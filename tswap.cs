@@ -1,4 +1,4 @@
-#!/usr/bin/env dotnet-script
+#!/usr/bin/env -S dotnet-script
 /*
  * tswap PoC - YubiKey Secret Manager (Single File)
  * 
@@ -6,21 +6,29 @@
  * Or compile:      dotnet build tswap.cs
  * 
  * Commands:
- *   init           - Initialize with 2 YubiKeys (creates XOR redundancy)
- *   add <name>     - Add a secret
- *   get <name>     - Get a secret value
- *   list           - List all secret names
- *   run -- <cmd>   - Execute command with {{token}} substitution
- * 
+ *   init                  - Initialize with 2 YubiKeys (creates XOR redundancy)
+ *   create <name> [len]   - Generate random secret (never displayed)
+ *   run <cmd> [args...]   - Execute command with {{token}} substitution
+ *   [sudo] add <name>     - Add a secret (user-provided value)
+ *   [sudo] get <name>     - Get a secret value
+ *   [sudo] list           - List all secret names
+ *   [sudo] delete <name>  - Delete a secret
+ *
  * Examples:
  *   dotnet script tswap.cs -- init
- *   dotnet script tswap.cs -- add storj-pass
- *   dotnet script tswap.cs run -- echo "Password: {{storj-pass}}"
+ *   dotnet script tswap.cs -- create storj-pass
+ *   dotnet script tswap.cs -- run echo "Password: {{storj-pass}}"
+ *   sudo dotnet script tswap.cs -- get storj-pass
  * 
  * Prerequisites:
  *   - .NET 10 SDK
  *   - 2 YubiKeys with slot 2 configured: ykman otp chalresp --generate 2
  *   - dotnet-script (install: dotnet tool install -g dotnet-script)
+ *   - For [sudo] commands: also install as root (sudo dotnet tool install -g dotnet-script)
+ *     and add /root/.dotnet/tools to sudo's secure_path:
+ *       sudo visudo
+ *       # Edit the Defaults secure_path line to include:
+ *       Defaults secure_path="...existing paths...:/root/.dotnet/tools"
  */
 
 #r "nuget: Yubico.YubiKey, 1.12.0"
@@ -42,10 +50,13 @@ using Yubico.YubiKey.Otp.Operations;
 // CONFIGURATION
 // ============================================================================
 
-var ConfigDir = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-    "tswap-poc"
-);
+// When running under sudo, resolve config relative to the invoking user's home
+// so that "sudo tswap get" finds the same database as "tswap create"
+var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+var appDataDir = sudoUser != null
+    ? Path.Combine("/home", sudoUser, ".config")
+    : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+var ConfigDir = Path.Combine(appDataDir, "tswap-poc");
 var ConfigFile = Path.Combine(ConfigDir, "config.json");
 var SecretsFile = Path.Combine(ConfigDir, "secrets.json.enc");
 
@@ -305,6 +316,14 @@ string ReadPassword()
     return password.ToString();
 }
 
+void RequireSudo(string commandName)
+{
+    if (!Environment.IsPrivilegedProcess)
+        throw new Exception(
+            $"The '{commandName}' command requires sudo.\n" +
+            $"Run: sudo dotnet script tswap.cs -- {commandName} ...");
+}
+
 // ============================================================================
 // COMMANDS
 // ============================================================================
@@ -369,6 +388,7 @@ void CmdInit()
 
 void CmdAdd(string name)
 {
+    RequireSudo("add");
     var config = LoadConfig();
     
     Console.Write($"Secret value for '{name}': ");
@@ -388,8 +408,50 @@ void CmdAdd(string name)
     Console.WriteLine($"\n✓ Secret '{name}' added successfully");
 }
 
+void CmdCreate(string name, int length = 32)
+{
+    const string charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+";
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    if (db.Secrets.ContainsKey(name))
+        throw new Exception($"Secret '{name}' already exists. Use 'delete' first to rotate.");
+
+    var bytes = RandomNumberGenerator.GetBytes(length);
+    var password = new char[length];
+    for (int i = 0; i < length; i++)
+        password[i] = charset[bytes[i] % charset.Length];
+
+    var value = new string(password);
+    db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+    SaveSecrets(db, key);
+
+    Console.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
+    Console.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+}
+
+void CmdDelete(string name)
+{
+    RequireSudo("delete");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    if (!db.Secrets.ContainsKey(name))
+        throw new Exception($"Secret '{name}' not found");
+
+    db.Secrets.Remove(name);
+    SaveSecrets(db, key);
+
+    Console.WriteLine($"\n✓ Secret '{name}' deleted");
+}
+
 void CmdGet(string name)
 {
+    RequireSudo("get");
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
@@ -402,6 +464,7 @@ void CmdGet(string name)
 
 void CmdList()
 {
+    RequireSudo("list");
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
@@ -425,9 +488,8 @@ void CmdList()
 void CmdRun(string[] args)
 {
     // args[0] is "run", everything after is the command
-    // (dotnet-script consumes the -- separator before passing to us)
     if (args.Length < 2)
-        throw new Exception("Usage: dotnet script tswap.cs -- run <command>");
+        throw new Exception("Usage: dotnet script tswap.cs -- run <command> [args...]");
     
     var commandArgs = args.Skip(1).ToArray();
     var command = string.Join(" ", commandArgs);
@@ -494,18 +556,24 @@ try
     {
         Console.WriteLine("tswap PoC - YubiKey Secret Manager (Single File)");
         Console.WriteLine("\nUsage:");
-        Console.WriteLine("  dotnet script tswap.cs -- init              Initialize with 2 YubiKeys");
-        Console.WriteLine("  dotnet script tswap.cs -- add <name>        Add a secret");
-        Console.WriteLine("  dotnet script tswap.cs -- get <name>        Get a secret");
-        Console.WriteLine("  dotnet script tswap.cs -- list              List all secrets");
-        Console.WriteLine("  dotnet script tswap.cs run -- <command>  Execute with {{token}} substitution");
+        Console.WriteLine("  dotnet script tswap.cs -- init                 Initialize with 2 YubiKeys");
+        Console.WriteLine("  dotnet script tswap.cs -- create <name> [len]  Generate random secret (no display)");
+        Console.WriteLine("  dotnet script tswap.cs -- run <cmd> [args...]   Execute with {{token}} substitution");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- add <name>    Add a secret (user-provided value)");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- get <name>    Get a secret value");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- list          List all secrets");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- delete <name> Delete a secret");
+        Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
         Console.WriteLine("\nExamples:");
-        Console.WriteLine("  dotnet script tswap.cs -- add storj-pass");
-        Console.WriteLine("  dotnet script tswap.cs run -- echo 'Password: {{storj-pass}}'");
-        Console.WriteLine("  dotnet script tswap.cs -- list");
+        Console.WriteLine("  dotnet script tswap.cs -- create storj-pass");
+        Console.WriteLine("  dotnet script tswap.cs -- run echo 'Password: {{storj-pass}}'");
+        Console.WriteLine("  sudo dotnet script tswap.cs -- get storj-pass");
+        Console.WriteLine("  sudo dotnet script tswap.cs -- list");
         Console.WriteLine("\nPrerequisites:");
         Console.WriteLine("  - Install dotnet-script: dotnet tool install -g dotnet-script");
         Console.WriteLine("  - Configure YubiKeys: ykman otp chalresp --generate 2");
+        Console.WriteLine("  - For [sudo] commands: sudo dotnet tool install -g dotnet-script");
+        Console.WriteLine("    then add /root/.dotnet/tools to sudo secure_path (sudo visudo)");
         Environment.Exit(1);
     }
     
@@ -517,22 +585,35 @@ try
             CmdInit();
             break;
         
+        case "create":
+            if (Args.Count < 2)
+                throw new Exception("Usage: dotnet script tswap.cs -- create <name> [length]");
+            var createLength = Args.Count >= 3 ? int.Parse(Args[2]) : 32;
+            CmdCreate(Args[1], createLength);
+            break;
+
         case "add":
             if (Args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- add <name>");
             CmdAdd(Args[1]);
             break;
-        
+
         case "get":
             if (Args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- get <name>");
             CmdGet(Args[1]);
             break;
-        
+
         case "list":
             CmdList();
             break;
-        
+
+        case "delete":
+            if (Args.Count < 2)
+                throw new Exception("Usage: dotnet script tswap.cs -- delete <name>");
+            CmdDelete(Args[1]);
+            break;
+
         case "run":
             CmdRun(Args.ToArray());
             break;

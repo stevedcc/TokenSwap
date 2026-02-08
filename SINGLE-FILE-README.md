@@ -27,8 +27,8 @@ ykman otp chalresp --generate 2
 
 # 3. Run tswap (note: slot 2 requires LONG touch - 2-3 seconds)
 dotnet script tswap.cs -- init
-dotnet script tswap.cs -- add test-secret
-dotnet script tswap.cs run -- echo "Secret: {{test-secret}}"
+dotnet script tswap.cs -- create test-secret
+dotnet script tswap.cs -- run echo "Secret: {{test-secret}}"
 ```
 
 That's it. Single file, no project needed.
@@ -39,18 +39,27 @@ That's it. Single file, no project needed.
 # Initialize with 2 YubiKeys
 dotnet script tswap.cs -- init
 
-# Add secret
-dotnet script tswap.cs -- add <n>
+# Generate random secret (never displayed) - AI agent safe
+dotnet script tswap.cs -- create <name> [length]
 
-# Get secret  
-dotnet script tswap.cs -- get <n>
+# Token substitution (killer feature) - AI agent safe
+dotnet script tswap.cs -- run <command with {{tokens}}>
 
-# List all secrets
-dotnet script tswap.cs -- list
+# [sudo] Add secret (user-provided value)
+sudo dotnet script tswap.cs -- add <name>
 
-# Token substitution (killer feature)
-dotnet script tswap.cs -- run -- <command with {{tokens}}>
+# [sudo] Get secret
+sudo dotnet script tswap.cs -- get <name>
+
+# [sudo] List all secrets
+sudo dotnet script tswap.cs -- list
+
+# [sudo] Delete a secret
+sudo dotnet script tswap.cs -- delete <name>
 ```
+
+Commands marked `[sudo]` require elevated privileges. This prevents AI agents
+from reading, enumerating, or setting specific secret values.
 
 ## Quick Test
 
@@ -60,24 +69,26 @@ dotnet script tswap.cs -- init
 # Insert YK1, LONG touch (2-3 sec), swap to YK2, LONG touch
 # BACKUP THE XOR SHARE!
 
-# Add test secret
-dotnet script tswap.cs -- add demo
-# Value: test123
+# Create test secret (random, never displayed)
+dotnet script tswap.cs -- create demo
 # LONG touch YubiKey (2-3 sec)
 
 # Token substitution
-dotnet script tswap.cs run -- echo "Password: {{demo}}"
+dotnet script tswap.cs -- run echo "Password: {{demo}}"
 # LONG touch YubiKey (2-3 sec)
-# Output: Password: test123
+# Output: Password: <random value>
+
+# Verify secret exists (requires sudo)
+sudo dotnet script tswap.cs -- list
 
 # Check history
 history | tail -2
-# Shows: {{demo}} NOT test123 ✓
+# Shows: {{demo}} NOT the actual secret ✓
 ```
 
 ## What This File Does
 
-**450 lines of C# proving:**
+**Single-file C# proving:**
 1. ✅ XOR redundancy (either YubiKey unlocks)
 2. ✅ Token substitution (AI-safe coding)
 3. ✅ AES-256-GCM encryption
@@ -93,8 +104,8 @@ chmod +x tswap.cs
 
 # Run directly
 ./tswap.cs init
-./tswap.cs add test
-./tswap.cs run -- echo {{test}}
+./tswap.cs create test
+./tswap.cs run echo {{test}}
 ```
 
 ## Real-World Example
@@ -105,7 +116,7 @@ cat > backup.sh << 'EOF'
 #!/bin/bash
 # Claude can see this entire script - no secrets!
 
-dotnet script tswap.cs run -- rclone sync \
+dotnet script tswap.cs -- run rclone sync \
   --password {{storj-backup}} \
   /data remote:backup
 EOF
@@ -129,6 +140,14 @@ chmod +x backup.sh
 **dotnet-script:**
 ```bash
 dotnet tool install -g dotnet-script
+```
+
+**For [sudo] commands — also install as root and update secure_path:**
+```bash
+sudo dotnet tool install -g dotnet-script
+sudo visudo
+# Add /root/.dotnet/tools to the Defaults secure_path line:
+# Defaults secure_path="...existing paths...:/root/.dotnet/tools"
 ```
 
 **YubiKey slot 2 configured:**
@@ -207,12 +226,14 @@ History: echo "{{secret}}" (AI-safe!)
 
 **"dotnet script not found"**
 ```bash
-# Install globally
+# Install for your user
 dotnet tool install -g dotnet-script
 
-# Add to PATH (Linux/macOS)
-echo 'export PATH="$PATH:$HOME/.dotnet/tools"' >> ~/.bashrc
-source ~/.bashrc
+# If also failing under sudo, install as root too
+sudo dotnet tool install -g dotnet-script
+# and ensure /root/.dotnet/tools is in sudo's secure_path
+sudo visudo
+# Defaults secure_path="...:/root/.dotnet/tools"
 ```
 
 **"No YubiKey detected"**
@@ -250,7 +271,7 @@ ykman otp settings 2 --no-enter  # Disable touch requirement
 4. **AI-safe coding works** - History shows tokens, not secrets
 5. **Single file is viable** - No build system needed
 
-**This is production-ready crypto in 450 lines.**
+**Production-ready crypto with sudo-based access control.**
 
 ## Next Steps
 
