@@ -451,13 +451,13 @@ void CmdRun(string[] args)
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
-            throw new Exception($"Secret '{{{{{token}}}}}' not found");
+            throw new Exception("Secret '{{" + token + "}}' not found");
     }
     
     // Substitute tokens
     var substitutedCommand = command;
     foreach (var token in tokens)
-        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", db.Secrets[token].Value);
+        substitutedCommand = substitutedCommand.Replace("{{" + token + "}}", db.Secrets[token].Value);
     
     // Show sanitized version
     var sanitized = tokenRegex.Replace(command, "********");
@@ -473,7 +473,7 @@ void CmdRun(string[] args)
         StartInfo = new ProcessStartInfo
         {
             FileName = shell,
-            Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
+            Arguments = $@"{shellArg} ""{substitutedCommand.Replace(@"""", @"""""")}""",
             UseShellExecute = false
         }
     };
