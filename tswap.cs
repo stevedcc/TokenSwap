@@ -18,7 +18,7 @@
  * Examples:
  *   dotnet script tswap.cs -- init
  *   dotnet script tswap.cs -- create storj-pass
- *   dotnet script tswap.cs -- run echo "Password: {{storj-pass}}"
+ *   dotnet script tswap.cs -- run rclone sync --password {{storj-pass}} /data remote:backup
  *   sudo dotnet script tswap.cs -- get storj-pass
  * 
  * Prerequisites:
@@ -615,7 +615,7 @@ try
         Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
         Console.WriteLine("  dotnet script tswap.cs -- create storj-pass");
-        Console.WriteLine("  dotnet script tswap.cs -- run echo 'Password: {{storj-pass}}'");
+        Console.WriteLine("  dotnet script tswap.cs -- run rclone sync --password {{storj-pass}} /data remote:backup");
         Console.WriteLine("  sudo dotnet script tswap.cs -- get storj-pass");
         Console.WriteLine("  sudo dotnet script tswap.cs -- list");
         Console.WriteLine("\nPrerequisites:");

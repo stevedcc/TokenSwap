@@ -28,7 +28,7 @@ ykman otp chalresp --generate 2
 # 3. Run tswap (note: slot 2 requires LONG touch - 2-3 seconds)
 dotnet script tswap.cs -- init
 dotnet script tswap.cs -- create test-secret
-dotnet script tswap.cs -- run echo "Secret: {{test-secret}}"
+dotnet script tswap.cs -- run curl -H "Authorization: Bearer {{test-secret}}" https://api.example.com
 ```
 
 That's it. Single file, no project needed.
@@ -74,9 +74,8 @@ dotnet script tswap.cs -- create demo
 # LONG touch YubiKey (2-3 sec)
 
 # Token substitution
-dotnet script tswap.cs -- run echo "Password: {{demo}}"
+dotnet script tswap.cs -- run curl -H "Authorization: Bearer {{demo}}" https://api.example.com
 # LONG touch YubiKey (2-3 sec)
-# Output: Password: <random value>
 
 # Verify secret exists (requires sudo)
 sudo dotnet script tswap.cs -- list
@@ -105,7 +104,7 @@ chmod +x tswap.cs
 # Run directly
 ./tswap.cs init
 ./tswap.cs create test
-./tswap.cs run echo {{test}}
+./tswap.cs run curl -H "Authorization: Bearer {{test}}" https://api.example.com
 ```
 
 ## Real-World Example
@@ -213,13 +212,13 @@ Same master_key either way!
 
 **Token Substitution:**
 ```
-Input:  echo "{{secret}}"
+Input:  curl -H "Auth: {{secret}}" https://api.example.com
 Regex:  \{\{([a-zA-Z0-9-]+)\}\}
 Tokens: ["secret"]
 Unlock: YubiKey → decrypt secrets DB
 Replace: {{secret}} → actual_value
-Execute: echo "actual_value"
-History: echo "{{secret}}" (AI-safe!)
+Execute: curl -H "Auth: actual_value" https://api.example.com
+History: curl -H "Auth: {{secret}}" ... (AI-safe!)
 ```
 
 ## Troubleshooting
