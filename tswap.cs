@@ -8,6 +8,7 @@
  * Commands:
  *   init                  - Initialize with 2 YubiKeys (creates XOR redundancy)
  *   create <name> [len]   - Generate random secret (never displayed)
+ *   names                 - List secret names (no values, AI agent safe)
  *   run <cmd> [args...]   - Execute command with {{token}} substitution
  *   [sudo] add <name>     - Add a secret (user-provided value)
  *   [sudo] get <name>     - Get a secret value
@@ -42,6 +43,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Yubico.Core.Logging;
 using Yubico.YubiKey;
 using Yubico.YubiKey.Otp;
 using Yubico.YubiKey.Otp.Operations;
@@ -49,6 +52,14 @@ using Yubico.YubiKey.Otp.Operations;
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
+
+var Verbose = Args.Any(a => a == "-v" || a == "--verbose");
+
+// Suppress Yubico SDK console logging unless verbose
+Log.ConfigureLoggerFactory(builder =>
+{
+    builder.SetMinimumLevel(Verbose ? LogLevel.Information : LogLevel.None);
+});
 
 // When running under sudo, resolve config relative to the invoking user's home
 // so that "sudo tswap get" finds the same database as "tswap create"
@@ -74,7 +85,7 @@ record SecretsDb(Dictionary<string, Secret> Secrets);
 
 byte[] ChallengeYubiKey(IYubiKeyDevice device, string challenge)
 {
-    Console.Write($"YubiKey (serial: {device.SerialNumber})... ");
+    if (Verbose) Console.Write($"YubiKey (serial: {device.SerialNumber})... ");
     
     try
     {
@@ -115,13 +126,13 @@ byte[] ChallengeYubiKey(IYubiKeyDevice device, string challenge)
             for (int i = 0; i < responseBytes.Length; i++)
                 responseBytes[i] = Convert.ToByte(hexResponse.Substring(i * 2, 2), 16);
             
-            Console.WriteLine("✓");
+            if (Verbose) Console.WriteLine("✓");
             return responseBytes;
         }
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"\nFailed: {ex.Message}");
+        if (Verbose) Console.WriteLine($"\nFailed: {ex.Message}");
         throw;
     }
 }
@@ -485,6 +496,22 @@ void CmdList()
     }
 }
 
+void CmdNames()
+{
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    if (db.Secrets.Count == 0)
+    {
+        Console.WriteLine("No secrets stored.");
+        return;
+    }
+
+    foreach (var name in db.Secrets.Keys.OrderBy(n => n))
+        Console.WriteLine(name);
+}
+
 void CmdRun(string[] args)
 {
     // args[0] is "run", everything after is the command
@@ -501,9 +528,26 @@ void CmdRun(string[] args)
     
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
-    
-    Console.WriteLine($"Found tokens: {string.Join(", ", tokens)}");
-    
+
+    // Block obvious attempts to exfiltrate secrets via run
+    var baseCommand = commandArgs[0].ToLower();
+    var blockedCommands = new HashSet<string>
+        { "echo", "printf", "cat", "env", "printenv", "set", "tee" };
+    if (blockedCommands.Contains(baseCommand))
+        throw new Exception(
+            $"The command '{baseCommand}' would expose secret values.\n" +
+            "The 'run' command is for programs that *use* secrets, not display them.\n" +
+            "Use 'sudo ... get <name>' to view a secret.");
+
+    // Block shell output redirection (secrets could be written to readable files)
+    if (Regex.IsMatch(command, @"[|>]"))
+        throw new Exception(
+            "Pipes and output redirection are not allowed in 'run' commands.\n" +
+            "Secrets could be captured to files or piped to other programs.\n" +
+            "Use 'sudo ... get <name>' to retrieve a secret value.");
+
+    if (Verbose) Console.WriteLine($"Found tokens: {string.Join(", ", tokens)}");
+
     // Unlock and get secrets
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
@@ -522,9 +566,12 @@ void CmdRun(string[] args)
         substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", db.Secrets[token].Value);
     
     // Show sanitized version
-    var sanitized = tokenRegex.Replace(command, "********");
-    Console.WriteLine($"\nExecuting: {sanitized}");
-    Console.WriteLine();
+    if (Verbose)
+    {
+        var sanitized = tokenRegex.Replace(command, "********");
+        Console.WriteLine($"\nExecuting: {sanitized}");
+        Console.WriteLine();
+    }
     
     // Execute command
     var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
@@ -558,12 +605,14 @@ try
         Console.WriteLine("\nUsage:");
         Console.WriteLine("  dotnet script tswap.cs -- init                 Initialize with 2 YubiKeys");
         Console.WriteLine("  dotnet script tswap.cs -- create <name> [len]  Generate random secret (no display)");
+        Console.WriteLine("  dotnet script tswap.cs -- names                List secret names (no values)");
         Console.WriteLine("  dotnet script tswap.cs -- run <cmd> [args...]   Execute with {{token}} substitution");
         Console.WriteLine("  [sudo] dotnet script tswap.cs -- add <name>    Add a secret (user-provided value)");
         Console.WriteLine("  [sudo] dotnet script tswap.cs -- get <name>    Get a secret value");
         Console.WriteLine("  [sudo] dotnet script tswap.cs -- list          List all secrets");
         Console.WriteLine("  [sudo] dotnet script tswap.cs -- delete <name> Delete a secret");
         Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
+        Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
         Console.WriteLine("  dotnet script tswap.cs -- create storj-pass");
         Console.WriteLine("  dotnet script tswap.cs -- run echo 'Password: {{storj-pass}}'");
@@ -577,8 +626,9 @@ try
         Environment.Exit(1);
     }
     
-    var command = Args[0].ToLower();
-    
+    var args = Args.Where(a => a != "-v" && a != "--verbose").ToList();
+    var command = args[0].ToLower();
+
     switch (command)
     {
         case "init":
@@ -586,22 +636,26 @@ try
             break;
         
         case "create":
-            if (Args.Count < 2)
+            if (args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- create <name> [length]");
-            var createLength = Args.Count >= 3 ? int.Parse(Args[2]) : 32;
-            CmdCreate(Args[1], createLength);
+            var createLength = args.Count >= 3 ? int.Parse(args[2]) : 32;
+            CmdCreate(args[1], createLength);
             break;
 
         case "add":
-            if (Args.Count < 2)
+            if (args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- add <name>");
-            CmdAdd(Args[1]);
+            CmdAdd(args[1]);
             break;
 
         case "get":
-            if (Args.Count < 2)
+            if (args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- get <name>");
-            CmdGet(Args[1]);
+            CmdGet(args[1]);
+            break;
+
+        case "names":
+            CmdNames();
             break;
 
         case "list":
@@ -609,13 +663,13 @@ try
             break;
 
         case "delete":
-            if (Args.Count < 2)
+            if (args.Count < 2)
                 throw new Exception("Usage: dotnet script tswap.cs -- delete <name>");
-            CmdDelete(Args[1]);
+            CmdDelete(args[1]);
             break;
 
         case "run":
-            CmdRun(Args.ToArray());
+            CmdRun(args.ToArray());
             break;
         
         default:
