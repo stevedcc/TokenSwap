@@ -65,6 +65,9 @@ dotnet tool install -g dotnet-script
 # Configure both YubiKeys (slot 2, one time each)
 ykman otp chalresp --generate 2
 
+# Make executable
+chmod +x tswap.cs
+
 # Initialize (requires both keys, one at a time)
 ./tswap.cs init
 
