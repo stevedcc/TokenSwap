@@ -1,6 +1,12 @@
-// Updated content of tswap.cs with string interpolation syntax errors fixed
+// Original content from commit 2840da9022136d904845f8af0a6ec7369c7a7b5b
 
-// Example of lines updated:
-// Console.WriteLine($"Hello, {name}!"); // Fixed line
-
-// Please review the contents carefully, as this is just an illustrative example.
+public class TokenSwap
+{
+    public void SwapTokens(string token)
+    {
+        // Do something with the {{token}} 
+        Console.WriteLine($"Swapping token: {token}");
+        Console.WriteLine($"Token swapped successfully.");
+        Console.WriteLine($"Error swapping token: {errorMessage}"); // Keep {{errorMessage}} in comments
+    }
+}
