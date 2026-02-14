@@ -8,8 +8,13 @@
  * Commands:
  *   init                  - Initialize with 2 YubiKeys (creates XOR redundancy)
  *   create <name> [len]   - Generate random secret (never displayed)
+ *   ingest <name>         - Pipe secret from stdin (never displayed)
  *   names                 - List secret names (no values, AI agent safe)
  *   run <cmd> [args...]   - Execute command with {{token}} substitution
+ *   burn <name> [reason]  - Mark a secret as burned (needs rotation)
+ *   burned                - List all burned secrets
+ *   prompt                - Show AI agent instructions
+ *   prompt-hash           - SHA-256 hash of agent instructions
  *   [sudo] add <name>     - Add a secret (user-provided value)
  *   [sudo] get <name>     - Get a secret value
  *   [sudo] list           - List all secret names
@@ -32,6 +37,7 @@
  *       Defaults secure_path="...existing paths...:/root/.dotnet/tools"
  */
 
+#nullable enable
 #r "nuget: Yubico.YubiKey, 1.12.0"
 
 using System;
@@ -71,12 +77,46 @@ var ConfigDir = Path.Combine(appDataDir, "tswap-poc");
 var ConfigFile = Path.Combine(ConfigDir, "config.json");
 var SecretsFile = Path.Combine(ConfigDir, "secrets.json.enc");
 
+const string PromptText = @"# tswap - AI Agent Secret Management Instructions
+
+You are working with tswap, a hardware-backed secret manager. Your role is to
+manage secrets WITHOUT ever seeing their plaintext values.
+
+## Commands you SHOULD use (no sudo required):
+- `tswap create <name> [length]` — Generate a new random secret (value is never displayed)
+- `tswap ingest <name>` — Pipe a secret from an external source: `<source> | tswap ingest <name>`
+- `tswap names` — List all secret names (no values shown)
+- `tswap run <command>` — Execute a command with {{secret-name}} token substitution
+- `tswap burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
+- `tswap burned` — List all burned secrets that need rotation
+- `tswap prompt` — Display these instructions
+- `tswap prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
+
+## Commands you must NEVER use (require sudo, expose values):
+- `sudo tswap add <name>` — Only for human interactive use
+- `sudo tswap get <name>` — Exposes plaintext value
+- `sudo tswap list` — Lists secrets with metadata
+- `sudo tswap delete <name>` — Removes a secret
+
+## Key rules:
+1. NEVER use sudo commands — they expose secret values
+2. NEVER generate, invent, or hardcode secret values yourself — always use `tswap create <name>` to
+   generate secrets, then tell the user the name you chose so they can find it
+3. Use {{secret-name}} tokens in `run` commands to use secrets without seeing them
+4. If you accidentally see a plaintext secret, immediately run `tswap burn <name> <reason>`
+5. To import secrets from external systems, pipe them directly — NEVER use intermediate variables or
+   echo. For Kubernetes, use jq (not jsonpath, which has shell quoting issues with dots/underscores):
+   `kubectl get secret <secret> -n <ns> -o json | jq -r '.data[""<key>""] // empty' | base64 -d | tswap ingest <name>`
+6. Check `tswap names` to see available secrets before constructing commands
+7. Burned secrets should be rotated — check with `tswap burned`
+8. When you create or ingest a secret, always inform the user of the secret name you used";
+
 // ============================================================================
 // DATA STRUCTURES
 // ============================================================================
 
 record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
-record Secret(string Value, DateTime Created, DateTime Modified);
+record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 record SecretsDb(Dictionary<string, Secret> Secrets);
 
 // ============================================================================
@@ -111,7 +151,7 @@ byte[] ChallengeYubiKey(IYubiKeyDevice device, string challenge)
             CreateNoWindow = true
         };
         
-        using (var process = System.Diagnostics.Process.Start(psi))
+        using (var process = System.Diagnostics.Process.Start(psi)!)
         {
             var output = process.StandardOutput.ReadToEnd();
             var error = process.StandardError.ReadToEnd();
@@ -509,7 +549,103 @@ void CmdNames()
     }
 
     foreach (var name in db.Secrets.Keys.OrderBy(n => n))
-        Console.WriteLine(name);
+    {
+        var burned = db.Secrets[name].BurnedAt.HasValue ? " [BURNED]" : "";
+        Console.WriteLine($"{name}{burned}");
+    }
+}
+
+void CmdIngest(string name)
+{
+    if (Console.IsInputRedirected == false)
+        throw new Exception("No input piped. Use: <source> | tswap ingest <name>\nFor interactive input, use: sudo tswap add <name>");
+
+    var value = Console.In.ReadToEnd().TrimEnd();
+    if (string.IsNullOrEmpty(value))
+        throw new Exception("Empty input received. Nothing to store.");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    if (db.Secrets.ContainsKey(name))
+        throw new Exception($"Secret '{name}' already exists. Use 'delete' first to rotate.");
+
+    db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+    SaveSecrets(db, key);
+
+    Console.WriteLine($"\n✓ Secret '{name}' ingested from stdin");
+    Console.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+}
+
+void CmdBurn(string name, string? reason)
+{
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    if (!db.Secrets.ContainsKey(name))
+        throw new Exception($"Secret '{name}' not found");
+
+    var existing = db.Secrets[name];
+    db.Secrets[name] = existing with { BurnedAt = DateTime.UtcNow, BurnReason = reason };
+    SaveSecrets(db, key);
+
+    Console.WriteLine($"\n⚠ Secret '{name}' marked as BURNED");
+    Console.WriteLine("  This secret should be rotated as soon as possible.");
+}
+
+void CmdBurned()
+{
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var burned = db.Secrets
+        .Where(s => s.Value.BurnedAt.HasValue)
+        .OrderBy(s => s.Value.BurnedAt)
+        .ToList();
+
+    if (burned.Count == 0)
+    {
+        Console.WriteLine("No burned secrets. All secrets are clean.");
+        return;
+    }
+
+    var nameWidth = Math.Min(40, burned.Max(s => s.Key.Length));
+    var dateWidth = 18; // "yyyy-MM-dd HH:mm" + 2 spaces
+    var headerWidth = nameWidth + 2 + dateWidth + 2 + 6; // 6 = "REASON".Length
+
+    Console.WriteLine($"\n⚠ Burned Secrets ({burned.Count}):");
+    Console.WriteLine($"{"NAME".PadRight(nameWidth)}  {"BURNED AT".PadRight(dateWidth)}  REASON");
+    Console.WriteLine("".PadRight(Math.Max(headerWidth, 60), '-'));
+
+    foreach (var (name, secret) in burned)
+    {
+        var reason = secret.BurnReason ?? "(no reason given)";
+        if (name.Length <= nameWidth)
+        {
+            Console.WriteLine($"{name.PadRight(nameWidth)}  {secret.BurnedAt:yyyy-MM-dd HH:mm}  {reason}");
+        }
+        else
+        {
+            Console.WriteLine(name);
+            Console.WriteLine($"{"".PadRight(nameWidth)}  {secret.BurnedAt:yyyy-MM-dd HH:mm}  {reason}");
+        }
+    }
+
+    Console.WriteLine($"\n→ Rotate these secrets, then 'delete' and re-create them.");
+}
+
+void CmdPrompt()
+{
+    Console.WriteLine(PromptText);
+}
+
+void CmdPromptHash()
+{
+    var hash = SHA256.HashData(Encoding.UTF8.GetBytes(PromptText));
+    Console.WriteLine(Convert.ToHexString(hash).ToLower());
 }
 
 void CmdRun(string[] args)
@@ -603,19 +739,26 @@ try
     {
         Console.WriteLine("tswap PoC - YubiKey Secret Manager (Single File)");
         Console.WriteLine("\nUsage:");
-        Console.WriteLine("  dotnet script tswap.cs -- init                 Initialize with 2 YubiKeys");
-        Console.WriteLine("  dotnet script tswap.cs -- create <name> [len]  Generate random secret (no display)");
-        Console.WriteLine("  dotnet script tswap.cs -- names                List secret names (no values)");
-        Console.WriteLine("  dotnet script tswap.cs -- run <cmd> [args...]   Execute with {{token}} substitution");
-        Console.WriteLine("  [sudo] dotnet script tswap.cs -- add <name>    Add a secret (user-provided value)");
-        Console.WriteLine("  [sudo] dotnet script tswap.cs -- get <name>    Get a secret value");
-        Console.WriteLine("  [sudo] dotnet script tswap.cs -- list          List all secrets");
-        Console.WriteLine("  [sudo] dotnet script tswap.cs -- delete <name> Delete a secret");
+        Console.WriteLine("  dotnet script tswap.cs -- init                    Initialize with 2 YubiKeys");
+        Console.WriteLine("  dotnet script tswap.cs -- create <name> [len]     Generate random secret (no display)");
+        Console.WriteLine("  dotnet script tswap.cs -- ingest <name>           Pipe secret from stdin (no display)");
+        Console.WriteLine("  dotnet script tswap.cs -- names                   List secret names (no values)");
+        Console.WriteLine("  dotnet script tswap.cs -- run <cmd> [args...]     Execute with {{token}} substitution");
+        Console.WriteLine("  dotnet script tswap.cs -- burn <name> [reason]    Mark a secret as burned");
+        Console.WriteLine("  dotnet script tswap.cs -- burned                  List all burned secrets");
+        Console.WriteLine("  dotnet script tswap.cs -- prompt                  Show AI agent instructions");
+        Console.WriteLine("  dotnet script tswap.cs -- prompt-hash             Hash of agent instructions");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- add <name>       Add a secret (user-provided value)");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- get <name>       Get a secret value");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- list             List all secrets");
+        Console.WriteLine("  [sudo] dotnet script tswap.cs -- delete <name>    Delete a secret");
         Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
         Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
         Console.WriteLine("  dotnet script tswap.cs -- create storj-pass");
+        Console.WriteLine("  kubectl get secret db-pass -o jsonpath='{.data.password}' | base64 -d | dotnet script tswap.cs -- ingest db-pass");
         Console.WriteLine("  dotnet script tswap.cs -- run rclone sync --password {{storj-pass}} /data remote:backup");
+        Console.WriteLine("  dotnet script tswap.cs -- burn db-pass \"accidentally logged\"");
         Console.WriteLine("  sudo dotnet script tswap.cs -- get storj-pass");
         Console.WriteLine("  sudo dotnet script tswap.cs -- list");
         Console.WriteLine("\nPrerequisites:");
@@ -668,10 +811,35 @@ try
             CmdDelete(args[1]);
             break;
 
+        case "ingest":
+            if (args.Count < 2)
+                throw new Exception("Usage: <source> | dotnet script tswap.cs -- ingest <name>");
+            CmdIngest(args[1]);
+            break;
+
+        case "burn":
+            if (args.Count < 2)
+                throw new Exception("Usage: dotnet script tswap.cs -- burn <name> [reason]");
+            var burnReason = args.Count >= 3 ? string.Join(" ", args.Skip(2)) : null;
+            CmdBurn(args[1], burnReason);
+            break;
+
+        case "burned":
+            CmdBurned();
+            break;
+
+        case "prompt":
+            CmdPrompt();
+            break;
+
+        case "prompt-hash":
+            CmdPromptHash();
+            break;
+
         case "run":
             CmdRun(args.ToArray());
             break;
-        
+
         default:
             throw new Exception($"Unknown command: {command}");
     }
