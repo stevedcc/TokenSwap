@@ -1,21 +1,12 @@
-#!/usr/bin/env -S dotnet-script
 /*
- * tswap - YubiKey Secret Manager (dotnet-script version)
+ * tswap - YubiKey Secret Manager (Compiled Entry Point)
  *
- * This is the script version for development. For the compiled binary,
- * see Program.cs and build with: dotnet publish -c Release
+ * This is the AOT-compiled version of tswap.cs.
+ * For the interpreted dotnet-script version, see tswap.cs.
  *
- * Usage:
- *   chmod +x tswap.cs
- *   ./tswap.cs <command>
- *
- * Prerequisites:
- *   - ykman CLI (YubiKey Manager)
- *   - dotnet-script: dotnet tool install -g dotnet-script
- *   - 2 YubiKeys with slot 2 configured: ykman otp chalresp --generate 2
+ * Build:   dotnet publish -c Release
+ * Install: cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
  */
-
-#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -25,7 +16,11 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+
+// Bridge dotnet-script's Args to compiled args
+var Args = args.ToList();
 
 // ============================================================================
 // CONFIGURATION
@@ -98,10 +93,6 @@ var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 // ============================================================================
 // DATA STRUCTURES
 // ============================================================================
-
-record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
-record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-record SecretsDb(Dictionary<string, Secret> Secrets);
 
 // ============================================================================
 // YUBIKEY OPERATIONS
@@ -215,7 +206,7 @@ byte[] XorBytes(byte[] a, byte[] b)
 {
     if (a.Length != b.Length)
         throw new ArgumentException("Byte arrays must be same length for XOR");
-    
+
     return a.Zip(b, (x, y) => (byte)(x ^ y)).ToArray();
 }
 
@@ -223,8 +214,7 @@ byte[] DeriveKey(byte[] k1, byte[] k2)
 {
     var combined = k1.Concat(k2).ToArray();
     var salt = Encoding.UTF8.GetBytes("tswap-poc-v1");
-    
-    // Use new .NET 10 Pbkdf2 static method
+
     return Rfc2898DeriveBytes.Pbkdf2(
         combined,
         salt,
@@ -242,10 +232,10 @@ byte[] Encrypt(byte[] plaintext, byte[] key)
         var nonce = new byte[AesGcm.NonceByteSizes.MaxSize];
         var tag = new byte[tagSizeInBytes];
         var ciphertext = new byte[plaintext.Length];
-        
+
         RandomNumberGenerator.Fill(nonce);
         aes.Encrypt(nonce, plaintext, ciphertext, tag);
-        
+
         return nonce.Concat(tag).Concat(ciphertext).ToArray();
     }
 }
@@ -254,11 +244,11 @@ byte[] Decrypt(byte[] encrypted, byte[] key)
 {
     var nonceSize = AesGcm.NonceByteSizes.MaxSize;
     var tagSize = AesGcm.TagByteSizes.MaxSize;
-    
+
     var nonce = encrypted.Take(nonceSize).ToArray();
     var tag = encrypted.Skip(nonceSize).Take(tagSize).ToArray();
     var ciphertext = encrypted.Skip(nonceSize + tagSize).ToArray();
-    
+
     using (var aes = new AesGcm(key, tagSize))
     {
         var plaintext = new byte[ciphertext.Length];
@@ -275,16 +265,16 @@ Config LoadConfig()
 {
     if (!File.Exists(ConfigFile))
         throw new Exception($"Not initialized. Run: {Prefix} init");
-    
+
     var json = File.ReadAllText(ConfigFile);
-    return JsonSerializer.Deserialize<Config>(json) 
+    return JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)
         ?? throw new Exception("Invalid config");
 }
 
 void SaveConfig(Config config)
 {
     Directory.CreateDirectory(ConfigDir);
-    var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+    var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
     File.WriteAllText(ConfigFile, json);
 }
 
@@ -292,18 +282,18 @@ SecretsDb LoadSecrets(byte[] key)
 {
     if (!File.Exists(SecretsFile))
         return new SecretsDb(new Dictionary<string, Secret>());
-    
+
     var encrypted = File.ReadAllBytes(SecretsFile);
     var decrypted = Decrypt(encrypted, key);
     var json = Encoding.UTF8.GetString(decrypted);
-    return JsonSerializer.Deserialize<SecretsDb>(json) 
+    return JsonSerializer.Deserialize(json, TswapJsonContext.Default.SecretsDb)
         ?? new SecretsDb(new Dictionary<string, Secret>());
 }
 
 void SaveSecrets(SecretsDb db, byte[] key)
 {
     Directory.CreateDirectory(ConfigDir);
-    var json = JsonSerializer.Serialize(db, new JsonSerializerOptions { WriteIndented = true });
+    var json = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
     var plaintext = Encoding.UTF8.GetBytes(json);
     var encrypted = Encrypt(plaintext, key);
     File.WriteAllBytes(SecretsFile, encrypted);
@@ -318,11 +308,11 @@ byte[] UnlockWithYubiKey(Config config)
 
     // Challenge current YubiKey
     var k_current = ChallengeYubiKey(serial, "tswap-unlock");
-    
+
     // Reconstruct other key via XOR
     var xorShare = Convert.FromHexString(config.RedundancyXor);
     var k_other = XorBytes(k_current, xorShare);
-    
+
     // Determine order (use serials to ensure consistent ordering)
     byte[] k1, k2;
     if (serial == config.YubiKeySerials[0])
@@ -335,7 +325,7 @@ byte[] UnlockWithYubiKey(Config config)
         k1 = k_other;
         k2 = k_current;
     }
-    
+
     return DeriveKey(k1, k2);
 }
 
@@ -388,11 +378,11 @@ void CmdInit()
         if (Console.ReadLine()?.ToLower() != "yes")
             return;
     }
-    
+
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  tswap - YubiKey Initialization       ║");
     Console.WriteLine("╚════════════════════════════════════════╝\n");
-    
+
     // Challenge first YubiKey
     Console.WriteLine("Insert YubiKey #1 and press Enter...");
     Console.ReadLine();
@@ -408,19 +398,19 @@ void CmdInit()
         throw new Exception("Same YubiKey detected. Please use two different YubiKeys.");
 
     var k2 = ChallengeYubiKey(serial2, "tswap-unlock");
-    
+
     // Compute XOR redundancy
     var xorShare = XorBytes(k1, k2);
-    
+
     // Save config
     var config = new Config(
         new List<int> { serial1, serial2 },
         Convert.ToHexString(xorShare),
         DateTime.UtcNow
     );
-    
+
     SaveConfig(config);
-    
+
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
     Console.WriteLine("╚════════════════════════════════════════╝\n");
@@ -440,21 +430,21 @@ void CmdAdd(string name)
 {
     RequireSudo("add");
     var config = LoadConfig();
-    
+
     Console.Write($"Secret value for '{name}': ");
     var value = ReadPassword();
     Console.Write("Confirm value: ");
     var confirm = ReadPassword();
-    
+
     if (value != confirm)
         throw new Exception("Values don't match");
-    
+
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
+
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
     SaveSecrets(db, key);
-    
+
     Console.WriteLine($"\n✓ Secret '{name}' added successfully");
 }
 
@@ -505,10 +495,10 @@ void CmdGet(string name)
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
+
     if (!db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' not found");
-    
+
     Console.WriteLine(db.Secrets[name].Value);
 }
 
@@ -518,17 +508,17 @@ void CmdList()
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
+
     if (db.Secrets.Count == 0)
     {
         Console.WriteLine("No secrets stored.");
         return;
     }
-    
+
     Console.WriteLine($"\nSecrets ({db.Secrets.Count}):");
     Console.WriteLine("NAME                 CREATED              MODIFIED");
     Console.WriteLine("".PadRight(60, '-'));
-    
+
     foreach (var (name, secret) in db.Secrets.OrderBy(s => s.Key))
     {
         Console.WriteLine($"{name.PadRight(20)} {secret.Created:yyyy-MM-dd HH:mm} {secret.Modified:yyyy-MM-dd HH:mm}");
@@ -647,20 +637,20 @@ void CmdPromptHash()
     Console.WriteLine(Convert.ToHexString(hash).ToLower());
 }
 
-void CmdRun(string[] args)
+void CmdRun(string[] runArgs)
 {
-    // args[0] is "run", everything after is the command
-    if (args.Length < 2)
+    // runArgs[0] is "run", everything after is the command
+    if (runArgs.Length < 2)
         throw new Exception($"Usage: {Prefix} run <command> [args...]");
-    
-    var commandArgs = args.Skip(1).ToArray();
+
+    var commandArgs = runArgs.Skip(1).ToArray();
     var command = string.Join(" ", commandArgs);
-    
+
     // Find {{tokens}}
     var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9-]+)\}\}");
     var matches = tokenRegex.Matches(command);
     var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
-    
+
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
@@ -687,19 +677,19 @@ void CmdRun(string[] args)
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
+
     // Verify all tokens exist
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
             throw new Exception($"Secret '{{{{{token}}}}}' not found");
     }
-    
+
     // Substitute tokens
     var substitutedCommand = command;
     foreach (var token in tokens)
         substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", db.Secrets[token].Value);
-    
+
     // Show sanitized version
     if (Verbose)
     {
@@ -707,11 +697,11 @@ void CmdRun(string[] args)
         Console.WriteLine($"\nExecuting: {sanitized}");
         Console.WriteLine();
     }
-    
+
     // Execute command
     var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
     var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
-    
+
     var process = new Process
     {
         StartInfo = new ProcessStartInfo
@@ -721,10 +711,10 @@ void CmdRun(string[] args)
             UseShellExecute = false
         }
     };
-    
+
     process.Start();
     process.WaitForExit();
-    
+
     Environment.Exit(process.ExitCode);
 }
 
@@ -764,10 +754,10 @@ try
         Console.WriteLine("\nPrerequisites:");
         Console.WriteLine("  - ykman CLI: pip install yubikey-manager");
         Console.WriteLine("  - Configure YubiKeys: ykman otp chalresp --generate 2");
-        Console.WriteLine("  - For [sudo] commands, tswap must also be available to root");
+        Console.WriteLine($"  - For [sudo] commands: copy tswap to /usr/local/bin");
         Environment.Exit(1);
     }
-    
+
     var filteredArgs = Args.Where(a => a != "-v" && a != "--verbose").ToList();
     var command = filteredArgs[0].ToLower();
 
@@ -776,7 +766,7 @@ try
         case "init":
             CmdInit();
             break;
-        
+
         case "create":
             if (filteredArgs.Count < 2)
                 throw new Exception($"Usage: {Prefix} create <name> [length]");
@@ -848,3 +838,16 @@ catch (Exception ex)
     Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
     Environment.Exit(1);
 }
+
+// ============================================================================
+// AOT-compatible JSON serialization and data structures
+// ============================================================================
+
+[JsonSerializable(typeof(Config))]
+[JsonSerializable(typeof(SecretsDb))]
+[JsonSourceGenerationOptions(WriteIndented = true)]
+internal partial class TswapJsonContext : JsonSerializerContext { }
+
+record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
+record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
+record SecretsDb(Dictionary<string, Secret> Secrets);

