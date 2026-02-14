@@ -515,13 +515,16 @@ void CmdList()
         return;
     }
 
+    var nameWidth = Math.Max(20, db.Secrets.Keys.Max(n => n.Length));
+    var lineWidth = nameWidth + 2 + 16 + 2 + 16; // name + gaps + two date columns
+
     Console.WriteLine($"\nSecrets ({db.Secrets.Count}):");
-    Console.WriteLine("NAME                 CREATED              MODIFIED");
-    Console.WriteLine("".PadRight(60, '-'));
+    Console.WriteLine($"{"NAME".PadRight(nameWidth)}  {"CREATED".PadRight(16)}  MODIFIED");
+    Console.WriteLine("".PadRight(lineWidth, '-'));
 
     foreach (var (name, secret) in db.Secrets.OrderBy(s => s.Key))
     {
-        Console.WriteLine($"{name.PadRight(20)} {secret.Created:yyyy-MM-dd HH:mm} {secret.Modified:yyyy-MM-dd HH:mm}");
+        Console.WriteLine($"{name.PadRight(nameWidth)}  {secret.Created:yyyy-MM-dd HH:mm}  {secret.Modified:yyyy-MM-dd HH:mm}");
     }
 }
 
