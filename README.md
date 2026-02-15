@@ -185,6 +185,27 @@ tswap run rclone sync \
 
 Shell history records `{{storj-backup}}`, not the password. The secret only exists in the subprocess's memory during execution.
 
+## Example: Keeping Secrets Out of Config Files
+
+In Helm `values.yaml` and similar config files, replace plaintext secrets with empty values and a tswap comment indicating which secret to use:
+
+```yaml
+database:
+  host: db.example.com
+  username: app
+  password: ""  # tswap: db-password
+redis:
+  auth: ""  # tswap: redis-auth
+```
+
+An AI agent can freely read this file without seeing secret values. When deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
+
+```bash
+tswap run helm upgrade myapp ./chart \
+  --set database.password={{db-password}} \
+  --set redis.auth={{redis-auth}}
+```
+
 ## Files
 
 ```

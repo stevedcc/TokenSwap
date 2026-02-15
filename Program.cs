@@ -81,13 +81,24 @@ manage secrets WITHOUT ever seeing their plaintext values.
 2. NEVER generate, invent, or hardcode secret values yourself — always use `%CMD% create <name>` to
    generate secrets, then tell the user the name you chose so they can find it
 3. Use {{secret-name}} tokens in `run` commands to use secrets without seeing them
-4. If you accidentally see a plaintext secret, immediately run `%CMD% burn <name> <reason>`
+4. If you see a plaintext secret value in ANY context (file contents, command output,
+   log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
+   BEFORE continuing any other work. Do not finish your current task first.
+   Check `%CMD% names` to find the matching secret name if needed.
 5. To import secrets from external systems, pipe them directly — NEVER use intermediate variables or
    echo. For Kubernetes, use jq (not jsonpath, which has shell quoting issues with dots/underscores):
    `kubectl get secret <secret> -n <ns> -o json | jq -r '.data[""<key>""] // empty' | base64 -d | %CMD% ingest <name>`
 6. Check `%CMD% names` to see available secrets before constructing commands
 7. Burned secrets should be rotated — check with `%CMD% burned`
-8. When you create or ingest a secret, always inform the user of the secret name you used";
+8. When you create or ingest a secret, always inform the user of the secret name you used
+9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
+
+## Keeping secrets out of config files:
+- In Helm values.yaml and similar config files, replace plaintext secrets with empty
+  values and a tswap comment: `password: """"  # tswap: k8s-namespace-secret-name`
+- When deploying, scan for `# tswap:` comments and construct `%CMD% run` commands
+  with `--set` flags using `{{token}}` substitution
+- This allows agents to freely read config files without seeing secret values";
 var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 
 // ============================================================================
@@ -691,7 +702,10 @@ void CmdRun(string[] runArgs)
     // Substitute tokens
     var substitutedCommand = command;
     foreach (var token in tokens)
-        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", db.Secrets[token].Value);
+    {
+        var escapedValue = "'" + db.Secrets[token].Value.Replace("'", "'\\''") + "'";
+        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", escapedValue);
+    }
 
     // Show sanitized version
     if (Verbose)
