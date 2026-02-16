@@ -40,13 +40,23 @@ string DetectInvocationPrefix()
 }
 var Prefix = DetectInvocationPrefix();
 
-// When running under sudo, resolve config relative to the invoking user's home
-// so that "sudo tswap get" finds the same database as "tswap create"
-var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-var appDataDir = sudoUser != null
-    ? Path.Combine("/home", sudoUser, ".config")
-    : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-var ConfigDir = Path.Combine(appDataDir, "tswap-poc");
+// Allow overriding config directory for testing
+var configDirOverride = Environment.GetEnvironmentVariable("TSWAP_CONFIG_DIR");
+string ConfigDir;
+if (configDirOverride != null)
+{
+    ConfigDir = configDirOverride;
+}
+else
+{
+    // When running under sudo, resolve config relative to the invoking user's home
+    // so that "sudo tswap get" finds the same database as "tswap create"
+    var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+    var appDataDir = sudoUser != null
+        ? Path.Combine("/home", sudoUser, ".config")
+        : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    ConfigDir = Path.Combine(appDataDir, "tswap-poc");
+}
 
 var PromptText = Prompt.GetText(Prefix);
 
@@ -54,11 +64,30 @@ var PromptText = Prompt.GetText(Prefix);
 var storage = new Storage(ConfigDir);
 
 // ============================================================================
+// TEST KEY BYPASS
+// ============================================================================
+
+// When TSWAP_TEST_KEY is set (hex-encoded 32-byte key), all YubiKey operations
+// are bypassed. This allows integration testing without hardware YubiKeys.
+var testKeyHex = Environment.GetEnvironmentVariable("TSWAP_TEST_KEY");
+byte[]? TestKey = null;
+if (testKeyHex != null)
+{
+    TestKey = Convert.FromHexString(testKeyHex);
+    if (TestKey.Length != 32)
+        throw new Exception("TSWAP_TEST_KEY must be exactly 32 bytes (64 hex chars)");
+    if (Verbose) Console.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey operations bypassed");
+}
+
+// ============================================================================
 // YUBIKEY OPERATIONS
 // ============================================================================
 
 byte[] ChallengeYubiKey(int serial, string challenge)
 {
+    if (TestKey != null)
+        return TestKey[..20]; // Return first 20 bytes as simulated HMAC-SHA1 response
+
     if (Verbose) Console.Write($"YubiKey (serial: {serial})... ");
 
     try
@@ -110,6 +139,9 @@ byte[] ChallengeYubiKey(int serial, string challenge)
 
 int GetYubiKey(int? requiredSerial = null)
 {
+    if (TestKey != null)
+        return requiredSerial ?? 99999999; // Return synthetic serial
+
     // List connected YubiKeys via ykman
     var psi = new ProcessStartInfo
     {
@@ -159,6 +191,9 @@ int GetYubiKey(int? requiredSerial = null)
 
 byte[] UnlockWithYubiKey(Config config)
 {
+    if (TestKey != null)
+        return TestKey; // Bypass YubiKey entirely — use test key as master key
+
     var serial = GetYubiKey();
 
     if (!config.YubiKeySerials.Contains(serial))
@@ -235,6 +270,19 @@ void CmdInit()
         Console.Write("Already initialized. Reinitialize? (yes/no): ");
         if (Console.ReadLine()?.ToLower() != "yes")
             return;
+    }
+
+    if (TestKey != null)
+    {
+        // Test mode: create synthetic config without YubiKey interaction
+        var testConfig = new Config(
+            new List<int> { 99999999, 99999998 },
+            new string('0', 40), // 20-byte zero XOR share (hex)
+            DateTime.UtcNow
+        );
+        storage.SaveConfig(testConfig);
+        Console.WriteLine("Initialized (test mode)");
+        return;
     }
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
