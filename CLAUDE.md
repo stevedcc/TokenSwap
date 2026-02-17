@@ -9,14 +9,14 @@ TokenSwap (tswap) is a hardware-backed secret manager that solves two problems:
 2. **YubiKey Redundancy**: Two YubiKeys enrolled once; either key unlocks the vault via XOR key reconstruction
 
 C# application with two entry points:
-- **`Program.cs`** — NativeAOT compiled binary (`dotnet publish -c Release -p:PublishAot=true`). 3.8MB, ~20ms startup, no runtime dependencies.
+- **`Program.cs`** — NativeAOT compiled binary (`dotnet publish -c Release`). 3.8MB, ~20ms startup, no runtime dependencies.
 - **`tswap.cs`** — dotnet-script version for development (`chmod +x tswap.cs && ./tswap.cs`).
 
 ## Building and Running
 
 ```bash
 # Compiled binary (recommended)
-dotnet publish -c Release -p:PublishAot=true
+dotnet publish -c Release
 cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
 tswap <command>
 
