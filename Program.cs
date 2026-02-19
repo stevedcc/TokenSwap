@@ -8,16 +8,11 @@
  * Install: cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
  */
 
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using TswapCore;
 
 // Bridge dotnet-script's Args to compiled args
 var Args = args.ToList();
@@ -45,65 +40,44 @@ string DetectInvocationPrefix()
 }
 var Prefix = DetectInvocationPrefix();
 
-// When running under sudo, resolve config relative to the invoking user's home
-// so that "sudo tswap get" finds the same database as "tswap create"
-var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-var appDataDir = sudoUser != null
-    ? Path.Combine("/home", sudoUser, ".config")
-    : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-var ConfigDir = Path.Combine(appDataDir, "tswap-poc");
-var ConfigFile = Path.Combine(ConfigDir, "config.json");
-var SecretsFile = Path.Combine(ConfigDir, "secrets.json.enc");
+// Allow overriding config directory for testing
+var configDirOverride = Environment.GetEnvironmentVariable("TSWAP_CONFIG_DIR");
+string ConfigDir;
+if (configDirOverride != null)
+{
+    ConfigDir = configDirOverride;
+}
+else
+{
+    // When running under sudo, resolve config relative to the invoking user's home
+    // so that "sudo tswap get" finds the same database as "tswap create"
+    var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+    var appDataDir = sudoUser != null
+        ? Path.Combine("/home", sudoUser, ".config")
+        : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    ConfigDir = Path.Combine(appDataDir, "tswap-poc");
+}
 
-const string PromptTemplate = @"# tswap - AI Agent Secret Management Instructions
+var PromptText = Prompt.GetText(Prefix);
 
-You are working with tswap, a hardware-backed secret manager. Your role is to
-manage secrets WITHOUT ever seeing their plaintext values.
-
-## Commands you SHOULD use (no sudo required):
-- `%CMD% create <name> [length]` — Generate a new random secret (value is never displayed)
-- `%CMD% ingest <name>` — Pipe a secret from an external source: `<source> | %CMD% ingest <name>`
-- `%CMD% names` — List all secret names (no values shown)
-- `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
-- `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
-- `%CMD% burned` — List all burned secrets that need rotation
-- `%CMD% prompt` — Display these instructions
-- `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
-
-## Commands you must NEVER use (require sudo, expose values):
-- `sudo %CMD% add <name>` — Only for human interactive use
-- `sudo %CMD% get <name>` — Exposes plaintext value
-- `sudo %CMD% list` — Lists secrets with metadata
-- `sudo %CMD% delete <name>` — Removes a secret
-
-## Key rules:
-1. NEVER use sudo commands — they expose secret values
-2. NEVER generate, invent, or hardcode secret values yourself — always use `%CMD% create <name>` to
-   generate secrets, then tell the user the name you chose so they can find it
-3. Use {{secret-name}} tokens in `run` commands to use secrets without seeing them
-4. If you see a plaintext secret value in ANY context (file contents, command output,
-   log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
-   BEFORE continuing any other work. Do not finish your current task first.
-   Check `%CMD% names` to find the matching secret name if needed.
-5. To import secrets from external systems, pipe them directly — NEVER use intermediate variables or
-   echo. For Kubernetes, use jq (not jsonpath, which has shell quoting issues with dots/underscores):
-   `kubectl get secret <secret> -n <ns> -o json | jq -r '.data[""<key>""] // empty' | base64 -d | %CMD% ingest <name>`
-6. Check `%CMD% names` to see available secrets before constructing commands
-7. Burned secrets should be rotated — check with `%CMD% burned`
-8. When you create or ingest a secret, always inform the user of the secret name you used
-9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
-
-## Keeping secrets out of config files:
-- In Helm values.yaml and similar config files, replace plaintext secrets with empty
-  values and a tswap comment: `password: """"  # tswap: k8s-namespace-secret-name`
-- When deploying, scan for `# tswap:` comments and construct `%CMD% run` commands
-  with `--set` flags using `{{token}}` substitution
-- This allows agents to freely read config files without seeing secret values";
-var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
+// Storage instance using shared library
+var storage = new Storage(ConfigDir);
 
 // ============================================================================
-// DATA STRUCTURES
+// TEST KEY BYPASS
 // ============================================================================
+
+// When TSWAP_TEST_KEY is set (hex-encoded 32-byte key), all YubiKey operations
+// are bypassed. This allows integration testing without hardware YubiKeys.
+var testKeyHex = Environment.GetEnvironmentVariable("TSWAP_TEST_KEY");
+byte[]? TestKey = null;
+if (testKeyHex != null)
+{
+    TestKey = Convert.FromHexString(testKeyHex);
+    if (TestKey.Length != 32)
+        throw new Exception("TSWAP_TEST_KEY must be exactly 32 bytes (64 hex chars)");
+    if (Verbose) Console.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey operations bypassed");
+}
 
 // ============================================================================
 // YUBIKEY OPERATIONS
@@ -111,6 +85,9 @@ var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 
 byte[] ChallengeYubiKey(int serial, string challenge)
 {
+    if (TestKey != null)
+        return TestKey[..20]; // Return first 20 bytes as simulated HMAC-SHA1 response
+
     if (Verbose) Console.Write($"YubiKey (serial: {serial})... ");
 
     try
@@ -162,6 +139,9 @@ byte[] ChallengeYubiKey(int serial, string challenge)
 
 int GetYubiKey(int? requiredSerial = null)
 {
+    if (TestKey != null)
+        return requiredSerial ?? 99999999; // Return synthetic serial
+
     // List connected YubiKeys via ykman
     var psi = new ProcessStartInfo
     {
@@ -209,109 +189,11 @@ int GetYubiKey(int? requiredSerial = null)
     return serials[0];
 }
 
-// ============================================================================
-// CRYPTO OPERATIONS
-// ============================================================================
-
-byte[] XorBytes(byte[] a, byte[] b)
-{
-    if (a.Length != b.Length)
-        throw new ArgumentException("Byte arrays must be same length for XOR");
-
-    return a.Zip(b, (x, y) => (byte)(x ^ y)).ToArray();
-}
-
-byte[] DeriveKey(byte[] k1, byte[] k2)
-{
-    var combined = k1.Concat(k2).ToArray();
-    var salt = Encoding.UTF8.GetBytes("tswap-poc-v1");
-
-    return Rfc2898DeriveBytes.Pbkdf2(
-        combined,
-        salt,
-        100000,
-        HashAlgorithmName.SHA256,
-        32  // 256 bits
-    );
-}
-
-byte[] Encrypt(byte[] plaintext, byte[] key)
-{
-    var tagSizeInBytes = AesGcm.TagByteSizes.MaxSize;
-    using (var aes = new AesGcm(key, tagSizeInBytes))
-    {
-        var nonce = new byte[AesGcm.NonceByteSizes.MaxSize];
-        var tag = new byte[tagSizeInBytes];
-        var ciphertext = new byte[plaintext.Length];
-
-        RandomNumberGenerator.Fill(nonce);
-        aes.Encrypt(nonce, plaintext, ciphertext, tag);
-
-        return nonce.Concat(tag).Concat(ciphertext).ToArray();
-    }
-}
-
-byte[] Decrypt(byte[] encrypted, byte[] key)
-{
-    var nonceSize = AesGcm.NonceByteSizes.MaxSize;
-    var tagSize = AesGcm.TagByteSizes.MaxSize;
-
-    var nonce = encrypted.Take(nonceSize).ToArray();
-    var tag = encrypted.Skip(nonceSize).Take(tagSize).ToArray();
-    var ciphertext = encrypted.Skip(nonceSize + tagSize).ToArray();
-
-    using (var aes = new AesGcm(key, tagSize))
-    {
-        var plaintext = new byte[ciphertext.Length];
-        aes.Decrypt(nonce, ciphertext, tag, plaintext);
-        return plaintext;
-    }
-}
-
-// ============================================================================
-// STORAGE OPERATIONS
-// ============================================================================
-
-Config LoadConfig()
-{
-    if (!File.Exists(ConfigFile))
-        throw new Exception($"Not initialized. Run: {Prefix} init");
-
-    var json = File.ReadAllText(ConfigFile);
-    return JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)
-        ?? throw new Exception("Invalid config");
-}
-
-void SaveConfig(Config config)
-{
-    Directory.CreateDirectory(ConfigDir);
-    var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
-    File.WriteAllText(ConfigFile, json);
-}
-
-SecretsDb LoadSecrets(byte[] key)
-{
-    if (!File.Exists(SecretsFile))
-        return new SecretsDb(new Dictionary<string, Secret>());
-
-    var encrypted = File.ReadAllBytes(SecretsFile);
-    var decrypted = Decrypt(encrypted, key);
-    var json = Encoding.UTF8.GetString(decrypted);
-    return JsonSerializer.Deserialize(json, TswapJsonContext.Default.SecretsDb)
-        ?? new SecretsDb(new Dictionary<string, Secret>());
-}
-
-void SaveSecrets(SecretsDb db, byte[] key)
-{
-    Directory.CreateDirectory(ConfigDir);
-    var json = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
-    var plaintext = Encoding.UTF8.GetBytes(json);
-    var encrypted = Encrypt(plaintext, key);
-    File.WriteAllBytes(SecretsFile, encrypted);
-}
-
 byte[] UnlockWithYubiKey(Config config)
 {
+    if (TestKey != null)
+        return TestKey; // Bypass YubiKey entirely — use test key as master key
+
     var serial = GetYubiKey();
 
     if (!config.YubiKeySerials.Contains(serial))
@@ -322,7 +204,7 @@ byte[] UnlockWithYubiKey(Config config)
 
     // Reconstruct other key via XOR
     var xorShare = Convert.FromHexString(config.RedundancyXor);
-    var k_other = XorBytes(k_current, xorShare);
+    var k_other = Crypto.XorBytes(k_current, xorShare);
 
     // Determine order (use serials to ensure consistent ordering)
     byte[] k1, k2;
@@ -337,7 +219,7 @@ byte[] UnlockWithYubiKey(Config config)
         k2 = k_current;
     }
 
-    return DeriveKey(k1, k2);
+    return Crypto.DeriveKey(k1, k2);
 }
 
 // ============================================================================
@@ -383,11 +265,24 @@ void RequireSudo(string commandName)
 
 void CmdInit()
 {
-    if (File.Exists(ConfigFile))
+    if (File.Exists(storage.ConfigFile))
     {
         Console.Write("Already initialized. Reinitialize? (yes/no): ");
         if (Console.ReadLine()?.ToLower() != "yes")
             return;
+    }
+
+    if (TestKey != null)
+    {
+        // Test mode: create synthetic config without YubiKey interaction
+        var testConfig = new Config(
+            new List<int> { 99999999, 99999998 },
+            new string('0', 40), // 20-byte zero XOR share (hex)
+            DateTime.UtcNow
+        );
+        storage.SaveConfig(testConfig);
+        Console.WriteLine("Initialized (test mode)");
+        return;
     }
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
@@ -411,7 +306,7 @@ void CmdInit()
     var k2 = ChallengeYubiKey(serial2, "tswap-unlock");
 
     // Compute XOR redundancy
-    var xorShare = XorBytes(k1, k2);
+    var xorShare = Crypto.XorBytes(k1, k2);
 
     // Save config
     var config = new Config(
@@ -420,7 +315,7 @@ void CmdInit()
         DateTime.UtcNow
     );
 
-    SaveConfig(config);
+    storage.SaveConfig(config);
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -434,13 +329,13 @@ void CmdInit()
     Console.WriteLine("  [ ] Printed copy (home safe)");
     Console.WriteLine("  [ ] Second printed copy (off-site)");
     Console.WriteLine("  [ ] Git repository");
-    Console.WriteLine($"\nConfig saved to: {ConfigFile}");
+    Console.WriteLine($"\nConfig saved to: {storage.ConfigFile}");
 }
 
 void CmdAdd(string name)
 {
     RequireSudo("add");
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
 
     Console.Write($"Secret value for '{name}': ");
     var value = ReadPassword();
@@ -451,10 +346,10 @@ void CmdAdd(string name)
         throw new Exception("Values don't match");
 
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
-    SaveSecrets(db, key);
+    storage.SaveSecrets(db, key);
 
     Console.WriteLine($"\n✓ Secret '{name}' added successfully");
 }
@@ -463,9 +358,9 @@ void CmdCreate(string name, int length = 32)
 {
     const string charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+";
 
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' already exists. Use 'delete' first to rotate.");
@@ -477,7 +372,7 @@ void CmdCreate(string name, int length = 32)
 
     var value = new string(password);
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
-    SaveSecrets(db, key);
+    storage.SaveSecrets(db, key);
 
     Console.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
     Console.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
@@ -487,15 +382,15 @@ void CmdDelete(string name)
 {
     RequireSudo("delete");
 
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (!db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' not found");
 
     db.Secrets.Remove(name);
-    SaveSecrets(db, key);
+    storage.SaveSecrets(db, key);
 
     Console.WriteLine($"\n✓ Secret '{name}' deleted");
 }
@@ -503,9 +398,9 @@ void CmdDelete(string name)
 void CmdGet(string name)
 {
     RequireSudo("get");
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (!db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' not found");
@@ -516,9 +411,9 @@ void CmdGet(string name)
 void CmdList()
 {
     RequireSudo("list");
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (db.Secrets.Count == 0)
     {
@@ -541,9 +436,9 @@ void CmdList()
 
 void CmdNames()
 {
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (db.Secrets.Count == 0)
     {
@@ -567,15 +462,15 @@ void CmdIngest(string name)
     if (string.IsNullOrEmpty(value))
         throw new Exception("Empty input received. Nothing to store.");
 
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' already exists. Use 'delete' first to rotate.");
 
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
-    SaveSecrets(db, key);
+    storage.SaveSecrets(db, key);
 
     Console.WriteLine($"\n✓ Secret '{name}' ingested from stdin");
     Console.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
@@ -583,16 +478,16 @@ void CmdIngest(string name)
 
 void CmdBurn(string name, string? reason)
 {
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     if (!db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' not found");
 
     var existing = db.Secrets[name];
     db.Secrets[name] = existing with { BurnedAt = DateTime.UtcNow, BurnReason = reason };
-    SaveSecrets(db, key);
+    storage.SaveSecrets(db, key);
 
     Console.WriteLine($"\n⚠ Secret '{name}' marked as BURNED");
     Console.WriteLine("  This secret should be rotated as soon as possible.");
@@ -600,9 +495,9 @@ void CmdBurn(string name, string? reason)
 
 void CmdBurned()
 {
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     var burned = db.Secrets
         .Where(s => s.Value.BurnedAt.HasValue)
@@ -647,8 +542,7 @@ void CmdPrompt()
 
 void CmdPromptHash()
 {
-    var hash = SHA256.HashData(Encoding.UTF8.GetBytes(PromptText));
-    Console.WriteLine(Convert.ToHexString(hash).ToLower());
+    Console.WriteLine(Prompt.GetHash(Prefix));
 }
 
 void CmdRun(string[] runArgs)
@@ -661,25 +555,21 @@ void CmdRun(string[] runArgs)
     var command = string.Join(" ", commandArgs);
 
     // Find {{tokens}}
-    var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9-]+)\}\}");
-    var matches = tokenRegex.Matches(command);
-    var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
+    var tokens = Validation.ExtractTokens(command);
 
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
     // Block obvious attempts to exfiltrate secrets via run
-    var baseCommand = commandArgs[0].ToLower();
-    var blockedCommands = new HashSet<string>
-        { "echo", "printf", "cat", "env", "printenv", "set", "tee" };
-    if (blockedCommands.Contains(baseCommand))
+    var blocked = Validation.GetBlockedCommand(commandArgs[0]);
+    if (blocked != null)
         throw new Exception(
-            $"The command '{baseCommand}' would expose secret values.\n" +
+            $"The command '{blocked}' would expose secret values.\n" +
             "The 'run' command is for programs that *use* secrets, not display them.\n" +
             "Use 'sudo ... get <name>' to view a secret.");
 
     // Block shell output redirection (secrets could be written to readable files)
-    if (Regex.IsMatch(command, @"[|>]"))
+    if (Validation.HasPipeOrRedirect(command))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
             "Secrets could be captured to files or piped to other programs.\n" +
@@ -688,9 +578,9 @@ void CmdRun(string[] runArgs)
     if (Verbose) Console.WriteLine($"Found tokens: {string.Join(", ", tokens)}");
 
     // Unlock and get secrets
-    var config = LoadConfig();
+    var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
-    var db = LoadSecrets(key);
+    var db = storage.LoadSecrets(key);
 
     // Verify all tokens exist
     foreach (var token in tokens)
@@ -700,18 +590,13 @@ void CmdRun(string[] runArgs)
     }
 
     // Substitute tokens
-    var substitutedCommand = command;
-    foreach (var token in tokens)
-    {
-        var escapedValue = "'" + db.Secrets[token].Value.Replace("'", "'\\''") + "'";
-        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", escapedValue);
-    }
+    var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
+    var substitutedCommand = Validation.SubstituteTokens(command, secretValues);
 
     // Show sanitized version
     if (Verbose)
     {
-        var sanitized = tokenRegex.Replace(command, "********");
-        Console.WriteLine($"\nExecuting: {sanitized}");
+        Console.WriteLine($"\nExecuting: {Validation.SanitizeCommand(command)}");
         Console.WriteLine();
     }
 
@@ -856,15 +741,3 @@ catch (Exception ex)
     Environment.Exit(1);
 }
 
-// ============================================================================
-// AOT-compatible JSON serialization and data structures
-// ============================================================================
-
-[JsonSerializable(typeof(Config))]
-[JsonSerializable(typeof(SecretsDb))]
-[JsonSourceGenerationOptions(WriteIndented = true)]
-internal partial class TswapJsonContext : JsonSerializerContext { }
-
-record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
-record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-record SecretsDb(Dictionary<string, Secret> Secrets);
