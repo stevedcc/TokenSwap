@@ -48,11 +48,12 @@ public class ValidationTests
     }
 
     [Fact]
-    public void ExtractTokens_RejectsUnderscoreInToken()
+    public void ExtractTokens_AcceptsUnderscoreInToken()
     {
-        // Token regex only allows [a-zA-Z0-9-], not underscores
+        // Token regex allows [a-zA-Z0-9_-] so ingest-style names like my_secret work
         var tokens = Validation.ExtractTokens("{{my_secret}}");
-        Assert.Empty(tokens);
+        Assert.Single(tokens);
+        Assert.Equal("my_secret", tokens[0]);
     }
 
     // --- Blocked commands ---

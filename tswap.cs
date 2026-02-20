@@ -671,7 +671,7 @@ void CmdRun(string[] args)
     var command = string.Join(" ", commandArgs);
     
     // Find {{tokens}}
-    var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9-]+)\}\}");
+    var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9_-]+)\}\}");
     var matches = tokenRegex.Matches(command);
     var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
     
@@ -748,7 +748,7 @@ void CmdRun(string[] args)
 List<(string FilePath, int LineNumber, string SecretName)> ScanFileForMarkers(string filePath)
 {
     var results = new List<(string, int, string)>();
-    var markerRegex = new Regex(@"#\s*tswap:\s*([a-zA-Z0-9-]+)");
+    var markerRegex = new Regex(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)");
     string[] lines;
     try
     {

@@ -4,7 +4,7 @@ namespace TswapCore;
 
 public static class Check
 {
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap:\s*([a-zA-Z0-9-]+)", RegexOptions.Multiline);
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)", RegexOptions.Multiline);
 
     public record MarkerRef(string FilePath, int LineNumber, string SecretName);
 
