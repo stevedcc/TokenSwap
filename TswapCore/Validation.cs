@@ -4,7 +4,7 @@ namespace TswapCore;
 
 public static class Validation
 {
-    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9-]+)\}\}");
+    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
 
     private static readonly HashSet<string> BlockedCommands = new(StringComparer.OrdinalIgnoreCase)
         { "echo", "printf", "cat", "env", "printenv", "set", "tee" };

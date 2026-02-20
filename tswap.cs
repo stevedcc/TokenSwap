@@ -671,7 +671,7 @@ void CmdRun(string[] args)
     var command = string.Join(" ", commandArgs);
     
     // Find {{tokens}}
-    var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9-]+)\}\}");
+    var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9_-]+)\}\}");
     var matches = tokenRegex.Matches(command);
     var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
     
@@ -745,6 +745,89 @@ void CmdRun(string[] args)
     Environment.Exit(process.ExitCode);
 }
 
+List<(string FilePath, int LineNumber, string SecretName)> ScanFileForMarkers(string filePath)
+{
+    var results = new List<(string, int, string)>();
+    var markerRegex = new Regex(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
+    string[] lines;
+    try
+    {
+        lines = File.ReadAllLines(filePath);
+    }
+    catch
+    {
+        return results;
+    }
+    for (int i = 0; i < lines.Length; i++)
+    {
+        var matches = markerRegex.Matches(lines[i]);
+        foreach (Match match in matches)
+            results.Add((filePath, i + 1, match.Groups[1].Value));
+    }
+    return results;
+}
+
+List<(string FilePath, int LineNumber, string SecretName)> ScanPathForMarkers(string path)
+{
+    if (File.Exists(path))
+        return ScanFileForMarkers(path);
+    if (Directory.Exists(path))
+    {
+        var results = new List<(string, int, string)>();
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            results.AddRange(ScanFileForMarkers(file));
+        return results;
+    }
+    throw new Exception($"Path not found: {path}");
+}
+
+void CmdCheck(string path)
+{
+    var markers = ScanPathForMarkers(path);
+
+    if (markers.Count == 0)
+    {
+        Console.WriteLine("No # tswap: markers found.");
+        return;
+    }
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var byFile = markers.GroupBy(m => m.FilePath).OrderBy(g => g.Key);
+
+    int okCount = 0, warnCount = 0, missingCount = 0;
+
+    foreach (var fileGroup in byFile)
+    {
+        Console.WriteLine($"\n{fileGroup.Key}:");
+        foreach (var (filePath, lineNumber, secretName) in fileGroup.OrderBy(m => m.LineNumber))
+        {
+            if (!db.Secrets.ContainsKey(secretName))
+            {
+                Console.WriteLine($"  ✗ {secretName} (line {lineNumber}) — NOT FOUND");
+                missingCount++;
+            }
+            else if (db.Secrets[secretName].BurnedAt.HasValue)
+            {
+                Console.WriteLine($"  ⚠ {secretName} (line {lineNumber}) — BURNED, needs rotation");
+                warnCount++;
+            }
+            else
+            {
+                Console.WriteLine($"  ✓ {secretName} (line {lineNumber})");
+                okCount++;
+            }
+        }
+    }
+
+    Console.WriteLine($"\nSummary: {okCount} ok, {warnCount} warning(s), {missingCount} missing");
+
+    if (missingCount > 0)
+        Environment.Exit(1);
+}
+
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
@@ -761,6 +844,7 @@ try
         Console.WriteLine($"  {p} ingest <name>           Pipe secret from stdin (no display)");
         Console.WriteLine($"  {p} names                   List secret names (no values)");
         Console.WriteLine($"  {p} run <cmd> [args...]     Execute with {{{{token}}}} substitution");
+        Console.WriteLine($"  {p} check <path>            Verify # tswap: markers in file/dir");
         Console.WriteLine($"  {p} burn <name> [reason]    Mark a secret as burned");
         Console.WriteLine($"  {p} burned                  List all burned secrets");
         Console.WriteLine($"  {p} prompt                  Show AI agent instructions");
@@ -775,6 +859,8 @@ try
         Console.WriteLine($"  {p} create storj-pass");
         Console.WriteLine($"  kubectl get secret db-pass -o jsonpath='{{{{.data.password}}}}' | base64 -d | {p} ingest db-pass");
         Console.WriteLine($"  {p} run rclone sync --password {{{{storj-pass}}}} /data remote:backup");
+        Console.WriteLine($"  {p} check values.yaml");
+        Console.WriteLine($"  {p} check ./helm/");
         Console.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         Console.WriteLine($"  sudo {p} get storj-pass");
         Console.WriteLine($"  sudo {p} list");
@@ -850,6 +936,12 @@ try
 
         case "prompt-hash":
             CmdPromptHash();
+            break;
+
+        case "check":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: {Prefix} check <path>");
+            CmdCheck(filteredArgs[1]);
             break;
 
         case "run":
