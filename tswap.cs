@@ -748,7 +748,7 @@ void CmdRun(string[] args)
 List<(string FilePath, int LineNumber, string SecretName)> ScanFileForMarkers(string filePath)
 {
     var results = new List<(string, int, string)>();
-    var markerRegex = new Regex(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)");
+    var markerRegex = new Regex(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
     string[] lines;
     try
     {

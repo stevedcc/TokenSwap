@@ -4,15 +4,15 @@ namespace TswapCore;
 
 public static class Check
 {
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)");
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
 
     public record MarkerRef(string FilePath, int LineNumber, string SecretName);
 
     /// <summary>
     /// Scan a single file for <c># tswap: &lt;name&gt;</c> markers.
     /// Returns one entry per marker found, with line number.
-    /// Note: no space is permitted between <c>tswap</c> and the colon;
-    /// <c># tswap : name</c> is not recognised.
+    /// Optional whitespace is permitted before and after the colon,
+    /// so both <c># tswap: name</c> and <c># tswap : name</c> are recognised.
     /// Binary files and files that cannot be read are silently skipped (empty list returned).
     /// </summary>
     public static List<MarkerRef> ScanFile(string filePath)
