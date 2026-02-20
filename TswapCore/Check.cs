@@ -4,14 +4,16 @@ namespace TswapCore;
 
 public static class Check
 {
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)", RegexOptions.Multiline);
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap:\s*([a-zA-Z0-9_-]+)");
 
     public record MarkerRef(string FilePath, int LineNumber, string SecretName);
 
     /// <summary>
-    /// Scan a single file for # tswap: &lt;name&gt; markers.
+    /// Scan a single file for <c># tswap: &lt;name&gt;</c> markers.
     /// Returns one entry per marker found, with line number.
-    /// Binary files that cannot be read as text are silently skipped (empty list returned).
+    /// Note: no space is permitted between <c>tswap</c> and the colon;
+    /// <c># tswap : name</c> is not recognised.
+    /// Binary files and files that cannot be read are silently skipped (empty list returned).
     /// </summary>
     public static List<MarkerRef> ScanFile(string filePath)
     {
@@ -21,7 +23,7 @@ public static class Check
         {
             lines = File.ReadAllLines(filePath);
         }
-        catch
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // Skip unreadable or binary files
             return results;
@@ -37,8 +39,12 @@ public static class Check
         return results;
     }
 
+    private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
+        { ".git", "bin", "obj", "node_modules" };
+
     /// <summary>
-    /// Scan a file or directory (recursively) for # tswap: &lt;name&gt; markers.
+    /// Scan a file or directory (recursively) for <c># tswap: &lt;name&gt;</c> markers.
+    /// Skips <c>.git</c>, <c>bin</c>, <c>obj</c>, and <c>node_modules</c> directories.
     /// Throws if path does not exist.
     /// </summary>
     public static List<MarkerRef> ScanPath(string path)
@@ -49,12 +55,26 @@ public static class Check
         if (Directory.Exists(path))
         {
             var results = new List<MarkerRef>();
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            foreach (var file in EnumerateFiles(path))
                 results.AddRange(ScanFile(file));
             return results;
         }
 
         throw new Exception($"Path not found: {path}");
+    }
+
+    private static IEnumerable<string> EnumerateFiles(string root)
+    {
+        foreach (var file in Directory.EnumerateFiles(root))
+            yield return file;
+
+        foreach (var dir in Directory.EnumerateDirectories(root))
+        {
+            if (ExcludedDirs.Contains(Path.GetFileName(dir)))
+                continue;
+            foreach (var file in EnumerateFiles(dir))
+                yield return file;
+        }
     }
 
     public enum SecretStatus { Ok, Burned, Missing }
