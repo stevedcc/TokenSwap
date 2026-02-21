@@ -219,12 +219,36 @@ tswap tocomment values.yaml             # apply
 tswap apply values.yaml > values.deployed.yaml
 ```
 
-Alternatively, when deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
+### Helm Deployment Patterns
+
+For Helm deployments, `tswap` supports multiple approaches:
+
+**Option 1: Process substitution (recommended)** — No temporary files, secrets never touch disk:
+
+```bash
+# Directly pipe applied secrets to helm via process substitution
+helm upgrade myapp ./chart -f <(tswap apply values.yaml)
+
+# With multiple values files
+helm upgrade myapp ./chart \
+  -f values.yaml \
+  -f <(tswap apply secrets.yaml)
+```
+
+**Option 2: Individual secret substitution** — Use `{{token}}` syntax with `run`:
 
 ```bash
 tswap run helm upgrade myapp ./chart \
   --set database.password={{db-password}} \
   --set redis.auth={{redis-auth}}
+```
+
+**Option 3: Temporary file** — When process substitution isn't available:
+
+```bash
+tswap apply values.yaml > /tmp/values.deployed.yaml
+helm upgrade myapp ./chart -f /tmp/values.deployed.yaml
+rm /tmp/values.deployed.yaml
 ```
 
 ## Files

@@ -64,6 +64,10 @@ Self-documenting agent instructions. `prompt` outputs usage instructions, `promp
 
 Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators.
 
+### File Marker Substitution (`apply` command)
+
+Reads files with `# tswap: <secret-name>` markers and substitutes empty values with actual secrets, outputting to stdout. Supports Helm process substitution pattern: `helm upgrade -f <(tswap apply values.yaml)`. This avoids writing secrets to temporary files on disk.
+
 ### Storage
 
 Config directory: `~/.config/tswap-poc/`

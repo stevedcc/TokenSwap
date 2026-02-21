@@ -944,6 +944,8 @@ try
         Console.WriteLine($"  {p} tocomment values.yaml --dry-run");
         Console.WriteLine($"  {p} tocomment values.yaml");
         Console.WriteLine($"  {p} apply values.yaml");
+        Console.WriteLine($"  {p} apply values.yaml > deployed.yaml");
+        Console.WriteLine($"  helm upgrade app ./chart -f <({p} apply secrets.yaml)");
         Console.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         Console.WriteLine($"  sudo {p} get storj-pass");
         Console.WriteLine($"  sudo {p} list");

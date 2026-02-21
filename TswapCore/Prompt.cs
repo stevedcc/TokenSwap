@@ -53,7 +53,9 @@ manage secrets WITHOUT ever seeing their plaintext values.
 - Use `%CMD% tocomment <file>` to automatically replace inline secret values with `# tswap:` markers
 - Use `%CMD% check <path>` to verify that all `# tswap:` markers reference secrets that exist in the vault
 - Use `%CMD% apply <file>` to substitute secret values into a file for deployment (outputs to stdout)
-- When deploying, scan for `# tswap:` comments and construct `%CMD% run` commands
+- For Helm deployments, use process substitution: `helm upgrade app ./chart -f <(%CMD% apply values.yaml)`
+  This avoids writing secrets to temporary files
+- Alternatively, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
 - This allows agents to freely read config files without seeing secret values";
 
