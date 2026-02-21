@@ -119,11 +119,19 @@ public sealed class RedactProcessor : SecretProcessor
 /// </summary>
 public sealed class ToCommentProcessor : SecretProcessor
 {
-    // Match the value either double-quoted, single-quoted, or unquoted (no mismatched quotes).
+    // Match the value either double-quoted, single-quoted, or unquoted.
+    // Use negative lookahead/lookbehind to prevent matching secrets that are substrings of larger values.
+    // All three patterns are symmetric: secret must not be preceded or followed by dash or word chars.
+    // This prevents matching "myapp" inside "myapp-database" or 'app' inside 'app-config'.
+    //
+    // Known limitation: A secret appearing in prose will still match if surrounded by spaces
+    // (e.g. "description: contact myapp support" would match "myapp"). This is acceptable since
+    // prose is rarely found in YAML value positions, and the alternative (requiring colon-space
+    // context) would fail on valid YAML like flow sequences or compact mappings.
     protected override string GetSearchPattern(string searchText)
     {
         var escaped = Regex.Escape(searchText);
-        return $"(?:\"{escaped}\"|'{escaped}'|{escaped})";
+        return $"(?:(?<![-\\w])\"{escaped}\"(?![-\\w])|(?<![-\\w])'{escaped}'(?![-\\w])|(?<![-\\w]){escaped}(?![-\\w]))";
     }
 
     protected override string GetReplacement(string secretName, MatchType matchType)
