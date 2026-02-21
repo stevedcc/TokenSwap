@@ -1,0 +1,8 @@
+# Normalize line endings: store LF in the repo, convert on checkout to platform native
+* text=auto eol=lf
+
+# Binaries — no conversion
+# raw AES-256-GCM ciphertext (nonce + ciphertext + auth tag)
+*.enc binary
+*.png binary
+*.pdf binary

@@ -17,6 +17,8 @@
 
 #nullable enable
 
+#r "TswapCore/bin/Debug/net10.0/TswapCore.dll"
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -26,6 +28,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using TswapCore;
 
 // ============================================================================
 // CONFIGURATION
@@ -110,9 +113,7 @@ var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 // DATA STRUCTURES
 // ============================================================================
 
-record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
-record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-record SecretsDb(Dictionary<string, Secret> Secrets);
+// Config, Secret, SecretsDb are provided by TswapCore.dll
 
 // ============================================================================
 // YUBIKEY OPERATIONS
@@ -745,6 +746,7 @@ void CmdRun(string[] args)
     Environment.Exit(process.ExitCode);
 }
 
+
 List<(string FilePath, int LineNumber, string SecretName)> ScanFileForMarkers(string filePath)
 {
     var results = new List<(string, int, string)>();
@@ -828,6 +830,60 @@ void CmdCheck(string path)
         Environment.Exit(1);
 }
 
+void CmdRedact(string filePath)
+{
+    if (!File.Exists(filePath))
+        throw new Exception($"File not found: {filePath}");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var content = File.ReadAllText(filePath);
+    var redacted = Redact.RedactContent(content, db);
+
+    Console.Write(redacted);
+
+    var unknowns = Redact.FindUnknownSecrets(redacted);
+    foreach (var (line, snippet) in unknowns)
+        Console.Error.WriteLine($"⚠ Line {line}: possible unrecognized secret: {snippet}");
+}
+
+void CmdToComment(string filePath, bool dryRun)
+{
+    if (!File.Exists(filePath))
+        throw new Exception($"File not found: {filePath}");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var content = File.ReadAllText(filePath);
+    var (newContent, changes) = Redact.ToComment(content, db);
+
+    if (changes.Count == 0)
+    {
+        Console.WriteLine("No secrets found. File unchanged.");
+        return;
+    }
+
+    foreach (var diff in changes)
+    {
+        Console.WriteLine($"  line {diff.LineNumber}:");
+        Console.WriteLine($"  - {diff.Before}");
+        Console.WriteLine($"  + {diff.After}");
+    }
+
+    if (dryRun)
+    {
+        Console.WriteLine($"\n(dry run) {changes.Count} line(s) would be modified.");
+        return;
+    }
+
+    File.WriteAllText(filePath, newContent);
+    Console.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
+}
+
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
@@ -845,6 +901,8 @@ try
         Console.WriteLine($"  {p} names                   List secret names (no values)");
         Console.WriteLine($"  {p} run <cmd> [args...]     Execute with {{{{token}}}} substitution");
         Console.WriteLine($"  {p} check <path>            Verify # tswap: markers in file/dir");
+        Console.WriteLine($"  {p} redact <file>           Output file with secret values redacted");
+        Console.WriteLine($"  {p} tocomment <file>        Replace inline secrets with # tswap: comments");
         Console.WriteLine($"  {p} burn <name> [reason]    Mark a secret as burned");
         Console.WriteLine($"  {p} burned                  List all burned secrets");
         Console.WriteLine($"  {p} prompt                  Show AI agent instructions");
@@ -861,6 +919,9 @@ try
         Console.WriteLine($"  {p} run rclone sync --password {{{{storj-pass}}}} /data remote:backup");
         Console.WriteLine($"  {p} check values.yaml");
         Console.WriteLine($"  {p} check ./helm/");
+        Console.WriteLine($"  {p} redact values.yaml");
+        Console.WriteLine($"  {p} tocomment values.yaml --dry-run");
+        Console.WriteLine($"  {p} tocomment values.yaml");
         Console.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         Console.WriteLine($"  sudo {p} get storj-pass");
         Console.WriteLine($"  sudo {p} list");
@@ -942,6 +1003,18 @@ try
             if (filteredArgs.Count < 2)
                 throw new Exception($"Usage: {Prefix} check <path>");
             CmdCheck(filteredArgs[1]);
+            break;
+
+        case "redact":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: {Prefix} redact <file>");
+            CmdRedact(filteredArgs[1]);
+            break;
+
+        case "tocomment":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: {Prefix} tocomment <file> [--dry-run]");
+            CmdToComment(filteredArgs[1], filteredArgs.Contains("--dry-run"));
             break;
 
         case "run":
