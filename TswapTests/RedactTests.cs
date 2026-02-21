@@ -452,12 +452,15 @@ label: myapp-prod";
     }
 
     [Fact]
-    public void ToComment_ValueSplitAcrossMultipleLines_NowFixed()
+    public void ToComment_ValueSplitAcrossMultipleLines_NoMatch()
     {
-        // This test verifies that the fix for multi-line YAML values works correctly.
-        // Previously, when a value was split across multiple lines, the continuation
-        // lines remained unchanged causing "trailing garbage". Now with reassembly logic,
-        // multi-line values are properly handled.
+        // Current limitation: when a value is split across multiple lines in YAML,
+        // the line-by-line processing cannot match the full secret value.
+        // This is a known limitation but is safer than the previous approach which
+        // could corrupt files by removing continuation lines even for non-secrets.
+        //
+        // Workaround: Store secrets on single lines in YAML files, or use `tswap apply`
+        // workflow instead of trying to convert existing multi-line files.
         
         var fullValue = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0IQWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0plY205bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVhYkNCRFFR";
         var db = MakeDb(("k8s-cert", fullValue));
@@ -472,25 +475,12 @@ label: myapp-prod";
         
         var (content, changes) = Redact.ToComment(yaml, db);
         
-        // With the fix: reassembly happens, match succeeds, continuation lines removed
-        var lines = content.Split('\n');
+        // No match occurs because the secret is split across lines
+        Assert.Empty(changes);
         
-        // Should have 1 change (the reassembled line)
-        Assert.Single(changes);
-        
-        // Should have 2 lines (data:, ca.crt with marker)
-        // Continuation lines are removed during reassembly
-        Assert.Equal(2, lines.Length);
-        
-        // The converted line should have the tswap marker
-        var certLine = lines[1];
-        Assert.Contains("# tswap: k8s-cert", certLine);
-        
-        // No trailing garbage
-        Assert.DoesNotContain(line2.Substring(0, 5), certLine);
-        Assert.DoesNotContain(line2.Substring(0, 5), content);
+        // File remains unchanged (no data loss)
+        Assert.Equal(yaml, content);
     }
-
 
 
     [Fact]
@@ -514,5 +504,24 @@ label: myapp-prod";
         
         // Verify no trailing garbage - the base64 should not appear in output
         Assert.DoesNotContain(largeBase64.Substring(0, 50), content);
+    }
+
+    [Fact]
+    public void ToComment_Base64LookingNonSecretMultiLine_FileUnchanged()
+    {
+        // Critical test: YAML with base64-looking multi-line value that is NOT in the secret DB
+        // should remain byte-for-byte identical. The tocomment command must not corrupt files.
+        var db = new SecretsDb(new Dictionary<string, Secret>()); // empty — no secrets registered
+        
+        var yaml = @"data:
+  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t
+    T3JxS09jeEwxTTNxRUoya3V6
+kind: Secret";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // File must be unchanged
+        Assert.Equal(yaml, content);
+        Assert.Empty(changes);
     }
 }
