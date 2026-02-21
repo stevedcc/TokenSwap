@@ -798,8 +798,8 @@ void CmdMigrate()
         return;
     }
     
-    Console.WriteLine("\n⚠️  Before proceeding, backup your XOR share:");
-    Console.WriteLine($"    {config.RedundancyXor}\n");
+    Console.WriteLine("\n⚠️  IMPORTANT: Ensure you have your XOR share backed up from initial setup.");
+    Console.WriteLine("    You will need it if you need to recover your vault.\n");
     
     Console.WriteLine("Migration steps:");
     Console.WriteLine("  1. Reconfigure BOTH YubiKeys to require touch:");

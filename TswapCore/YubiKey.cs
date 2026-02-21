@@ -70,19 +70,32 @@ public class YubiKey
     }
 
     /// <summary>
-    /// Print a warning if YubiKey slots don't require touch
+    /// Print a warning if YubiKey slots don't require touch or status is unknown
     /// </summary>
     public static void WarnIfNoTouch(Config config)
     {
-        if (config.RequiresTouch == false)
+        if (config.RequiresTouch != true)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey slots configured without touch    ║");
-            Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-            Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
-            Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
-            Console.WriteLine("║  inserted, weakening the security model.                         ║");
+            
+            if (config.RequiresTouch == false)
+            {
+                Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey slots configured without touch    ║");
+                Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
+                Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
+                Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
+                Console.WriteLine("║  inserted, weakening the security model.                         ║");
+            }
+            else // config.RequiresTouch == null
+            {
+                Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey touch requirement unknown         ║");
+                Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
+                Console.WriteLine("║  Unable to detect if your YubiKeys require button press.         ║");
+                Console.WriteLine("║  This may indicate ykman is not installed or detection failed.   ║");
+                Console.WriteLine("║  If touch is not required, any process can unlock the vault.     ║");
+            }
+            
             Console.WriteLine("║                                                                   ║");
             Console.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required   ║");
             Console.WriteLine("║  slots for better security.                                       ║");

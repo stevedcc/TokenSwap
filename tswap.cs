@@ -386,15 +386,28 @@ void SaveSecrets(SecretsDb db, byte[] key)
 byte[] UnlockWithYubiKey(Config config)
 {
     // Warn about missing touch requirement
-    if (config.RequiresTouch == false)
+    if (config.RequiresTouch != true)
     {
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey slots configured without touch    ║");
-        Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
-        Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
-        Console.WriteLine("║  inserted, weakening the security model.                         ║");
+        
+        if (config.RequiresTouch == false)
+        {
+            Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey slots configured without touch    ║");
+            Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
+            Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
+            Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
+            Console.WriteLine("║  inserted, weakening the security model.                         ║");
+        }
+        else // config.RequiresTouch == null
+        {
+            Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey touch requirement unknown         ║");
+            Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
+            Console.WriteLine("║  Unable to detect if your YubiKeys require button press.         ║");
+            Console.WriteLine("║  This may indicate ykman is not installed or detection failed.   ║");
+            Console.WriteLine("║  If touch is not required, any process can unlock the vault.     ║");
+        }
+        
         Console.WriteLine("║                                                                   ║");
         Console.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required   ║");
         Console.WriteLine("║  slots for better security.                                       ║");
@@ -1036,8 +1049,8 @@ void CmdMigrate()
         return;
     }
     
-    Console.WriteLine("\n⚠️  Before proceeding, backup your XOR share:");
-    Console.WriteLine($"    {config.RedundancyXor}\n");
+    Console.WriteLine("\n⚠️  IMPORTANT: Ensure you have your XOR share backed up from initial setup.");
+    Console.WriteLine("    You will need it if you need to recover your vault.\n");
     
     Console.WriteLine("Migration steps:");
     Console.WriteLine("  1. Reconfigure BOTH YubiKeys to require touch:");
