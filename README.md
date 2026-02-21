@@ -19,6 +19,9 @@ create (random gen)       add (user sets value)
 ingest (pipe from stdin)  get (show value)
 names  (list names)       list (names + metadata)
 run    (substitute)       delete (remove)
+check  (verify markers)
+redact (safe view)
+tocomment (annotate file)
 burn   (mark compromised)
 burned (rotation report)
 prompt (agent instructions)
@@ -121,6 +124,9 @@ tswap names
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
 | `burned` | No | List all burned secrets |
+| `check <path>` | No | Scan file/dir for `# tswap:` markers; exits non-zero on missing secrets |
+| `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
+| `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `prompt` | No | Show AI agent instructions |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `add <name>` | Yes | Store a user-provided secret value |
@@ -198,7 +204,18 @@ redis:
   auth: ""  # tswap: redis-auth
 ```
 
-An AI agent can freely read this file without seeing secret values. When deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
+An AI agent can freely read this file without seeing secret values. Use `check` to verify all markers reference known secrets, and `tocomment` to automatically annotate a file that already has inline secret values:
+
+```bash
+# Verify all # tswap: markers in a file reference secrets that exist
+tswap check values.yaml
+
+# Automatically replace inline secret values with # tswap: markers
+tswap tocomment values.yaml --dry-run   # preview changes
+tswap tocomment values.yaml             # apply
+```
+
+When deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
 
 ```bash
 tswap run helm upgrade myapp ./chart \
