@@ -154,6 +154,193 @@ tswap migrate
 # 4. Restore secrets
 ```
 
+## Threat Model & Non-Goals
+
+tswap prevents **accidental leaks and casual exfiltration** — it does not attempt to confine a determined local actor. Understanding these boundaries is essential for evaluating whether tswap fits your deployment.
+
+### What tswap protects against
+
+| Threat | How |
+|--------|-----|
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
+| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee`; pipes (`\|`) and redirects (`>`) are blocked |
+| Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
+| Single YubiKey loss | XOR key reconstruction — either key derives the other via the stored XOR share |
+| Vault access without physical presence | Touch-required YubiKey slots (recommended config) require a button press to unlock |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete` require sudo; agents should never run sudo |
+
+### What tswap does NOT protect against
+
+| Non-goal | Why |
+|----------|-----|
+| Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `python`, `cp`, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
+| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
+| Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
+| Brute-force on encrypted vault | AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the vault file (`secrets.json.enc`) could be attacked offline if both the file and XOR share are obtained without a YubiKey |
+
+### Design rationale
+
+The `run` command's exfiltration prevention is intentionally a **shallow blocklist, not a sandbox**. Deep command analysis (parsing shell semantics, detecting indirect exfiltration) would add complexity without providing real security — a motivated attacker can always find a bypass. The blocklist catches honest mistakes and obvious misuse. For stronger containment, combine tswap with OS-level sandboxing (containers, seccomp, AppArmor) or network-level controls.
+
+## Recommended Agent Permissions
+
+tswap's sudo boundary defines two roles: **agent** (no sudo) and **operator** (sudo). This section provides a reference for configuring access control when integrating tswap with AI agents or automation.
+
+### Agent role (no sudo)
+
+These commands are safe for AI agents and automation. They never expose secret values:
+
+| Command | Purpose | Risk |
+|---------|---------|------|
+| `create <name> [length]` | Generate random secret | None — value is never displayed |
+| `ingest <name>` | Import secret from stdin pipe | None — agent constructs the pipeline but never sees the value |
+| `names` | List secret names | Reveals what secrets exist (names only) |
+| `run <cmd>` | Use secrets via `{{token}}` | Secrets passed to subprocess; exfiltration blocklist applies |
+| `burn <name> [reason]` | Mark secret as compromised | None — write-only operation |
+| `burned` | List burned secrets | Reveals names + burn metadata |
+| `check <path>` | Verify `# tswap:` markers | None — reads markers, not values |
+| `redact <file>` | View file with values masked | None — replaces values with `[REDACTED]` |
+| `tocomment <file>` | Annotate file with markers | Requires unlocked vault to match values |
+| `apply <file>` | Substitute markers with values | Output contains plaintext — send to stdout/process substitution only |
+| `prompt` / `prompt-hash` | Self-documentation | None |
+| `init` / `migrate` | Setup and migration | Requires physical YubiKey interaction |
+
+### Operator role (requires sudo)
+
+These commands expose or modify secret values. They should **only** be used by human operators interactively:
+
+| Command | Purpose | Why restricted |
+|---------|---------|----------------|
+| `add <name>` | Store a user-provided value | Operator types the secret — agent should never know it |
+| `get <name>` | Display plaintext value | Directly exposes secret to the terminal |
+| `list` | List secrets with metadata | Reveals creation/modification timestamps |
+| `delete <name>` | Remove a secret | Irreversible — requires operator judgment |
+
+### Example: policy enforcement
+
+If your environment supports command allowlists (e.g., a wrapper script, CI/CD policy, or agent framework permissions), configure the agent's allowed commands to match the agent role above:
+
+```bash
+# Example allowlist for an AI agent wrapper
+ALLOWED_COMMANDS="create|ingest|names|run|burn|burned|check|redact|tocomment|apply|prompt|prompt-hash|init|migrate"
+
+# Reject anything not in the allowlist
+if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
+    echo "Permission denied: '$1' requires operator access" >&2
+    exit 1
+fi
+```
+
+For Claude Code specifically, the `prompt` command provides the agent with usage instructions that include these boundaries. The agent should run `tswap prompt` at session start and follow the rules it contains.
+
+## Burn & Rotate Playbook
+
+When a secret is exposed — whether through accidental command output, a log file, or an agent seeing a plaintext value — follow this response procedure.
+
+### Step 1: Burn immediately
+
+Mark the secret as compromised. This is the **first** action, before anything else:
+
+```bash
+tswap burn <name> "reason: how it was exposed"
+```
+
+This records a timestamp and reason. The `names` command will show `[BURNED]` next to the secret, and `apply`/`check` will warn about it. Burning is idempotent — re-burning updates the timestamp and reason.
+
+### Step 2: Assess scope
+
+Check what else may be affected:
+
+```bash
+# List all burned secrets
+tswap burned
+
+# Check which files reference the burned secret
+tswap check /path/to/project
+```
+
+Determine:
+- **How was it exposed?** (command output, log file, agent context, error message)
+- **Who/what saw it?** (AI agent, CI log, terminal session)
+- **Is it in use anywhere?** (running services, config files, CI/CD pipelines)
+
+### Step 3: Rotate at the source
+
+Rotate the credential at whatever system issued it. This is provider-specific:
+
+| Provider | Rotation action |
+|----------|----------------|
+| Database password | `ALTER USER app WITH PASSWORD '...'` (use `tswap run` with a new secret) |
+| API key | Regenerate in provider dashboard, revoke the old key |
+| Kubernetes secret | `kubectl create secret` with new value, rollout restart |
+| Cloud credentials | Rotate via IAM console or CLI, deactivate old key |
+
+### Step 4: Create replacement secret
+
+```bash
+# Option A: Generate a new random secret
+tswap create db-password-v2 48
+
+# Option B: Ingest from an external source
+kubectl get secret new-creds -n prod -o json \
+  | jq -r '.data["password"] // empty' \
+  | base64 -d \
+  | tswap ingest db-password-v2
+```
+
+### Step 5: Update references
+
+Update all files and commands that referenced the old secret name:
+
+```bash
+# Find all references to the old secret
+tswap check /path/to/project
+
+# Update # tswap: markers in config files
+# (manually change db-password → db-password-v2 in marker comments)
+
+# Verify the new references
+tswap check /path/to/project
+```
+
+### Step 6: Verify and clean up
+
+```bash
+# Confirm no burned secrets remain unrotated
+tswap burned
+
+# Delete the old burned secret (operator action, requires sudo)
+sudo tswap delete db-password
+```
+
+### Quick reference
+
+```
+Exposure detected
+    │
+    ▼
+tswap burn <name> "reason"       ← immediate, before anything else
+    │
+    ▼
+tswap burned                     ← assess scope
+tswap check /project             ← find references
+    │
+    ▼
+Rotate at source                 ← provider-specific
+    │
+    ▼
+tswap create <new-name>          ← replacement secret
+    │
+    ▼
+Update markers / commands        ← point references to new secret
+    │
+    ▼
+tswap burned                     ← confirm rotation complete
+sudo tswap delete <old-name>     ← clean up (operator only)
+```
+
 ## Commands
 
 | Command | Sudo | Description |
