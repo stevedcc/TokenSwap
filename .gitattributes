@@ -1,0 +1,7 @@
+# Normalize line endings: store LF in the repo, convert on checkout to platform native
+* text=auto eol=lf
+
+# Binaries — no conversion
+*.enc binary
+*.png binary
+*.pdf binary
