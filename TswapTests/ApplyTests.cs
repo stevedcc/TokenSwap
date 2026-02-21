@@ -110,6 +110,21 @@ redis:
     }
 
     [Fact]
+    public void ApplySecrets_EscapesBackslashesAndQuotes()
+    {
+        var db = new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["secret-with-backslash"] = new Secret(@"value\with\backslash""quote", DateTime.UtcNow, DateTime.UtcNow, null, null)
+        });
+
+        var input = @"key: """"  # tswap: secret-with-backslash";
+
+        var result = Apply.ApplySecrets(input, db);
+        // Backslash becomes \\ and quote becomes \"
+        Assert.Contains(@"value\\with\\backslash\""quote", result);
+    }
+
+    [Fact]
     public void ApplySecrets_EscapesSingleQuotes()
     {
         var db = new SecretsDb(new Dictionary<string, Secret>

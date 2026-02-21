@@ -47,14 +47,18 @@ public static class Apply
             var markerPart = line.Substring(markerMatch.Index);
 
             // Match empty string patterns (with quotes)
-            var emptyValueRegex = new Regex(@"^(.*[:=]\s*)([""'])(\2)(\s*)$");
+            // Pattern: key: "" or key: '' (capturing prefix, quote char, and trailing whitespace)
+            // Group 1: prefix (everything up to the opening quote)
+            // Group 2: opening quote (either " or ')
+            // The \2 backreference matches the same quote character for closing
+            var emptyValueRegex = new Regex(@"^(.*[:=]\s*)([""'])\2(\s*)$");
             var match = emptyValueRegex.Match(beforeMarker);
 
             if (match.Success)
             {
                 var prefix = match.Groups[1].Value;  // "key: "
                 var quote = match.Groups[2].Value;   // " or '
-                var whitespace = match.Groups[4].Value;  // optional whitespace
+                var whitespace = match.Groups[3].Value;  // optional whitespace
 
                 // Escape the secret value for the appropriate quote style
                 var escapedValue = EscapeForQuote(secret.Value, quote);
@@ -84,13 +88,14 @@ public static class Apply
     {
         if (quoteChar == "\"")
         {
-            // Escape backslashes and double quotes
+            // Escape backslashes first, then double quotes
+            // This prevents double-escaping: \ -> \\ and " -> \"
             return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
         else if (quoteChar == "'")
         {
-            // Escape single quotes (different strategies for different contexts)
-            // For YAML single quotes, double the quote: ' becomes ''
+            // Escape single quotes for YAML: ' becomes ''
+            // Backslashes don't need escaping in YAML single quotes
             return value.Replace("'", "''");
         }
         return value;
