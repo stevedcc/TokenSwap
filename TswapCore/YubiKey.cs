@@ -33,20 +33,31 @@ public class YubiKey
                 return null;
 
             // Parse output to check if slot 2 has "Require touch" enabled
-            // Example output line: "Slot 2: configured  Require touch: yes"
+            // Example output: "Slot 2: configured" with flags on same or subsequent lines
             var lines = output.Split('\n');
+            bool foundSlot = false;
             foreach (var line in lines)
             {
-                if (line.Contains($"Slot {slot}:"))
+                var slotInfo = line.ToLower();
+                
+                if (slotInfo.Contains($"slot {slot}:"))
                 {
-                    // Check if "Require touch" appears after the slot line or in the same line
-                    var slotInfo = line.ToLower();
-                    
-                    // Check if "require touch" and "yes" are present
+                    foundSlot = true;
+                    // Check if "require touch" is on the same line
                     if (slotInfo.Contains("require touch"))
                     {
                         return slotInfo.Contains("yes") || slotInfo.Contains("true");
                     }
+                }
+                else if (foundSlot && slotInfo.Contains("require touch"))
+                {
+                    // "Require touch" on subsequent line after slot declaration
+                    return slotInfo.Contains("yes") || slotInfo.Contains("true");
+                }
+                else if (foundSlot && slotInfo.Trim() == "")
+                {
+                    // Empty line after slot - no more slot info
+                    break;
                 }
             }
 

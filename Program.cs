@@ -819,7 +819,7 @@ void CmdMigrate()
         Console.WriteLine("DETAILED MIGRATION GUIDE");
         Console.WriteLine(new string('═', 64) + "\n");
         
-        Console.WriteLine("Step 1: Export current secrets (requires sudo)");
+        Console.WriteLine("Step 1: Export secret names (requires sudo)");
         Console.WriteLine("  mkdir -p ~/tswap-backup");
         Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt");
         Console.WriteLine("  # Note: Values must be manually re-added after migration\n");

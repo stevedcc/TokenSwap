@@ -250,15 +250,26 @@ bool? DetectTouchRequirement(int serial, int slot = 2)
 
         // Parse output to check if slot 2 has "Require touch" enabled
         var lines = output.Split('\n');
+        bool foundSlot = false;
         foreach (var line in lines)
         {
-            if (line.Contains($"Slot {slot}:"))
+            var slotInfo = line.ToLower();
+            
+            if (slotInfo.Contains($"slot {slot}:"))
             {
-                var slotInfo = line.ToLower();
+                foundSlot = true;
                 if (slotInfo.Contains("require touch"))
                 {
                     return slotInfo.Contains("yes") || slotInfo.Contains("true");
                 }
+            }
+            else if (foundSlot && slotInfo.Contains("require touch"))
+            {
+                return slotInfo.Contains("yes") || slotInfo.Contains("true");
+            }
+            else if (foundSlot && slotInfo.Trim() == "")
+            {
+                break;
             }
         }
 
@@ -1046,7 +1057,7 @@ void CmdMigrate()
         Console.WriteLine("DETAILED MIGRATION GUIDE");
         Console.WriteLine(new string('═', 64) + "\n");
         
-        Console.WriteLine("Step 1: Export current secrets (requires sudo)");
+        Console.WriteLine("Step 1: Export secret names (requires sudo)");
         Console.WriteLine("  mkdir -p ~/tswap-backup");
         Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt");
         Console.WriteLine("  # Note: Values must be manually re-added after migration\n");
