@@ -889,6 +889,21 @@ void CmdToComment(string filePath, bool dryRun)
     Console.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
 }
 
+void CmdApply(string filePath)
+{
+    if (!File.Exists(filePath))
+        throw new Exception($"File not found: {filePath}");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var content = File.ReadAllText(filePath);
+    var applied = Apply.ApplySecrets(content, db);
+
+    Console.Write(applied);
+}
+
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
@@ -908,6 +923,7 @@ try
         Console.WriteLine($"  {p} check <path>            Verify # tswap: markers in file/dir");
         Console.WriteLine($"  {p} redact <file>           Output file with secret values redacted");
         Console.WriteLine($"  {p} tocomment <file>        Replace inline secrets with # tswap: comments");
+        Console.WriteLine($"  {p} apply <file>            Output file with # tswap: markers substituted");
         Console.WriteLine($"  {p} burn <name> [reason]    Mark a secret as burned");
         Console.WriteLine($"  {p} burned                  List all burned secrets");
         Console.WriteLine($"  {p} prompt                  Show AI agent instructions");
@@ -927,6 +943,7 @@ try
         Console.WriteLine($"  {p} redact values.yaml");
         Console.WriteLine($"  {p} tocomment values.yaml --dry-run");
         Console.WriteLine($"  {p} tocomment values.yaml");
+        Console.WriteLine($"  {p} apply values.yaml");
         Console.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         Console.WriteLine($"  sudo {p} get storj-pass");
         Console.WriteLine($"  sudo {p} list");
@@ -1020,6 +1037,12 @@ try
             if (filteredArgs.Count < 2)
                 throw new Exception($"Usage: {Prefix} tocomment <file> [--dry-run]");
             CmdToComment(filteredArgs[1], filteredArgs.Contains("--dry-run"));
+            break;
+
+        case "apply":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: {Prefix} apply <file>");
+            CmdApply(filteredArgs[1]);
             break;
 
         case "run":

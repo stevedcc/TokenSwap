@@ -33,7 +33,7 @@ There is no test suite or linter configured.
 
 Commands are split by whether they require sudo:
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `prompt`, `prompt-hash` — safe for AI agents
+- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash` — safe for AI agents
 - **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>` — exposes secret values
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.

@@ -20,6 +20,7 @@ manage secrets WITHOUT ever seeing their plaintext values.
 - `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits non-zero if any referenced secret is missing
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
 - `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
+- `%CMD% apply <file>` — Read file with `# tswap:` markers and output with actual secret values substituted
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
@@ -51,6 +52,7 @@ manage secrets WITHOUT ever seeing their plaintext values.
   values and a tswap comment: `password: """"  # tswap: k8s-namespace-secret-name`
 - Use `%CMD% tocomment <file>` to automatically replace inline secret values with `# tswap:` markers
 - Use `%CMD% check <path>` to verify that all `# tswap:` markers reference secrets that exist in the vault
+- Use `%CMD% apply <file>` to substitute secret values into a file for deployment (outputs to stdout)
 - When deploying, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
 - This allows agents to freely read config files without seeing secret values";

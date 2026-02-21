@@ -127,6 +127,7 @@ tswap names
 | `check <path>` | No | Scan file/dir for `# tswap:` markers; exits non-zero on missing secrets |
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
+| `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
 | `prompt` | No | Show AI agent instructions |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `add <name>` | Yes | Store a user-provided secret value |
@@ -204,7 +205,7 @@ redis:
   auth: ""  # tswap: redis-auth
 ```
 
-An AI agent can freely read this file without seeing secret values. Use `check` to verify all markers reference known secrets, and `tocomment` to automatically annotate a file that already has inline secret values:
+An AI agent can freely read this file without seeing secret values. Use `check` to verify all markers reference known secrets, `tocomment` to automatically annotate a file that already has inline secret values, and `apply` to substitute secrets for deployment:
 
 ```bash
 # Verify all # tswap: markers in a file reference secrets that exist
@@ -213,9 +214,12 @@ tswap check values.yaml
 # Automatically replace inline secret values with # tswap: markers
 tswap tocomment values.yaml --dry-run   # preview changes
 tswap tocomment values.yaml             # apply
+
+# Substitute actual secret values for deployment
+tswap apply values.yaml > values.deployed.yaml
 ```
 
-When deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
+Alternatively, when deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
 
 ```bash
 tswap run helm upgrade myapp ./chart \
