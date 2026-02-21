@@ -127,6 +127,7 @@ tswap names
 | `check <path>` | No | Scan file/dir for `# tswap:` markers; exits non-zero on missing secrets |
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
+| `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
 | `prompt` | No | Show AI agent instructions |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `add <name>` | Yes | Store a user-provided secret value |
@@ -204,7 +205,7 @@ redis:
   auth: ""  # tswap: redis-auth
 ```
 
-An AI agent can freely read this file without seeing secret values. Use `check` to verify all markers reference known secrets, and `tocomment` to automatically annotate a file that already has inline secret values:
+An AI agent can freely read this file without seeing secret values. Use `check` to verify all markers reference known secrets, `tocomment` to automatically annotate a file that already has inline secret values, and `apply` to substitute secrets for deployment:
 
 ```bash
 # Verify all # tswap: markers in a file reference secrets that exist
@@ -213,14 +214,52 @@ tswap check values.yaml
 # Automatically replace inline secret values with # tswap: markers
 tswap tocomment values.yaml --dry-run   # preview changes
 tswap tocomment values.yaml             # apply
+
+# Substitute actual secret values for deployment
+tswap apply values.yaml > values.deployed.yaml
 ```
 
-When deploying, scan for `# tswap:` comments and construct `run` commands with `--set` flags using `{{token}}` substitution:
+### Helm Deployment Patterns
+
+For Helm deployments, `tswap` supports multiple approaches:
+
+**Option 1: Process substitution (recommended)** — No temporary files, secrets never touch disk:
+
+```bash
+# Directly pipe applied secrets to helm via process substitution
+helm upgrade myapp ./chart -f <(tswap apply values.yaml)
+
+# With multiple values files
+helm upgrade myapp ./chart \
+  -f values.yaml \
+  -f <(tswap apply secrets.yaml)
+```
+
+**Security Note:** The `# tswap: <secret-name>` comments remain in the applied output. While secret *values* are protected, secret *names* will appear in:
+- Helm's `--debug` output
+- Release manifests stored in Kubernetes secrets
+- Audit logs and observability tools
+
+This exposes what secrets your application uses (e.g., `db-password`, `api-key`) but not their values. If secret names themselves are sensitive in your threat model, consider using generic names (e.g., `secret-1`, `secret-2`) or stripping comments with `sed`:
+
+```bash
+helm upgrade myapp ./chart -f <(tswap apply values.yaml | sed 's/#.*tswap.*$//')
+```
+
+**Option 2: Individual secret substitution** — Use `{{token}}` syntax with `run`:
 
 ```bash
 tswap run helm upgrade myapp ./chart \
   --set database.password={{db-password}} \
   --set redis.auth={{redis-auth}}
+```
+
+**Option 3: Temporary file** — When process substitution isn't available:
+
+```bash
+tswap apply values.yaml > /tmp/values.deployed.yaml
+helm upgrade myapp ./chart -f /tmp/values.deployed.yaml
+rm /tmp/values.deployed.yaml
 ```
 
 ## Files

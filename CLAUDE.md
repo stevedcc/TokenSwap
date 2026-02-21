@@ -33,7 +33,7 @@ There is no test suite or linter configured.
 
 Commands are split by whether they require sudo:
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `prompt`, `prompt-hash` — safe for AI agents
+- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash` — safe for AI agents
 - **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>` — exposes secret values
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
@@ -63,6 +63,10 @@ Self-documenting agent instructions. `prompt` outputs usage instructions, `promp
 ### Token Substitution (`run` command)
 
 Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators.
+
+### File Marker Substitution (`apply` command)
+
+Reads files with `# tswap: <secret-name>` markers and substitutes empty values with actual secrets, outputting to stdout. Supports Helm process substitution pattern: `helm upgrade -f <(tswap apply values.yaml)`. This avoids writing secrets to temporary files on disk.
 
 ### Storage
 
