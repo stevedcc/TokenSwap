@@ -20,6 +20,8 @@ public abstract class SecretProcessor
     /// Builds the ordered list of (name, matchType, searchText) entries for all non-burned
     /// secrets, including plaintext, Base64, and Base64Url variants. Sorted longest-first so
     /// that a longer value is never clobbered by a shorter value that shares a prefix.
+    /// Also includes variants with whitespace normalized to handle cases where secrets are
+    /// stored with newlines/spaces but files have them formatted differently.
     /// </summary>
     protected static IReadOnlyList<(string Name, MatchType Type, string SearchText)>
         BuildMatchList(SecretsDb db)
@@ -33,7 +35,15 @@ public abstract class SecretProcessor
             var value = secret.Value;
             if (string.IsNullOrEmpty(value)) continue;
 
+            // Add original value
             list.Add((name, MatchType.Plaintext, value));
+
+            // Add whitespace-normalized variant (newlines/spaces removed)
+            // This helps match secrets that were stored with formatting but appear
+            // without formatting in files, or vice versa
+            var normalized = value.Replace("\r", "").Replace("\n", "").Replace(" ", "").Replace("\t", "");
+            if (normalized != value && !string.IsNullOrEmpty(normalized))
+                list.Add((name, MatchType.Plaintext, normalized));
 
             var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
             if (base64 != value)
@@ -54,6 +64,8 @@ public abstract class SecretProcessor
     /// records a <see cref="LineDiff"/> for every line that changes. The replacement is
     /// passed as a lambda to <see cref="Regex.Replace"/> so that special characters (e.g.
     /// <c>$</c>) in the replacement string are treated as literals.
+    /// For <see cref="ToCommentProcessor"/>, also removes continuation lines after a replacement
+    /// to avoid leaving "trailing garbage" when YAML values span multiple lines.
     /// </summary>
     public (string Content, IReadOnlyList<LineDiff> Changes) Process(string content, SecretsDb db)
     {
@@ -61,9 +73,13 @@ public abstract class SecretProcessor
         content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
         var diffs = new List<LineDiff>();
+        var linesToRemove = new HashSet<int>();  // Track continuation lines to remove
 
         for (int i = 0; i < lines.Length; i++)
         {
+            if (linesToRemove.Contains(i))
+                continue;  // Skip lines marked for removal
+
             var original = lines[i];
             var current = original;
 
@@ -78,10 +94,63 @@ public abstract class SecretProcessor
             {
                 diffs.Add(new LineDiff(i + 1, original, current));
                 lines[i] = current;
+                
+                // Check if this processor should remove continuation lines
+                if (ShouldRemoveContinuationLines())
+                {
+                    // Detect and mark continuation lines for removal
+                    var baseIndent = GetLeadingWhitespaceCount(original);
+                    for (int j = i + 1; j < lines.Length; j++)
+                    {
+                        var nextLine = lines[j];
+                        
+                        // Stop if we hit an empty line or a line with same/less indentation
+                        if (string.IsNullOrWhiteSpace(nextLine))
+                            break;
+                        
+                        var nextIndent = GetLeadingWhitespaceCount(nextLine);
+                        if (nextIndent <= baseIndent)
+                            break;  // Not a continuation line
+                        
+                        // This is a continuation line - mark for removal
+                        linesToRemove.Add(j);
+                        diffs.Add(new LineDiff(j + 1, nextLine, ""));  // Empty = removed
+                    }
+                }
             }
         }
 
-        return (string.Join('\n', lines), diffs);
+        // Filter out lines marked for removal
+        var result = new List<string>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!linesToRemove.Contains(i))
+                result.Add(lines[i]);
+        }
+
+        return (string.Join('\n', result), diffs);
+    }
+
+    /// <summary>
+    /// Returns true if this processor should remove continuation lines after a replacement.
+    /// Only ToCommentProcessor needs this behavior to avoid leaving trailing garbage.
+    /// </summary>
+    protected virtual bool ShouldRemoveContinuationLines() => false;
+
+    /// <summary>
+    /// Counts the number of leading whitespace characters in a line.
+    /// </summary>
+    private static int GetLeadingWhitespaceCount(string line)
+    {
+        int count = 0;
+        foreach (char c in line)
+        {
+            if (char.IsWhiteSpace(c))
+                count++;
+            else
+                break;
+        }
+        return count;
     }
 
     /// <summary>
@@ -136,6 +205,12 @@ public sealed class ToCommentProcessor : SecretProcessor
 
     protected override string GetReplacement(string secretName, MatchType matchType)
         => $"\"\"  # tswap: {secretName}";
+
+    /// <summary>
+    /// Enable removal of continuation lines to avoid leaving trailing garbage when
+    /// YAML values span multiple lines (e.g., long base64 strings formatted for readability).
+    /// </summary>
+    protected override bool ShouldRemoveContinuationLines() => true;
 }
 
 /// <summary>

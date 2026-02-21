@@ -487,20 +487,19 @@ label: myapp-prod";
     }
 
     [Fact]
-    public void ToComment_ValueSpansMultipleLines_ContinuationLinesRemainUnchanged()
+    public void ToComment_ValueSpansMultipleLines_ContinuationLinesRemovedCorrectly()
     {
-        // BUG REPRODUCTION: When a YAML value spans multiple lines (e.g., long base64
-        // with line breaks for readability), and the secret is stored as a single-line value,
-        // tocomment only replaces the first line, leaving continuation lines unchanged.
+        // When a YAML value spans multiple lines (e.g., long base64 with line breaks
+        // for readability), tocomment should replace the first line AND remove continuation
+        // lines to avoid leaving "trailing garbage".
         //
-        // This happens because:
-        // 1. File content is split on \n for line-by-line processing
-        // 2. Line 1 matches the secret and gets replaced
-        // 3. Lines 2, 3, etc. (continuation lines) don't match anything and stay unchanged
-        // 4. Result: Line 1 has tswap marker, but lines 2+ still have base64 data
+        // This ensures clean conversion:
+        // Before:  ca.crt: LS0t...part1
+        //              T3Jx...part2
+        // After:   ca.crt: ""  # tswap: k8s-cert
         
         // User stores the full cert as ONE string (no newlines)
-        var fullCert = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0lRWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0psY201bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVoYkNCRFFR";
+        var fullCert = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0lRWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0plY205bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVoYkNCRFFR";
         var db = MakeDb(("k8s-cert", fullCert));
         
         // YAML file has the cert split across multiple lines (formatted for readability)
@@ -512,26 +511,23 @@ label: myapp-prod";
         
         var (content, changes) = Redact.ToComment(yaml, db);
         
-        // BUG: Only line 1 gets replaced, line 2 remains unchanged
-        if (changes.Count > 0)
-        {
-            Assert.Single(changes);  // Only line 1 changed
-            Assert.Contains("# tswap: k8s-cert", content);
-            
-            // Line 2's continuation data should be gone, but it remains
-            Assert.Contains(line2Value, content);
-            
-            // This creates invalid YAML with trailing garbage
-            var lines = content.Split('\n');
-            Assert.Equal(2, lines.Length);  // Still 2 lines
-            Assert.Contains("# tswap: k8s-cert", lines[0]);  // Line 1 has marker
-            Assert.Contains(line2Value, lines[1]);  // Line 2 still has data - BUG!
-        }
-        else
-        {
-            // Alternative manifestation: no match at all if line1 alone doesn't match
-            // (e.g., if there are word boundaries preventing it)
-            Assert.Empty(changes);
-        }
+        // Should have 2 changes: line 1 replaced, line 2 removed
+        Assert.Equal(2, changes.Count);
+        
+        // Line 1: replaced with tswap marker
+        Assert.Equal(1, changes[0].LineNumber);
+        Assert.Contains("# tswap: k8s-cert", changes[0].After);
+        
+        // Line 2: removed (empty)
+        Assert.Equal(2, changes[1].LineNumber);
+        Assert.Equal("", changes[1].After);
+        
+        // Final content should have only 1 line (line 2 removed)
+        var lines = content.Split('\n');
+        Assert.Single(lines);
+        Assert.Contains("# tswap: k8s-cert", lines[0]);
+        
+        // No trailing garbage - line2Value should not appear anywhere
+        Assert.DoesNotContain(line2Value, content);
     }
 }
