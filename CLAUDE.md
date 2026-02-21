@@ -101,6 +101,8 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 ### Prerequisites
 
 - `ykman` CLI (YubiKey Manager)
-- 2 YubiKeys with slot 2 configured for challenge-response
+- 2 YubiKeys with slot 2 configured:
+  - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
+  - **Less secure**: `ykman otp chalresp --generate 2` (no button press, for CI/automation only)
 - .NET 10 SDK (build time only)
 - For sudo commands: copy the compiled binary to `/usr/local/bin`

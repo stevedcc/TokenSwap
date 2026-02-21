@@ -224,6 +224,11 @@ int GetYubiKey(int? requiredSerial = null)
     return serials[0];
 }
 
+bool? DetectTouchRequirement(int serial, int slot = 2)
+{
+    return YubiKey.DetectTouchRequirement(serial, slot);
+}
+
 // ============================================================================
 // CRYPTO OPERATIONS
 // ============================================================================
@@ -328,6 +333,9 @@ void SaveSecrets(SecretsDb db, byte[] key)
 
 byte[] UnlockWithYubiKey(Config config)
 {
+    // Warn about missing touch requirement
+    YubiKey.WarnIfNoTouch(config);
+
     var serial = GetYubiKey();
 
     if (!config.YubiKeySerials.Contains(serial))
@@ -426,6 +434,17 @@ void CmdInit()
 
     var k2 = ChallengeYubiKey(serial2, "tswap-unlock");
     
+    // Detect touch requirement for both keys
+    Console.WriteLine("\nDetecting YubiKey slot configuration...");
+    var touch1 = DetectTouchRequirement(serial1);
+    var touch2 = DetectTouchRequirement(serial2);
+    
+    bool? requiresTouch = null;
+    if (touch1.HasValue && touch2.HasValue)
+    {
+        requiresTouch = touch1.Value && touch2.Value;
+    }
+    
     // Compute XOR redundancy
     var xorShare = XorBytes(k1, k2);
     
@@ -433,7 +452,8 @@ void CmdInit()
     var config = new Config(
         new List<int> { serial1, serial2 },
         Convert.ToHexString(xorShare),
-        DateTime.UtcNow
+        DateTime.UtcNow,
+        requiresTouch
     );
     
     SaveConfig(config);
@@ -442,6 +462,27 @@ void CmdInit()
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
     Console.WriteLine("╚════════════════════════════════════════╝\n");
     Console.WriteLine($"YubiKey Serials: {serial1}, {serial2}");
+    
+    // Report touch requirement status
+    if (requiresTouch == true)
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("✓ Touch requirement: ENABLED (recommended)");
+        Console.ResetColor();
+    }
+    else if (requiresTouch == false)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("⚠️  Touch requirement: DISABLED");
+        Console.WriteLine("\nSECURITY NOTICE: Your YubiKeys are configured without button press");
+        Console.WriteLine("requirement. Any process with access to inserted keys can unlock vault.");
+        Console.WriteLine("\nTo enable touch requirement:");
+        Console.WriteLine("  1. ykman otp delete 2      (for each key)");
+        Console.WriteLine("  2. ykman otp chalresp --generate --touch 2");
+        Console.WriteLine("  3. tswap init              (reinitialize)");
+        Console.ResetColor();
+    }
+    
     Console.WriteLine("\n⚠️  CRITICAL: BACKUP XOR SHARE NOW\n");
     Console.WriteLine("XOR Share (hex):");
     Console.WriteLine(config.RedundancyXor);
@@ -904,6 +945,80 @@ void CmdApply(string filePath)
     Console.Write(applied);
 }
 
+void CmdMigrate()
+{
+    Console.WriteLine("\n╔════════════════════════════════════════════════════════════════╗");
+    Console.WriteLine("║  tswap - YubiKey Touch Requirement Migration                  ║");
+    Console.WriteLine("╠════════════════════════════════════════════════════════════════╣");
+    Console.WriteLine("║  This will help you upgrade your YubiKey slots to require     ║");
+    Console.WriteLine("║  button press for better security.                            ║");
+    Console.WriteLine("╚════════════════════════════════════════════════════════════════╝\n");
+
+    var config = LoadConfig();
+    
+    Console.WriteLine("Current configuration:");
+    Console.WriteLine($"  YubiKey #1 Serial: {config.YubiKeySerials[0]}");
+    Console.WriteLine($"  YubiKey #2 Serial: {config.YubiKeySerials[1]}");
+    
+    if (config.RequiresTouch == true)
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("  Touch requirement: Already ENABLED ✓");
+        Console.ResetColor();
+        Console.WriteLine("\nYour configuration already requires touch. No migration needed.");
+        return;
+    }
+    
+    Console.WriteLine("\n⚠️  IMPORTANT: Ensure you have your XOR share backed up from initial setup.");
+    Console.WriteLine("    You will need it if you need to recover your vault.\n");
+    
+    Console.WriteLine("Migration steps:");
+    Console.WriteLine("  1. Reconfigure BOTH YubiKeys to require touch:");
+    Console.WriteLine("     a) ykman otp delete 2");
+    Console.WriteLine("     b) ykman otp chalresp --generate --touch 2");
+    Console.WriteLine("  2. Reinitialize tswap with 'tswap init'");
+    Console.WriteLine("  3. Restore secrets from backup or re-add them");
+    Console.WriteLine("\nIMPORTANT: After reconfiguring YubiKeys, you MUST reinitialize.");
+    Console.WriteLine("The XOR share will change because slot response changes.\n");
+    
+    Console.Write("Do you want to see detailed instructions? (yes/no): ");
+    var response = Console.ReadLine()?.ToLower();
+    
+    if (response == "yes" || response == "y")
+    {
+        Console.WriteLine("\n" + new string('═', 64));
+        Console.WriteLine("DETAILED MIGRATION GUIDE");
+        Console.WriteLine(new string('═', 64) + "\n");
+        
+        Console.WriteLine("Step 1: Export secret names (requires sudo)");
+        Console.WriteLine("  mkdir -p ~/tswap-backup");
+        Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt");
+        Console.WriteLine("  # Note: Values must be manually re-added after migration\n");
+        
+        Console.WriteLine("Step 2: Reconfigure YubiKey #1");
+        Console.WriteLine("  Insert YubiKey #1");
+        Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp delete 2");
+        Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp chalresp --generate --touch 2");
+        Console.WriteLine("  # Test: ykman otp info  (should show 'Require touch: yes')\n");
+        
+        Console.WriteLine("Step 3: Reconfigure YubiKey #2");
+        Console.WriteLine("  Remove YubiKey #1, insert YubiKey #2");
+        Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp delete 2");
+        Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp chalresp --generate --touch 2");
+        Console.WriteLine("  # Test: ykman otp info  (should show 'Require touch: yes')\n");
+        
+        Console.WriteLine("Step 4: Reinitialize tswap");
+        Console.WriteLine("  tswap init");
+        Console.WriteLine("  # Follow prompts with both YubiKeys\n");
+        
+        Console.WriteLine("Step 5: Restore secrets");
+        Console.WriteLine("  # Re-add secrets using 'sudo tswap add <name>'");
+        Console.WriteLine("  # Or use 'tswap create <name>' for new random values\n");
+        
+        Console.WriteLine(new string('═', 64));
+    }
+}
+
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
@@ -916,6 +1031,7 @@ try
         Console.WriteLine("tswap - YubiKey Secret Manager");
         Console.WriteLine("\nUsage:");
         Console.WriteLine($"  {p} init                    Initialize with 2 YubiKeys");
+        Console.WriteLine($"  {p} migrate                 Guide to upgrade slots for touch requirement");
         Console.WriteLine($"  {p} create <name> [len]     Generate random secret (no display)");
         Console.WriteLine($"  {p} ingest <name>           Pipe secret from stdin (no display)");
         Console.WriteLine($"  {p} names                   List secret names (no values)");
@@ -951,7 +1067,10 @@ try
         Console.WriteLine($"  sudo {p} list");
         Console.WriteLine("\nPrerequisites:");
         Console.WriteLine("  - ykman CLI: pip install yubikey-manager");
-        Console.WriteLine("  - Configure YubiKeys: ykman otp chalresp --generate 2");
+        Console.WriteLine("  - Configure YubiKeys with touch requirement (recommended):");
+        Console.WriteLine("    ykman otp chalresp --generate --touch 2");
+        Console.WriteLine("  - Or without touch (less secure):");
+        Console.WriteLine("    ykman otp chalresp --generate 2");
         Console.WriteLine("  - For [sudo] commands, tswap must also be available to root");
         Environment.Exit(1);
     }
@@ -963,6 +1082,10 @@ try
     {
         case "init":
             CmdInit();
+            break;
+        
+        case "migrate":
+            CmdMigrate();
             break;
         
         case "create":
