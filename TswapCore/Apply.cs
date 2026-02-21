@@ -5,6 +5,12 @@ namespace TswapCore;
 public static class Apply
 {
     private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
+    
+    // Match empty string patterns with quotes: key: "" or key: ''
+    private static readonly Regex EmptyValueRegex = new(@"^(.*[:=]\s*)([""'])\2(\s*)$");
+    
+    // Match unquoted pattern: key: (followed by marker)
+    private static readonly Regex UnquotedRegex = new(@"^(.*[:=]\s*)$");
 
     /// <summary>
     /// Apply secret values to a file containing <c># tswap: &lt;name&gt;</c> markers.
@@ -46,13 +52,8 @@ public static class Apply
             var beforeMarker = line.Substring(0, markerMatch.Index);
             var markerPart = line.Substring(markerMatch.Index);
 
-            // Match empty string patterns (with quotes)
-            // Pattern: key: "" or key: '' (capturing prefix, quote char, and trailing whitespace)
-            // Group 1: prefix (everything up to the opening quote)
-            // Group 2: opening quote (either " or ')
-            // The \2 backreference matches the same quote character for closing
-            var emptyValueRegex = new Regex(@"^(.*[:=]\s*)([""'])\2(\s*)$");
-            var match = emptyValueRegex.Match(beforeMarker);
+            // Try to match empty string patterns (with quotes)
+            var match = EmptyValueRegex.Match(beforeMarker);
 
             if (match.Success)
             {
@@ -68,8 +69,7 @@ public static class Apply
             else
             {
                 // Check for unquoted empty or placeholder pattern
-                var unquotedRegex = new Regex(@"^(.*[:=]\s*)(\s*)$");
-                var unquotedMatch = unquotedRegex.Match(beforeMarker);
+                var unquotedMatch = UnquotedRegex.Match(beforeMarker);
                 
                 if (unquotedMatch.Success)
                 {
@@ -77,6 +77,11 @@ public static class Apply
                     // Default to double quotes for safety
                     var escapedValue = EscapeForQuote(secret.Value, "\"");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
+                }
+                else
+                {
+                    // Value already populated - warn user
+                    Console.Error.WriteLine($"Warning: Line {i + 1} has marker '# tswap: {secretName}' but value appears already populated. Skipping substitution.");
                 }
             }
         }

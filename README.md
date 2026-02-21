@@ -235,6 +235,17 @@ helm upgrade myapp ./chart \
   -f <(tswap apply secrets.yaml)
 ```
 
+**Security Note:** The `# tswap: <secret-name>` comments remain in the applied output. While secret *values* are protected, secret *names* will appear in:
+- Helm's `--debug` output
+- Release manifests stored in Kubernetes secrets
+- Audit logs and observability tools
+
+This exposes what secrets your application uses (e.g., `db-password`, `api-key`) but not their values. If secret names themselves are sensitive in your threat model, consider using generic names (e.g., `secret-1`, `secret-2`) or stripping comments with `sed`:
+
+```bash
+helm upgrade myapp ./chart -f <(tswap apply values.yaml | sed 's/#.*tswap.*$//')
+```
+
 **Option 2: Individual secret substitution** — Use `{{token}}` syntax with `run`:
 
 ```bash

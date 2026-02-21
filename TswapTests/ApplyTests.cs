@@ -193,4 +193,66 @@ redis:
         var result = Apply.ApplySecrets(input, db);
         Assert.Equal(expected, result);
     }
+
+    [Fact]
+    public void ApplySecrets_UnquotedPattern()
+    {
+        var db = new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["my-secret"] = new Secret("secretvalue", DateTime.UtcNow, DateTime.UtcNow, null, null)
+        });
+
+        var input = "key:  # tswap: my-secret";
+
+        var result = Apply.ApplySecrets(input, db);
+        // Note: preserves spacing before marker (two spaces after colon)
+        Assert.Contains(@"key:  ""secretvalue""  # tswap: my-secret", result);
+    }
+
+    [Fact]
+    public void ApplySecrets_UnquotedPatternYaml()
+    {
+        var db = new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["db-pass"] = new Secret("pass123", DateTime.UtcNow, DateTime.UtcNow, null, null)
+        });
+
+        var input = @"database:
+  password:  # tswap: db-pass
+  host: localhost";
+
+        var result = Apply.ApplySecrets(input, db);
+        // Note: preserves spacing before marker (one space after colon)
+        Assert.Contains(@"password:  ""pass123""  # tswap: db-pass", result);
+    }
+
+    [Fact]
+    public void ApplySecrets_WarnsWhenValueAlreadyPopulated()
+    {
+        var db = new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["db-password"] = new Secret("newsecret", DateTime.UtcNow, DateTime.UtcNow, null, null)
+        });
+
+        var input = @"password: ""existingvalue""  # tswap: db-password";
+
+        // Capture stderr
+        var originalError = Console.Error;
+        using var errorWriter = new StringWriter();
+        Console.SetError(errorWriter);
+
+        var result = Apply.ApplySecrets(input, db);
+
+        Console.SetError(originalError);
+        var stderr = errorWriter.ToString();
+
+        // Value should not be changed
+        Assert.Contains("existingvalue", result);
+        Assert.DoesNotContain("newsecret", result);
+        
+        // Should have warning in stderr
+        Assert.Contains("Warning", stderr);
+        Assert.Contains("already populated", stderr);
+        Assert.Contains("db-password", stderr);
+    }
 }

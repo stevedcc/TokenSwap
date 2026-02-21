@@ -440,4 +440,51 @@ public class ProgramTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("determinism-test", stdout);
     }
+
+    // --- Apply ---
+
+    [Fact]
+    public void Apply_OutputsSubstitutedContent()
+    {
+        // Initialize and create a secret
+        RunTswap("init");
+        RunTswap("create", "test-secret", "16");
+
+        // Create a temp YAML file with tswap marker
+        var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
+        File.WriteAllText(yamlFile, @"database:
+  host: localhost
+  password: """"  # tswap: test-secret
+  port: 5432");
+
+        // Run apply and check stdout
+        var (exit, stdout, _) = RunTswap("apply", yamlFile);
+
+        Assert.Equal(0, exit);
+        // Should contain the structure
+        Assert.Contains("database:", stdout);
+        Assert.Contains("host: localhost", stdout);
+        Assert.Contains("port: 5432", stdout);
+        // Should have password line with marker
+        Assert.Contains("# tswap: test-secret", stdout);
+        // Should NOT contain empty password
+        Assert.DoesNotContain(@"password: """"", stdout);
+        // Should have a populated password (16 chars in double quotes)
+        Assert.Matches(@"password: "".{16}""", stdout);
+    }
+
+    [Fact]
+    public void Apply_FailsOnMissingSecret()
+    {
+        RunTswap("init");
+
+        var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: nonexistent-secret");
+
+        var (exit, _, stderr) = RunTswap("apply", yamlFile);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("nonexistent-secret", stderr);
+        Assert.Contains("not found", stderr);
+    }
 }
