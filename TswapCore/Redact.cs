@@ -58,6 +58,7 @@ public abstract class SecretProcessor
     public (string Content, IReadOnlyList<LineDiff> Changes) Process(string content, SecretsDb db)
     {
         var matchList = BuildMatchList(db);
+        content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
         var diffs = new List<LineDiff>();
 
@@ -118,9 +119,12 @@ public sealed class RedactProcessor : SecretProcessor
 /// </summary>
 public sealed class ToCommentProcessor : SecretProcessor
 {
-    // Consume an optional leading and trailing " or ' so they are replaced cleanly.
+    // Match the value either double-quoted, single-quoted, or unquoted (no mismatched quotes).
     protected override string GetSearchPattern(string searchText)
-        => "[\"']?" + Regex.Escape(searchText) + "[\"']?";
+    {
+        var escaped = Regex.Escape(searchText);
+        return $"(?:\"{escaped}\"|'{escaped}'|{escaped})";
+    }
 
     protected override string GetReplacement(string secretName, MatchType matchType)
         => $"\"\"  # tswap: {secretName}";
@@ -163,8 +167,8 @@ public static class Redact
 
         for (int i = 0; i < lines.Length; i++)
         {
-            var match = CredentialHeuristic.Match(lines[i]);
-            if (match.Success)
+            var matches = CredentialHeuristic.Matches(lines[i]);
+            if (matches.Count > 0)
                 results.Add((i + 1, lines[i].Trim()));
         }
 

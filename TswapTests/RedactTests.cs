@@ -108,12 +108,11 @@ public class RedactTests
     [Fact]
     public void Redact_Base64UrlEncodedValue_IsRedactedWithLabel()
     {
-        // Use a value whose base64 contains + or / to exercise the base64url path
+        // ">>?>>" encodes to base64 "Pj4/Pz4+" which contains both + and /,
+        // guaranteeing a distinct base64url form "Pj4_Pz4-" for every run.
         var db = MakeDb(("my-key", ">>??>>"));
         var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(">>??>>"));
         var b64url = b64.Replace('+', '-').Replace('/', '_').TrimEnd('=');
-        // Only test if the base64url form actually differs from base64
-        if (b64url == b64) return; // nothing to test for this value
         var result = Redact.RedactContent($"data: {b64url}", db);
         Assert.Equal("data: [REDACTED: my-key (base64url)]", result);
     }

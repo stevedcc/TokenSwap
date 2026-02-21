@@ -17,6 +17,8 @@
 
 #nullable enable
 
+#r "TswapCore/bin/Debug/net10.0/TswapCore.dll"
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -26,6 +28,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using TswapCore;
 
 // ============================================================================
 // CONFIGURATION
@@ -110,9 +113,7 @@ var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 // DATA STRUCTURES
 // ============================================================================
 
-record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created);
-record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-record SecretsDb(Dictionary<string, Secret> Secrets);
+// Config, Secret, SecretsDb are provided by TswapCore.dll
 
 // ============================================================================
 // YUBIKEY OPERATIONS
@@ -745,100 +746,6 @@ void CmdRun(string[] args)
     Environment.Exit(process.ExitCode);
 }
 
-// ============================================================================
-// REDACT / TOCOMMENT HELPERS
-// ============================================================================
-
-// Returns (name, isBase64, isBase64Url, searchText) entries for all non-burned secrets,
-// including plaintext, Base64, and Base64Url variants, sorted longest-first.
-List<(string Name, bool IsBase64, bool IsBase64Url, string SearchText)> BuildSecretMatchList(SecretsDb db)
-{
-    var list = new List<(string, bool, bool, string)>();
-
-    foreach (var (name, secret) in db.Secrets)
-    {
-        if (secret.BurnedAt.HasValue) continue;
-        var value = secret.Value;
-        if (string.IsNullOrEmpty(value)) continue;
-
-        list.Add((name, false, false, value));
-
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
-        if (base64 != value)
-            list.Add((name, true, false, base64));
-
-        var base64Url = base64.Replace('+', '-').Replace('/', '_').TrimEnd('=');
-        if (base64Url != base64 && base64Url != value)
-            list.Add((name, false, true, base64Url));
-    }
-
-    list.Sort((a, b) => b.SearchText.Length.CompareTo(a.SearchText.Length));
-    return list;
-}
-
-string RedactFileContent(string content, SecretsDb db)
-{
-    var matchList = BuildSecretMatchList(db);
-    var lines = content.Split('\n');
-
-    for (int i = 0; i < lines.Length; i++)
-    {
-        foreach (var (name, isBase64, isBase64Url, searchText) in matchList)
-        {
-            var pattern = Regex.Escape(searchText);
-            var label = isBase64Url ? $"[REDACTED: {name} (base64url)]"
-                      : isBase64   ? $"[REDACTED: {name} (base64)]"
-                      :              $"[REDACTED: {name}]";
-            lines[i] = Regex.Replace(lines[i], pattern, _ => label);
-        }
-    }
-
-    return string.Join('\n', lines);
-}
-
-(string Content, List<(int LineNumber, string Before, string After)> Changes)
-    ToCommentFileContent(string content, SecretsDb db)
-{
-    var matchList = BuildSecretMatchList(db);
-    var lines = content.Split('\n');
-    var diffs = new List<(int, string, string)>();
-
-    for (int i = 0; i < lines.Length; i++)
-    {
-        var original = lines[i];
-        var current = original;
-
-        foreach (var (name, _, _, searchText) in matchList)
-        {
-            var pattern = "[\"']?" + Regex.Escape(searchText) + "[\"']?";
-            var replacement = $"\"\"  # tswap: {name}";
-            current = Regex.Replace(current, pattern, _ => replacement);
-        }
-
-        if (current != original)
-        {
-            diffs.Add((i + 1, original, current));
-            lines[i] = current;
-        }
-    }
-
-    return (string.Join('\n', lines), diffs);
-}
-
-List<(int Line, string Snippet)> FindUnknownSecretsInContent(string content)
-{
-    var heuristic = new Regex(
-        @"(?:password|passwd|token|secret|key|apikey|api_key|pass)\s*[:=]\s*[""']?([A-Za-z0-9+/\-_]{12,}=*)[""']?",
-        RegexOptions.IgnoreCase);
-    var results = new List<(int, string)>();
-    var lines = content.Split('\n');
-    for (int i = 0; i < lines.Length; i++)
-    {
-        var m = heuristic.Match(lines[i]);
-        if (m.Success) results.Add((i + 1, lines[i].Trim()));
-    }
-    return results;
-}
 
 List<(string FilePath, int LineNumber, string SecretName)> ScanFileForMarkers(string filePath)
 {
@@ -933,11 +840,11 @@ void CmdRedact(string filePath)
     var db = LoadSecrets(key);
 
     var content = File.ReadAllText(filePath);
-    var redacted = RedactFileContent(content, db);
+    var redacted = Redact.RedactContent(content, db);
 
     Console.Write(redacted);
 
-    var unknowns = FindUnknownSecretsInContent(redacted);
+    var unknowns = Redact.FindUnknownSecrets(redacted);
     foreach (var (line, snippet) in unknowns)
         Console.Error.WriteLine($"⚠ Line {line}: possible unrecognized secret: {snippet}");
 }
@@ -952,7 +859,7 @@ void CmdToComment(string filePath, bool dryRun)
     var db = LoadSecrets(key);
 
     var content = File.ReadAllText(filePath);
-    var (newContent, changes) = ToCommentFileContent(content, db);
+    var (newContent, changes) = Redact.ToComment(content, db);
 
     if (changes.Count == 0)
     {
@@ -960,11 +867,11 @@ void CmdToComment(string filePath, bool dryRun)
         return;
     }
 
-    foreach (var (lineNum, before, after) in changes)
+    foreach (var diff in changes)
     {
-        Console.WriteLine($"  line {lineNum}:");
-        Console.WriteLine($"  - {before}");
-        Console.WriteLine($"  + {after}");
+        Console.WriteLine($"  line {diff.LineNumber}:");
+        Console.WriteLine($"  - {diff.Before}");
+        Console.WriteLine($"  + {diff.After}");
     }
 
     if (dryRun)
