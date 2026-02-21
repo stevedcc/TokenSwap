@@ -209,6 +209,89 @@ public class RedactTests
     }
 
     // -------------------------------------------------------------------------
+    // Redact.ToComment — YAML punctuation adjacency
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ToComment_YamlFlowMapping_UnquotedValueAdjacentToComma()
+    {
+        // value sits between ": " and "," — comma must survive unchanged
+        var db = MakeDb(("db-pass", "s3cr3t"));
+        var (content, _) = Redact.ToComment("{password: s3cr3t, host: local}", db);
+        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+    }
+
+    [Fact]
+    public void ToComment_YamlFlowMapping_DoubleQuotedValueAdjacentToComma()
+    {
+        // double-quoted value inside a flow mapping — quotes consumed, comma survives
+        var db = MakeDb(("db-pass", "s3cr3t"));
+        var (content, _) = Redact.ToComment("{password: \"s3cr3t\", host: local}", db);
+        Assert.Equal("{password: \"\"  # tswap: db-pass, host: local}", content);
+    }
+
+    [Fact]
+    public void ToComment_YamlFlowSequence_ValueAdjacentToBracket()
+    {
+        // value is the sole element of a flow sequence — bracket must survive
+        var db = MakeDb(("db-pass", "s3cr3t"));
+        var (content, _) = Redact.ToComment("passwords: [s3cr3t]", db);
+        Assert.Equal("passwords: [\"\"  # tswap: db-pass]", content);
+    }
+
+    [Fact]
+    public void ToComment_YamlNoSpaceAfterColon_Replaced()
+    {
+        // compact "key:value" (no space) — value still matched and replaced
+        var db = MakeDb(("db-pass", "s3cr3t"));
+        var (content, changes) = Redact.ToComment("password:s3cr3t", db);
+        Assert.Equal("password:\"\"  # tswap: db-pass", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_ValueWithExistingTrailingComment_CommentPreserved()
+    {
+        // existing inline comment is preserved (appended after the tswap marker)
+        var db = MakeDb(("db-pass", "s3cr3t"));
+        var (content, _) = Redact.ToComment("password: s3cr3t  # legacy value", db);
+        Assert.Equal("password: \"\"  # tswap: db-pass  # legacy value", content);
+    }
+
+    [Fact]
+    public void ToComment_CrlfLineEndings_NormalizedToLf()
+    {
+        // CRLF input must not leave stray \r in the output or miscount line numbers
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, changes) = Redact.ToComment("a: ok\r\nb: s3cr3t\r\nc: ok", db);
+        Assert.DoesNotContain("\r", content);
+        Assert.Single(changes);
+        Assert.Equal(2, changes[0].LineNumber);
+    }
+
+    [Fact]
+    public void ToComment_SecretContainsRegexSpecialChars_LiteralMatchOnly()
+    {
+        // "p+ss" as an unescaped regex matches "pss"/"ppss"/… but NOT the literal "p+ss".
+        // Regex.Escape must be applied so only the exact value is replaced.
+        var db = MakeDb(("api-key", "p+ss"));
+        var (content, changes) = Redact.ToComment("apikey: p+ss", db);
+        Assert.Equal("apikey: \"\"  # tswap: api-key", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_SecretContainsRegexSpecialChars_DoesNotMatchRelatedString()
+    {
+        // "pss" satisfies the unescaped regex "p+ss" but must NOT be replaced when
+        // the actual stored secret is "p+ss".
+        var db = MakeDb(("api-key", "p+ss"));
+        var (content, changes) = Redact.ToComment("apikey: pss", db);
+        Assert.Equal("apikey: pss", content);
+        Assert.Empty(changes);
+    }
+
+    // -------------------------------------------------------------------------
     // Redact.FindUnknownSecrets
     // -------------------------------------------------------------------------
 
