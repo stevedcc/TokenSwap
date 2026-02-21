@@ -226,59 +226,7 @@ int GetYubiKey(int? requiredSerial = null)
 
 bool? DetectTouchRequirement(int serial, int slot = 2)
 {
-    try
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "ykman",
-            Arguments = $"--device {serial} otp info",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var process = Process.Start(psi);
-        if (process == null)
-            return null;
-
-        var output = process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-
-        if (process.ExitCode != 0)
-            return null;
-
-        // Parse output to check if slot 2 has "Require touch" enabled
-        var lines = output.Split('\n');
-        bool foundSlot = false;
-        foreach (var line in lines)
-        {
-            var slotInfo = line.ToLower();
-            
-            if (slotInfo.Contains($"slot {slot}:"))
-            {
-                foundSlot = true;
-                if (slotInfo.Contains("require touch"))
-                {
-                    return slotInfo.Contains("yes") || slotInfo.Contains("true");
-                }
-            }
-            else if (foundSlot && slotInfo.Contains("require touch"))
-            {
-                return slotInfo.Contains("yes") || slotInfo.Contains("true");
-            }
-            else if (foundSlot && slotInfo.Trim() == "")
-            {
-                break;
-            }
-        }
-
-        return false;
-    }
-    catch
-    {
-        return null;
-    }
+    return YubiKey.DetectTouchRequirement(serial, slot);
 }
 
 // ============================================================================
