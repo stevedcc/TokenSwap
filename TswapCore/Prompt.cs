@@ -17,6 +17,7 @@ manage secrets WITHOUT ever seeing their plaintext values.
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
+- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers and verify secrets exist
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
 - `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values in a file with `""  # tswap: name` markers
 - `%CMD% prompt` — Display these instructions
@@ -48,6 +49,8 @@ manage secrets WITHOUT ever seeing their plaintext values.
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty
   values and a tswap comment: `password: """"  # tswap: k8s-namespace-secret-name`
+- Use `%CMD% tocomment <file>` to automatically replace inline secret values with `# tswap:` markers
+- Use `%CMD% check <path>` to verify that all `# tswap:` markers reference secrets that exist in the vault
 - When deploying, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
 - This allows agents to freely read config files without seeing secret values";
