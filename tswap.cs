@@ -386,35 +386,7 @@ void SaveSecrets(SecretsDb db, byte[] key)
 byte[] UnlockWithYubiKey(Config config)
 {
     // Warn about missing touch requirement
-    if (config.RequiresTouch != true)
-    {
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-        
-        if (config.RequiresTouch == false)
-        {
-            Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey slots configured without touch    ║");
-            Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-            Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
-            Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
-            Console.WriteLine("║  inserted, weakening the security model.                         ║");
-        }
-        else // config.RequiresTouch == null
-        {
-            Console.WriteLine("║  ⚠️  SECURITY WARNING: YubiKey touch requirement unknown         ║");
-            Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-            Console.WriteLine("║  Unable to detect if your YubiKeys require button press.         ║");
-            Console.WriteLine("║  This may indicate ykman is not installed or detection failed.   ║");
-            Console.WriteLine("║  If touch is not required, any process can unlock the vault.     ║");
-        }
-        
-        Console.WriteLine("║                                                                   ║");
-        Console.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required   ║");
-        Console.WriteLine("║  slots for better security.                                       ║");
-        Console.WriteLine("╚═══════════════════════════════════════════════════════════════════╝");
-        Console.ResetColor();
-        Console.WriteLine();
-    }
+    YubiKey.WarnIfNoTouch(config);
 
     var serial = GetYubiKey();
 
