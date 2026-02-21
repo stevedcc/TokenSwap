@@ -2,6 +2,7 @@
 * text=auto eol=lf
 
 # Binaries — no conversion
-*.enc binary  # raw AES-256-GCM ciphertext (nonce + ciphertext + auth tag)
+# raw AES-256-GCM ciphertext (nonce + ciphertext + auth tag)
+*.enc binary
 *.png binary
 *.pdf binary
