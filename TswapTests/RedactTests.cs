@@ -292,6 +292,80 @@ public class RedactTests
     }
 
     // -------------------------------------------------------------------------
+    // Redact.ToComment — substring over-matching prevention
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ToComment_ShortSecretValue_DoesNotMatchInsideOtherValues()
+    {
+        // Secret value "myapp" should NOT match when it appears as part of other field values
+        // like "myapp-db-credentials" or "myapp-database"
+        var db = MakeDb(("k8s-myapp-db-username", "myapp"));
+        var yaml = @"apiVersion: v1
+kind: Secret
+metadata:
+  name: myapp-db-credentials
+  namespace: myapp-database
+stringData:
+  username: myapp
+  password: CHANGEME";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // Only the actual secret value line should change
+        Assert.Single(changes);
+        Assert.Equal(7, changes[0].LineNumber);
+        Assert.Contains("username:", changes[0].After);
+        Assert.Contains("# tswap: k8s-myapp-db-username", changes[0].After);
+        
+        // name and namespace fields should be unchanged
+        Assert.Contains("name: myapp-db-credentials", content);
+        Assert.Contains("namespace: myapp-database", content);
+    }
+
+    [Fact]
+    public void ToComment_ShortSecretValue_MatchesOnlyCompleteYamlValues()
+    {
+        // "app" as a secret should match "username: app" but not "name: myapp"
+        var db = MakeDb(("short-name", "app"));
+        var yaml = @"name: myapp
+username: app
+other: app-config";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // Should match line 2 (username: app) but not line 1 or 3
+        Assert.Single(changes);
+        Assert.Equal(2, changes[0].LineNumber);
+        Assert.Contains("username:", changes[0].After);
+        
+        // Other lines should be unchanged
+        Assert.Contains("name: myapp", content);
+        Assert.Contains("other: app-config", content);
+    }
+
+    [Fact]
+    public void ToComment_ShortSecretValue_QuotedCompleteMatch()
+    {
+        // When value is quoted, only the complete quoted value should match
+        var db = MakeDb(("k8s-user", "myapp"));
+        var yaml = @"name: ""myapp-credentials""
+username: ""myapp""
+label: myapp-prod";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // Only line 2 has the complete secret value
+        Assert.Single(changes);
+        Assert.Equal(2, changes[0].LineNumber);
+        Assert.Contains("# tswap: k8s-user", changes[0].After);
+        
+        // Other lines unchanged
+        Assert.Contains("name: \"myapp-credentials\"", content);
+        Assert.Contains("label: myapp-prod", content);
+    }
+
+    // -------------------------------------------------------------------------
     // Redact.FindUnknownSecrets
     // -------------------------------------------------------------------------
 

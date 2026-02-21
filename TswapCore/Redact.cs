@@ -119,11 +119,14 @@ public sealed class RedactProcessor : SecretProcessor
 /// </summary>
 public sealed class ToCommentProcessor : SecretProcessor
 {
-    // Match the value either double-quoted, single-quoted, or unquoted (no mismatched quotes).
+    // Match the value either double-quoted, single-quoted, or unquoted.
+    // Use negative lookahead/lookbehind to prevent matching secrets that are substrings of larger values.
+    // For quoted: "secret" or 'secret' must not be followed by dash or word chars
+    // For unquoted: secret must not be preceded or followed by dash or word chars
     protected override string GetSearchPattern(string searchText)
     {
         var escaped = Regex.Escape(searchText);
-        return $"(?:\"{escaped}\"|'{escaped}'|{escaped})";
+        return $"(?:\"{escaped}\"(?![-\\w])|'{escaped}'(?![-\\w])|(?<![-\\w]){escaped}(?![-\\w]))";
     }
 
     protected override string GetReplacement(string secretName, MatchType matchType)
