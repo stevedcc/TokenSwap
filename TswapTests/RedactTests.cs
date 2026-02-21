@@ -427,4 +427,101 @@ label: myapp-prod";
         Assert.Single(hits);
         Assert.Equal(2, hits[0].Line);
     }
+
+    // -------------------------------------------------------------------------
+    // Redact.ToComment — large/multi-line values
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ToComment_LargeBase64Value_OnSingleLine_ReplacedCompletely()
+    {
+        // Create a large base64-encoded value (simulating a certificate)
+        var largeData = new string('A', 500); // 500 character string
+        var largeBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(largeData));
+        
+        var db = MakeDb(("k8s-cert", largeData));
+        
+        // YAML with the base64 value on a single line
+        var yaml = $"  ca.crt: {largeBase64}";
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // The entire value should be replaced, with no trailing garbage
+        Assert.Equal("  ca.crt: \"\"  # tswap: k8s-cert", content);
+        Assert.Single(changes);
+        Assert.DoesNotContain("AAA", content); // No part of the base64 should remain
+    }
+
+    [Fact]
+    public void ToComment_ValueSplitAcrossMultipleLines_NoMatch()
+    {
+        // Current limitation: when a value is split across multiple lines in YAML,
+        // the line-by-line processing cannot match the full secret value.
+        // This is a known limitation but is safer than the previous approach which
+        // could corrupt files by removing continuation lines even for non-secrets.
+        //
+        // Workaround: Store secrets on single lines in YAML files, or use `tswap apply`
+        // workflow instead of trying to convert existing multi-line files.
+        
+        var fullValue = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0IQWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0plY205bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVhYkNCRFFR";
+        var db = MakeDb(("k8s-cert", fullValue));
+        
+        var line1 = fullValue.Substring(0, 68);
+        var line2 = fullValue.Substring(68);
+        
+        // YAML with value split across lines (common in Kubernetes manifests)
+        var yaml = $@"data:
+  ca.crt: {line1}
+    {line2}";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // No match occurs because the secret is split across lines
+        Assert.Empty(changes);
+        
+        // File remains unchanged (no data loss)
+        Assert.Equal(yaml, content);
+    }
+
+
+    [Fact]
+    public void ToComment_VeryLongBase64SingleLine_ReplacesCleanly()
+    {
+        // Test with a VERY long base64 value on a single line (simulating large certificate)
+        // This verifies that length alone doesn't cause issues
+        var largeData = new string('X', 1000);  // 1000 chars
+        var largeBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(largeData));
+        
+        var db = MakeDb(("k8s-large-cert", largeData));
+        
+        // YAML with the base64 on ONE line (no multi-line formatting)
+        var yaml = $"  certificate: {largeBase64}";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // Should successfully replace the entire value
+        Assert.Single(changes);
+        Assert.Contains("# tswap: k8s-large-cert", content);
+        
+        // Verify no trailing garbage - the base64 should not appear in output
+        Assert.DoesNotContain(largeBase64.Substring(0, 50), content);
+    }
+
+    [Fact]
+    public void ToComment_Base64LookingNonSecretMultiLine_FileUnchanged()
+    {
+        // Critical test: YAML with base64-looking multi-line value that is NOT in the secret DB
+        // should remain byte-for-byte identical. The tocomment command must not corrupt files.
+        var db = new SecretsDb(new Dictionary<string, Secret>()); // empty — no secrets registered
+        
+        var yaml = @"data:
+  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t
+    T3JxS09jeEwxTTNxRUoya3V6
+kind: Secret";
+        
+        var (content, changes) = Redact.ToComment(yaml, db);
+        
+        // File must be unchanged
+        Assert.Equal(yaml, content);
+        Assert.Empty(changes);
+    }
 }
