@@ -74,11 +74,11 @@ public class CheckTests : IDisposable
     [Fact]
     public void ScanFile_HandlesExtraWhitespaceAroundColon()
     {
+        // The regex uses \s* before and after the colon, so "tswap : name" is valid.
         var path = WriteFile("values.yaml", "key: \"\"  #  tswap :  my-secret\n");
-        // The regex requires "tswap:" immediately (no space before colon), so this should NOT match.
-        // This test documents the exact boundary of accepted syntax.
         var results = Check.ScanFile(path);
-        Assert.Empty(results);
+        Assert.Single(results);
+        Assert.Equal("my-secret", results[0].SecretName);
     }
 
     [Fact]
