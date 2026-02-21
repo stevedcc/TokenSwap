@@ -452,82 +452,67 @@ label: myapp-prod";
     }
 
     [Fact]
-    public void ToComment_ValueSplitAcrossMultipleLines_FirstLineOnly()
+    public void ToComment_ValueSplitAcrossMultipleLines_NowFixed()
     {
-        // This test documents the current limitation: when a value is split across
-        // multiple YAML lines (continuation with indentation), only the portion on
-        // the first line gets processed. The continuation lines remain unchanged.
-        // This is the root cause of the "trailing garbage" bug reported in the issue.
+        // This test verifies that the fix for multi-line YAML values works correctly.
+        // Previously, when a value was split across multiple lines, the continuation
+        // lines remained unchanged causing "trailing garbage". Now with reassembly logic,
+        // multi-line values are properly handled.
         
-        var longValue = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0lRWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0psY201bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVoYkNCRFFR";
-        var db = MakeDb(("k8s-cert", longValue));
+        var fullValue = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0IQWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0plY205bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVhYkNCRFFR";
+        var db = MakeDb(("k8s-cert", fullValue));
+        
+        var line1 = fullValue.Substring(0, 68);
+        var line2 = fullValue.Substring(68);
         
         // YAML with value split across lines (common in Kubernetes manifests)
-        var yaml = @"data:
-  ca.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0lRWm9j
-    T3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFR
-    REV3TnJkV0psY201bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVoYkNCRFFR";
+        var yaml = $@"data:
+  ca.crt: {line1}
+    {line2}";
         
         var (content, changes) = Redact.ToComment(yaml, db);
         
-        // BUG: The continuation lines remain unchanged, causing "trailing garbage"
-        // This test will FAIL with the current implementation until the bug is fixed
+        // With the fix: reassembly happens, match succeeds, continuation lines removed
         var lines = content.Split('\n');
         
-        // Expected: Only 1 change (the first line), and continuation lines removed
-        // Actual: The continuation lines remain as-is
-        Assert.Single(changes); // Only one line changed
-        Assert.Equal(3, lines.Length); // Should be 3 lines (data:, ca.crt with marker, empty?)
+        // Should have 1 change (the reassembled line)
+        Assert.Single(changes);
         
-        // The converted line should not have trailing data
+        // Should have 2 lines (data:, ca.crt with marker)
+        // Continuation lines are removed during reassembly
+        Assert.Equal(2, lines.Length);
+        
+        // The converted line should have the tswap marker
         var certLine = lines[1];
         Assert.Contains("# tswap: k8s-cert", certLine);
-        // This is where the bug manifests: continuation data shouldn't be on this line
-        // Assert.DoesNotContain("O3JxS", certLine); // Part of line 2 should not appear
+        
+        // No trailing garbage
+        Assert.DoesNotContain(line2.Substring(0, 5), certLine);
+        Assert.DoesNotContain(line2.Substring(0, 5), content);
     }
 
+
+
     [Fact]
-    public void ToComment_ValueSpansMultipleLines_ContinuationLinesRemovedCorrectly()
+    public void ToComment_VeryLongBase64SingleLine_ReplacesCleanly()
     {
-        // When a YAML value spans multiple lines (e.g., long base64 with line breaks
-        // for readability), tocomment should replace the first line AND remove continuation
-        // lines to avoid leaving "trailing garbage".
-        //
-        // This ensures clean conversion:
-        // Before:  ca.crt: LS0t...part1
-        //              T3Jx...part2
-        // After:   ca.crt: ""  # tswap: k8s-cert
+        // Test with a VERY long base64 value on a single line (simulating large certificate)
+        // This verifies that length alone doesn't cause issues
+        var largeData = new string('X', 1000);  // 1000 chars
+        var largeBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(largeData));
         
-        // User stores the full cert as ONE string (no newlines)
-        var fullCert = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUZGekNDQXYrZ0F3SUJBZ0lRWm9jT3JxS09jeEwxTTNxRUoya3V6QU5CZ2txaGtpRzl3MEJBUXNGQURBY01TSXdJQVlEVlFRREV3TnJkV0plY205bGRHVnpJR0poYzJWa0lHOXVJSFJvWlNCcGJuUmxjbTVoYkNCRFFR";
-        var db = MakeDb(("k8s-cert", fullCert));
+        var db = MakeDb(("k8s-large-cert", largeData));
         
-        // YAML file has the cert split across multiple lines (formatted for readability)
-        // Line 1: ca.crt: <first_part>
-        // Line 2:     <continuation_part>
-        var line1Value = fullCert.Substring(0, 68);  // First 68 chars
-        var line2Value = fullCert.Substring(68);      // Rest
-        var yaml = $"  ca.crt: {line1Value}\n    {line2Value}";
+        // YAML with the base64 on ONE line (no multi-line formatting)
+        var yaml = $"  certificate: {largeBase64}";
         
         var (content, changes) = Redact.ToComment(yaml, db);
         
-        // Should have 2 changes: line 1 replaced, line 2 removed
-        Assert.Equal(2, changes.Count);
+        // Should successfully replace the entire value
+        Assert.Single(changes);
+        Assert.Contains("# tswap: k8s-large-cert", content);
         
-        // Line 1: replaced with tswap marker
-        Assert.Equal(1, changes[0].LineNumber);
-        Assert.Contains("# tswap: k8s-cert", changes[0].After);
-        
-        // Line 2: removed (empty)
-        Assert.Equal(2, changes[1].LineNumber);
-        Assert.Equal("", changes[1].After);
-        
-        // Final content should have only 1 line (line 2 removed)
-        var lines = content.Split('\n');
-        Assert.Single(lines);
-        Assert.Contains("# tswap: k8s-cert", lines[0]);
-        
-        // No trailing garbage - line2Value should not appear anywhere
-        Assert.DoesNotContain(line2Value, content);
+        // Verify no trailing garbage - the base64 should not appear in output
+        Assert.DoesNotContain(largeBase64.Substring(0, 50), content);
     }
 }

@@ -66,12 +66,20 @@ public abstract class SecretProcessor
     /// <c>$</c>) in the replacement string are treated as literals.
     /// For <see cref="ToCommentProcessor"/>, also removes continuation lines after a replacement
     /// to avoid leaving "trailing garbage" when YAML values span multiple lines.
+    /// Additionally, attempts to reassemble multi-line base64 values before processing.
     /// </summary>
     public (string Content, IReadOnlyList<LineDiff> Changes) Process(string content, SecretsDb db)
     {
         var matchList = BuildMatchList(db);
         content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
+        
+        // Pre-process: reassemble potential multi-line base64 values
+        if (ShouldReassembleMultiLineValues())
+        {
+            lines = ReassembleBase64Lines(lines);
+        }
+        
         var diffs = new List<LineDiff>();
         var linesToRemove = new HashSet<int>();  // Track continuation lines to remove
 
@@ -132,10 +140,101 @@ public abstract class SecretProcessor
     }
 
     /// <summary>
+    /// Reassembles lines that appear to be multi-line base64 values into single lines.
+    /// This helps match secrets that are stored as single-line values but formatted
+    /// across multiple lines in YAML files for readability.
+    /// </summary>
+    private static string[] ReassembleBase64Lines(string[] lines)
+    {
+        var result = new List<string>();
+        var i = 0;
+        
+        while (i < lines.Length)
+        {
+            var line = lines[i];
+            
+            // Check if this line contains a key: value pattern
+            if (line.Contains(':') && !line.TrimStart().StartsWith('#'))
+            {
+                var colonIndex = line.IndexOf(':');
+                var valueStart = colonIndex + 1;
+                
+                if (valueStart < line.Length)
+                {
+                    var valuePart = line.Substring(valueStart).TrimStart();
+                    
+                    // Check if this looks like the start of a base64 value
+                    if (IsLikelyBase64(valuePart))
+                    {
+                        var assembled = line;
+                        var baseIndent = GetLeadingWhitespaceCount(line);
+                        var j = i + 1;
+                        
+                        // Collect continuation lines
+                        while (j < lines.Length)
+                        {
+                            var nextLine = lines[j];
+                            var nextIndent = GetLeadingWhitespaceCount(nextLine);
+                            var nextTrimmed = nextLine.Trim();
+                            
+                            // Stop if empty line or not a continuation
+                            if (string.IsNullOrWhiteSpace(nextLine) || nextIndent <= baseIndent)
+                                break;
+                            
+                            // Stop if doesn't look like base64
+                            if (!IsLikelyBase64(nextTrimmed))
+                                break;
+                            
+                            // Append the continuation (without whitespace)
+                            assembled += nextTrimmed;
+                            j++;
+                        }
+                        
+                        result.Add(assembled);
+                        i = j;  // Skip the continuation lines
+                        continue;
+                    }
+                }
+            }
+            
+            result.Add(line);
+            i++;
+        }
+        
+        return result.ToArray();
+    }
+
+    /// <summary>
+    /// Heuristic to detect if a string looks like base64 data.
+    /// </summary>
+    private static bool IsLikelyBase64(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length < 4)
+            return false;
+        
+        // Base64 consists of: A-Z, a-z, 0-9, +, /, and = (padding)
+        // Check if at least 80% of characters are base64-valid
+        int validChars = 0;
+        foreach (char c in value)
+        {
+            if (char.IsLetterOrDigit(c) || c == '+' || c == '/' || c == '=' || c == '-' || c == '_')
+                validChars++;
+        }
+        
+        return (double)validChars / value.Length >= 0.8;
+    }
+
+    /// <summary>
     /// Returns true if this processor should remove continuation lines after a replacement.
     /// Only ToCommentProcessor needs this behavior to avoid leaving trailing garbage.
     /// </summary>
     protected virtual bool ShouldRemoveContinuationLines() => false;
+
+    /// <summary>
+    /// Returns true if this processor should reassemble multi-line base64 values before processing.
+    /// Only ToCommentProcessor needs this behavior to match secrets split across lines.
+    /// </summary>
+    protected virtual bool ShouldReassembleMultiLineValues() => false;
 
     /// <summary>
     /// Counts the number of leading whitespace characters in a line.
@@ -211,6 +310,12 @@ public sealed class ToCommentProcessor : SecretProcessor
     /// YAML values span multiple lines (e.g., long base64 strings formatted for readability).
     /// </summary>
     protected override bool ShouldRemoveContinuationLines() => true;
+
+    /// <summary>
+    /// Enable reassembly of multi-line base64 values to allow matching secrets that are
+    /// split across multiple lines in YAML files.
+    /// </summary>
+    protected override bool ShouldReassembleMultiLineValues() => true;
 }
 
 /// <summary>
