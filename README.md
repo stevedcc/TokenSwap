@@ -124,7 +124,7 @@ tswap names
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
 | `burned` | No | List all burned secrets |
-| `check <path>` | No | Scan file/dir for `# tswap:` markers and verify secrets exist |
+| `check <path>` | No | Scan file/dir for `# tswap:` markers; exits non-zero on missing secrets |
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `prompt` | No | Show AI agent instructions |

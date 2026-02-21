@@ -17,9 +17,9 @@ manage secrets WITHOUT ever seeing their plaintext values.
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
-- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers and verify secrets exist
+- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits non-zero if any referenced secret is missing
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
-- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values in a file with `""  # tswap: name` markers
+- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
