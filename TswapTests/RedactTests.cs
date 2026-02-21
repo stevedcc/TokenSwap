@@ -365,6 +365,33 @@ label: myapp-prod";
         Assert.Contains("label: myapp-prod", content);
     }
 
+    [Fact]
+    public void ToComment_ShortSecretValue_DoesNotMatchInsideShellEmbeddedInYaml()
+    {
+        // Secret value "myapp" appears inside a shell script embedded in a YAML literal block.
+        // It should match the assignment but not the resource name in the script comment.
+        var db = MakeDb(("k8s-app-name", "myapp"));
+        var yaml = @"storage:
+  files:
+    - path: /usr/local/bin/run-installer
+      contents:
+        inline: |
+          #!/usr/bin/env sh
+          # configures myapp-service
+          export APP_NAME=""myapp""
+          curl -sfL https://example.com | APP_NAME=""$APP_NAME"" sh";
+
+        var (content, changes) = Redact.ToComment(yaml, db);
+
+        // Only the assignment line should be replaced
+        Assert.Single(changes);
+        Assert.Contains("export APP_NAME", changes[0].After);
+        Assert.Contains("# tswap: k8s-app-name", changes[0].After);
+
+        // The comment line referencing myapp-service should be untouched
+        Assert.Contains("# configures myapp-service", content);
+    }
+
     // -------------------------------------------------------------------------
     // Redact.FindUnknownSecrets
     // -------------------------------------------------------------------------
