@@ -99,6 +99,10 @@ chmod +x tswap.cs
 
 ```bash
 # Configure both YubiKeys (slot 2, one time each)
+# With touch requirement (RECOMMENDED for security)
+ykman otp chalresp --generate --touch 2
+
+# Or without touch (less secure, for advanced/CI use only)
 ykman otp chalresp --generate 2
 
 # Initialize (requires both keys, one at a time)
@@ -114,11 +118,48 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 tswap names
 ```
 
+## Security: YubiKey Touch Requirement
+
+**By default, tswap recommends configuring YubiKey slots with touch requirement** for better security:
+
+```bash
+ykman otp chalresp --generate --touch 2
+```
+
+This means:
+- ✓ **Physical presence required** — touching the YubiKey confirms intent
+- ✓ **Protection from local malware** — processes can't silently unlock vault
+- ✓ **Better threat model** — combines "something you have" (key) + "something you do" (touch)
+
+### Without Touch (Less Secure)
+
+Slots configured without touch (`ykman otp chalresp --generate 2`) allow any process with access to the inserted YubiKey to unlock the vault:
+
+- ⚠️  No physical confirmation required
+- ⚠️  Vulnerable to malware accessing inserted keys
+- ⚠️  Suitable only for CI/CD or automated scenarios where touch is impractical
+
+### Migrating to Touch-Required Slots
+
+If you have an existing installation without touch:
+
+```bash
+# Check your configuration status
+tswap migrate
+
+# Follow the migration guide to:
+# 1. Backup your secrets
+# 2. Reconfigure YubiKeys with --touch flag
+# 3. Reinitialize tswap
+# 4. Restore secrets
+```
+
 ## Commands
 
 | Command | Sudo | Description |
 |---------|------|-------------|
 | `init` | No | Initialize with 2 YubiKeys |
+| `migrate` | No | Guide to upgrade slots for touch requirement |
 | `create <name> [length]` | No | Generate random secret (never displayed) |
 | `ingest <name>` | No | Pipe secret from stdin (never displayed) |
 | `names` | No | List secret names only |
@@ -274,7 +315,9 @@ rm /tmp/values.deployed.yaml
 ## Prerequisites
 
 - `ykman` CLI (YubiKey Manager): `pip install yubikey-manager` or via system package manager
-- 2 YubiKeys with slot 2 configured: `ykman otp chalresp --generate 2`
+- 2 YubiKeys with slot 2 configured:
+  - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
+  - **Less secure**: `ykman otp chalresp --generate 2` (no button press)
 - .NET 10 SDK (build time only — the compiled binary has no runtime dependencies)
 
 ## License
