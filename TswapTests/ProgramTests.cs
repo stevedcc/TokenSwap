@@ -487,4 +487,168 @@ public class ProgramTests : IDisposable
         Assert.Contains("nonexistent-secret", stderr);
         Assert.Contains("not found", stderr);
     }
+
+    // --- Init: new config fields ---
+
+    [Fact]
+    public void Init_ConfigHasUnlockChallenge()
+    {
+        RunTswap("init");
+        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
+        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+
+        Assert.NotNull(config.UnlockChallenge);
+        Assert.Equal(64, config.UnlockChallenge.Length); // 32 bytes as hex
+    }
+
+    [Fact]
+    public void Init_ConfigHasRngMode()
+    {
+        RunTswap("init");
+        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
+        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+
+        Assert.NotNull(config.RngMode);
+        Assert.Equal("system", config.RngMode); // test mode uses default
+    }
+
+    // --- Export / Import ---
+
+    [Fact]
+    public void Export_CreatesEncryptedFile()
+    {
+        RunTswap("init");
+        RunTswap("create", "my-secret");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        var (exit, stdout, _) = RunTswapWithStdin("passphrase123\npassphrase123\n", "export", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(exportPath));
+        // File must not contain the plaintext secret name
+        Assert.DoesNotContain("my-secret", File.ReadAllText(exportPath));
+        Assert.Contains("tswap-export-v1", File.ReadAllText(exportPath));
+    }
+
+    [Fact]
+    public void Export_Import_RoundTrip()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("secret-value", "ingest", "db-pass");
+        RunTswap("create", "api-key");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("strongpassphrase\nstrongpassphrase\n", "export", exportPath);
+
+        // Re-init clears the vault
+        RunTswap("init");
+        var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("2", stdout); // "Imported 2 secret(s)"
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("db-pass", namesOut);
+        Assert.Contains("api-key", namesOut);
+    }
+
+    [Fact]
+    public void Import_SkipsBurnedSecrets()
+    {
+        RunTswap("init");
+        RunTswap("create", "good-secret");
+        RunTswap("create", "burned-secret");
+        RunTswap("burn", "burned-secret", "compromised");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+
+        RunTswap("init");
+        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Skipped", stdout);
+        Assert.Contains("burned-secret", stdout);
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("good-secret", namesOut);
+        Assert.DoesNotContain("burned-secret", namesOut);
+    }
+
+    [Fact]
+    public void Import_SkipsExistingSecrets()
+    {
+        RunTswap("init");
+        RunTswap("create", "existing-secret");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+
+        // Import into the same vault — existing-secret already there
+        var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Skipped", stdout);
+        Assert.Contains("existing-secret", stdout);
+    }
+
+    [Fact]
+    public void Import_WrongPassphraseFails()
+    {
+        RunTswap("init");
+        RunTswap("create", "a-secret");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("correct-passphrase\ncorrect-passphrase\n", "export", exportPath);
+
+        var (exit, _, stderr) = RunTswapWithStdin("wrong-passphrase\n", "import", exportPath);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("wrong passphrase", stderr);
+    }
+
+    // --- Migrate ---
+
+    [Fact]
+    public void Migrate_OldConfig_UpdatesRngMode()
+    {
+        // Simulate a pre-feature config: init normally then strip UnlockChallenge
+        RunTswap("init");
+        var configPath = Path.Combine(_tempDir, "config.json");
+        var config = JsonSerializer.Deserialize(
+            File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
+        var oldConfig = config with { UnlockChallenge = null, RngMode = "system" };
+        File.WriteAllText(configPath,
+            JsonSerializer.Serialize(oldConfig, TswapJsonContext.Default.Config));
+
+        // Run migrate, choose YubiKey entropy mode (option 2), decline detailed instructions
+        var (exit, stdout, _) = RunTswapWithStdin("2\nno\n", "migrate");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("YubiKey hardware", stdout);
+
+        var updated = JsonSerializer.Deserialize(
+            File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
+        Assert.Equal("yubikey", updated.RngMode);
+    }
+
+    [Fact]
+    public void Migrate_ModernConfig_ReportsUpToDate()
+    {
+        RunTswap("init");
+        // Modern config has UnlockChallenge set and RequiresTouch from synthetic init
+        // We need to also set RequiresTouch = true to satisfy all checks
+        var configPath = Path.Combine(_tempDir, "config.json");
+        var config = JsonSerializer.Deserialize(
+            File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
+        var modernConfig = config with { RequiresTouch = true };
+        File.WriteAllText(configPath,
+            JsonSerializer.Serialize(modernConfig, TswapJsonContext.Default.Config));
+
+        var (exit, stdout, _) = RunTswap("migrate");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("up to date", stdout);
+    }
 }

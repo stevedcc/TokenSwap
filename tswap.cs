@@ -371,6 +371,10 @@ byte[] UnlockWithYubiKey(Config config)
 
 string ReadPassword()
 {
+    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
+    if (Console.IsInputRedirected)
+        return Console.ReadLine() ?? "";
+
     var password = new StringBuilder();
     while (true)
     {
@@ -396,6 +400,7 @@ string ReadPassword()
 
 void RequireSudo(string commandName)
 {
+    if (TestKey != null) return; // test mode bypasses privilege check
     if (!Environment.IsPrivilegedProcess)
         throw new Exception(
             $"The '{commandName}' command requires sudo.\n" +

@@ -233,6 +233,10 @@ byte[] UnlockWithYubiKey(Config config)
 
 string ReadPassword()
 {
+    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
+    if (Console.IsInputRedirected)
+        return Console.ReadLine() ?? "";
+
     var password = new StringBuilder();
     while (true)
     {
@@ -258,6 +262,7 @@ string ReadPassword()
 
 void RequireSudo(string commandName)
 {
+    if (TestKey != null) return; // test mode bypasses privilege check
     if (!Environment.IsPrivilegedProcess)
         throw new Exception(
             $"The '{commandName}' command requires sudo.\n" +
@@ -283,7 +288,10 @@ void CmdInit()
         var testConfig = new Config(
             new List<int> { 99999999, 99999998 },
             new string('0', 40), // 20-byte zero XOR share (hex)
-            DateTime.UtcNow
+            DateTime.UtcNow,
+            null,
+            "system",
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
         );
         storage.SaveConfig(testConfig);
         Console.WriteLine("Initialized (test mode)");

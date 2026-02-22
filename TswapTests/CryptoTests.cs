@@ -194,4 +194,52 @@ public class CryptoTests
         var masterFromK2 = Crypto.DeriveKey(k1_recovered, k2);
         Assert.Equal(masterFromK1, masterFromK2);
     }
+
+    // --- DeriveKeyFromPassphrase ---
+
+    [Fact]
+    public void DeriveKeyFromPassphrase_Deterministic()
+    {
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var k1 = Crypto.DeriveKeyFromPassphrase("correct-horse-battery-staple", salt);
+        var k2 = Crypto.DeriveKeyFromPassphrase("correct-horse-battery-staple", salt);
+        Assert.Equal(k1, k2);
+    }
+
+    [Fact]
+    public void DeriveKeyFromPassphrase_Returns32Bytes()
+    {
+        var key = Crypto.DeriveKeyFromPassphrase("passphrase", RandomNumberGenerator.GetBytes(32));
+        Assert.Equal(32, key.Length);
+    }
+
+    [Fact]
+    public void DeriveKeyFromPassphrase_DifferentSaltsDifferentKeys()
+    {
+        var salt1 = RandomNumberGenerator.GetBytes(32);
+        var salt2 = RandomNumberGenerator.GetBytes(32);
+        var k1 = Crypto.DeriveKeyFromPassphrase("same-passphrase", salt1);
+        var k2 = Crypto.DeriveKeyFromPassphrase("same-passphrase", salt2);
+        Assert.NotEqual(k1, k2);
+    }
+
+    [Fact]
+    public void DeriveKeyFromPassphrase_DifferentPassphrasesDifferentKeys()
+    {
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var k1 = Crypto.DeriveKeyFromPassphrase("passphrase-one", salt);
+        var k2 = Crypto.DeriveKeyFromPassphrase("passphrase-two", salt);
+        Assert.NotEqual(k1, k2);
+    }
+
+    [Fact]
+    public void DeriveKeyFromPassphrase_IndependentOfDeriveKey()
+    {
+        // Passphrase-derived key must not collide with YubiKey-derived key under same input
+        var salt = Encoding.UTF8.GetBytes("tswap-poc-v1"); // same salt as DeriveKey uses
+        var hmacBytes = RandomNumberGenerator.GetBytes(20);
+        var passphraseKey = Crypto.DeriveKeyFromPassphrase(Encoding.UTF8.GetString(hmacBytes), salt);
+        var yubiKey = Crypto.DeriveKey(hmacBytes, hmacBytes);
+        Assert.NotEqual(passphraseKey, yubiKey);
+    }
 }
