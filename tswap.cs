@@ -121,6 +121,29 @@ var PromptText = PromptTemplate.Replace("%CMD%", Prefix);
 // Config, Secret, SecretsDb are provided by TswapCore.dll
 
 // ============================================================================
+// TEST KEY BYPASS
+// ============================================================================
+
+// When TSWAP_TEST_KEY is set (hex-encoded 32-byte key), all YubiKey operations
+// are bypassed. This allows integration testing without hardware YubiKeys.
+//
+// Security note: TestKey also bypasses RequireSudo. The risk is bounded:
+// an attacker who sets TSWAP_TEST_KEY still needs the correct 32-byte master
+// key to decrypt vault data — an arbitrary TestKey value will cause AES-GCM
+// authentication to fail on any secrets.json.enc encrypted with the real key.
+// The sudo boundary protects AI agents from reading secrets via the tswap CLI,
+// not from OS-level file access (which is out of scope regardless).
+var testKeyHex = Environment.GetEnvironmentVariable("TSWAP_TEST_KEY");
+byte[]? TestKey = null;
+if (testKeyHex != null)
+{
+    TestKey = Convert.FromHexString(testKeyHex);
+    if (TestKey.Length != 32)
+        throw new Exception("TSWAP_TEST_KEY must be exactly 32 bytes (64 hex chars)");
+    if (Verbose) Console.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey operations bypassed");
+}
+
+// ============================================================================
 // YUBIKEY OPERATIONS
 // ============================================================================
 
@@ -556,7 +579,11 @@ void CmdCreate(string name, int length = 32)
         var entropySerial = GetYubiKey();
         var challenge = RandomNumberGenerator.GetBytes(20);
         var hmac = ChallengeYubiKey(entropySerial, Convert.ToHexString(challenge));
-        entropy = SHA256.HashData(challenge.Concat(hmac).ToArray());
+        // Mix challenge + HMAC, then use HKDF to expand to exactly `length` bytes.
+        // This avoids the period-32 bias that SHA256 truncation would cause for
+        // passwords longer than 32 characters.
+        var ikm = SHA256.HashData(challenge.Concat(hmac).ToArray());
+        entropy = HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, length, salt: default, info: Encoding.UTF8.GetBytes("tswap-create"));
     }
     else
     {
@@ -565,7 +592,7 @@ void CmdCreate(string name, int length = 32)
 
     var password = new char[length];
     for (int i = 0; i < length; i++)
-        password[i] = charset[entropy[i % entropy.Length] % charset.Length];
+        password[i] = charset[entropy[i] % charset.Length];
 
     var value = new string(password);
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
@@ -694,7 +721,8 @@ void CmdImport(string path)
 
     byte[] plaintext;
     try { plaintext = Decrypt(Convert.FromBase64String(exportFile.Ciphertext), exportKey); }
-    catch { throw new Exception("Decryption failed — wrong passphrase?"); }
+    catch (CryptographicException) { throw new Exception("Decryption failed — wrong passphrase or file tampered"); }
+    catch (FormatException) { throw new Exception("Export file is corrupted (base64 decode failed)"); }
 
     var exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
         ?? throw new Exception("Invalid export data");
@@ -1085,9 +1113,9 @@ void CmdMigrate()
 
     var config = LoadConfig();
 
-    // UnlockChallenge == null is a reliable indicator the config predates the
-    // vault-unique challenge and RngMode features (both were added together).
-    bool needsRngPrompt          = config.UnlockChallenge == null;
+    // Each setting is checked independently so that a partially-migrated or
+    // manually-edited config still gets prompted for whichever fields are missing.
+    bool needsRngPrompt          = config.RngMode == null;
     bool needsChallengeMigration = config.UnlockChallenge == null;
     bool needsTouchMigration     = config.RequiresTouch != true;
     bool needsReInit             = needsChallengeMigration || needsTouchMigration;

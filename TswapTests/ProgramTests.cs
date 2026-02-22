@@ -540,12 +540,14 @@ public class ProgramTests : IDisposable
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("strongpassphrase\nstrongpassphrase\n", "export", exportPath);
 
-        // Re-init clears the vault
+        // Re-init clears the vault (also delete secrets.json.enc — test key is constant
+        // so the old encrypted file remains readable if not explicitly removed)
         RunTswap("init");
+        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
         var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
-        Assert.Contains("2", stdout); // "Imported 2 secret(s)"
+        Assert.Contains("Imported 2 secret(s)", stdout);
 
         var (_, namesOut, _) = RunTswap("names");
         Assert.Contains("db-pass", namesOut);
@@ -618,7 +620,7 @@ public class ProgramTests : IDisposable
         var configPath = Path.Combine(_tempDir, "config.json");
         var config = JsonSerializer.Deserialize(
             File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
-        var oldConfig = config with { UnlockChallenge = null, RngMode = "system" };
+        var oldConfig = config with { UnlockChallenge = null, RngMode = null };
         File.WriteAllText(configPath,
             JsonSerializer.Serialize(oldConfig, TswapJsonContext.Default.Config));
 
