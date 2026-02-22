@@ -68,15 +68,11 @@ var storage = new Storage(ConfigDir);
 // TEST KEY BYPASS
 // ============================================================================
 
-// When TSWAP_TEST_KEY is set (hex-encoded 32-byte key), all YubiKey operations
-// are bypassed. This allows integration testing without hardware YubiKeys.
-//
-// Security note: TestKey also bypasses RequireSudo. The risk is bounded:
-// an attacker who sets TSWAP_TEST_KEY still needs the correct 32-byte master
-// key to decrypt vault data — an arbitrary TestKey value will cause AES-GCM
-// authentication to fail on any secrets.json.enc encrypted with the real key.
-// The sudo boundary protects AI agents from reading secrets via the tswap CLI,
-// not from OS-level file access (which is out of scope regardless).
+// Both test bypass variables are Debug-only: the Release binary has no code path
+// to stub YubiKey operations or skip sudo checks, regardless of env vars set.
+//   TSWAP_TEST_KEY        — hex-encoded 32-byte key; stubs all YubiKey hardware calls
+//   TSWAP_TEST_SUDO_BYPASS=1 — skips RequireSudo so tests exercise export/import as non-root
+#if DEBUG
 var testKeyHex = Environment.GetEnvironmentVariable("TSWAP_TEST_KEY");
 byte[]? TestKey = null;
 if (testKeyHex != null)
@@ -86,6 +82,10 @@ if (testKeyHex != null)
         throw new Exception("TSWAP_TEST_KEY must be exactly 32 bytes (64 hex chars)");
     if (Verbose) Console.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey operations bypassed");
 }
+bool AllowSudoBypass = Environment.GetEnvironmentVariable("TSWAP_TEST_SUDO_BYPASS") == "1";
+#else
+byte[]? TestKey = null;
+#endif
 
 // ============================================================================
 // YUBIKEY OPERATIONS
@@ -269,7 +269,9 @@ string ReadPassword()
 
 void RequireSudo(string commandName)
 {
-    if (TestKey != null) return; // test mode bypasses privilege check
+#if DEBUG
+    if (AllowSudoBypass) return;
+#endif
     if (!Environment.IsPrivilegedProcess)
         throw new Exception(
             $"The '{commandName}' command requires sudo.\n" +

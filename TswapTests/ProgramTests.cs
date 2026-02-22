@@ -45,6 +45,7 @@ public class ProgramTests : IDisposable
             CreateNoWindow = true
         };
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
+        psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
 
         using var process = Process.Start(psi)!;
@@ -68,6 +69,7 @@ public class ProgramTests : IDisposable
             CreateNoWindow = true
         };
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
+        psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
 
         using var process = Process.Start(psi)!;
