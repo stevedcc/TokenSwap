@@ -341,8 +341,9 @@ byte[] UnlockWithYubiKey(Config config)
     if (!config.YubiKeySerials.Contains(serial))
         throw new Exception($"YubiKey {serial} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
 
-    // Challenge current YubiKey
-    var k_current = ChallengeYubiKey(serial, "tswap-unlock");
+    // Challenge current YubiKey using the vault-unique challenge (falls back to the
+    // legacy fixed challenge for configs created before this feature was added).
+    var k_current = ChallengeYubiKey(serial, config.UnlockChallenge ?? "tswap-unlock");
     
     // Reconstruct other key via XOR
     var xorShare = Convert.FromHexString(config.RedundancyXor);
@@ -418,11 +419,15 @@ void CmdInit()
     Console.WriteLine("║  tswap - YubiKey Initialization       ║");
     Console.WriteLine("╚════════════════════════════════════════╝\n");
     
+    // Generate a vault-unique unlock challenge so the HMAC response cannot be
+    // pre-computed by someone who briefly accesses a YubiKey without the config.
+    var unlockChallenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
     // Challenge first YubiKey
     Console.WriteLine("Insert YubiKey #1 and press Enter...");
     Console.ReadLine();
     var serial1 = GetYubiKey();
-    var k1 = ChallengeYubiKey(serial1, "tswap-unlock");
+    var k1 = ChallengeYubiKey(serial1, unlockChallenge);
 
     // Challenge second YubiKey
     Console.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
@@ -432,7 +437,7 @@ void CmdInit()
     if (serial1 == serial2)
         throw new Exception("Same YubiKey detected. Please use two different YubiKeys.");
 
-    var k2 = ChallengeYubiKey(serial2, "tswap-unlock");
+    var k2 = ChallengeYubiKey(serial2, unlockChallenge);
     
     // Detect touch requirement for both keys
     Console.WriteLine("\nDetecting YubiKey slot configuration...");
@@ -462,7 +467,8 @@ void CmdInit()
         Convert.ToHexString(xorShare),
         DateTime.UtcNow,
         requiresTouch,
-        rngMode
+        rngMode,
+        unlockChallenge
     );
     
     SaveConfig(config);
