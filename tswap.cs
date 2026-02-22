@@ -978,74 +978,110 @@ void CmdApply(string filePath)
 void CmdMigrate()
 {
     Console.WriteLine("\n╔════════════════════════════════════════════════════════════════╗");
-    Console.WriteLine("║  tswap - YubiKey Touch Requirement Migration                  ║");
-    Console.WriteLine("╠════════════════════════════════════════════════════════════════╣");
-    Console.WriteLine("║  This will help you upgrade your YubiKey slots to require     ║");
-    Console.WriteLine("║  button press for better security.                            ║");
+    Console.WriteLine("║  tswap - Security Configuration Migration                    ║");
     Console.WriteLine("╚════════════════════════════════════════════════════════════════╝\n");
 
     var config = LoadConfig();
-    
+
+    // UnlockChallenge == null is a reliable indicator the config predates the
+    // vault-unique challenge and RngMode features (both were added together).
+    bool needsRngPrompt          = config.UnlockChallenge == null;
+    bool needsChallengeMigration = config.UnlockChallenge == null;
+    bool needsTouchMigration     = config.RequiresTouch != true;
+    bool needsReInit             = needsChallengeMigration || needsTouchMigration;
+
+    // ── Status ───────────────────────────────────────────────────────────────
     Console.WriteLine("Current configuration:");
-    Console.WriteLine($"  YubiKey #1 Serial: {config.YubiKeySerials[0]}");
-    Console.WriteLine($"  YubiKey #2 Serial: {config.YubiKeySerials[1]}");
-    
-    if (config.RequiresTouch == true)
+    Console.WriteLine($"  YubiKey #1:       {config.YubiKeySerials[0]}");
+    Console.WriteLine($"  YubiKey #2:       {config.YubiKeySerials[1]}");
+
+    Console.ForegroundColor = config.RequiresTouch == true ? ConsoleColor.Green : ConsoleColor.Yellow;
+    Console.WriteLine(config.RequiresTouch == true
+        ? "  Touch:            ENABLED ✓"
+        : "  Touch:            not enabled ⚠");
+    Console.ResetColor();
+
+    Console.ForegroundColor = needsRngPrompt ? ConsoleColor.Yellow : ConsoleColor.Green;
+    Console.WriteLine(needsRngPrompt
+        ? "  Entropy mode:     not configured (defaults to system RNG) ⚠"
+        : $"  Entropy mode:     {config.RngMode} ✓");
+    Console.ResetColor();
+
+    Console.ForegroundColor = needsChallengeMigration ? ConsoleColor.Yellow : ConsoleColor.Green;
+    Console.WriteLine(needsChallengeMigration
+        ? "  Unlock challenge: not set (fixed predictable challenge) ⚠"
+        : "  Unlock challenge: vault-unique ✓");
+    Console.ResetColor();
+
+    if (!needsRngPrompt && !needsReInit)
     {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  Touch requirement: Already ENABLED ✓");
-        Console.ResetColor();
-        Console.WriteLine("\nYour configuration already requires touch. No migration needed.");
+        Console.WriteLine("\n✓ All security settings are up to date. No migration needed.");
         return;
     }
-    
-    Console.WriteLine("\n⚠️  IMPORTANT: Ensure you have your XOR share backed up from initial setup.");
-    Console.WriteLine("    You will need it if you need to recover your vault.\n");
-    
-    Console.WriteLine("Migration steps:");
-    Console.WriteLine("  1. Reconfigure BOTH YubiKeys to require touch:");
-    Console.WriteLine("     a) ykman otp delete 2");
-    Console.WriteLine("     b) ykman otp chalresp --generate --touch 2");
-    Console.WriteLine("  2. Reinitialize tswap with 'tswap init'");
-    Console.WriteLine("  3. Restore secrets from backup or re-add them");
-    Console.WriteLine("\nIMPORTANT: After reconfiguring YubiKeys, you MUST reinitialize.");
-    Console.WriteLine("The XOR share will change because slot response changes.\n");
-    
-    Console.Write("Do you want to see detailed instructions? (yes/no): ");
-    var response = Console.ReadLine()?.ToLower();
-    
-    if (response == "yes" || response == "y")
+
+    // ── Entropy mode: update in place, no re-init required ───────────────────
+    if (needsRngPrompt)
     {
-        Console.WriteLine("\n" + new string('═', 64));
-        Console.WriteLine("DETAILED MIGRATION GUIDE");
-        Console.WriteLine(new string('═', 64) + "\n");
-        
-        Console.WriteLine("Step 1: Export secret names (requires sudo)");
-        Console.WriteLine("  mkdir -p ~/tswap-backup");
-        Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt");
-        Console.WriteLine("  # Note: Values must be manually re-added after migration\n");
-        
-        Console.WriteLine("Step 2: Reconfigure YubiKey #1");
-        Console.WriteLine("  Insert YubiKey #1");
-        Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp delete 2");
-        Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp chalresp --generate --touch 2");
-        Console.WriteLine("  # Test: ykman otp info  (should show 'Require touch: yes')\n");
-        
-        Console.WriteLine("Step 3: Reconfigure YubiKey #2");
-        Console.WriteLine("  Remove YubiKey #1, insert YubiKey #2");
-        Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp delete 2");
-        Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp chalresp --generate --touch 2");
-        Console.WriteLine("  # Test: ykman otp info  (should show 'Require touch: yes')\n");
-        
-        Console.WriteLine("Step 4: Reinitialize tswap");
-        Console.WriteLine("  tswap init");
-        Console.WriteLine("  # Follow prompts with both YubiKeys\n");
-        
-        Console.WriteLine("Step 5: Restore secrets");
-        Console.WriteLine("  # Re-add secrets using 'sudo tswap add <name>'");
-        Console.WriteLine("  # Or use 'tswap create <name>' for new random values\n");
-        
-        Console.WriteLine(new string('═', 64));
+        Console.WriteLine("\n── Entropy mode for 'create' (no re-init required) ─────────────");
+        Console.WriteLine("Password generation entropy source:");
+        Console.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
+        Console.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary");
+        Console.Write("Choose [1/2, default 1]: ");
+        var rngChoice = Console.ReadLine()?.Trim();
+        var newRngMode = rngChoice == "2" ? "yubikey" : "system";
+        config = config with { RngMode = newRngMode };
+        SaveConfig(config);
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"✓ Entropy mode set to: {(newRngMode == "yubikey" ? "YubiKey hardware" : "System RNG")}");
+        Console.ResetColor();
+    }
+
+    // ── Items requiring re-init ───────────────────────────────────────────────
+    if (needsReInit)
+    {
+        Console.WriteLine("\n── Settings requiring re-initialization ─────────────────────────");
+        if (needsChallengeMigration)
+        {
+            Console.WriteLine("  • Unlock challenge: a vault-unique challenge requires re-challenging");
+            Console.WriteLine("    both YubiKeys and re-encrypting the vault with a new master key.");
+        }
+        if (needsTouchMigration)
+            Console.WriteLine("  • Touch requirement: YubiKey slots must be reconfigured.");
+
+        Console.WriteLine("\n⚠️  IMPORTANT: Ensure your XOR share is backed up before proceeding.");
+
+        Console.Write("\nShow detailed re-initialization instructions? (yes/no): ");
+        if ((Console.ReadLine()?.ToLower() ?? "") is "yes" or "y")
+        {
+            int step = 1;
+            Console.WriteLine("\n" + new string('═', 64));
+            Console.WriteLine("RE-INITIALIZATION GUIDE");
+            Console.WriteLine(new string('═', 64) + "\n");
+
+            Console.WriteLine($"Step {step++}: Export secret names (requires sudo)");
+            Console.WriteLine("  mkdir -p ~/tswap-backup");
+            Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt\n");
+
+            if (needsTouchMigration)
+            {
+                Console.WriteLine($"Step {step++}: Reconfigure YubiKey slots to require touch");
+                Console.WriteLine("  Insert YubiKey #1");
+                Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp delete 2");
+                Console.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp chalresp --generate --touch 2");
+                Console.WriteLine("  Remove YubiKey #1, insert YubiKey #2");
+                Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp delete 2");
+                Console.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp chalresp --generate --touch 2\n");
+            }
+
+            Console.WriteLine($"Step {step++}: Reinitialize tswap (generates a new vault-unique unlock challenge)");
+            Console.WriteLine("  tswap init\n");
+
+            Console.WriteLine($"Step {step}: Restore secrets");
+            Console.WriteLine("  sudo tswap add <name>    # re-add existing secrets");
+            Console.WriteLine("  tswap create <name>      # or generate new random values\n");
+
+            Console.WriteLine(new string('═', 64));
+        }
     }
 }
 
