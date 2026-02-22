@@ -322,12 +322,21 @@ void CmdInit()
     // Compute XOR redundancy
     var xorShare = Crypto.XorBytes(k1, k2);
 
+    // Choose RNG mode for secret generation
+    Console.WriteLine("\nPassword generation entropy source:");
+    Console.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
+    Console.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
+    Console.Write("Choose [1/2, default 1]: ");
+    var rngChoice = Console.ReadLine()?.Trim();
+    var rngMode = rngChoice == "2" ? "yubikey" : "system";
+
     // Save config
     var config = new Config(
         new List<int> { serial1, serial2 },
         Convert.ToHexString(xorShare),
         DateTime.UtcNow,
-        requiresTouch
+        requiresTouch,
+        rngMode
     );
 
     storage.SaveConfig(config);
@@ -357,6 +366,8 @@ void CmdInit()
         Console.ResetColor();
     }
     
+    Console.WriteLine($"Entropy mode:    {(rngMode == "yubikey" ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
+
     Console.WriteLine("\n⚠️  CRITICAL: BACKUP XOR SHARE NOW\n");
     Console.WriteLine("XOR Share (hex):");
     Console.WriteLine(config.RedundancyXor);
@@ -401,10 +412,23 @@ void CmdCreate(string name, int length = 32)
     if (db.Secrets.ContainsKey(name))
         throw new Exception($"Secret '{name}' already exists. Use 'delete' first to rotate.");
 
-    var bytes = RandomNumberGenerator.GetBytes(length);
+    byte[] entropy;
+    if (config.RngMode == "yubikey" && TestKey == null)
+    {
+        Console.WriteLine("Touch YubiKey for entropy generation...");
+        var entropySerial = GetYubiKey();
+        var challenge = RandomNumberGenerator.GetBytes(20);
+        var hmac = ChallengeYubiKey(entropySerial, Convert.ToHexString(challenge));
+        entropy = SHA256.HashData(challenge.Concat(hmac).ToArray());
+    }
+    else
+    {
+        entropy = RandomNumberGenerator.GetBytes(length);
+    }
+
     var password = new char[length];
     for (int i = 0; i < length; i++)
-        password[i] = charset[bytes[i] % charset.Length];
+        password[i] = charset[entropy[i % entropy.Length] % charset.Length];
 
     var value = new string(password);
     db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
