@@ -27,6 +27,17 @@ public static class Crypto
         );
     }
 
+    public static byte[] DeriveKeyFromPassphrase(string passphrase, byte[] salt)
+    {
+        return Rfc2898DeriveBytes.Pbkdf2(
+            Encoding.UTF8.GetBytes(passphrase),
+            salt,
+            100000,
+            HashAlgorithmName.SHA256,
+            32
+        );
+    }
+
     public static byte[] Encrypt(byte[] plaintext, byte[] key)
     {
         var tagSizeInBytes = AesGcm.TagByteSizes.MaxSize;

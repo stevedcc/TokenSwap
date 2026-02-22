@@ -626,6 +626,103 @@ void CmdList()
     }
 }
 
+void CmdExport(string path)
+{
+    RequireSudo("export");
+
+    if (File.Exists(path))
+    {
+        Console.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
+        if (Console.ReadLine()?.ToLower() != "yes") return;
+    }
+
+    Console.Write("Export passphrase: ");
+    var passphrase = ReadPassword();
+    Console.Write("Confirm passphrase: ");
+    var confirm = ReadPassword();
+    if (passphrase != confirm)
+        throw new Exception("Passphrases don't match");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    var salt = RandomNumberGenerator.GetBytes(32);
+    var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+    var plaintext = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb));
+    var ciphertext = Encrypt(plaintext, exportKey);
+
+    var exportFile = new ExportFile(
+        "tswap-export-v1",
+        DateTime.UtcNow,
+        Convert.ToBase64String(salt),
+        Convert.ToBase64String(ciphertext)
+    );
+    File.WriteAllText(path, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+    var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt == null);
+    var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
+    Console.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
+    if (burned > 0)
+        Console.WriteLine($"  ({burned} burned secret(s) included — will be skipped on import)");
+    Console.WriteLine("  Keep this file and its passphrase secure.");
+}
+
+void CmdImport(string path)
+{
+    RequireSudo("import");
+
+    if (!File.Exists(path))
+        throw new Exception($"Export file not found: {path}");
+
+    Console.Write("Export passphrase: ");
+    var passphrase = ReadPassword();
+
+    var exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
+        ?? throw new Exception("Invalid export file");
+
+    if (exportFile.Version != "tswap-export-v1")
+        throw new Exception($"Unsupported export version: {exportFile.Version}");
+
+    var salt = Convert.FromBase64String(exportFile.Salt);
+    var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+
+    byte[] plaintext;
+    try { plaintext = Decrypt(Convert.FromBase64String(exportFile.Ciphertext), exportKey); }
+    catch { throw new Exception("Decryption failed — wrong passphrase?"); }
+
+    var exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
+        ?? throw new Exception("Invalid export data");
+
+    var config = LoadConfig();
+    var key = UnlockWithYubiKey(config);
+    var db = LoadSecrets(key);
+
+    int imported = 0, skippedExisting = 0, skippedBurned = 0;
+    foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
+    {
+        if (secret.BurnedAt != null)
+        {
+            Console.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault)");
+            skippedBurned++;
+            continue;
+        }
+        if (db.Secrets.ContainsKey(name))
+        {
+            Console.WriteLine($"  ⚠ Skipped '{name}' (already exists)");
+            skippedExisting++;
+            continue;
+        }
+        db.Secrets[name] = secret;
+        imported++;
+    }
+
+    SaveSecrets(db, key);
+    Console.WriteLine($"\n✓ Imported {imported} secret(s)");
+    if (skippedBurned > 0)   Console.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
+    if (skippedExisting > 0) Console.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
+}
+
 void CmdNames()
 {
     var config = LoadConfig();
@@ -1058,9 +1155,9 @@ void CmdMigrate()
             Console.WriteLine("RE-INITIALIZATION GUIDE");
             Console.WriteLine(new string('═', 64) + "\n");
 
-            Console.WriteLine($"Step {step++}: Export secret names (requires sudo)");
-            Console.WriteLine("  mkdir -p ~/tswap-backup");
-            Console.WriteLine("  sudo tswap list > ~/tswap-backup/secret-names.txt\n");
+            Console.WriteLine($"Step {step++}: Export all secrets to an encrypted backup (requires sudo)");
+            Console.WriteLine("  sudo tswap export ~/tswap-backup.enc");
+            Console.WriteLine("  # Choose a strong passphrase — you will need it to import\n");
 
             if (needsTouchMigration)
             {
@@ -1076,9 +1173,8 @@ void CmdMigrate()
             Console.WriteLine($"Step {step++}: Reinitialize tswap (generates a new vault-unique unlock challenge)");
             Console.WriteLine("  tswap init\n");
 
-            Console.WriteLine($"Step {step}: Restore secrets");
-            Console.WriteLine("  sudo tswap add <name>    # re-add existing secrets");
-            Console.WriteLine("  tswap create <name>      # or generate new random values\n");
+            Console.WriteLine($"Step {step}: Restore secrets from backup");
+            Console.WriteLine("  sudo tswap import ~/tswap-backup.enc\n");
 
             Console.WriteLine(new string('═', 64));
         }
@@ -1112,8 +1208,10 @@ try
         Console.WriteLine($"  {p} prompt-hash             Hash of agent instructions");
         Console.WriteLine($"  [sudo] {p} add <name>       Add a secret (user-provided value)");
         Console.WriteLine($"  [sudo] {p} get <name>       Get a secret value");
-        Console.WriteLine($"  [sudo] {p} list             List all secrets");
+        Console.WriteLine($"  [sudo] {p} list             List all secrets (names and dates, no values)");
         Console.WriteLine($"  [sudo] {p} delete <name>    Delete a secret");
+        Console.WriteLine($"  [sudo] {p} export <file>    Export all secrets to an encrypted backup");
+        Console.WriteLine($"  [sudo] {p} import <file>    Import secrets from an encrypted backup");
         Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
         Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
@@ -1179,6 +1277,18 @@ try
 
         case "list":
             CmdList();
+            break;
+
+        case "export":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: sudo {Prefix} export <file>");
+            CmdExport(filteredArgs[1]);
+            break;
+
+        case "import":
+            if (filteredArgs.Count < 2)
+                throw new Exception($"Usage: sudo {Prefix} import <file>");
+            CmdImport(filteredArgs[1]);
             break;
 
         case "delete":
