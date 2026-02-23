@@ -1078,7 +1078,7 @@ void CmdToComment(string filePath, bool dryRun)
     foreach (var diff in changes)
     {
         Console.WriteLine($"  line {diff.LineNumber}:");
-        Console.WriteLine($"  - {diff.Before}");
+        Console.WriteLine($"  - {Redact.RedactContent(diff.Before, db)}");
         Console.WriteLine($"  + {diff.After}");
     }
 
