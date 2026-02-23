@@ -124,21 +124,21 @@ public class YubiKey
             {
                 Console.WriteLine("║  [!]  SECURITY WARNING: YubiKey slots configured without touch    ║");
                 Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.WriteLine("║  Your YubiKeys are configured without requiring button press.    ║");
-                Console.WriteLine("║  This means any process can unlock the vault if the key is       ║");
-                Console.WriteLine("║  inserted, weakening the security model.                         ║");
+                Console.WriteLine("║  Your YubiKeys are configured without requiring button press.     ║");
+                Console.WriteLine("║  This means any process can unlock the vault if the key is        ║");
+                Console.WriteLine("║  inserted, weakening the security model.                          ║");
             }
             else // config.RequiresTouch == null
             {
                 Console.WriteLine("║  [!]  SECURITY WARNING: YubiKey touch requirement unknown         ║");
                 Console.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.WriteLine("║  Unable to detect if your YubiKeys require button press.         ║");
-                Console.WriteLine("║  This may indicate ykman is not installed or detection failed.   ║");
-                Console.WriteLine("║  If touch is not required, any process can unlock the vault.     ║");
+                Console.WriteLine("║  Unable to detect if your YubiKeys require button press.          ║");
+                Console.WriteLine("║  This may indicate ykman is not installed or detection failed.    ║");
+                Console.WriteLine("║  If touch is not required, any process can unlock the vault.      ║");
             }
             
             Console.WriteLine("║                                                                   ║");
-            Console.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required   ║");
+            Console.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required    ║");
             Console.WriteLine("║  slots for better security.                                       ║");
             Console.WriteLine("╚═══════════════════════════════════════════════════════════════════╝");
             Console.ResetColor();
