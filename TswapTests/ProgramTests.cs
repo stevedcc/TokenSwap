@@ -578,7 +578,8 @@ public class ProgramTests : IDisposable
 
         // Re-init clears the vault (also delete secrets.json.enc — test key is constant
         // so the old encrypted file remains readable if not explicitly removed)
-        RunTswap("init");
+        // "yes\n" answers the "Already initialized. Reinitialize?" prompt via stdin.
+        RunTswapWithStdin("yes\n", "init");
         File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
         var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
 
@@ -601,7 +602,7 @@ public class ProgramTests : IDisposable
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswap("init");
+        RunTswapWithStdin("yes\n", "init");
         File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
 
