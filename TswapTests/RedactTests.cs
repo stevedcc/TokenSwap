@@ -259,6 +259,34 @@ public class RedactTests
     }
 
     [Fact]
+    public void ToComment_LineAlreadyHasTswapMarker_DoesNotAddDuplicate()
+    {
+        // When processing output from "tswap apply", don't add duplicate markers
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, changes) = Redact.ToComment("password: \"s3cr3t\"  # tswap: pw", db);
+        Assert.Equal("password: \"\"  # tswap: pw", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_LineAlreadyHasTswapMarkerWithOtherComment_PreservesBoth()
+    {
+        // When line has both tswap marker and other comments, preserve both
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, _) = Redact.ToComment("password: \"s3cr3t\"  # tswap: pw  # legacy", db);
+        Assert.Equal("password: \"\"  # tswap: pw  # legacy", content);
+    }
+
+    [Fact]
+    public void ToComment_LineHasWrongMarker_AddsCorrectMarker()
+    {
+        // When line has marker for different secret, add the correct one
+        var db = MakeDb(("pw", "s3cr3t"), ("other", "different"));
+        var (content, _) = Redact.ToComment("password: \"s3cr3t\"  # tswap: other", db);
+        Assert.Equal("password: \"\"  # tswap: pw  # tswap: other", content);
+    }
+
+    [Fact]
     public void ToComment_CrlfLineEndings_NormalizedToLf()
     {
         // CRLF input must not leave stray \r in the output or miscount line numbers

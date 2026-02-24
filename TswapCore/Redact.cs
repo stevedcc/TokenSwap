@@ -219,6 +219,9 @@ public sealed class RedactProcessor : SecretProcessor
 /// </summary>
 public sealed class ToCommentProcessor : SecretProcessor
 {
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
+    private string? _currentLine;
+
     // Match the value either double-quoted, single-quoted, or unquoted.
     // Use negative lookahead/lookbehind to prevent matching secrets that are substrings of larger values.
     // All three patterns are symmetric: secret must not be preceded or followed by dash or word chars.
@@ -235,7 +238,87 @@ public sealed class ToCommentProcessor : SecretProcessor
     }
 
     protected override string GetReplacement(string secretName, MatchType matchType)
-        => $"\"\"  # tswap: {secretName}";
+    {
+        // Check if the current line already has a # tswap: marker for this secret
+        if (_currentLine != null)
+        {
+            var match = MarkerRegex.Match(_currentLine);
+            if (match.Success && match.Groups[1].Value == secretName)
+            {
+                // Line already has the correct marker, just replace with empty quotes
+                return "\"\"";
+            }
+        }
+        return $"\"\"  # tswap: {secretName}";
+    }
+
+    /// <summary>
+    /// Override Process to track the current line being processed.
+    /// </summary>
+    public new (string Content, IReadOnlyList<LineDiff> Changes) Process(string content, SecretsDb db)
+    {
+        var matchList = BuildMatchList(db);
+        content = content.Replace("\r\n", "\n");
+        var lines = content.Split('\n');
+        
+        var diffs = new List<LineDiff>();
+        var linesToRemove = new HashSet<int>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (linesToRemove.Contains(i))
+                continue;
+
+            var original = lines[i];
+            var current = original;
+            _currentLine = original;  // Set current line for GetReplacement
+
+            foreach (var (name, type, searchText) in matchList)
+            {
+                var pattern = GetSearchPattern(searchText);
+                var replacement = GetReplacement(name, type);
+                current = Regex.Replace(current, pattern, _ => replacement);
+            }
+
+            if (current != original)
+            {
+                diffs.Add(new LineDiff(i + 1, original, current));
+                lines[i] = current;
+                
+                if (ShouldRemoveContinuationLines())
+                {
+                    var baseIndent = GetLeadingWhitespaceCount(original);
+                    for (int j = i + 1; j < lines.Length; j++)
+                    {
+                        var nextLine = lines[j];
+                        
+                        if (string.IsNullOrWhiteSpace(nextLine))
+                            break;
+                        
+                        var nextIndent = GetLeadingWhitespaceCount(nextLine);
+                        if (nextIndent <= baseIndent)
+                            break;
+                        
+                        var trimmed = nextLine.Trim();
+                        if (!IsLikelyBase64(trimmed))
+                            break;
+                        
+                        linesToRemove.Add(j);
+                        diffs.Add(new LineDiff(j + 1, nextLine, ""));
+                    }
+                }
+            }
+        }
+
+        var result = new List<string>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!linesToRemove.Contains(i))
+                result.Add(lines[i]);
+        }
+
+        return (string.Join('\n', result), diffs);
+    }
 
     /// <summary>
     /// Enable removal of continuation lines to avoid leaving trailing garbage when
@@ -243,6 +326,35 @@ public sealed class ToCommentProcessor : SecretProcessor
     /// Continuation lines are only removed AFTER a successful match on the parent line.
     /// </summary>
     protected override bool ShouldRemoveContinuationLines() => true;
+
+    private static int GetLeadingWhitespaceCount(string line)
+    {
+        int count = 0;
+        foreach (char c in line)
+        {
+            if (char.IsWhiteSpace(c))
+                count++;
+            else
+                break;
+        }
+        return count;
+    }
+
+    private static bool IsLikelyBase64(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Length < 16)
+            return false;
+        
+        int validChars = 0;
+        foreach (char c in value)
+        {
+            if (char.IsLetterOrDigit(c) || c == '+' || c == '/' || c == '=')
+                validChars++;
+        }
+        
+        double ratio = (double)validChars / value.Length;
+        return ratio >= 0.95;
+    }
 }
 
 /// <summary>
