@@ -393,6 +393,52 @@ label: myapp-prod";
     }
 
     // -------------------------------------------------------------------------
+    // Redact.ToComment — duplicate marker prevention (apply output round-trip)
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void ToComment_ApplyOutputWithMatchingMarker_DoesNotDuplicateMarker()
+    {
+        // tswap apply produces: key: "s3cr3t"  # tswap: pw
+        // tocomment on that output must NOT produce: key: ""  # tswap: pw  # tswap: pw
+        var db = MakeDb(("pw", "s3cr3t"));
+        var applyOutput = "password: \"s3cr3t\"  # tswap: pw";
+        var (content, changes) = Redact.ToComment(applyOutput, db);
+        Assert.Equal("password: \"\"  # tswap: pw", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_ApplyOutputUnquotedWithMatchingMarker_DoesNotDuplicateMarker()
+    {
+        // Unquoted variant: password: s3cr3t  # tswap: pw
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, changes) = Redact.ToComment("password: s3cr3t  # tswap: pw", db);
+        Assert.Equal("password: \"\"  # tswap: pw", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_ApplyOutputWithWrongMarker_ReplacesWithCorrectMarker()
+    {
+        // If the existing marker names a different secret, the correct secret wins.
+        // The stale marker is consumed and replaced with the one matching the actual value.
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, changes) = Redact.ToComment("password: \"s3cr3t\"  # tswap: old-name", db);
+        Assert.Equal("password: \"\"  # tswap: pw", content);
+        Assert.Single(changes);
+    }
+
+    [Fact]
+    public void ToComment_ApplyOutputWithMarkerAndTrailingComment_PreservesTrailingComment()
+    {
+        // Marker is consumed; any trailing comments after the marker are unaffected.
+        var db = MakeDb(("pw", "s3cr3t"));
+        var (content, _) = Redact.ToComment("password: \"s3cr3t\"  # tswap: pw  # set at deploy", db);
+        Assert.Equal("password: \"\"  # tswap: pw  # set at deploy", content);
+    }
+
+    // -------------------------------------------------------------------------
     // Redact.FindUnknownSecrets
     // -------------------------------------------------------------------------
 

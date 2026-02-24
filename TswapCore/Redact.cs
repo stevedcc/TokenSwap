@@ -231,7 +231,13 @@ public sealed class ToCommentProcessor : SecretProcessor
     protected override string GetSearchPattern(string searchText)
     {
         var escaped = Regex.Escape(searchText);
-        return $"(?:(?<![-\\w])\"{escaped}\"(?![-\\w])|(?<![-\\w])'{escaped}'(?![-\\w])|(?<![-\\w]){escaped}(?![-\\w]))";
+        // Optionally consume an existing tswap marker immediately following the value.
+        // This prevents duplication when processing `tswap apply` output, which emits lines
+        // like: key: "actual-secret"  # tswap: secret-name
+        // Without this, the marker would survive as a YAML comment and tocomment would
+        // append a second one, producing: key: ""  # tswap: secret-name  # tswap: secret-name
+        var existingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+)?";
+        return $"(?:(?<![-\\w])\"{escaped}\"{existingMarker}(?![-\\w])|(?<![-\\w])'{escaped}'{existingMarker}(?![-\\w])|(?<![-\\w]){escaped}{existingMarker}(?![-\\w]))";
     }
 
     protected override string GetReplacement(string secretName, MatchType matchType)
