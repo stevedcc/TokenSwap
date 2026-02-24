@@ -655,4 +655,73 @@ public class ProgramTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("up to date", stdout);
     }
+
+    // --- tocomment: security ---
+
+    [Fact]
+    public void ToComment_DryRun_DoesNotExposeSecretInOutput()
+    {
+        RunTswap("init");
+        // Ingest a known secret value via stdin
+        var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
+        Assert.Equal(0, ingestExit);
+
+        // Write a YAML file containing the plaintext secret
+        var yamlFile = Path.Combine(_tempDir, "applied.yaml");
+        File.WriteAllText(yamlFile, "password: supersecretvalue123");
+
+        // Run tocomment --dry-run and capture output
+        var (exit, stdout, _) = RunTswap("tocomment", yamlFile, "--dry-run");
+
+        Assert.Equal(0, exit);
+        // The secret must NOT appear anywhere in the output
+        Assert.DoesNotContain("supersecretvalue123", stdout);
+        // The output must show the redacted form on the before-line
+        Assert.Contains("[REDACTED: my-password]", stdout);
+        // The after-line must show the tswap marker
+        Assert.Contains("# tswap: my-password", stdout);
+    }
+
+    [Fact]
+    public void ToComment_Live_DoesNotExposeSecretInOutput()
+    {
+        RunTswap("init");
+        var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
+        Assert.Equal(0, ingestExit);
+
+        var yamlFile = Path.Combine(_tempDir, "applied.yaml");
+        File.WriteAllText(yamlFile, "password: supersecretvalue123");
+
+        var (exit, stdout, _) = RunTswap("tocomment", yamlFile);
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("supersecretvalue123", stdout);
+        Assert.Contains("[REDACTED: my-password]", stdout);
+    }
+
+    [Fact]
+    public void ToComment_ContinuationLine_DoesNotLeakFragmentInOutput()
+    {
+        RunTswap("init");
+        var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
+        Assert.Equal(0, ingestExit);
+
+        // Simulates a multi-line YAML scalar: the continuation line is a base64-looking
+        // fragment. RedactContent cannot redact it (it is only a partial match), so without
+        // the fix it would be printed verbatim — the test ensures it is suppressed instead.
+        var yamlFile = Path.Combine(_tempDir, "multiline.yaml");
+        File.WriteAllText(yamlFile,
+            "password: supersecretvalue123\n" +
+            "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+
+        var (exit, stdout, _) = RunTswap("tocomment", yamlFile, "--dry-run");
+
+        Assert.Equal(0, exit);
+        // Raw continuation fragment must NOT appear in output
+        Assert.DoesNotContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", stdout);
+        // Safe placeholder must appear instead
+        Assert.Contains("[removed continuation line]", stdout);
+        // Main secret must also not be leaked
+        Assert.DoesNotContain("supersecretvalue123", stdout);
+    }
 }
