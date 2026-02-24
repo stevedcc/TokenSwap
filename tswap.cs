@@ -1075,11 +1075,30 @@ void CmdToComment(string filePath, bool dryRun)
         return;
     }
 
+    // Pre-compute redacted forms in a single pass so BuildMatchList is called once.
+    var normalDiffs = changes.Where(d => d.After != "").ToList();
+    var redactedBefores = Redact.RedactContent(
+        string.Join('\n', normalDiffs.Select(d => d.Before)), db).Split('\n');
+    var redactedByLineNumber = normalDiffs
+        .Select((d, idx) => (d.LineNumber, Redacted: redactedBefores[idx]))
+        .ToDictionary(x => x.LineNumber, x => x.Redacted);
+
     foreach (var diff in changes)
     {
         Console.WriteLine($"  line {diff.LineNumber}:");
-        Console.WriteLine($"  - {Redact.RedactContent(diff.Before, db)}");
-        Console.WriteLine($"  + {diff.After}");
+        if (diff.After == "")
+        {
+            // Continuation line being removed. Its content is a raw base64 fragment that
+            // cannot be fully redacted (it is only part of the secret's full base64 value),
+            // so suppress it rather than risk printing sensitive data.
+            Console.WriteLine($"  - [removed continuation line]");
+            Console.WriteLine($"  + (removed)");
+        }
+        else
+        {
+            Console.WriteLine($"  - {redactedByLineNumber[diff.LineNumber]}");
+            Console.WriteLine($"  + {diff.After}");
+        }
     }
 
     if (dryRun)

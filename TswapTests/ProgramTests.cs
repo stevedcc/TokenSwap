@@ -698,4 +698,30 @@ public class ProgramTests : IDisposable
         Assert.DoesNotContain("supersecretvalue123", stdout);
         Assert.Contains("[REDACTED: my-password]", stdout);
     }
+
+    [Fact]
+    public void ToComment_ContinuationLine_DoesNotLeakFragmentInOutput()
+    {
+        RunTswap("init");
+        var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
+        Assert.Equal(0, ingestExit);
+
+        // Simulates a multi-line YAML scalar: the continuation line is a base64-looking
+        // fragment. RedactContent cannot redact it (it is only a partial match), so without
+        // the fix it would be printed verbatim — the test ensures it is suppressed instead.
+        var yamlFile = Path.Combine(_tempDir, "multiline.yaml");
+        File.WriteAllText(yamlFile,
+            "password: supersecretvalue123\n" +
+            "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
+
+        var (exit, stdout, _) = RunTswap("tocomment", yamlFile, "--dry-run");
+
+        Assert.Equal(0, exit);
+        // Raw continuation fragment must NOT appear in output
+        Assert.DoesNotContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", stdout);
+        // Safe placeholder must appear instead
+        Assert.Contains("[removed continuation line]", stdout);
+        // Main secret must also not be leaked
+        Assert.DoesNotContain("supersecretvalue123", stdout);
+    }
 }
