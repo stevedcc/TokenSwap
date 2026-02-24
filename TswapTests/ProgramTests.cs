@@ -490,6 +490,38 @@ public class ProgramTests : IDisposable
         Assert.Contains("not found", stderr);
     }
 
+    [Fact]
+    public void Apply_DiagnosticsGoToStderr_NotStdout()
+    {
+        // This test verifies that warning banners and diagnostic messages
+        // are written to stderr, not stdout, so they don't corrupt piped output
+        RunTswap("init");
+        RunTswap("create", "test-secret", "16");
+
+        var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: test-secret");
+
+        var (exit, stdout, stderr) = RunTswap("apply", yamlFile);
+
+        Assert.Equal(0, exit);
+        
+        // Stdout should contain ONLY the YAML output
+        Assert.Contains("password:", stdout);
+        Assert.Contains("# tswap: test-secret", stdout);
+        
+        // Stdout should NOT contain any warning boxes or diagnostic messages
+        Assert.DoesNotContain("WARNING", stdout);
+        Assert.DoesNotContain("SECURITY", stdout);
+        Assert.DoesNotContain("╔═", stdout);  // Box drawing characters
+        Assert.DoesNotContain("║", stdout);
+        Assert.DoesNotContain("╚═", stdout);
+        
+        // If there are any warnings (e.g., about touch requirements),
+        // they should be in stderr, not stdout
+        // (We can't test this reliably without a real YubiKey, but the
+        // absence of warning content in stdout proves the fix works)
+    }
+
     // --- Init: new config fields ---
 
     [Fact]
