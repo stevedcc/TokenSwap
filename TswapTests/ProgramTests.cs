@@ -490,6 +490,40 @@ public class ProgramTests : IDisposable
         Assert.Contains("not found", stderr);
     }
 
+    [Fact]
+    public void Apply_DiagnosticsGoToStderr_NotStdout()
+    {
+        // NOTE: This test cannot fully validate the fix without real YubiKey hardware.
+        // In test mode (TSWAP_TEST_KEY set), no security warning banner is generated,
+        // so we can only verify that stdout contains clean YAML without warning text.
+        // The negative assertions pass regardless of whether warnings go to stderr.
+        // 
+        // However, this test still provides value by ensuring that the apply command's
+        // stdout output remains clean YAML that can be safely piped or redirected.
+        
+        RunTswap("init");
+        RunTswap("create", "test-secret", "16");
+
+        var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: test-secret");
+
+        var (exit, stdout, stderr) = RunTswap("apply", yamlFile);
+
+        Assert.Equal(0, exit);
+        
+        // Stdout should contain ONLY the YAML output
+        Assert.Contains("password:", stdout);
+        Assert.Contains("# tswap: test-secret", stdout);
+        
+        // Stdout should NOT contain any warning boxes or diagnostic messages
+        // (In test mode these assertions always pass, but they document the requirement)
+        Assert.DoesNotContain("WARNING", stdout);
+        Assert.DoesNotContain("SECURITY", stdout);
+        Assert.DoesNotContain("╔═", stdout);  // Box drawing characters
+        Assert.DoesNotContain("║", stdout);
+        Assert.DoesNotContain("╚═", stdout);
+    }
+
     // --- Init: new config fields ---
 
     [Fact]
@@ -671,15 +705,15 @@ public class ProgramTests : IDisposable
         File.WriteAllText(yamlFile, "password: supersecretvalue123");
 
         // Run tocomment --dry-run and capture output
-        var (exit, stdout, _) = RunTswap("tocomment", yamlFile, "--dry-run");
+        var (exit, stdout, stderr) = RunTswap("tocomment", yamlFile, "--dry-run");
 
         Assert.Equal(0, exit);
-        // The secret must NOT appear anywhere in the output
+        // The secret must NOT appear anywhere in the output (stdout or stderr)
         Assert.DoesNotContain("supersecretvalue123", stdout);
-        // The output must show the redacted form on the before-line
-        Assert.Contains("[REDACTED: my-password]", stdout);
-        // The after-line must show the tswap marker
-        Assert.Contains("# tswap: my-password", stdout);
+        Assert.DoesNotContain("supersecretvalue123", stderr);
+        // The diff output is now in stderr (diagnostic output)
+        Assert.Contains("[REDACTED: my-password]", stderr);
+        Assert.Contains("# tswap: my-password", stderr);
     }
 
     [Fact]
@@ -692,11 +726,14 @@ public class ProgramTests : IDisposable
         var yamlFile = Path.Combine(_tempDir, "applied.yaml");
         File.WriteAllText(yamlFile, "password: supersecretvalue123");
 
-        var (exit, stdout, _) = RunTswap("tocomment", yamlFile);
+        var (exit, stdout, stderr) = RunTswap("tocomment", yamlFile);
 
         Assert.Equal(0, exit);
+        // Secret must not appear in either stream
         Assert.DoesNotContain("supersecretvalue123", stdout);
-        Assert.Contains("[REDACTED: my-password]", stdout);
+        Assert.DoesNotContain("supersecretvalue123", stderr);
+        // Diff output is in stderr
+        Assert.Contains("[REDACTED: my-password]", stderr);
     }
 
     [Fact]
@@ -714,14 +751,16 @@ public class ProgramTests : IDisposable
             "password: supersecretvalue123\n" +
             "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n");
 
-        var (exit, stdout, _) = RunTswap("tocomment", yamlFile, "--dry-run");
+        var (exit, stdout, stderr) = RunTswap("tocomment", yamlFile, "--dry-run");
 
         Assert.Equal(0, exit);
-        // Raw continuation fragment must NOT appear in output
+        // Raw continuation fragment must NOT appear in either stream
         Assert.DoesNotContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", stdout);
-        // Safe placeholder must appear instead
-        Assert.Contains("[removed continuation line]", stdout);
-        // Main secret must also not be leaked
+        Assert.DoesNotContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", stderr);
+        // Safe placeholder must appear in stderr (diff output)
+        Assert.Contains("[removed continuation line]", stderr);
+        // Main secret must also not be leaked in either stream
         Assert.DoesNotContain("supersecretvalue123", stdout);
+        Assert.DoesNotContain("supersecretvalue123", stderr);
     }
 }

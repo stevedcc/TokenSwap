@@ -888,7 +888,7 @@ void CmdToComment(string filePath, bool dryRun)
 
     if (changes.Count == 0)
     {
-        Console.WriteLine("No secrets found. File unchanged.");
+        Console.Error.WriteLine("No secrets found. File unchanged.");
         return;
     }
 
@@ -902,30 +902,30 @@ void CmdToComment(string filePath, bool dryRun)
 
     foreach (var diff in changes)
     {
-        Console.WriteLine($"  line {diff.LineNumber}:");
+        Console.Error.WriteLine($"  line {diff.LineNumber}:");
         if (diff.After == "")
         {
             // Continuation line being removed. Its content is a raw base64 fragment that
             // cannot be fully redacted (it is only part of the secret's full base64 value),
             // so suppress it rather than risk printing sensitive data.
-            Console.WriteLine($"  - [removed continuation line]");
-            Console.WriteLine($"  + (removed)");
+            Console.Error.WriteLine($"  - [removed continuation line]");
+            Console.Error.WriteLine($"  + (removed)");
         }
         else
         {
-            Console.WriteLine($"  - {redactedByLineNumber[diff.LineNumber]}");
-            Console.WriteLine($"  + {diff.After}");
+            Console.Error.WriteLine($"  - {redactedByLineNumber[diff.LineNumber]}");
+            Console.Error.WriteLine($"  + {diff.After}");
         }
     }
 
     if (dryRun)
     {
-        Console.WriteLine($"\n(dry run) {changes.Count} line(s) would be modified.");
+        Console.Error.WriteLine($"\n(dry run) {changes.Count} line(s) would be modified.");
         return;
     }
 
     File.WriteAllText(filePath, newContent);
-    Console.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
+    Console.Error.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
 }
 
 void CmdApply(string filePath)
