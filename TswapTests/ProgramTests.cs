@@ -33,20 +33,32 @@ public class ProgramTests : IDisposable
             Directory.Delete(_tempDir, true);
     }
 
-    private (int exitCode, string stdout, string stderr) RunTswap(params string[] args)
+    private ProcessStartInfo MakePsi(bool redirectStdin = false)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"run --project \"{_projectDir}/tswap.csproj\" -- {string.Join(" ", args)}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = redirectStdin,
             UseShellExecute = false,
             CreateNoWindow = true
         };
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
+        psi.ArgumentList.Add("run");
+        psi.ArgumentList.Add("--project");
+        psi.ArgumentList.Add($"{_projectDir}/tswap.csproj");
+        psi.ArgumentList.Add("--");
+        return psi;
+    }
+
+    private (int exitCode, string stdout, string stderr) RunTswap(params string[] args)
+    {
+        var psi = MakePsi();
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
 
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEnd();
@@ -58,19 +70,9 @@ public class ProgramTests : IDisposable
 
     private (int exitCode, string stdout, string stderr) RunTswapWithStdin(string stdin, params string[] args)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"run --project \"{_projectDir}/tswap.csproj\" -- {string.Join(" ", args)}",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
-        psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
-        psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
+        var psi = MakePsi(redirectStdin: true);
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
 
         using var process = Process.Start(psi)!;
         process.StandardInput.Write(stdin);
@@ -139,6 +141,107 @@ public class ProgramTests : IDisposable
         Assert.Contains("already exists", stderr);
     }
 
+    [Fact]
+    public void Create_EmptyNameFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("empty", stderr);
+    }
+
+    [Fact]
+    public void Create_NameWithSpaceFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "bad name");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Invalid secret name", stderr);
+    }
+
+    [Fact]
+    public void Create_NameWithSpecialCharsFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "bad!name");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Invalid secret name", stderr);
+    }
+
+    [Fact]
+    public void Create_NameTooLongFails()
+    {
+        RunTswap("init");
+        var longName = new string('a', 65);
+        var (exit, _, stderr) = RunTswap("create", longName);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("too long", stderr);
+    }
+
+    [Fact]
+    public void Create_NameAtMaxLengthSucceeds()
+    {
+        RunTswap("init");
+        var maxName = new string('a', 64);
+        var (exit, _, _) = RunTswap("create", maxName);
+
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public void Create_ZeroLengthFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "valid-name", "0");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("at least 1", stderr);
+    }
+
+    [Fact]
+    public void Create_NegativeLengthFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "valid-name", "-5");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("at least 1", stderr);
+    }
+
+    [Fact]
+    public void Create_TooLongLengthFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "valid-name", "4097");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("at most 4096", stderr);
+    }
+
+    [Fact]
+    public void Create_NonNumericLengthFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("create", "valid-name", "abc");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("whole number", stderr);
+    }
+
+    [Fact]
+    public void Create_MaxLengthSucceeds()
+    {
+        RunTswap("init");
+        var (exit, stdout, _) = RunTswap("create", "valid-name", "4096");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("4096 chars", stdout);
+    }
+
     // --- Names ---
 
     [Fact]
@@ -190,6 +293,48 @@ public class ProgramTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("already exists", stderr);
+    }
+
+    [Fact]
+    public void Ingest_EmptyNameFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswapWithStdin("some-value", "ingest", "");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("empty", stderr);
+    }
+
+    [Fact]
+    public void Ingest_NameWithSpaceFails()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswapWithStdin("some-value", "ingest", "bad name");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Invalid secret name", stderr);
+    }
+
+    [Fact]
+    public void Ingest_TooLongValueFails()
+    {
+        RunTswap("init");
+        var longValue = new string('x', 65537);
+        var (exit, _, stderr) = RunTswapWithStdin(longValue, "ingest", "toolong");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("too long", stderr);
+    }
+
+    [Fact]
+    public void Ingest_MaxLengthValueSucceeds()
+    {
+        RunTswap("init");
+        var maxValue = new string('x', 65536);
+        var (exit, stdout, _) = RunTswapWithStdin(maxValue, "ingest", "maxlen");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("ingested", stdout);
     }
 
     // --- Burn ---
