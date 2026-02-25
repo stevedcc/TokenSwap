@@ -172,6 +172,27 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Create_NameTooLongFails()
+    {
+        RunTswap("init");
+        var longName = new string('a', 65);
+        var (exit, _, stderr) = RunTswap("create", longName);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("too long", stderr);
+    }
+
+    [Fact]
+    public void Create_NameAtMaxLengthSucceeds()
+    {
+        RunTswap("init");
+        var maxName = new string('a', 64);
+        var (exit, _, _) = RunTswap("create", maxName);
+
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
     public void Create_ZeroLengthFails()
     {
         RunTswap("init");

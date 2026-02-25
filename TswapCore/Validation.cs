@@ -7,6 +7,7 @@ public static class Validation
     public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
 
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
+    private const int MaxNameLength = 64;
     private const int MaxGeneratedLength = 4096;
     private const int MaxIngestedLength = 65536;
 
@@ -21,6 +22,8 @@ public static class Validation
     {
         if (string.IsNullOrEmpty(name))
             throw new Exception("Secret name must not be empty.");
+        if (name.Length > MaxNameLength)
+            throw new Exception($"Secret name is too long ({name.Length} chars). Maximum allowed is {MaxNameLength} characters.");
         if (!ValidNameRegex.IsMatch(name))
             throw new Exception($"Invalid secret name '{name}'. Names must contain only letters, digits, underscores, and hyphens ([a-zA-Z0-9_-]).");
     }
