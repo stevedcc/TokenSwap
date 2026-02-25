@@ -6,8 +6,45 @@ public static class Validation
 {
     public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
 
+    private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
+    private const int MaxSecretLength = 4096;
+
     private static readonly HashSet<string> BlockedCommands = new(StringComparer.OrdinalIgnoreCase)
         { "echo", "printf", "cat", "env", "printenv", "set", "tee" };
+
+    /// <summary>
+    /// Validate a secret name: must be non-empty and contain only [a-zA-Z0-9_-].
+    /// Throws a user-friendly exception on failure.
+    /// </summary>
+    public static void ValidateName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            throw new Exception("Secret name must not be empty.");
+        if (!ValidNameRegex.IsMatch(name))
+            throw new Exception($"Invalid secret name '{name}'. Names must contain only letters, digits, underscores, and hyphens ([a-zA-Z0-9_-]).");
+    }
+
+    /// <summary>
+    /// Validate a requested secret length: must be between 1 and 4096.
+    /// Throws a user-friendly exception on failure.
+    /// </summary>
+    public static void ValidateLength(int length)
+    {
+        if (length < 1)
+            throw new Exception($"Secret length must be at least 1 character (got {length}).");
+        if (length > MaxSecretLength)
+            throw new Exception($"Secret length must be at most {MaxSecretLength} characters (got {length}).");
+    }
+
+    /// <summary>
+    /// Validate an ingested secret value length: must be between 1 and 4096.
+    /// Throws a user-friendly exception on failure.
+    /// </summary>
+    public static void ValidateSecretValue(string value)
+    {
+        if (value.Length > MaxSecretLength)
+            throw new Exception($"Secret value is too long ({value.Length} chars). Maximum allowed is {MaxSecretLength} characters.");
+    }
 
     /// <summary>
     /// Extract distinct token names from a command string.

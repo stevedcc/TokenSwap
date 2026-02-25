@@ -429,6 +429,9 @@ void CmdCreate(string name, int length = 32)
 {
     const string charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+";
 
+    Validation.ValidateName(name);
+    Validation.ValidateLength(length);
+
     var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = storage.LoadSecrets(key);
@@ -641,12 +644,15 @@ void CmdNames()
 
 void CmdIngest(string name)
 {
+    Validation.ValidateName(name);
+
     if (Console.IsInputRedirected == false)
         throw new Exception($"No input piped. Use: <source> | {Prefix} ingest <name>\nFor interactive input, use: sudo {Prefix} add <name>");
 
     var value = Console.In.ReadToEnd().TrimEnd();
     if (string.IsNullOrEmpty(value))
         throw new Exception("Empty input received. Nothing to store.");
+    Validation.ValidateSecretValue(value);
 
     var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
@@ -1126,7 +1132,16 @@ try
         case "create":
             if (filteredArgs.Count < 2)
                 throw new Exception($"Usage: {Prefix} create <name> [length]");
-            var createLength = filteredArgs.Count >= 3 ? int.Parse(filteredArgs[2]) : 32;
+            int createLength;
+            if (filteredArgs.Count >= 3)
+            {
+                if (!int.TryParse(filteredArgs[2], out createLength))
+                    throw new Exception($"Invalid length '{filteredArgs[2]}'. Length must be a whole number.");
+            }
+            else
+            {
+                createLength = 32;
+            }
             CmdCreate(filteredArgs[1], createLength);
             break;
 
