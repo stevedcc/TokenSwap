@@ -25,7 +25,12 @@ public static class Validation
         if (name.Length > MaxNameLength)
             throw new Exception($"Secret name is too long ({name.Length} chars). Maximum allowed is {MaxNameLength} characters.");
         if (!ValidNameRegex.IsMatch(name))
-            throw new Exception($"Invalid secret name '{name}'. Names must contain only letters, digits, underscores, and hyphens ([a-zA-Z0-9_-]).");
+        {
+            // Escape the user-supplied value before embedding in the message to prevent
+            // terminal/log injection via control characters or ANSI escape sequences.
+            var safe = Regex.Replace(name, @"[^\x20-\x7E]", "?");
+            throw new Exception($"Invalid secret name '{safe}'. Names must contain only letters, digits, underscores, and hyphens ([a-zA-Z0-9_-]).");
+        }
     }
 
     /// <summary>
@@ -48,6 +53,25 @@ public static class Validation
     {
         if (value.Length > MaxIngestedLength)
             throw new Exception($"Secret value is too long ({value.Length} chars). Maximum allowed is {MaxIngestedLength} characters.");
+    }
+
+    /// <summary>
+    /// Read from <paramref name="reader"/> up to <see cref="MaxIngestedLength"/> characters,
+    /// then trim trailing whitespace. Throws immediately if the stream exceeds the limit,
+    /// so the process never allocates more than MaxIngestedLength + 1 characters from stdin.
+    /// </summary>
+    public static string ReadBoundedStdin(TextReader reader)
+    {
+        var buf = new char[MaxIngestedLength + 1];
+        int total = 0;
+        int read;
+        while ((read = reader.Read(buf, total, buf.Length - total)) > 0)
+        {
+            total += read;
+            if (total > MaxIngestedLength)
+                throw new Exception($"Secret value is too long. Maximum allowed is {MaxIngestedLength} characters.");
+        }
+        return new string(buf, 0, total).TrimEnd();
     }
 
     /// <summary>

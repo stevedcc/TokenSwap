@@ -543,6 +543,7 @@ void CmdInit()
 
 void CmdAdd(string name)
 {
+    Validation.ValidateName(name);
     RequireSudo("add");
     var config = LoadConfig();
     
@@ -609,6 +610,7 @@ void CmdCreate(string name, int length = 32)
 
 void CmdDelete(string name)
 {
+    Validation.ValidateName(name);
     RequireSudo("delete");
 
     var config = LoadConfig();
@@ -626,6 +628,7 @@ void CmdDelete(string name)
 
 void CmdGet(string name)
 {
+    Validation.ValidateName(name);
     RequireSudo("get");
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
@@ -787,10 +790,9 @@ void CmdIngest(string name)
     if (Console.IsInputRedirected == false)
         throw new Exception($"No input piped. Use: <source> | {Prefix} ingest <name>\nFor interactive input, use: sudo {Prefix} add <name>");
 
-    var value = Console.In.ReadToEnd().TrimEnd();
+    var value = Validation.ReadBoundedStdin(Console.In);
     if (string.IsNullOrEmpty(value))
         throw new Exception("Empty input received. Nothing to store.");
-    Validation.ValidateSecretValue(value);
 
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
@@ -808,6 +810,7 @@ void CmdIngest(string name)
 
 void CmdBurn(string name, string? reason)
 {
+    Validation.ValidateName(name);
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);

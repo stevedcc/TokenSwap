@@ -5,6 +5,77 @@ namespace TswapTests;
 
 public class ValidationTests
 {
+    // --- ValidateName ---
+
+    [Fact]
+    public void ValidateName_ValidNamesPass()
+    {
+        // Should not throw
+        Validation.ValidateName("my-secret");
+        Validation.ValidateName("MY_SECRET_123");
+        Validation.ValidateName(new string('a', 64)); // exactly at limit
+    }
+
+    [Fact]
+    public void ValidateName_EmptyThrows()
+    {
+        var ex = Assert.Throws<Exception>(() => Validation.ValidateName(""));
+        Assert.Contains("empty", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateName_TooLongThrows()
+    {
+        var ex = Assert.Throws<Exception>(() => Validation.ValidateName(new string('a', 65)));
+        Assert.Contains("too long", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateName_InvalidCharsThrows()
+    {
+        var ex = Assert.Throws<Exception>(() => Validation.ValidateName("bad name"));
+        Assert.Contains("Invalid secret name", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateName_ControlCharEscapedInMessage()
+    {
+        // A name containing a control character (ESC = 0x1B) should have it replaced with
+        // '?' in the error message, not echoed raw, to prevent terminal injection.
+        var ex = Assert.Throws<Exception>(() => Validation.ValidateName("bad\u001bname"));
+        // The sanitized form must appear (ESC replaced with '?')
+        Assert.Contains("bad?name", ex.Message);
+        // Every character in the message must be in the printable ASCII range or whitespace
+        Assert.All(ex.Message, c => Assert.True(c >= 0x20 || c == '\n' || c == '\r' || c == '\t',
+            $"Message contains non-printable character U+{(int)c:X4}"));
+    }
+
+    // --- ReadBoundedStdin ---
+
+    [Fact]
+    public void ReadBoundedStdin_ReadsAndTrims()
+    {
+        using var reader = new StringReader("hello world\n");
+        Assert.Equal("hello world", Validation.ReadBoundedStdin(reader));
+    }
+
+    [Fact]
+    public void ReadBoundedStdin_ExactLimitAllowed()
+    {
+        var value = new string('x', 65536);
+        using var reader = new StringReader(value);
+        Assert.Equal(value, Validation.ReadBoundedStdin(reader));
+    }
+
+    [Fact]
+    public void ReadBoundedStdin_OverLimitThrows()
+    {
+        var value = new string('x', 65537);
+        using var reader = new StringReader(value);
+        var ex = Assert.Throws<Exception>(() => Validation.ReadBoundedStdin(reader));
+        Assert.Contains("too long", ex.Message);
+    }
+
     // --- Token extraction ---
 
     [Fact]
