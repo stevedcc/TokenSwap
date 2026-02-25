@@ -693,6 +693,20 @@ public class ProgramTests : IDisposable
         Assert.Equal("system", config.RngMode); // test mode uses default
     }
 
+    // Regression test for issue #39: init must not hang when stdin is piped.
+    // The "Insert YubiKey and press Enter" pauses are TTY-only; when stdin is
+    // redirected they must be skipped so that piped "yes" answers only the
+    // reinitialise prompt and the command completes normally.
+    [Fact]
+    public void Init_Reinit_PipedYes_DoesNotHang()
+    {
+        RunTswap("init");
+        // "yes\n" answers the "Already initialized. Reinitialize?" prompt.
+        var (exit, stdout, _) = RunTswapWithStdin("yes\n", "init");
+        Assert.Equal(0, exit);
+        Assert.Contains("test mode", stdout);
+    }
+
     // --- Export / Import ---
 
     [Fact]
@@ -834,6 +848,20 @@ public class ProgramTests : IDisposable
 
         Assert.Equal(0, exit);
         Assert.Contains("up to date", stdout);
+    }
+
+    // Regression test for issue #39: migrate must not hang when stdin is piped.
+    // Synthetic init leaves RequiresTouch=null → needsTouchMigration=true → the
+    // "Show detailed re-initialization instructions? (yes/no):" prompt is shown.
+    // Piped "no\n" must answer it without blocking and the command must exit 0.
+    [Fact]
+    public void Migrate_PipedNo_DoesNotHang()
+    {
+        RunTswap("init");
+        // Default synthetic config: RngMode="system", UnlockChallenge=set, RequiresTouch=null
+        // → needsReInit=true (touch migration required) → yes/no prompt is shown
+        var (exit, _, _) = RunTswapWithStdin("no\n", "migrate");
+        Assert.Equal(0, exit);
     }
 
     // --- tocomment: security ---
