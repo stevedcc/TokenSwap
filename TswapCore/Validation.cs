@@ -46,16 +46,6 @@ public static class Validation
     }
 
     /// <summary>
-    /// Validate an ingested secret value length: must be at most 64 KB.
-    /// Throws a user-friendly exception on failure.
-    /// </summary>
-    public static void ValidateSecretValue(string value)
-    {
-        if (value.Length > MaxIngestedLength)
-            throw new Exception($"Secret value is too long ({value.Length} chars). Maximum allowed is {MaxIngestedLength} characters.");
-    }
-
-    /// <summary>
     /// Read from <paramref name="reader"/> up to <see cref="MaxIngestedLength"/> characters,
     /// then trim trailing whitespace. Throws immediately if the stream exceeds the limit,
     /// so the process never allocates more than MaxIngestedLength + 1 characters from stdin.
