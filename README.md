@@ -194,8 +194,8 @@ These commands are safe for AI agents and automation. They never expose secret v
 
 | Command | Purpose | Risk |
 |---------|---------|------|
-| `create <name> [length]` | Generate random secret | None — value is never displayed |
-| `ingest <name>` | Import secret from stdin pipe | None — agent constructs the pipeline but never sees the value |
+| `create <name> [length]` | Generate random secret (length 1–4096, default 32) | None — value is never displayed |
+| `ingest <name>` | Import secret from stdin pipe (value up to 64 KB) | None — agent constructs the pipeline but never sees the value |
 | `names` | List secret names | Reveals what secrets exist (names only) |
 | `run <cmd>` | Use secrets via `{{token}}` | Secrets passed to subprocess; exfiltration blocklist applies |
 | `burn <name> [reason]` | Mark secret as compromised | None — write-only operation |
@@ -347,8 +347,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 |---------|------|-------------|
 | `init` | No | Initialize with 2 YubiKeys |
 | `migrate` | No | Guide to upgrade slots for touch requirement |
-| `create <name> [length]` | No | Generate random secret (never displayed) |
-| `ingest <name>` | No | Pipe secret from stdin (never displayed) |
+| `create <name> [length]` | No | Generate random secret (never displayed); name must match `[a-zA-Z0-9_-]`, length 1–4096, default 32 |
+| `ingest <name>` | No | Pipe secret from stdin (never displayed); name must match `[a-zA-Z0-9_-]`, value up to 64 KB |
 | `names` | No | List secret names only |
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
