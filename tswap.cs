@@ -455,13 +455,15 @@ void CmdInit()
 
     // Challenge first YubiKey
     Console.WriteLine("Insert YubiKey #1 and press Enter...");
-    Console.ReadLine();
+    if (!Console.IsInputRedirected)
+        Console.ReadLine();
     var serial1 = GetYubiKey();
     var k1 = ChallengeYubiKey(serial1, unlockChallenge);
 
     // Challenge second YubiKey
     Console.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
-    Console.ReadLine();
+    if (!Console.IsInputRedirected)
+        Console.ReadLine();
     var serial2 = GetYubiKey();
 
     if (serial1 == serial2)
