@@ -347,8 +347,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 |---------|------|-------------|
 | `init` | No | Initialize with 2 YubiKeys |
 | `migrate` | No | Guide to upgrade slots for touch requirement |
-| `create <name> [length]` | No | Generate random secret (never displayed); name must match `[a-zA-Z0-9_-]`, length 1–4096, default 32 |
-| `ingest <name>` | No | Pipe secret from stdin (never displayed); name must match `[a-zA-Z0-9_-]`, value up to 64 KB |
+| `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, no max length enforced; value length 1–4096, default 32 |
+| `ingest <name>` | No | Pipe secret from stdin (never displayed); name: `[a-zA-Z0-9_-]`, no max length enforced; value up to 64 KB |
 | `names` | No | List secret names only |
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
