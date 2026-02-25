@@ -298,7 +298,7 @@ public class ProgramTests : IDisposable
     public void Ingest_TooLongValueFails()
     {
         RunTswap("init");
-        var longValue = new string('x', 4097);
+        var longValue = new string('x', 65537);
         var (exit, _, stderr) = RunTswapWithStdin(longValue, "ingest", "toolong");
 
         Assert.NotEqual(0, exit);
@@ -309,7 +309,7 @@ public class ProgramTests : IDisposable
     public void Ingest_MaxLengthValueSucceeds()
     {
         RunTswap("init");
-        var maxValue = new string('x', 4096);
+        var maxValue = new string('x', 65536);
         var (exit, stdout, _) = RunTswapWithStdin(maxValue, "ingest", "maxlen");
 
         Assert.Equal(0, exit);

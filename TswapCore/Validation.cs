@@ -7,7 +7,8 @@ public static class Validation
     public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
 
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
-    private const int MaxSecretLength = 4096;
+    private const int MaxGeneratedLength = 4096;
+    private const int MaxIngestedLength = 65536;
 
     private static readonly HashSet<string> BlockedCommands = new(StringComparer.OrdinalIgnoreCase)
         { "echo", "printf", "cat", "env", "printenv", "set", "tee" };
@@ -32,18 +33,18 @@ public static class Validation
     {
         if (length < 1)
             throw new Exception($"Secret length must be at least 1 character (got {length}).");
-        if (length > MaxSecretLength)
-            throw new Exception($"Secret length must be at most {MaxSecretLength} characters (got {length}).");
+        if (length > MaxGeneratedLength)
+            throw new Exception($"Secret length must be at most {MaxGeneratedLength} characters (got {length}).");
     }
 
     /// <summary>
-    /// Validate an ingested secret value length: must be between 1 and 4096.
+    /// Validate an ingested secret value length: must be at most 64 KB.
     /// Throws a user-friendly exception on failure.
     /// </summary>
     public static void ValidateSecretValue(string value)
     {
-        if (value.Length > MaxSecretLength)
-            throw new Exception($"Secret value is too long ({value.Length} chars). Maximum allowed is {MaxSecretLength} characters.");
+        if (value.Length > MaxIngestedLength)
+            throw new Exception($"Secret value is too long ({value.Length} chars). Maximum allowed is {MaxIngestedLength} characters.");
     }
 
     /// <summary>
