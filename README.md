@@ -69,18 +69,35 @@ Both produce the same master key. This means:
 
 ### Install (compiled binary — recommended)
 
+The compiled binary is a native executable with ~20ms startup. No .NET runtime needed at run time.
+
+**Linux (x64)**
 ```bash
-# Build (requires .NET 10 SDK)
-dotnet publish -c Release
-
-# Install
+dotnet publish -c Release -r linux-x64
 cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-
-# For sudo commands, also install system-wide
-sudo cp ~/.local/bin/tswap /usr/local/bin/
+sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 ```
 
-The compiled binary is a 3.8MB native executable with ~20ms startup. No .NET runtime needed at run time.
+**macOS (Apple Silicon)**
+```bash
+dotnet publish -c Release -r osx-arm64
+cp bin/Release/net10.0/osx-arm64/publish/tswap ~/.local/bin/
+sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+```
+
+**macOS (Intel)**
+```bash
+dotnet publish -c Release -r osx-x64
+cp bin/Release/net10.0/osx-x64/publish/tswap ~/.local/bin/
+sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+```
+
+**Windows (x64)**
+```powershell
+dotnet publish -c Release -r win-x64
+# Copy tswap.exe to a directory on your PATH, e.g.:
+copy bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
+```
 
 ### Install (script — for development)
 
@@ -94,6 +111,12 @@ chmod +x tswap.cs
 # Run directly
 ./tswap.cs <command>
 ```
+
+### Windows notes
+
+- **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`) require running from an **elevated command prompt** (right-click → "Run as administrator") instead of `sudo`.
+- **Process substitution** (`<(tswap apply values.yaml)`) is a bash feature and is not available in cmd or PowerShell. Use Option 2 or 3 from the [Helm Deployment Patterns](#helm-deployment-patterns) section instead.
+- The `tswap.cs` script version requires dotnet-script and is intended for Linux/macOS development; use the compiled `.exe` on Windows.
 
 ### Setup
 
@@ -247,7 +270,7 @@ Mark the secret as compromised. This is the **first** action, before anything el
 tswap burn <name> "reason: how it was exposed"
 ```
 
-This records a timestamp and reason. The `names` command will show `[BURNED]` next to the secret, and `apply`/`check` will warn about it. Burning is idempotent — re-burning updates the timestamp and reason.
+This records a timestamp and reason. The `names` command will show `[BURNED]` next to the secret, and `apply`/`check` will warn about it. Re-burning a secret that is already burned is rejected — the original incident record is preserved.
 
 ### Step 2: Assess scope
 
@@ -353,7 +376,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
 | `burned` | No | List all burned secrets |
-| `check <path>` | No | Scan file/dir for `# tswap:` markers; exits non-zero on missing secrets |
+| `check <path>` | No | Scan file/dir for `# tswap:` markers; exits 1 if any secret is missing, 2 if any secret is burned |
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
@@ -365,6 +388,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `delete <name>` | Yes | Remove a secret |
 
 Add `-v` or `--verbose` to any command for detailed YubiKey output.
+
+On Linux/macOS, commands marked **Sudo** require `sudo tswap <command>`. On Windows, run `tswap <command>` from an elevated command prompt instead.
 
 ## Example: AI Agent Workflow
 
@@ -493,11 +518,18 @@ rm /tmp/values.deployed.yaml
 
 ## Files
 
+| Platform | Config directory |
+|----------|-----------------|
+| Linux / macOS | `~/.config/tswap/` |
+| Windows | `%APPDATA%\tswap\` |
+
 ```
-~/.config/tswap-poc/
+<config directory>/
 ├── config.json         # YubiKey serials + XOR share (not secret on its own)
 └── secrets.json.enc    # AES-256-GCM encrypted secrets database
 ```
+
+> **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: on Linux/macOS rename `~/.config/tswap-poc/` to `~/.config/tswap/`, and on Windows rename `%APPDATA%\tswap-poc\` to `%APPDATA%\tswap\`.
 
 ## Prerequisites
 

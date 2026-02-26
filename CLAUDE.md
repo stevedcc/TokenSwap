@@ -70,7 +70,7 @@ Reads files with `# tswap: <secret-name>` markers and substitutes empty values w
 
 ### Storage
 
-Config directory: `~/.config/tswap-poc/`
+Config directory: `~/.config/tswap/`
 - `config.json` — YubiKey serials + XOR share (plaintext, not secret)
 - `secrets.json.enc` — AES-256-GCM encrypted secrets database
 

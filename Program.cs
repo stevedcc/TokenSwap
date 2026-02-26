@@ -51,12 +51,31 @@ if (configDirOverride != null)
 else
 {
     // When running under sudo, resolve config relative to the invoking user's home
-    // so that "sudo tswap get" finds the same database as "tswap create"
+    // so that "sudo tswap get" finds the same database as "tswap create".
+    // SUDO_USER is only set on Unix; on Windows, UAC elevation preserves APPDATA.
     var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-    var appDataDir = sudoUser != null
-        ? Path.Combine("/home", sudoUser, ".config")
-        : Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-    ConfigDir = Path.Combine(appDataDir, "tswap-poc");
+    string appDataDir;
+    if (sudoUser != null && !OperatingSystem.IsWindows())
+    {
+        var userHome = OperatingSystem.IsMacOS()
+            ? Path.Combine("/Users", sudoUser)
+            : Path.Combine("/home", sudoUser);
+        appDataDir = Path.Combine(userHome, ".config");
+    }
+    else
+    {
+        appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    }
+    ConfigDir = Path.Combine(appDataDir, "tswap");
+
+    // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
+    // Only runs on the standard path, not when TSWAP_CONFIG_DIR is overridden.
+    var legacyDir = Path.Combine(appDataDir, "tswap-poc");
+    if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
+    {
+        Directory.Move(legacyDir, ConfigDir);
+        Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+    }
 }
 
 var PromptText = Prompt.GetText(Prefix);
@@ -273,9 +292,12 @@ void RequireSudo(string commandName)
     if (AllowSudoBypass) return;
 #endif
     if (!Environment.IsPrivilegedProcess)
-        throw new Exception(
-            $"The '{commandName}' command requires sudo.\n" +
-            $"Run: sudo {Prefix} {commandName} ...");
+    {
+        var msg = OperatingSystem.IsWindows()
+            ? $"The '{commandName}' command requires an administrator prompt.\nRun tswap from an elevated command prompt."
+            : $"The '{commandName}' command requires sudo.\nRun: sudo {Prefix} {commandName} ...";
+        throw new Exception(msg);
+    }
 }
 
 // ============================================================================
