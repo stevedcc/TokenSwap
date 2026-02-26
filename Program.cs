@@ -67,14 +67,15 @@ else
         appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
     }
     ConfigDir = Path.Combine(appDataDir, "tswap");
-}
 
-// Migrate legacy config directory tswap-poc -> tswap (one-time, silent)
-var legacyDir = Path.Combine(Path.GetDirectoryName(ConfigDir)!, "tswap-poc");
-if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
-{
-    Directory.Move(legacyDir, ConfigDir);
-    Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+    // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
+    // Only runs on the standard path, not when TSWAP_CONFIG_DIR is overridden.
+    var legacyDir = Path.Combine(appDataDir, "tswap-poc");
+    if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
+    {
+        Directory.Move(legacyDir, ConfigDir);
+        Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+    }
 }
 
 var PromptText = Prompt.GetText(Prefix);

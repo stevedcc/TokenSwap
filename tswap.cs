@@ -71,8 +71,9 @@ else
 }
 var ConfigDir = Path.Combine(appDataDir, "tswap");
 
-// Migrate legacy config directory tswap-poc -> tswap (one-time, silent)
-var legacyDir = Path.Combine(Path.GetDirectoryName(ConfigDir)!, "tswap-poc");
+// Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
+// Only runs on the standard path, not when TSWAP_CONFIG_DIR is overridden.
+var legacyDir = Path.Combine(appDataDir, "tswap-poc");
 if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
 {
     Directory.Move(legacyDir, ConfigDir);
