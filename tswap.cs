@@ -53,31 +53,41 @@ string DetectInvocationPrefix()
 }
 var Prefix = DetectInvocationPrefix();
 
-// When running under sudo, resolve config relative to the invoking user's home
-// so that "sudo tswap get" finds the same database as "tswap create".
-// SUDO_USER is only set on Unix; on Windows, UAC elevation preserves APPDATA.
-var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-string appDataDir;
-if (sudoUser != null && !OperatingSystem.IsWindows())
+// Allow overriding config directory for testing
+var configDirOverride = Environment.GetEnvironmentVariable("TSWAP_CONFIG_DIR");
+string ConfigDir;
+if (configDirOverride != null)
 {
-    var userHome = OperatingSystem.IsMacOS()
-        ? Path.Combine("/Users", sudoUser)
-        : Path.Combine("/home", sudoUser);
-    appDataDir = Path.Combine(userHome, ".config");
+    ConfigDir = configDirOverride;
 }
 else
 {
-    appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-}
-var ConfigDir = Path.Combine(appDataDir, "tswap");
+    // When running under sudo, resolve config relative to the invoking user's home
+    // so that "sudo tswap get" finds the same database as "tswap create".
+    // SUDO_USER is only set on Unix; on Windows, UAC elevation preserves APPDATA.
+    var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+    string appDataDir;
+    if (sudoUser != null && !OperatingSystem.IsWindows())
+    {
+        var userHome = OperatingSystem.IsMacOS()
+            ? Path.Combine("/Users", sudoUser)
+            : Path.Combine("/home", sudoUser);
+        appDataDir = Path.Combine(userHome, ".config");
+    }
+    else
+    {
+        appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    }
+    ConfigDir = Path.Combine(appDataDir, "tswap");
 
-// Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
-// Only runs on the standard path, not when TSWAP_CONFIG_DIR is overridden.
-var legacyDir = Path.Combine(appDataDir, "tswap-poc");
-if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
-{
-    Directory.Move(legacyDir, ConfigDir);
-    Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+    // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
+    // Only runs on the standard path, not when TSWAP_CONFIG_DIR is overridden.
+    var legacyDir = Path.Combine(appDataDir, "tswap-poc");
+    if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
+    {
+        Directory.Move(legacyDir, ConfigDir);
+        Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+    }
 }
 
 var ConfigFile = Path.Combine(ConfigDir, "config.json");
