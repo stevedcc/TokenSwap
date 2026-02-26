@@ -1051,10 +1051,19 @@ void CmdCheck(string path)
 
     Console.WriteLine($"\nSummary: {okCount} ok, {warnCount} warning(s), {missingCount} missing");
 
+    // Exit-code precedence: missing secrets (1) take priority over burned/warn secrets (2)
+    int exitCode = 0;
     if (missingCount > 0)
-        Environment.Exit(1);
-    if (warnCount > 0)
-        Environment.Exit(2);
+    {
+        exitCode = 1;
+    }
+    else if (warnCount > 0)
+    {
+        exitCode = 2;
+    }
+
+    if (exitCode != 0)
+        Environment.Exit(exitCode);
 }
 
 void CmdRedact(string filePath)
