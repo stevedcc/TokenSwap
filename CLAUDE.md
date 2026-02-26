@@ -17,7 +17,9 @@ C# application with two entry points:
 ```bash
 # Compiled binary (recommended)
 dotnet publish -c Release
-cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+# Linux:   cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+# macOS:   cp bin/Release/net10.0/osx-arm64/publish/tswap ~/.local/bin/
+# Windows: copy bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
 tswap <command>
 
 # Script (for development)
@@ -25,7 +27,11 @@ chmod +x tswap.cs
 ./tswap.cs <command>
 ```
 
-There is no test suite or linter configured.
+Tests live in `TswapTests/TswapTests.csproj`. Run with:
+```bash
+TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
+```
+There is no linter configured.
 
 ## Architecture
 
@@ -33,8 +39,8 @@ There is no test suite or linter configured.
 
 Commands are split by whether they require sudo:
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash` — safe for AI agents
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>` — exposes secret values
+- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `migrate` — safe for AI agents
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>` — exposes secret values
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
 
@@ -54,7 +60,7 @@ Allows piping secrets from external sources (e.g., `kubectl`, `vault`) without t
 
 ### Burn Tracking (`burn` / `burned` commands)
 
-Agents can mark secrets as burned (compromised/seen) via `burn <name> [reason]`. The `burned` command generates a rotation report. The `names` command shows `[BURNED]` markers. Burning is idempotent (updates timestamp/reason on re-burn).
+Agents can mark secrets as burned (compromised/seen) via `burn <name> [reason]`. The `burned` command generates a rotation report. The `names` command shows `[BURNED]` markers. Re-burning an already-burned secret is rejected — the original incident record is preserved.
 
 ### Agent Prompt (`prompt` / `prompt-hash` commands)
 
@@ -77,14 +83,14 @@ Config directory: `~/.config/tswap/`
 ### Code Organization (tswap.cs)
 
 The script file is organized into logical sections:
-1. **Configuration** (~line 52) — paths, verbose flag, invocation detection, sudo user resolution, `PromptTemplate`
-2. **Data Structures** (~line 120) — `Config`, `Secret` (with burn fields), `SecretsDb` records
-3. **YubiKey Operations** (~line 128) — `ChallengeYubiKey()`, `GetYubiKey()` via ykman CLI
-4. **Crypto Operations** (~line 232) — XOR, PBKDF2, AES-GCM encrypt/decrypt
-5. **Storage Operations** (~line 292) — load/save config and secrets, unlock logic
-6. **Helper Functions** (~line 364) — masked password input, sudo enforcement
-7. **Commands** (~line 401) — all command implementations (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, add, get, list, delete)
-8. **Main Entry Point** (~line 753) — argument parsing and dispatch
+1. **Configuration** (~line 33) — paths, verbose flag, invocation detection, sudo user resolution, TSWAP_CONFIG_DIR override, legacy dir migration
+2. **Data Structures** (~line 148) — `Config`, `Secret` (with burn fields), `SecretsDb` records
+3. **YubiKey Operations** (~line 177) — `ChallengeYubiKey()`, `GetYubiKey()` via ykman CLI
+4. **Crypto Operations** (~line 286) — XOR, PBKDF2, AES-GCM encrypt/decrypt
+5. **Storage Operations** (~line 346) — load/save config and secrets, unlock logic
+6. **Helper Functions** (~line 422) — masked password input, sudo enforcement
+7. **Commands** (~line 469) — all command implementations (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import)
+8. **Main Entry Point** (~line 1300) — argument parsing and dispatch
 
 `Program.cs` mirrors the same structure but adds a `JsonSerializerContext` (source-generated, required for NativeAOT) and uses `args` instead of dotnet-script's `Args`.
 
@@ -94,7 +100,7 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 
 1. **Get instructions**: Run `tswap prompt` at the start of a session to get current usage instructions. Follow them.
 2. **Check for updates**: Run `tswap prompt-hash` periodically (e.g., at the start of each session) and compare against the last known hash. If it changed, re-read the full prompt.
-3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, and `burned` only.
+3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `apply`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only.
 4. **Use `{{token}}` substitution** via `run` to pass secrets to commands without seeing them.
 5. **Burn immediately** if you accidentally see a plaintext secret: `tswap burn <name> "<reason>"`.
 
