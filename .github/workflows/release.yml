@@ -69,7 +69,9 @@ jobs:
 
       - name: Install native build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y clang zlib1g-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
 
       - name: Publish
         run: >
@@ -102,13 +104,14 @@ jobs:
           cd artifacts
           for dir in */; do
             rid="${dir%/}"
+            runtime="${rid#tswap-}"
             cd "$dir"
             # Windows binary has .exe
-            if [[ "$rid" == win-* ]]; then
-              zip "../tswap-${rid}.zip" tswap.exe
+            if [[ "$runtime" == win-* ]]; then
+              zip "../tswap-${runtime}.zip" tswap.exe
             else
               chmod +x tswap
-              tar czf "../tswap-${rid}.tar.gz" tswap
+              tar czf "../tswap-${runtime}.tar.gz" tswap
             fi
             cd ..
           done
