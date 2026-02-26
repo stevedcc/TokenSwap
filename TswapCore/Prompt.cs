@@ -23,7 +23,7 @@ automated/silent unlocking by malicious processes.
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
-- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits non-zero if any referenced secret is missing
+- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing, 2 if any secret is burned
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
 - `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
 - `%CMD% apply <file>` — Read file with `# tswap:` markers and output with actual secret values substituted
@@ -35,6 +35,8 @@ automated/silent unlocking by malicious processes.
 - `sudo %CMD% get <name>` — Exposes plaintext value
 - `sudo %CMD% list` — Lists secrets with metadata
 - `sudo %CMD% delete <name>` — Removes a secret
+- `sudo %CMD% export <file>` — Backup vault to encrypted file (human use only; ask the user to run this)
+- `sudo %CMD% import <file>` — Restore vault from encrypted backup (human use only; ask the user to run this)
 
 ## Key rules:
 1. NEVER use sudo commands — they expose secret values

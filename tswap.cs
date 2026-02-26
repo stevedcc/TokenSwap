@@ -717,7 +717,7 @@ void CmdImport(string path)
     if (!File.Exists(path))
         throw new Exception($"Export file not found: {path}");
 
-    Console.Write("Export passphrase: ");
+    Console.Write("Import passphrase: ");
     var passphrase = ReadPassword();
 
     var exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
@@ -821,6 +821,12 @@ void CmdBurn(string name, string? reason)
         throw new Exception($"Secret '{name}' not found");
 
     var existing = db.Secrets[name];
+    if (existing.BurnedAt.HasValue)
+    {
+        var originalReason = existing.BurnReason ?? "(no reason given)";
+        throw new Exception($"Secret '{name}' is already burned (since {existing.BurnedAt:yyyy-MM-dd HH:mm}: {originalReason})");
+    }
+
     db.Secrets[name] = existing with { BurnedAt = DateTime.UtcNow, BurnReason = reason };
     SaveSecrets(db, key);
 
@@ -926,7 +932,7 @@ void CmdRun(string[] args)
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
-            throw new Exception($"Secret '{{{{{token}}}}}' not found");
+            throw new Exception($"Secret '{token}' not found");
     }
     
     // Substitute tokens
@@ -1047,6 +1053,8 @@ void CmdCheck(string path)
 
     if (missingCount > 0)
         Environment.Exit(1);
+    if (warnCount > 0)
+        Environment.Exit(2);
 }
 
 void CmdRedact(string filePath)
@@ -1301,9 +1309,9 @@ try
         Console.WriteLine("  - Or without touch (less secure):");
         Console.WriteLine("    ykman otp chalresp --generate 2");
         Console.WriteLine("  - For [sudo] commands, tswap must also be available to root");
-        Environment.Exit(1);
+        Environment.Exit(0);
     }
-    
+
     var filteredArgs = Args.Where(a => a != "-v" && a != "--verbose").ToList();
     var command = filteredArgs[0].ToLower();
 
