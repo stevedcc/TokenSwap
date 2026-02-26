@@ -29,7 +29,11 @@ chmod +x tswap.cs
 
 Tests live in `TswapTests/TswapTests.csproj`. Run with:
 ```bash
+# Linux/macOS:
 TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
+
+# Windows (PowerShell):
+$env:TSWAP_TEST_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) }); dotnet test .\TswapTests\TswapTests.csproj
 ```
 There is no linter configured.
 
