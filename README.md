@@ -81,15 +81,16 @@ sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 **macOS (Apple Silicon)**
 ```bash
 dotnet publish -c Release -r osx-arm64
-cp bin/Release/net10.0/osx-arm64/publish/tswap ~/.local/bin/
-sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+sudo cp bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 ```
 
-**macOS (Intel)**
+**macOS (Intel, build from source)**
+
+> Intel Mac prebuilt binaries are not included in releases — GitHub's Intel macOS runners have been retired and NativeAOT cannot cross-compile. Build locally:
+
 ```bash
 dotnet publish -c Release -r osx-x64
-cp bin/Release/net10.0/osx-x64/publish/tswap ~/.local/bin/
-sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+sudo cp bin/Release/net10.0/osx-x64/publish/tswap /usr/local/bin/
 ```
 
 **Windows (x64)**
