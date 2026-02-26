@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
+
+  verify-version:
+    name: Verify Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check tag matches csproj version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TAG_VERSION="${TAG#v}"
+          CSPROJ_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' tswap.csproj)
+          echo "Tag version:    $TAG_VERSION"
+          echo "Csproj version: $CSPROJ_VERSION"
+          if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ]; then
+            echo "ERROR: Tag $TAG does not match <Version>$CSPROJ_VERSION</Version> in tswap.csproj"
+            exit 1
+          fi
+
+  build:
+    needs: [test, verify-version]
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: linux-arm64
+            os: ubuntu-22.04-arm
+          - rid: osx-x64
+            os: macos-13
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: win-x64
+            os: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install native build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish
+        run: >
+          dotnet publish tswap.csproj
+          --configuration Release
+          --runtime ${{ matrix.rid }}
+          --output ./publish/${{ matrix.rid }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tswap-${{ matrix.rid }}
+          path: ./publish/${{ matrix.rid }}/
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Rename and zip binaries
+        run: |
+          cd artifacts
+          for dir in */; do
+            rid="${dir%/}"
+            runtime="${rid#tswap-}"
+            cd "$dir"
+            # Windows binary has .exe
+            if [[ "$runtime" == win-* ]]; then
+              zip "../tswap-${runtime}.zip" tswap.exe
+            else
+              chmod +x tswap
+              tar czf "../tswap-${runtime}.tar.gz" tswap
+            fi
+            cd ..
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/tswap-linux-x64.tar.gz
+            artifacts/tswap-linux-arm64.tar.gz
+            artifacts/tswap-osx-x64.tar.gz
+            artifacts/tswap-osx-arm64.tar.gz
+            artifacts/tswap-win-x64.zip
