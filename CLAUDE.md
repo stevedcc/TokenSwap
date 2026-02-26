@@ -18,7 +18,7 @@ C# application with two entry points:
 # Compiled binary (recommended)
 dotnet publish -c Release
 # Linux:   cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   cp bin/Release/net10.0/osx-arm64/publish/tswap ~/.local/bin/
+# macOS:   sudo cp bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 # Windows: copy bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
 tswap <command>
 

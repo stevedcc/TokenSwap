@@ -81,15 +81,13 @@ sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 **macOS (Apple Silicon)**
 ```bash
 dotnet publish -c Release -r osx-arm64
-cp bin/Release/net10.0/osx-arm64/publish/tswap ~/.local/bin/
-sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+sudo cp bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 ```
 
 **macOS (Intel)**
 ```bash
 dotnet publish -c Release -r osx-x64
-cp bin/Release/net10.0/osx-x64/publish/tswap ~/.local/bin/
-sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
+sudo cp bin/Release/net10.0/osx-x64/publish/tswap /usr/local/bin/
 ```
 
 **Windows (x64)**
