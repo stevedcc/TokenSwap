@@ -58,7 +58,7 @@ var Prefix = DetectInvocationPrefix();
 // SUDO_USER is only set on Unix; on Windows, UAC elevation preserves APPDATA.
 var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
 string appDataDir;
-if (sudoUser != null)
+if (sudoUser != null && !OperatingSystem.IsWindows())
 {
     var userHome = OperatingSystem.IsMacOS()
         ? Path.Combine("/Users", sudoUser)
@@ -70,6 +70,15 @@ else
     appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 }
 var ConfigDir = Path.Combine(appDataDir, "tswap");
+
+// Migrate legacy config directory tswap-poc -> tswap (one-time, silent)
+var legacyDir = Path.Combine(Path.GetDirectoryName(ConfigDir)!, "tswap-poc");
+if (Directory.Exists(legacyDir) && !Directory.Exists(ConfigDir))
+{
+    Directory.Move(legacyDir, ConfigDir);
+    Console.Error.WriteLine($"Migrated config directory: {legacyDir} -> {ConfigDir}");
+}
+
 var ConfigFile = Path.Combine(ConfigDir, "config.json");
 var SecretsFile = Path.Combine(ConfigDir, "secrets.json.enc");
 
