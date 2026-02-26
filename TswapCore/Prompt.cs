@@ -23,7 +23,7 @@ automated/silent unlocking by malicious processes.
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
-- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing, 2 if any secret is burned
+- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
 - `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
 - `%CMD% apply <file>` — Read file with `# tswap:` markers and output with actual secret values substituted
