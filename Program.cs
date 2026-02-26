@@ -868,10 +868,17 @@ void CmdCheck(string path)
 
     Console.WriteLine($"\nSummary: {okCount} ok, {warnCount} warning(s), {missingCount} missing");
 
+    // Exit codes:
+    //   0 = all secrets OK
+    //   1 = at least one secret is missing
+    //   2 = at least one secret is burned (takes precedence over missing when both occur)
+    var exitCode = 0;
     if (missingCount > 0)
-        Environment.Exit(1);
+        exitCode = 1;
     if (warnCount > 0)
-        Environment.Exit(2);
+        exitCode = 2; // burned secrets override missing when both are present
+    if (exitCode != 0)
+        Environment.Exit(exitCode);
 }
 
 void CmdRedact(string filePath)
