@@ -681,6 +681,26 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Check_ExitCode1_WhenMixedMissingAndBurned()
+    {
+        RunTswap("init");
+        RunTswap("create", "burned-mixed-secret");
+        RunTswap("burn", "burned-mixed-secret", "was leaked");
+
+        var yamlFile = Path.Combine(_tempDir, "check-mixed.yaml");
+        File.WriteAllText(yamlFile, @"
+password1: """"  # tswap: burned-mixed-secret
+password2: """"  # tswap: missing-mixed-secret");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile);
+
+        // Missing takes precedence over burned, so exit code should be 1
+        Assert.Equal(1, exit);
+        Assert.Contains("NOT FOUND", stdout);
+        Assert.Contains("BURNED", stdout);
+    }
+
+    [Fact]
     public void Check_ExitCode0_WhenAllOk()
     {
         RunTswap("init");
