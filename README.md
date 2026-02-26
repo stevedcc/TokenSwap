@@ -529,7 +529,7 @@ rm /tmp/values.deployed.yaml
 └── secrets.json.enc    # AES-256-GCM encrypted secrets database
 ```
 
-> **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: rename `~/.config/tswap-poc/` to `~/.config/tswap/`.
+> **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: on Linux/macOS rename `~/.config/tswap-poc/` to `~/.config/tswap/`, and on Windows rename `%APPDATA%\tswap-poc\` to `%APPDATA%\tswap\`.
 
 ## Prerequisites
 
