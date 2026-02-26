@@ -371,6 +371,20 @@ public class ProgramTests : IDisposable
         Assert.Contains("not found", stderr);
     }
 
+    [Fact]
+    public void Burn_AlreadyBurnedFails()
+    {
+        RunTswap("init");
+        RunTswap("create", "already-burned");
+        RunTswap("burn", "already-burned", "original reason");
+
+        var (exit, _, stderr) = RunTswap("burn", "already-burned", "second reason");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("already burned", stderr);
+        Assert.Contains("original reason", stderr);
+    }
+
     // --- Burned ---
 
     [Fact]
@@ -491,7 +505,7 @@ public class ProgramTests : IDisposable
     {
         var (exit, stdout, _) = RunTswap();
 
-        Assert.Equal(1, exit);
+        Assert.Equal(0, exit);
         Assert.Contains("Usage", stdout);
     }
 
@@ -633,6 +647,71 @@ public class ProgramTests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("nonexistent-secret", stderr);
         Assert.Contains("not found", stderr);
+    }
+
+    // --- Check ---
+
+    [Fact]
+    public void Check_ExitCode1_WhenSecretMissing()
+    {
+        RunTswap("init");
+
+        var yamlFile = Path.Combine(_tempDir, "check-missing.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: missing-secret");
+
+        var (exit, _, _) = RunTswap("check", yamlFile);
+
+        Assert.Equal(1, exit);
+    }
+
+    [Fact]
+    public void Check_ExitCode2_WhenSecretBurned()
+    {
+        RunTswap("init");
+        RunTswap("create", "burned-check-secret");
+        RunTswap("burn", "burned-check-secret", "was leaked");
+
+        var yamlFile = Path.Combine(_tempDir, "check-burned.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: burned-check-secret");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("BURNED", stdout);
+    }
+
+    [Fact]
+    public void Check_ExitCode1_WhenMixedMissingAndBurned()
+    {
+        RunTswap("init");
+        RunTswap("create", "burned-mixed-secret");
+        RunTswap("burn", "burned-mixed-secret", "was leaked");
+
+        var yamlFile = Path.Combine(_tempDir, "check-mixed.yaml");
+        File.WriteAllText(yamlFile, @"
+password1: """"  # tswap: burned-mixed-secret
+password2: """"  # tswap: missing-mixed-secret");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile);
+
+        // Missing takes precedence over burned, so exit code should be 1
+        Assert.Equal(1, exit);
+        Assert.Contains("NOT FOUND", stdout);
+        Assert.Contains("BURNED", stdout);
+    }
+
+    [Fact]
+    public void Check_ExitCode0_WhenAllOk()
+    {
+        RunTswap("init");
+        RunTswap("create", "ok-check-secret");
+
+        var yamlFile = Path.Combine(_tempDir, "check-ok.yaml");
+        File.WriteAllText(yamlFile, @"password: """"  # tswap: ok-check-secret");
+
+        var (exit, _, _) = RunTswap("check", yamlFile);
+
+        Assert.Equal(0, exit);
     }
 
     [Fact]
