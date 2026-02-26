@@ -51,8 +51,6 @@ jobs:
             os: ubuntu-latest
           - rid: linux-arm64
             os: ubuntu-22.04-arm
-          - rid: osx-x64
-            os: macos-13
           - rid: osx-arm64
             os: macos-latest
           - rid: win-x64
@@ -124,6 +122,5 @@ jobs:
           files: |
             artifacts/tswap-linux-x64.tar.gz
             artifacts/tswap-linux-arm64.tar.gz
-            artifacts/tswap-osx-x64.tar.gz
             artifacts/tswap-osx-arm64.tar.gz
             artifacts/tswap-win-x64.zip
