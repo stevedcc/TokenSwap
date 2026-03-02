@@ -498,6 +498,21 @@ public class ProgramTests : IDisposable
         Assert.Contains("Pipes", stderr);
     }
 
+    [Fact]
+    public void Run_SecretRedactedFromErrorOutput()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
+
+        // ls on a nonexistent path that includes the secret — ls will echo the path in its
+        // error message, which tswap run should redact before it reaches the terminal
+        var (exit, _, stderr) = RunTswap("run", "ls", "/tmp/prefix-{{my-pass}}-suffix");
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("abc123xyz", stderr);
+        Assert.Contains("[REDACTED: my-pass]", stderr);
+    }
+
     // --- No args ---
 
     [Fact]

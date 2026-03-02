@@ -277,6 +277,22 @@ public static class Redact
         => new ToCommentProcessor().Process(content, db);
 
     /// <summary>
+    /// Replaces any of the given secret values in <paramref name="line"/> with
+    /// <c>[REDACTED: name]</c>. Intended for streaming redaction of subprocess output in
+    /// <c>tswap run</c>. Sorted longest-first to prevent a shorter value from clobbering a
+    /// longer one that shares a prefix.
+    /// </summary>
+    public static string RedactLine(string line, IReadOnlyDictionary<string, string> secretValues)
+    {
+        foreach (var (name, value) in secretValues.OrderByDescending(kv => kv.Value.Length))
+        {
+            if (!string.IsNullOrEmpty(value))
+                line = line.Replace(value, $"[REDACTED: {name}]");
+        }
+        return line;
+    }
+
+    /// <summary>
     /// Scans <paramref name="content"/> for strings that look like unrecognized credentials
     /// (adjacent to a keyword like <c>password</c>, <c>token</c>, etc.). Returns the 1-based
     /// line number and the matched snippet for each hit.

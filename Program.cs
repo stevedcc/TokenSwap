@@ -825,7 +825,8 @@ void CmdRun(string[] runArgs)
         Console.WriteLine();
     }
 
-    // Execute command
+    // Execute command, forwarding output through redaction to prevent secret values
+    // from appearing in terminal output if the command fails and echoes its arguments
     var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
     var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
 
@@ -835,11 +836,26 @@ void CmdRun(string[] runArgs)
         {
             FileName = shell,
             Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         }
     };
 
+    process.OutputDataReceived += (_, e) =>
+    {
+        if (e.Data != null)
+            Console.WriteLine(Redact.RedactLine(e.Data, secretValues));
+    };
+    process.ErrorDataReceived += (_, e) =>
+    {
+        if (e.Data != null)
+            Console.Error.WriteLine(Redact.RedactLine(e.Data, secretValues));
+    };
+
     process.Start();
+    process.BeginOutputReadLine();
+    process.BeginErrorReadLine();
     process.WaitForExit();
 
     Environment.Exit(process.ExitCode);
