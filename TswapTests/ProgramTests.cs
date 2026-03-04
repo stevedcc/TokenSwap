@@ -47,6 +47,9 @@ public class ProgramTests : IDisposable
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
+        // fork() from a JIT-mode .NET process crashes when W^X protection is active.
+        // The deployed AOT binary has no JIT so this is not needed in production.
+        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add($"{_projectDir}/tswap.csproj");
@@ -505,12 +508,13 @@ public class ProgramTests : IDisposable
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
         // ls on a nonexistent path that includes the secret — ls will echo the path in its
-        // error message, which tswap run should redact before it reaches the terminal
-        var (exit, _, stderr) = RunTswap("run", "ls", "/tmp/prefix-{{my-pass}}-suffix");
+        // error message. With PTY, stderr and stdout are merged into a single stream, so
+        // the redacted error text arrives on stdout.
+        var (exit, stdout, _) = RunTswap("run", "ls", "/tmp/prefix-{{my-pass}}-suffix");
 
         Assert.NotEqual(0, exit);
-        Assert.DoesNotContain("abc123xyz", stderr);
-        Assert.Contains("[REDACTED: my-pass]", stderr);
+        Assert.DoesNotContain("abc123xyz", stdout);
+        Assert.Contains("[REDACTED: my-pass]", stdout);
     }
 
     // --- No args ---

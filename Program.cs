@@ -825,45 +825,16 @@ void CmdRun(string[] runArgs)
         Console.WriteLine();
     }
 
-    // Execute command, forwarding output through redaction to prevent secret values
-    // from appearing in terminal output if the command fails and echoes its arguments.
-    // Pre-sort secrets longest-first once; reused on every output line in the handlers.
-    var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
-    var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
-
+    // Execute command via PTY so child processes see a real terminal — enabling colour
+    // output, progress bars, and interactive prompts (kubectl exec, helm install, etc.).
+    // PTY output is still intercepted and redacted before reaching our terminal.
     var sortedSecrets = secretValues
         .OrderByDescending(kv => kv.Value.Length)
         .ToList();
 
-    var process = new Process
-    {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = shell,
-            Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        }
-    };
+    int exitCode = Pty.Create().Run(substitutedCommand, sortedSecrets);
 
-    process.OutputDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-            Console.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
-    };
-    process.ErrorDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-            Console.Error.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
-    };
-
-    process.Start();
-    process.BeginOutputReadLine();
-    process.BeginErrorReadLine();
-    process.WaitForExit();
-
-    Environment.Exit(process.ExitCode);
+    Environment.Exit(exitCode);
 }
 
 void CmdCheck(string path)
