@@ -60,10 +60,13 @@ internal abstract class UnixPty : IPtyRunner
     /// </summary>
     public int Run(string command, List<KeyValuePair<string, string>> sortedSecrets)
     {
+        int consoleRows, consoleCols;
+        try { consoleRows = Console.WindowHeight; consoleCols = Console.WindowWidth; }
+        catch { consoleRows = 0; consoleCols = 0; }
         var winsize = new Winsize
         {
-            ws_row = (ushort)(Console.WindowHeight > 0 ? Console.WindowHeight : 24),
-            ws_col = (ushort)(Console.WindowWidth  > 0 ? Console.WindowWidth  : 80),
+            ws_row = (ushort)(consoleRows > 0 ? consoleRows : 24),
+            ws_col = (ushort)(consoleCols > 0 ? consoleCols : 80),
         };
 
         // Marshal all strings to native memory BEFORE fork so the child never needs

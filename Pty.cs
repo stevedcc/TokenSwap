@@ -11,6 +11,10 @@ internal static class Pty
 {
     public static IPtyRunner Create()
     {
+        // When tswap's own stdout is piped, a PTY has no real terminal on its master side.
+        // Fall back to process-based redirection so downstream consumers receive plain text.
+        if (Console.IsOutputRedirected)
+            return new FallbackPty();
         if (OperatingSystem.IsLinux())   return new LinuxPty();
         if (OperatingSystem.IsMacOS())   return new MacOSPty();
         if (OperatingSystem.IsWindows()) return new WindowsPty();
@@ -45,7 +49,15 @@ internal sealed class FallbackPty : IPtyRunner
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data != null)
-                Console.Error.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
+            {
+                var redacted = Redact.RedactLine(e.Data, sortedSecrets);
+                // When stdout is a pipe, merge stderr into stdout to mirror PTY merged-stream
+                // behaviour and give downstream consumers a complete, redacted output stream.
+                if (Console.IsOutputRedirected)
+                    Console.WriteLine(redacted);
+                else
+                    Console.Error.WriteLine(redacted);
+            }
         };
         process.Start();
         process.BeginOutputReadLine();

@@ -123,37 +123,52 @@ internal sealed class WindowsPty : IPtyRunner
     /// </summary>
     public int Run(string command, List<KeyValuePair<string, string>> sortedSecrets)
     {
+        int consoleCols, consoleRows;
+        try { consoleCols = Console.WindowWidth; consoleRows = Console.WindowHeight; }
+        catch { consoleCols = 0; consoleRows = 0; }
         var size = new COORD
         {
-            X = (short)(Console.WindowWidth  > 0 ? Console.WindowWidth  : 80),
-            Y = (short)(Console.WindowHeight > 0 ? Console.WindowHeight : 24),
+            X = (short)(consoleCols > 0 ? consoleCols : 80),
+            Y = (short)(consoleRows > 0 ? consoleRows : 24),
         };
 
-        // Create two anonymous pipe pairs.
-        //   PTY stdin:  we write to hPipeInWr;  child reads from hPipeInRd (via ConPTY).
-        //   PTY stdout: child writes to hPipeOutWr (via ConPTY); we read from hPipeOutRd.
-        var secAttr = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>() };
-        if (!CreatePipe(out var hPipeInRd,  out var hPipeInWr,  ref secAttr, 0))
-            throw new Exception("CreatePipe (stdin) failed");
-        if (!CreatePipe(out var hPipeOutRd, out var hPipeOutWr, ref secAttr, 0))
-            throw new Exception("CreatePipe (stdout) failed");
+        // Pre-declare all handles as Zero so the finally block can safely close whatever
+        // was successfully opened, regardless of where an exception is thrown.
+        var hPipeInRd  = IntPtr.Zero;
+        var hPipeInWr  = IntPtr.Zero;
+        var hPipeOutRd = IntPtr.Zero;
+        var hPipeOutWr = IntPtr.Zero;
+        var hPC        = IntPtr.Zero;
+        var attrList   = IntPtr.Zero;
+        var hProcess   = IntPtr.Zero;
+        bool attrListInitialized = false;
 
-        // Create the ConPTY: it reads from hPipeInRd and writes to hPipeOutWr.
-        if (CreatePseudoConsole(size, hPipeInRd, hPipeOutWr, 0, out var hPC) != 0)
-            throw new Exception("CreatePseudoConsole failed");
-
-        // The ConPTY now owns those ends — close our copies to avoid handle leaks.
-        CloseHandle(hPipeInRd);
-        CloseHandle(hPipeOutWr);
-
-        // Build a process-thread attribute list containing the ConPTY handle.
-        IntPtr attrListSize = IntPtr.Zero;
-        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrListSize);
-        var attrList = Marshal.AllocHGlobal(attrListSize);
         try
         {
+            // Create two anonymous pipe pairs.
+            //   PTY stdin:  we write to hPipeInWr;  child reads from hPipeInRd (via ConPTY).
+            //   PTY stdout: child writes to hPipeOutWr (via ConPTY); we read from hPipeOutRd.
+            var secAttr = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>() };
+            if (!CreatePipe(out hPipeInRd,  out hPipeInWr,  ref secAttr, 0))
+                throw new Exception("CreatePipe (stdin) failed");
+            if (!CreatePipe(out hPipeOutRd, out hPipeOutWr, ref secAttr, 0))
+                throw new Exception("CreatePipe (stdout) failed");
+
+            // Create the ConPTY: it reads from hPipeInRd and writes to hPipeOutWr.
+            if (CreatePseudoConsole(size, hPipeInRd, hPipeOutWr, 0, out hPC) != 0)
+                throw new Exception("CreatePseudoConsole failed");
+
+            // The ConPTY now owns those ends — null our copies so finally won't double-close.
+            CloseHandle(hPipeInRd);  hPipeInRd  = IntPtr.Zero;
+            CloseHandle(hPipeOutWr); hPipeOutWr = IntPtr.Zero;
+
+            // Build a process-thread attribute list containing the ConPTY handle.
+            IntPtr attrListSize = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrListSize);
+            attrList = Marshal.AllocHGlobal(attrListSize);
             if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref attrListSize))
                 throw new Exception("InitializeProcThreadAttributeList failed");
+            attrListInitialized = true;
 
             // Pass the HPCON by reference so Windows receives a pointer to the handle value.
             var hPCValue = hPC;
@@ -180,11 +195,8 @@ internal sealed class WindowsPty : IPtyRunner
                     ref si, out var pi))
                 throw new Exception($"CreateProcess failed (Win32 error {Marshal.GetLastWin32Error()})");
 
-            DeleteProcThreadAttributeList(attrList);
-            Marshal.FreeHGlobal(attrList);
-            attrList = IntPtr.Zero;
-
-            CloseHandle(pi.hThread);
+            hProcess = pi.hProcess;
+            CloseHandle(pi.hThread); // hThread is not needed after process is created
 
             // Forward stdin → PTY input pipe so interactive programs work.
             var stdinThread = new Thread(() =>
@@ -224,23 +236,20 @@ internal sealed class WindowsPty : IPtyRunner
                 stdout.Flush();
             }
 
-            WaitForSingleObject(pi.hProcess, INFINITE);
-            GetExitCodeProcess(pi.hProcess, out uint exitCode);
-
-            CloseHandle(pi.hProcess);
-            CloseHandle(hPipeInWr);
-            CloseHandle(hPipeOutRd);
-            ClosePseudoConsole(hPC);
-
+            WaitForSingleObject(hProcess, INFINITE);
+            GetExitCodeProcess(hProcess, out uint exitCode);
             return (int)exitCode;
         }
-        catch
+        finally
         {
-            if (attrList != IntPtr.Zero) Marshal.FreeHGlobal(attrList);
-            CloseHandle(hPipeInWr);
-            CloseHandle(hPipeOutRd);
-            ClosePseudoConsole(hPC);
-            throw;
+            if (hProcess   != IntPtr.Zero) CloseHandle(hProcess);
+            if (hPipeInWr  != IntPtr.Zero) CloseHandle(hPipeInWr);
+            if (hPipeOutRd != IntPtr.Zero) CloseHandle(hPipeOutRd);
+            if (hPipeInRd  != IntPtr.Zero) CloseHandle(hPipeInRd);
+            if (hPipeOutWr != IntPtr.Zero) CloseHandle(hPipeOutWr);
+            if (hPC        != IntPtr.Zero) ClosePseudoConsole(hPC);
+            if (attrListInitialized)       DeleteProcThreadAttributeList(attrList);
+            if (attrList   != IntPtr.Zero) Marshal.FreeHGlobal(attrList);
         }
     }
 }

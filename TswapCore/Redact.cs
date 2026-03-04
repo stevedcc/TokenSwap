@@ -336,7 +336,7 @@ public sealed class StreamRedactor
         _secrets = sortedSecrets;
         // Retain (longestSecret - 1) chars between chunks: the minimum overlap that guarantees
         // any single secret value, split at any position, is still seen in full.
-        _overlap = sortedSecrets.Count > 0 ? sortedSecrets.Max(kv => kv.Value.Length) - 1 : 0;
+        _overlap = sortedSecrets.Count > 0 ? Math.Max(0, sortedSecrets.Max(kv => kv.Value?.Length ?? 0) - 1) : 0;
     }
 
     /// <summary>
