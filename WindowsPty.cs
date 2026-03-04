@@ -202,17 +202,25 @@ internal sealed class WindowsPty : IPtyRunner
             stdinThread.Start();
 
             // Read ConPTY output (stdout+stderr merged), redact secrets, write to our stdout.
-            var readBuf = new byte[4096];
-            var decoder = Encoding.UTF8.GetDecoder();
-            var charBuf = new char[4096];
-            var stdout  = Console.OpenStandardOutput();
+            // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
+            // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
+            var readBuf  = new byte[4096];
+            var decoder  = Encoding.UTF8.GetDecoder();
+            var charBuf  = new char[4096];
+            var stdout   = Console.OpenStandardOutput();
+            var redactor = new StreamRedactor(sortedSecrets);
             while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
             {
                 var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
-                var chunk     = new string(charBuf, 0, charCount);
-                var redacted  = Redact.RedactLine(chunk, sortedSecrets);
+                var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
                 var outBytes  = Encoding.UTF8.GetBytes(redacted);
                 stdout.Write(outBytes, 0, outBytes.Length);
+                stdout.Flush();
+            }
+            var tail = redactor.Flush();
+            if (tail.Length > 0)
+            {
+                stdout.Write(Encoding.UTF8.GetBytes(tail));
                 stdout.Flush();
             }
 

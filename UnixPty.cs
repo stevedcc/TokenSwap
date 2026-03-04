@@ -118,20 +118,27 @@ internal abstract class UnixPty : IPtyRunner
         stdinThread.Start();
 
         // Read PTY output (stdout+stderr merged), redact secrets, write to our stdout.
-        // Use a stateful UTF-8 decoder so sequences split across read chunks are handled.
-        var readBuf = new byte[4096];
-        var decoder = Encoding.UTF8.GetDecoder();
-        var charBuf = new char[4096];
-        var stdout = Console.OpenStandardOutput();
+        // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
+        // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
+        var readBuf  = new byte[4096];
+        var decoder  = Encoding.UTF8.GetDecoder();
+        var charBuf  = new char[4096];
+        var stdout   = Console.OpenStandardOutput();
+        var redactor = new StreamRedactor(sortedSecrets);
         while (true)
         {
             int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
             if (n <= 0) break; // 0 = EOF, -1 = EIO when slave closes after child exit
             var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
-            var chunk = new string(charBuf, 0, charCount);
-            var redacted = Redact.RedactLine(chunk, sortedSecrets);
-            var outBytes = Encoding.UTF8.GetBytes(redacted);
+            var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
+            var outBytes  = Encoding.UTF8.GetBytes(redacted);
             stdout.Write(outBytes, 0, outBytes.Length);
+            stdout.Flush();
+        }
+        var tail = redactor.Flush();
+        if (tail.Length > 0)
+        {
+            stdout.Write(Encoding.UTF8.GetBytes(tail));
             stdout.Flush();
         }
 
