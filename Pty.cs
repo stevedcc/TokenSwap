@@ -12,15 +12,18 @@ internal static class Pty
     public static IPtyRunner Create()
     {
         // OS check comes first so the fallback runner uses the right shell for the platform.
-        // When stdout is redirected (piped to another process), fall back to process-based
-        // I/O — a PTY master requires a real terminal and raw PTY bytes would corrupt
-        // downstream consumers. ConPTY requires Windows 10 1809 (build 17763) or later.
+        // Fall back to process-based I/O when stdout or stdin is redirected:
+        //   - Redirected stdout: PTY master bytes would corrupt a downstream pipe consumer.
+        //   - Redirected stdin:  PTY can't half-close its input side, so the child would hang
+        //                        waiting for EOF after stdin is exhausted.
+        // ConPTY requires Windows 10 1809 (build 17763) or later.
+        bool usePty = !Console.IsOutputRedirected && !Console.IsInputRedirected;
         if (OperatingSystem.IsLinux())
-            return Console.IsOutputRedirected ? new FallbackPty() : (IPtyRunner)new LinuxPty();
+            return usePty ? (IPtyRunner)new LinuxPty() : new FallbackPty();
         if (OperatingSystem.IsMacOS())
-            return Console.IsOutputRedirected ? new FallbackPty() : new MacOSPty();
+            return usePty ? new MacOSPty() : new FallbackPty();
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
-            return Console.IsOutputRedirected ? new FallbackPty() : new WindowsPty();
+            return usePty ? new WindowsPty() : new FallbackPty();
         return new FallbackPty();
     }
 }
@@ -50,14 +53,17 @@ internal sealed class FallbackPty : IPtyRunner
         }
         else
         {
+            // Use ArgumentList so the command string is passed as-is to bash via execve,
+            // with no shell quoting needed. Consistent with the PTY path (/bin/bash -c).
             startInfo = new ProcessStartInfo
             {
-                FileName        = "/bin/sh",
-                Arguments       = $"-c \"{command.Replace("\"", "\\\"")}\"",
+                FileName        = "/bin/bash",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
             };
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(command);
         }
 
         // Track stream-close events so we know all async callbacks have fired
