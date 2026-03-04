@@ -277,17 +277,17 @@ public static class Redact
         => new ToCommentProcessor().Process(content, db);
 
     /// <summary>
-    /// Replaces any of the given secret values in <paramref name="line"/> with
-    /// <c>[REDACTED: name]</c>. Intended for streaming redaction of subprocess output in
-    /// <c>tswap run</c>. Sorted longest-first to prevent a shorter value from clobbering a
-    /// longer one that shares a prefix.
+    /// Replaces secret values in <paramref name="line"/> with <c>[REDACTED: name]</c>.
+    /// Intended for streaming redaction of subprocess output in <c>tswap run</c>.
+    /// Caller is responsible for ordering — pass values longest-first to prevent a shorter
+    /// value from clobbering a longer one that shares a prefix.
     /// </summary>
-    public static string RedactLine(string line, IReadOnlyDictionary<string, string> secretValues)
+    public static string RedactLine(string line, IEnumerable<KeyValuePair<string, string>> secretValues)
     {
-        foreach (var (name, value) in secretValues.OrderByDescending(kv => kv.Value.Length))
+        foreach (var kvp in secretValues)
         {
-            if (!string.IsNullOrEmpty(value))
-                line = line.Replace(value, $"[REDACTED: {name}]");
+            if (!string.IsNullOrEmpty(kvp.Value))
+                line = line.Replace(kvp.Value, $"[REDACTED: {kvp.Key}]");
         }
         return line;
     }

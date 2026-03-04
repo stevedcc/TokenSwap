@@ -598,10 +598,12 @@ kind: Secret";
     [Fact]
     public void RedactLine_LongerValueTakesPrecedenceOverShorterPrefix()
     {
-        var secrets = new Dictionary<string, string>
+        // "super" is a genuine prefix of "superSecret" — order matters.
+        // Pass longest-first (as CmdRun does) to verify precedence is respected.
+        var secrets = new List<KeyValuePair<string, string>>
         {
-            ["short"] = "secret",
-            ["long"] = "superSecret"
+            new("long",  "superSecret"),
+            new("short", "super"),
         };
         var result = Redact.RedactLine("val=superSecret", secrets);
         Assert.Equal("val=[REDACTED: long]", result);

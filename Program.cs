@@ -826,9 +826,14 @@ void CmdRun(string[] runArgs)
     }
 
     // Execute command, forwarding output through redaction to prevent secret values
-    // from appearing in terminal output if the command fails and echoes its arguments
+    // from appearing in terminal output if the command fails and echoes its arguments.
+    // Pre-sort secrets longest-first once; reused on every output line in the handlers.
     var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
     var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
+
+    var sortedSecrets = secretValues
+        .OrderByDescending(kv => kv.Value.Length)
+        .ToList();
 
     var process = new Process
     {
@@ -845,12 +850,12 @@ void CmdRun(string[] runArgs)
     process.OutputDataReceived += (_, e) =>
     {
         if (e.Data != null)
-            Console.WriteLine(Redact.RedactLine(e.Data, secretValues));
+            Console.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
     };
     process.ErrorDataReceived += (_, e) =>
     {
         if (e.Data != null)
-            Console.Error.WriteLine(Redact.RedactLine(e.Data, secretValues));
+            Console.Error.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
     };
 
     process.Start();
