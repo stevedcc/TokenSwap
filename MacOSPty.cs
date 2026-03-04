@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 /// <summary>
 /// macOS PTY: forkpty is declared in &lt;util.h&gt; and lives in libutil.dylib.
 /// </summary>
-[SupportedOSPlatform("osx")]
+[SupportedOSPlatform("macos")]
 internal sealed class MacOSPty : UnixPty
 {
     [DllImport("libutil", EntryPoint = "forkpty")]

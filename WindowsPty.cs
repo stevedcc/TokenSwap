@@ -185,7 +185,9 @@ internal sealed class WindowsPty : IPtyRunner
             };
 
             // Provide a mutable char[] for the command line (Windows spec requires writable buffer).
-            var cmdStr = $"cmd.exe /c \"{command.Replace("\"", "\\\"")}\"";
+            // cmd.exe uses "" (doubled quote) not \" (backslash-quote) for quoting.
+            var escapedCommand = command.Replace("\"", "\"\"");
+            var cmdStr = $"cmd.exe /c \"\"{escapedCommand}\"\"";
             var cmdLine = new char[cmdStr.Length + 1]; // +1 for null terminator
             cmdStr.CopyTo(0, cmdLine, 0, cmdStr.Length);
 
@@ -207,7 +209,10 @@ internal sealed class WindowsPty : IPtyRunner
                     var stdin = Console.OpenStandardInput();
                     int n;
                     while ((n = stdin.Read(buf, 0, buf.Length)) > 0)
-                        WriteFile(hPipeInWr, buf, (uint)n, out _, IntPtr.Zero);
+                    {
+                        if (!WriteFile(hPipeInWr, buf, (uint)n, out _, IntPtr.Zero))
+                            return; // pipe broken or closed
+                    }
                 }
                 catch { /* stdin closed or pipe broken */ }
             }) { IsBackground = true };
@@ -217,22 +222,23 @@ internal sealed class WindowsPty : IPtyRunner
             // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
             // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
             var readBuf  = new byte[4096];
-            var decoder  = Encoding.UTF8.GetDecoder();
-            var charBuf  = new char[4096];
+            var encoding = Console.OutputEncoding;
+            var decoder  = encoding.GetDecoder();
+            var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
             var stdout   = Console.OpenStandardOutput();
             var redactor = new StreamRedactor(sortedSecrets);
             while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
             {
                 var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
                 var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
-                var outBytes  = Encoding.UTF8.GetBytes(redacted);
+                var outBytes  = encoding.GetBytes(redacted);
                 stdout.Write(outBytes, 0, outBytes.Length);
                 stdout.Flush();
             }
             var tail = redactor.Flush();
             if (tail.Length > 0)
             {
-                stdout.Write(Encoding.UTF8.GetBytes(tail));
+                stdout.Write(encoding.GetBytes(tail));
                 stdout.Flush();
             }
 

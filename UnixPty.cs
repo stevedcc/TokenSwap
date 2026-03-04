@@ -16,7 +16,7 @@ using TswapCore;
 /// (libc on Linux, libutil on macOS).
 /// </summary>
 [SupportedOSPlatform("linux")]
-[SupportedOSPlatform("osx")]
+[SupportedOSPlatform("macos")]
 internal abstract class UnixPty : IPtyRunner
 {
     [StructLayout(LayoutKind.Sequential)]
@@ -114,7 +114,10 @@ internal abstract class UnixPty : IPtyRunner
                 var stdin = Console.OpenStandardInput();
                 int n;
                 while ((n = stdin.Read(buf, 0, buf.Length)) > 0)
-                    write(masterFd, buf, n);
+                {
+                    if (write(masterFd, buf, n) <= 0)
+                        return; // PTY closed or write error
+                }
             }
             catch { /* stdin closed or PTY gone */ }
         }) { IsBackground = true };
@@ -124,8 +127,9 @@ internal abstract class UnixPty : IPtyRunner
         // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
         // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
         var readBuf  = new byte[4096];
-        var decoder  = Encoding.UTF8.GetDecoder();
-        var charBuf  = new char[4096];
+        var encoding = Console.OutputEncoding;
+        var decoder  = encoding.GetDecoder();
+        var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
         var stdout   = Console.OpenStandardOutput();
         var redactor = new StreamRedactor(sortedSecrets);
         while (true)
@@ -134,14 +138,14 @@ internal abstract class UnixPty : IPtyRunner
             if (n <= 0) break; // 0 = EOF, -1 = EIO when slave closes after child exit
             var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
             var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
-            var outBytes  = Encoding.UTF8.GetBytes(redacted);
+            var outBytes  = encoding.GetBytes(redacted);
             stdout.Write(outBytes, 0, outBytes.Length);
             stdout.Flush();
         }
         var tail = redactor.Flush();
         if (tail.Length > 0)
         {
-            stdout.Write(Encoding.UTF8.GetBytes(tail));
+            stdout.Write(encoding.GetBytes(tail));
             stdout.Flush();
         }
 
