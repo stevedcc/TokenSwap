@@ -73,7 +73,7 @@ internal sealed class FallbackPty : IPtyRunner
         var outputDrained = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var errorDrained  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var process = new Process { StartInfo = startInfo };
+        using var process = new Process { StartInfo = startInfo };
 
         process.OutputDataReceived += (_, e) =>
         {

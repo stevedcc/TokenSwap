@@ -221,29 +221,42 @@ internal sealed class WindowsPty : IPtyRunner
             // Read ConPTY output (stdout+stderr merged), redact secrets, write to our stdout.
             // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
             // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
+            //
+            // The read loop runs on a Task so the main thread can wait for the child process
+            // and then close the ConPTY. The ConPTY holds the pipe write-end open even after
+            // the child exits, so ReadFile would block forever if ClosePseudoConsole were
+            // called only from the finally block (which can't run until the read loop ends).
             var readBuf  = new byte[4096];
             var encoding = Console.OutputEncoding;
             var decoder  = encoding.GetDecoder();
             var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
             var stdout   = Console.OpenStandardOutput();
             var redactor = new StreamRedactor(sortedSecrets);
-            while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
+            var readTask = Task.Run(() =>
             {
-                var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
-                var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
-                var outBytes  = encoding.GetBytes(redacted);
-                stdout.Write(outBytes, 0, outBytes.Length);
-                stdout.Flush();
-            }
-            var tail = redactor.Flush();
-            if (tail.Length > 0)
-            {
-                stdout.Write(encoding.GetBytes(tail));
-                stdout.Flush();
-            }
+                while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
+                {
+                    var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
+                    var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
+                    var outBytes  = encoding.GetBytes(redacted);
+                    stdout.Write(outBytes, 0, outBytes.Length);
+                    stdout.Flush();
+                }
+                var tail = redactor.Flush();
+                if (tail.Length > 0)
+                {
+                    stdout.Write(encoding.GetBytes(tail));
+                    stdout.Flush();
+                }
+            });
 
+            // Wait for the child, then close the ConPTY to signal EOF to the read task.
             WaitForSingleObject(hProcess, INFINITE);
             GetExitCodeProcess(hProcess, out uint exitCode);
+            ClosePseudoConsole(hPC);
+            hPC = IntPtr.Zero; // prevent double-close in finally
+
+            readTask.Wait(); // drain any buffered output before returning
             return (int)exitCode;
         }
         finally

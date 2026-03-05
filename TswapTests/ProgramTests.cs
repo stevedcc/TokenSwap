@@ -508,8 +508,8 @@ public class ProgramTests : IDisposable
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
         // ls on a nonexistent path that includes the secret — ls will echo the path in its
-        // error message. With PTY, stderr and stdout are merged into a single stream, so
-        // the redacted error text arrives on stdout.
+        // error message. The test harness redirects stdout, so tswap uses FallbackPty, which
+        // merges stderr into stdout when Console.IsOutputRedirected. Redacted text lands on stdout.
         var (exit, stdout, _) = RunTswap("run", "ls", "/tmp/prefix-{{my-pass}}-suffix");
 
         Assert.NotEqual(0, exit);
