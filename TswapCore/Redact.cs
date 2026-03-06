@@ -277,6 +277,22 @@ public static class Redact
         => new ToCommentProcessor().Process(content, db);
 
     /// <summary>
+    /// Replaces secret values in <paramref name="line"/> with <c>[REDACTED: name]</c>.
+    /// Intended for streaming redaction of subprocess output in <c>tswap run</c>.
+    /// Caller is responsible for ordering — pass values longest-first to prevent a shorter
+    /// value from clobbering a longer one that shares a prefix.
+    /// </summary>
+    public static string RedactLine(string line, IEnumerable<KeyValuePair<string, string>> secretValues)
+    {
+        foreach (var kvp in secretValues)
+        {
+            if (!string.IsNullOrEmpty(kvp.Value))
+                line = line.Replace(kvp.Value, $"[REDACTED: {kvp.Key}]");
+        }
+        return line;
+    }
+
+    /// <summary>
     /// Scans <paramref name="content"/> for strings that look like unrecognized credentials
     /// (adjacent to a keyword like <c>password</c>, <c>token</c>, etc.). Returns the 1-based
     /// line number and the matched snippet for each hit.
@@ -294,5 +310,85 @@ public static class Redact
         }
 
         return results;
+    }
+}
+
+/// <summary>
+/// Stateful, streaming redactor for PTY/pipe output. Maintains a sliding-window overlap
+/// between successive chunks so secrets that straddle a read-buffer boundary are still caught.
+///
+/// Usage pattern:
+/// <code>
+///   var r = new StreamRedactor(sortedSecrets);
+///   foreach (var chunk in readLoop)
+///       emit(r.ProcessChunk(chunk));
+///   emit(r.Flush());
+/// </code>
+/// </summary>
+public sealed class StreamRedactor
+{
+    private readonly IReadOnlyList<KeyValuePair<string, string>> _secrets;
+    private readonly int _overlap;
+    private string _tail = "";
+
+    public StreamRedactor(IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    {
+        _secrets = sortedSecrets;
+        // Retain (longestSecret - 1) chars between chunks: the minimum overlap that guarantees
+        // any single secret value, split at any position, is still seen in full.
+        _overlap = sortedSecrets.Count > 0 ? Math.Max(0, sortedSecrets.Max(kv => kv.Value?.Length ?? 0) - 1) : 0;
+    }
+
+    /// <summary>
+    /// Incorporates the next decoded chunk and returns the redacted prefix that is safe to emit.
+    /// The tail (up to <c>overlap</c> chars) is held back and prepended to the next chunk.
+    /// </summary>
+    public string ProcessChunk(string chunk)
+    {
+        var window  = _tail + chunk;
+        var safeLen = Math.Max(0, window.Length - _overlap);
+
+        // A secret may start before safeLen and end after it, meaning the naive split would
+        // divide it across the emit/tail boundary and neither half would match. Fix: pull
+        // safeLen back to the start of any such straddling match. Repeat until stable (a
+        // pull can expose further straddling matches earlier in the window).
+        bool adjusted;
+        do
+        {
+            adjusted = false;
+            foreach (var kv in _secrets)
+            {
+                if (string.IsNullOrEmpty(kv.Value)) continue;
+                var idx = 0;
+                while ((idx = window.IndexOf(kv.Value, idx, StringComparison.Ordinal)) >= 0)
+                {
+                    var matchEnd = idx + kv.Value.Length;
+                    if (idx < safeLen && matchEnd > safeLen)
+                    {
+                        safeLen  = idx;
+                        adjusted = true;
+                    }
+                    idx++;
+                }
+            }
+        } while (adjusted);
+
+        // Don't split a UTF-16 surrogate pair at the emit boundary.
+        if (safeLen > 0 && safeLen < window.Length &&
+            char.IsHighSurrogate(window[safeLen - 1]) && char.IsLowSurrogate(window[safeLen]))
+            safeLen--;
+
+        _tail = window[safeLen..];
+        return Redact.RedactLine(window[..safeLen], _secrets);
+    }
+
+    /// <summary>
+    /// Flushes the retained tail after the last chunk. Must be called once at EOF.
+    /// </summary>
+    public string Flush()
+    {
+        var result = _tail.Length > 0 ? Redact.RedactLine(_tail, _secrets) : "";
+        _tail = "";
+        return result;
     }
 }

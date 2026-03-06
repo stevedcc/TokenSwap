@@ -825,24 +825,16 @@ void CmdRun(string[] runArgs)
         Console.WriteLine();
     }
 
-    // Execute command
-    var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
-    var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
+    // Execute command via PTY so child processes see a real terminal — enabling colour
+    // output, progress bars, and interactive prompts (kubectl exec, helm install, etc.).
+    // PTY output is still intercepted and redacted before reaching our terminal.
+    var sortedSecrets = secretValues
+        .OrderByDescending(kv => kv.Value.Length)
+        .ToList();
 
-    var process = new Process
-    {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = shell,
-            Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false
-        }
-    };
+    int exitCode = Pty.Create().Run(substitutedCommand, sortedSecrets);
 
-    process.Start();
-    process.WaitForExit();
-
-    Environment.Exit(process.ExitCode);
+    Environment.Exit(exitCode);
 }
 
 void CmdCheck(string path)

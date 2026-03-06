@@ -17,6 +17,12 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="IPtyRunner.cs" />
+    <Compile Include="Pty.cs" />
+    <Compile Include="UnixPty.cs" />
+    <Compile Include="LinuxPty.cs" />
+    <Compile Include="MacOSPty.cs" />
+    <Compile Include="WindowsPty.cs" />
   </ItemGroup>
 
   <ItemGroup>

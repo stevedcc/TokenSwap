@@ -570,4 +570,58 @@ kind: Secret";
         Assert.Equal(yaml, content);
         Assert.Empty(changes);
     }
+
+    // -------------------------------------------------------------------------
+    // Redact.RedactLine
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public void RedactLine_PlaintextValue_IsRedacted()
+    {
+        var secrets = new Dictionary<string, string> { ["db-pass"] = "s3cr3t" };
+        var result = Redact.RedactLine("error: bad password s3cr3t given", secrets);
+        Assert.Equal("error: bad password [REDACTED: db-pass] given", result);
+    }
+
+    [Fact]
+    public void RedactLine_MultipleValues_AllRedacted()
+    {
+        var secrets = new Dictionary<string, string>
+        {
+            ["pass"] = "abc123",
+            ["key"] = "xyz789"
+        };
+        var result = Redact.RedactLine("pass=abc123 key=xyz789", secrets);
+        Assert.Equal("pass=[REDACTED: pass] key=[REDACTED: key]", result);
+    }
+
+    [Fact]
+    public void RedactLine_LongerValueTakesPrecedenceOverShorterPrefix()
+    {
+        // "super" is a genuine prefix of "superSecret" — order matters.
+        // Pass longest-first (as CmdRun does) to verify precedence is respected.
+        var secrets = new List<KeyValuePair<string, string>>
+        {
+            new("long",  "superSecret"),
+            new("short", "super"),
+        };
+        var result = Redact.RedactLine("val=superSecret", secrets);
+        Assert.Equal("val=[REDACTED: long]", result);
+    }
+
+    [Fact]
+    public void RedactLine_NoSecretInLine_ReturnedUnchanged()
+    {
+        var secrets = new Dictionary<string, string> { ["pass"] = "s3cr3t" };
+        var result = Redact.RedactLine("nothing sensitive here", secrets);
+        Assert.Equal("nothing sensitive here", result);
+    }
+
+    [Fact]
+    public void RedactLine_EmptySecretValue_Skipped()
+    {
+        var secrets = new Dictionary<string, string> { ["pass"] = "" };
+        var result = Redact.RedactLine("some output line", secrets);
+        Assert.Equal("some output line", result);
+    }
 }

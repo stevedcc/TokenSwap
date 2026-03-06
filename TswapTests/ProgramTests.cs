@@ -47,6 +47,9 @@ public class ProgramTests : IDisposable
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
+        // fork() from a JIT-mode .NET process crashes when W^X protection is active.
+        // The deployed AOT binary has no JIT so this is not needed in production.
+        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
         psi.ArgumentList.Add("run");
         psi.ArgumentList.Add("--project");
         psi.ArgumentList.Add($"{_projectDir}/tswap.csproj");
@@ -496,6 +499,25 @@ public class ProgramTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("Pipes", stderr);
+    }
+
+    [Fact]
+    public void Run_SecretRedactedFromErrorOutput()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // ls + /tmp path is POSIX-only
+
+        // ls on a nonexistent path that includes the secret — ls will echo the path in its
+        // error message. The test harness redirects stdout, so tswap uses FallbackPty, which
+        // merges stderr into stdout when Console.IsOutputRedirected. Redacted text lands on stdout.
+        var (exit, stdout, _) = RunTswap("run", "ls", "/tmp/prefix-{{my-pass}}-suffix");
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("abc123xyz", stdout);
+        Assert.Contains("[REDACTED: my-pass]", stdout);
     }
 
     // --- No args ---
