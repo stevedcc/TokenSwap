@@ -35,7 +35,7 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "_exit")]
     private static extern void _exit(int status);
 
-    [DllImport("libc", EntryPoint = "read")]
+    [DllImport("libc", EntryPoint = "read", SetLastError = true)]
     private static extern nint read(int fd, [Out] byte[] buf, nint count);
 
     [DllImport("libc", EntryPoint = "write")]
@@ -44,8 +44,10 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "close")]
     private static extern int close(int fd);
 
-    [DllImport("libc", EntryPoint = "waitpid")]
+    [DllImport("libc", EntryPoint = "waitpid", SetLastError = true)]
     private static extern int waitpid(int pid, ref int status, int options);
+
+    private const int EINTR = 4; // POSIX: interrupted system call
 
     /// <summary>
     /// Platform-specific forkpty call. Linux imports from libc; macOS from libutil.
@@ -155,7 +157,12 @@ internal abstract class UnixPty : IPtyRunner
         while (true)
         {
             int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
-            if (n <= 0) break; // 0 = EOF, -1 = EIO when slave closes after child exit
+            if (n == 0) break; // EOF
+            if (n < 0)
+            {
+                if (Marshal.GetLastPInvokeError() == EINTR) continue; // signal interrupted, retry
+                break; // EIO or other error (slave side closed after child exit)
+            }
             var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
             var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
             var outBytes  = encoding.GetBytes(redacted);
@@ -174,8 +181,12 @@ internal abstract class UnixPty : IPtyRunner
 
         close(masterFd);
 
+        // Loop waitpid on EINTR so a signal delivery during the wait doesn't
+        // leave status uninitialised and produce a garbage exit code.
         int status = 0;
-        waitpid(pid, ref status, 0);
+        int wret;
+        do { wret = waitpid(pid, ref status, 0); }
+        while (wret < 0 && Marshal.GetLastPInvokeError() == EINTR);
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0

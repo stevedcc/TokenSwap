@@ -8,7 +8,7 @@ using TswapCore;
 /// pseudo-console so programs see a real TTY (enabling colour output, progress bars,
 /// and interactive prompts), while tswap intercepts the output pipe to apply redaction.
 ///
-/// Requires Windows 10 v1809 (build 17763) or later — ConPseudoConsole was added in RS5.
+/// Requires Windows 10 v1809 (build 17763) or later — CreatePseudoConsole (ConPTY) was added in RS5.
 /// stdout and stderr from the child are merged into a single PTY output stream, matching
 /// the behaviour of the POSIX forkpty() implementations on Linux and macOS.
 /// </summary>
