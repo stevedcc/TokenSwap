@@ -34,8 +34,11 @@ internal static class Pty
 /// <see cref="Process"/> with redirected streams; TTY semantics (colours, interactive
 /// prompts) are not preserved. Shell is selected per OS.
 ///
-/// Output is streamed through <see cref="StreamRedactor"/> in byte-faithful chunks
-/// (no line-ending normalisation) so downstream pipe consumers receive exact bytes.
+/// Output is streamed through <see cref="StreamRedactor"/> using
+/// <see cref="Console.OutputEncoding"/> for decoding and re-encoding (no line-ending
+/// normalisation at the .NET stream level), giving downstream pipe consumers a complete,
+/// redacted stream. Note: the decode/re-encode round-trip may alter bytes for sequences
+/// that are invalid in the console encoding.
 /// </summary>
 internal sealed class FallbackPty : IPtyRunner
 {
@@ -73,15 +76,20 @@ internal sealed class FallbackPty : IPtyRunner
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
-        var stdout  = Console.OpenStandardOutput();
-        var stderr  = Console.IsOutputRedirected ? stdout : Console.OpenStandardError();
+        var stdout   = Console.OpenStandardOutput();
+        var stderr   = Console.IsOutputRedirected ? stdout : Console.OpenStandardError();
         var encoding = Console.OutputEncoding;
+
+        // When stderr is merged into stdout both drain tasks share the same Stream instance.
+        // Stream is not guaranteed thread-safe, so a lock is required to prevent interleaved
+        // or corrupted writes. No lock is needed when they target distinct streams.
+        var sharedLock = Console.IsOutputRedirected ? new object() : null;
 
         // Drain stdout and stderr concurrently through StreamRedactor to avoid pipe-buffer
         // deadlocks when the child writes to both streams. Reading them sequentially could
         // block forever if the child fills one pipe while waiting for the other to drain.
-        var stdoutTask = Task.Run(() => Drain(process.StandardOutput.BaseStream, stdout, sortedSecrets, encoding));
-        var stderrTask = Task.Run(() => Drain(process.StandardError.BaseStream,  stderr, sortedSecrets, encoding));
+        var stdoutTask = Task.Run(() => Drain(process.StandardOutput.BaseStream, stdout, sortedSecrets, encoding, sharedLock));
+        var stderrTask = Task.Run(() => Drain(process.StandardError.BaseStream,  stderr, sortedSecrets, encoding, sharedLock));
 
         process.WaitForExit();
         Task.WaitAll(stdoutTask, stderrTask);
@@ -91,21 +99,30 @@ internal sealed class FallbackPty : IPtyRunner
     private static void Drain(
         Stream source, Stream dest,
         IReadOnlyList<KeyValuePair<string, string>> sortedSecrets,
-        Encoding encoding)
+        Encoding encoding, object? writeLock)
     {
-        var readBuf = new byte[4096];
-        var decoder = encoding.GetDecoder();
-        var charBuf = new char[encoding.GetMaxCharCount(readBuf.Length)];
+        var readBuf  = new byte[4096];
+        var decoder  = encoding.GetDecoder();
+        var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
         var redactor = new StreamRedactor(sortedSecrets);
         int n;
         while ((n = source.Read(readBuf, 0, readBuf.Length)) > 0)
         {
             var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
-            var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
-            dest.Write(encoding.GetBytes(redacted));
+            var outBytes  = encoding.GetBytes(redactor.ProcessChunk(new string(charBuf, 0, charCount)));
+            if (writeLock != null)
+                lock (writeLock) dest.Write(outBytes);
+            else
+                dest.Write(outBytes);
         }
         var tail = redactor.Flush();
         if (tail.Length > 0)
-            dest.Write(encoding.GetBytes(tail));
+        {
+            var tailBytes = encoding.GetBytes(tail);
+            if (writeLock != null)
+                lock (writeLock) dest.Write(tailBytes);
+            else
+                dest.Write(tailBytes);
+        }
     }
 }

@@ -115,8 +115,28 @@ internal abstract class UnixPty : IPtyRunner
                 int n;
                 while ((n = stdin.Read(buf, 0, buf.Length)) > 0)
                 {
-                    if (write(masterFd, buf, n) <= 0)
-                        return; // PTY closed or write error
+                    // write(2) can return a short count (partial write). Loop until all bytes
+                    // are written, only treating 0/negative as PTY-closed or fatal error.
+                    var writeOffset = 0;
+                    while (writeOffset < n)
+                    {
+                        nint written;
+                        if (writeOffset == 0)
+                        {
+                            written = write(masterFd, buf, n);
+                        }
+                        else
+                        {
+                            // Partial write occurred — copy the remainder into a temporary
+                            // slice (write(2) has no offset parameter).
+                            var remaining = n - writeOffset;
+                            var slice = new byte[remaining];
+                            Buffer.BlockCopy(buf, writeOffset, slice, 0, remaining);
+                            written = write(masterFd, slice, remaining);
+                        }
+                        if (written <= 0) return; // PTY closed or fatal error
+                        writeOffset += (int)written;
+                    }
                 }
             }
             catch { /* stdin closed or PTY gone */ }
