@@ -121,7 +121,7 @@ internal sealed class WindowsPty : IPtyRunner
     /// Runs <paramref name="command"/> via cmd.exe /c inside a ConPTY, writing redacted
     /// output to stdout. Returns the child process's exit code.
     /// </summary>
-    public int Run(string command, List<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
         int consoleCols, consoleRows;
         try { consoleCols = Console.WindowWidth; consoleRows = Console.WindowHeight; }
@@ -150,13 +150,14 @@ internal sealed class WindowsPty : IPtyRunner
             //   PTY stdout: child writes to hPipeOutWr (via ConPTY); we read from hPipeOutRd.
             var secAttr = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>() };
             if (!CreatePipe(out hPipeInRd,  out hPipeInWr,  ref secAttr, 0))
-                throw new Exception("CreatePipe (stdin) failed");
+                throw new Exception($"CreatePipe (stdin) failed (Win32 error {Marshal.GetLastWin32Error()})");
             if (!CreatePipe(out hPipeOutRd, out hPipeOutWr, ref secAttr, 0))
-                throw new Exception("CreatePipe (stdout) failed");
+                throw new Exception($"CreatePipe (stdout) failed (Win32 error {Marshal.GetLastWin32Error()})");
 
             // Create the ConPTY: it reads from hPipeInRd and writes to hPipeOutWr.
-            if (CreatePseudoConsole(size, hPipeInRd, hPipeOutWr, 0, out hPC) != 0)
-                throw new Exception("CreatePseudoConsole failed");
+            int hpcHr;
+            if ((hpcHr = CreatePseudoConsole(size, hPipeInRd, hPipeOutWr, 0, out hPC)) != 0)
+                throw new Exception($"CreatePseudoConsole failed (HRESULT 0x{hpcHr:X8})");
 
             // The ConPTY now owns those ends — null our copies so finally won't double-close.
             CloseHandle(hPipeInRd);  hPipeInRd  = IntPtr.Zero;
@@ -240,6 +241,9 @@ internal sealed class WindowsPty : IPtyRunner
                     var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
                     var outBytes  = encoding.GetBytes(redacted);
                     stdout.Write(outBytes, 0, outBytes.Length);
+                    // Flush after every chunk so output appears immediately in the terminal.
+                    // PTY is used for interactive commands (kubectl, helm, ssh) where real-time
+                    // streaming matters more than raw throughput.
                     stdout.Flush();
                 }
                 var tail = redactor.Flush();

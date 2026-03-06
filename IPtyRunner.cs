@@ -9,5 +9,5 @@ internal interface IPtyRunner
     /// Runs <paramref name="command"/> via the platform shell inside a PTY,
     /// writing redacted output to stdout. Returns the child's exit code.
     /// </summary>
-    int Run(string command, List<KeyValuePair<string, string>> sortedSecrets);
+    int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets);
 }

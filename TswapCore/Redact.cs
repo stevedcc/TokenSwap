@@ -373,6 +373,11 @@ public sealed class StreamRedactor
             }
         } while (adjusted);
 
+        // Don't split a UTF-16 surrogate pair at the emit boundary.
+        if (safeLen > 0 && safeLen < window.Length &&
+            char.IsHighSurrogate(window[safeLen - 1]) && char.IsLowSurrogate(window[safeLen]))
+            safeLen--;
+
         _tail = window[safeLen..];
         return Redact.RedactLine(window[..safeLen], _secrets);
     }

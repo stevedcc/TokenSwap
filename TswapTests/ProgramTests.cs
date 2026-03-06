@@ -507,6 +507,9 @@ public class ProgramTests : IDisposable
         RunTswap("init");
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // ls + /tmp path is POSIX-only
+
         // ls on a nonexistent path that includes the secret — ls will echo the path in its
         // error message. The test harness redirects stdout, so tswap uses FallbackPty, which
         // merges stderr into stdout when Console.IsOutputRedirected. Redacted text lands on stdout.

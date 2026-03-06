@@ -58,7 +58,7 @@ internal abstract class UnixPty : IPtyRunner
     /// Runs <paramref name="command"/> via /bin/bash -c inside a PTY, writing redacted
     /// output to stdout. Returns the child process's exit code.
     /// </summary>
-    public int Run(string command, List<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
         int consoleRows, consoleCols;
         try { consoleRows = Console.WindowHeight; consoleCols = Console.WindowWidth; }
@@ -140,6 +140,9 @@ internal abstract class UnixPty : IPtyRunner
             var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
             var outBytes  = encoding.GetBytes(redacted);
             stdout.Write(outBytes, 0, outBytes.Length);
+            // Flush after every chunk so output appears immediately in the terminal.
+            // PTY is used for interactive commands (kubectl, helm, ssh) where real-time
+            // streaming matters more than raw throughput.
             stdout.Flush();
         }
         var tail = redactor.Flush();

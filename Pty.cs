@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using TswapCore;
 
 /// <summary>
@@ -29,13 +30,16 @@ internal static class Pty
 }
 
 /// <summary>
-/// Fallback runner for unsupported platforms or when stdout is redirected. Uses
+/// Fallback runner for unsupported platforms or when stdout/stdin is redirected. Uses
 /// <see cref="Process"/> with redirected streams; TTY semantics (colours, interactive
 /// prompts) are not preserved. Shell is selected per OS.
+///
+/// Output is streamed through <see cref="StreamRedactor"/> in byte-faithful chunks
+/// (no line-ending normalisation) so downstream pipe consumers receive exact bytes.
 /// </summary>
 internal sealed class FallbackPty : IPtyRunner
 {
-    public int Run(string command, List<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
         ProcessStartInfo startInfo;
         if (OperatingSystem.IsWindows())
@@ -66,37 +70,42 @@ internal sealed class FallbackPty : IPtyRunner
             startInfo.ArgumentList.Add(command);
         }
 
-        // Track stream-close events so we know all async callbacks have fired
-        // before returning. BeginOutputReadLine + a single WaitForExit() can return
-        // while background drain threads are still dispatching events, dropping the
-        // tail of output. The null-data event fires exactly when the stream is closed.
-        var outputDrained = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var errorDrained  = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
         using var process = new Process { StartInfo = startInfo };
-
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data == null) { outputDrained.TrySetResult(true); return; }
-            Console.WriteLine(Redact.RedactLine(e.Data, sortedSecrets));
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data == null) { errorDrained.TrySetResult(true); return; }
-            var redacted = Redact.RedactLine(e.Data, sortedSecrets);
-            // When stdout is a pipe, merge stderr into stdout to mirror PTY merged-stream
-            // behaviour and give downstream consumers a complete, redacted output stream.
-            if (Console.IsOutputRedirected)
-                Console.WriteLine(redacted);
-            else
-                Console.Error.WriteLine(redacted);
-        };
-
         process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+
+        var stdout  = Console.OpenStandardOutput();
+        var stderr  = Console.IsOutputRedirected ? stdout : Console.OpenStandardError();
+        var encoding = Console.OutputEncoding;
+
+        // Drain stdout and stderr concurrently through StreamRedactor to avoid pipe-buffer
+        // deadlocks when the child writes to both streams. Reading them sequentially could
+        // block forever if the child fills one pipe while waiting for the other to drain.
+        var stdoutTask = Task.Run(() => Drain(process.StandardOutput.BaseStream, stdout, sortedSecrets, encoding));
+        var stderrTask = Task.Run(() => Drain(process.StandardError.BaseStream,  stderr, sortedSecrets, encoding));
+
         process.WaitForExit();
-        Task.WaitAll(outputDrained.Task, errorDrained.Task);
+        Task.WaitAll(stdoutTask, stderrTask);
         return process.ExitCode;
+    }
+
+    private static void Drain(
+        Stream source, Stream dest,
+        IReadOnlyList<KeyValuePair<string, string>> sortedSecrets,
+        Encoding encoding)
+    {
+        var readBuf = new byte[4096];
+        var decoder = encoding.GetDecoder();
+        var charBuf = new char[encoding.GetMaxCharCount(readBuf.Length)];
+        var redactor = new StreamRedactor(sortedSecrets);
+        int n;
+        while ((n = source.Read(readBuf, 0, readBuf.Length)) > 0)
+        {
+            var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
+            var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
+            dest.Write(encoding.GetBytes(redacted));
+        }
+        var tail = redactor.Flush();
+        if (tail.Length > 0)
+            dest.Write(encoding.GetBytes(tail));
     }
 }
