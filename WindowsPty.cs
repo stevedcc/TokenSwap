@@ -61,6 +61,7 @@ internal sealed class WindowsPty : IPtyRunner
     private const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
     private const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private const uint INFINITE                            = 0xFFFFFFFF;
+    private const uint WAIT_FAILED                         = 0xFFFFFFFF;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CreatePipe(
@@ -255,8 +256,10 @@ internal sealed class WindowsPty : IPtyRunner
             });
 
             // Wait for the child, then close the ConPTY to signal EOF to the read task.
-            WaitForSingleObject(hProcess, INFINITE);
-            GetExitCodeProcess(hProcess, out uint exitCode);
+            if (WaitForSingleObject(hProcess, INFINITE) == WAIT_FAILED)
+                throw new Exception($"WaitForSingleObject failed (Win32 error {Marshal.GetLastWin32Error()})");
+            if (!GetExitCodeProcess(hProcess, out uint exitCode))
+                throw new Exception($"GetExitCodeProcess failed (Win32 error {Marshal.GetLastWin32Error()})");
             ClosePseudoConsole(hPC);
             hPC = IntPtr.Zero; // prevent double-close in finally
 

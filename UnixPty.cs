@@ -38,7 +38,7 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "read", SetLastError = true)]
     private static extern nint read(int fd, [Out] byte[] buf, nint count);
 
-    [DllImport("libc", EntryPoint = "write")]
+    [DllImport("libc", EntryPoint = "write", SetLastError = true)]
     private static extern nint write(int fd, [In] byte[] buf, nint count);
 
     [DllImport("libc", EntryPoint = "close")]
@@ -136,7 +136,12 @@ internal abstract class UnixPty : IPtyRunner
                             Buffer.BlockCopy(buf, writeOffset, slice, 0, remaining);
                             written = write(masterFd, slice, remaining);
                         }
-                        if (written <= 0) return; // PTY closed or fatal error
+                        if (written < 0)
+                        {
+                            if (Marshal.GetLastPInvokeError() == EINTR) continue; // interrupted, retry
+                            return; // PTY closed or fatal error
+                        }
+                        if (written == 0) return; // PTY closed
                         writeOffset += (int)written;
                     }
                 }
@@ -187,6 +192,9 @@ internal abstract class UnixPty : IPtyRunner
         int wret;
         do { wret = waitpid(pid, ref status, 0); }
         while (wret < 0 && Marshal.GetLastPInvokeError() == EINTR);
+
+        if (wret < 0)
+            throw new Exception($"waitpid failed (errno {Marshal.GetLastPInvokeError()})");
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0

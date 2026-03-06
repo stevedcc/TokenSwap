@@ -13,12 +13,13 @@ internal static class Pty
     public static IPtyRunner Create()
     {
         // OS check comes first so the fallback runner uses the right shell for the platform.
-        // Fall back to process-based I/O when stdout or stdin is redirected:
+        // Fall back to process-based I/O when stdout, stdin, or stderr is redirected:
         //   - Redirected stdout: PTY master bytes would corrupt a downstream pipe consumer.
         //   - Redirected stdin:  PTY can't half-close its input side, so the child would hang
         //                        waiting for EOF after stdin is exhausted.
+        //   - Redirected stderr: PTY merges stderr into stdout, silently ignoring the redirect.
         // ConPTY requires Windows 10 1809 (build 17763) or later.
-        bool usePty = !Console.IsOutputRedirected && !Console.IsInputRedirected;
+        bool usePty = !Console.IsOutputRedirected && !Console.IsInputRedirected && !Console.IsErrorRedirected;
         if (OperatingSystem.IsLinux())
             return usePty ? (IPtyRunner)new LinuxPty() : new FallbackPty();
         if (OperatingSystem.IsMacOS())
