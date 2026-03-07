@@ -520,6 +520,42 @@ public class ProgramTests : IDisposable
         Assert.Contains("[REDACTED: my-pass]", stdout);
     }
 
+    [Fact]
+    public void Run_FirstLineOfStdoutNotDropped()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // printf is POSIX-only
+
+        // Regression test for issue #74: the first line of subprocess stdout was
+        // silently dropped due to a race between forkpty() and the parent's read loop.
+        //
+        // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
+        // the result to bash -c as one string. To keep "sh -c <compound>" intact the whole
+        // compound must arrive as a single commandArg with its own shell quotes. After
+        // tswap substitutes {{my-secret}} → 's3cr3t' the bash string becomes:
+        //   sh -c 'echo before; echo 's3cr3t'; echo after'
+        // Shell adjacent-string concatenation reassembles this as the three-command script
+        //   echo before; echo s3cr3t; echo after
+        // which sh then executes. 'echo' is not blocked (only the top-level command, "sh",
+        // is checked against the blocklist).
+        //
+        // All three streams are redirected by the test harness so tswap uses FallbackPty;
+        // the UnixPty path is exercised by interactive use, but both share the same
+        // StreamRedactor and output-draining logic.
+        var (exit, stdout, _) = RunTswap(
+            "run", "sh", "-c",
+            "'echo before; echo {{my-secret}}; echo after'");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("before",  stdout);
+        Assert.Contains("after",   stdout);
+        Assert.DoesNotContain("s3cr3t", stdout);
+        Assert.Contains("[REDACTED: my-secret]", stdout);
+    }
+
     // --- No args ---
 
     [Fact]
