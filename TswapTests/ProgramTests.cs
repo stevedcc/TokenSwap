@@ -532,19 +532,21 @@ public class ProgramTests : IDisposable
         // Regression test for issue #74: the first line of subprocess stdout was
         // silently dropped due to a race between forkpty() and the parent's read loop.
         //
+        // Coverage note: the test harness redirects all three streams so tswap always
+        // uses FallbackPty, not UnixPty. The structural fix (pre-fork allocation +
+        // Task.Run read loop) in UnixPty can only be manually verified with an interactive
+        // terminal where no streams are redirected. This test guards the FallbackPty
+        // (pipe) path and the shared StreamRedactor logic against future regressions.
+        //
         // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
-        // the result to bash -c as one string. To keep "sh -c <compound>" intact the whole
-        // compound must arrive as a single commandArg with its own shell quotes. After
-        // tswap substitutes {{my-secret}} → 's3cr3t' the bash string becomes:
+        // the result to bash -c as one string. To keep "sh -c <compound>" intact, the
+        // whole compound must arrive as a single commandArg with its own shell quotes.
+        // After tswap substitutes {{my-secret}} → 's3cr3t' the bash string becomes:
         //   sh -c 'echo before; echo 's3cr3t'; echo after'
         // Shell adjacent-string concatenation reassembles this as the three-command script
         //   echo before; echo s3cr3t; echo after
         // which sh then executes. 'echo' is not blocked (only the top-level command, "sh",
         // is checked against the blocklist).
-        //
-        // All three streams are redirected by the test harness so tswap uses FallbackPty;
-        // the UnixPty path is exercised by interactive use, but both share the same
-        // StreamRedactor and output-draining logic.
         var (exit, stdout, _) = RunTswap(
             "run", "sh", "-c",
             "'echo before; echo {{my-secret}}; echo after'");
