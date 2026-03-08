@@ -53,9 +53,10 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
     private static extern int poll(ref PollFd fds, uint nfds, int timeout);
 
-    private const short POLLIN  = 1;   // POSIX: fd has data to read (Linux and macOS)
-    private const short POLLERR = 8;   // POSIX: error condition on fd
-    private const short POLLNVAL = 32; // POSIX: invalid fd
+    private const short POLLIN   = 1;   // POSIX: fd has data to read (Linux and macOS)
+    private const short POLLOUT  = 4;   // POSIX: fd is ready for writing
+    private const short POLLERR  = 8;   // POSIX: error condition on fd
+    private const short POLLNVAL = 32;  // POSIX: invalid fd
 
     private const int EINTR  = 4;  // POSIX: interrupted system call
     // EAGAIN differs by OS: Linux=11, macOS=35 (same value as EWOULDBLOCK on macOS).
@@ -184,11 +185,23 @@ internal abstract class UnixPty : IPtyRunner
                 // streaming matters more than raw throughput.
                 stdout.Flush();
             }
-            var tail = redactor.Flush();
-            if (tail.Length > 0)
+            // If cancelled (30s drain timeout), suppress the redactor tail: the sliding-window
+            // buffer may contain a partial, unredacted secret fragment from a truncated stream.
+            // Emitting it risks leaking secret material, so we discard it and signal truncation.
+            if (Volatile.Read(ref cancelDrain))
             {
-                stdout.Write(encoding.GetBytes(tail));
+                var marker = encoding.GetBytes("[output truncated]" + Environment.NewLine);
+                stdout.Write(marker, 0, marker.Length);
                 stdout.Flush();
+            }
+            else
+            {
+                var tail = redactor.Flush();
+                if (tail.Length > 0)
+                {
+                    stdout.Write(encoding.GetBytes(tail));
+                    stdout.Flush();
+                }
             }
         });
 
@@ -224,7 +237,15 @@ internal abstract class UnixPty : IPtyRunner
                         if (written < 0)
                         {
                             var err = Marshal.GetLastPInvokeError();
-                            if (err == EINTR || err == EAGAIN) continue; // interrupted or flow-controlled, retry
+                            if (err == EINTR) continue; // signal interrupted, retry immediately
+                            if (err == EAGAIN)
+                            {
+                                // PTY master write buffer full — wait for writability (POLLOUT)
+                                // with a 200 ms timeout to avoid a hot spin under back-pressure.
+                                var wpfd = new PollFd { fd = masterFd, events = POLLOUT };
+                                poll(ref wpfd, 1, 200);
+                                continue;
+                            }
                             return; // PTY closed or fatal error
                         }
                         if (written == 0) return; // PTY closed

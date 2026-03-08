@@ -544,12 +544,14 @@ public class ProgramTests : IDisposable
         // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
         // the result to bash -c as one string. To keep "sh -c <compound>" intact, the
         // whole compound must arrive as a single commandArg with its own shell quotes.
-        // After tswap substitutes {{my-secret}} → 's3cr3t' the bash string becomes:
+        // SubstituteTokens() replaces {{my-secret}} with a single-quoted value ('s3cr3t'),
+        // which terminates and reopens the surrounding single-quoted string, so bash sees:
         //   sh -c 'echo before; echo 's3cr3t'; echo after'
-        // Shell adjacent-string concatenation reassembles this as the three-command script
+        // The shell treats adjacent quoted/unquoted segments as one token; sh executes:
         //   echo before; echo s3cr3t; echo after
-        // which sh then executes. 'echo' is not blocked (only the top-level command, "sh",
-        // is checked against the blocklist).
+        // The redactor must catch the raw value (s3cr3t) in the output stream.
+        // 'echo' is not blocked (only the top-level command, "sh", is checked against
+        // the blocklist).
         var (exit, stdout, _) = RunTswap(
             "run", "sh", "-c",
             "'echo before; echo {{my-secret}}; echo after'");
