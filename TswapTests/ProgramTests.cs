@@ -590,7 +590,10 @@ public class ProgramTests : IDisposable
         // isatty(0/1/2) returns true and Pty.Create() picks LinuxPty/MacOSPty.
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
-        if (OpenPty(ref masterFd, ref slaveFd, nameBuf) < 0)
+        int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
+        if (ptyRet == int.MinValue)
+            return; // openpty not available on this platform; skip test
+        if (ptyRet < 0)
             throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
         var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
@@ -1183,12 +1186,17 @@ password2: """"  # tswap: missing-mixed-secret");
     [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
     private static extern int PtyPoll(ref TestPollFd fds, uint nfds, int timeout);
 
+    // Returns the openpty result (< 0 on failure), or int.MinValue if openpty is not
+    // available on this platform (neither libc nor libutil exports the symbol).
     private static int OpenPty(ref int masterFd, ref int slaveFd, byte[] nameBuf)
     {
         try { return openpty_libc(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
         catch (DllNotFoundException) { }
         catch (EntryPointNotFoundException) { } // openpty not exported by libc on this platform
-        return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero);
+        try { return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { } // libutil not present or openpty not exported
+        return int.MinValue; // sentinel: openpty not available on this platform
     }
 
     [Fact]

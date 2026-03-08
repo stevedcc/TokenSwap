@@ -53,7 +53,9 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
     private static extern int poll(ref PollFd fds, uint nfds, int timeout);
 
-    private const short POLLIN = 1;  // POSIX: fd has data to read (Linux and macOS)
+    private const short POLLIN  = 1;   // POSIX: fd has data to read (Linux and macOS)
+    private const short POLLERR = 8;   // POSIX: error condition on fd
+    private const short POLLNVAL = 32; // POSIX: invalid fd
 
     private const int EINTR  = 4;  // POSIX: interrupted system call
     // EAGAIN differs by OS: Linux=11, macOS=35 (same value as EWOULDBLOCK on macOS).
@@ -160,6 +162,11 @@ internal abstract class UnixPty : IPtyRunner
                     if (Marshal.GetLastPInvokeError() == EINTR) continue;
                     break;
                 }
+                // Only call read() when the fd actually has data (POLLIN). POLLHUP without
+                // POLLIN means the slave was closed with no buffered data; POLLERR/POLLNVAL
+                // indicate a broken or invalid fd. In all three cases, break cleanly rather
+                // than risk a blocking or error read().
+                if ((pfd.revents & POLLIN) == 0) break;
                 int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
                 if (n == 0) break; // EOF
                 if (n < 0)
