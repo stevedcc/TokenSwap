@@ -256,12 +256,14 @@ internal abstract class UnixPty : IPtyRunner
         }
 
         // Child has exited, but its descendants may still hold inherited slave PTY fds open,
-        // keeping the slave alive. Give the read task up to 5 s to drain any remaining
+        // keeping the slave alive. Give the read task up to 30 s to drain any remaining
         // kernel-buffered output naturally (via EIO once all slave fds close), then signal
         // cancellation so it exits within one poll timeout (≤ 200 ms) without a cross-thread
         // fd close, which is undefined behaviour on POSIX.
+        // 30 s provides headroom for slow stdout consumers and large kernel buffers; any finite
+        // timeout may truncate output from zombie descendants that stay alive indefinitely.
         // try/finally ensures close(masterFd) runs even if readTask.Wait() throws.
-        if (!readTask.Wait(TimeSpan.FromSeconds(5)))
+        if (!readTask.Wait(TimeSpan.FromSeconds(30)))
             Volatile.Write(ref cancelDrain, true);
         try { readTask.Wait(); } // if cancelled, exits within ≤ 200 ms; else already done
         finally { close(masterFd); }

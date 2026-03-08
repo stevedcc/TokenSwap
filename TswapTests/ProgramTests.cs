@@ -629,6 +629,9 @@ public class ProgramTests : IDisposable
         // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
         // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
         const int EINTR  = 4;
+        // EAGAIN differs by OS: Linux=11, macOS=35. Retry rather than treating as EIO
+        // to match the production UnixPty loop and avoid spurious breaks on O_NONBLOCK fds.
+        int eagain = OperatingSystem.IsLinux() ? 11 : 35;
         const short POLLIN_FLAG = 1;
         var sb       = new StringBuilder();
         var buf      = new byte[4096];
@@ -652,7 +655,8 @@ public class ProgramTests : IDisposable
                 int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
                 if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
                 if (n == 0) break; // EOF
-                if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                var readErrno = Marshal.GetLastPInvokeError();
+                if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
                 break; // EIO or other terminal error
             }
         }
