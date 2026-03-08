@@ -47,6 +47,14 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "waitpid", SetLastError = true)]
     private static extern int waitpid(int pid, ref int status, int options);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PollFd { public int fd; public short events; public short revents; }
+
+    [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+    private static extern int poll(ref PollFd fds, uint nfds, int timeout);
+
+    private const short POLLIN = 1;  // POSIX: fd has data to read (Linux and macOS)
+
     private const int EINTR  = 4;  // POSIX: interrupted system call
     // EAGAIN differs by OS: Linux=11, macOS=35 (same value as EWOULDBLOCK on macOS).
     private static readonly int EAGAIN = OperatingSystem.IsLinux() ? 11 : 35;
@@ -142,7 +150,12 @@ internal abstract class UnixPty : IPtyRunner
                 {
                     var errno = Marshal.GetLastPInvokeError();
                     if (errno == EINTR)  continue; // signal interrupted, retry
-                    if (errno == EAGAIN) { Thread.Sleep(1); continue; } // O_NONBLOCK fd: no data yet, yield and retry
+                    if (errno == EAGAIN) // O_NONBLOCK fd: no data yet — wait for it via poll
+                    {
+                        var pfd = new PollFd { fd = masterFd, events = POLLIN };
+                        poll(ref pfd, 1, -1); // block until data or hangup; retry read on return
+                        continue;
+                    }
                     break; // EIO or other error (slave side closed after child exit)
                 }
                 var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
@@ -222,11 +235,19 @@ internal abstract class UnixPty : IPtyRunner
             throw new Exception($"waitpid failed (errno {errno})");
         }
 
-        // Child has exited; the slave PTY is now fully closed. The read task will
-        // receive EIO on its next read() call and exit the loop. Wait here so we
-        // drain and flush all remaining buffered output before closing the master fd.
-        readTask.Wait();
-        close(masterFd);
+        // Child has exited, but its descendants may still hold inherited slave PTY fds open,
+        // keeping the slave alive and blocking the read task indefinitely. Give the read task
+        // a short window to drain any remaining kernel-buffered output; if it hasn't finished
+        // by then, force-close masterFd so the next read() fails and the task exits its loop.
+        if (!readTask.Wait(TimeSpan.FromSeconds(5)))
+        {
+            close(masterFd);
+            readTask.Wait(); // now exits promptly on EBADF from the closed fd
+        }
+        else
+        {
+            close(masterFd);
+        }
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0

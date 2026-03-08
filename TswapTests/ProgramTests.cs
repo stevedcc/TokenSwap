@@ -620,25 +620,34 @@ public class ProgramTests : IDisposable
         psi.Environment["TSWAP_CONFIG_DIR"]          = _tempDir;
         psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
 
-        using var process = Process.Start(psi)!;
-        PtyClose(slaveFd); // close our copy; child holds it — when child exits, master gets EIO
-
         // Read from the outer PTY master until EIO (all slave fds closed after child exits).
+        // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
+        // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
         const int EINTR = 4;
         var sb  = new StringBuilder();
         var buf = new byte[4096];
-        while (true)
+        string output;
+        using var process = Process.Start(psi)!;
+        try
         {
-            int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
-            if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
-            if (n == 0) break;
-            if (Marshal.GetLastPInvokeError() == EINTR) continue;
-            break; // EIO or other terminal error
-        }
-        PtyClose(masterFd);
-        process.WaitForExit();
+            PtyClose(slaveFd); slaveFd = -1; // close our copy; child holds it
 
-        var output = sb.ToString();
+            while (true)
+            {
+                int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
+                if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
+                if (n == 0) break;
+                if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                break; // EIO or other terminal error
+            }
+        }
+        finally
+        {
+            if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
+            if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
+        }
+        process.WaitForExit();
+        output = sb.ToString();
         Assert.Equal(0, process.ExitCode);
         Assert.Contains("before",               output);
         Assert.Contains("after",                output);
