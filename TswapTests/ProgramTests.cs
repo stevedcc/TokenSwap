@@ -621,22 +621,34 @@ public class ProgramTests : IDisposable
         psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
 
         // Read from the outer PTY master until EIO (all slave fds closed after child exits).
+        // poll() with a 500 ms timeout bounds each read attempt so the test can never hang
+        // indefinitely if tswap or dotnet stalls; the 60 s deadline kills the child process.
         // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
         // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
-        const int EINTR = 4;
-        var sb  = new StringBuilder();
-        var buf = new byte[4096];
+        const int EINTR  = 4;
+        const short POLLIN_FLAG = 1;
+        var sb       = new StringBuilder();
+        var buf      = new byte[4096];
+        var deadline = DateTime.UtcNow.AddSeconds(60);
         string output;
         using var process = Process.Start(psi)!;
         try
         {
             PtyClose(slaveFd); slaveFd = -1; // close our copy; child holds it
 
-            while (true)
+            while (DateTime.UtcNow < deadline)
             {
+                var pfd = new TestPollFd { fd = masterFd, events = POLLIN_FLAG };
+                int pr = PtyPoll(ref pfd, 1, 500);
+                if (pr == 0) continue; // timeout — check deadline and loop
+                if (pr < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    break; // poll error
+                }
                 int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
                 if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
-                if (n == 0) break;
+                if (n == 0) break; // EOF
                 if (Marshal.GetLastPInvokeError() == EINTR) continue;
                 break; // EIO or other terminal error
             }
@@ -646,7 +658,11 @@ public class ProgramTests : IDisposable
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
-        process.WaitForExit();
+        if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
+        {
+            process.Kill();
+            process.WaitForExit();
+        }
         output = sb.ToString();
         Assert.Equal(0, process.ExitCode);
         Assert.Contains("before",               output);
@@ -1160,6 +1176,12 @@ password2: """"  # tswap: missing-mixed-secret");
 
     [DllImport("libc", EntryPoint = "close")]
     private static extern int PtyClose(int fd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TestPollFd { public int fd; public short events; public short revents; }
+
+    [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+    private static extern int PtyPoll(ref TestPollFd fds, uint nfds, int timeout);
 
     private static int OpenPty(ref int masterFd, ref int slaveFd, byte[] nameBuf)
     {

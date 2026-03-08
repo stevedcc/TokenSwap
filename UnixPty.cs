@@ -216,7 +216,8 @@ internal abstract class UnixPty : IPtyRunner
                         }
                         if (written < 0)
                         {
-                            if (Marshal.GetLastPInvokeError() == EINTR) continue; // interrupted, retry
+                            var err = Marshal.GetLastPInvokeError();
+                            if (err == EINTR || err == EAGAIN) continue; // interrupted or flow-controlled, retry
                             return; // PTY closed or fatal error
                         }
                         if (written == 0) return; // PTY closed
@@ -240,8 +241,10 @@ internal abstract class UnixPty : IPtyRunner
             // Capture errno before any further native call can overwrite it.
             var errno = Marshal.GetLastPInvokeError();
             Volatile.Write(ref cancelDrain, true);
-            readTask.Wait(); // exits within one poll timeout (≤ 200 ms)
-            close(masterFd);
+            // readTask.Wait() can throw (e.g. stdout write failure); swallow it here
+            // because the waitpid failure is the primary error, and always close the fd.
+            try { readTask.Wait(); } catch { /* secondary to waitpid failure */ }
+            finally { close(masterFd); }
             throw new Exception($"waitpid failed (errno {errno})");
         }
 
@@ -250,10 +253,11 @@ internal abstract class UnixPty : IPtyRunner
         // kernel-buffered output naturally (via EIO once all slave fds close), then signal
         // cancellation so it exits within one poll timeout (≤ 200 ms) without a cross-thread
         // fd close, which is undefined behaviour on POSIX.
+        // try/finally ensures close(masterFd) runs even if readTask.Wait() throws.
         if (!readTask.Wait(TimeSpan.FromSeconds(5)))
             Volatile.Write(ref cancelDrain, true);
-        readTask.Wait(); // if we signalled, exits within ≤ 200 ms; otherwise already done
-        close(masterFd);
+        try { readTask.Wait(); } // if cancelled, exits within ≤ 200 ms; else already done
+        finally { close(masterFd); }
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0
