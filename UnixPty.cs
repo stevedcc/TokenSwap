@@ -132,6 +132,12 @@ internal abstract class UnixPty : IPtyRunner
         if (pid < 0)
             throw new Exception("forkpty failed");
 
+        // cancelDrain is set by the main thread to ask the read loop to stop polling and exit.
+        // Volatile.Read/Write provides acquire/release semantics sufficient for a single-writer
+        // cancellation flag. The loop's 200 ms poll timeout bounds how long before the flag
+        // is observed, avoiding any cross-thread fd-close (which is UB on POSIX).
+        var cancelDrain = false;
+
         // Schedule the read loop on the thread pool immediately — before the stdin
         // thread and before waitpid — so it races to call read(masterFd) while the
         // child is still in its earliest execution. All read-loop state was allocated
@@ -142,20 +148,24 @@ internal abstract class UnixPty : IPtyRunner
         // that straddle a read-buffer boundary are still caught.
         var readTask = Task.Run(() =>
         {
-            while (true)
+            while (!Volatile.Read(ref cancelDrain))
             {
+                // Poll with a 200 ms timeout so we re-check cancelDrain regularly even
+                // when the child is idle. This avoids blocking indefinitely in read().
+                var pfd = new PollFd { fd = masterFd, events = POLLIN };
+                int pr = poll(ref pfd, 1, 200);
+                if (pr == 0) continue;           // timeout — loop back and check cancelDrain
+                if (pr < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    break;
+                }
                 int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
                 if (n == 0) break; // EOF
                 if (n < 0)
                 {
                     var errno = Marshal.GetLastPInvokeError();
-                    if (errno == EINTR)  continue; // signal interrupted, retry
-                    if (errno == EAGAIN) // O_NONBLOCK fd: no data yet — wait for it via poll
-                    {
-                        var pfd = new PollFd { fd = masterFd, events = POLLIN };
-                        poll(ref pfd, 1, -1); // block until data or hangup; retry read on return
-                        continue;
-                    }
+                    if (errno == EINTR || errno == EAGAIN) continue; // retry
                     break; // EIO or other error (slave side closed after child exit)
                 }
                 var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
@@ -227,27 +237,23 @@ internal abstract class UnixPty : IPtyRunner
 
         if (wret < 0)
         {
-            // Capture errno before close() can overwrite it. Close masterFd to unblock
-            // the read task (causes read() to fail), then drain it to prevent leaks.
+            // Capture errno before any further native call can overwrite it.
             var errno = Marshal.GetLastPInvokeError();
+            Volatile.Write(ref cancelDrain, true);
+            readTask.Wait(); // exits within one poll timeout (≤ 200 ms)
             close(masterFd);
-            readTask.Wait();
             throw new Exception($"waitpid failed (errno {errno})");
         }
 
         // Child has exited, but its descendants may still hold inherited slave PTY fds open,
-        // keeping the slave alive and blocking the read task indefinitely. Give the read task
-        // a short window to drain any remaining kernel-buffered output; if it hasn't finished
-        // by then, force-close masterFd so the next read() fails and the task exits its loop.
+        // keeping the slave alive. Give the read task up to 5 s to drain any remaining
+        // kernel-buffered output naturally (via EIO once all slave fds close), then signal
+        // cancellation so it exits within one poll timeout (≤ 200 ms) without a cross-thread
+        // fd close, which is undefined behaviour on POSIX.
         if (!readTask.Wait(TimeSpan.FromSeconds(5)))
-        {
-            close(masterFd);
-            readTask.Wait(); // now exits promptly on EBADF from the closed fd
-        }
-        else
-        {
-            close(masterFd);
-        }
+            Volatile.Write(ref cancelDrain, true);
+        readTask.Wait(); // if we signalled, exits within ≤ 200 ms; otherwise already done
+        close(masterFd);
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0
