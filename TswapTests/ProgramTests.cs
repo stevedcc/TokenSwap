@@ -528,16 +528,18 @@ public class ProgramTests : IDisposable
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // printf is POSIX-only
+            return; // POSIX sh/echo only
 
-        // Regression test for issue #74: the first line of subprocess stdout was
-        // silently dropped due to a race between forkpty() and the parent's read loop.
+        // Regression test for the "first line of subprocess stdout missing" behaviour
+        // reported in issue #74. The root cause turned out to be a shell quoting issue
+        // (tracked separately in issue #75): the user's shell strips the single quotes
+        // around the compound command before tswap sees it, so bash -c reconstructs the
+        // command incorrectly and the first line is lost. The UnixPty pre-fork allocation
+        // + Task.Run read loop is still a sound defensive improvement.
         //
         // Coverage note: the test harness redirects all three streams so tswap always
-        // uses FallbackPty, not UnixPty. The structural fix (pre-fork allocation +
-        // Task.Run read loop) in UnixPty can only be manually verified with an interactive
-        // terminal where no streams are redirected. This test guards the FallbackPty
-        // (pipe) path and the shared StreamRedactor logic against future regressions.
+        // uses FallbackPty, not UnixPty. This test guards the FallbackPty (pipe) path
+        // and the shared StreamRedactor logic against future regressions.
         //
         // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
         // the result to bash -c as one string. To keep "sh -c <compound>" intact, the
@@ -607,8 +609,8 @@ public class ProgramTests : IDisposable
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
-            $"exec <{slavePath} >{slavePath} 2>{slavePath}\n" +
-            $"exec dotnet run --project {_projectDir}/tswap.csproj" +
+            $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+            $"exec dotnet run --project \"{_projectDir}/tswap.csproj\"" +
             $" -- run sh -c \"'echo before; echo {{{{my-secret}}}}; echo after'\"\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
