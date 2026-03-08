@@ -47,7 +47,20 @@ internal abstract class UnixPty : IPtyRunner
     [DllImport("libc", EntryPoint = "waitpid", SetLastError = true)]
     private static extern int waitpid(int pid, ref int status, int options);
 
-    private const int EINTR = 4; // POSIX: interrupted system call
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PollFd { public int fd; public short events; public short revents; }
+
+    [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+    private static extern int poll(ref PollFd fds, uint nfds, int timeout);
+
+    private const short POLLIN   = 1;   // POSIX: fd has data to read (Linux and macOS)
+    private const short POLLOUT  = 4;   // POSIX: fd is ready for writing
+    private const short POLLERR  = 8;   // POSIX: error condition on fd
+    private const short POLLNVAL = 32;  // POSIX: invalid fd
+
+    private const int EINTR  = 4;  // POSIX: interrupted system call
+    // EAGAIN differs by OS: Linux=11, macOS=35 (same value as EWOULDBLOCK on macOS).
+    private static readonly int EAGAIN = OperatingSystem.IsLinux() ? 11 : 35;
 
     /// <summary>
     /// Platform-specific forkpty call. Linux imports from libc; macOS from libutil.
@@ -86,6 +99,21 @@ internal abstract class UnixPty : IPtyRunner
         Marshal.WriteIntPtr(nativeArgv, 2 * ptrSize, nativeCmd);
         Marshal.WriteIntPtr(nativeArgv, 3 * ptrSize, IntPtr.Zero);
 
+        // Allocate read-loop infrastructure BEFORE fork so the parent thread can
+        // enter read(masterFd) with minimum latency after Forkpty() returns.
+        // The child begins executing the moment Forkpty() returns in the parent;
+        // any managed allocation or thread creation that happens between fork and
+        // the first read() call is a window during which the child's early output
+        // sits in the PTY kernel buffer. Preparing everything here collapses that
+        // window to just the unavoidable work: freeing pre-allocated native strings
+        // and scheduling the read Task.
+        var readBuf  = new byte[4096];
+        var encoding = Console.OutputEncoding;
+        var decoder  = encoding.GetDecoder();
+        var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
+        var stdout   = Console.OpenStandardOutput();
+        var redactor = new StreamRedactor(sortedSecrets);
+
         int pid = Forkpty(out int masterFd, IntPtr.Zero, IntPtr.Zero, ref winsize);
 
         if (pid == 0)
@@ -106,6 +134,76 @@ internal abstract class UnixPty : IPtyRunner
 
         if (pid < 0)
             throw new Exception("forkpty failed");
+
+        // cancelDrain is set by the main thread to ask the read loop to stop polling and exit.
+        // Volatile.Read/Write provides acquire/release semantics sufficient for a single-writer
+        // cancellation flag. The loop's 200 ms poll timeout bounds how long before the flag
+        // is observed, avoiding any cross-thread fd-close (which is UB on POSIX).
+        var cancelDrain = false;
+
+        // Schedule the read loop on the thread pool immediately — before the stdin
+        // thread and before waitpid — so it races to call read(masterFd) while the
+        // child is still in its earliest execution. All read-loop state was allocated
+        // above (pre-fork) so the Task body needs no additional setup.
+        //
+        // Read PTY output (stdout+stderr merged), redact secrets, write to our stdout.
+        // StreamRedactor maintains a sliding-window overlap between chunks so secrets
+        // that straddle a read-buffer boundary are still caught.
+        var readTask = Task.Run(() =>
+        {
+            while (!Volatile.Read(ref cancelDrain))
+            {
+                // Poll with a 200 ms timeout so we re-check cancelDrain regularly even
+                // when the child is idle. This avoids blocking indefinitely in read().
+                var pfd = new PollFd { fd = masterFd, events = POLLIN };
+                int pr = poll(ref pfd, 1, 200);
+                if (pr == 0) continue;           // timeout — loop back and check cancelDrain
+                if (pr < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    break;
+                }
+                // Only call read() when the fd actually has data (POLLIN). POLLHUP without
+                // POLLIN means the slave was closed with no buffered data; POLLERR/POLLNVAL
+                // indicate a broken or invalid fd. In all three cases, break cleanly rather
+                // than risk a blocking or error read().
+                if ((pfd.revents & POLLIN) == 0) break;
+                int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
+                if (n == 0) break; // EOF
+                if (n < 0)
+                {
+                    var errno = Marshal.GetLastPInvokeError();
+                    if (errno == EINTR || errno == EAGAIN) continue; // retry
+                    break; // EIO or other error (slave side closed after child exit)
+                }
+                var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
+                var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
+                var outBytes  = encoding.GetBytes(redacted);
+                stdout.Write(outBytes, 0, outBytes.Length);
+                // Flush after every chunk so output appears immediately in the terminal.
+                // PTY is used for interactive commands (kubectl, helm, ssh) where real-time
+                // streaming matters more than raw throughput.
+                stdout.Flush();
+            }
+            // If cancelled (30s drain timeout), suppress the redactor tail: the sliding-window
+            // buffer may contain a partial, unredacted secret fragment from a truncated stream.
+            // Emitting it risks leaking secret material, so we discard it and signal truncation.
+            if (Volatile.Read(ref cancelDrain))
+            {
+                var marker = encoding.GetBytes("[output truncated]" + Environment.NewLine);
+                stdout.Write(marker, 0, marker.Length);
+                stdout.Flush();
+            }
+            else
+            {
+                var tail = redactor.Flush();
+                if (tail.Length > 0)
+                {
+                    stdout.Write(encoding.GetBytes(tail));
+                    stdout.Flush();
+                }
+            }
+        });
 
         // Forward stdin → PTY master so interactive programs work (ssh, kubectl exec, etc.)
         var stdinThread = new Thread(() =>
@@ -138,7 +236,16 @@ internal abstract class UnixPty : IPtyRunner
                         }
                         if (written < 0)
                         {
-                            if (Marshal.GetLastPInvokeError() == EINTR) continue; // interrupted, retry
+                            var err = Marshal.GetLastPInvokeError();
+                            if (err == EINTR) continue; // signal interrupted, retry immediately
+                            if (err == EAGAIN)
+                            {
+                                // PTY master write buffer full — wait for writability (POLLOUT)
+                                // with a 200 ms timeout to avoid a hot spin under back-pressure.
+                                var wpfd = new PollFd { fd = masterFd, events = POLLOUT };
+                                poll(ref wpfd, 1, 200);
+                                continue;
+                            }
                             return; // PTY closed or fatal error
                         }
                         if (written == 0) return; // PTY closed
@@ -150,42 +257,6 @@ internal abstract class UnixPty : IPtyRunner
         }) { IsBackground = true };
         stdinThread.Start();
 
-        // Read PTY output (stdout+stderr merged), redact secrets, write to our stdout.
-        // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
-        // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
-        var readBuf  = new byte[4096];
-        var encoding = Console.OutputEncoding;
-        var decoder  = encoding.GetDecoder();
-        var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
-        var stdout   = Console.OpenStandardOutput();
-        var redactor = new StreamRedactor(sortedSecrets);
-        while (true)
-        {
-            int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
-            if (n == 0) break; // EOF
-            if (n < 0)
-            {
-                if (Marshal.GetLastPInvokeError() == EINTR) continue; // signal interrupted, retry
-                break; // EIO or other error (slave side closed after child exit)
-            }
-            var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
-            var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
-            var outBytes  = encoding.GetBytes(redacted);
-            stdout.Write(outBytes, 0, outBytes.Length);
-            // Flush after every chunk so output appears immediately in the terminal.
-            // PTY is used for interactive commands (kubectl, helm, ssh) where real-time
-            // streaming matters more than raw throughput.
-            stdout.Flush();
-        }
-        var tail = redactor.Flush();
-        if (tail.Length > 0)
-        {
-            stdout.Write(encoding.GetBytes(tail));
-            stdout.Flush();
-        }
-
-        close(masterFd);
-
         // Loop waitpid on EINTR so a signal delivery during the wait doesn't
         // leave status uninitialised and produce a garbage exit code.
         int status = 0;
@@ -194,7 +265,29 @@ internal abstract class UnixPty : IPtyRunner
         while (wret < 0 && Marshal.GetLastPInvokeError() == EINTR);
 
         if (wret < 0)
-            throw new Exception($"waitpid failed (errno {Marshal.GetLastPInvokeError()})");
+        {
+            // Capture errno before any further native call can overwrite it.
+            var errno = Marshal.GetLastPInvokeError();
+            Volatile.Write(ref cancelDrain, true);
+            // readTask.Wait() can throw (e.g. stdout write failure); swallow it here
+            // because the waitpid failure is the primary error, and always close the fd.
+            try { readTask.Wait(); } catch { /* secondary to waitpid failure */ }
+            finally { close(masterFd); }
+            throw new Exception($"waitpid failed (errno {errno})");
+        }
+
+        // Child has exited, but its descendants may still hold inherited slave PTY fds open,
+        // keeping the slave alive. Give the read task up to 30 s to drain any remaining
+        // kernel-buffered output naturally (via EIO once all slave fds close), then signal
+        // cancellation so it exits within one poll timeout (≤ 200 ms) without a cross-thread
+        // fd close, which is undefined behaviour on POSIX.
+        // 30 s provides headroom for slow stdout consumers and large kernel buffers; any finite
+        // timeout may truncate output from zombie descendants that stay alive indefinitely.
+        // try/finally ensures close(masterFd) runs even if readTask.Wait() throws.
+        if (!readTask.Wait(TimeSpan.FromSeconds(30)))
+            Volatile.Write(ref cancelDrain, true);
+        try { readTask.Wait(); } // if cancelled, exits within ≤ 200 ms; else already done
+        finally { close(masterFd); }
 
         // Decode waitpid status: WIFEXITED vs WIFSIGNALED
         return (status & 0x7f) == 0

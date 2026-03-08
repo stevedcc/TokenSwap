@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -520,6 +521,165 @@ public class ProgramTests : IDisposable
         Assert.Contains("[REDACTED: my-pass]", stdout);
     }
 
+    [Fact]
+    public void Run_FirstLineOfStdoutNotDropped()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // POSIX sh/echo only
+
+        // Regression test for the "first line of subprocess stdout missing" behaviour
+        // reported in issue #74. The root cause turned out to be a shell quoting issue
+        // (tracked separately in issue #75): the user's shell strips the single quotes
+        // around the compound command before tswap sees it, so bash -c reconstructs the
+        // command incorrectly and the first line is lost. The UnixPty pre-fork allocation
+        // + Task.Run read loop is still a sound defensive improvement.
+        //
+        // Coverage note: the test harness redirects all three streams so tswap always
+        // uses FallbackPty, not UnixPty. This test guards the FallbackPty (pipe) path
+        // and the shared StreamRedactor logic against future regressions.
+        //
+        // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
+        // the result to bash -c as one string. To keep "sh -c <compound>" intact, the
+        // whole compound must arrive as a single commandArg with its own shell quotes.
+        // SubstituteTokens() replaces {{my-secret}} with a single-quoted value ('s3cr3t'),
+        // which terminates and reopens the surrounding single-quoted string, so bash sees:
+        //   sh -c 'echo before; echo 's3cr3t'; echo after'
+        // The shell treats adjacent quoted/unquoted segments as one token; sh executes:
+        //   echo before; echo s3cr3t; echo after
+        // The redactor must catch the raw value (s3cr3t) in the output stream.
+        // 'echo' is not blocked (only the top-level command, "sh", is checked against
+        // the blocklist).
+        var (exit, stdout, _) = RunTswap(
+            "run", "sh", "-c",
+            "'echo before; echo {{my-secret}}; echo after'");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("before",  stdout);
+        Assert.Contains("after",   stdout);
+        Assert.DoesNotContain("s3cr3t", stdout);
+        Assert.Contains("[REDACTED: my-secret]", stdout);
+    }
+
+    /// <summary>
+    /// End-to-end test for issue #74 that exercises the real PTY code path (LinuxPty via
+    /// forkpty). The test opens its own outer PTY and gives tswap the slave as its
+    /// stdin/stdout/stderr via a bash script, so <c>Console.IsOutputRedirected</c> returns
+    /// false inside tswap and <c>Pty.Create()</c> returns <c>LinuxPty</c> — not FallbackPty.
+    /// Output is captured from the outer PTY master.
+    ///
+    /// Note: the original issue #74 symptom ("before" missing) turned out to be a shell
+    /// quoting issue in the reproducer command rather than a real race: the shell strips the
+    /// single quotes around the compound command before tswap sees it, so bash -c receives
+    /// "sh -c echo before; ..." and sh runs echo with no arguments. The fix to UnixPty
+    /// (pre-fork allocation + Task.Run read loop) is still a sound defensive improvement, but
+    /// the race window is smaller than sh startup time in practice so this test passes with
+    /// both the pre-fix and the post-fix UnixPty. Its value is verifying that LinuxPty is
+    /// selected (not FallbackPty) and that the full PTY redaction pipeline works correctly.
+    /// </summary>
+    [Fact]
+    public void Run_FirstLineOfStdoutNotDropped_UnixPty()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+
+        // Open an outer PTY pair. tswap will inherit the slave as its fds so
+        // isatty(0/1/2) returns true and Pty.Create() picks LinuxPty/MacOSPty.
+        var nameBuf = new byte[256];
+        int masterFd = -1, slaveFd = -1;
+        int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
+        if (ptyRet == int.MinValue)
+            return; // openpty not available on this platform; skip test
+        if (ptyRet < 0)
+            throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
+
+        var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
+            Array.IndexOf(nameBuf, (byte)0) is int z and >= 0 ? z : nameBuf.Length);
+
+        // Write a small bash script. The two `exec` lines:
+        //   1. Replace bash's own fds 0/1/2 with the slave PTY (making tswap see a real TTY).
+        //   2. Replace bash with dotnet so dotnet inherits those slave fds.
+        //
+        // Argument quoting: `"'echo before; ...; echo after'"` inside the double-quoted bash
+        // string preserves the inner single quotes literally in dotnet's argv. tswap then joins
+        // its commandArgs and gets:
+        //   sh -c 'echo before; echo {{my-secret}}; echo after'
+        // After substituting {{my-secret}} → s3cr3t the shell sees adjacent string literals
+        // (single-quote concatenation) and runs: echo before; echo s3cr3t; echo after.
+        var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
+        File.WriteAllText(scriptPath,
+            $"#!/bin/bash\n" +
+            $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+            $"exec dotnet run --project \"{_projectDir}/tswap.csproj\"" +
+            $" -- run sh -c \"'echo before; echo {{{{my-secret}}}}; echo after'\"\n");
+
+        var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
+        psi.ArgumentList.Add(scriptPath);
+        psi.Environment["TSWAP_TEST_KEY"]            = _testKeyHex;
+        psi.Environment["TSWAP_TEST_SUDO_BYPASS"]    = "1";
+        psi.Environment["TSWAP_CONFIG_DIR"]          = _tempDir;
+        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
+
+        // Read from the outer PTY master until EIO (all slave fds closed after child exits).
+        // poll() with a 500 ms timeout bounds each read attempt so the test can never hang
+        // indefinitely if tswap or dotnet stalls; the 60 s deadline kills the child process.
+        // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
+        // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
+        const int EINTR  = 4;
+        // EAGAIN differs by OS: Linux=11, macOS=35. Retry rather than treating as EIO
+        // to match the production UnixPty loop and avoid spurious breaks on O_NONBLOCK fds.
+        int eagain = OperatingSystem.IsLinux() ? 11 : 35;
+        const short POLLIN_FLAG = 1;
+        var sb       = new StringBuilder();
+        var buf      = new byte[4096];
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        string output;
+        using var process = Process.Start(psi)!;
+        try
+        {
+            PtyClose(slaveFd); slaveFd = -1; // close our copy; child holds it
+
+            while (DateTime.UtcNow < deadline)
+            {
+                var pfd = new TestPollFd { fd = masterFd, events = POLLIN_FLAG };
+                int pr = PtyPoll(ref pfd, 1, 500);
+                if (pr == 0) continue; // timeout — check deadline and loop
+                if (pr < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    break; // poll error
+                }
+                int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
+                if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
+                if (n == 0) break; // EOF
+                var readErrno = Marshal.GetLastPInvokeError();
+                if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
+                break; // EIO or other terminal error
+            }
+        }
+        finally
+        {
+            if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
+            if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
+        }
+        if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
+        {
+            process.Kill();
+            process.WaitForExit();
+        }
+        output = sb.ToString();
+        Assert.Equal(0, process.ExitCode);
+        Assert.Contains("before",               output);
+        Assert.Contains("after",                output);
+        Assert.DoesNotContain("s3cr3t",         output);
+        Assert.Contains("[REDACTED: my-secret]", output);
+    }
+
     // --- No args ---
 
     [Fact]
@@ -1009,6 +1169,40 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.DoesNotContain("supersecretvalue123", stderr);
         // Diff output is in stderr
         Assert.Contains("[REDACTED: my-password]", stderr);
+    }
+
+    // --- PTY P/Invoke helpers (used by Run_FirstLineOfStdoutNotDropped_UnixPty) ---
+
+    // openpty: try libc first (glibc 2.34+ / Fedora 35+ / Ubuntu 22.04+), then libutil.
+    [DllImport("libc",    EntryPoint = "openpty", SetLastError = true)]
+    private static extern int openpty_libc(ref int amaster, ref int aslave, [Out] byte[] name, IntPtr termp, IntPtr winp);
+
+    [DllImport("libutil", EntryPoint = "openpty", SetLastError = true)]
+    private static extern int openpty_libutil(ref int amaster, ref int aslave, [Out] byte[] name, IntPtr termp, IntPtr winp);
+
+    [DllImport("libc", EntryPoint = "read",  SetLastError = true)]
+    private static extern nint PtyRead(int fd, [Out] byte[] buf, nint count);
+
+    [DllImport("libc", EntryPoint = "close")]
+    private static extern int PtyClose(int fd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TestPollFd { public int fd; public short events; public short revents; }
+
+    [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+    private static extern int PtyPoll(ref TestPollFd fds, uint nfds, int timeout);
+
+    // Returns the openpty result (< 0 on failure), or int.MinValue if openpty is not
+    // available on this platform (neither libc nor libutil exports the symbol).
+    private static int OpenPty(ref int masterFd, ref int slaveFd, byte[] nameBuf)
+    {
+        try { return openpty_libc(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { } // openpty not exported by libc on this platform
+        try { return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { } // libutil not present or openpty not exported
+        return int.MinValue; // sentinel: openpty not available on this platform
     }
 
     [Fact]
