@@ -1154,6 +1154,7 @@ password2: """"  # tswap: missing-mixed-secret");
     {
         try { return openpty_libc(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero); }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { } // openpty not exported by libc on this platform
         return openpty_libutil(ref masterFd, ref slaveFd, nameBuf, IntPtr.Zero, IntPtr.Zero);
     }
 

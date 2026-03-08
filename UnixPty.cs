@@ -48,7 +48,8 @@ internal abstract class UnixPty : IPtyRunner
     private static extern int waitpid(int pid, ref int status, int options);
 
     private const int EINTR  = 4;  // POSIX: interrupted system call
-    private const int EAGAIN = 11; // POSIX: try again (O_NONBLOCK, no data yet)
+    // EAGAIN differs by OS: Linux=11, macOS=35 (same value as EWOULDBLOCK on macOS).
+    private static readonly int EAGAIN = OperatingSystem.IsLinux() ? 11 : 35;
 
     /// <summary>
     /// Platform-specific forkpty call. Linux imports from libc; macOS from libutil.
@@ -141,7 +142,7 @@ internal abstract class UnixPty : IPtyRunner
                 {
                     var errno = Marshal.GetLastPInvokeError();
                     if (errno == EINTR)  continue; // signal interrupted, retry
-                    if (errno == EAGAIN) continue; // O_NONBLOCK fd: no data yet, spin
+                    if (errno == EAGAIN) { Thread.Sleep(1); continue; } // O_NONBLOCK fd: no data yet, yield and retry
                     break; // EIO or other error (slave side closed after child exit)
                 }
                 var charCount = decoder.GetChars(readBuf, 0, n, charBuf, 0);
@@ -212,7 +213,14 @@ internal abstract class UnixPty : IPtyRunner
         while (wret < 0 && Marshal.GetLastPInvokeError() == EINTR);
 
         if (wret < 0)
-            throw new Exception($"waitpid failed (errno {Marshal.GetLastPInvokeError()})");
+        {
+            // Capture errno before close() can overwrite it. Close masterFd to unblock
+            // the read task (causes read() to fail), then drain it to prevent leaks.
+            var errno = Marshal.GetLastPInvokeError();
+            close(masterFd);
+            readTask.Wait();
+            throw new Exception($"waitpid failed (errno {errno})");
+        }
 
         // Child has exited; the slave PTY is now fully closed. The read task will
         // receive EIO on its next read() call and exit the loop. Wait here so we
