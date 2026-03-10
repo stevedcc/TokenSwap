@@ -524,11 +524,11 @@ public class ProgramTests : IDisposable
     [Fact]
     public void Run_FirstLineOfStdoutNotDropped()
     {
-        RunTswap("init");
-        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
-
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return; // POSIX sh/echo only
+
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         // Regression test for the "first line of subprocess stdout missing" behaviour
         // reported in issue #74. The root cause turned out to be a shell quoting issue
@@ -669,7 +669,7 @@ public class ProgramTests : IDisposable
         }
         if (!process.WaitForExit(TimeSpan.FromSeconds(5)))
         {
-            process.Kill();
+            process.Kill(entireProcessTree: true);
             process.WaitForExit();
         }
         output = sb.ToString();

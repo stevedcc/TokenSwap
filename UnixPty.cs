@@ -163,10 +163,10 @@ internal abstract class UnixPty : IPtyRunner
                     if (Marshal.GetLastPInvokeError() == EINTR) continue;
                     break;
                 }
-                // Only call read() when the fd actually has data (POLLIN). POLLHUP without
-                // POLLIN means the slave was closed with no buffered data; POLLERR/POLLNVAL
-                // indicate a broken or invalid fd. In all three cases, break cleanly rather
-                // than risk a blocking or error read().
+                // Only call read() when the fd actually has data. POLLERR/POLLNVAL signal
+                // a broken or invalid fd; POLLHUP without POLLIN means the slave was closed
+                // with no buffered data. Break in all cases rather than risk a blocking read().
+                if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) break;
                 if ((pfd.revents & POLLIN) == 0) break;
                 int n = (int)read(masterFd, readBuf, (nint)readBuf.Length);
                 if (n == 0) break; // EOF
@@ -243,7 +243,17 @@ internal abstract class UnixPty : IPtyRunner
                                 // PTY master write buffer full — wait for writability (POLLOUT)
                                 // with a 200 ms timeout to avoid a hot spin under back-pressure.
                                 var wpfd = new PollFd { fd = masterFd, events = POLLOUT };
-                                poll(ref wpfd, 1, 200);
+                                while (true)
+                                {
+                                    int pr = poll(ref wpfd, 1, 200);
+                                    if (pr < 0)
+                                    {
+                                        if (Marshal.GetLastPInvokeError() == EINTR) continue; // interrupted, re-poll
+                                        return; // poll error — treat as fatal
+                                    }
+                                    if (pr == 0 || (wpfd.revents & POLLOUT) == 0) return; // timeout or error event
+                                    break; // fd writable — retry write
+                                }
                                 continue;
                             }
                             return; // PTY closed or fatal error
