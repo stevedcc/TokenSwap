@@ -61,7 +61,12 @@ public static class Validation
             if (total > MaxIngestedLength)
                 throw new Exception($"Secret value is too long. Maximum allowed is {MaxIngestedLength} characters.");
         }
-        return new string(buf, 0, total).TrimEnd();
+        var value = new string(buf, 0, total).TrimEnd();
+        if (value.Contains('\0'))
+            throw new Exception(
+                "Secret value contains a NUL byte (\\0), which cannot be used as a " +
+                "process argument. Re-ingest the secret without embedded NUL bytes.");
+        return value;
     }
 
     /// <summary>

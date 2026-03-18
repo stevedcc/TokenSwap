@@ -76,6 +76,14 @@ public class ValidationTests
         Assert.Contains("too long", ex.Message);
     }
 
+    [Fact]
+    public void ReadBoundedStdin_NulByteThrows()
+    {
+        using var reader = new StringReader("hello\0world");
+        var ex = Assert.Throws<Exception>(() => Validation.ReadBoundedStdin(reader));
+        Assert.Contains("NUL", ex.Message);
+    }
+
     // --- Token extraction ---
 
     [Fact]

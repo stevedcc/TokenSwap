@@ -1092,6 +1092,43 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("wrong passphrase", stderr);
     }
 
+    [Fact]
+    public void Import_SkipsSecretsWithNulBytes()
+    {
+        RunTswap("init");
+
+        // Construct a synthetic export file containing one clean secret and one whose value
+        // contains a NUL byte. We bypass tswap for this because ingest now rejects NUL values.
+        const string passphrase = "test-passphrase";
+        var salt       = RandomNumberGenerator.GetBytes(16);
+        var exportKey  = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+        var db         = new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["good-secret"] = new Secret("good-value",  DateTime.UtcNow, DateTime.UtcNow),
+            ["nul-secret"]  = new Secret("bad\0value",  DateTime.UtcNow, DateTime.UtcNow),
+        });
+        var dbJson     = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey);
+        var exportFile = new ExportFile(
+            "tswap-export-v1", DateTime.UtcNow,
+            Convert.ToBase64String(salt),
+            Convert.ToBase64String(ciphertext));
+        var exportPath = Path.Combine(_tempDir, "nul-test.enc");
+        File.WriteAllText(exportPath,
+            JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, _) = RunTswapWithStdin(passphrase + "\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        Assert.Contains("nul-secret", stdout);
+        Assert.Contains("NUL", stdout);
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("good-secret", namesOut);
+        Assert.DoesNotContain("nul-secret", namesOut);
+    }
+
     // --- Migrate ---
 
     [Fact]

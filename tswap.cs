@@ -774,7 +774,7 @@ void CmdImport(string path)
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
 
-    int imported = 0, skippedExisting = 0, skippedBurned = 0;
+    int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
     foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
     {
         if (secret.BurnedAt != null)
@@ -789,6 +789,12 @@ void CmdImport(string path)
             skippedExisting++;
             continue;
         }
+        if (secret.Value.Contains('\0'))
+        {
+            Console.WriteLine($"  ⚠ Skipped '{name}' (value contains a NUL byte — cannot be used as a process argument)");
+            skippedNul++;
+            continue;
+        }
         db.Secrets[name] = secret;
         imported++;
     }
@@ -797,6 +803,7 @@ void CmdImport(string path)
     Console.WriteLine($"\n✓ Imported {imported} secret(s)");
     if (skippedBurned > 0)   Console.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
     if (skippedExisting > 0) Console.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
+    if (skippedNul > 0)      Console.WriteLine($"  Skipped {skippedNul} secret(s) with NUL bytes (re-export from source after fixing values)");
 }
 
 void CmdNames()
