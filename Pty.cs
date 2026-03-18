@@ -49,6 +49,9 @@ internal sealed class FallbackPty : IPtyRunner
 {
     public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
+        if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
+            throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
+
         // Execute argv[0] directly (no shell wrapper). ProcessStartInfo.ArgumentList
         // handles per-platform quoting so each element is passed as a literal string.
         var startInfo = new ProcessStartInfo

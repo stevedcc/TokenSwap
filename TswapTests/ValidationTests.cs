@@ -243,6 +243,16 @@ public class ValidationTests
         Assert.Equal(3, result.Length);
     }
 
+    [Fact]
+    public void SubstituteTokensInArgs_NulInValueThrows()
+    {
+        var secrets = new Dictionary<string, string> { { "tok", "val\0ue" } };
+        var ex = Assert.Throws<Exception>(() =>
+            Validation.SubstituteTokensInArgs(["cmd", "{{tok}}"], secrets));
+        Assert.Contains("NUL", ex.Message);
+        Assert.Contains("tok", ex.Message);
+    }
+
     // --- Sanitize ---
 
     [Fact]

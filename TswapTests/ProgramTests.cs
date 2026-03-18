@@ -491,6 +491,21 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Run_BlockedCommandViaTokenSubstitutionFails()
+    {
+        // A token in argv[0] that expands to a blocked command must still be rejected.
+        // The pre-substitution blocklist check sees "{{cmd}}" (not blocked); the
+        // post-substitution re-check must catch the expanded value.
+        RunTswap("init");
+        RunTswapWithStdin("echo", "ingest", "cmd");
+
+        var (exit, _, stderr) = RunTswap("run", "{{cmd}}", "hello");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("expose secret", stderr);
+    }
+
+    [Fact]
     public void Run_PipeBlockedFails()
     {
         RunTswap("init");

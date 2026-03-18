@@ -788,7 +788,8 @@ void CmdRun(string[] runArgs)
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
-    // Block obvious attempts to exfiltrate secrets via run
+    // Block obvious attempts to exfiltrate secrets via run.
+    // Pre-substitution check catches literal blocked commands in the template.
     var blocked = Validation.GetBlockedCommand(commandArgs[0]);
     if (blocked != null)
         throw new Exception(
@@ -796,7 +797,10 @@ void CmdRun(string[] runArgs)
             "The 'run' command is for programs that *use* secrets, not display them.\n" +
             "Use 'sudo ... get <name>' to view a secret.");
 
-    // Block shell output redirection (secrets could be written to readable files)
+    // Block shell output redirection in the command template (secrets could be written
+    // to readable files). Note: this check runs before token substitution. Secret values
+    // that contain '|' or '>' are safe when exec'd directly because no shell interprets
+    // them; only the command template itself is scanned here.
     if (Validation.HasPipeOrRedirect(commandJoined))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
@@ -820,6 +824,16 @@ void CmdRun(string[] runArgs)
     // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
     var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
     var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
+
+    // Re-check the blocklist against argv[0] after substitution: a token in the executable
+    // position (e.g. `run {{cmd}} arg` where {{cmd}} expands to `echo`) would bypass the
+    // pre-substitution check above.
+    var blockedPost = Validation.GetBlockedCommand(argv[0]);
+    if (blockedPost != null)
+        throw new Exception(
+            $"The command '{blockedPost}' would expose secret values.\n" +
+            "The 'run' command is for programs that *use* secrets, not display them.\n" +
+            "Use 'sudo ... get <name>' to view a secret.");
 
     // Show sanitized version
     if (Verbose)

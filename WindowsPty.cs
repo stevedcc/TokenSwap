@@ -125,6 +125,9 @@ internal sealed class WindowsPty : IPtyRunner
     /// </summary>
     public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
+        if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
+            throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
+
         int consoleCols, consoleRows;
         try { consoleCols = Console.WindowWidth; consoleRows = Console.WindowHeight; }
         catch { consoleCols = 0; consoleRows = 0; }

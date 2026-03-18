@@ -93,12 +93,26 @@ public static class Validation
     }
 
     /// <summary>
-    /// Substitute tokens in each argument with raw secret values (no shell quoting).
-    /// Used when the program is executed directly via execvp/Process — no shell wrapper
-    /// means no shell quoting is needed; the value is passed as a literal string.
+    /// Substitute tokens in each argument with raw secret values.
+    /// Values are not shell-quoted because the program is executed directly via
+    /// execvp/Process — the OS passes each element as a literal string to the child.
+    /// Note: when the target program is a shell (e.g. <c>sh -c ...</c>), the shell
+    /// will interpret metacharacters in the substituted value as part of its script.
+    /// Callers that pass secrets into shell scripts should be aware of this.
+    /// Values containing NUL (<c>\0</c>) are rejected because native APIs treat NUL
+    /// as a string terminator and would silently truncate the argument.
     /// </summary>
     public static string[] SubstituteTokensInArgs(string[] args, Dictionary<string, string> secretValues)
     {
+        // Reject NUL in secret values before substitution: native APIs (execvp, CreateProcess)
+        // treat NUL as a string terminator, so a NUL-containing value would be silently
+        // truncated, potentially altering the executed command.
+        foreach (var (token, value) in secretValues)
+            if (value.Contains('\0'))
+                throw new Exception(
+                    $"Secret '{token}' contains a NUL byte (\\0), which cannot be passed " +
+                    "as a process argument. Re-ingest the secret without embedded NUL bytes.");
+
         var result = new string[args.Length];
         for (int i = 0; i < args.Length; i++)
         {
