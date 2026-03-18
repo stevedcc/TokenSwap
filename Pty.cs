@@ -33,7 +33,11 @@ internal static class Pty
 /// <summary>
 /// Fallback runner for unsupported platforms or when stdout/stdin is redirected. Uses
 /// <see cref="Process"/> with redirected streams; TTY semantics (colours, interactive
-/// prompts) are not preserved. Shell is selected per OS.
+/// prompts) are not preserved.
+///
+/// Directly executes <c>argv[0]</c> with the remaining elements as its argument list
+/// (no shell wrapper). <see cref="ProcessStartInfo.ArgumentList"/> handles platform-specific
+/// quoting automatically.
 ///
 /// Output is streamed through <see cref="StreamRedactor"/> using
 /// <see cref="Console.OutputEncoding"/> for decoding and re-encoding (no line-ending
@@ -43,36 +47,19 @@ internal static class Pty
 /// </summary>
 internal sealed class FallbackPty : IPtyRunner
 {
-    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
-        ProcessStartInfo startInfo;
-        if (OperatingSystem.IsWindows())
+        // Execute argv[0] directly (no shell wrapper). ProcessStartInfo.ArgumentList
+        // handles per-platform quoting so each element is passed as a literal string.
+        var startInfo = new ProcessStartInfo
         {
-            // cmd.exe uses doubled quotes ("") not backslash-escaped quotes.
-            var escaped = command.Replace("\"", "\"\"");
-            startInfo = new ProcessStartInfo
-            {
-                FileName        = "cmd.exe",
-                Arguments       = $"/c \"\"{escaped}\"\"",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-            };
-        }
-        else
-        {
-            // Use ArgumentList so the command string is passed as-is to bash via execve,
-            // with no shell quoting needed. Consistent with the PTY path (/bin/bash -c).
-            startInfo = new ProcessStartInfo
-            {
-                FileName        = "/bin/bash",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-            };
-            startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add(command);
-        }
+            FileName               = argv[0],
+            UseShellExecute        = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+        };
+        foreach (var a in argv.AsSpan(1))
+            startInfo.ArgumentList.Add(a);
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();

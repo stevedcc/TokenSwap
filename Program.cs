@@ -777,10 +777,13 @@ void CmdRun(string[] runArgs)
         throw new Exception($"Usage: {Prefix} run <command> [args...]");
 
     var commandArgs = runArgs.Skip(1).ToArray();
-    var command = string.Join(" ", commandArgs);
+    // Join for scanning only — NOT used for execution. Executing via shell would require
+    // re-quoting and would destroy the argument structure the caller's shell already
+    // parsed correctly (issue #75).
+    var commandJoined = string.Join(" ", commandArgs);
 
     // Find {{tokens}}
-    var tokens = Validation.ExtractTokens(command);
+    var tokens = Validation.ExtractTokens(commandJoined);
 
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
@@ -794,7 +797,7 @@ void CmdRun(string[] runArgs)
             "Use 'sudo ... get <name>' to view a secret.");
 
     // Block shell output redirection (secrets could be written to readable files)
-    if (Validation.HasPipeOrRedirect(command))
+    if (Validation.HasPipeOrRedirect(commandJoined))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
             "Secrets could be captured to files or piped to other programs.\n" +
@@ -814,14 +817,15 @@ void CmdRun(string[] runArgs)
             throw new Exception($"Secret '{token}' not found");
     }
 
-    // Substitute tokens
+    // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
     var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
-    var substitutedCommand = Validation.SubstituteTokens(command, secretValues);
+    var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
 
     // Show sanitized version
     if (Verbose)
     {
-        Console.WriteLine($"\nExecuting: {Validation.SanitizeCommand(command)}");
+        var sanitized = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));
+        Console.WriteLine($"\nExecuting: {sanitized}");
         Console.WriteLine();
     }
 
@@ -832,7 +836,7 @@ void CmdRun(string[] runArgs)
         .OrderByDescending(kv => kv.Value.Length)
         .ToList();
 
-    int exitCode = Pty.Create().Run(substitutedCommand, sortedSecrets);
+    int exitCode = Pty.Create().Run(argv, sortedSecrets);
 
     Environment.Exit(exitCode);
 }

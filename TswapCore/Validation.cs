@@ -93,15 +93,19 @@ public static class Validation
     }
 
     /// <summary>
-    /// Substitute tokens in a command with shell-escaped secret values.
+    /// Substitute tokens in each argument with raw secret values (no shell quoting).
+    /// Used when the program is executed directly via execvp/Process — no shell wrapper
+    /// means no shell quoting is needed; the value is passed as a literal string.
     /// </summary>
-    public static string SubstituteTokens(string command, Dictionary<string, string> secretValues)
+    public static string[] SubstituteTokensInArgs(string[] args, Dictionary<string, string> secretValues)
     {
-        var result = command;
-        foreach (var (token, value) in secretValues)
+        var result = new string[args.Length];
+        for (int i = 0; i < args.Length; i++)
         {
-            var escapedValue = "'" + value.Replace("'", "'\\''") + "'";
-            result = result.Replace($"{{{{{token}}}}}", escapedValue);
+            var a = args[i];
+            foreach (var (token, value) in secretValues)
+                a = a.Replace($"{{{{{token}}}}}", value);
+            result[i] = a;
         }
         return result;
     }

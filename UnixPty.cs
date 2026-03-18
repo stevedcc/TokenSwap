@@ -70,10 +70,11 @@ internal abstract class UnixPty : IPtyRunner
     protected abstract int Forkpty(out int amaster, IntPtr name, IntPtr termp, ref Winsize winp);
 
     /// <summary>
-    /// Runs <paramref name="command"/> via /bin/bash -c inside a PTY, writing redacted
-    /// output to stdout. Returns the child process's exit code.
+    /// Directly executes <paramref name="argv"/>[0] with the remaining elements as its
+    /// argument list inside a PTY (no shell wrapper), writing redacted output to stdout.
+    /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
         int consoleRows, consoleCols;
         try { consoleRows = Console.WindowHeight; consoleCols = Console.WindowWidth; }
@@ -84,20 +85,22 @@ internal abstract class UnixPty : IPtyRunner
             ws_col = (ushort)(consoleCols > 0 ? consoleCols : 80),
         };
 
-        // Marshal all strings to native memory BEFORE fork so the child never needs
+        // Marshal all argv strings to native memory BEFORE fork so the child never needs
         // to allocate from the managed heap (which may have GC locks from other threads).
-        var nativeBash = Marshal.StringToHGlobalAnsi("/bin/bash");
-        var nativeName = Marshal.StringToHGlobalAnsi("bash");
-        var nativeDashC = Marshal.StringToHGlobalAnsi("-c");
-        var nativeCmd   = Marshal.StringToHGlobalAnsi(command);
+        var nativeStrings = new IntPtr[argv.Length];
+        for (int i = 0; i < argv.Length; i++)
+            nativeStrings[i] = Marshal.StringToHGlobalAnsi(argv[i]);
 
-        // Build argv in native memory: char*[] = { "bash", "-c", cmd, NULL }
+        // Build null-terminated argv array in native memory: char*[] = { argv[0], ..., NULL }
         int ptrSize = IntPtr.Size;
-        var nativeArgv = Marshal.AllocHGlobal(ptrSize * 4);
-        Marshal.WriteIntPtr(nativeArgv, 0 * ptrSize, nativeName);
-        Marshal.WriteIntPtr(nativeArgv, 1 * ptrSize, nativeDashC);
-        Marshal.WriteIntPtr(nativeArgv, 2 * ptrSize, nativeCmd);
-        Marshal.WriteIntPtr(nativeArgv, 3 * ptrSize, IntPtr.Zero);
+        var nativeArgv = Marshal.AllocHGlobal(ptrSize * (argv.Length + 1));
+        for (int i = 0; i < argv.Length; i++)
+            Marshal.WriteIntPtr(nativeArgv, i * ptrSize, nativeStrings[i]);
+        Marshal.WriteIntPtr(nativeArgv, argv.Length * ptrSize, IntPtr.Zero);
+
+        // Copy the executable pointer to a stack-local so the child can read it without
+        // touching the managed nativeStrings array after fork.
+        var nativeExe = nativeStrings[0];
 
         // Allocate read-loop infrastructure BEFORE fork so the parent thread can
         // enter read(masterFd) with minimum latency after Forkpty() returns.
@@ -120,16 +123,14 @@ internal abstract class UnixPty : IPtyRunner
         {
             // Child — only async-signal-safe native calls; no managed allocation.
             // execvp replaces the process image; _exit is the async-signal-safe exit.
-            execvp_native(nativeBash, nativeArgv);
+            execvp_native(nativeExe, nativeArgv);
             _exit(127);
             return 0; // unreachable
         }
 
         // Parent: free native strings (child has its own copy via CoW, replaced by exec).
-        Marshal.FreeHGlobal(nativeBash);
-        Marshal.FreeHGlobal(nativeName);
-        Marshal.FreeHGlobal(nativeDashC);
-        Marshal.FreeHGlobal(nativeCmd);
+        for (int i = 0; i < nativeStrings.Length; i++)
+            Marshal.FreeHGlobal(nativeStrings[i]);
         Marshal.FreeHGlobal(nativeArgv);
 
         if (pid < 0)

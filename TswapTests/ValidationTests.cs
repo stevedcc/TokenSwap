@@ -195,31 +195,52 @@ public class ValidationTests
     // --- Token substitution ---
 
     [Fact]
-    public void SubstituteTokens_ReplacesTokens()
+    public void SubstituteTokensInArgs_ReplacesTokenInSingleArg()
     {
         var secrets = new Dictionary<string, string> { { "pass", "s3cret" } };
-        var result = Validation.SubstituteTokens("cmd --password {{pass}}", secrets);
-        Assert.Equal("cmd --password 's3cret'", result);
+        var result = Validation.SubstituteTokensInArgs(["--password", "{{pass}}"], secrets);
+        Assert.Equal(new[] { "--password", "s3cret" }, result);
     }
 
     [Fact]
-    public void SubstituteTokens_EscapesSingleQuotes()
+    public void SubstituteTokensInArgs_RawValue_NoShellQuoting()
     {
+        // Single quotes in the value are passed through verbatim — no shell escaping.
         var secrets = new Dictionary<string, string> { { "pass", "it's" } };
-        var result = Validation.SubstituteTokens("cmd {{pass}}", secrets);
-        Assert.Equal("cmd 'it'\\''s'", result);
+        var result = Validation.SubstituteTokensInArgs(["cmd", "{{pass}}"], secrets);
+        Assert.Equal(new[] { "cmd", "it's" }, result);
     }
 
     [Fact]
-    public void SubstituteTokens_MultipleTokens()
+    public void SubstituteTokensInArgs_MultipleTokensAcrossArgs()
     {
         var secrets = new Dictionary<string, string>
         {
             { "user", "admin" },
             { "pass", "pw123" }
         };
-        var result = Validation.SubstituteTokens("cmd --user {{user}} --pass {{pass}}", secrets);
-        Assert.Equal("cmd --user 'admin' --pass 'pw123'", result);
+        var result = Validation.SubstituteTokensInArgs(
+            ["cmd", "--user", "{{user}}", "--pass", "{{pass}}"], secrets);
+        Assert.Equal(new[] { "cmd", "--user", "admin", "--pass", "pw123" }, result);
+    }
+
+    [Fact]
+    public void SubstituteTokensInArgs_TokenInsideCompoundArg()
+    {
+        // Token embedded in a larger string (e.g. a -c script passed to sh).
+        var secrets = new Dictionary<string, string> { { "tok", "val" } };
+        var result = Validation.SubstituteTokensInArgs(
+            ["sh", "-c", "echo before; echo {{tok}}; echo after"], secrets);
+        Assert.Equal(new[] { "sh", "-c", "echo before; echo val; echo after" }, result);
+    }
+
+    [Fact]
+    public void SubstituteTokensInArgs_PreservesArgCount()
+    {
+        var secrets = new Dictionary<string, string> { { "x", "y" } };
+        var input = new[] { "a", "{{x}}", "c" };
+        var result = Validation.SubstituteTokensInArgs(input, secrets);
+        Assert.Equal(3, result.Length);
     }
 
     // --- Sanitize ---

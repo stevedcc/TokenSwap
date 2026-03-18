@@ -927,13 +927,16 @@ void CmdRun(string[] args)
         throw new Exception($"Usage: {Prefix} run <command> [args...]");
     
     var commandArgs = args.Skip(1).ToArray();
-    var command = string.Join(" ", commandArgs);
-    
+    // Join for scanning only — NOT used for execution. Executing via shell would require
+    // re-quoting and would destroy the argument structure the caller's shell already
+    // parsed correctly (issue #75).
+    var commandJoined = string.Join(" ", commandArgs);
+
     // Find {{tokens}}
     var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9_-]+)\}\}");
-    var matches = tokenRegex.Matches(command);
-    var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
-    
+    var tokens = tokenRegex.Matches(commandJoined)
+        .Select(m => m.Groups[1].Value).Distinct().ToList();
+
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
@@ -948,7 +951,7 @@ void CmdRun(string[] args)
             "Use 'sudo ... get <name>' to view a secret.");
 
     // Block shell output redirection (secrets could be written to readable files)
-    if (Regex.IsMatch(command, @"[|>]"))
+    if (Regex.IsMatch(commandJoined, @"[|>]"))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
             "Secrets could be captured to files or piped to other programs.\n" +
@@ -960,47 +963,45 @@ void CmdRun(string[] args)
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
+
     // Verify all tokens exist
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
             throw new Exception($"Secret '{token}' not found");
     }
-    
-    // Substitute tokens
-    var substitutedCommand = command;
+
+    // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
+    var argv = commandArgs.ToArray();
     foreach (var token in tokens)
     {
-        var escapedValue = "'" + db.Secrets[token].Value.Replace("'", "'\\''") + "'";
-        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", escapedValue);
+        var value = db.Secrets[token].Value;
+        for (int i = 0; i < argv.Length; i++)
+            argv[i] = argv[i].Replace($"{{{{{token}}}}}", value);
     }
 
     // Show sanitized version
     if (Verbose)
     {
-        var sanitized = tokenRegex.Replace(command, "********");
+        var sanitized = string.Join(" ", commandArgs.Select(a => tokenRegex.Replace(a, "********")));
         Console.WriteLine($"\nExecuting: {sanitized}");
         Console.WriteLine();
     }
-    
-    // Execute command
-    var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
-    var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
-    
-    var process = new Process
+
+    // Execute argv[0] directly (no shell wrapper) so argument structure is preserved.
+    // ProcessStartInfo.ArgumentList handles per-platform quoting automatically.
+    var psi = new ProcessStartInfo
     {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = shell,
-            Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false
-        }
+        FileName        = argv[0],
+        UseShellExecute = false,
     };
-    
+    foreach (var a in argv.AsSpan(1))
+        psi.ArgumentList.Add(a);
+
+    var process = new Process { StartInfo = psi };
     process.Start();
     process.WaitForExit();
-    
+
     Environment.Exit(process.ExitCode);
 }
 
