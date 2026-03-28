@@ -221,8 +221,9 @@ byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
     if (TestKey != null)
         return TestKey; // Bypass YubiKey entirely — use test key as master key
 
-    // Warn about missing touch requirement (suppressed for read-only metadata commands
-    // that never expose secret values: names, burned, burn, check).
+    // Warn about missing touch requirement (suppressed for commands that never expose
+    // secret values on stdout/stderr, even though they still decrypt the vault:
+    // names, burned, burn, check).
     if (warnIfNoTouch)
         YubiKey.WarnIfNoTouch(config);
 
@@ -259,8 +260,12 @@ byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
 // HELPER FUNCTIONS
 // ============================================================================
 
-string ReadPassword()
+// echo: stream that receives masking feedback (*, backspace, newline).
+// Defaults to Console.Out for vault-mutation commands; pass Console.Error for
+// export/import so stdout stays clean when the output is piped or redirected.
+string ReadPassword(TextWriter? echo = null)
 {
+    echo ??= Console.Out;
     // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
     if (Console.IsInputRedirected)
         return Console.ReadLine() ?? "";
@@ -271,18 +276,18 @@ string ReadPassword()
         var key = Console.ReadKey(true);
         if (key.Key == ConsoleKey.Enter)
         {
-            Console.WriteLine();
+            echo.WriteLine();
             break;
         }
         if (key.Key == ConsoleKey.Backspace && password.Length > 0)
         {
             password.Remove(password.Length - 1, 1);
-            Console.Write("\b \b");
+            echo.Write("\b \b");
         }
         else if (!char.IsControl(key.KeyChar))
         {
             password.Append(key.KeyChar);
-            Console.Write("*");
+            echo.Write("*");
         }
     }
     return password.ToString();
@@ -572,9 +577,9 @@ void CmdExport(string path)
     }
 
     Console.Error.Write("Export passphrase: ");
-    var passphrase = ReadPassword();
+    var passphrase = ReadPassword(Console.Error);
     Console.Error.Write("Confirm passphrase: ");
-    var confirm = ReadPassword();
+    var confirm = ReadPassword(Console.Error);
     if (passphrase != confirm)
         throw new Exception("Passphrases don't match");
 
@@ -611,7 +616,7 @@ void CmdImport(string path)
         throw new Exception($"Export file not found: {path}");
 
     Console.Error.Write("Import passphrase: ");
-    var passphrase = ReadPassword();
+    var passphrase = ReadPassword(Console.Error);
 
     ExportFile exportFile;
     try
@@ -635,8 +640,16 @@ void CmdImport(string path)
     catch (CryptographicException) { throw new Exception("Decryption failed — wrong passphrase or file tampered"); }
     catch (FormatException) { throw new Exception("Export file is corrupted (base64 decode failed)"); }
 
-    var exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
-        ?? throw new Exception("Invalid export data");
+    SecretsDb exportedDb;
+    try
+    {
+        exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
+            ?? throw new Exception("Invalid export data");
+    }
+    catch (JsonException ex)
+    {
+        throw new Exception($"Export data is corrupted (decrypted payload is not valid JSON): {ex.Message}");
+    }
 
     var config = storage.LoadConfig();
     var key = UnlockWithYubiKey(config);
