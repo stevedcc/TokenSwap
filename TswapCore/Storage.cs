@@ -36,7 +36,10 @@ public class Storage
     public SecretsDb LoadSecrets(byte[] key)
     {
         if (!File.Exists(SecretsFile))
+        {
+            Console.Error.WriteLine($"Warning: vault file not found ({SecretsFile}). Starting with empty vault.");
             return new SecretsDb(new Dictionary<string, Secret>());
+        }
 
         var encrypted = File.ReadAllBytes(SecretsFile);
         var decrypted = Crypto.Decrypt(encrypted, key);

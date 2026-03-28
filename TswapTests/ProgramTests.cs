@@ -1302,4 +1302,68 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.DoesNotContain("supersecretvalue123", stdout);
         Assert.DoesNotContain("supersecretvalue123", stderr);
     }
+
+    // --- issue #69: init creates vault file ---
+
+    [Fact]
+    public void Init_CreatesVaultFile()
+    {
+        var (exit, _, _) = RunTswap("init");
+
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(Path.Combine(_tempDir, "secrets.json.enc")),
+            "init should create an empty secrets.json.enc so subsequent commands do not warn about a missing vault");
+    }
+
+    // --- issue #67: export prompts go to stderr ---
+
+    [Fact]
+    public void Export_PromptsAreOnStderr()
+    {
+        RunTswap("init");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        var (exit, stdout, stderr) = RunTswapWithStdin("testpass\ntestpass\n", "export", exportPath);
+
+        Assert.Equal(0, exit);
+        // The interactive prompt "Export passphrase:" must not pollute stdout
+        // (stdout is the redirect target when the user pipes export output).
+        Assert.DoesNotContain("Export passphrase:", stdout);
+        Assert.DoesNotContain("Confirm passphrase:", stdout);
+        // Prompts must appear on stderr so the user sees them when stdout is redirected
+        Assert.Contains("Export passphrase:", stderr);
+        Assert.Contains("Confirm passphrase:", stderr);
+    }
+
+    // --- issue #68: export cancel exits with non-zero code ---
+
+    [Fact]
+    public void Export_Cancel_ExitsWithError()
+    {
+        RunTswap("init");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        File.WriteAllText(exportPath, "existing"); // trigger the overwrite prompt
+
+        // Answer "no" to the overwrite question — should cancel and exit non-zero
+        var (exit, _, stderr) = RunTswapWithStdin("no\n", "export", exportPath);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("cancelled", stderr, StringComparison.OrdinalIgnoreCase);
+        // File must not be modified
+        Assert.Equal("existing", File.ReadAllText(exportPath));
+    }
+
+    // --- issue #29: import with invalid JSON gives friendly error ---
+
+    [Fact]
+    public void Import_InvalidJson_GivesFriendlyError()
+    {
+        RunTswap("init");
+        var badFile = Path.Combine(_tempDir, "bad.enc");
+        File.WriteAllText(badFile, "this is not json at all {{{");
+
+        var (exit, _, stderr) = RunTswapWithStdin("anypassphrase\n", "import", badFile);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+    }
 }

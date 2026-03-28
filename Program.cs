@@ -216,13 +216,15 @@ int GetYubiKey(int? requiredSerial = null)
     return serials[0];
 }
 
-byte[] UnlockWithYubiKey(Config config)
+byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
 {
     if (TestKey != null)
         return TestKey; // Bypass YubiKey entirely — use test key as master key
 
-    // Warn about missing touch requirement
-    YubiKey.WarnIfNoTouch(config);
+    // Warn about missing touch requirement (suppressed for read-only metadata commands
+    // that never expose secret values: names, burned, burn, check).
+    if (warnIfNoTouch)
+        YubiKey.WarnIfNoTouch(config);
 
     var serial = GetYubiKey();
 
@@ -325,6 +327,7 @@ void CmdInit()
             Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
         );
         storage.SaveConfig(testConfig);
+        storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), TestKey);
         Console.WriteLine("Initialized (test mode)");
         return;
     }
@@ -388,6 +391,11 @@ void CmdInit()
     );
 
     storage.SaveConfig(config);
+    // Create an empty encrypted vault so the file exists from the start.
+    // This prevents LoadSecrets from logging a "vault not found" warning on the
+    // first vault-touching command and makes it clear the file was intentionally
+    // created (rather than being accidentally lost).
+    storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -558,13 +566,14 @@ void CmdExport(string path)
 
     if (File.Exists(path))
     {
-        Console.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
-        if (Console.ReadLine()?.ToLower() != "yes") return;
+        Console.Error.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
+        if (Console.ReadLine()?.ToLower() != "yes")
+            throw new Exception("Export cancelled.");
     }
 
-    Console.Write("Export passphrase: ");
+    Console.Error.Write("Export passphrase: ");
     var passphrase = ReadPassword();
-    Console.Write("Confirm passphrase: ");
+    Console.Error.Write("Confirm passphrase: ");
     var confirm = ReadPassword();
     if (passphrase != confirm)
         throw new Exception("Passphrases don't match");
@@ -601,11 +610,19 @@ void CmdImport(string path)
     if (!File.Exists(path))
         throw new Exception($"Export file not found: {path}");
 
-    Console.Write("Import passphrase: ");
+    Console.Error.Write("Import passphrase: ");
     var passphrase = ReadPassword();
 
-    var exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
-        ?? throw new Exception("Invalid export file");
+    ExportFile exportFile;
+    try
+    {
+        exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
+            ?? throw new Exception("Invalid export file");
+    }
+    catch (JsonException ex)
+    {
+        throw new Exception($"Export file is not valid JSON: {ex.Message}");
+    }
 
     if (exportFile.Version != "tswap-export-v1")
         throw new Exception($"Unsupported export version: {exportFile.Version}");
@@ -663,7 +680,7 @@ void CmdImport(string path)
 void CmdNames()
 {
     var config = storage.LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = storage.LoadSecrets(key);
 
     if (db.Secrets.Count == 0)
@@ -708,7 +725,7 @@ void CmdBurn(string name, string? reason)
 {
     Validation.ValidateName(name);
     var config = storage.LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = storage.LoadSecrets(key);
 
     if (!db.Secrets.ContainsKey(name))
@@ -731,7 +748,7 @@ void CmdBurn(string name, string? reason)
 void CmdBurned()
 {
     var config = storage.LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = storage.LoadSecrets(key);
 
     var burned = db.Secrets
@@ -879,7 +896,7 @@ void CmdCheck(string path)
     }
 
     var config = storage.LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = storage.LoadSecrets(key);
 
     var results = Check.CheckMarkers(markers, db);
