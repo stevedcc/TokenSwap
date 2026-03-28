@@ -100,12 +100,20 @@ public static class Validation
     /// <summary>
     /// Substitute tokens in each argument with raw secret values.
     /// Values are not shell-quoted because the program is executed directly via
-    /// execvp/Process — the OS passes each element as a literal string to the child.
-    /// Note: when the target program is a shell (e.g. <c>sh -c ...</c>), the shell
-    /// will interpret metacharacters in the substituted value as part of its script.
-    /// Callers that pass secrets into shell scripts should be aware of this.
-    /// Values containing NUL (<c>\0</c>) are rejected because native APIs treat NUL
-    /// as a string terminator and would silently truncate the argument.
+    /// execvp/Process — the OS passes each element as a literal string to the child
+    /// process without any shell interpretation.
+    ///
+    /// <para><b>Shell-target warning:</b> when the target program is a shell
+    /// (e.g. <c>sh -c "... {{tok}} ..."</c>), the shell will interpret
+    /// metacharacters in the substituted value (<c>$(…)</c>, backticks, <c>;</c>,
+    /// newlines, redirects, etc.) as shell syntax. This differs from the previous
+    /// behaviour where values were single-quote-escaped before being passed to
+    /// <c>bash -c</c>. Callers that embed secrets inside shell scripts must ensure
+    /// the secret values are intended to be executed as shell code, or must apply
+    /// their own POSIX quoting before passing the argument to this method.</para>
+    ///
+    /// <para>Values containing NUL (<c>\0</c>) are rejected: native APIs treat NUL
+    /// as a string terminator and would silently truncate the argument.</para>
     /// </summary>
     public static string[] SubstituteTokensInArgs(string[] args, Dictionary<string, string> secretValues)
     {

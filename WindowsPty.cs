@@ -299,10 +299,13 @@ internal sealed class WindowsPty : IPtyRunner
         return string.Join(' ', parts);
     }
 
+    // Static to avoid allocating a new char[] on every call to WindowsQuoteArg.
+    private static readonly char[] QuoteNeededChars = { ' ', '\t', '"' };
+
     private static string WindowsQuoteArg(string arg)
     {
         // Empty arg must be quoted so it survives as an empty token.
-        if (arg.Length > 0 && arg.IndexOfAny(new[] { ' ', '\t', '"' }) < 0)
+        if (arg.Length > 0 && arg.IndexOfAny(QuoteNeededChars) < 0)
             return arg;
 
         var sb = new System.Text.StringBuilder("\"");

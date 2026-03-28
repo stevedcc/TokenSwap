@@ -640,9 +640,12 @@ void CmdImport(string path)
             skippedExisting++;
             continue;
         }
-        if (secret.Value.Contains('\0'))
+        if (secret.Value == null || secret.Value.Contains('\0'))
         {
-            Console.WriteLine($"  ⚠ Skipped '{name}' (value contains a NUL byte — cannot be used as a process argument)");
+            // System.Text.Json can produce null for non-nullable string properties when the
+            // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).
+            // Treat null the same as NUL: reject rather than propagate a bad value.
+            Console.WriteLine($"  ⚠ Skipped '{name}' (value is null or contains a NUL byte — cannot be used as a process argument)");
             skippedNul++;
             continue;
         }

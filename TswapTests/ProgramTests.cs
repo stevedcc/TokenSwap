@@ -1093,21 +1093,28 @@ password2: """"  # tswap: missing-mixed-secret");
     }
 
     [Fact]
-    public void Import_SkipsSecretsWithNulBytes()
+    public void Import_SkipsSecretsWithNulOrNullValues()
     {
         RunTswap("init");
 
-        // Construct a synthetic export file containing one clean secret and one whose value
-        // contains a NUL byte. We bypass tswap for this because ingest now rejects NUL values.
+        // Construct a synthetic export file containing one clean secret, one with a NUL byte,
+        // and one with a null value (possible from a tampered/corrupted export file since
+        // System.Text.Json can produce null for non-nullable string properties).
+        // We bypass tswap for this because ingest now rejects NUL values.
         const string passphrase = "test-passphrase";
         var salt       = RandomNumberGenerator.GetBytes(16);
         var exportKey  = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
-        var db         = new SecretsDb(new Dictionary<string, Secret>
-        {
-            ["good-secret"] = new Secret("good-value",  DateTime.UtcNow, DateTime.UtcNow),
-            ["nul-secret"]  = new Secret("bad\0value",  DateTime.UtcNow, DateTime.UtcNow),
-        });
-        var dbJson     = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
+
+        // Inject the null-value secret via raw JSON to bypass the C# type system.
+        var dbJson = $$"""
+            {
+              "Secrets": {
+                "good-secret": {"Value":"good-value","Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"},
+                "nul-secret":  {"Value":"bad\u0000val","Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"},
+                "null-secret": {"Value":null,          "Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"}
+              }
+            }
+            """;
         var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey);
         var exportFile = new ExportFile(
             "tswap-export-v1", DateTime.UtcNow,
@@ -1121,12 +1128,13 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.Equal(0, exit);
         Assert.Contains("Imported 1 secret(s)", stdout);
-        Assert.Contains("nul-secret", stdout);
-        Assert.Contains("NUL", stdout);
+        Assert.Contains("nul-secret",  stdout);
+        Assert.Contains("null-secret", stdout);
 
         var (_, namesOut, _) = RunTswap("names");
-        Assert.Contains("good-secret", namesOut);
-        Assert.DoesNotContain("nul-secret", namesOut);
+        Assert.Contains("good-secret",      namesOut);
+        Assert.DoesNotContain("nul-secret",  namesOut);
+        Assert.DoesNotContain("null-secret", namesOut);
     }
 
     // --- Migrate ---
