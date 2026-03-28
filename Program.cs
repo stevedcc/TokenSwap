@@ -266,9 +266,15 @@ byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
 string ReadPassword(TextWriter? echo = null)
 {
     echo ??= Console.Out;
-    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
+    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking.
+    // Write a newline to echo so the next line of stderr output starts on a fresh line
+    // (the caller writes the prompt with Write, not WriteLine).
     if (Console.IsInputRedirected)
-        return Console.ReadLine() ?? "";
+    {
+        var line = Console.ReadLine() ?? "";
+        echo.WriteLine();
+        return line;
+    }
 
     var password = new StringBuilder();
     while (true)

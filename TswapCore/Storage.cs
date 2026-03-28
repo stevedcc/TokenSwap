@@ -35,13 +35,25 @@ public class Storage
 
     public SecretsDb LoadSecrets(byte[] key)
     {
-        if (!File.Exists(SecretsFile))
+        byte[] encrypted;
+        try
         {
-            Console.Error.WriteLine($"Warning: vault file not found ({SecretsFile}). Starting with empty vault.");
+            encrypted = File.ReadAllBytes(SecretsFile);
+        }
+        catch (FileNotFoundException)
+        {
+            Console.Error.WriteLine(
+                $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
+                "Restore secrets.json.enc from backup or run 'tswap init'.");
             return new SecretsDb(new Dictionary<string, Secret>());
         }
-
-        var encrypted = File.ReadAllBytes(SecretsFile);
+        catch (DirectoryNotFoundException)
+        {
+            Console.Error.WriteLine(
+                $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
+                "Restore secrets.json.enc from backup or run 'tswap init'.");
+            return new SecretsDb(new Dictionary<string, Secret>());
+        }
         var decrypted = Crypto.Decrypt(encrypted, key);
         var json = Encoding.UTF8.GetString(decrypted);
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.SecretsDb)

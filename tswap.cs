@@ -365,13 +365,25 @@ void SaveConfig(Config config)
 
 SecretsDb LoadSecrets(byte[] key)
 {
-    if (!File.Exists(SecretsFile))
+    byte[] encrypted;
+    try
     {
-        Console.Error.WriteLine($"Warning: vault file not found ({SecretsFile}). Starting with empty vault.");
+        encrypted = File.ReadAllBytes(SecretsFile);
+    }
+    catch (FileNotFoundException)
+    {
+        Console.Error.WriteLine(
+            $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
+            $"Restore secrets.json.enc from backup or run '{Prefix} init'.");
         return new SecretsDb(new Dictionary<string, Secret>());
     }
-    
-    var encrypted = File.ReadAllBytes(SecretsFile);
+    catch (DirectoryNotFoundException)
+    {
+        Console.Error.WriteLine(
+            $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
+            $"Restore secrets.json.enc from backup or run '{Prefix} init'.");
+        return new SecretsDb(new Dictionary<string, Secret>());
+    }
     var decrypted = Decrypt(encrypted, key);
     var json = Encoding.UTF8.GetString(decrypted);
     return JsonSerializer.Deserialize<SecretsDb>(json) 
@@ -434,9 +446,15 @@ byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
 string ReadPassword(TextWriter? echo = null)
 {
     echo ??= Console.Out;
-    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
+    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking.
+    // Write a newline to echo so the next line of stderr output starts on a fresh line
+    // (the caller writes the prompt with Write, not WriteLine).
     if (Console.IsInputRedirected)
-        return Console.ReadLine() ?? "";
+    {
+        var line = Console.ReadLine() ?? "";
+        echo.WriteLine();
+        return line;
+    }
 
     var password = new StringBuilder();
     while (true)
