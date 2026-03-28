@@ -547,8 +547,12 @@ void CmdInit()
     );
     
     SaveConfig(config);
-    // Create an empty encrypted vault so the file exists from the start.
-    SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
+    // Create an empty encrypted vault only when one does not already exist.
+    // On re-initialisation the old vault is encrypted with a now-unreachable key;
+    // leaving the file in place lets a user recover it from backup alongside the
+    // old config, rather than destroying the ciphertext entirely.
+    if (!File.Exists(SecretsFile))
+        SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");

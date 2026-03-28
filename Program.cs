@@ -332,7 +332,8 @@ void CmdInit()
             Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
         );
         storage.SaveConfig(testConfig);
-        storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), TestKey);
+        if (!File.Exists(storage.SecretsFile))
+            storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), TestKey);
         Console.WriteLine("Initialized (test mode)");
         return;
     }
@@ -396,11 +397,12 @@ void CmdInit()
     );
 
     storage.SaveConfig(config);
-    // Create an empty encrypted vault so the file exists from the start.
-    // This prevents LoadSecrets from logging a "vault not found" warning on the
-    // first vault-touching command and makes it clear the file was intentionally
-    // created (rather than being accidentally lost).
-    storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
+    // Create an empty encrypted vault only when one does not already exist.
+    // On re-initialisation the old vault is encrypted with a now-unreachable key;
+    // leaving the file in place lets a user recover it from backup alongside the
+    // old config, rather than destroying the ciphertext entirely.
+    if (!File.Exists(storage.SecretsFile))
+        storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
