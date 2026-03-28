@@ -117,14 +117,15 @@ public static class Validation
     /// </summary>
     public static string[] SubstituteTokensInArgs(string[] args, Dictionary<string, string> secretValues)
     {
-        // Reject NUL in secret values before substitution: native APIs (execvp, CreateProcess)
-        // treat NUL as a string terminator, so a NUL-containing value would be silently
-        // truncated, potentially altering the executed command.
+        // Reject null and NUL-containing values before substitution.
+        // Null can occur if the secrets DB was tampered/corrupted (System.Text.Json can
+        // populate null for non-nullable string properties). NUL bytes are silently truncated
+        // by native APIs (execvp, CreateProcess), potentially altering the executed command.
         foreach (var (token, value) in secretValues)
-            if (value.Contains('\0'))
+            if (value is null || value.Contains('\0'))
                 throw new Exception(
-                    $"Secret '{token}' contains a NUL byte (\\0), which cannot be passed " +
-                    "as a process argument. Re-ingest the secret without embedded NUL bytes.");
+                    $"Secret '{token}' has a null or NUL-containing value, which cannot be " +
+                    "passed as a process argument. Re-ingest the secret with a valid value.");
 
         var result = new string[args.Length];
         for (int i = 0; i < args.Length; i++)

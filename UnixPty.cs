@@ -19,6 +19,12 @@ using TswapCore;
 [SupportedOSPlatform("macos")]
 internal abstract class UnixPty : IPtyRunner
 {
+    // Pre-allocated, static message written to stderr when execvp fails in the child.
+    // Static objects are not moved by the CLR GC, so reading this byte[] in the child
+    // after fork() is safe — no allocation or GC interaction is required.
+    private static readonly byte[] ExecFailedMsg =
+        "tswap: exec failed (command not found or not executable)\n"u8.ToArray();
+
     [StructLayout(LayoutKind.Sequential)]
     protected struct Winsize
     {
@@ -127,6 +133,10 @@ internal abstract class UnixPty : IPtyRunner
             // Child — only async-signal-safe native calls; no managed allocation.
             // execvp replaces the process image; _exit is the async-signal-safe exit.
             execvp_native(nativeExe, nativeArgv);
+            // execvp only returns on failure (command not found / not executable).
+            // Write a diagnostic to stderr before exiting so the user gets actionable
+            // output instead of a silent exit code 127.
+            write(2, ExecFailedMsg, (nint)ExecFailedMsg.Length);
             _exit(127);
             return 0; // unreachable
         }

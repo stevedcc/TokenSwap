@@ -824,11 +824,14 @@ void CmdRun(string[] runArgs)
     var key = UnlockWithYubiKey(config);
     var db = storage.LoadSecrets(key);
 
-    // Verify all tokens exist
+    // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
+    // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
             throw new Exception($"Secret '{token}' not found");
+        if (db.Secrets[token].Value == null)
+            throw new Exception($"Secret '{token}' has a null value in the database — data may be corrupted.");
     }
 
     // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
