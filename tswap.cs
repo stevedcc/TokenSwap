@@ -806,7 +806,7 @@ void CmdImport(string path)
     Console.WriteLine($"\n✓ Imported {imported} secret(s)");
     if (skippedBurned > 0)   Console.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
     if (skippedExisting > 0) Console.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
-    if (skippedNul > 0)      Console.WriteLine($"  Skipped {skippedNul} secret(s) with NUL bytes (re-export from source after fixing values)");
+    if (skippedNul > 0)      Console.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
 }
 
 void CmdNames()

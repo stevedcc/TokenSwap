@@ -9,8 +9,9 @@ using TswapCore;
 /// and interactive prompts), while tswap intercepts the master side to apply redaction.
 ///
 /// Safety: all strings are marshaled to native memory BEFORE forkpty() so the child
-/// never runs any managed code — it only calls execvp_native() and _exit(), both
-/// async-signal-safe with pre-allocated IntPtr arguments.
+/// never invokes the CLR marshaler. The child calls execvp_native() (async-signal-safe)
+/// and on failure writes a diagnostic via write_ptr() using a pre-pinned IntPtr buffer,
+/// then calls _exit() — no managed allocation or CLR re-entry on either path.
 ///
 /// Subclasses override <see cref="Forkpty"/> to supply the platform-specific DllImport
 /// (libc on Linux, libutil on macOS).
@@ -19,11 +20,12 @@ using TswapCore;
 [SupportedOSPlatform("macos")]
 internal abstract class UnixPty : IPtyRunner
 {
-    // Pre-allocated, static message written to stderr when execvp fails in the child.
-    // Static objects are not moved by the CLR GC, so reading this byte[] in the child
-    // after fork() is safe — no allocation or GC interaction is required.
-    private static readonly byte[] ExecFailedMsg =
-        "tswap: exec failed (command not found or not executable)\n"u8.ToArray();
+    // Message written to stderr when execvp fails in the child after fork().
+    // The byte[] is pinned for the process lifetime so the GC never moves it; the child
+    // writes via the IntPtr overload of write() to avoid invoking the P/Invoke marshaler
+    // (which re-enters the CLR and is not async-signal-safe / fork-safe).
+    private static readonly byte[]   ExecFailedMsg    = "tswap: exec failed (command not found or not executable)\n"u8.ToArray();
+    private static readonly GCHandle ExecFailedMsgPin = GCHandle.Alloc(ExecFailedMsg, GCHandleType.Pinned);
 
     [StructLayout(LayoutKind.Sequential)]
     protected struct Winsize
@@ -46,6 +48,11 @@ internal abstract class UnixPty : IPtyRunner
 
     [DllImport("libc", EntryPoint = "write", SetLastError = true)]
     private static extern nint write(int fd, [In] byte[] buf, nint count);
+
+    // IntPtr overload used in the child after fork() — avoids the P/Invoke marshaler
+    // touching managed memory, which is not async-signal-safe.
+    [DllImport("libc", EntryPoint = "write")]
+    private static extern nint write_ptr(int fd, IntPtr buf, nint count);
 
     [DllImport("libc", EntryPoint = "close")]
     private static extern int close(int fd);
@@ -134,9 +141,9 @@ internal abstract class UnixPty : IPtyRunner
             // execvp replaces the process image; _exit is the async-signal-safe exit.
             execvp_native(nativeExe, nativeArgv);
             // execvp only returns on failure (command not found / not executable).
-            // Write a diagnostic to stderr before exiting so the user gets actionable
-            // output instead of a silent exit code 127.
-            write(2, ExecFailedMsg, (nint)ExecFailedMsg.Length);
+            // Write a diagnostic to stderr via the IntPtr overload — avoids the P/Invoke
+            // marshaler (not fork-safe); uses the pre-pinned unmanaged address directly.
+            write_ptr(2, ExecFailedMsgPin.AddrOfPinnedObject(), (nint)ExecFailedMsg.Length);
             _exit(127);
             return 0; // unreachable
         }
