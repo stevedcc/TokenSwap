@@ -6,8 +6,9 @@
 internal interface IPtyRunner
 {
     /// <summary>
-    /// Runs <paramref name="command"/> via the platform shell inside a PTY,
-    /// writing redacted output to stdout. Returns the child's exit code.
+    /// Directly executes <paramref name="argv"/>[0] with the remaining elements as its
+    /// argument list (no shell wrapper), writing redacted output to stdout.
+    /// Returns the child's exit code.
     /// </summary>
-    int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets);
+    int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets);
 }

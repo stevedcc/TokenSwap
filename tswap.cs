@@ -774,7 +774,7 @@ void CmdImport(string path)
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
 
-    int imported = 0, skippedExisting = 0, skippedBurned = 0;
+    int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
     foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
     {
         if (secret.BurnedAt != null)
@@ -789,6 +789,15 @@ void CmdImport(string path)
             skippedExisting++;
             continue;
         }
+        if (secret.Value == null || secret.Value.Contains('\0'))
+        {
+            // System.Text.Json can produce null for non-nullable string properties when the
+            // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).
+            // Treat null the same as NUL: reject rather than propagate a bad value.
+            Console.WriteLine($"  ⚠ Skipped '{name}' (value is null or contains a NUL byte — cannot be used as a process argument)");
+            skippedNul++;
+            continue;
+        }
         db.Secrets[name] = secret;
         imported++;
     }
@@ -797,6 +806,7 @@ void CmdImport(string path)
     Console.WriteLine($"\n✓ Imported {imported} secret(s)");
     if (skippedBurned > 0)   Console.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
     if (skippedExisting > 0) Console.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
+    if (skippedNul > 0)      Console.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
 }
 
 void CmdNames()
@@ -927,17 +937,21 @@ void CmdRun(string[] args)
         throw new Exception($"Usage: {Prefix} run <command> [args...]");
     
     var commandArgs = args.Skip(1).ToArray();
-    var command = string.Join(" ", commandArgs);
-    
+    // Join for scanning only — NOT used for execution. Executing via shell would require
+    // re-quoting and would destroy the argument structure the caller's shell already
+    // parsed correctly (issue #75).
+    var commandJoined = string.Join(" ", commandArgs);
+
     // Find {{tokens}}
     var tokenRegex = new Regex(@"\{\{([a-zA-Z0-9_-]+)\}\}");
-    var matches = tokenRegex.Matches(command);
-    var tokens = matches.Select(m => m.Groups[1].Value).Distinct().ToList();
-    
+    var tokens = tokenRegex.Matches(commandJoined)
+        .Select(m => m.Groups[1].Value).Distinct().ToList();
+
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
-    // Block obvious attempts to exfiltrate secrets via run
+    // Block obvious attempts to exfiltrate secrets via run.
+    // Pre-substitution check catches literal blocked commands in the template.
     var baseCommand = commandArgs[0].ToLower();
     var blockedCommands = new HashSet<string>
         { "echo", "printf", "cat", "env", "printenv", "set", "tee" };
@@ -947,8 +961,11 @@ void CmdRun(string[] args)
             "The 'run' command is for programs that *use* secrets, not display them.\n" +
             "Use 'sudo ... get <name>' to view a secret.");
 
-    // Block shell output redirection (secrets could be written to readable files)
-    if (Regex.IsMatch(command, @"[|>]"))
+    // Block shell output redirection in the command template (secrets could be written
+    // to readable files). Note: this check runs before token substitution. Secret values
+    // that contain '|' or '>' are safe when exec'd directly because no shell interprets
+    // them; only the command template itself is scanned here.
+    if (Regex.IsMatch(commandJoined, @"[|>]"))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
             "Secrets could be captured to files or piped to other programs.\n" +
@@ -960,47 +977,63 @@ void CmdRun(string[] args)
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
     var db = LoadSecrets(key);
-    
-    // Verify all tokens exist
+
+    // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
+    // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
             throw new Exception($"Secret '{token}' not found");
+        if (db.Secrets[token].Value == null)
+            throw new Exception($"Secret '{token}' has a null value in the database — data may be corrupted.");
     }
-    
-    // Substitute tokens
-    var substitutedCommand = command;
+
+    // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
+    // Validates that no secret value contains a NUL byte (would be silently truncated
+    // by native APIs) and rejects values with embedded NUL.
+    var argv = commandArgs.ToArray();
     foreach (var token in tokens)
     {
-        var escapedValue = "'" + db.Secrets[token].Value.Replace("'", "'\\''") + "'";
-        substitutedCommand = substitutedCommand.Replace($"{{{{{token}}}}}", escapedValue);
+        var value = db.Secrets[token].Value;
+        if (value.Contains('\0'))
+            throw new Exception(
+                $"Secret '{token}' contains a NUL byte (\\0), which cannot be passed " +
+                "as a process argument. Re-ingest the secret without embedded NUL bytes.");
+        for (int i = 0; i < argv.Length; i++)
+            argv[i] = argv[i].Replace($"{{{{{token}}}}}", value);
     }
+
+    // Re-check the blocklist against argv[0] after substitution: a token in the executable
+    // position (e.g. `run {{cmd}} arg` where {{cmd}} expands to `echo`) would bypass the
+    // pre-substitution check above.
+    if (blockedCommands.Contains(argv[0].ToLower()))
+        throw new Exception(
+            $"The command '{argv[0].ToLower()}' would expose secret values.\n" +
+            "The 'run' command is for programs that *use* secrets, not display them.\n" +
+            "Use 'sudo ... get <name>' to view a secret.");
 
     // Show sanitized version
     if (Verbose)
     {
-        var sanitized = tokenRegex.Replace(command, "********");
+        var sanitized = string.Join(" ", commandArgs.Select(a => tokenRegex.Replace(a, "********")));
         Console.WriteLine($"\nExecuting: {sanitized}");
         Console.WriteLine();
     }
-    
-    // Execute command
-    var shell = OperatingSystem.IsWindows() ? "cmd" : "/bin/bash";
-    var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
-    
-    var process = new Process
+
+    // Execute argv[0] directly (no shell wrapper) so argument structure is preserved.
+    // ProcessStartInfo.ArgumentList handles per-platform quoting automatically.
+    var psi = new ProcessStartInfo
     {
-        StartInfo = new ProcessStartInfo
-        {
-            FileName = shell,
-            Arguments = $"{shellArg} \"{substitutedCommand.Replace("\"", "\\\"")}\"",
-            UseShellExecute = false
-        }
+        FileName        = argv[0],
+        UseShellExecute = false,
     };
-    
+    foreach (var a in argv.AsSpan(1))
+        psi.ArgumentList.Add(a);
+
+    var process = new Process { StartInfo = psi };
     process.Start();
     process.WaitForExit();
-    
+
     Environment.Exit(process.ExitCode);
 }
 

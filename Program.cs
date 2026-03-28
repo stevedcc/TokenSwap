@@ -625,7 +625,7 @@ void CmdImport(string path)
     var key = UnlockWithYubiKey(config);
     var db = storage.LoadSecrets(key);
 
-    int imported = 0, skippedExisting = 0, skippedBurned = 0;
+    int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
     foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
     {
         if (secret.BurnedAt != null)
@@ -640,6 +640,15 @@ void CmdImport(string path)
             skippedExisting++;
             continue;
         }
+        if (secret.Value == null || secret.Value.Contains('\0'))
+        {
+            // System.Text.Json can produce null for non-nullable string properties when the
+            // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).
+            // Treat null the same as NUL: reject rather than propagate a bad value.
+            Console.WriteLine($"  ⚠ Skipped '{name}' (value is null or contains a NUL byte — cannot be used as a process argument)");
+            skippedNul++;
+            continue;
+        }
         db.Secrets[name] = secret;
         imported++;
     }
@@ -648,6 +657,7 @@ void CmdImport(string path)
     Console.WriteLine($"\n✓ Imported {imported} secret(s)");
     if (skippedBurned > 0)   Console.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
     if (skippedExisting > 0) Console.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
+    if (skippedNul > 0)      Console.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
 }
 
 void CmdNames()
@@ -777,15 +787,19 @@ void CmdRun(string[] runArgs)
         throw new Exception($"Usage: {Prefix} run <command> [args...]");
 
     var commandArgs = runArgs.Skip(1).ToArray();
-    var command = string.Join(" ", commandArgs);
+    // Join for scanning only — NOT used for execution. Executing via shell would require
+    // re-quoting and would destroy the argument structure the caller's shell already
+    // parsed correctly (issue #75).
+    var commandJoined = string.Join(" ", commandArgs);
 
     // Find {{tokens}}
-    var tokens = Validation.ExtractTokens(command);
+    var tokens = Validation.ExtractTokens(commandJoined);
 
     if (tokens.Count == 0)
         throw new Exception("No {{tokens}} found in command");
 
-    // Block obvious attempts to exfiltrate secrets via run
+    // Block obvious attempts to exfiltrate secrets via run.
+    // Pre-substitution check catches literal blocked commands in the template.
     var blocked = Validation.GetBlockedCommand(commandArgs[0]);
     if (blocked != null)
         throw new Exception(
@@ -793,8 +807,11 @@ void CmdRun(string[] runArgs)
             "The 'run' command is for programs that *use* secrets, not display them.\n" +
             "Use 'sudo ... get <name>' to view a secret.");
 
-    // Block shell output redirection (secrets could be written to readable files)
-    if (Validation.HasPipeOrRedirect(command))
+    // Block shell output redirection in the command template (secrets could be written
+    // to readable files). Note: this check runs before token substitution. Secret values
+    // that contain '|' or '>' are safe when exec'd directly because no shell interprets
+    // them; only the command template itself is scanned here.
+    if (Validation.HasPipeOrRedirect(commandJoined))
         throw new Exception(
             "Pipes and output redirection are not allowed in 'run' commands.\n" +
             "Secrets could be captured to files or piped to other programs.\n" +
@@ -807,21 +824,35 @@ void CmdRun(string[] runArgs)
     var key = UnlockWithYubiKey(config);
     var db = storage.LoadSecrets(key);
 
-    // Verify all tokens exist
+    // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
+    // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
     foreach (var token in tokens)
     {
         if (!db.Secrets.ContainsKey(token))
             throw new Exception($"Secret '{token}' not found");
+        if (db.Secrets[token].Value == null)
+            throw new Exception($"Secret '{token}' has a null value in the database — data may be corrupted.");
     }
 
-    // Substitute tokens
+    // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
     var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
-    var substitutedCommand = Validation.SubstituteTokens(command, secretValues);
+    var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
+
+    // Re-check the blocklist against argv[0] after substitution: a token in the executable
+    // position (e.g. `run {{cmd}} arg` where {{cmd}} expands to `echo`) would bypass the
+    // pre-substitution check above.
+    var blockedPost = Validation.GetBlockedCommand(argv[0]);
+    if (blockedPost != null)
+        throw new Exception(
+            $"The command '{blockedPost}' would expose secret values.\n" +
+            "The 'run' command is for programs that *use* secrets, not display them.\n" +
+            "Use 'sudo ... get <name>' to view a secret.");
 
     // Show sanitized version
     if (Verbose)
     {
-        Console.WriteLine($"\nExecuting: {Validation.SanitizeCommand(command)}");
+        var sanitized = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));
+        Console.WriteLine($"\nExecuting: {sanitized}");
         Console.WriteLine();
     }
 
@@ -832,7 +863,7 @@ void CmdRun(string[] runArgs)
         .OrderByDescending(kv => kv.Value.Length)
         .ToList();
 
-    int exitCode = Pty.Create().Run(substitutedCommand, sortedSecrets);
+    int exitCode = Pty.Create().Run(argv, sortedSecrets);
 
     Environment.Exit(exitCode);
 }

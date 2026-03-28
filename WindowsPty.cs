@@ -119,11 +119,15 @@ internal sealed class WindowsPty : IPtyRunner
         out uint lpNumberOfBytesWritten, IntPtr lpOverlapped);
 
     /// <summary>
-    /// Runs <paramref name="command"/> via cmd.exe /c inside a ConPTY, writing redacted
-    /// output to stdout. Returns the child process's exit code.
+    /// Directly executes <paramref name="argv"/>[0] with the remaining elements as its
+    /// argument list inside a ConPTY (no shell wrapper), writing redacted output to stdout.
+    /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
+        if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
+            throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
+
         int consoleCols, consoleRows;
         try { consoleCols = Console.WindowWidth; consoleRows = Console.WindowHeight; }
         catch { consoleCols = 0; consoleRows = 0; }
@@ -186,10 +190,11 @@ internal sealed class WindowsPty : IPtyRunner
                 lpAttributeList = attrList,
             };
 
-            // Provide a mutable char[] for the command line (Windows spec requires writable buffer).
-            // cmd.exe uses "" (doubled quote) not \" (backslash-quote) for quoting.
-            var escapedCommand = command.Replace("\"", "\"\"");
-            var cmdStr = $"cmd.exe /c \"\"{escapedCommand}\"\"";
+            // Build the command line for CreateProcess from argv using Windows quoting rules
+            // (CommandLineToArgvW-compatible: backslash-quote for embedded quotes, double-quote
+            // wrapping for args that contain spaces or quotes). No cmd.exe wrapper is needed;
+            // we execute argv[0] directly so argument structure is preserved exactly.
+            var cmdStr = BuildWindowsCommandLine(argv);
             var cmdLine = new char[cmdStr.Length + 1]; // +1 for null terminator
             cmdStr.CopyTo(0, cmdLine, 0, cmdStr.Length);
 
@@ -277,5 +282,56 @@ internal sealed class WindowsPty : IPtyRunner
             if (attrListInitialized)       DeleteProcThreadAttributeList(attrList);
             if (attrList   != IntPtr.Zero) Marshal.FreeHGlobal(attrList);
         }
+    }
+
+    /// <summary>
+    /// Builds a Windows command line string from <paramref name="argv"/> using the quoting
+    /// rules required by <c>CommandLineToArgvW</c>: each argument containing spaces, tabs,
+    /// or double-quotes is wrapped in double-quotes; embedded double-quotes are escaped as
+    /// <c>\"</c>; backslashes immediately before a double-quote (or the closing quote) are
+    /// doubled. Arguments that need no quoting are appended verbatim.
+    /// </summary>
+    private static string BuildWindowsCommandLine(string[] argv)
+    {
+        var parts = new string[argv.Length];
+        for (int i = 0; i < argv.Length; i++)
+            parts[i] = WindowsQuoteArg(argv[i]);
+        return string.Join(' ', parts);
+    }
+
+    // Static to avoid allocating a new char[] on every call to WindowsQuoteArg.
+    private static readonly char[] QuoteNeededChars = { ' ', '\t', '"' };
+
+    private static string WindowsQuoteArg(string arg)
+    {
+        // Empty arg must be quoted so it survives as an empty token.
+        if (arg.Length > 0 && arg.IndexOfAny(QuoteNeededChars) < 0)
+            return arg;
+
+        var sb = new System.Text.StringBuilder("\"");
+        int backslashes = 0;
+        foreach (char c in arg)
+        {
+            if (c == '\\')
+            {
+                backslashes++;
+            }
+            else if (c == '"')
+            {
+                // Each preceding backslash plus the quote itself must be escaped.
+                sb.Append('\\', backslashes * 2 + 1);
+                sb.Append('"');
+                backslashes = 0;
+            }
+            else
+            {
+                if (backslashes > 0) { sb.Append('\\', backslashes); backslashes = 0; }
+                sb.Append(c);
+            }
+        }
+        // Trailing backslashes before the closing quote must be doubled.
+        sb.Append('\\', backslashes * 2);
+        sb.Append('"');
+        return sb.ToString();
     }
 }

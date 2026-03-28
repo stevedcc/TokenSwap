@@ -61,7 +61,12 @@ public static class Validation
             if (total > MaxIngestedLength)
                 throw new Exception($"Secret value is too long. Maximum allowed is {MaxIngestedLength} characters.");
         }
-        return new string(buf, 0, total).TrimEnd();
+        var value = new string(buf, 0, total).TrimEnd();
+        if (value.Contains('\0'))
+            throw new Exception(
+                "Secret value contains a NUL byte (\\0), which cannot be used as a " +
+                "process argument. Re-ingest the secret without embedded NUL bytes.");
+        return value;
     }
 
     /// <summary>
@@ -93,15 +98,42 @@ public static class Validation
     }
 
     /// <summary>
-    /// Substitute tokens in a command with shell-escaped secret values.
+    /// Substitute tokens in each argument with raw secret values.
+    /// Values are not shell-quoted because the program is executed directly via
+    /// execvp/Process — the OS passes each element as a literal string to the child
+    /// process without any shell interpretation.
+    ///
+    /// <para><b>Shell-target warning:</b> when the target program is a shell
+    /// (e.g. <c>sh -c "... {{tok}} ..."</c>), the shell will interpret
+    /// metacharacters in the substituted value (<c>$(…)</c>, backticks, <c>;</c>,
+    /// newlines, redirects, etc.) as shell syntax. This differs from the previous
+    /// behaviour where values were single-quote-escaped before being passed to
+    /// <c>bash -c</c>. Callers that embed secrets inside shell scripts must ensure
+    /// the secret values are intended to be executed as shell code, or must apply
+    /// their own POSIX quoting before passing the argument to this method.</para>
+    ///
+    /// <para>Values containing NUL (<c>\0</c>) are rejected: native APIs treat NUL
+    /// as a string terminator and would silently truncate the argument.</para>
     /// </summary>
-    public static string SubstituteTokens(string command, Dictionary<string, string> secretValues)
+    public static string[] SubstituteTokensInArgs(string[] args, Dictionary<string, string> secretValues)
     {
-        var result = command;
+        // Reject null and NUL-containing values before substitution.
+        // Null can occur if the secrets DB was tampered/corrupted (System.Text.Json can
+        // populate null for non-nullable string properties). NUL bytes are silently truncated
+        // by native APIs (execvp, CreateProcess), potentially altering the executed command.
         foreach (var (token, value) in secretValues)
+            if (value is null || value.Contains('\0'))
+                throw new Exception(
+                    $"Secret '{token}' has a null or NUL-containing value, which cannot be " +
+                    "passed as a process argument. Re-ingest the secret with a valid value.");
+
+        var result = new string[args.Length];
+        for (int i = 0; i < args.Length; i++)
         {
-            var escapedValue = "'" + value.Replace("'", "'\\''") + "'";
-            result = result.Replace($"{{{{{token}}}}}", escapedValue);
+            var a = args[i];
+            foreach (var (token, value) in secretValues)
+                a = a.Replace($"{{{{{token}}}}}", value);
+            result[i] = a;
         }
         return result;
     }

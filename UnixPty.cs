@@ -9,8 +9,9 @@ using TswapCore;
 /// and interactive prompts), while tswap intercepts the master side to apply redaction.
 ///
 /// Safety: all strings are marshaled to native memory BEFORE forkpty() so the child
-/// never runs any managed code — it only calls execvp_native() and _exit(), both
-/// async-signal-safe with pre-allocated IntPtr arguments.
+/// never invokes the CLR marshaler. The child calls execvp_native() (async-signal-safe)
+/// and on failure writes a diagnostic via write_ptr() using a pre-pinned IntPtr buffer,
+/// then calls _exit() — no managed allocation or CLR re-entry on either path.
 ///
 /// Subclasses override <see cref="Forkpty"/> to supply the platform-specific DllImport
 /// (libc on Linux, libutil on macOS).
@@ -19,6 +20,13 @@ using TswapCore;
 [SupportedOSPlatform("macos")]
 internal abstract class UnixPty : IPtyRunner
 {
+    // Message written to stderr when execvp fails in the child after fork().
+    // The byte[] is pinned for the process lifetime so the GC never moves it; the child
+    // writes via the IntPtr overload of write() to avoid invoking the P/Invoke marshaler
+    // (which re-enters the CLR and is not async-signal-safe / fork-safe).
+    private static readonly byte[]   ExecFailedMsg    = "tswap: exec failed (command not found or not executable)\n"u8.ToArray();
+    private static readonly GCHandle ExecFailedMsgPin = GCHandle.Alloc(ExecFailedMsg, GCHandleType.Pinned);
+
     [StructLayout(LayoutKind.Sequential)]
     protected struct Winsize
     {
@@ -40,6 +48,11 @@ internal abstract class UnixPty : IPtyRunner
 
     [DllImport("libc", EntryPoint = "write", SetLastError = true)]
     private static extern nint write(int fd, [In] byte[] buf, nint count);
+
+    // IntPtr overload used in the child after fork() — avoids the P/Invoke marshaler
+    // touching managed memory, which is not async-signal-safe.
+    [DllImport("libc", EntryPoint = "write")]
+    private static extern nint write_ptr(int fd, IntPtr buf, nint count);
 
     [DllImport("libc", EntryPoint = "close")]
     private static extern int close(int fd);
@@ -70,11 +83,15 @@ internal abstract class UnixPty : IPtyRunner
     protected abstract int Forkpty(out int amaster, IntPtr name, IntPtr termp, ref Winsize winp);
 
     /// <summary>
-    /// Runs <paramref name="command"/> via /bin/bash -c inside a PTY, writing redacted
-    /// output to stdout. Returns the child process's exit code.
+    /// Directly executes <paramref name="argv"/>[0] with the remaining elements as its
+    /// argument list inside a PTY (no shell wrapper), writing redacted output to stdout.
+    /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string command, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
     {
+        if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
+            throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
+
         int consoleRows, consoleCols;
         try { consoleRows = Console.WindowHeight; consoleCols = Console.WindowWidth; }
         catch { consoleRows = 0; consoleCols = 0; }
@@ -84,20 +101,22 @@ internal abstract class UnixPty : IPtyRunner
             ws_col = (ushort)(consoleCols > 0 ? consoleCols : 80),
         };
 
-        // Marshal all strings to native memory BEFORE fork so the child never needs
+        // Marshal all argv strings to native memory BEFORE fork so the child never needs
         // to allocate from the managed heap (which may have GC locks from other threads).
-        var nativeBash = Marshal.StringToHGlobalAnsi("/bin/bash");
-        var nativeName = Marshal.StringToHGlobalAnsi("bash");
-        var nativeDashC = Marshal.StringToHGlobalAnsi("-c");
-        var nativeCmd   = Marshal.StringToHGlobalAnsi(command);
+        var nativeStrings = new IntPtr[argv.Length];
+        for (int i = 0; i < argv.Length; i++)
+            nativeStrings[i] = Marshal.StringToHGlobalAnsi(argv[i]);
 
-        // Build argv in native memory: char*[] = { "bash", "-c", cmd, NULL }
+        // Build null-terminated argv array in native memory: char*[] = { argv[0], ..., NULL }
         int ptrSize = IntPtr.Size;
-        var nativeArgv = Marshal.AllocHGlobal(ptrSize * 4);
-        Marshal.WriteIntPtr(nativeArgv, 0 * ptrSize, nativeName);
-        Marshal.WriteIntPtr(nativeArgv, 1 * ptrSize, nativeDashC);
-        Marshal.WriteIntPtr(nativeArgv, 2 * ptrSize, nativeCmd);
-        Marshal.WriteIntPtr(nativeArgv, 3 * ptrSize, IntPtr.Zero);
+        var nativeArgv = Marshal.AllocHGlobal(ptrSize * (argv.Length + 1));
+        for (int i = 0; i < argv.Length; i++)
+            Marshal.WriteIntPtr(nativeArgv, i * ptrSize, nativeStrings[i]);
+        Marshal.WriteIntPtr(nativeArgv, argv.Length * ptrSize, IntPtr.Zero);
+
+        // Copy the executable pointer to a stack-local so the child can read it without
+        // touching the managed nativeStrings array after fork.
+        var nativeExe = nativeStrings[0];
 
         // Allocate read-loop infrastructure BEFORE fork so the parent thread can
         // enter read(masterFd) with minimum latency after Forkpty() returns.
@@ -120,16 +139,18 @@ internal abstract class UnixPty : IPtyRunner
         {
             // Child — only async-signal-safe native calls; no managed allocation.
             // execvp replaces the process image; _exit is the async-signal-safe exit.
-            execvp_native(nativeBash, nativeArgv);
+            execvp_native(nativeExe, nativeArgv);
+            // execvp only returns on failure (command not found / not executable).
+            // Write a diagnostic to stderr via the IntPtr overload — avoids the P/Invoke
+            // marshaler (not fork-safe); uses the pre-pinned unmanaged address directly.
+            write_ptr(2, ExecFailedMsgPin.AddrOfPinnedObject(), (nint)ExecFailedMsg.Length);
             _exit(127);
             return 0; // unreachable
         }
 
         // Parent: free native strings (child has its own copy via CoW, replaced by exec).
-        Marshal.FreeHGlobal(nativeBash);
-        Marshal.FreeHGlobal(nativeName);
-        Marshal.FreeHGlobal(nativeDashC);
-        Marshal.FreeHGlobal(nativeCmd);
+        for (int i = 0; i < nativeStrings.Length; i++)
+            Marshal.FreeHGlobal(nativeStrings[i]);
         Marshal.FreeHGlobal(nativeArgv);
 
         if (pid < 0)

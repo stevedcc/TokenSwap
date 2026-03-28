@@ -491,6 +491,21 @@ public class ProgramTests : IDisposable
     }
 
     [Fact]
+    public void Run_BlockedCommandViaTokenSubstitutionFails()
+    {
+        // A token in argv[0] that expands to a blocked command must still be rejected.
+        // The pre-substitution blocklist check sees "{{cmd}}" (not blocked); the
+        // post-substitution re-check must catch the expanded value.
+        RunTswap("init");
+        RunTswapWithStdin("echo", "ingest", "cmd");
+
+        var (exit, _, stderr) = RunTswap("run", "{{cmd}}", "hello");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("expose secret", stderr);
+    }
+
+    [Fact]
     public void Run_PipeBlockedFails()
     {
         RunTswap("init");
@@ -530,31 +545,20 @@ public class ProgramTests : IDisposable
         RunTswap("init");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
-        // Regression test for the "first line of subprocess stdout missing" behaviour
-        // reported in issue #74. The root cause turned out to be a shell quoting issue
-        // (tracked separately in issue #75): the user's shell strips the single quotes
-        // around the compound command before tswap sees it, so bash -c reconstructs the
-        // command incorrectly and the first line is lost. The UnixPty pre-fork allocation
-        // + Task.Run read loop is still a sound defensive improvement.
+        // Regression test for issue #74 / fix for issue #75.
+        // tswap now execs argv[0] directly (no shell wrapper), so the compound command
+        // is passed as a single literal argument to sh -c — exactly as the user's shell
+        // already parsed it. No artificial quoting workaround is needed.
         //
         // Coverage note: the test harness redirects all three streams so tswap always
         // uses FallbackPty, not UnixPty. This test guards the FallbackPty (pipe) path
         // and the shared StreamRedactor logic against future regressions.
         //
-        // Command construction note: CmdRun does string.Join(" ", commandArgs) and passes
-        // the result to bash -c as one string. To keep "sh -c <compound>" intact, the
-        // whole compound must arrive as a single commandArg with its own shell quotes.
-        // SubstituteTokens() replaces {{my-secret}} with a single-quoted value ('s3cr3t'),
-        // which terminates and reopens the surrounding single-quoted string, so bash sees:
-        //   sh -c 'echo before; echo 's3cr3t'; echo after'
-        // The shell treats adjacent quoted/unquoted segments as one token; sh executes:
-        //   echo before; echo s3cr3t; echo after
-        // The redactor must catch the raw value (s3cr3t) in the output stream.
         // 'echo' is not blocked (only the top-level command, "sh", is checked against
-        // the blocklist).
+        // the blocklist). The redactor must catch the raw value (s3cr3t) in the output.
         var (exit, stdout, _) = RunTswap(
             "run", "sh", "-c",
-            "'echo before; echo {{my-secret}}; echo after'");
+            "echo before; echo {{my-secret}}; echo after");
 
         Assert.Equal(0, exit);
         Assert.Contains("before",  stdout);
@@ -564,20 +568,44 @@ public class ProgramTests : IDisposable
     }
 
     /// <summary>
-    /// End-to-end test for issue #74 that exercises the real PTY code path (LinuxPty via
-    /// forkpty). The test opens its own outer PTY and gives tswap the slave as its
-    /// stdin/stdout/stderr via a bash script, so <c>Console.IsOutputRedirected</c> returns
-    /// false inside tswap and <c>Pty.Create()</c> returns <c>LinuxPty</c> — not FallbackPty.
-    /// Output is captured from the outer PTY master.
+    /// Regression test for issue #75: compound shell commands passed via sh -c work
+    /// correctly end-to-end. This is the exact user scenario from the bug report:
+    ///   tswap run sh -c 'echo before; echo {{my-secret}}; echo after'
+    /// The user's shell strips the outer single quotes; tswap receives the compound
+    /// command as a single argv element and execs sh directly with it — no intermediate
+    /// bash re-parsing that would split the compound command on semicolons.
+    /// </summary>
+    [Fact]
+    public void Run_CompoundCommandViaShellDashC()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // POSIX sh/echo only
+
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+
+        // Simulate what the user's shell delivers to tswap after stripping outer quotes:
+        // the compound command arrives as one argument, not split on the semicolons.
+        var (exit, stdout, _) = RunTswap(
+            "run", "sh", "-c",
+            "echo before; echo {{my-secret}}; echo after");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("before",  stdout);
+        Assert.Contains("after",   stdout);
+        Assert.DoesNotContain("s3cr3t", stdout);
+        Assert.Contains("[REDACTED: my-secret]", stdout);
+    }
+
+    /// <summary>
+    /// End-to-end test for issues #74 and #75 that exercises the real PTY code path
+    /// (LinuxPty via forkpty). The test opens its own outer PTY and gives tswap the slave
+    /// as its stdin/stdout/stderr via a bash script, so <c>Console.IsOutputRedirected</c>
+    /// returns false inside tswap and <c>Pty.Create()</c> returns <c>LinuxPty</c> — not
+    /// FallbackPty. Output is captured from the outer PTY master.
     ///
-    /// Note: the original issue #74 symptom ("before" missing) turned out to be a shell
-    /// quoting issue in the reproducer command rather than a real race: the shell strips the
-    /// single quotes around the compound command before tswap sees it, so bash -c receives
-    /// "sh -c echo before; ..." and sh runs echo with no arguments. The fix to UnixPty
-    /// (pre-fork allocation + Task.Run read loop) is still a sound defensive improvement, but
-    /// the race window is smaller than sh startup time in practice so this test passes with
-    /// both the pre-fix and the post-fix UnixPty. Its value is verifying that LinuxPty is
-    /// selected (not FallbackPty) and that the full PTY redaction pipeline works correctly.
+    /// tswap now execs argv[0] directly (issue #75 fix), so the compound command string
+    /// is passed as a literal argument to sh -c with no intermediate shell re-parsing.
     /// </summary>
     [Fact]
     public void Run_FirstLineOfStdoutNotDropped_UnixPty()
@@ -605,18 +633,15 @@ public class ProgramTests : IDisposable
         //   1. Replace bash's own fds 0/1/2 with the slave PTY (making tswap see a real TTY).
         //   2. Replace bash with dotnet so dotnet inherits those slave fds.
         //
-        // Argument quoting: `"'echo before; ...; echo after'"` inside the double-quoted bash
-        // string preserves the inner single quotes literally in dotnet's argv. tswap then joins
-        // its commandArgs and gets:
-        //   sh -c 'echo before; echo {{my-secret}}; echo after'
-        // After substituting {{my-secret}} → s3cr3t the shell sees adjacent string literals
-        // (single-quote concatenation) and runs: echo before; echo s3cr3t; echo after.
+        // The compound command is passed as a plain double-quoted string in the bash script.
+        // Bash passes it as a single argv element to dotnet, and tswap exec's sh directly
+        // with that element as the -c argument — no intermediate shell re-parsing.
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
             $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
             $"exec dotnet run --project \"{_projectDir}/tswap.csproj\"" +
-            $" -- run sh -c \"'echo before; echo {{{{my-secret}}}}; echo after'\"\n");
+            $" -- run sh -c \"echo before; echo {{{{my-secret}}}}; echo after\"\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add(scriptPath);
@@ -1065,6 +1090,51 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("wrong passphrase", stderr);
+    }
+
+    [Fact]
+    public void Import_SkipsSecretsWithNulOrNullValues()
+    {
+        RunTswap("init");
+
+        // Construct a synthetic export file containing one clean secret, one with a NUL byte,
+        // and one with a null value (possible from a tampered/corrupted export file since
+        // System.Text.Json can produce null for non-nullable string properties).
+        // We bypass tswap for this because ingest now rejects NUL values.
+        const string passphrase = "test-passphrase";
+        var salt       = RandomNumberGenerator.GetBytes(16);
+        var exportKey  = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+
+        // Inject the null-value secret via raw JSON to bypass the C# type system.
+        var dbJson = $$"""
+            {
+              "Secrets": {
+                "good-secret": {"Value":"good-value","Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"},
+                "nul-secret":  {"Value":"bad\u0000val","Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"},
+                "null-secret": {"Value":null,          "Created":"{{DateTime.UtcNow:O}}","Modified":"{{DateTime.UtcNow:O}}"}
+              }
+            }
+            """;
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey);
+        var exportFile = new ExportFile(
+            "tswap-export-v1", DateTime.UtcNow,
+            Convert.ToBase64String(salt),
+            Convert.ToBase64String(ciphertext));
+        var exportPath = Path.Combine(_tempDir, "nul-test.enc");
+        File.WriteAllText(exportPath,
+            JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, _) = RunTswapWithStdin(passphrase + "\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        Assert.Contains("nul-secret",  stdout);
+        Assert.Contains("null-secret", stdout);
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("good-secret",      namesOut);
+        Assert.DoesNotContain("nul-secret",  namesOut);
+        Assert.DoesNotContain("null-secret", namesOut);
     }
 
     // --- Migrate ---
