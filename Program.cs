@@ -403,12 +403,21 @@ void CmdInit()
     );
 
     storage.SaveConfig(config);
-    // Create an empty encrypted vault only when one does not already exist.
-    // On re-initialisation the old vault is encrypted with a now-unreachable key;
-    // leaving the file in place lets a user recover it from backup alongside the
-    // old config, rather than destroying the ciphertext entirely.
-    if (!File.Exists(storage.SecretsFile))
-        storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), Crypto.DeriveKey(k1, k2));
+    // Re-initialisation generates a new master key (new challenge + new XOR share), so any
+    // existing vault is no longer decryptable with it. Rename the old file to a timestamped
+    // backup so it remains recoverable (by restoring the old config alongside it), then
+    // create a fresh empty vault under the canonical name.
+    var newVaultKey = Crypto.DeriveKey(k1, k2);
+    if (File.Exists(storage.SecretsFile))
+    {
+        var backupPath = storage.SecretsFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
+        File.Move(storage.SecretsFile, backupPath);
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"\nExisting vault moved to backup: {backupPath}");
+        Console.WriteLine("To recover old secrets: restore that file together with the previous config.json.");
+        Console.ResetColor();
+    }
+    storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), newVaultKey);
 
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -580,7 +589,9 @@ void CmdExport(string path)
     if (File.Exists(path))
     {
         Console.Error.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
-        if (Console.ReadLine()?.ToLower() != "yes")
+        var overwriteResponse = Console.ReadLine();
+        if (Console.IsInputRedirected) Console.Error.WriteLine();
+        if (overwriteResponse?.ToLower() != "yes")
             throw new Exception("Export cancelled.");
     }
 

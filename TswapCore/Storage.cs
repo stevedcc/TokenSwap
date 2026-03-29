@@ -44,14 +44,16 @@ public class Storage
         {
             Console.Error.WriteLine(
                 $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
-                "Restore secrets.json.enc from backup or run 'tswap init'.");
+                "To recover: restore secrets.json.enc alongside its original config.json from backup. " +
+                "To start fresh: run 'tswap init' (this will overwrite config.json).");
             return new SecretsDb(new Dictionary<string, Secret>());
         }
         catch (DirectoryNotFoundException)
         {
             Console.Error.WriteLine(
                 $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
-                "Restore secrets.json.enc from backup or run 'tswap init'.");
+                "To recover: restore the config directory from backup. " +
+                "To start fresh: run 'tswap init' (this will overwrite config.json).");
             return new SecretsDb(new Dictionary<string, Secret>());
         }
         var decrypted = Crypto.Decrypt(encrypted, key);
