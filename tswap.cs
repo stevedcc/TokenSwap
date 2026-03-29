@@ -365,10 +365,27 @@ void SaveConfig(Config config)
 
 SecretsDb LoadSecrets(byte[] key)
 {
-    if (!File.Exists(SecretsFile))
+    byte[] encrypted;
+    try
+    {
+        encrypted = File.ReadAllBytes(SecretsFile);
+    }
+    catch (FileNotFoundException)
+    {
+        Console.Error.WriteLine(
+            $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
+            $"To recover: restore secrets.json.enc alongside its original config.json from backup. " +
+            $"To start fresh: run '{Prefix} init' (this will overwrite config.json).");
         return new SecretsDb(new Dictionary<string, Secret>());
-    
-    var encrypted = File.ReadAllBytes(SecretsFile);
+    }
+    catch (DirectoryNotFoundException)
+    {
+        Console.Error.WriteLine(
+            $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
+            $"To recover: restore the config directory from backup. " +
+            $"To start fresh: run '{Prefix} init' (this will overwrite config.json).");
+        return new SecretsDb(new Dictionary<string, Secret>());
+    }
     var decrypted = Decrypt(encrypted, key);
     var json = Encoding.UTF8.GetString(decrypted);
     return JsonSerializer.Deserialize<SecretsDb>(json) 
@@ -384,10 +401,13 @@ void SaveSecrets(SecretsDb db, byte[] key)
     File.WriteAllBytes(SecretsFile, encrypted);
 }
 
-byte[] UnlockWithYubiKey(Config config)
+byte[] UnlockWithYubiKey(Config config, bool warnIfNoTouch = true)
 {
-    // Warn about missing touch requirement
-    YubiKey.WarnIfNoTouch(config);
+    // Warn about missing touch requirement (suppressed for commands that never expose
+    // secret values on stdout/stderr, even though they still decrypt the vault:
+    // names, burned, burn, check).
+    if (warnIfNoTouch)
+        YubiKey.WarnIfNoTouch(config);
 
     var serial = GetYubiKey();
 
@@ -422,11 +442,21 @@ byte[] UnlockWithYubiKey(Config config)
 // HELPER FUNCTIONS
 // ============================================================================
 
-string ReadPassword()
+// echo: stream that receives masking feedback (*, backspace, newline).
+// Defaults to Console.Out for vault-mutation commands; pass Console.Error for
+// export/import so stdout stays clean when the output is piped or redirected.
+string ReadPassword(TextWriter? echo = null)
 {
-    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking
+    echo ??= Console.Out;
+    // When stdin is redirected (e.g. in tests or piped input) skip interactive masking.
+    // Write a newline to echo so the next line of stderr output starts on a fresh line
+    // (the caller writes the prompt with Write, not WriteLine).
     if (Console.IsInputRedirected)
-        return Console.ReadLine() ?? "";
+    {
+        var line = Console.ReadLine() ?? "";
+        echo.WriteLine();
+        return line;
+    }
 
     var password = new StringBuilder();
     while (true)
@@ -434,18 +464,18 @@ string ReadPassword()
         var key = Console.ReadKey(true);
         if (key.Key == ConsoleKey.Enter)
         {
-            Console.WriteLine();
+            echo.WriteLine();
             break;
         }
         if (key.Key == ConsoleKey.Backspace && password.Length > 0)
         {
             password.Remove(password.Length - 1, 1);
-            Console.Write("\b \b");
+            echo.Write("\b \b");
         }
         else if (!char.IsControl(key.KeyChar))
         {
             password.Append(key.KeyChar);
-            Console.Write("*");
+            echo.Write("*");
         }
     }
     return password.ToString();
@@ -536,8 +566,28 @@ void CmdInit()
         unlockChallenge
     );
     
+    // Re-initialisation generates a new master key (new challenge + new XOR share), so any
+    // existing vault is no longer decryptable with it. Back up both files before writing
+    // new ones so recovery (restore both .bak files together) remains possible.
+    // Config is backed up first — if anything fails mid-init the old config still matches
+    // the old vault backup.
+    var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+    var newVaultKey = Crypto.DeriveKey(k1, k2);
+    if (File.Exists(ConfigFile))
+        File.Copy(ConfigFile, ConfigFile + ".bak-" + timestamp);
     SaveConfig(config);
-    
+    if (File.Exists(SecretsFile))
+    {
+        var vaultBackup = SecretsFile + ".bak-" + timestamp;
+        File.Move(SecretsFile, vaultBackup);
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
+        Console.WriteLine("Previous config backed up alongside it. To recover old secrets:");
+        Console.WriteLine("  restore both .bak files under their original names.");
+        Console.ResetColor();
+    }
+    SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), newVaultKey);
+
     Console.WriteLine("\n╔════════════════════════════════════════╗");
     Console.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
     Console.WriteLine("╚════════════════════════════════════════╝\n");
@@ -707,14 +757,17 @@ void CmdExport(string path)
 
     if (File.Exists(path))
     {
-        Console.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
-        if (Console.ReadLine()?.ToLower() != "yes") return;
+        Console.Error.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
+        var overwriteResponse = Console.ReadLine();
+        if (Console.IsInputRedirected) Console.Error.WriteLine();
+        if (overwriteResponse?.ToLower() != "yes")
+            throw new Exception("Export cancelled.");
     }
 
-    Console.Write("Export passphrase: ");
-    var passphrase = ReadPassword();
-    Console.Write("Confirm passphrase: ");
-    var confirm = ReadPassword();
+    Console.Error.Write("Export passphrase: ");
+    var passphrase = ReadPassword(Console.Error);
+    Console.Error.Write("Confirm passphrase: ");
+    var confirm = ReadPassword(Console.Error);
     if (passphrase != confirm)
         throw new Exception("Passphrases don't match");
 
@@ -750,11 +803,19 @@ void CmdImport(string path)
     if (!File.Exists(path))
         throw new Exception($"Export file not found: {path}");
 
-    Console.Write("Import passphrase: ");
-    var passphrase = ReadPassword();
+    Console.Error.Write("Import passphrase: ");
+    var passphrase = ReadPassword(Console.Error);
 
-    var exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
-        ?? throw new Exception("Invalid export file");
+    ExportFile exportFile;
+    try
+    {
+        exportFile = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)
+            ?? throw new Exception("Invalid export file");
+    }
+    catch (JsonException ex)
+    {
+        throw new Exception($"Export file is not valid JSON: {ex.Message}");
+    }
 
     if (exportFile.Version != "tswap-export-v1")
         throw new Exception($"Unsupported export version: {exportFile.Version}");
@@ -767,8 +828,16 @@ void CmdImport(string path)
     catch (CryptographicException) { throw new Exception("Decryption failed — wrong passphrase or file tampered"); }
     catch (FormatException) { throw new Exception("Export file is corrupted (base64 decode failed)"); }
 
-    var exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
-        ?? throw new Exception("Invalid export data");
+    SecretsDb exportedDb;
+    try
+    {
+        exportedDb = JsonSerializer.Deserialize(Encoding.UTF8.GetString(plaintext), TswapJsonContext.Default.SecretsDb)
+            ?? throw new Exception("Invalid export data");
+    }
+    catch (JsonException ex)
+    {
+        throw new Exception($"Export data is corrupted (decrypted payload is not valid JSON): {ex.Message}");
+    }
 
     var config = LoadConfig();
     var key = UnlockWithYubiKey(config);
@@ -812,7 +881,7 @@ void CmdImport(string path)
 void CmdNames()
 {
     var config = LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = LoadSecrets(key);
 
     if (db.Secrets.Count == 0)
@@ -857,7 +926,7 @@ void CmdBurn(string name, string? reason)
 {
     Validation.ValidateName(name);
     var config = LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = LoadSecrets(key);
 
     if (!db.Secrets.ContainsKey(name))
@@ -880,7 +949,7 @@ void CmdBurn(string name, string? reason)
 void CmdBurned()
 {
     var config = LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = LoadSecrets(key);
 
     var burned = db.Secrets
@@ -1085,7 +1154,7 @@ void CmdCheck(string path)
     }
 
     var config = LoadConfig();
-    var key = UnlockWithYubiKey(config);
+    var key = UnlockWithYubiKey(config, warnIfNoTouch: false);
     var db = LoadSecrets(key);
 
     var byFile = markers.GroupBy(m => m.FilePath).OrderBy(g => g.Key);
