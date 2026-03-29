@@ -3,6 +3,12 @@ using Xunit;
 
 namespace TswapTests;
 
+// Tests in this class mutate Console.Error; run them serially to avoid
+// interference with other tests that may write to the shared global stream.
+[CollectionDefinition("serial", DisableParallelization = true)]
+public class SerialCollection { }
+
+[Collection("serial")]
 public class ApplyTests
 {
     [Fact]

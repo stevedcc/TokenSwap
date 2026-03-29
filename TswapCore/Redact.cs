@@ -53,13 +53,18 @@ public abstract class SecretProcessor
         }
 
         // Longest search text first to prevent shorter values partially overlapping longer ones.
-        // Tie-break by SearchText then Name then Type for deterministic output when two secrets
-        // share the same value (e.g. a burned secret whose value duplicates a live one).
+        // Tie-break order: length desc → SearchText → non-burned before burned (so a live secret
+        // wins over a burned one with the same value) → Name → Type.
         list.Sort((a, b) =>
         {
             int cmp = b.SearchText.Length.CompareTo(a.SearchText.Length);
             if (cmp != 0) return cmp;
             cmp = string.Compare(a.SearchText, b.SearchText, StringComparison.Ordinal);
+            if (cmp != 0) return cmp;
+            // Prefer non-burned: false (0) sorts before true (1)
+            bool aBurned = db.Secrets.TryGetValue(a.Name, out var as_) && as_.BurnedAt.HasValue;
+            bool bBurned = db.Secrets.TryGetValue(b.Name, out var bs_) && bs_.BurnedAt.HasValue;
+            cmp = aBurned.CompareTo(bBurned);
             if (cmp != 0) return cmp;
             cmp = string.Compare(a.Name, b.Name, StringComparison.Ordinal);
             if (cmp != 0) return cmp;
