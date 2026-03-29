@@ -3,12 +3,6 @@ using Xunit;
 
 namespace TswapTests;
 
-// Tests in this class mutate Console.Error; run them serially to avoid
-// interference with other tests that may write to the shared global stream.
-[CollectionDefinition("serial", DisableParallelization = true)]
-public class SerialCollection { }
-
-[Collection("serial")]
 public class ApplyTests
 {
     [Fact]
@@ -97,11 +91,7 @@ redis:
         var input = @"password: """"  # tswap: burned-secret";
 
         var errWriter = new StringWriter();
-        var oldError = Console.Error;
-        Console.SetError(errWriter);
-        string result;
-        try { result = Apply.ApplySecrets(input, db); }
-        finally { Console.SetError(oldError); }
+        var result = Apply.ApplySecrets(input, db, errWriter);
 
         Assert.Contains("burned-value", result);
         Assert.Contains("# tswap: burned-secret", result);
