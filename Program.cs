@@ -631,7 +631,7 @@ void CmdExport(string path)
     var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
     Console.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
     if (burned > 0)
-        Console.WriteLine($"  ({burned} burned secret(s) included — will be skipped on import)");
+        Console.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'import --include-burned' to preserve them)");
     Console.WriteLine("  Keep this file and its passphrase secure.");
 }
 
@@ -1207,7 +1207,7 @@ try
         Console.WriteLine($"  [sudo] {p} list             List all secrets (names and dates, no values)");
         Console.WriteLine($"  [sudo] {p} delete <name>    Delete a secret");
         Console.WriteLine($"  [sudo] {p} export <file>    Export all secrets to an encrypted backup");
-        Console.WriteLine($"  [sudo] {p} import <file>    Import secrets from an encrypted backup");
+        Console.WriteLine($"  [sudo] {p} import [--include-burned] <file>    Import secrets from an encrypted backup (burned secrets skipped by default)");
         Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
         Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
