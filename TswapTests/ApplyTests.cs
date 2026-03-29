@@ -90,10 +90,17 @@ redis:
 
         var input = @"password: """"  # tswap: burned-secret";
 
-        // Should not throw; warning goes to Console.Error
-        var result = Apply.ApplySecrets(input, db);
+        var errWriter = new StringWriter();
+        var oldError = Console.Error;
+        Console.SetError(errWriter);
+        string result;
+        try { result = Apply.ApplySecrets(input, db); }
+        finally { Console.SetError(oldError); }
+
         Assert.Contains("burned-value", result);
         Assert.Contains("# tswap: burned-secret", result);
+        Assert.Contains("burned", errWriter.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("burned-secret", errWriter.ToString());
     }
 
     [Fact]

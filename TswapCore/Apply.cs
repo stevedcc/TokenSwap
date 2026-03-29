@@ -61,7 +61,10 @@ public static class Apply
                 var escapedValue = EscapeForQuote(secret.Value, quote);
                 if (secret.BurnedAt.HasValue)
                     Console.Error.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
-                lines[i] = $"{prefix}{quote}{escapedValue}{quote}{whitespace}{markerPart}";
+                // Ensure at least one space before the marker so '#' is a valid YAML comment
+                // (without whitespace, key: "value"# tswap: name is not a comment in YAML)
+                var sep = whitespace.Length > 0 ? whitespace : " ";
+                lines[i] = $"{prefix}{quote}{escapedValue}{quote}{sep}{markerPart}";
             }
             else
             {

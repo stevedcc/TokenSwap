@@ -631,7 +631,7 @@ void CmdExport(string path)
     var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
     Console.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
     if (burned > 0)
-        Console.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'import --include-burned' to preserve them)");
+        Console.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'sudo {Prefix} import --include-burned {path}' to preserve them)");
     Console.WriteLine("  Keep this file and its passphrase secure.");
 }
 

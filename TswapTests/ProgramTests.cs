@@ -1409,9 +1409,10 @@ password2: """"  # tswap: missing-mixed-secret");
         var yamlFile = Path.Combine(_tempDir, "content.yaml");
         File.WriteAllText(yamlFile, "token: burned-secret-value");
 
-        var (exit, _, stderr) = RunTswap("tocomment", yamlFile, "--dry-run");
+        var (exit, stdout, stderr) = RunTswap("tocomment", yamlFile, "--dry-run");
 
         Assert.Equal(0, exit);
+        Assert.DoesNotContain("burned-secret-value", stdout);
         Assert.DoesNotContain("burned-secret-value", stderr);
         Assert.Contains("# tswap: my-burned", stderr);
     }
