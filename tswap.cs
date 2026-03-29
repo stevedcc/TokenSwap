@@ -1512,8 +1512,8 @@ try
             break;
 
         case "import":
-            var includeBurned = filteredArgs.Remove("--include-burned");
-            if (filteredArgs.Count < 2)
+            var includeBurned = filteredArgs.RemoveAll(a => a == "--include-burned") > 0;
+            if (filteredArgs.Count != 2)
                 throw new Exception($"Usage: sudo {Prefix} import [--include-burned] <file>");
             CmdImport(filteredArgs[1], includeBurned);
             break;
