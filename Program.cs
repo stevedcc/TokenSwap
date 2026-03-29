@@ -635,7 +635,7 @@ void CmdExport(string path)
     Console.WriteLine("  Keep this file and its passphrase secure.");
 }
 
-void CmdImport(string path)
+void CmdImport(string path, bool includeBurned = false)
 {
     RequireSudo("import");
 
@@ -685,9 +685,9 @@ void CmdImport(string path)
     int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
     foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
     {
-        if (secret.BurnedAt != null)
+        if (secret.BurnedAt != null && !includeBurned)
         {
-            Console.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault)");
+            Console.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault; use --include-burned to import)");
             skippedBurned++;
             continue;
         }
@@ -1291,9 +1291,10 @@ try
             break;
 
         case "import":
+            var includeBurned = filteredArgs.Remove("--include-burned");
             if (filteredArgs.Count < 2)
-                throw new Exception($"Usage: sudo {Prefix} import <file>");
-            CmdImport(filteredArgs[1]);
+                throw new Exception($"Usage: sudo {Prefix} import [--include-burned] <file>");
+            CmdImport(filteredArgs[1], includeBurned);
             break;
 
         case "delete":

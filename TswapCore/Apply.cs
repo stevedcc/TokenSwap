@@ -37,9 +37,9 @@ public static class Apply
             if (!db.Secrets.TryGetValue(secretName, out var secret))
                 throw new Exception($"Secret '{secretName}' not found (line {i + 1})");
 
-            // Check if secret is burned
+            // Warn if secret is burned but still apply it
             if (secret.BurnedAt.HasValue)
-                throw new Exception($"Secret '{secretName}' is burned and cannot be applied (line {i + 1})");
+                Console.Error.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
 
             // Find and replace empty value patterns before the marker
             // Patterns to match:

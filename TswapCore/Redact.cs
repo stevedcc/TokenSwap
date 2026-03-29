@@ -17,8 +17,8 @@ public record LineDiff(int LineNumber, string Before, string After);
 public abstract class SecretProcessor
 {
     /// <summary>
-    /// Builds the ordered list of (name, matchType, searchText) entries for all non-burned
-    /// secrets, including plaintext, Base64, and Base64Url variants. Sorted longest-first so
+    /// Builds the ordered list of (name, matchType, searchText) entries for all secrets,
+    /// including plaintext, Base64, and Base64Url variants. Sorted longest-first so
     /// that a longer value is never clobbered by a shorter value that shares a prefix.
     /// Also includes variants with whitespace normalized to handle cases where secrets are
     /// stored with newlines/spaces but files have them formatted differently.
@@ -30,8 +30,6 @@ public abstract class SecretProcessor
 
         foreach (var (name, secret) in db.Secrets)
         {
-            if (secret.BurnedAt.HasValue) continue;
-
             var value = secret.Value;
             if (string.IsNullOrEmpty(value)) continue;
 
@@ -264,7 +262,7 @@ public static class Redact
 
     /// <summary>
     /// Returns a copy of <paramref name="content"/> with all known secret values (and their
-    /// Base64 variants) replaced by <c>[REDACTED: name]</c> labels. Burned secrets are skipped.
+    /// Base64 variants) replaced by <c>[REDACTED: name]</c> labels.
     /// </summary>
     public static string RedactContent(string content, SecretsDb db)
         => new RedactProcessor().Process(content, db).Content;

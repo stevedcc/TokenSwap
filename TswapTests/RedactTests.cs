@@ -68,11 +68,11 @@ public class RedactTests
     }
 
     [Fact]
-    public void Redact_BurnedSecret_NotRedacted()
+    public void Redact_BurnedSecret_IsRedacted()
     {
         var db = MakeDb(("pw", "secret", true));
         var result = Redact.RedactContent("password: secret", db);
-        Assert.Equal("password: secret", result);
+        Assert.Equal("password: [REDACTED: pw]", result);
     }
 
     [Fact]
@@ -190,12 +190,12 @@ public class RedactTests
     }
 
     [Fact]
-    public void ToComment_BurnedSecret_NotReplaced()
+    public void ToComment_BurnedSecret_IsReplaced()
     {
         var db = MakeDb(("pw", "s3cr3t", true));
         var (content, changes) = Redact.ToComment("password: s3cr3t", db);
-        Assert.Equal("password: s3cr3t", content);
-        Assert.Empty(changes);
+        Assert.Equal("password: \"\"  # tswap: pw", content);
+        Assert.Single(changes);
     }
 
     [Fact]

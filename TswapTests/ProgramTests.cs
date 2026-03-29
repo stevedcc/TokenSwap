@@ -1379,4 +1379,107 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.NotEqual(0, exit);
         Assert.Contains("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
     }
+
+    // --- issue #81: extend burn handling ---
+
+    [Fact]
+    public void Redact_IncludesBurnedSecretValues()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
+        RunTswap("burn", "my-burned", "test");
+
+        var yamlFile = Path.Combine(_tempDir, "content.txt");
+        File.WriteAllText(yamlFile, "token: burned-secret-value");
+
+        var (exit, stdout, _) = RunTswap("redact", yamlFile);
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("burned-secret-value", stdout);
+        Assert.Contains("[REDACTED: my-burned]", stdout);
+    }
+
+    [Fact]
+    public void ToComment_IncludesBurnedSecretValues()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
+        RunTswap("burn", "my-burned", "test");
+
+        var yamlFile = Path.Combine(_tempDir, "content.yaml");
+        File.WriteAllText(yamlFile, "token: burned-secret-value");
+
+        var (exit, _, stderr) = RunTswap("tocomment", yamlFile, "--dry-run");
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("burned-secret-value", stderr);
+        Assert.Contains("# tswap: my-burned", stderr);
+    }
+
+    [Fact]
+    public void Apply_BurnedSecret_AppliesWithWarning()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
+        RunTswap("burn", "my-burned", "test");
+
+        var yamlFile = Path.Combine(_tempDir, "apply-burned.yaml");
+        File.WriteAllText(yamlFile, "token: \"\"  # tswap: my-burned");
+
+        var (exit, stdout, stderr) = RunTswap("apply", yamlFile);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("burned-secret-value", stdout);
+        Assert.Contains("Warning", stderr);
+        Assert.Contains("burned", stderr);
+    }
+
+    [Fact]
+    public void Import_IncludeBurned_ImportsBurnedSecrets()
+    {
+        RunTswap("init");
+        RunTswapWithStdin("burned-value", "ingest", "was-burned");
+        RunTswap("burn", "was-burned", "compromised");
+        RunTswap("create", "good-secret");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+
+        RunTswapWithStdin("yes\n", "init");
+        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", "--include-burned", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Imported 2 secret(s)", stdout);
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("good-secret", namesOut);
+        Assert.Contains("was-burned", namesOut);
+        Assert.Contains("[BURNED]", namesOut);
+    }
+
+    [Fact]
+    public void Import_Default_SkipsBurnedSecrets_WithHint()
+    {
+        RunTswap("init");
+        RunTswap("create", "good-secret");
+        RunTswap("create", "burned-secret");
+        RunTswap("burn", "burned-secret", "compromised");
+
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+
+        RunTswapWithStdin("yes\n", "init");
+        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Skipped", stdout);
+        Assert.Contains("burned-secret", stdout);
+        Assert.Contains("--include-burned", stdout);
+
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("good-secret", namesOut);
+        Assert.DoesNotContain("burned-secret", namesOut);
+    }
 }
