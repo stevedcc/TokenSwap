@@ -17,8 +17,8 @@ public record LineDiff(int LineNumber, string Before, string After);
 public abstract class SecretProcessor
 {
     /// <summary>
-    /// Builds the ordered list of (name, matchType, searchText) entries for all non-burned
-    /// secrets, including plaintext, Base64, and Base64Url variants. Sorted longest-first so
+    /// Builds the ordered list of (name, matchType, searchText) entries for all secrets,
+    /// including plaintext, Base64, and Base64Url variants. Sorted longest-first so
     /// that a longer value is never clobbered by a shorter value that shares a prefix.
     /// Also includes variants with whitespace normalized to handle cases where secrets are
     /// stored with newlines/spaces but files have them formatted differently.
@@ -30,8 +30,6 @@ public abstract class SecretProcessor
 
         foreach (var (name, secret) in db.Secrets)
         {
-            if (secret.BurnedAt.HasValue) continue;
-
             var value = secret.Value;
             if (string.IsNullOrEmpty(value)) continue;
 
@@ -54,8 +52,24 @@ public abstract class SecretProcessor
                 list.Add((name, MatchType.Base64Url, base64Url));
         }
 
-        // Longest search text first to prevent shorter values partially overlapping longer ones
-        list.Sort((a, b) => b.SearchText.Length.CompareTo(a.SearchText.Length));
+        // Longest search text first to prevent shorter values partially overlapping longer ones.
+        // Tie-break order: length desc → SearchText → non-burned before burned (so a live secret
+        // wins over a burned one with the same value) → Name → Type.
+        list.Sort((a, b) =>
+        {
+            int cmp = b.SearchText.Length.CompareTo(a.SearchText.Length);
+            if (cmp != 0) return cmp;
+            cmp = string.Compare(a.SearchText, b.SearchText, StringComparison.Ordinal);
+            if (cmp != 0) return cmp;
+            // Prefer non-burned: false (0) sorts before true (1)
+            bool aBurned = db.Secrets.TryGetValue(a.Name, out var as_) && as_.BurnedAt.HasValue;
+            bool bBurned = db.Secrets.TryGetValue(b.Name, out var bs_) && bs_.BurnedAt.HasValue;
+            cmp = aBurned.CompareTo(bBurned);
+            if (cmp != 0) return cmp;
+            cmp = string.Compare(a.Name, b.Name, StringComparison.Ordinal);
+            if (cmp != 0) return cmp;
+            return a.Type.CompareTo(b.Type);
+        });
         return list;
     }
 
@@ -264,7 +278,7 @@ public static class Redact
 
     /// <summary>
     /// Returns a copy of <paramref name="content"/> with all known secret values (and their
-    /// Base64 variants) replaced by <c>[REDACTED: name]</c> labels. Burned secrets are skipped.
+    /// Base64 variants) replaced by <c>[REDACTED: name]</c> labels.
     /// </summary>
     public static string RedactContent(string content, SecretsDb db)
         => new RedactProcessor().Process(content, db).Content;

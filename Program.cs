@@ -631,11 +631,11 @@ void CmdExport(string path)
     var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
     Console.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
     if (burned > 0)
-        Console.WriteLine($"  ({burned} burned secret(s) included — will be skipped on import)");
+        Console.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'sudo {Prefix} import --include-burned {path}' to preserve them)");
     Console.WriteLine("  Keep this file and its passphrase secure.");
 }
 
-void CmdImport(string path)
+void CmdImport(string path, bool includeBurned = false)
 {
     RequireSudo("import");
 
@@ -685,9 +685,9 @@ void CmdImport(string path)
     int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
     foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
     {
-        if (secret.BurnedAt != null)
+        if (secret.BurnedAt != null && !includeBurned)
         {
-            Console.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault)");
+            Console.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault; use --include-burned to import)");
             skippedBurned++;
             continue;
         }
@@ -1207,7 +1207,7 @@ try
         Console.WriteLine($"  [sudo] {p} list             List all secrets (names and dates, no values)");
         Console.WriteLine($"  [sudo] {p} delete <name>    Delete a secret");
         Console.WriteLine($"  [sudo] {p} export <file>    Export all secrets to an encrypted backup");
-        Console.WriteLine($"  [sudo] {p} import <file>    Import secrets from an encrypted backup");
+        Console.WriteLine($"  [sudo] {p} import [--include-burned] <file>    Import secrets from an encrypted backup (burned secrets skipped by default)");
         Console.WriteLine("\nCommands marked [sudo] require elevated privileges.");
         Console.WriteLine("Add -v or --verbose for detailed YubiKey output.");
         Console.WriteLine("\nExamples:");
@@ -1291,9 +1291,10 @@ try
             break;
 
         case "import":
-            if (filteredArgs.Count < 2)
-                throw new Exception($"Usage: sudo {Prefix} import <file>");
-            CmdImport(filteredArgs[1]);
+            var includeBurned = filteredArgs.RemoveAll(a => a == "--include-burned") > 0;
+            if (filteredArgs.Count != 2)
+                throw new Exception($"Usage: sudo {Prefix} import [--include-burned] <file>");
+            CmdImport(filteredArgs[1], includeBurned);
             break;
 
         case "delete":

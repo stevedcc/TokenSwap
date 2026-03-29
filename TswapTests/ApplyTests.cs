@@ -81,18 +81,22 @@ redis:
     }
 
     [Fact]
-    public void ApplySecrets_ThrowsOnBurnedSecret()
+    public void ApplySecrets_AppliesBurnedSecretWithWarning()
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["burned-secret"] = new Secret("value", DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, "leaked")
+            ["burned-secret"] = new Secret("burned-value", DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, "leaked")
         });
 
         var input = @"password: """"  # tswap: burned-secret";
 
-        var ex = Assert.Throws<Exception>(() => Apply.ApplySecrets(input, db));
-        Assert.Contains("burned-secret", ex.Message);
-        Assert.Contains("burned", ex.Message.ToLower());
+        var errWriter = new StringWriter();
+        var result = Apply.ApplySecrets(input, db, errWriter);
+
+        Assert.Contains("burned-value", result);
+        Assert.Contains("# tswap: burned-secret", result);
+        Assert.Contains("burned", errWriter.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("burned-secret", errWriter.ToString());
     }
 
     [Fact]
