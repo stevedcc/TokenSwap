@@ -402,19 +402,27 @@ void CmdInit()
         unlockChallenge
     );
 
-    storage.SaveConfig(config);
     // Re-initialisation generates a new master key (new challenge + new XOR share), so any
-    // existing vault is no longer decryptable with it. Rename the old file to a timestamped
-    // backup so it remains recoverable (by restoring the old config alongside it), then
-    // create a fresh empty vault under the canonical name.
+    // existing vault is no longer decryptable with it. Back up both files before writing
+    // new ones so recovery (restore both .bak files together) remains possible.
+    // Config is backed up first — if anything fails mid-init the old config still matches
+    // the old vault backup.
+    var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
     var newVaultKey = Crypto.DeriveKey(k1, k2);
+    if (File.Exists(storage.ConfigFile))
+    {
+        var configBackup = storage.ConfigFile + ".bak-" + timestamp;
+        File.Copy(storage.ConfigFile, configBackup);
+    }
+    storage.SaveConfig(config);
     if (File.Exists(storage.SecretsFile))
     {
-        var backupPath = storage.SecretsFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
-        File.Move(storage.SecretsFile, backupPath);
+        var vaultBackup = storage.SecretsFile + ".bak-" + timestamp;
+        File.Move(storage.SecretsFile, vaultBackup);
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine($"\nExisting vault moved to backup: {backupPath}");
-        Console.WriteLine("To recover old secrets: restore that file together with the previous config.json.");
+        Console.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
+        Console.WriteLine("Previous config backed up alongside it. To recover old secrets:");
+        Console.WriteLine("  restore both .bak files under their original names.");
         Console.ResetColor();
     }
     storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), newVaultKey);

@@ -1315,6 +1315,19 @@ password2: """"  # tswap: missing-mixed-secret");
             "init should create an empty secrets.json.enc so subsequent commands do not warn about a missing vault");
     }
 
+    [Fact]
+    public void Names_WarnsMissingVaultOnStderr()
+    {
+        RunTswap("init");
+        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+
+        var (exit, _, stderr) = RunTswap("names");
+
+        // Command succeeds (empty vault) and emits a warning on stderr
+        Assert.Equal(0, exit);
+        Assert.Contains("vault file not found", stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
     // --- issue #67: export prompts go to stderr ---
 
     [Fact]
