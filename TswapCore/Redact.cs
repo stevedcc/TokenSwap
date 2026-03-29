@@ -52,8 +52,19 @@ public abstract class SecretProcessor
                 list.Add((name, MatchType.Base64Url, base64Url));
         }
 
-        // Longest search text first to prevent shorter values partially overlapping longer ones
-        list.Sort((a, b) => b.SearchText.Length.CompareTo(a.SearchText.Length));
+        // Longest search text first to prevent shorter values partially overlapping longer ones.
+        // Tie-break by SearchText then Name then Type for deterministic output when two secrets
+        // share the same value (e.g. a burned secret whose value duplicates a live one).
+        list.Sort((a, b) =>
+        {
+            int cmp = b.SearchText.Length.CompareTo(a.SearchText.Length);
+            if (cmp != 0) return cmp;
+            cmp = string.Compare(a.SearchText, b.SearchText, StringComparison.Ordinal);
+            if (cmp != 0) return cmp;
+            cmp = string.Compare(a.Name, b.Name, StringComparison.Ordinal);
+            if (cmp != 0) return cmp;
+            return a.Type.CompareTo(b.Type);
+        });
         return list;
     }
 

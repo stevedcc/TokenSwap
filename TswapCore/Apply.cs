@@ -37,10 +37,6 @@ public static class Apply
             if (!db.Secrets.TryGetValue(secretName, out var secret))
                 throw new Exception($"Secret '{secretName}' not found (line {i + 1})");
 
-            // Warn if secret is burned but still apply it
-            if (secret.BurnedAt.HasValue)
-                Console.Error.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
-
             // Find and replace empty value patterns before the marker
             // Patterns to match:
             // - key: ""  # tswap: name
@@ -63,19 +59,22 @@ public static class Apply
 
                 // Escape the secret value for the appropriate quote style
                 var escapedValue = EscapeForQuote(secret.Value, quote);
-                
+                if (secret.BurnedAt.HasValue)
+                    Console.Error.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
                 lines[i] = $"{prefix}{quote}{escapedValue}{quote}{whitespace}{markerPart}";
             }
             else
             {
                 // Check for unquoted empty or placeholder pattern
                 var unquotedMatch = UnquotedRegex.Match(beforeMarker);
-                
+
                 if (unquotedMatch.Success)
                 {
                     var prefix = unquotedMatch.Groups[1].Value;
                     // Default to double quotes for safety
                     var escapedValue = EscapeForQuote(secret.Value, "\"");
+                    if (secret.BurnedAt.HasValue)
+                        Console.Error.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
                 }
                 else
