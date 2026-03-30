@@ -68,7 +68,14 @@ Agents can mark secrets as burned (compromised/seen) via `burn <name> [reason]`.
 
 ### Agent Prompt (`prompt` / `prompt-hash` commands)
 
-Self-documenting agent instructions. `prompt` outputs usage instructions, `prompt-hash` outputs their SHA-256 hash for cache validation. Neither requires YubiKey or sudo. Instructions auto-detect invocation mode (compiled binary vs script) and show correct command syntax.
+`prompt` outputs a complete, ready-to-use SKILL.md file (YAML frontmatter + usage instructions). Install it once so your agent loads it automatically when relevant:
+
+```bash
+mkdir -p .claude/skills/tswap
+tswap prompt > .claude/skills/tswap/SKILL.md
+```
+
+The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ; consult your agent's documentation. `prompt-hash` outputs the SHA-256 hash of the full output for cache validation. Neither command requires YubiKey or sudo. Instructions auto-detect invocation mode (compiled binary vs script) and show correct command syntax.
 
 ### Token Substitution (`run` command)
 
@@ -102,8 +109,8 @@ The script file is organized into logical sections:
 
 When working in this repository and tswap is initialized (YubiKey present), follow these rules:
 
-1. **Get instructions**: Run `tswap prompt` at the start of a session to get current usage instructions. Follow them.
-2. **Check for updates**: Run `tswap prompt-hash` periodically (e.g., at the start of each session) and compare against the last known hash. If it changed, re-read the full prompt.
+1. **Install the skill** (one-time, per project): `mkdir -p .claude/skills/tswap && tswap prompt > .claude/skills/tswap/SKILL.md`. After installation the SKILL.md is loaded automatically by your agent when relevant — no need to run `tswap prompt` at session start.
+2. **Keep it current**: Re-run the install command whenever `tswap prompt-hash` changes so your skill file stays up to date.
 3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `apply`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only.
 4. **Use `{{token}}` substitution** via `run` to pass secrets to commands without seeing them.
 5. **Burn immediately** if you accidentally see a plaintext secret: `tswap burn <name> "<reason>"`.
