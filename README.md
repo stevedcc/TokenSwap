@@ -257,7 +257,14 @@ if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
 fi
 ```
 
-For Claude Code specifically, the `prompt` command provides the agent with usage instructions that include these boundaries. The agent should run `tswap prompt` at session start and follow the rules it contains.
+The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once per project so your agent loads it automatically when working with secrets:
+
+```bash
+mkdir -p .claude/skills/tswap
+tswap prompt > .claude/skills/tswap/SKILL.md
+```
+
+The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ. Re-run the command whenever `tswap prompt-hash` changes to keep the skill file current.
 
 ## Burn & Rotate Playbook
 
