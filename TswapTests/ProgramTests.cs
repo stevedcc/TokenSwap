@@ -1253,6 +1253,9 @@ password2: """"  # tswap: missing-mixed-secret");
     [DllImport("libc", EntryPoint = "read",  SetLastError = true)]
     private static extern nint PtyRead(int fd, [Out] byte[] buf, nint count);
 
+    [DllImport("libc", EntryPoint = "write", SetLastError = true)]
+    private static extern nint PtyWrite(int fd, byte[] buf, nint count);
+
     [DllImport("libc", EntryPoint = "close")]
     private static extern int PtyClose(int fd);
 
@@ -1273,6 +1276,108 @@ password2: """"  # tswap: missing-mixed-secret");
         catch (DllNotFoundException) { }
         catch (EntryPointNotFoundException) { } // libutil not present or openpty not exported
         return int.MinValue; // sentinel: openpty not available on this platform
+    }
+
+    // Starts tswap with a PTY so ReadPassword enters interactive mode, then sends
+    // Ctrl+C (0x03) until the process exits.  Two triggers fire a send (subject to a
+    // 1-second cooldown between sends):
+    //   • quiescent: 500 ms of silence after any output — process is blocked in ReadKey
+    //   • prompt match: waitForPrompt text appears in accumulated output
+    // Early sends (before TreatControlCAsInput=true is set) generate SIGINT with no
+    // foreground pgid, which is silently dropped; the process keeps running and more
+    // output arrives, resetting the quiescent timer for another attempt.
+    // Returns (exitCode, output); (-2, "") if openpty is unavailable on this platform.
+    private (int exitCode, string output) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
+    {
+        var nameBuf = new byte[256];
+        int masterFd = -1, slaveFd = -1;
+        int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
+        if (ptyRet == int.MinValue) return (-2, "");
+        if (ptyRet < 0) throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
+
+        var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
+            Array.IndexOf(nameBuf, (byte)0) is int z and >= 0 ? z : nameBuf.Length);
+
+        var quotedArgs = string.Join(" ", args.Select(a => $"\"{a}\""));
+        var scriptPath = Path.Combine(_tempDir, $"pty_ctrlc_{Guid.NewGuid():N}.sh");
+        File.WriteAllText(scriptPath,
+            $"#!/bin/bash\n" +
+            $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+            $"exec dotnet run --project \"{_projectDir}/tswap.csproj\" -- {quotedArgs}\n");
+
+        var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
+        psi.ArgumentList.Add(scriptPath);
+        psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
+        psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
+        psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
+        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
+
+        var sb = new StringBuilder();
+        var buf = new byte[4096];
+        var deadline = DateTime.UtcNow.AddSeconds(120);
+        DateTime? lastDataAt = null;
+        DateTime lastCtrlCAt = DateTime.MinValue;
+        const int EINTR = 4;
+        int eagain = OperatingSystem.IsLinux() ? 11 : 35;
+
+        void TrySendCtrlC()
+        {
+            if (DateTime.UtcNow - lastCtrlCAt < TimeSpan.FromMilliseconds(1000)) return;
+            PtyWrite(masterFd, new byte[] { 0x03 }, 1);
+            lastCtrlCAt = DateTime.UtcNow;
+        }
+
+        using var process = Process.Start(psi)!;
+        try
+        {
+            PtyClose(slaveFd); slaveFd = -1;
+
+            while (DateTime.UtcNow < deadline)
+            {
+                var pfd = new TestPollFd { fd = masterFd, events = 1 }; // POLLIN
+                int pr = PtyPoll(ref pfd, 1, 200);
+                if (pr == 0)
+                {
+                    // No new data for 200 ms. Fire if quiescent for 500 ms total.
+                    if (lastDataAt.HasValue &&
+                        DateTime.UtcNow - lastDataAt.Value > TimeSpan.FromMilliseconds(500))
+                        TrySendCtrlC();
+                    continue;
+                }
+                if (pr < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    break;
+                }
+                int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
+                if (n > 0)
+                {
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                    lastDataAt = DateTime.UtcNow;
+                    // Immediate send when the expected prompt text is visible.
+                    if (sb.ToString().Contains(waitForPrompt))
+                        TrySendCtrlC();
+                    continue;
+                }
+                if (n == 0) break; // EOF
+                var errno = Marshal.GetLastPInvokeError();
+                if (errno == EINTR || errno == eagain) continue;
+                break; // EIO or other terminal error
+            }
+        }
+        finally
+        {
+            if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
+            if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
+        }
+
+        if (!process.WaitForExit(TimeSpan.FromSeconds(10)))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+
+        return (process.ExitCode, sb.ToString());
     }
 
     [Fact]
@@ -1482,5 +1587,62 @@ password2: """"  # tswap: missing-mixed-secret");
         var (_, namesOut, _) = RunTswap("names");
         Assert.Contains("good-secret", namesOut);
         Assert.DoesNotContain("burned-secret", namesOut);
+    }
+
+    // --- issue #85: Ctrl+C during ReadPassword restores terminal and prints "Cancelled" ---
+    // These tests require a PTY so ReadPassword takes the interactive path.
+    // Before the fix, Ctrl+C raised SIGINT and the process died without printing "Cancelled".
+    // After the fix, TreatControlCAsInput intercepts it, the finally block resets the flag,
+    // OperationCanceledException propagates to the top-level handler, and "Cancelled" is printed.
+
+    [Fact]
+    public void Add_CtrlC_DuringPasswordPrompt_PrintsCancelledAndExits130()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        RunTswap("init");
+
+        var (exitCode, output) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
+
+        if (exitCode == -2) return; // openpty not available on this platform
+
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+    }
+
+    [Fact]
+    public void Export_CtrlC_DuringPassphrasePrompt_PrintsCancelledAndExits130()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        RunTswap("init");
+        RunTswap("create", "a-secret");
+        var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
+
+        var (exitCode, output) = RunTswapWithPtyCtrlC("Export passphrase:", "export", exportPath);
+
+        if (exitCode == -2) return; // openpty not available on this platform
+
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+        Assert.False(File.Exists(exportPath), "export file must not be created on cancellation");
+    }
+
+    [Fact]
+    public void Import_CtrlC_DuringPassphrasePrompt_PrintsCancelledAndExits130()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        RunTswap("init");
+        RunTswap("create", "a-secret");
+        var exportPath = Path.Combine(_tempDir, "ctrlc-import.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+
+        var (exitCode, output) = RunTswapWithPtyCtrlC("Import passphrase:", "import", exportPath);
+
+        if (exitCode == -2) return; // openpty not available on this platform
+
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
     }
 }
