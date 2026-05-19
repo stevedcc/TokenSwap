@@ -1317,6 +1317,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var deadline = DateTime.UtcNow.AddSeconds(120);
         DateTime? lastDataAt = null;
         DateTime lastCtrlCAt = DateTime.MinValue;
+        bool promptSeen = false;
         const int EINTR = 4;
         int eagain = OperatingSystem.IsLinux() ? 11 : 35;
 
@@ -1355,7 +1356,10 @@ password2: """"  # tswap: missing-mixed-secret");
                     sb.Append(Encoding.UTF8.GetString(buf, 0, n));
                     lastDataAt = DateTime.UtcNow;
                     // Immediate send when the expected prompt text is visible.
-                    if (sb.ToString().Contains(waitForPrompt))
+                    // promptSeen avoids re-materialising sb on every chunk once matched.
+                    if (!promptSeen && sb.ToString().Contains(waitForPrompt))
+                        promptSeen = true;
+                    if (promptSeen)
                         TrySendCtrlC();
                     continue;
                 }

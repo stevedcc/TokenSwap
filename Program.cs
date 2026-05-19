@@ -276,6 +276,7 @@ string ReadPassword(TextWriter? echo = null)
         return line;
     }
 
+    var prevTreatCtrlC = Console.TreatControlCAsInput;
     Console.TreatControlCAsInput = true;
     try
     {
@@ -308,7 +309,7 @@ string ReadPassword(TextWriter? echo = null)
     }
     finally
     {
-        Console.TreatControlCAsInput = false;
+        Console.TreatControlCAsInput = prevTreatCtrlC;
     }
 }
 
@@ -1375,7 +1376,7 @@ try
 }
 catch (OperationCanceledException)
 {
-    Console.Error.WriteLine("\nCancelled.");
+    Console.Error.WriteLine("Cancelled.");
     Environment.Exit(130);
 }
 catch (Exception ex)
