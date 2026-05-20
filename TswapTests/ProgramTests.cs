@@ -1254,7 +1254,7 @@ password2: """"  # tswap: missing-mixed-secret");
     private static extern nint PtyRead(int fd, [Out] byte[] buf, nint count);
 
     [DllImport("libc", EntryPoint = "write", SetLastError = true)]
-    private static extern nint PtyWrite(int fd, byte[] buf, nint count);
+    private static extern nint PtyWrite(int fd, [In] byte[] buf, nint count);
 
     [DllImport("libc", EntryPoint = "close")]
     private static extern int PtyClose(int fd);
