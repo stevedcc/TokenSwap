@@ -1318,19 +1318,27 @@ password2: """"  # tswap: missing-mixed-secret");
         DateTime? lastDataAt = null;
         DateTime lastCtrlCAt = DateTime.MinValue;
         bool promptSeen = false;
+        // searchFrom tracks how much of sb has already been scanned for waitForPrompt,
+        // leaving a (prompt.Length - 1) overlap to catch matches that straddle chunks.
+        int searchFrom = 0;
         const int EINTR = 4;
         int eagain = OperatingSystem.IsLinux() ? 11 : 35;
 
         void TrySendCtrlC()
         {
             if (DateTime.UtcNow - lastCtrlCAt < TimeSpan.FromMilliseconds(1000)) return;
-            PtyWrite(masterFd, new byte[] { 0x03 }, 1);
-            lastCtrlCAt = DateTime.UtcNow;
+            // Retry on EINTR/EAGAIN so Ctrl+C is always delivered.
+            var ctrlC = new byte[] { 0x03 };
+            nint written;
+            do { written = PtyWrite(masterFd, ctrlC, 1); }
+            while (written < 0 && Marshal.GetLastPInvokeError() is int e && (e == EINTR || e == eagain));
+            if (written == 1) lastCtrlCAt = DateTime.UtcNow;
         }
 
-        using var process = Process.Start(psi)!;
+        // Open the try/finally before Process.Start so fd cleanup runs even if Start throws.
         try
         {
+            using var process = Process.Start(psi)!;
             PtyClose(slaveFd); slaveFd = -1;
 
             while (DateTime.UtcNow < deadline)
@@ -1355,10 +1363,15 @@ password2: """"  # tswap: missing-mixed-secret");
                 {
                     sb.Append(Encoding.UTF8.GetString(buf, 0, n));
                     lastDataAt = DateTime.UtcNow;
-                    // Immediate send when the expected prompt text is visible.
-                    // promptSeen avoids re-materialising sb on every chunk once matched.
-                    if (!promptSeen && sb.ToString().Contains(waitForPrompt))
-                        promptSeen = true;
+                    // Scan only the newly appended region (plus overlap) rather than
+                    // re-materialising the full buffer on every chunk.
+                    if (!promptSeen)
+                    {
+                        int scanFrom = Math.Max(0, searchFrom - waitForPrompt.Length + 1);
+                        if (sb.ToString(scanFrom, sb.Length - scanFrom).Contains(waitForPrompt))
+                            promptSeen = true;
+                        searchFrom = sb.Length;
+                    }
                     if (promptSeen)
                         TrySendCtrlC();
                     continue;
@@ -1368,20 +1381,20 @@ password2: """"  # tswap: missing-mixed-secret");
                 if (errno == EINTR || errno == eagain) continue;
                 break; // EIO or other terminal error
             }
+
+            if (!process.WaitForExit(TimeSpan.FromSeconds(10)))
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+            }
+
+            return (process.ExitCode, sb.ToString());
         }
         finally
         {
             if (masterFd != -1) { PtyClose(masterFd); masterFd = -1; }
             if (slaveFd  != -1) { PtyClose(slaveFd);  slaveFd  = -1; }
         }
-
-        if (!process.WaitForExit(TimeSpan.FromSeconds(10)))
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit();
-        }
-
-        return (process.ExitCode, sb.ToString());
     }
 
     [Fact]
