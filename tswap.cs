@@ -458,27 +458,41 @@ string ReadPassword(TextWriter? echo = null)
         return line;
     }
 
-    var password = new StringBuilder();
-    while (true)
+    var prevTreatCtrlC = Console.TreatControlCAsInput;
+    Console.TreatControlCAsInput = true;
+    try
     {
-        var key = Console.ReadKey(true);
-        if (key.Key == ConsoleKey.Enter)
+        var password = new StringBuilder();
+        while (true)
         {
-            echo.WriteLine();
-            break;
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Enter)
+            {
+                echo.WriteLine();
+                break;
+            }
+            if (key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                echo.WriteLine();
+                throw new OperationCanceledException();
+            }
+            if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+            {
+                password.Remove(password.Length - 1, 1);
+                echo.Write("\b \b");
+            }
+            else if (!char.IsControl(key.KeyChar))
+            {
+                password.Append(key.KeyChar);
+                echo.Write("*");
+            }
         }
-        if (key.Key == ConsoleKey.Backspace && password.Length > 0)
-        {
-            password.Remove(password.Length - 1, 1);
-            echo.Write("\b \b");
-        }
-        else if (!char.IsControl(key.KeyChar))
-        {
-            password.Append(key.KeyChar);
-            echo.Write("*");
-        }
+        return password.ToString();
     }
-    return password.ToString();
+    finally
+    {
+        Console.TreatControlCAsInput = prevTreatCtrlC;
+    }
 }
 
 void RequireSudo(string commandName)
@@ -1580,6 +1594,11 @@ try
         default:
             throw new Exception($"Unknown command: {command}");
     }
+}
+catch (OperationCanceledException)
+{
+    Console.Error.WriteLine("Cancelled.");
+    Environment.Exit(130);
 }
 catch (Exception ex)
 {
