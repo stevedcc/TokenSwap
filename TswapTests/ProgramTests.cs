@@ -428,6 +428,10 @@ public class ProgramTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("tswap", stdout);
         Assert.Contains("AI Agent", stdout);
+        // SKILL.md frontmatter
+        Assert.Contains("---", stdout);
+        Assert.Contains("name: tswap", stdout);
+        Assert.Contains("must use when", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -5,7 +5,12 @@ namespace TswapCore;
 
 public static class Prompt
 {
-    public const string Template = @"# tswap - AI Agent Secret Management Instructions
+    public const string Template = @"---
+name: tswap
+description: Must use when working with secrets, credentials, passwords, API keys, or any sensitive values; when running authenticated commands; or when storing, retrieving, rotating, or burning secrets.
+---
+
+# tswap - AI Agent Secret Management Instructions
 
 You are working with tswap, a hardware-backed secret manager. Your role is to
 manage secrets WITHOUT ever seeing their plaintext values.
