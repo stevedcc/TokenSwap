@@ -257,14 +257,41 @@ if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
 fi
 ```
 
-The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once per project so your agent loads it automatically when working with secrets:
+The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and all supported agents will pick it up automatically.
+
+### Global install (recommended)
+
+`~/.agents/skills/` is a cross-tool standard read natively by GitHub Copilot and OpenAI Codex CLI. Claude Code reads from `~/.claude/skills/`, which can be a symlink:
 
 ```bash
-mkdir -p .claude/skills/tswap
-tswap prompt > .claude/skills/tswap/SKILL.md
+# Install to shared global location
+mkdir -p ~/.agents/skills/tswap
+tswap prompt > ~/.agents/skills/tswap/SKILL.md
+
+# Claude Code — symlink so all tools share one file
+ln -s ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
-The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ. Re-run the command whenever `tswap prompt-hash` changes to keep the skill file current.
+| Tool | Reads from |
+|------|-----------|
+| GitHub Copilot | `~/.agents/skills/tswap/SKILL.md` |
+| OpenAI Codex CLI | `~/.agents/skills/tswap/SKILL.md` |
+| Claude Code | `~/.claude/skills/tswap/SKILL.md` (symlink → `~/.agents/skills/tswap`) |
+
+### Per-project install (fallback)
+
+If you work in a project where the global skill isn't available, install it at the repo level:
+
+```bash
+mkdir -p .agents/skills/tswap
+tswap prompt > .agents/skills/tswap/SKILL.md
+```
+
+Codex CLI walks up from `$CWD` looking for `.agents/skills/`, so this also works for project-specific overrides. Claude Code equivalent is `.claude/skills/tswap/SKILL.md`.
+
+### Keeping the skill current
+
+Re-run the install command whenever `tswap prompt-hash` changes to pick up updated instructions.
 
 ## Burn & Rotate Playbook
 
