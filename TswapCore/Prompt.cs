@@ -7,7 +7,7 @@ public static class Prompt
 {
     public const string Template = @"---
 name: tswap
-description: Must use when working with secrets, credentials, passwords, API keys, or any sensitive values; when running authenticated commands; or when storing, retrieving, rotating, or when a plaintext secret has been accidentally viewed in unencrypted form.
+description: Must use when working with secrets, credentials, passwords, API keys, or any sensitive values; when running authenticated commands; or when storing, retrieving, rotating, or when a secret value has been seen in cleartext or any trivially decodable form.
 ---
 
 # tswap - AI Agent Secret Management Instructions
