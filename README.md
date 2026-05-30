@@ -263,21 +263,36 @@ The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage 
 
 `~/.agents/skills/` is a cross-tool standard read natively by GitHub Copilot and OpenAI Codex CLI. Claude Code reads from `~/.claude/skills/`, which can be a symlink:
 
+**Linux / macOS**
+
 ```bash
 # Install to shared global location
 mkdir -p ~/.agents/skills/tswap
 tswap prompt > ~/.agents/skills/tswap/SKILL.md
 
 # Claude Code — symlink so all tools share one file
+# -n ensures an existing symlink-to-directory is replaced, not nested
 mkdir -p ~/.claude/skills
-ln -sf ~/.agents/skills/tswap ~/.claude/skills/tswap
+ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
-| Tool | Reads from |
-|------|-----------|
-| GitHub Copilot | `~/.agents/skills/tswap/SKILL.md` |
-| OpenAI Codex CLI | `~/.agents/skills/tswap/SKILL.md` |
-| Claude Code | `~/.claude/skills/tswap/SKILL.md` (symlink → `~/.agents/skills/tswap`) |
+**Windows**
+
+```powershell
+# Install to shared global location
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills\tswap"
+tswap prompt > "$env:USERPROFILE\.agents\skills\tswap\SKILL.md"
+
+# Claude Code — directory symlink (requires Developer Mode or admin)
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills"
+cmd /c mklink /D "$env:USERPROFILE\.claude\skills\tswap" "$env:USERPROFILE\.agents\skills\tswap"
+```
+
+| Tool | Linux / macOS | Windows |
+|------|--------------|---------|
+| GitHub Copilot | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
+| OpenAI Codex CLI | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
+| Claude Code | `~/.claude/skills/tswap/` (symlink) | `%USERPROFILE%\.claude\skills\tswap\` (symlink, optional) |
 
 ### Per-project install (fallback)
 
