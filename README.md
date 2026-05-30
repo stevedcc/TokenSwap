@@ -271,8 +271,9 @@ mkdir -p ~/.agents/skills/tswap
 tswap prompt > ~/.agents/skills/tswap/SKILL.md
 
 # Claude Code — symlink so all tools share one file
-# -n ensures an existing symlink-to-directory is replaced, not nested
+# Remove an existing real directory first (ln -sfn only replaces symlinks)
 mkdir -p ~/.claude/skills
+[ -d ~/.claude/skills/tswap ] && ! [ -L ~/.claude/skills/tswap ] && rm -rf ~/.claude/skills/tswap
 ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
@@ -284,8 +285,11 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills\tswap"
 tswap prompt | Out-File -Encoding utf8 "$env:USERPROFILE\.agents\skills\tswap\SKILL.md"
 
 # Claude Code — directory symlink (requires Developer Mode or admin)
+# Remove existing directory or link first — mklink /D fails if path exists
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills"
-cmd /c mklink /D "$env:USERPROFILE\.claude\skills\tswap" "$env:USERPROFILE\.agents\skills\tswap"
+$claudeLink = "$env:USERPROFILE\.claude\skills\tswap"
+if (Test-Path $claudeLink) { Remove-Item -Recurse -Force $claudeLink }
+cmd /c mklink /D "$claudeLink" "$env:USERPROFILE\.agents\skills\tswap"
 ```
 
 | Tool | Linux / macOS | Windows |
