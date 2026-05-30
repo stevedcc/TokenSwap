@@ -281,7 +281,7 @@ ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```powershell
 # Install to shared global location
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills\tswap"
-tswap prompt > "$env:USERPROFILE\.agents\skills\tswap\SKILL.md"
+tswap prompt | Out-File -Encoding utf8 "$env:USERPROFILE\.agents\skills\tswap\SKILL.md"
 
 # Claude Code — directory symlink (requires Developer Mode or admin)
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills"
