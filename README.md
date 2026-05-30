@@ -257,14 +257,62 @@ if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
 fi
 ```
 
-The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once per project so your agent loads it automatically when working with secrets:
+The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and GitHub Copilot and OpenAI Codex CLI will pick it up automatically. Claude Code requires an additional symlink step (see below).
+
+### Global install (recommended)
+
+`~/.agents/skills/` is a cross-tool standard read natively by GitHub Copilot and OpenAI Codex CLI. Claude Code reads from `~/.claude/skills/`, which can be a symlink:
+
+**Linux / macOS**
 
 ```bash
-mkdir -p .claude/skills/tswap
-tswap prompt > .claude/skills/tswap/SKILL.md
+# Install to shared global location
+mkdir -p ~/.agents/skills/tswap
+tswap prompt > ~/.agents/skills/tswap/SKILL.md
+
+# Claude Code — symlink so all tools share one file
+# Remove an existing real directory first (ln -sfn only replaces symlinks)
+mkdir -p ~/.claude/skills
+[ -e ~/.claude/skills/tswap ] && ! [ -L ~/.claude/skills/tswap ] && rm -rf ~/.claude/skills/tswap
+ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
-The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ. Re-run the command whenever `tswap prompt-hash` changes to keep the skill file current.
+**Windows**
+
+```powershell
+# Install to shared global location
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills\tswap"
+# Out-File -Encoding utf8 writes a BOM in PowerShell 5.1; use WriteAllLines for UTF-8 without BOM
+[System.IO.File]::WriteAllLines("$env:USERPROFILE\.agents\skills\tswap\SKILL.md", (tswap prompt))
+
+# Claude Code — directory symlink (requires Developer Mode or admin)
+# Remove existing directory or link first — mklink /D fails if path exists
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude\skills"
+$claudeLink = "$env:USERPROFILE\.claude\skills\tswap"
+if (Test-Path $claudeLink) { Remove-Item -Recurse -Force $claudeLink }
+cmd /c mklink /D "$claudeLink" "$env:USERPROFILE\.agents\skills\tswap"
+```
+
+| Tool | Linux / macOS | Windows |
+|------|--------------|---------|
+| GitHub Copilot | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
+| OpenAI Codex CLI | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
+| Claude Code | `~/.claude/skills/tswap/SKILL.md` (symlink) | `%USERPROFILE%\.claude\skills\tswap\SKILL.md` (symlink, optional) |
+
+### Per-project install (fallback)
+
+If you work in a project where the global skill isn't available, install it at the repo level:
+
+```bash
+mkdir -p .agents/skills/tswap
+tswap prompt > .agents/skills/tswap/SKILL.md
+```
+
+Codex CLI walks up from `$CWD` looking for `.agents/skills/`, so this also works for project-specific overrides. Claude Code equivalent is `.claude/skills/tswap/SKILL.md`.
+
+### Keeping the skill current
+
+Re-run the install command whenever `tswap prompt-hash` changes to pick up updated instructions.
 
 ## Burn & Rotate Playbook
 
