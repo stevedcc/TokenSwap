@@ -257,7 +257,7 @@ if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
 fi
 ```
 
-The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and all supported agents will pick it up automatically.
+The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and GitHub Copilot, OpenAI Codex CLI, and Claude Code will pick it up automatically.
 
 ### Global install (recommended)
 
@@ -292,7 +292,7 @@ cmd /c mklink /D "$env:USERPROFILE\.claude\skills\tswap" "$env:USERPROFILE\.agen
 |------|--------------|---------|
 | GitHub Copilot | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
 | OpenAI Codex CLI | `~/.agents/skills/tswap/SKILL.md` | `%USERPROFILE%\.agents\skills\tswap\SKILL.md` |
-| Claude Code | `~/.claude/skills/tswap/` (symlink) | `%USERPROFILE%\.claude\skills\tswap\` (symlink, optional) |
+| Claude Code | `~/.claude/skills/tswap/SKILL.md` (symlink) | `%USERPROFILE%\.claude\skills\tswap\SKILL.md` (symlink, optional) |
 
 ### Per-project install (fallback)
 
