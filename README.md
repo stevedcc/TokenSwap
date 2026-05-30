@@ -257,7 +257,7 @@ if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
 fi
 ```
 
-The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and GitHub Copilot, OpenAI Codex CLI, and Claude Code will pick it up automatically.
+The `prompt` command outputs a complete SKILL.md file (YAML frontmatter + usage instructions). Install it once globally and GitHub Copilot and OpenAI Codex CLI will pick it up automatically. Claude Code requires an additional symlink step (see below).
 
 ### Global install (recommended)
 
@@ -273,7 +273,7 @@ tswap prompt > ~/.agents/skills/tswap/SKILL.md
 # Claude Code — symlink so all tools share one file
 # Remove an existing real directory first (ln -sfn only replaces symlinks)
 mkdir -p ~/.claude/skills
-[ -d ~/.claude/skills/tswap ] && ! [ -L ~/.claude/skills/tswap ] && rm -rf ~/.claude/skills/tswap
+[ -e ~/.claude/skills/tswap ] && ! [ -L ~/.claude/skills/tswap ] && rm -rf ~/.claude/skills/tswap
 ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
@@ -282,7 +282,8 @@ ln -sfn ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```powershell
 # Install to shared global location
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.agents\skills\tswap"
-tswap prompt | Out-File -Encoding utf8 "$env:USERPROFILE\.agents\skills\tswap\SKILL.md"
+# Out-File -Encoding utf8 writes a BOM in PowerShell 5.1; use WriteAllLines for UTF-8 without BOM
+[System.IO.File]::WriteAllLines("$env:USERPROFILE\.agents\skills\tswap\SKILL.md", (tswap prompt))
 
 # Claude Code — directory symlink (requires Developer Mode or admin)
 # Remove existing directory or link first — mklink /D fails if path exists
