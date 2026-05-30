@@ -269,7 +269,8 @@ mkdir -p ~/.agents/skills/tswap
 tswap prompt > ~/.agents/skills/tswap/SKILL.md
 
 # Claude Code — symlink so all tools share one file
-ln -s ~/.agents/skills/tswap ~/.claude/skills/tswap
+mkdir -p ~/.claude/skills
+ln -sf ~/.agents/skills/tswap ~/.claude/skills/tswap
 ```
 
 | Tool | Reads from |
