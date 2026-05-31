@@ -21,7 +21,10 @@ dotnet publish -c Release
 # Windows: copy bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
-tswap installscript > install.sh && bash install.sh
+# Linux/macOS:
+tswap installscript > installTswap.sh && bash installTswap.sh
+# Windows (PowerShell):
+# tswap installscript > installTswap.ps1; pwsh installTswap.ps1
 
 tswap <command>
 ```

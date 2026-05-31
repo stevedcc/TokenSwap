@@ -104,10 +104,18 @@ copy bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\M
 
 Once tswap is built and on your PATH, `installscript` generates a ready-to-run script for your current platform:
 
+**Linux / macOS**
 ```bash
-tswap installscript > install.sh
-# Review install.sh, then:
-bash install.sh
+tswap installscript > installTswap.sh
+# Review installTswap.sh, then:
+bash installTswap.sh
+```
+
+**Windows (PowerShell)**
+```powershell
+tswap installscript > installTswap.ps1
+# Review installTswap.ps1, then:
+pwsh installTswap.ps1
 ```
 
 ### Windows notes
