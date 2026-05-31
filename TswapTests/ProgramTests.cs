@@ -446,6 +446,63 @@ public class ProgramTests : IDisposable
         Assert.Matches("^[0-9a-f]{64}$", hash);
     }
 
+    // --- InstallScript ---
+
+    /// <summary>
+    /// Under 'dotnet run', Environment.ProcessPath is the compiled binary (not the dotnet
+    /// host), so installscript succeeds and embeds the actual binary path.
+    /// </summary>
+    [Fact]
+    public void InstallScript_OutputsScript()
+    {
+        var (exit, stdout, _) = RunTswap("installscript");
+
+        Assert.Equal(0, exit);
+        if (OperatingSystem.IsWindows())
+        {
+            // PowerShell: no shebang, has ErrorActionPreference
+            Assert.Contains("ErrorActionPreference", stdout);
+            Assert.Contains("tswap.exe", stdout);
+        }
+        else
+        {
+            // Bash: starts with shebang
+            Assert.StartsWith("#!/usr/bin/env bash", stdout.TrimStart());
+            Assert.Contains("tswap", stdout);
+        }
+    }
+
+    [Fact]
+    public void InstallScript_EmbedsBinaryPath()
+    {
+        var (exit, stdout, _) = RunTswap("installscript");
+
+        Assert.Equal(0, exit);
+        // The script must embed a non-empty binary path (not the placeholder)
+        Assert.DoesNotContain("TSWAP_BINARY_PATH_PLACEHOLDER", stdout);
+        // The embedded path must reference tswap
+        Assert.Contains("tswap", stdout);
+    }
+
+    [Fact]
+    public void InstallScript_InstallsSkillMd()
+    {
+        var (exit, stdout, _) = RunTswap("installscript");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("SKILL.md", stdout);
+        Assert.Contains(".agents/skills/tswap", stdout.Replace('\\', '/'));
+    }
+
+    [Fact]
+    public void InstallScript_CreatesClaudeSymlink()
+    {
+        var (exit, stdout, _) = RunTswap("installscript");
+
+        Assert.Equal(0, exit);
+        Assert.Contains(".claude/skills", stdout.Replace('\\', '/'));
+    }
+
     // --- Run (token substitution) ---
 
     [Fact]
