@@ -101,8 +101,9 @@ public class InstallScriptTests
         var script = InstallScript.GetPowerShellScript(@"C:\tmp\tswap.exe");
         Assert.Contains(".agents\\skills\\tswap", script);
         Assert.Contains("SKILL.md", script);
-        // Must use Out-File -Encoding utf8, NOT bare > redirection (issue comment requirement)
-        Assert.Contains("Out-File -Encoding utf8", script);
+        // Must use WriteAllLines (no BOM on PS 5.1) — Out-File -Encoding utf8 writes a BOM
+        Assert.Contains("WriteAllLines", script);
+        Assert.DoesNotContain("Out-File", script);
         Assert.DoesNotContain("prompt >", script);
     }
 
@@ -131,6 +132,64 @@ public class InstallScriptTests
         Assert.Contains("Stop", script);
     }
 
+    // ── macOS script ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void GetMacOSScript_EmbedsBinaryPath()
+    {
+        var script = InstallScript.GetMacOSScript("/Applications/tswap");
+        Assert.Contains("/Applications/tswap", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_IsShebangBash()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.StartsWith("#!/usr/bin/env bash", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_InstallsToUsrLocalBinOnly()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.Contains("/usr/local/bin/tswap", script);
+        Assert.Contains("sudo", script);
+        // macOS does not install to ~/.local/bin
+        Assert.DoesNotContain(".local/bin", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_InstallsSkillMd()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.Contains("~/.agents/skills/tswap", script);
+        Assert.Contains("SKILL.md", script);
+        Assert.Contains("tswap prompt >", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_CreatesClaudeSymlink()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.Contains("~/.claude/skills/tswap", script);
+        Assert.Contains("ln -s", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_IsIdempotent_HandlesRealDirectory()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.Contains("rm -rf", script);
+        Assert.Contains("-L", script);
+    }
+
+    [Fact]
+    public void GetMacOSScript_UsesSetEuo()
+    {
+        var script = InstallScript.GetMacOSScript("/tmp/tswap");
+        Assert.Contains("set -euo pipefail", script);
+    }
+
     // ── GetScript platform dispatch ────────────────────────────────────────────
 
     [Fact]
@@ -139,14 +198,18 @@ public class InstallScriptTests
         var script = InstallScript.GetScript("/fake/path/tswap");
         if (OperatingSystem.IsWindows())
         {
-            // PowerShell: no shebang, has ErrorActionPreference
             Assert.False(script.StartsWith("#!"));
             Assert.Contains("ErrorActionPreference", script);
         }
+        else if (OperatingSystem.IsMacOS())
+        {
+            Assert.StartsWith("#!/usr/bin/env bash", script);
+            Assert.DoesNotContain(".local/bin", script);
+        }
         else
         {
-            // Bash: has shebang
             Assert.StartsWith("#!/usr/bin/env bash", script);
+            Assert.Contains(".local/bin", script);
         }
     }
 }
