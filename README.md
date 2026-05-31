@@ -100,24 +100,28 @@ dotnet publish -c Release -r win-x64
 copy bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
 ```
 
-### Install (script — for development)
+### Reinstall using installscript
 
+Once tswap is built and on your PATH, `installscript` generates a ready-to-run script for your current platform:
+
+**Linux / macOS**
 ```bash
-# Install dotnet-script runtime
-dotnet tool install -g dotnet-script
+tswap installscript > installTswap.sh
+# Review installTswap.sh, then:
+bash installTswap.sh
+```
 
-# Make executable
-chmod +x tswap.cs
-
-# Run directly
-./tswap.cs <command>
+**Windows (PowerShell)**
+```powershell
+tswap installscript > installTswap.ps1
+# Review installTswap.ps1, then:
+pwsh installTswap.ps1
 ```
 
 ### Windows notes
 
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`) require running from an **elevated command prompt** (right-click → "Run as administrator") instead of `sudo`.
 - **Process substitution** (`<(tswap apply values.yaml)`) is a bash feature and is not available in cmd or PowerShell. Use Option 2 or 3 from the [Helm Deployment Patterns](#helm-deployment-patterns) section instead.
-- The `tswap.cs` script version requires dotnet-script and is intended for Linux/macOS development; use the compiled `.exe` on Windows.
 
 ### Setup
 

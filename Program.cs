@@ -1,21 +1,16 @@
 /*
- * tswap - YubiKey Secret Manager (Compiled Entry Point)
- *
- * This is the AOT-compiled version of tswap.cs.
- * For the interpreted dotnet-script version, see tswap.cs.
+ * tswap - YubiKey Secret Manager
  *
  * Build:   dotnet publish -c Release
- * Install: cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+ * Install: tswap installscript > install.sh && bash install.sh
  */
 
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using TswapCore;
 
-// Bridge dotnet-script's Args to compiled args
 var Args = args.ToList();
 
 // ============================================================================
@@ -29,15 +24,7 @@ string DetectInvocationPrefix()
 {
     var processPath = Environment.ProcessPath;
     if (processPath == null) return "tswap";
-    var processName = Path.GetFileName(processPath);
-    // Compiled binary: process name is tswap (or whatever it was renamed to)
-    if (!processName.Contains("dotnet"))
-        return Path.GetFileNameWithoutExtension(processPath);
-    // Script mode: check if invoked via 'dotnet script' or shebang
-    if (Regex.IsMatch(Environment.CommandLine, @"dotnet\s+script\s+"))
-        return "dotnet script tswap.cs --";
-    // Shebang (#!/usr/bin/env -S dotnet-script) or direct dotnet-script invocation
-    return "./tswap.cs";
+    return Path.GetFileNameWithoutExtension(processPath);
 }
 var Prefix = DetectInvocationPrefix();
 
@@ -855,12 +842,6 @@ void CmdInstallScript()
 {
     var binaryPath = Environment.ProcessPath
         ?? throw new Exception("Cannot determine the path of the current binary.");
-
-    // Running under dotnet-script or 'dotnet run' — not an installed binary
-    if (Path.GetFileName(binaryPath).Contains("dotnet"))
-        throw new Exception(
-            "'installscript' requires the compiled binary, not a script or 'dotnet run' invocation.\n" +
-            "Build first: dotnet publish -r <rid> -c Release");
 
     Console.WriteLine(InstallScript.GetScript(binaryPath));
 }

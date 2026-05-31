@@ -8,23 +8,25 @@ TokenSwap (tswap) is a hardware-backed secret manager that solves two problems:
 1. **AI Agent Safety**: AI agents can use passwords via `{{token}}` substitution without seeing plaintext values
 2. **YubiKey Redundancy**: Two YubiKeys enrolled once; either key unlocks the vault via XOR key reconstruction
 
-C# application with two entry points:
+C# application with a single entry point:
 - **`Program.cs`** — NativeAOT compiled binary (`dotnet publish -c Release`). 3.8MB, ~20ms startup, no runtime dependencies.
-- **`tswap.cs`** — dotnet-script version for development (`chmod +x tswap.cs && ./tswap.cs`).
 
 ## Building and Running
 
 ```bash
-# Compiled binary (recommended)
+# Build
 dotnet publish -c Release
 # Linux:   cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
 # macOS:   sudo cp bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 # Windows: copy bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
-tswap <command>
 
-# Script (for development)
-chmod +x tswap.cs
-./tswap.cs <command>
+# Or generate a platform install script from the compiled binary
+# Linux/macOS:
+tswap installscript > installTswap.sh && bash installTswap.sh
+# Windows (PowerShell):
+# tswap installscript > installTswap.ps1; pwsh installTswap.ps1
+
+tswap <command>
 ```
 
 Tests live in `TswapTests/TswapTests.csproj`. Run with:
@@ -75,7 +77,7 @@ mkdir -p .claude/skills/tswap
 tswap prompt > .claude/skills/tswap/SKILL.md
 ```
 
-The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ; consult your agent's documentation. `prompt-hash` outputs the SHA-256 hash of the full output for cache validation. Neither command requires YubiKey or sudo. Instructions auto-detect invocation mode (compiled binary vs script) and show correct command syntax.
+The install path varies by agent — Claude Code uses `.claude/skills/`, other tools (Copilot, Cursor, Gemini CLI, Codex CLI) differ; consult your agent's documentation. `prompt-hash` outputs the SHA-256 hash of the full output for cache validation. Neither command requires YubiKey or sudo.
 
 ### Token Substitution (`run` command)
 
@@ -91,19 +93,16 @@ Config directory: `~/.config/tswap/`
 - `config.json` — YubiKey serials + XOR share (plaintext, not secret)
 - `secrets.json.enc` — AES-256-GCM encrypted secrets database
 
-### Code Organization (tswap.cs)
+### Code Organization (Program.cs)
 
-The script file is organized into logical sections:
-1. **Configuration** (~line 33) — paths, verbose flag, invocation detection, sudo user resolution, TSWAP_CONFIG_DIR override, legacy dir migration
-2. **Data Structures** (~line 148) — `Config`, `Secret` (with burn fields), `SecretsDb` records
-3. **YubiKey Operations** (~line 177) — `ChallengeYubiKey()`, `GetYubiKey()` via ykman CLI
-4. **Crypto Operations** (~line 286) — XOR, PBKDF2, AES-GCM encrypt/decrypt
-5. **Storage Operations** (~line 346) — load/save config and secrets, unlock logic
-6. **Helper Functions** (~line 422) — masked password input, sudo enforcement
-7. **Commands** (~line 469) — all command implementations (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import)
-8. **Main Entry Point** (~line 1300) — argument parsing and dispatch
+`Program.cs` is organized into logical sections:
+1. **Configuration** (~line 20) — paths, verbose flag, invocation detection, sudo user resolution, TSWAP_CONFIG_DIR override, legacy dir migration
+2. **YubiKey Operations** — `ChallengeYubiKey()`, `GetYubiKey()` via ykman CLI
+3. **Helper Functions** — masked password input, sudo enforcement
+4. **Commands** — all command implementations (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import)
+5. **Main Entry Point** — argument parsing and dispatch
 
-`Program.cs` mirrors the same structure but adds a `JsonSerializerContext` (source-generated, required for NativeAOT) and uses `args` instead of dotnet-script's `Args`.
+`TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
 ## Working with tswap as an AI Agent
 
