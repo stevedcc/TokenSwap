@@ -10,8 +10,6 @@
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Size</OptimizationPreference>
-    <!-- Exclude the dotnet-script version -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);tswap.cs</DefaultItemExcludes>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 

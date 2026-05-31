@@ -16,11 +16,11 @@ public class PromptTests
     [Fact]
     public void GetText_DifferentPrefixes()
     {
-        var compiled = Prompt.GetText("tswap");
-        var script = Prompt.GetText("./tswap.cs");
+        var defaultPrefix = Prompt.GetText("tswap");
+        var renamed = Prompt.GetText("mytswap");
 
-        Assert.Contains("tswap create", compiled);
-        Assert.Contains("./tswap.cs create", script);
+        Assert.Contains("tswap create", defaultPrefix);
+        Assert.Contains("mytswap create", renamed);
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class PromptTests
     public void GetHash_DiffersForDifferentPrefix()
     {
         var hash1 = Prompt.GetHash("tswap");
-        var hash2 = Prompt.GetHash("./tswap.cs");
+        var hash2 = Prompt.GetHash("mytswap");
         Assert.NotEqual(hash1, hash2);
     }
 
