@@ -851,6 +851,20 @@ void CmdPromptHash()
     Console.WriteLine(Prompt.GetHash(Prefix));
 }
 
+void CmdInstallScript()
+{
+    var binaryPath = Environment.ProcessPath
+        ?? throw new Exception("Cannot determine the path of the current binary.");
+
+    // Running under dotnet-script or 'dotnet run' — not an installed binary
+    if (Path.GetFileName(binaryPath).Contains("dotnet"))
+        throw new Exception(
+            "'installscript' requires the compiled binary, not a script or 'dotnet run' invocation.\n" +
+            "Build first: dotnet publish -r <rid> -c Release");
+
+    Console.WriteLine(InstallScript.GetScript(binaryPath));
+}
+
 void CmdRun(string[] runArgs)
 {
     // runArgs[0] is "run", everything after is the command
@@ -1216,6 +1230,7 @@ try
         Console.WriteLine($"  {p} burned                  List all burned secrets");
         Console.WriteLine($"  {p} prompt                  Show AI agent instructions");
         Console.WriteLine($"  {p} prompt-hash             Hash of agent instructions");
+        Console.WriteLine($"  {p} installscript           Generate a platform install script (redirect to a file, review, then run)");
         Console.WriteLine($"  [sudo] {p} add <name>       Add a secret (user-provided value)");
         Console.WriteLine($"  [sudo] {p} get <name>       Get a secret value");
         Console.WriteLine($"  [sudo] {p} list             List all secrets (names and dates, no values)");
@@ -1340,6 +1355,10 @@ try
 
         case "prompt-hash":
             CmdPromptHash();
+            break;
+
+        case "installscript":
+            CmdInstallScript();
             break;
 
         case "check":

@@ -952,6 +952,13 @@ void CmdBurned()
     Console.WriteLine($"\n→ Rotate these secrets, then 'delete' and re-create them.");
 }
 
+void CmdInstallScript()
+{
+    throw new Exception(
+        "'installscript' requires the compiled binary, not a script or 'dotnet run' invocation.\n" +
+        "Build first: dotnet publish -r <rid> -c Release");
+}
+
 void CmdPrompt()
 {
     Console.WriteLine(Prompt.GetText(Prefix));
@@ -1384,6 +1391,7 @@ try
         Console.WriteLine($"  {p} apply <file>            Output file with # tswap: markers substituted");
         Console.WriteLine($"  {p} burn <name> [reason]    Mark a secret as burned");
         Console.WriteLine($"  {p} burned                  List all burned secrets");
+        Console.WriteLine($"  {p} installscript           Generate a platform install script (redirect to a file, review, then run)");
         Console.WriteLine($"  {p} prompt                  Show AI agent instructions");
         Console.WriteLine($"  {p} prompt-hash             Hash of agent instructions");
         Console.WriteLine($"  [sudo] {p} add <name>       Add a secret (user-provided value)");
@@ -1502,6 +1510,10 @@ try
 
         case "burned":
             CmdBurned();
+            break;
+
+        case "installscript":
+            CmdInstallScript();
             break;
 
         case "prompt":
