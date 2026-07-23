@@ -688,11 +688,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init");
         RunTswapWithStdin("s3cr3t-conpty-value", "ingest", "my-secret");
 
-        // 'echo' is only blocked as argv[0]; inside the cmd /c script it is fine, and
-        // '&' separators avoid the pipe/redirect template check — mirroring the sh -c
-        // compound-command tests on POSIX.
+        // The child prints everything and then stays alive briefly: Server 2022's
+        // conhost doesn't paint very short sessions until client disconnect, and that
+        // teardown flush races pseudoconsole close at both nesting levels — an
+        // instantly-exiting child can render as a blank session. The trailing sleep
+        // gives the paint timers at both levels time to emit the text while the
+        // sessions are alive (also the realistic shape of production commands).
         var (exitCode, output) = RunTswapInConPty(waitForOutput: "after",
-            "run", "cmd", "/c", "echo before& echo {{my-secret}}& echo after");
+            "run", "pwsh", "-NoProfile", "-Command",
+            "Write-Output before; Write-Output {{my-secret}}; Write-Output after; Start-Sleep -Milliseconds 1500");
 
         // Assert via Assert.True with the full escaped capture: xunit truncates the
         // haystack in Contains failures, which hides the VT stream needed to diagnose
