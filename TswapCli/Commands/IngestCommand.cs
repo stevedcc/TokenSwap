@@ -26,7 +26,7 @@ public sealed class IngestCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         if (db.Secrets.ContainsKey(name))
             throw new TswapException($"Secret '{name}' already exists. Use 'delete' first to rotate.");

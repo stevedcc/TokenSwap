@@ -71,40 +71,4 @@ public class YubiKey
         // Slot not found or not configured
         return null;
     }
-
-    /// <summary>
-    /// Print a warning if YubiKey slots don't require touch or status is unknown
-    /// </summary>
-    public static void WarnIfNoTouch(Config config)
-    {
-        if (config.RequiresTouch != true)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Error.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-            
-            if (config.RequiresTouch == false)
-            {
-                Console.Error.WriteLine("║  [!]  SECURITY WARNING: YubiKey slots configured without touch    ║");
-                Console.Error.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.Error.WriteLine("║  Your YubiKeys are configured without requiring button press.     ║");
-                Console.Error.WriteLine("║  This means any process can unlock the vault if the key is        ║");
-                Console.Error.WriteLine("║  inserted, weakening the security model.                          ║");
-            }
-            else // config.RequiresTouch == null
-            {
-                Console.Error.WriteLine("║  [!]  SECURITY WARNING: YubiKey touch requirement unknown         ║");
-                Console.Error.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.Error.WriteLine("║  Unable to detect if your YubiKeys require button press.          ║");
-                Console.Error.WriteLine("║  This may indicate ykman is not installed or detection failed.    ║");
-                Console.Error.WriteLine("║  If touch is not required, any process can unlock the vault.      ║");
-            }
-            
-            Console.Error.WriteLine("║                                                                   ║");
-            Console.Error.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required    ║");
-            Console.Error.WriteLine("║  slots for better security.                                       ║");
-            Console.Error.WriteLine("╚═══════════════════════════════════════════════════════════════════╝");
-            Console.ResetColor();
-            Console.Error.WriteLine();
-        }
-    }
 }

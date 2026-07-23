@@ -25,7 +25,7 @@ public sealed class CheckCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config, warnIfNoTouch: false);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         var results = Check.CheckMarkers(markers, db);
 

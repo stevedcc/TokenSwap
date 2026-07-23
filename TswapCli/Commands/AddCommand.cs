@@ -28,7 +28,7 @@ public sealed class AddCommand : ICliCommand
             throw new TswapException("Values don't match");
 
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
         ctx.Storage.SaveSecrets(db, key);

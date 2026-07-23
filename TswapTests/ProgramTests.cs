@@ -1035,7 +1035,9 @@ password2: """"  # tswap: missing-mixed-secret");
         var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
 
         Assert.NotNull(config.RngMode);
-        Assert.Equal("system", config.RngMode); // test mode uses default
+        Assert.Equal(RngMode.System, config.RngMode); // test mode uses default
+        // On-disk format compatibility: the enum must serialize as the legacy lowercase string
+        Assert.Contains("\"RngMode\": \"system\"", json);
     }
 
     // Regression test for issue #39: init must not hang when stdin is piped.
@@ -1218,7 +1220,7 @@ password2: """"  # tswap: missing-mixed-secret");
 
         var updated = JsonSerializer.Deserialize(
             File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
-        Assert.Equal("yubikey", updated.RngMode);
+        Assert.Equal(RngMode.YubiKey, updated.RngMode);
     }
 
     [Fact]

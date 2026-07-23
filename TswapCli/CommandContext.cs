@@ -20,9 +20,22 @@ public sealed record CommandContext(
     public string Prefix => Env.Prefix;
     public bool Verbose => Env.Verbose;
 
-    /// <summary>Unlocks the vault, prompting for YubiKey selection if several are present.</summary>
+    /// <summary>
+    /// Unlocks the vault, prompting for YubiKey selection if several are present.
+    /// <paramref name="warnIfNoTouch"/> is suppressed for commands that never expose
+    /// secret values on stdout/stderr (names, burned, burn, check), and in test mode
+    /// (matching the historical test-key bypass, which skipped the warning).
+    /// </summary>
     public byte[] Unlock(Config config, bool warnIfNoTouch = true)
-        => Unlocker.Unlock(config, ChooseSerial, warnIfNoTouch);
+    {
+        if (warnIfNoTouch && TestKey == null)
+            SecurityWarnings.WarnIfNoTouch(Console, config);
+        return Unlocker.Unlock(config, ChooseSerial);
+    }
+
+    /// <summary>Loads the secrets database, surfacing recoverable-vault warnings on stderr.</summary>
+    public TswapCore.SecretsDb LoadSecrets(byte[] key)
+        => Storage.LoadSecrets(key, Console.Error);
 
     /// <summary>Resolves a connected YubiKey serial, prompting when several are present.</summary>
     public int SelectSerial(int? requiredSerial = null)

@@ -21,7 +21,7 @@ public sealed class ToCommentCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         var content = File.ReadAllText(filePath);
         var (newContent, changes) = Redact.ToComment(content, db);

@@ -20,7 +20,7 @@ public sealed class RedactCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         var content = File.ReadAllText(filePath);
         var redacted = Redact.RedactContent(content, db);

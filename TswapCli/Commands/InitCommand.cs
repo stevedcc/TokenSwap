@@ -30,7 +30,7 @@ public sealed class InitCommand : ICliCommand
                 new string('0', 40), // 20-byte zero XOR share (hex)
                 DateTime.UtcNow,
                 null,
-                "system",
+                RngMode.System,
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
             );
             ctx.Storage.SaveConfig(testConfig);
@@ -86,7 +86,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
         c.Out.Write("Choose [1/2, default 1]: ");
         var rngChoice = c.ReadLine()?.Trim();
-        var rngMode = rngChoice == "2" ? "yubikey" : "system";
+        var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
 
         // Save config
         var config = new Config(
@@ -148,7 +148,7 @@ public sealed class InitCommand : ICliCommand
             c.ResetColor();
         }
 
-        c.Out.WriteLine($"Entropy mode:    {(rngMode == "yubikey" ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
+        c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
 
         c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP XOR SHARE NOW\n");
         c.Out.WriteLine("XOR Share (hex):");
