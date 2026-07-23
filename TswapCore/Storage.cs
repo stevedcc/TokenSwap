@@ -82,7 +82,29 @@ public class Storage
     private static void WriteFileAtomic(string path, byte[] bytes)
     {
         var tmp = path + ".tmp";
-        File.WriteAllBytes(tmp, bytes);
-        File.Move(tmp, path, overwrite: true);
+        try
+        {
+            File.WriteAllBytes(tmp, bytes);
+            if (File.Exists(path))
+            {
+                // Preserve the existing file's permissions: a plain rename would give the
+                // result the temp file's default (umask) mode, silently *widening* access
+                // to the vault/config if the user had tightened it (e.g. chmod 600).
+                if (!OperatingSystem.IsWindows())
+                    File.SetUnixFileMode(tmp, File.GetUnixFileMode(path));
+                // File.Replace preserves the destination's ACLs/attributes on Windows
+                // (rename semantics elsewhere).
+                File.Replace(tmp, path, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(tmp, path);
+            }
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+            throw;
+        }
     }
 }
