@@ -241,10 +241,12 @@ internal sealed class WindowsPty : IPtyRunner
             var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
             var stdout   = Console.OpenStandardOutput();
             var redactor = new StreamRedactor(replacements);
+            var totalRead = new long[1]; // Interlocked counter shared with the drain loop below
             var readTask = Task.Run(() =>
             {
                 while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
                 {
+                    Interlocked.Add(ref totalRead[0], nRead);
                     var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
                     var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
                     var outBytes  = encoding.GetBytes(redacted);
@@ -262,11 +264,30 @@ internal sealed class WindowsPty : IPtyRunner
                 }
             });
 
-            // Wait for the child, then close the ConPTY to signal EOF to the read task.
+            // Wait for the child to exit.
             if (WaitForSingleObject(hProcess, INFINITE) == WAIT_FAILED)
                 throw new Exception($"WaitForSingleObject failed (Win32 error {Marshal.GetLastWin32Error()})");
             if (!GetExitCodeProcess(hProcess, out uint exitCode))
                 throw new Exception($"GetExitCodeProcess failed (Win32 error {Marshal.GetLastWin32Error()})");
+
+            // ConPTY paints frames on its own schedule, and ClosePseudoConsole discards
+            // frames not yet written to the output pipe — closing immediately after a
+            // fast child exits loses its final output (caught by the ConPTY E2E test).
+            // Drain until the stream stays quiet across two consecutive checks (~400 ms),
+            // capped at 30 s in case descendants keep the console alive — mirroring the
+            // UnixPty drain timeout. Output keeps streaming to stdout while we wait.
+            var drainDeadline = Environment.TickCount64 + 30_000;
+            long lastCount = -1;
+            while (Environment.TickCount64 < drainDeadline)
+            {
+                Thread.Sleep(200);
+                var count = Interlocked.Read(ref totalRead[0]);
+                if (count == lastCount)
+                    break; // no new output across a full interval — conhost has flushed
+                lastCount = count;
+            }
+
+            // Close the ConPTY to signal EOF to the read task.
             ClosePseudoConsole(hPC);
             hPC = IntPtr.Zero; // prevent double-close in finally
 
