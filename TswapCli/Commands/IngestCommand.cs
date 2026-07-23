@@ -20,7 +20,7 @@ public sealed class IngestCommand : ICliCommand
         if (ctx.Console.IsInputRedirected == false)
             throw new TswapException($"No input piped. Use: <source> | {ctx.Prefix} ingest <name>\nFor interactive input, use: sudo {ctx.Prefix} add <name>");
 
-        var value = Validation.ReadBoundedStdin(Console.In);
+        var value = Validation.ReadBoundedStdin(ctx.Console.In);
         if (string.IsNullOrEmpty(value))
             throw new TswapException("Empty input received. Nothing to store.");
 

@@ -30,21 +30,31 @@ jobs:
       - name: Build
         run: dotnet build TokenSwap.slnx
 
-      - name: Unit tests
-        run: dotnet test TokenSwap.slnx --no-build --filter "FullyQualifiedName!~ProgramTests"
-
-      # ProgramTests builds tswap once (TswapBinaryFixture), then spawns the built
-      # binary per test (~30 s sequentially). Verified on Linux; extending to
-      # macOS/Windows runners is a follow-up once their runtime behaviour is confirmed.
-      - name: Integration tests (ProgramTests)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName~ProgramTests"
+      - name: Unit tests (in-process)
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
       - name: AOT publish
         run: dotnet publish TswapCli/TswapCli.csproj -c Release
+
+      # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
+      # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
+      # the binary — this is the step that actually tests NativeAOT-compiled behaviour.
+      # Verified on Linux; extending to macOS/Windows runners is a follow-up.
+      - name: E2E tests (NativeAOT binary)
+        if: matrix.os == 'ubuntu-latest'
+        timeout-minutes: 15
+        run: |
+          dotnet publish TswapCli/TswapCli.csproj -c Debug
+          # Select exactly one published binary deterministically; fail fast if none.
+          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f -path '*/publish/tswap' -print -quit)
+          if [ -z "$BINARY" ]; then
+            echo "::error::no published tswap binary found under TswapCli/bin/Debug" >&2
+            exit 1
+          fi
+          TSWAP_E2E_BINARY="$BINARY" \
+            dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

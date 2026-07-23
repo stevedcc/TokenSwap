@@ -43,13 +43,10 @@ try
     var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);
-    return CommandRegistry.Dispatch(ctx, env.CommandArgs);
+    return CliRunner.Run(ctx, env.CommandArgs);
 }
-catch (OperationCanceledException)
-{
-    Console.Error.WriteLine("Cancelled.");
-    return 130;
-}
+// CliRunner maps command errors; these catches cover composition failures only
+// (e.g. malformed TSWAP_TEST_KEY), keeping the same output format.
 catch (TswapException ex)
 {
     Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
