@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Run the tswap test suite.
 #
-#   ./runtests.sh                 all tests (unit + integration; ~11 min)
+#   ./runtests.sh                 all tests (unit + integration; ~40 s)
 #   ./runtests.sh --unit          unit tests only (~1 s)
-#   ./runtests.sh --integration   ProgramTests only (spawns `dotnet run` per test)
+#   ./runtests.sh --integration   ProgramTests only (builds tswap once, then
+#                                 spawns the built binary per test)
 #
 # Tests run sequentially (TswapTests/xunit.runner.json): ProgramTests spawns a
-# `dotnet run` subprocess per test, and concurrent test hosts each doing that
-# can exhaust memory on constrained machines.
+# tswap subprocess per test, and concurrent test hosts each doing that can
+# exhaust memory on constrained machines.
 set -eo pipefail
 
 FILTER=""

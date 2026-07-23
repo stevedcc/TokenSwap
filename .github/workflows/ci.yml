@@ -33,12 +33,12 @@ jobs:
       - name: Unit tests
         run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName!~ProgramTests"
 
-      # ProgramTests spawn a `dotnet run` subprocess per test (~11 min sequentially).
-      # Verified on Linux; extending to macOS/Windows runners is a follow-up once
-      # their runtime behaviour (paths, process spawning) is confirmed.
+      # ProgramTests builds tswap once (TswapBinaryFixture), then spawns the built
+      # binary per test (~30 s sequentially). Verified on Linux; extending to
+      # macOS/Windows runners is a follow-up once their runtime behaviour is confirmed.
       - name: Integration tests (ProgramTests)
         if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 30
+        timeout-minutes: 10
         run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName~ProgramTests"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes

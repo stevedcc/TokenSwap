@@ -11,21 +11,23 @@ namespace TswapTests;
 /// <summary>
 /// Integration tests for Program.cs using TSWAP_TEST_KEY to bypass YubiKey.
 /// Each test gets an isolated temp config directory and a deterministic test key.
+/// The tswap binary is built once per run by <see cref="TswapBinaryFixture"/> and
+/// invoked directly (not via `dotnet run`, which re-evaluates MSBuild per call).
 /// </summary>
-public class ProgramTests : IDisposable
+public class ProgramTests : IClassFixture<TswapBinaryFixture>, IDisposable
 {
     private readonly string _tempDir;
     private readonly string _testKeyHex;
-    private readonly string _projectDir;
+    private readonly string _binaryPath;
 
-    public ProgramTests()
+    public ProgramTests(TswapBinaryFixture binary)
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "tswap-prog-test-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
 
         // Deterministic 32-byte test key
         _testKeyHex = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-        _projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        _binaryPath = binary.BinaryPath;
     }
 
     public void Dispose()
@@ -38,7 +40,7 @@ public class ProgramTests : IDisposable
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "dotnet",
+            FileName = _binaryPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = redirectStdin,
@@ -51,10 +53,6 @@ public class ProgramTests : IDisposable
         // fork() from a JIT-mode .NET process crashes when W^X protection is active.
         // The deployed AOT binary has no JIT so this is not needed in production.
         psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
-        psi.ArgumentList.Add("run");
-        psi.ArgumentList.Add("--project");
-        psi.ArgumentList.Add($"{_projectDir}/tswap.csproj");
-        psi.ArgumentList.Add("--");
         return psi;
     }
 
@@ -449,8 +447,8 @@ public class ProgramTests : IDisposable
     // --- InstallScript ---
 
     /// <summary>
-    /// Under 'dotnet run', Environment.ProcessPath is the compiled binary (not the dotnet
-    /// host), so installscript succeeds and embeds the actual binary path.
+    /// Tests invoke the compiled apphost binary directly, so Environment.ProcessPath is
+    /// the binary itself and installscript succeeds and embeds the actual binary path.
     /// </summary>
     [Fact]
     public void InstallScript_OutputsScript()
@@ -692,17 +690,17 @@ public class ProgramTests : IDisposable
 
         // Write a small bash script. The two `exec` lines:
         //   1. Replace bash's own fds 0/1/2 with the slave PTY (making tswap see a real TTY).
-        //   2. Replace bash with dotnet so dotnet inherits those slave fds.
+        //   2. Replace bash with the tswap binary so it inherits those slave fds.
         //
         // The compound command is passed as a plain double-quoted string in the bash script.
-        // Bash passes it as a single argv element to dotnet, and tswap exec's sh directly
+        // Bash passes it as a single argv element to tswap, and tswap exec's sh directly
         // with that element as the -c argument — no intermediate shell re-parsing.
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
             $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
-            $"exec dotnet run --project \"{_projectDir}/tswap.csproj\"" +
-            $" -- run sh -c \"echo before; echo {{{{my-secret}}}}; echo after\"\n");
+            $"exec \"{_binaryPath}\"" +
+            $" run sh -c \"echo before; echo {{{{my-secret}}}}; echo after\"\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add(scriptPath);
@@ -795,13 +793,13 @@ public class ProgramTests : IDisposable
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "dotnet",
-            Arguments = $"run --project \"{_projectDir}/tswap.csproj\" -- init",
+            FileName = _binaryPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        psi.ArgumentList.Add("init");
         psi.Environment["TSWAP_TEST_KEY"] = "AABB"; // Only 2 bytes, not 32
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
 
@@ -1364,7 +1362,7 @@ password2: """"  # tswap: missing-mixed-secret");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
             $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
-            $"exec dotnet run --project \"{_projectDir}/tswap.csproj\" -- {quotedArgs}\n");
+            $"exec \"{_binaryPath}\" {quotedArgs}\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add(scriptPath);
