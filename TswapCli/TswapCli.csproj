@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>tswap</AssemblyName>
+    <RootNamespace>TswapCli</RootNamespace>
     <TargetFramework>net10.0</TargetFramework>
     <Version>0.0.2</Version>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -10,21 +12,11 @@
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Size</OptimizationPreference>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="Program.cs" />
-    <Compile Include="IPtyRunner.cs" />
-    <Compile Include="Pty.cs" />
-    <Compile Include="UnixPty.cs" />
-    <Compile Include="LinuxPty.cs" />
-    <Compile Include="MacOSPty.cs" />
-    <Compile Include="WindowsPty.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="TswapCore\TswapCore.csproj" />
+    <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
+    <ProjectReference Include="..\ConsoleIntercept\ConsoleIntercept.csproj" />
   </ItemGroup>
 
 </Project>

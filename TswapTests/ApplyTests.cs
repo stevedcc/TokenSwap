@@ -240,14 +240,9 @@ redis:
 
         var input = @"password: ""existingvalue""  # tswap: db-password";
 
-        // Capture stderr
-        var originalError = Console.Error;
+        // Warnings go to an explicit writer (ApplySecrets no longer defaults to Console.Error)
         using var errorWriter = new StringWriter();
-        Console.SetError(errorWriter);
-
-        var result = Apply.ApplySecrets(input, db);
-
-        Console.SetError(originalError);
+        var result = Apply.ApplySecrets(input, db, warnings: errorWriter);
         var stderr = errorWriter.ToString();
 
         // Value should not be changed

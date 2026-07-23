@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 # Run the tswap test suite.
 #
-#   ./runtests.sh                 all tests (unit + integration; ~40 s)
-#   ./runtests.sh --unit          unit tests only (~1 s)
-#   ./runtests.sh --integration   ProgramTests only (builds tswap once, then
-#                                 spawns the built binary per test)
-#
-# Tests run sequentially (TswapTests/xunit.runner.json): ProgramTests spawns a
-# tswap subprocess per test, and concurrent test hosts each doing that can
-# exhaust memory on constrained machines.
+#   ./runtests.sh            all tests (in-process + E2E; ~40 s, builds tswap once)
+#   ./runtests.sh --unit     in-process tests only (~5 s, no subprocess spawning)
+#   ./runtests.sh --e2e      end-to-end tests only (spawn the built tswap binary;
+#                            set TSWAP_E2E_BINARY to test a pre-built/AOT binary)
 set -eo pipefail
 
 FILTER=""
+TARGET="./TokenSwap.slnx"
 case "${1:-}" in
-  --unit)        FILTER="--filter FullyQualifiedName!~ProgramTests" ;;
-  --integration) FILTER="--filter FullyQualifiedName~ProgramTests" ;;
+  --unit)        FILTER="--filter Category!=E2E" ;;
+  # E2E tests live only in TswapTests; target that project directly so the
+  # filter doesn't produce a "no tests matched" warning in ConsoleIntercept.Tests.
+  --e2e|--integration)
+                 FILTER="--filter Category=E2E"
+                 TARGET="./TswapTests/TswapTests.csproj" ;;
   "")            ;;
-  *) echo "Usage: $0 [--unit|--integration]" >&2; exit 64 ;;
+  *) echo "Usage: $0 [--unit|--e2e]" >&2; exit 64 ;;
 esac
 
 TSWAP_TEST_KEY="${TSWAP_TEST_KEY:-$(openssl rand -hex 32)}" \
-  dotnet test ./TswapTests/TswapTests.csproj $FILTER
+  dotnet test "$TARGET" $FILTER

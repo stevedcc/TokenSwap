@@ -17,11 +17,11 @@ public static class Apply
     /// Finds lines with empty values (e.g., <c>password: ""  # tswap: db-password</c>)
     /// and replaces the empty value with the actual secret value.
     /// Returns the modified content. Warnings are written to <paramref name="warnings"/>
-    /// (defaults to <see cref="Console.Error"/>).
+    /// (discarded when null — callers that surface warnings must pass a writer).
     /// </summary>
     public static string ApplySecrets(string content, SecretsDb db, TextWriter? warnings = null)
     {
-        warnings ??= Console.Error;
+        warnings ??= TextWriter.Null;
         content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
 

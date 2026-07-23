@@ -6,9 +6,6 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <!-- TswapCli is a RID-specific (self-contained-on-publish) exe; referencing it from
-         this RID-agnostic test project is fine for in-process command tests. -->
-    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,12 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
-    <ProjectReference Include="..\TswapCli\TswapCli.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\ConsoleIntercept\ConsoleIntercept.csproj" />
   </ItemGroup>
 
 </Project>

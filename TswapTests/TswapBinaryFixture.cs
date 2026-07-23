@@ -4,7 +4,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Builds tswap.csproj once (Debug) for the whole ProgramTests run and exposes the
+/// Builds TswapCli once (Debug) for the whole ProgramTests run and exposes the
 /// path to the built apphost binary. Tests invoke the binary directly instead of
 /// `dotnet run --project`, which pays an MSBuild project evaluation per invocation
 /// (~7.5 s per test, ~11 min across the suite when it was run that way).
@@ -19,6 +19,21 @@ public sealed class TswapBinaryFixture
     public TswapBinaryFixture()
     {
         var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+
+        // CI (and local runs) can point the E2E suite at a pre-built binary — e.g. a
+        // NativeAOT publish — instead of building the Debug apphost here. A relative
+        // path is resolved against the repo root, NOT the test host's working
+        // directory (which is the test output dir and would double the path).
+        var overridePath = Environment.GetEnvironmentVariable("TSWAP_E2E_BINARY");
+        if (!string.IsNullOrEmpty(overridePath))
+        {
+            BinaryPath = Path.IsPathRooted(overridePath)
+                ? overridePath
+                : Path.GetFullPath(Path.Combine(projectDir, overridePath));
+            if (!File.Exists(BinaryPath))
+                throw new Exception($"TSWAP_E2E_BINARY points to a missing file: {BinaryPath}");
+            return;
+        }
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -29,7 +44,7 @@ public sealed class TswapBinaryFixture
             WorkingDirectory = projectDir,
         };
         psi.ArgumentList.Add("build");
-        psi.ArgumentList.Add(Path.Combine(projectDir, "tswap.csproj"));
+        psi.ArgumentList.Add(Path.Combine(projectDir, "TswapCli", "TswapCli.csproj"));
         // -getProperty suppresses normal build logging on stdout and prints only the
         // property value after the build completes.
         psi.ArgumentList.Add("-getProperty:TargetPath");
@@ -39,7 +54,7 @@ public sealed class TswapBinaryFixture
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         if (process.ExitCode != 0)
-            throw new Exception($"Building tswap.csproj failed (exit {process.ExitCode}):\n{stdout}\n{stderr}");
+            throw new Exception($"Building TswapCli.csproj failed (exit {process.ExitCode}):\n{stdout}\n{stderr}");
 
         var targetPath = stdout.Trim(); // .../tswap.dll
         var binaryPath = OperatingSystem.IsWindows()

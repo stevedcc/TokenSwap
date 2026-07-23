@@ -1,45 +1,7 @@
-using System.Diagnostics;
-
 namespace TswapCore;
 
 public class YubiKey
 {
-    /// <summary>
-    /// Checks if a YubiKey slot is configured to require touch.
-    /// Returns null if detection fails.
-    /// </summary>
-    public static bool? DetectTouchRequirement(int serial, int slot = 2)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "ykman",
-                Arguments = $"--device {serial} otp info",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null)
-                return null;
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
-                return null;
-
-            return ParseTouchRequirement(output, slot);
-        }
-        catch
-        {
-            return null; // Detection failed
-        }
-    }
-
     /// <summary>
     /// Parse ykman otp info output to determine if a slot requires touch.
     /// Returns true if touch is required, false if not required, null if slot not found/configured.
@@ -108,41 +70,5 @@ public class YubiKey
 
         // Slot not found or not configured
         return null;
-    }
-
-    /// <summary>
-    /// Print a warning if YubiKey slots don't require touch or status is unknown
-    /// </summary>
-    public static void WarnIfNoTouch(Config config)
-    {
-        if (config.RequiresTouch != true)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Error.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-            
-            if (config.RequiresTouch == false)
-            {
-                Console.Error.WriteLine("║  [!]  SECURITY WARNING: YubiKey slots configured without touch    ║");
-                Console.Error.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.Error.WriteLine("║  Your YubiKeys are configured without requiring button press.     ║");
-                Console.Error.WriteLine("║  This means any process can unlock the vault if the key is        ║");
-                Console.Error.WriteLine("║  inserted, weakening the security model.                          ║");
-            }
-            else // config.RequiresTouch == null
-            {
-                Console.Error.WriteLine("║  [!]  SECURITY WARNING: YubiKey touch requirement unknown         ║");
-                Console.Error.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-                Console.Error.WriteLine("║  Unable to detect if your YubiKeys require button press.          ║");
-                Console.Error.WriteLine("║  This may indicate ykman is not installed or detection failed.    ║");
-                Console.Error.WriteLine("║  If touch is not required, any process can unlock the vault.      ║");
-            }
-            
-            Console.Error.WriteLine("║                                                                   ║");
-            Console.Error.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required    ║");
-            Console.Error.WriteLine("║  slots for better security.                                       ║");
-            Console.Error.WriteLine("╚═══════════════════════════════════════════════════════════════════╝");
-            Console.ResetColor();
-            Console.Error.WriteLine();
-        }
     }
 }

@@ -1,7 +1,6 @@
-using TswapCore;
 using Xunit;
 
-namespace TswapTests;
+namespace ConsoleIntercept.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="StreamRedactor"/>.
@@ -10,12 +9,12 @@ namespace TswapTests;
 /// </summary>
 public class StreamRedactorTests
 {
-    private static List<KeyValuePair<string, string>> Secrets(params (string name, string value)[] pairs)
-        => pairs.Select(p => new KeyValuePair<string, string>(p.name, p.value)).ToList();
+    private static List<StreamReplacement> Secrets(params (string name, string value)[] pairs)
+        => pairs.Select(p => new StreamReplacement(p.value, $"[REDACTED: {p.name}]")).ToList();
 
-    private static string Process(List<KeyValuePair<string, string>> secrets, params string[] chunks)
+    private static string Process(List<StreamReplacement> replacements, params string[] chunks)
     {
-        var r = new StreamRedactor(secrets);
+        var r = new StreamRedactor(replacements);
         var sb = new System.Text.StringBuilder();
         foreach (var chunk in chunks)
             sb.Append(r.ProcessChunk(chunk));
@@ -108,5 +107,59 @@ public class StreamRedactorTests
         var result = Process(secrets, chunk1, chunk2);
         Assert.DoesNotContain(secret, result);
         Assert.Contains("[REDACTED: s]", result);
+    }
+
+    [Fact]
+    public void NullReplacementList_ThrowsArgumentNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => new StreamRedactor(null!));
+    }
+
+    [Fact]
+    public void NullReplacementEntry_ThrowsArgument()
+    {
+        var replacements = new List<StreamReplacement> { null! };
+        Assert.Throws<ArgumentException>(() => new StreamRedactor(replacements));
+    }
+
+    [Fact]
+    public void NullFindOrReplace_ThrowsArgument()
+    {
+        Assert.Throws<ArgumentException>(
+            () => new StreamRedactor([new StreamReplacement(null!, "x")]));
+        Assert.Throws<ArgumentException>(
+            () => new StreamRedactor([new StreamReplacement("x", null!)]));
+    }
+
+    [Fact]
+    public void EmptyFind_IsAllowedAndInert()
+    {
+        // Empty Find is explicitly permitted (documented as the inert entry) and must
+        // never match anything.
+        var result = Process([new StreamReplacement("", "[X]")], "hello world");
+        Assert.Equal("hello world", result);
+    }
+
+    [Fact]
+    public void NullChunk_ThrowsArgumentNull()
+    {
+        var r = new StreamRedactor([new StreamReplacement("secret", "[X]")]);
+        Assert.Throws<ArgumentNullException>(() => r.ProcessChunk(null!));
+    }
+
+    [Fact]
+    public void UnsortedReplacements_LongerFindStillWins()
+    {
+        // The constructor re-sorts longest-Find-first, so passing the shorter
+        // prefix-sharing value first must not clobber the longer one.
+        var replacements = new List<StreamReplacement>
+        {
+            new("super", "[REDACTED: short]"),
+            new("superSecret", "[REDACTED: long]"),
+        };
+        var result = Process(replacements, "val=superSecret end");
+        Assert.Contains("[REDACTED: long]", result);
+        Assert.DoesNotContain("superSecret", result);
+        Assert.DoesNotContain("[REDACTED: short]", result);
     }
 }

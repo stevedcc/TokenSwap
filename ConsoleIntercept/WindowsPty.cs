@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Text;
-using TswapCore;
+
+namespace ConsoleIntercept;
 
 /// <summary>
 /// Windows ConPTY support via P/Invoke to kernel32. Spawns the child process inside a
@@ -60,6 +60,7 @@ internal sealed class WindowsPty : IPtyRunner
 
     private const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
     private const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+    private const int  STARTF_USESTDHANDLES                = 0x00000100;
     private const uint INFINITE                            = 0xFFFFFFFF;
     private const uint WAIT_FAILED                         = 0xFFFFFFFF;
 
@@ -80,11 +81,14 @@ internal sealed class WindowsPty : IPtyRunner
     private static extern bool InitializeProcThreadAttributeList(
         IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
 
-    // lpValue is a PVOID pointing to the HPCON handle value; pass via ref IntPtr.
+    // For PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, lpValue carries the HPCON handle VALUE
+    // itself (the consumer does not dereference it) — matching Microsoft's ConPTY sample.
+    // Passing a pointer-to-handle makes the child treat the pointer as its HPCON and die
+    // during init with STATUS_DLL_INIT_FAILED (0xC0000142); caught by the ConPTY E2E test.
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool UpdateProcThreadAttribute(
         IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute,
-        ref IntPtr lpValue, IntPtr cbSize,
+        IntPtr lpValue, IntPtr cbSize,
         IntPtr lpPreviousValue, IntPtr lpReturnSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -123,7 +127,7 @@ internal sealed class WindowsPty : IPtyRunner
     /// argument list inside a ConPTY (no shell wrapper), writing redacted output to stdout.
     /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements)
     {
         if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
             throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
@@ -176,17 +180,23 @@ internal sealed class WindowsPty : IPtyRunner
                 throw new Exception("InitializeProcThreadAttributeList failed");
             attrListInitialized = true;
 
-            // Pass the HPCON by reference so Windows receives a pointer to the handle value.
-            var hPCValue = hPC;
+            // Pass the HPCON value directly (not a pointer to it) — see DllImport note.
             if (!UpdateProcThreadAttribute(attrList, 0,
                     new IntPtr(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
-                    ref hPCValue, new IntPtr(IntPtr.Size),
+                    hPC, new IntPtr(IntPtr.Size),
                     IntPtr.Zero, IntPtr.Zero))
                 throw new Exception("UpdateProcThreadAttribute failed");
 
+            // STARTF_USESTDHANDLES with null handles (Windows Terminal's ConptyConnection
+            // pattern): prevents the child from receiving this process's std handle values
+            // and lets the console subsystem hand it the pseudoconsole's handles instead.
             var si = new STARTUPINFOEX
             {
-                StartupInfo     = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFOEX>() },
+                StartupInfo     = new STARTUPINFO
+                {
+                    cb      = Marshal.SizeOf<STARTUPINFOEX>(),
+                    dwFlags = STARTF_USESTDHANDLES, // hStdInput/Output/Error stay null
+                },
                 lpAttributeList = attrList,
             };
 
@@ -225,9 +235,9 @@ internal sealed class WindowsPty : IPtyRunner
             }) { IsBackground = true };
             stdinThread.Start();
 
-            // Read ConPTY output (stdout+stderr merged), redact secrets, write to our stdout.
-            // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
-            // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
+            // Read ConPTY output (stdout+stderr merged), apply replacements, write to our stdout.
+            // StreamRedactor maintains a sliding-window overlap between chunks so find-strings
+            // that straddle a read-buffer boundary are still caught.
             //
             // The read loop runs on a Task so the main thread can wait for the child process
             // and then close the ConPTY. The ConPTY holds the pipe write-end open even after
@@ -238,11 +248,13 @@ internal sealed class WindowsPty : IPtyRunner
             var decoder  = encoding.GetDecoder();
             var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
             var stdout   = Console.OpenStandardOutput();
-            var redactor = new StreamRedactor(sortedSecrets);
+            var redactor = new StreamRedactor(replacements);
+            var totalRead = new long[1]; // Interlocked counter shared with the drain loop below
             var readTask = Task.Run(() =>
             {
                 while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)
                 {
+                    Interlocked.Add(ref totalRead[0], nRead);
                     var charCount = decoder.GetChars(readBuf, 0, (int)nRead, charBuf, 0);
                     var redacted  = redactor.ProcessChunk(new string(charBuf, 0, charCount));
                     var outBytes  = encoding.GetBytes(redacted);
@@ -260,11 +272,30 @@ internal sealed class WindowsPty : IPtyRunner
                 }
             });
 
-            // Wait for the child, then close the ConPTY to signal EOF to the read task.
+            // Wait for the child to exit.
             if (WaitForSingleObject(hProcess, INFINITE) == WAIT_FAILED)
                 throw new Exception($"WaitForSingleObject failed (Win32 error {Marshal.GetLastWin32Error()})");
             if (!GetExitCodeProcess(hProcess, out uint exitCode))
                 throw new Exception($"GetExitCodeProcess failed (Win32 error {Marshal.GetLastWin32Error()})");
+
+            // ConPTY paints frames on its own schedule, and ClosePseudoConsole discards
+            // frames not yet written to the output pipe — closing immediately after a
+            // fast child exits loses its final output (caught by the ConPTY E2E test).
+            // Drain until the stream stays quiet across two consecutive checks (~400 ms),
+            // capped at 30 s in case descendants keep the console alive — mirroring the
+            // UnixPty drain timeout. Output keeps streaming to stdout while we wait.
+            var drainDeadline = Environment.TickCount64 + 30_000;
+            long lastCount = -1;
+            while (Environment.TickCount64 < drainDeadline)
+            {
+                Thread.Sleep(200);
+                var count = Interlocked.Read(ref totalRead[0]);
+                if (count == lastCount)
+                    break; // no new output across a full interval — conhost has flushed
+                lastCount = count;
+            }
+
+            // Close the ConPTY to signal EOF to the read task.
             ClosePseudoConsole(hPC);
             hPC = IntPtr.Zero; // prevent double-close in finally
 

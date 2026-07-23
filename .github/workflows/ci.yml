@@ -30,25 +30,39 @@ jobs:
       - name: Build
         run: dotnet build TokenSwap.slnx
 
-      - name: Unit tests
-        run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName!~ProgramTests"
-
-      # ProgramTests builds tswap once (TswapBinaryFixture), then spawns the built
-      # binary per test (~30 s sequentially). Verified on Linux; extending to
-      # macOS/Windows runners is a follow-up once their runtime behaviour is confirmed.
-      - name: Integration tests (ProgramTests)
-        if: matrix.os == 'ubuntu-latest'
-        timeout-minutes: 10
-        run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName~ProgramTests"
+      - name: Unit tests (in-process)
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
       - name: AOT publish
-        run: dotnet publish tswap.csproj -c Release
+        run: dotnet publish TswapCli/TswapCli.csproj -c Release
+
+      # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
+      # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
+      # the binary — this step tests NativeAOT-compiled behaviour on every OS. On macOS
+      # the outer-PTY tests exercise the real MacOSPty forkpty path; on Windows the
+      # outer-ConPTY test exercises the real WindowsPty path (POSIX-only PTY tests
+      # self-skip there).
+      - name: E2E tests (NativeAOT binary)
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          dotnet publish TswapCli/TswapCli.csproj -c Debug
+          # Select exactly one published binary deterministically; fail fast if none.
+          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f \( -path '*/publish/tswap' -o -path '*/publish/tswap.exe' \) -print -quit)
+          if [ -z "$BINARY" ]; then
+            echo "::error::no published tswap binary found under TswapCli/bin/Debug" >&2
+            exit 1
+          fi
+          # Git Bash paths (/d/a/...) are not valid for .NET on Windows; convert.
+          if command -v cygpath >/dev/null 2>&1; then BINARY=$(cygpath -w "$BINARY"); fi
+          TSWAP_E2E_BINARY="$BINARY" \
+            dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: tswap-${{ matrix.os }}
-          path: bin/Release/net10.0/*/publish/tswap*
+          path: TswapCli/bin/Release/net10.0/*/publish/tswap*
           if-no-files-found: error

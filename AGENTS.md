@@ -9,16 +9,16 @@ TokenSwap (tswap) is a hardware-backed secret manager that solves two problems:
 2. **YubiKey Redundancy**: Two YubiKeys enrolled once; either key unlocks the vault via XOR key reconstruction
 
 C# application with a single entry point:
-- **`Program.cs`** — NativeAOT compiled binary (`dotnet publish -c Release`). 3.8MB, ~20ms startup, no runtime dependencies.
+- **`TswapCli/Program.cs`** — NativeAOT compiled binary (`dotnet publish TswapCli/TswapCli.csproj -c Release`). ~4MB, ~20ms startup, no runtime dependencies.
 
 ## Building and Running
 
 ```bash
 # Build
-dotnet publish -c Release
-# Linux:   cp bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
-# Windows: copy bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
+dotnet publish TswapCli/TswapCli.csproj -c Release
+# Linux:   cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
+# Windows: copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
 # Linux/macOS:
@@ -29,9 +29,9 @@ tswap installscript > installTswap.sh && bash installTswap.sh
 tswap <command>
 ```
 
-Tests live in `TswapTests/TswapTests.csproj`. On Linux/macOS use `./runtests.sh`
-(`--unit` for the fast suite, ~1 s; `--integration` for `ProgramTests`, which builds
-tswap once then spawns the binary per test, ~30 s; no flag runs both). Or run directly:
+Tests live in `TswapTests/` and `ConsoleIntercept.Tests/`. On Linux/macOS use
+`./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
+tests that spawn the built binary; no flag runs both). Or run directly:
 ```shell
 # Linux/macOS:
 TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
@@ -95,16 +95,21 @@ Config directory: `~/.config/tswap/`
 - `config.json` — YubiKey serials + XOR share (plaintext, not secret)
 - `secrets.json.enc` — AES-256-GCM encrypted secrets database
 
-### Code Organization (Program.cs)
+### Code Organization (TswapCli)
 
-`Program.cs` is organized into logical sections:
-1. **Configuration** (~line 20) — paths, verbose flag, invocation detection, sudo user resolution, TSWAP_CONFIG_DIR override, legacy dir migration
-2. **YubiKey Operations** — `ChallengeYubiKey()`, `GetYubiKey()` via ykman CLI
-3. **Helper Functions** — masked password input, sudo enforcement
-4. **Commands** — all command implementations (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import)
-5. **Main Entry Point** — argument parsing and dispatch
+The `TswapCli/` project is the executable (assembly name `tswap`):
+1. **`Program.cs`** — composition root: resolves the environment, wires real or test services, dispatches, and maps exceptions to exit codes
+2. **`CliEnvironment`** — config-dir resolution (TSWAP_CONFIG_DIR override, SUDO_USER mapping, legacy dir migration), invocation prefix, verbose flag
+3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
+4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
+5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript)
+
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests) with `VaultUnlocker` holding the XOR-reconstruction unlock logic.
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
+
+`ConsoleIntercept/` is a self-contained library (no tswap dependencies) that runs a child process in a PTY while streaming its output through find/replace filters — used by `run` for secret redaction. It has its own README and test project (`ConsoleIntercept.Tests/`) and is designed to be extractable to a separate repository.
 
 ## Working with tswap as an AI Agent
 

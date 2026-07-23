@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
+namespace ConsoleIntercept;
+
 /// <summary>
 /// Linux PTY: forkpty was merged from libutil.so into libc.so.6 on glibc 2.34
 /// (Fedora 35+, Ubuntu 22.04+). Older distributions still ship it in libutil.so.1.
