@@ -23,7 +23,8 @@ public sealed class CliEnvironment
             Environment.GetEnvironmentVariable,
             Directory.Exists,
             Directory.Move,
-            Console.Error),
+            Console.Error,
+            () => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
         Verbose = args.Any(a => a is "-v" or "--verbose"),
         CommandArgs = args.Where(a => a is not ("-v" or "--verbose")).ToArray(),
     };
@@ -49,7 +50,8 @@ public sealed class CliEnvironment
         Func<string, string?> getEnv,
         Func<string, bool> directoryExists,
         Action<string, string> moveDirectory,
-        TextWriter log)
+        TextWriter log,
+        Func<string>? getApplicationDataDir = null)
     {
         var configDirOverride = getEnv("TSWAP_CONFIG_DIR");
         if (configDirOverride != null)
@@ -66,7 +68,8 @@ public sealed class CliEnvironment
         }
         else
         {
-            appDataDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            appDataDir = (getApplicationDataDir
+                ?? (() => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)))();
         }
         var configDir = Path.Combine(appDataDir, "tswap");
 
