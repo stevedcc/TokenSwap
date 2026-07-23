@@ -18,18 +18,22 @@ public sealed class TswapBinaryFixture
 
     public TswapBinaryFixture()
     {
+        var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+
         // CI (and local runs) can point the E2E suite at a pre-built binary — e.g. a
-        // NativeAOT publish — instead of building the Debug apphost here.
+        // NativeAOT publish — instead of building the Debug apphost here. A relative
+        // path is resolved against the repo root, NOT the test host's working
+        // directory (which is the test output dir and would double the path).
         var overridePath = Environment.GetEnvironmentVariable("TSWAP_E2E_BINARY");
         if (!string.IsNullOrEmpty(overridePath))
         {
-            BinaryPath = Path.GetFullPath(overridePath);
+            BinaryPath = Path.IsPathRooted(overridePath)
+                ? overridePath
+                : Path.GetFullPath(Path.Combine(projectDir, overridePath));
             if (!File.Exists(BinaryPath))
                 throw new Exception($"TSWAP_E2E_BINARY points to a missing file: {BinaryPath}");
             return;
         }
-
-        var projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",

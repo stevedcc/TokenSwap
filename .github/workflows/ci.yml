@@ -47,7 +47,7 @@ jobs:
         timeout-minutes: 15
         run: |
           dotnet publish TswapCli/TswapCli.csproj -c Debug
-          TSWAP_E2E_BINARY=$(ls TswapCli/bin/Debug/net10.0/*/publish/tswap) \
+          TSWAP_E2E_BINARY=$PWD/$(ls TswapCli/bin/Debug/net10.0/*/publish/tswap) \
             dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
       - name: Upload binary
