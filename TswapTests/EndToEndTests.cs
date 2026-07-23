@@ -839,9 +839,19 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                     hPC, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                 throw new Exception("UpdateProcThreadAttribute failed");
 
+            // STARTF_USESTDHANDLES with null handles (Windows Terminal's ConptyConnection
+            // pattern): without it the child receives this process's std handle VALUES
+            // (pipes under `dotnet test`, invalid in the child since bInheritHandles is
+            // false), and Windows only swaps std handles for fresh console handles when
+            // the old ones were console handles — leaving the child writing to nothing.
+            const int STARTF_USESTDHANDLES = 0x00000100;
             var six = new WinStartupInfoEx
             {
-                StartupInfo = new WinStartupInfo { cb = Marshal.SizeOf<WinStartupInfoEx>() },
+                StartupInfo = new WinStartupInfo
+                {
+                    cb = Marshal.SizeOf<WinStartupInfoEx>(),
+                    dwFlags = STARTF_USESTDHANDLES, // hStdInput/Output/Error stay null
+                },
                 lpAttributeList = attrList,
             };
 

@@ -60,6 +60,7 @@ internal sealed class WindowsPty : IPtyRunner
 
     private const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
     private const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+    private const int  STARTF_USESTDHANDLES                = 0x00000100;
     private const uint INFINITE                            = 0xFFFFFFFF;
     private const uint WAIT_FAILED                         = 0xFFFFFFFF;
 
@@ -186,9 +187,16 @@ internal sealed class WindowsPty : IPtyRunner
                     IntPtr.Zero, IntPtr.Zero))
                 throw new Exception("UpdateProcThreadAttribute failed");
 
+            // STARTF_USESTDHANDLES with null handles (Windows Terminal's ConptyConnection
+            // pattern): prevents the child from receiving this process's std handle values
+            // and lets the console subsystem hand it the pseudoconsole's handles instead.
             var si = new STARTUPINFOEX
             {
-                StartupInfo     = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFOEX>() },
+                StartupInfo     = new STARTUPINFO
+                {
+                    cb      = Marshal.SizeOf<STARTUPINFOEX>(),
+                    dwFlags = STARTF_USESTDHANDLES, // hStdInput/Output/Error stay null
+                },
                 lpAttributeList = attrList,
             };
 
