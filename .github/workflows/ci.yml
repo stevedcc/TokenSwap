@@ -47,7 +47,13 @@ jobs:
         timeout-minutes: 15
         run: |
           dotnet publish TswapCli/TswapCli.csproj -c Debug
-          TSWAP_E2E_BINARY=$PWD/$(ls TswapCli/bin/Debug/net10.0/*/publish/tswap) \
+          # Select exactly one published binary deterministically; fail fast if none.
+          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f -path '*/publish/tswap' -print -quit)
+          if [ -z "$BINARY" ]; then
+            echo "::error::no published tswap binary found under TswapCli/bin/Debug" >&2
+            exit 1
+          fi
+          TSWAP_E2E_BINARY="$BINARY" \
             dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
       - name: Upload binary
