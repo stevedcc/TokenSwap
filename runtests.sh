@@ -12,12 +12,16 @@
 set -eo pipefail
 
 FILTER=""
+TARGET="./TokenSwap.slnx"
 case "${1:-}" in
   --unit)        FILTER="--filter FullyQualifiedName!~ProgramTests" ;;
-  --integration) FILTER="--filter FullyQualifiedName~ProgramTests" ;;
+  # ProgramTests live only in TswapTests; target that project directly so the
+  # filter doesn't produce a "no tests matched" warning in ConsoleIntercept.Tests.
+  --integration) FILTER="--filter FullyQualifiedName~ProgramTests"
+                 TARGET="./TswapTests/TswapTests.csproj" ;;
   "")            ;;
   *) echo "Usage: $0 [--unit|--integration]" >&2; exit 64 ;;
 esac
 
 TSWAP_TEST_KEY="${TSWAP_TEST_KEY:-$(openssl rand -hex 32)}" \
-  dotnet test ./TswapTests/TswapTests.csproj $FILTER
+  dotnet test "$TARGET" $FILTER

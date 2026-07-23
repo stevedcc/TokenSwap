@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Text;
-using TswapCore;
+
+namespace ConsoleIntercept;
 
 /// <summary>
 /// Shared POSIX PTY implementation for Linux and macOS. Spawns the child process inside a
@@ -87,7 +87,7 @@ internal abstract class UnixPty : IPtyRunner
     /// argument list inside a PTY (no shell wrapper), writing redacted output to stdout.
     /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements)
     {
         if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
             throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
@@ -131,7 +131,7 @@ internal abstract class UnixPty : IPtyRunner
         var decoder  = encoding.GetDecoder();
         var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
         var stdout   = Console.OpenStandardOutput();
-        var redactor = new StreamRedactor(sortedSecrets);
+        var redactor = new StreamRedactor(replacements);
 
         int pid = Forkpty(out int masterFd, IntPtr.Zero, IntPtr.Zero, ref winsize);
 
@@ -167,8 +167,8 @@ internal abstract class UnixPty : IPtyRunner
         // child is still in its earliest execution. All read-loop state was allocated
         // above (pre-fork) so the Task body needs no additional setup.
         //
-        // Read PTY output (stdout+stderr merged), redact secrets, write to our stdout.
-        // StreamRedactor maintains a sliding-window overlap between chunks so secrets
+        // Read PTY output (stdout+stderr merged), apply replacements, write to our stdout.
+        // StreamRedactor maintains a sliding-window overlap between chunks so find-strings
         // that straddle a read-buffer boundary are still caught.
         var readTask = Task.Run(() =>
         {

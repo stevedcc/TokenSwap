@@ -106,6 +106,8 @@ Config directory: `~/.config/tswap/`
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
+`ConsoleIntercept/` is a self-contained library (no tswap dependencies) that runs a child process in a PTY while streaming its output through find/replace filters — used by `run` for secret redaction. It has its own README and test project (`ConsoleIntercept.Tests/`) and is designed to be extractable to a separate repository.
+
 ## Working with tswap as an AI Agent
 
 When working in this repository and tswap is initialized (YubiKey present), follow these rules:

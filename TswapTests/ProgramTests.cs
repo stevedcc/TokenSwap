@@ -660,7 +660,7 @@ public class ProgramTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// End-to-end test for issues #74 and #75 that exercises the real PTY code path
     /// (LinuxPty via forkpty). The test opens its own outer PTY and gives tswap the slave
     /// as its stdin/stdout/stderr via a bash script, so <c>Console.IsOutputRedirected</c>
-    /// returns false inside tswap and <c>Pty.Create()</c> returns <c>LinuxPty</c> — not
+    /// returns false inside tswap and <c>PtyRunnerFactory.Create()</c> returns <c>LinuxPty</c> — not
     /// FallbackPty. Output is captured from the outer PTY master.
     ///
     /// tswap now execs argv[0] directly (issue #75 fix), so the compound command string
@@ -676,7 +676,7 @@ public class ProgramTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
-        // isatty(0/1/2) returns true and Pty.Create() picks LinuxPty/MacOSPty.
+        // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
