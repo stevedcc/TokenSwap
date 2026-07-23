@@ -1,45 +1,7 @@
-using System.Diagnostics;
-
 namespace TswapCore;
 
 public class YubiKey
 {
-    /// <summary>
-    /// Checks if a YubiKey slot is configured to require touch.
-    /// Returns null if detection fails.
-    /// </summary>
-    public static bool? DetectTouchRequirement(int serial, int slot = 2)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "ykman",
-                Arguments = $"--device {serial} otp info",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null)
-                return null;
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
-                return null;
-
-            return ParseTouchRequirement(output, slot);
-        }
-        catch
-        {
-            return null; // Detection failed
-        }
-    }
-
     /// <summary>
     /// Parse ykman otp info output to determine if a slot requires touch.
     /// Returns true if touch is required, false if not required, null if slot not found/configured.
