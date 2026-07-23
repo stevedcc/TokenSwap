@@ -12,11 +12,24 @@ codes, same on-disk formats) unless explicitly called out.
 
 ## 1. Current state (baseline)
 
-Verified with .NET SDK 10.0.302: `dotnet build` succeeds for all three projects;
-203 unit tests pass (`dotnet test --filter "FullyQualifiedName!~ProgramTests"`).
-`ProgramTests` (~90 tests) spawn one `dotnet run` subprocess per test — they are
-slow, memory-hungry (OOM-killed the container on a default parallel run), and are
-a direct symptom of the main problem below.
+Verified with .NET SDK 10.0.302 in a memory-constrained Linux container:
+`dotnet build` succeeds for all three projects, and the full test suite passes —
+**289/289** (203 unit tests in ~1 s; the 86 `ProgramTests` in **10 m 43 s** when run
+sequentially with `xUnit.MaxParallelThreads=1`).
+
+`ProgramTests` spawns one `dotnet run --project tswap.csproj` subprocess per test,
+paying MSBuild evaluation + JIT startup each time (~7.5 s/test average). Two
+consequences observed while establishing this baseline:
+
+- **Slow**: ~11 minutes for 86 tests that assert on stdout text and exit codes.
+- **Fragile under default settings**: a default (parallel) `dotnet test` run was
+  SIGKILLed (exit 137) in this container — consistent with the OOM killer reaping
+  concurrent test hosts that each spawn `dotnet run` builds, though the kill could
+  not be attributed with certainty. Sequential runs complete reliably; parallelism
+  is the trigger either way.
+
+Both are symptoms of the same root cause addressed by this plan: `Program.cs` cannot
+be tested in-process, so the suite shells out to the real CLI for every case.
 
 ### Project layout today
 
@@ -276,7 +289,7 @@ The payoff phase: `ProgramTests`' 90 subprocess tests become in-process tests.
 1. **Command-level tests** construct commands with `FakeConsole`,
    `TestKeyYubiKeyService`, and a temp `Storage` dir. Port `ProgramTests` cases
    1:1 (same asserts on output text and exit codes) — they run in milliseconds
-   and can't OOM. Table stakes after Phase 2; expect ~85 of ~90 tests to port.
+   and can't OOM. Table stakes after Phase 2; expect ~80 of the 86 tests to port.
 2. **Keep a thin E2E layer**: ~10 smoke tests that exercise the *published binary*
    end-to-end (init → create → run with redaction → burn → check → export/import),
    `[Trait("Category","E2E")]`, excluded from default `dotnet test`, run in CI after
