@@ -423,6 +423,50 @@ Sync stays entirely external (git/Syncthing/Dropbox); per-record files also give
 content-free "what changed" diffs. A `tswap sync` (or auto-merge-on-load) folds a
 freshly-synced directory into the local view.
 
+#### Per-file security considerations (bake into the format, not retrofit)
+
+Splitting the single blob into one file per secret trades some **metadata** privacy for
+mergeability. Note up front what is *not* a concern: AES-256-GCM confidentiality does not
+weaken with small plaintext — a 12-byte password under a 256-bit key is as confidential
+as a 12 MB file; breaking it means breaking the key, and value length is irrelevant to
+that. The real costs are three metadata leaks, all versus the single blob, in descending
+order of how much they matter:
+
+1. **Value-length leakage (cheap, mandatory fix).** A per-secret ciphertext is
+   `plaintext + ~28 bytes` fixed overhead, so the file size reveals that secret's value
+   length — fingerprinting password vs API-key vs private-key. The single blob hid
+   individual lengths by pooling them. **Mitigation: pad every record to size buckets**
+   (e.g. next multiple of 256 bytes) before encrypting. Negligible cost; removes the leak.
+
+2. **Identity + timing correlation (the real tradeoff).** Deterministic
+   `HMAC(K_names, name)` filenames are *stable*, so a transport observer sees "the file
+   with hash `abc123…` changed again at 14:03" — the name stays hidden, but per-secret
+   **edit patterns over time** become trackable and correlatable with user activity. The
+   single blob leaks only "something changed." This collides with mergeability, which
+   *needs* a stable per-secret identity to recognise concurrent edits of the same secret.
+   Escape hatch: randomise the *filename* per write while keeping a stable record-id
+   *inside* the AEAD (each edit becomes a fresh opaque file; supersede/delete via
+   tombstones keyed on the internal id; periodic compaction). That defeats which-secret
+   correlation but not "an edit of ~this size happened around now" — hiding that needs
+   batching or decoy traffic, disproportionate for a personal fleet. **Decision to make
+   explicitly in the design doc:** deterministic filenames (simpler merge, leaks edit
+   identity/timing) vs randomised filenames + internal ids (hides identity, adds
+   compaction) — most personal threat models can accept deterministic + padding.
+
+3. **Nonce-management surface (subtle, mandatory fix).** N files rewritten
+   independently and concurrently across machines, all under one `K_v`, vastly enlarges
+   the GCM nonce-uniqueness surface — and GCM nonce reuse under one key is catastrophic
+   (loss of confidentiality *and* forgeability). The single blob sidesteps this with one
+   fresh nonce per whole-file save. **Mitigation: derive a per-record key**
+   `HKDF(K_v, salt = recordId || writeCounter)` so each encryption uses a distinct key,
+   making cross-record nonce collisions a non-issue — and this also makes `K_v` rotation
+   cleaner. (XChaCha20-Poly1305's 192-bit nonce is an alternative that makes random-nonce
+   collision negligible; per-record HKDF is preferred as it helps rotation too.)
+
+Items 1 and 3 are non-negotiable and cheap; item 2 is a deliberate privacy/mergeability
+choice. All three change the record's byte layout, so they must be fixed *before* the
+format is written — they are painful to retrofit once vaults exist on disk.
+
 #### Implementation ordering (each independently shippable)
 
 1. **`IVaultStore` extraction** (the Phase 5 backlog item): carve load/save of config +
@@ -430,8 +474,11 @@ freshly-synced directory into the local view.
    as the default implementation. Pure refactor, no behaviour change — the enabling step.
 2. **Per-secret record format + merge engine** (single-machine first): new store
    implementation with keyed-hash filenames, HLC metadata, and the LWW / earliest-burn /
-   tombstone merge rules. Fuzz/property-test the merge for commutativity and idempotence
-   (merge order must not matter). Still one machine, one `KEK` — no keyring yet.
+   tombstone merge rules. **Bake in the per-file security fixes now** (see above):
+   size-bucket padding before encryption, and per-record keys via
+   `HKDF(K_v, recordId || writeCounter)` — both change the byte layout and cannot be
+   retrofitted once vaults exist. Fuzz/property-test the merge for commutativity and
+   idempotence (merge order must not matter). Still one machine, one `KEK` — no keyring yet.
 3. **Keyring + enrollment** (multi-machine, 1-of-n): `K_v` + per-machine wrapped slots;
    `fleet init`, `fleet enroll`, `fleet machines`. Enrollment uses an **offline, two-file
    ephemeral X25519 exchange** (new machine emits a request file with its public key +
@@ -454,6 +501,11 @@ freshly-synced directory into the local view.
 - **`K_names` provenance:** deriving the filename-HMAC key from `K_v` means a rotation
   (step 4) renames every record; deriving it from a separate, non-rotated fleet constant
   avoids mass renames but must never be reconstructible without fleet membership.
+- **Filename identity vs edit-timing privacy** (from the per-file security notes):
+  deterministic `HMAC(name)` filenames keep merge simple but let a transport observer
+  track per-secret edit patterns; randomised filenames + internal record-ids hide that at
+  the cost of compaction. Pick one before writing the format. Padding (item 1) and
+  per-record keys (item 3) are settled — apply both regardless of this choice.
 - **Interaction with export/import:** the existing encrypted single-file export stays as
   the backup/transfer format; `IVaultStore` makes "export = serialize whatever store is
   active" fall out naturally.
