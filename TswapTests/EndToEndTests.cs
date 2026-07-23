@@ -691,7 +691,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // 'echo' is only blocked as argv[0]; inside the cmd /c script it is fine, and
         // '&' separators avoid the pipe/redirect template check — mirroring the sh -c
         // compound-command tests on POSIX.
-        var (exitCode, output) = RunTswapInConPty(
+        var (exitCode, output) = RunTswapInConPty(waitForOutput: "after",
             "run", "cmd", "/c", "echo before& echo {{my-secret}}& echo after");
 
         Assert.True(exitCode == 0, $"Expected exit 0, got {exitCode}. ConPTY output: [{output}]");
@@ -774,11 +774,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     /// <summary>
     /// Launches tswap attached to a fresh pseudoconsole and returns its exit code plus
-    /// everything rendered to the ConPTY output pipe (VT sequences included). Test env
-    /// vars are passed by temporarily setting them on this process (inherited by the
-    /// child); safe because the suite runs with parallelism disabled.
+    /// everything rendered to the ConPTY output pipe (VT sequences included).
+    /// <paramref name="waitForOutput"/> is the sentinel the caller expects to see last;
+    /// the ConPTY is held open until it renders (bounded by a deadline) because closing
+    /// early can discard un-painted frames. Test env vars are passed by temporarily
+    /// setting them on this process (inherited by the child); safe because the suite
+    /// runs with parallelism disabled.
     /// </summary>
-    private (int exitCode, string output) RunTswapInConPty(params string[] args)
+    private (int exitCode, string output) RunTswapInConPty(string waitForOutput, params string[] args)
     {
         const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
         const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
@@ -842,11 +845,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             CloseHandle(pi.hThread);
 
             var sb = new StringBuilder();
+            var sbLock = new object();
             var readTask = Task.Run(() =>
             {
                 var buf = new byte[4096];
                 while (ReadFile(outRd, buf, (uint)buf.Length, out uint n, IntPtr.Zero) && n > 0)
-                    sb.Append(Encoding.UTF8.GetString(buf, 0, (int)n));
+                {
+                    var chunk = Encoding.UTF8.GetString(buf, 0, (int)n);
+                    lock (sbLock) sb.Append(chunk);
+                }
             });
 
             if (WaitForSingleObject(hProcess, 60_000) != 0)
@@ -856,11 +863,25 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             }
             GetExitCodeProcess(hProcess, out uint exitCode);
 
+            // ConPTY paints frames on its own schedule, and ClosePseudoConsole can discard
+            // frames not yet written to the output pipe — a fast child can exit before its
+            // text is rendered. Keep the ConPTY open until the caller's sentinel text has
+            // been captured (or a deadline passes on genuine failure), then close.
+            var drainDeadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < drainDeadline)
+            {
+                string snapshot;
+                lock (sbLock) snapshot = sb.ToString();
+                if (snapshot.Contains(waitForOutput)) break;
+                Thread.Sleep(100);
+            }
+            Thread.Sleep(250); // grace period for trailing frames after the sentinel
+
             // Closing the ConPTY releases the output pipe so the read task sees EOF.
             ClosePseudoConsole(hPC); hPC = IntPtr.Zero;
             readTask.Wait(TimeSpan.FromSeconds(10));
 
-            return ((int)exitCode, sb.ToString());
+            lock (sbLock) return ((int)exitCode, sb.ToString());
         }
         finally
         {
