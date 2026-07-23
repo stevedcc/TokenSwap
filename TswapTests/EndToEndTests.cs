@@ -694,11 +694,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var (exitCode, output) = RunTswapInConPty(waitForOutput: "after",
             "run", "cmd", "/c", "echo before& echo {{my-secret}}& echo after");
 
-        Assert.True(exitCode == 0, $"Expected exit 0, got {exitCode}. ConPTY output: [{output}]");
-        Assert.Contains("before", output);
-        Assert.Contains("after", output);
-        Assert.DoesNotContain("s3cr3t-conpty-value", output);
-        Assert.Contains("[REDACTED: my-secret]", output);
+        // Assert via Assert.True with the full escaped capture: xunit truncates the
+        // haystack in Contains failures, which hides the VT stream needed to diagnose
+        // ConPTY behaviour on CI machines we can't reproduce on locally.
+        var dump = $"exit={exitCode} ConPTY output ({output.Length} chars): [{EscapeVt(output)}]";
+        Assert.True(exitCode == 0, $"Expected exit 0. {dump}");
+        Assert.True(output.Contains("before"), $"'before' missing. {dump}");
+        Assert.True(output.Contains("after"), $"'after' missing. {dump}");
+        Assert.False(output.Contains("s3cr3t-conpty-value"), $"raw secret leaked. {dump}");
+        Assert.True(output.Contains("[REDACTED: my-secret]"), $"redaction marker missing. {dump}");
     }
 
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
@@ -896,6 +900,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             if (attrInit)               DeleteProcThreadAttributeList(attrList);
             if (attrList != IntPtr.Zero) Marshal.FreeHGlobal(attrList);
         }
+    }
+
+    // Renders a VT stream printable for assertion messages (ESC → \e), truncated to
+    // keep CI logs readable.
+    private static string EscapeVt(string s)
+    {
+        var escaped = s.Replace("\u001b", "\\e").Replace("\r", "\\r").Replace("\n", "\\n");
+        return escaped.Length <= 3000 ? escaped : escaped[..3000] + $"…(+{escaped.Length - 3000} more)";
     }
 
     // CommandLineToArgvW-compatible quoting (mirrors WindowsPty.WindowsQuoteArg).
