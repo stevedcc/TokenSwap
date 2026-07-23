@@ -29,7 +29,9 @@ tswap installscript > installTswap.sh && bash installTswap.sh
 tswap <command>
 ```
 
-Tests live in `TswapTests/TswapTests.csproj`. Run with:
+Tests live in `TswapTests/TswapTests.csproj`. On Linux/macOS use `./runtests.sh`
+(`--unit` for the fast suite, ~1 s; `--integration` for `ProgramTests`, which spawns a
+`dotnet run` subprocess per test and takes ~11 min; no flag runs both). Or run directly:
 ```shell
 # Linux/macOS:
 TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
