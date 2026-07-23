@@ -19,7 +19,7 @@ public sealed class BurnCommand : ICliCommand
         Validation.ValidateName(name);
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config, warnIfNoTouch: false);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         if (!db.Secrets.ContainsKey(name))
             throw new TswapException($"Secret '{name}' not found");

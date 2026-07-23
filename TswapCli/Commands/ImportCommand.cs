@@ -39,7 +39,7 @@ public sealed class ImportCommand : ICliCommand
             throw new TswapException($"Export file is not valid JSON: {ex.Message}");
         }
 
-        if (exportFile.Version != "tswap-export-v1")
+        if (exportFile.Version != ExportFile.CurrentVersion)
             throw new TswapException($"Unsupported export version: {exportFile.Version}");
 
         var salt = Convert.FromBase64String(exportFile.Salt);
@@ -63,7 +63,7 @@ public sealed class ImportCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
         foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))

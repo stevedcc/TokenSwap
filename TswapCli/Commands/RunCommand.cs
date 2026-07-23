@@ -51,7 +51,7 @@ public sealed class RunCommand : ICliCommand
         // Unlock and get secrets
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
         // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).

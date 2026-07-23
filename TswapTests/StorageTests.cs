@@ -46,7 +46,7 @@ public class StorageTests : IDisposable
     [Fact]
     public void Config_LoadMissing_Throws()
     {
-        Assert.Throws<Exception>(() => _storage.LoadConfig());
+        Assert.Throws<TswapException>(() => _storage.LoadConfig());
     }
 
     // --- Secrets ---

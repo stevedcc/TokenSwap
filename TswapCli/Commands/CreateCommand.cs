@@ -34,13 +34,13 @@ public sealed class CreateCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         if (db.Secrets.ContainsKey(name))
             throw new TswapException($"Secret '{name}' already exists. Use 'delete' first to rotate.");
 
         byte[] entropy;
-        if (config.RngMode == "yubikey" && ctx.TestKey == null)
+        if (config.RngMode == RngMode.YubiKey && ctx.TestKey == null)
         {
             ctx.Console.Out.WriteLine("Touch YubiKey for entropy generation...");
             var entropySerial = ctx.SelectSerial();

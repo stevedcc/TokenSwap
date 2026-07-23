@@ -19,21 +19,27 @@ public class Storage
     public Config LoadConfig()
     {
         if (!File.Exists(ConfigFile))
-            throw new Exception("Not initialized. Run: tswap init");
+            throw new TswapException("Not initialized. Run: tswap init");
 
         var json = File.ReadAllText(ConfigFile);
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)
-            ?? throw new Exception("Invalid config");
+            ?? throw new TswapException("Invalid config");
     }
 
     public void SaveConfig(Config config)
     {
         Directory.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
-        File.WriteAllText(ConfigFile, json);
+        WriteFileAtomic(ConfigFile, Encoding.UTF8.GetBytes(json));
     }
 
-    public SecretsDb LoadSecrets(byte[] key)
+    /// <summary>
+    /// Loads and decrypts the secrets database. A missing vault or config directory
+    /// is recoverable (returns an empty database); the explanation is written to
+    /// <paramref name="warnings"/> when provided, so the library itself never
+    /// touches the console.
+    /// </summary>
+    public SecretsDb LoadSecrets(byte[] key, TextWriter? warnings = null)
     {
         byte[] encrypted;
         try
@@ -42,7 +48,7 @@ public class Storage
         }
         catch (FileNotFoundException)
         {
-            Console.Error.WriteLine(
+            warnings?.WriteLine(
                 $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
                 "To recover: restore secrets.json.enc alongside its original config.json from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
@@ -50,7 +56,7 @@ public class Storage
         }
         catch (DirectoryNotFoundException)
         {
-            Console.Error.WriteLine(
+            warnings?.WriteLine(
                 $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
                 "To recover: restore the config directory from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
@@ -68,6 +74,15 @@ public class Storage
         var json = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
         var plaintext = Encoding.UTF8.GetBytes(json);
         var encrypted = Crypto.Encrypt(plaintext, key);
-        File.WriteAllBytes(SecretsFile, encrypted);
+        WriteFileAtomic(SecretsFile, encrypted);
+    }
+
+    // Write-temp-then-rename so a crash mid-write can never destroy the existing
+    // file: the rename either fully replaces it or leaves it untouched.
+    private static void WriteFileAtomic(string path, byte[] bytes)
+    {
+        var tmp = path + ".tmp";
+        File.WriteAllBytes(tmp, bytes);
+        File.Move(tmp, path, overwrite: true);
     }
 }

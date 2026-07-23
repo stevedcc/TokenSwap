@@ -38,7 +38,7 @@ public sealed class ExportCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         var salt = RandomNumberGenerator.GetBytes(32);
         var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
@@ -46,7 +46,7 @@ public sealed class ExportCommand : ICliCommand
         var ciphertext = Crypto.Encrypt(plaintext, exportKey);
 
         var exportFile = new ExportFile(
-            "tswap-export-v1",
+            ExportFile.CurrentVersion,
             DateTime.UtcNow,
             Convert.ToBase64String(salt),
             Convert.ToBase64String(ciphertext)

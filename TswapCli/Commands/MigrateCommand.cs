@@ -1,3 +1,5 @@
+using TswapCore;
+
 namespace TswapCli.Commands;
 
 public sealed class MigrateCommand : ICliCommand
@@ -38,7 +40,7 @@ public sealed class MigrateCommand : ICliCommand
         c.SetForeground(needsRngPrompt ? ConsoleColor.Yellow : ConsoleColor.Green);
         c.Out.WriteLine(needsRngPrompt
             ? "  Entropy mode:     not configured (defaults to system RNG) ⚠"
-            : $"  Entropy mode:     {config.RngMode} ✓");
+            : $"  Entropy mode:     {config.RngMode?.DisplayName()} ✓");
         c.ResetColor();
 
         c.SetForeground(needsChallengeMigration ? ConsoleColor.Yellow : ConsoleColor.Green);
@@ -62,11 +64,11 @@ public sealed class MigrateCommand : ICliCommand
             c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary");
             c.Out.Write("Choose [1/2, default 1]: ");
             var rngChoice = c.ReadLine()?.Trim();
-            var newRngMode = rngChoice == "2" ? "yubikey" : "system";
+            var newRngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
             config = config with { RngMode = newRngMode };
             ctx.Storage.SaveConfig(config);
             c.SetForeground(ConsoleColor.Green);
-            c.Out.WriteLine($"✓ Entropy mode set to: {(newRngMode == "yubikey" ? "YubiKey hardware" : "System RNG")}");
+            c.Out.WriteLine($"✓ Entropy mode set to: {(newRngMode == RngMode.YubiKey ? "YubiKey hardware" : "System RNG")}");
             c.ResetColor();
         }
 

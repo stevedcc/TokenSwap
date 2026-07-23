@@ -22,17 +22,10 @@ public sealed class VaultUnlocker(IYubiKeyService yubiKeys, byte[]? overrideKey 
     /// Called with the connected serials when more than one YubiKey is present;
     /// returns the serial to use. Never called for zero or one connected key.
     /// </param>
-    /// <param name="warnIfNoTouch">
-    /// Print the missing-touch-requirement warning banner. Suppressed for commands
-    /// that never expose secret values on stdout/stderr (names, burned, burn, check).
-    /// </param>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, bool warnIfNoTouch = true)
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
         if (overrideKey != null)
             return overrideKey; // Test mode: bypass YubiKey entirely — the test key is the master key
-
-        if (warnIfNoTouch)
-            YubiKey.WarnIfNoTouch(config);
 
         var serial = SelectConnectedSerial(chooseSerial);
 

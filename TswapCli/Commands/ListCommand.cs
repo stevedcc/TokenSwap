@@ -12,7 +12,7 @@ public sealed class ListCommand : ICliCommand
         ctx.RequireSudo("list");
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.Storage.LoadSecrets(key);
+        var db = ctx.LoadSecrets(key);
 
         if (db.Secrets.Count == 0)
         {
