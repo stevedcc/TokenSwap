@@ -110,6 +110,44 @@ public class StreamRedactorTests
     }
 
     [Fact]
+    public void NullReplacementList_ThrowsArgumentNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => new StreamRedactor(null!));
+    }
+
+    [Fact]
+    public void NullReplacementEntry_ThrowsArgument()
+    {
+        var replacements = new List<StreamReplacement> { null! };
+        Assert.Throws<ArgumentException>(() => new StreamRedactor(replacements));
+    }
+
+    [Fact]
+    public void NullFindOrReplace_ThrowsArgument()
+    {
+        Assert.Throws<ArgumentException>(
+            () => new StreamRedactor([new StreamReplacement(null!, "x")]));
+        Assert.Throws<ArgumentException>(
+            () => new StreamRedactor([new StreamReplacement("x", null!)]));
+    }
+
+    [Fact]
+    public void EmptyFind_IsAllowedAndInert()
+    {
+        // Empty Find is explicitly permitted (documented as the inert entry) and must
+        // never match anything.
+        var result = Process([new StreamReplacement("", "[X]")], "hello world");
+        Assert.Equal("hello world", result);
+    }
+
+    [Fact]
+    public void NullChunk_ThrowsArgumentNull()
+    {
+        var r = new StreamRedactor([new StreamReplacement("secret", "[X]")]);
+        Assert.Throws<ArgumentNullException>(() => r.ProcessChunk(null!));
+    }
+
+    [Fact]
     public void UnsortedReplacements_LongerFindStillWins()
     {
         // The constructor re-sorts longest-Find-first, so passing the shorter

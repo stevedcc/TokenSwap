@@ -21,13 +21,22 @@ public sealed class StreamRedactor
 
     public StreamRedactor(IReadOnlyList<StreamReplacement> replacements)
     {
+        ArgumentNullException.ThrowIfNull(replacements);
+        foreach (var r in replacements)
+        {
+            if (r is null)
+                throw new ArgumentException("Replacement entries must not be null.", nameof(replacements));
+            if (r.Find is null || r.Replace is null)
+                throw new ArgumentException("StreamReplacement.Find and .Replace must not be null (use \"\" for an inert entry).", nameof(replacements));
+        }
+
         // Defensive longest-Find-first sort: a shorter Find that shares a prefix with a
         // longer one must not clobber it. Callers typically pass a pre-sorted list, but
         // re-sorting is cheap and makes the class safe to use standalone.
-        _replacements = replacements.OrderByDescending(r => r.Find?.Length ?? 0).ToList();
+        _replacements = replacements.OrderByDescending(r => r.Find.Length).ToList();
         // Retain (longestFind - 1) chars between chunks: the minimum overlap that guarantees
         // any single find-string, split at any position, is still seen in full.
-        _overlap = _replacements.Count > 0 ? Math.Max(0, (_replacements[0].Find?.Length ?? 0) - 1) : 0;
+        _overlap = _replacements.Count > 0 ? Math.Max(0, _replacements[0].Find.Length - 1) : 0;
     }
 
     /// <summary>
@@ -36,6 +45,8 @@ public sealed class StreamRedactor
     /// </summary>
     public string ProcessChunk(string chunk)
     {
+        ArgumentNullException.ThrowIfNull(chunk);
+
         var window  = _tail + chunk;
         var safeLen = Math.Max(0, window.Length - _overlap);
 
