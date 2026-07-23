@@ -669,4 +669,236 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
     }
+
+    // --- Windows ConPTY coverage ---
+
+    /// <summary>
+    /// Exercises the real WindowsPty (ConPTY) code path, which no other test reaches:
+    /// the test creates an *outer* pseudoconsole and launches tswap attached to it, so
+    /// tswap's stdio is a genuine console (IsOutputRedirected == false) and
+    /// PtyRunnerFactory selects WindowsPty for the child it spawns. Output is captured
+    /// from the outer ConPTY pipe — it carries VT sequences, so assertions use
+    /// substring checks on the rendered text.
+    /// </summary>
+    [Fact]
+    public void Run_CompoundCommand_RedactedOutput_WindowsConPty()
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
+
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t-conpty-value", "ingest", "my-secret");
+
+        // 'echo' is only blocked as argv[0]; inside the cmd /c script it is fine, and
+        // '&' separators avoid the pipe/redirect template check — mirroring the sh -c
+        // compound-command tests on POSIX.
+        var (exitCode, output) = RunTswapInConPty(
+            "run", "cmd", "/c", "echo before& echo {{my-secret}}& echo after");
+
+        Assert.True(exitCode == 0, $"Expected exit 0, got {exitCode}. ConPTY output: [{output}]");
+        Assert.Contains("before", output);
+        Assert.Contains("after", output);
+        Assert.DoesNotContain("s3cr3t-conpty-value", output);
+        Assert.Contains("[REDACTED: my-secret]", output);
+    }
+
+    // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinCoord { public short X, Y; }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WinStartupInfo
+    {
+        public int    cb;
+        public IntPtr lpReserved, lpDesktop, lpTitle;
+        public int    dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+        public short  wShowWindow, cbReserved2;
+        public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WinStartupInfoEx
+    {
+        public WinStartupInfo StartupInfo;
+        public IntPtr lpAttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinProcessInformation { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinSecurityAttributes { public int nLength; public IntPtr lpSecurityDescriptor; public bool bInheritHandle; }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CreatePipe(out IntPtr hReadPipe, out IntPtr hWritePipe, ref WinSecurityAttributes lpPipeAttributes, uint nSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern int CreatePseudoConsole(WinCoord size, IntPtr hInput, IntPtr hOutput, uint dwFlags, out IntPtr hPC);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void ClosePseudoConsole(IntPtr hPC);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute, ref IntPtr lpValue, IntPtr cbSize, IntPtr lpPreviousValue, IntPtr lpReturnSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string? lpApplicationName, [In] char[] lpCommandLine,
+        IntPtr lpProcessAttributes, IntPtr lpThreadAttributes,
+        bool bInheritHandles, uint dwCreationFlags,
+        IntPtr lpEnvironment, string? lpCurrentDirectory,
+        ref WinStartupInfoEx lpStartupInfo, out WinProcessInformation lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadFile(IntPtr hFile, [Out] byte[] lpBuffer, uint nNumberOfBytesToRead, out uint lpNumberOfBytesRead, IntPtr lpOverlapped);
+
+    /// <summary>
+    /// Launches tswap attached to a fresh pseudoconsole and returns its exit code plus
+    /// everything rendered to the ConPTY output pipe (VT sequences included). Test env
+    /// vars are passed by temporarily setting them on this process (inherited by the
+    /// child); safe because the suite runs with parallelism disabled.
+    /// </summary>
+    private (int exitCode, string output) RunTswapInConPty(params string[] args)
+    {
+        const uint EXTENDED_STARTUPINFO_PRESENT        = 0x00080000;
+        const int  PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
+
+        var inRd = IntPtr.Zero; var inWr = IntPtr.Zero;
+        var outRd = IntPtr.Zero; var outWr = IntPtr.Zero;
+        var hPC = IntPtr.Zero; var attrList = IntPtr.Zero; var hProcess = IntPtr.Zero;
+        bool attrInit = false;
+        var savedEnv = new Dictionary<string, string?>();
+
+        void SetEnv(string name, string? value)
+        {
+            savedEnv[name] = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        try
+        {
+            var sec = new WinSecurityAttributes { nLength = Marshal.SizeOf<WinSecurityAttributes>() };
+            if (!CreatePipe(out inRd, out inWr, ref sec, 0))
+                throw new Exception($"CreatePipe(stdin) failed ({Marshal.GetLastWin32Error()})");
+            if (!CreatePipe(out outRd, out outWr, ref sec, 0))
+                throw new Exception($"CreatePipe(stdout) failed ({Marshal.GetLastWin32Error()})");
+
+            // Wide enough that the redaction marker never wraps mid-token.
+            int hr = CreatePseudoConsole(new WinCoord { X = 120, Y = 30 }, inRd, outWr, 0, out hPC);
+            if (hr != 0)
+                throw new Exception($"CreatePseudoConsole failed (HRESULT 0x{hr:X8})");
+            CloseHandle(inRd);  inRd = IntPtr.Zero;   // ConPTY owns these ends now
+            CloseHandle(outWr); outWr = IntPtr.Zero;
+
+            var attrSize = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attrSize);
+            attrList = Marshal.AllocHGlobal(attrSize);
+            if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref attrSize))
+                throw new Exception("InitializeProcThreadAttributeList failed");
+            attrInit = true;
+            var hPCValue = hPC;
+            if (!UpdateProcThreadAttribute(attrList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
+                    ref hPCValue, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                throw new Exception("UpdateProcThreadAttribute failed");
+
+            var six = new WinStartupInfoEx
+            {
+                StartupInfo = new WinStartupInfo { cb = Marshal.SizeOf<WinStartupInfoEx>() },
+                lpAttributeList = attrList,
+            };
+
+            var cmdStr = string.Join(' ', new[] { _binaryPath }.Concat(args).Select(QuoteWindowsArg));
+            var cmdLine = new char[cmdStr.Length + 1];
+            cmdStr.CopyTo(0, cmdLine, 0, cmdStr.Length);
+
+            // Child inherits this process's environment (lpEnvironment = null).
+            SetEnv("TSWAP_TEST_KEY", _testKeyHex);
+            SetEnv("TSWAP_TEST_SUDO_BYPASS", "1");
+            SetEnv("TSWAP_CONFIG_DIR", _tempDir);
+
+            if (!CreateProcess(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false,
+                    EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, null, ref six, out var pi))
+                throw new Exception($"CreateProcess failed ({Marshal.GetLastWin32Error()})");
+            hProcess = pi.hProcess;
+            CloseHandle(pi.hThread);
+
+            var sb = new StringBuilder();
+            var readTask = Task.Run(() =>
+            {
+                var buf = new byte[4096];
+                while (ReadFile(outRd, buf, (uint)buf.Length, out uint n, IntPtr.Zero) && n > 0)
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, (int)n));
+            });
+
+            if (WaitForSingleObject(hProcess, 60_000) != 0)
+            {
+                TerminateProcess(hProcess, 1);
+                WaitForSingleObject(hProcess, 5_000);
+            }
+            GetExitCodeProcess(hProcess, out uint exitCode);
+
+            // Closing the ConPTY releases the output pipe so the read task sees EOF.
+            ClosePseudoConsole(hPC); hPC = IntPtr.Zero;
+            readTask.Wait(TimeSpan.FromSeconds(10));
+
+            return ((int)exitCode, sb.ToString());
+        }
+        finally
+        {
+            foreach (var (name, value) in savedEnv)
+                Environment.SetEnvironmentVariable(name, value);
+            if (hProcess != IntPtr.Zero) CloseHandle(hProcess);
+            if (hPC     != IntPtr.Zero) ClosePseudoConsole(hPC);
+            if (inWr    != IntPtr.Zero) CloseHandle(inWr);
+            if (outRd   != IntPtr.Zero) CloseHandle(outRd);
+            if (inRd    != IntPtr.Zero) CloseHandle(inRd);
+            if (outWr   != IntPtr.Zero) CloseHandle(outWr);
+            if (attrInit)               DeleteProcThreadAttributeList(attrList);
+            if (attrList != IntPtr.Zero) Marshal.FreeHGlobal(attrList);
+        }
+    }
+
+    // CommandLineToArgvW-compatible quoting (mirrors WindowsPty.WindowsQuoteArg).
+    private static string QuoteWindowsArg(string arg)
+    {
+        if (arg.Length > 0 && arg.IndexOfAny([' ', '\t', '"']) < 0)
+            return arg;
+
+        var sb = new StringBuilder("\"");
+        int backslashes = 0;
+        foreach (char c in arg)
+        {
+            if (c == '\\') { backslashes++; }
+            else if (c == '"')
+            {
+                sb.Append('\\', backslashes * 2 + 1).Append('"');
+                backslashes = 0;
+            }
+            else
+            {
+                if (backslashes > 0) { sb.Append('\\', backslashes); backslashes = 0; }
+                sb.Append(c);
+            }
+        }
+        sb.Append('\\', backslashes * 2).Append('"');
+        return sb.ToString();
+    }
 }

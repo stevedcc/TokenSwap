@@ -42,7 +42,8 @@ jobs:
       # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
       # the binary — this step tests NativeAOT-compiled behaviour on every OS. On macOS
       # the outer-PTY tests exercise the real MacOSPty forkpty path; on Windows the
-      # POSIX-only PTY tests self-skip and the subprocess/installscript tests run.
+      # outer-ConPTY test exercises the real WindowsPty path (POSIX-only PTY tests
+      # self-skip there).
       - name: E2E tests (NativeAOT binary)
         timeout-minutes: 15
         shell: bash
