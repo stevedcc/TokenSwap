@@ -1037,7 +1037,7 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.NotNull(config.RngMode);
         Assert.Equal(RngMode.System, config.RngMode); // test mode uses default
         // On-disk format compatibility: the enum must serialize as the legacy lowercase string
-        Assert.Contains("\"system\"", json);
+        Assert.Contains("\"RngMode\": \"system\"", json);
     }
 
     // Regression test for issue #39: init must not hang when stdin is piped.

@@ -49,6 +49,26 @@ public class StorageTests : IDisposable
         Assert.Throws<TswapException>(() => _storage.LoadConfig());
     }
 
+    [Fact]
+    public void Secrets_Resave_PreservesTightenedUnixFileMode()
+    {
+        if (OperatingSystem.IsWindows()) return; // Unix file modes only
+
+        var db = new SecretsDb(new Dictionary<string, Secret>());
+        _storage.SaveSecrets(db, _key);
+
+        // User tightens the vault to owner-only; the atomic rewrite must not widen it
+        // back to the temp file's default (umask) mode.
+        File.SetUnixFileMode(_storage.SecretsFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        db.Secrets["s"] = new Secret("v", DateTime.UtcNow, DateTime.UtcNow);
+        _storage.SaveSecrets(db, _key);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(_storage.SecretsFile));
+        Assert.False(File.Exists(_storage.SecretsFile + ".tmp"), "temp file must not linger");
+    }
+
     // --- Secrets ---
 
     [Fact]
