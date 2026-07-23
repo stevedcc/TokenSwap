@@ -44,11 +44,11 @@ jobs:
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
       - name: AOT publish
-        run: dotnet publish tswap.csproj -c Release
+        run: dotnet publish TswapCli/TswapCli.csproj -c Release
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: tswap-${{ matrix.os }}
-          path: bin/Release/net10.0/*/publish/tswap*
+          path: TswapCli/bin/Release/net10.0/*/publish/tswap*
           if-no-files-found: error

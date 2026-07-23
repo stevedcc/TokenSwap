@@ -4,7 +4,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Builds tswap.csproj once (Debug) for the whole ProgramTests run and exposes the
+/// Builds TswapCli once (Debug) for the whole ProgramTests run and exposes the
 /// path to the built apphost binary. Tests invoke the binary directly instead of
 /// `dotnet run --project`, which pays an MSBuild project evaluation per invocation
 /// (~7.5 s per test, ~11 min across the suite when it was run that way).
@@ -29,7 +29,7 @@ public sealed class TswapBinaryFixture
             WorkingDirectory = projectDir,
         };
         psi.ArgumentList.Add("build");
-        psi.ArgumentList.Add(Path.Combine(projectDir, "tswap.csproj"));
+        psi.ArgumentList.Add(Path.Combine(projectDir, "TswapCli", "TswapCli.csproj"));
         // -getProperty suppresses normal build logging on stdout and prints only the
         // property value after the build completes.
         psi.ArgumentList.Add("-getProperty:TargetPath");
@@ -39,7 +39,7 @@ public sealed class TswapBinaryFixture
         var stderr = process.StandardError.ReadToEnd();
         process.WaitForExit();
         if (process.ExitCode != 0)
-            throw new Exception($"Building tswap.csproj failed (exit {process.ExitCode}):\n{stdout}\n{stderr}");
+            throw new Exception($"Building TswapCli.csproj failed (exit {process.ExitCode}):\n{stdout}\n{stderr}");
 
         var targetPath = stdout.Trim(); // .../tswap.dll
         var binaryPath = OperatingSystem.IsWindows()
