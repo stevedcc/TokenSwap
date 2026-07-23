@@ -7,6 +7,7 @@ public sealed class SystemConsole : IConsole
 {
     public TextWriter Out => Console.Out;
     public TextWriter Error => Console.Error;
+    public TextReader In => Console.In;
     public bool IsInputRedirected => Console.IsInputRedirected;
     public string? ReadLine() => Console.ReadLine();
     public void SetForeground(ConsoleColor color) => Console.ForegroundColor = color;

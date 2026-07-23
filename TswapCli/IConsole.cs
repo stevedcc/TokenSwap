@@ -10,6 +10,7 @@ public interface IConsole
 {
     TextWriter Out { get; }
     TextWriter Error { get; }
+    TextReader In { get; }
     bool IsInputRedirected { get; }
     string? ReadLine();
 
