@@ -11,6 +11,10 @@ namespace TswapTests;
 /// </summary>
 public class CliEnvironmentTests
 {
+    // A fixed fake ApplicationData dir keeps the non-sudo branch deterministic
+    // (no dependency on the real user profile of the machine running the tests).
+    private static readonly string FakeAppData = Path.Combine(Path.GetTempPath(), "fake-appdata");
+
     private static string Resolve(
         Dictionary<string, string?> env,
         Func<string, bool>? directoryExists = null,
@@ -20,7 +24,8 @@ public class CliEnvironmentTests
             name => env.GetValueOrDefault(name),
             directoryExists ?? (_ => false),
             moveDirectory ?? ((_, _) => { }),
-            log ?? TextWriter.Null);
+            log ?? TextWriter.Null,
+            getApplicationDataDir: () => FakeAppData);
 
     [Fact]
     public void ConfigDirOverride_WinsOverEverything()
@@ -44,8 +49,7 @@ public class CliEnvironmentTests
     public void NoSudoUser_UsesApplicationData()
     {
         var dir = Resolve(new());
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        Assert.Equal(Path.Combine(appData, "tswap"), dir);
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
     }
 
     [Fact]
@@ -53,8 +57,7 @@ public class CliEnvironmentTests
     {
         string? movedFrom = null, movedTo = null;
         var log = new StringWriter();
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var legacy = Path.Combine(appData, "tswap-poc");
+        var legacy = Path.Combine(FakeAppData, "tswap-poc");
 
         var dir = Resolve(new(),
             directoryExists: path => path == legacy, // legacy exists, new dir doesn't
