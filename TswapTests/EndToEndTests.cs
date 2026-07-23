@@ -694,8 +694,15 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // instantly-exiting child can render as a blank session. The trailing sleep
         // gives the paint timers at both levels time to emit the text while the
         // sessions are alive (also the realistic shape of production commands).
-        var (exitCode, output) = RunTswapInConPty(waitForOutput: "after",
-            "run", "pwsh", "-NoProfile", "-Command",
+        // -v makes tswap print verbose lines directly to its stdout (the outer console)
+        // BEFORE any PTY work — separating "tswap's console writes are lost" from "the
+        // inner ConPTY pipeline lost the child's output" in a single capture. Note the
+        // verbose 'Executing:' line contains the literal command words, so assertions
+        // use only strings unique to each pipeline stage: the verbose token line
+        // (pre-PTY) and the redaction marker (only ever emitted from redacted child
+        // output). The raw secret never appears in verbose output (it is masked).
+        var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: my-secret]",
+            "run", "-v", "pwsh", "-NoProfile", "-Command",
             "Write-Output before; Write-Output {{my-secret}}; Write-Output after; Start-Sleep -Milliseconds 1500");
 
         // Assert via Assert.True with the full escaped capture: xunit truncates the
@@ -703,10 +710,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // ConPTY behaviour on CI machines we can't reproduce on locally.
         var dump = $"exit={exitCode} ConPTY output ({output.Length} chars): [{EscapeVt(output)}]";
         Assert.True(exitCode == 0, $"Expected exit 0. {dump}");
-        Assert.True(output.Contains("before"), $"'before' missing. {dump}");
-        Assert.True(output.Contains("after"), $"'after' missing. {dump}");
+        Assert.True(output.Contains("Found tokens: my-secret"),
+            $"verbose marker missing — tswap's own console writes are not reaching the outer ConPTY. {dump}");
         Assert.False(output.Contains("s3cr3t-conpty-value"), $"raw secret leaked. {dump}");
-        Assert.True(output.Contains("[REDACTED: my-secret]"), $"redaction marker missing. {dump}");
+        Assert.True(output.Contains("[REDACTED: my-secret]"),
+            $"redaction marker missing — the inner ConPTY pipeline lost the child's output. {dump}");
     }
 
     // --- ConPTY P/Invoke helpers (used by Run_CompoundCommand_RedactedOutput_WindowsConPty) ---
