@@ -80,11 +80,14 @@ internal sealed class WindowsPty : IPtyRunner
     private static extern bool InitializeProcThreadAttributeList(
         IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
 
-    // lpValue is a PVOID pointing to the HPCON handle value; pass via ref IntPtr.
+    // For PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, lpValue carries the HPCON handle VALUE
+    // itself (the consumer does not dereference it) — matching Microsoft's ConPTY sample.
+    // Passing a pointer-to-handle makes the child treat the pointer as its HPCON and die
+    // during init with STATUS_DLL_INIT_FAILED (0xC0000142); caught by the ConPTY E2E test.
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool UpdateProcThreadAttribute(
         IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute,
-        ref IntPtr lpValue, IntPtr cbSize,
+        IntPtr lpValue, IntPtr cbSize,
         IntPtr lpPreviousValue, IntPtr lpReturnSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -176,11 +179,10 @@ internal sealed class WindowsPty : IPtyRunner
                 throw new Exception("InitializeProcThreadAttributeList failed");
             attrListInitialized = true;
 
-            // Pass the HPCON by reference so Windows receives a pointer to the handle value.
-            var hPCValue = hPC;
+            // Pass the HPCON value directly (not a pointer to it) — see DllImport note.
             if (!UpdateProcThreadAttribute(attrList, 0,
                     new IntPtr(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
-                    ref hPCValue, new IntPtr(IntPtr.Size),
+                    hPC, new IntPtr(IntPtr.Size),
                     IntPtr.Zero, IntPtr.Zero))
                 throw new Exception("UpdateProcThreadAttribute failed");
 

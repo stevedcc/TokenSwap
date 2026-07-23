@@ -741,8 +741,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool InitializeProcThreadAttributeList(IntPtr lpAttributeList, int dwAttributeCount, int dwFlags, ref IntPtr lpSize);
 
+    // lpValue carries the HPCON handle value itself for the pseudoconsole attribute
+    // (not a pointer to it) — matching WindowsPty and Microsoft's ConPTY sample.
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool UpdateProcThreadAttribute(IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute, ref IntPtr lpValue, IntPtr cbSize, IntPtr lpPreviousValue, IntPtr lpReturnSize);
+    private static extern bool UpdateProcThreadAttribute(IntPtr lpAttributeList, uint dwFlags, IntPtr Attribute, IntPtr lpValue, IntPtr cbSize, IntPtr lpPreviousValue, IntPtr lpReturnSize);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
@@ -814,9 +816,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             if (!InitializeProcThreadAttributeList(attrList, 1, 0, ref attrSize))
                 throw new Exception("InitializeProcThreadAttributeList failed");
             attrInit = true;
-            var hPCValue = hPC;
             if (!UpdateProcThreadAttribute(attrList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
-                    ref hPCValue, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
+                    hPC, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                 throw new Exception("UpdateProcThreadAttribute failed");
 
             var six = new WinStartupInfoEx
