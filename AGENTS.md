@@ -47,10 +47,14 @@ There is no linter configured.
 
 Commands are split by whether they require sudo:
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `migrate` — safe for AI agents
+- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `migrate` — safe for AI agents
 - **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>` — exposes secret values
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
+
+`names`, `burned`, and `check` accept `--json` for machine-readable output (exit codes
+unchanged). `completion <bash|zsh|fish>` prints a shell completion script generated from
+the command registry.
 
 ### YubiKey XOR Redundancy
 
@@ -95,6 +99,11 @@ Config directory: `~/.config/tswap/`
 - `config.json` — YubiKey serials + XOR share (plaintext, not secret)
 - `secrets.json.enc` — AES-256-GCM encrypted secrets database
 
+Load/save of both files sits behind `TswapCore.IVaultStore`; `Storage` is the default
+single-file implementation. Commands depend on the interface, so an alternative backend
+(age file, OS keychain, the Phase 6 per-record store) is a new `IVaultStore` swapped in at
+the composition root.
+
 ### Code Organization (TswapCli)
 
 The `TswapCli/` project is the executable (assembly name `tswap`):
@@ -103,7 +112,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests) with `VaultUnlocker` holding the XOR-reconstruction unlock logic.
 

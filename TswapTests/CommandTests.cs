@@ -1149,4 +1149,170 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.DoesNotContain("burned-secret-value", stderr);
         Assert.Contains("# tswap: my-burned", stderr);
     }
+
+    // --- JSON output (--json) ---
+
+    [Fact]
+    public void Names_Json_EmptyVault_IsEmptyArray()
+    {
+        RunTswap("init");
+        var (exit, stdout, _) = RunTswap("names", "--json");
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(0, doc.RootElement.GetArrayLength());
+    }
+
+    [Fact]
+    public void Names_Json_ReportsBurnFlag()
+    {
+        RunTswap("init");
+        RunTswap("create", "alpha");
+        RunTswap("create", "beta");
+        RunTswap("burn", "beta", "leaked");
+
+        var (exit, stdout, _) = RunTswap("names", "--json");
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        var entries = doc.RootElement.EnumerateArray().ToList();
+        Assert.Equal(2, entries.Count);
+        // Sorted by name: alpha then beta.
+        Assert.Equal("alpha", entries[0].GetProperty("name").GetString());
+        Assert.False(entries[0].GetProperty("burned").GetBoolean());
+        Assert.Equal("beta", entries[1].GetProperty("name").GetString());
+        Assert.True(entries[1].GetProperty("burned").GetBoolean());
+        Assert.True(entries[1].TryGetProperty("burnedAt", out _));
+    }
+
+    [Fact]
+    public void Burned_Json_EmptyIsEmptyArray()
+    {
+        RunTswap("init");
+        RunTswap("create", "clean");
+
+        var (exit, stdout, _) = RunTswap("burned", "--json");
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(0, doc.RootElement.GetArrayLength());
+    }
+
+    [Fact]
+    public void Burned_Json_ListsBurnedWithReason()
+    {
+        RunTswap("init");
+        RunTswap("create", "leaked");
+        RunTswap("burn", "leaked", "seen in logs");
+
+        var (exit, stdout, _) = RunTswap("burned", "--json");
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        var entries = doc.RootElement.EnumerateArray().ToList();
+        Assert.Single(entries);
+        Assert.Equal("leaked", entries[0].GetProperty("name").GetString());
+        Assert.Equal("seen in logs", entries[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Check_Json_NoMarkers_IsEmptyReport()
+    {
+        RunTswap("init");
+        var yamlFile = Path.Combine(_tempDir, "plain.yaml");
+        File.WriteAllText(yamlFile, "password: hunter2\n");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile, "--json");
+
+        Assert.Equal(0, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(0, doc.RootElement.GetProperty("results").GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("missing").GetInt32());
+    }
+
+    [Fact]
+    public void Check_Json_ReportsStatusesAndPreservesExitCode()
+    {
+        RunTswap("init");
+        RunTswap("create", "present");
+
+        var yamlFile = Path.Combine(_tempDir, "mixed.yaml");
+        File.WriteAllText(yamlFile,
+            "a: \"\"  # tswap: present\nb: \"\"  # tswap: absent\n");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile, "--json");
+
+        // Missing secret -> exit 1, same as the human-readable path.
+        Assert.Equal(1, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(1, doc.RootElement.GetProperty("ok").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("missing").GetInt32());
+        var statuses = doc.RootElement.GetProperty("results").EnumerateArray()
+            .Select(e => e.GetProperty("status").GetString()).ToList();
+        Assert.Contains("ok", statuses);
+        Assert.Contains("missing", statuses);
+    }
+
+    [Fact]
+    public void Check_Json_MissingPath_StillUsageError()
+    {
+        RunTswap("init");
+        var (exit, _, stderr) = RunTswap("check", "--json");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Usage", stderr);
+    }
+
+    // --- Shell completion ---
+
+    [Fact]
+    public void Completion_Bash_ListsRegisteredCommands()
+    {
+        var (exit, stdout, _) = RunTswap("completion", "bash");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("complete -F", stdout);
+        Assert.Contains("names", stdout);
+        Assert.Contains("completion", stdout);
+    }
+
+    [Fact]
+    public void Completion_Zsh_EmitsCompdef()
+    {
+        var (exit, stdout, _) = RunTswap("completion", "zsh");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("#compdef tswap", stdout);
+        Assert.Contains("_describe", stdout);
+    }
+
+    [Fact]
+    public void Completion_Fish_EmitsCompleteLines()
+    {
+        var (exit, stdout, _) = RunTswap("completion", "fish");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("complete -c tswap", stdout);
+        Assert.Contains("__fish_use_subcommand", stdout);
+    }
+
+    [Fact]
+    public void Completion_UnknownShell_Fails()
+    {
+        var (exit, _, stderr) = RunTswap("completion", "powershell");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Usage", stderr);
+    }
+
+    [Fact]
+    public void Completion_NoArg_Fails()
+    {
+        var (exit, _, stderr) = RunTswap("completion");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Usage", stderr);
+    }
 }

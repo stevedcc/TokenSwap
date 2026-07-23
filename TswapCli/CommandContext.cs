@@ -11,7 +11,7 @@ namespace TswapCli;
 public sealed record CommandContext(
     IConsole Console,
     CliEnvironment Env,
-    Storage Storage,
+    IVaultStore Storage,
     IYubiKeyService YubiKeys,
     VaultUnlocker Unlocker,
     byte[]? TestKey,
