@@ -87,5 +87,10 @@ wrapped slot for a shared vault key.
 That is why `IHardwareKeyService` is the same seam Phase 6 builds on. Today `Unlock` returns
 the vault **master key** directly (single machine). Under Phase 6 the value a backend recovers
 becomes that machine's **key-encryption key (KEK)**, and a keyring layer unwraps the shared
-vault key with it — the backend contract is unchanged; only what sits above it grows. See
-`REFACTORING_PLAN.md` §Phase 6 for the key model and threat model.
+vault key with it — the backend contract is unchanged; only what sits above it grows.
+
+**`MULTI_MACHINE_KEYING.md`** is the settled design for that key model: the keyring of wrapped
+shares, why every alternative (escrow / XOR / Shamir / config-share) collapses into it, why the
+Secure Enclave forces wrap/unwrap, and the user-set unlock threshold (`k=1` any-device vs. `k≥2`
+two-device-required). Read it before implementing TPM/SE enrollment. See also
+`REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.

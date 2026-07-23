@@ -343,7 +343,8 @@ as a localized change with no cross-cutting churn:
   implementing `IHardwareKeyService` and registering at the composition root — see
   `HARDWARE_BACKENDS.md`. This is the same seam Phase 6's keyring builds on (the recovered
   value becomes the per-machine KEK). No behaviour change; the actual TPM/SE implementations
-  remain to be written.
+  remain to be written. The key model those backends share is worked out in
+  `MULTI_MACHINE_KEYING.md` (keyring of wrapped shares, user-set unlock threshold).
 - ⏭️ **`ConsoleIntercept` repo extraction + NuGet publishing.** Out of scope for an
   in-repo change — it means creating a separate repository and publishing to a package
   feed, and the plan defers picking the permanent package name to that point. The library
@@ -356,6 +357,12 @@ usable on a workstation, synced over an untrusted transport (git, Syncthing, Dro
 with the invariant that the synced files are **useless off-fleet**. This is the
 `IVaultStore` item from Phase 5 grown into a phase of its own, because it needs a new
 key-management model and a mergeable on-disk format.
+
+> **The key-management half is now worked out in `MULTI_MACHINE_KEYING.md`** — the keyring
+> of wrapped shares, the design-space rationale (why escrow / XOR / Shamir / config-share all
+> collapse into it), why the Secure Enclave forces wrap/unwrap, and the user-set unlock
+> threshold. It is also the motivation for going multi-backend at all: TPM + Secure Enclave
+> remove the two-YubiKey adoption barrier. The sections below cover the *on-disk format* half.
 
 #### How today's crypto actually works (and why it points at the design)
 
