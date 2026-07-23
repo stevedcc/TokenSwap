@@ -132,6 +132,28 @@ public class VaultUnlockerTests
     }
 
     [Fact]
+    public void Unlock_CorruptedConfigSerialCount_ThrowsUserFacingError()
+    {
+        var (yubi, config, _, _) = MakeVault();
+        yubi.Connected = [11111111];
+        var corrupted = config with { YubiKeySerials = [11111111] }; // only one serial
+
+        var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
+        Assert.Contains("expected exactly 2 YubiKey serials", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_SelectionCallbackReturnsUnconnectedSerial_Throws()
+    {
+        var (yubi, config, _, _) = MakeVault();
+        yubi.Connected = [11111111, 22222222];
+
+        var ex = Assert.Throws<TswapException>(
+            () => new VaultUnlocker(yubi).Unlock(config, _ => 55555555));
+        Assert.Contains("not among the connected keys", ex.Message);
+    }
+
+    [Fact]
     public void SelectConnectedSerial_RequiredSerialMissing_Throws()
     {
         var (yubi, _, _, _) = MakeVault();

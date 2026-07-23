@@ -5,7 +5,7 @@ namespace TswapCli.Commands;
 public sealed class ToCommentCommand : ICliCommand
 {
     public string Name => "tocomment";
-    public string HelpUsage => "tocomment <file>";
+    public string HelpUsage => "tocomment <file> [--dry-run]";
     public string Description => "Replace inline secrets with # tswap: comments";
     public bool RequiresSudo => false;
 

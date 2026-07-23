@@ -27,6 +27,13 @@ public sealed class VaultUnlocker(IYubiKeyService yubiKeys, byte[]? overrideKey 
         if (overrideKey != null)
             return overrideKey; // Test mode: bypass YubiKey entirely — the test key is the master key
 
+        // The XOR-redundancy scheme requires exactly two enrolled keys; a corrupted or
+        // hand-edited config would otherwise surface as an opaque index-out-of-range.
+        if (config.YubiKeySerials is not { Count: 2 })
+            throw new TswapException(
+                $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
+
         var serial = SelectConnectedSerial(chooseSerial);
 
         if (!config.YubiKeySerials.Contains(serial))
@@ -80,7 +87,14 @@ public sealed class VaultUnlocker(IYubiKeyService yubiKeys, byte[]? overrideKey 
         }
 
         if (serials.Count > 1)
-            return chooseSerial(serials);
+        {
+            var chosen = chooseSerial(serials);
+            // Guard against a callback returning something that isn't connected —
+            // later hardware calls would otherwise fail in confusing ways.
+            if (!serials.Contains(chosen))
+                throw new TswapException($"Selected YubiKey serial {chosen} is not among the connected keys ({string.Join(", ", serials)}).");
+            return chosen;
+        }
 
         return serials[0];
     }

@@ -47,7 +47,11 @@ public sealed record CommandContext(
         for (int i = 0; i < serials.Count; i++)
             Console.Out.WriteLine($"  {i + 1}. Serial: {serials[i]}");
         Console.Out.Write($"Select YubiKey (1-{serials.Count}): ");
-        var choice = int.Parse(Console.ReadLine() ?? "1");
+        var input = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(input))
+            return serials[0]; // blank/EOF = default to the first key
+        if (!int.TryParse(input, out var choice) || choice < 1 || choice > serials.Count)
+            throw new TswapException($"Invalid selection. Enter a number between 1 and {serials.Count}.");
         return serials[choice - 1];
     }
 
