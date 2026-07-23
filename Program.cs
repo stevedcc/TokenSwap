@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ConsoleIntercept;
 using TswapCore;
 
 var Args = args.ToList();
@@ -925,11 +926,13 @@ void CmdRun(string[] runArgs)
     // Execute command via PTY so child processes see a real terminal — enabling colour
     // output, progress bars, and interactive prompts (kubectl exec, helm install, etc.).
     // PTY output is still intercepted and redacted before reaching our terminal.
-    var sortedSecrets = secretValues
+    // Longest value first so a shorter secret sharing a prefix never clobbers a longer one.
+    var replacements = secretValues
         .OrderByDescending(kv => kv.Value.Length)
+        .Select(kv => new StreamReplacement(kv.Value, $"[REDACTED: {kv.Key}]"))
         .ToList();
 
-    int exitCode = Pty.Create().Run(argv, sortedSecrets);
+    int exitCode = PtyRunnerFactory.Create().Run(argv, replacements);
 
     Environment.Exit(exitCode);
 }

@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Text;
-using TswapCore;
+
+namespace ConsoleIntercept;
 
 /// <summary>
 /// Windows ConPTY support via P/Invoke to kernel32. Spawns the child process inside a
@@ -123,7 +123,7 @@ internal sealed class WindowsPty : IPtyRunner
     /// argument list inside a ConPTY (no shell wrapper), writing redacted output to stdout.
     /// Returns the child process's exit code.
     /// </summary>
-    public int Run(string[] argv, IReadOnlyList<KeyValuePair<string, string>> sortedSecrets)
+    public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements)
     {
         if (argv is not { Length: > 0 } || string.IsNullOrEmpty(argv[0]))
             throw new ArgumentException("argv must be non-empty and argv[0] must be a non-empty executable name.", nameof(argv));
@@ -225,9 +225,9 @@ internal sealed class WindowsPty : IPtyRunner
             }) { IsBackground = true };
             stdinThread.Start();
 
-            // Read ConPTY output (stdout+stderr merged), redact secrets, write to our stdout.
-            // StreamRedactor maintains a sliding-window overlap between chunks so secrets that
-            // straddle a read-buffer boundary are still caught. See TswapCore.StreamRedactor.
+            // Read ConPTY output (stdout+stderr merged), apply replacements, write to our stdout.
+            // StreamRedactor maintains a sliding-window overlap between chunks so find-strings
+            // that straddle a read-buffer boundary are still caught.
             //
             // The read loop runs on a Task so the main thread can wait for the child process
             // and then close the ConPTY. The ConPTY holds the pipe write-end open even after
@@ -238,7 +238,7 @@ internal sealed class WindowsPty : IPtyRunner
             var decoder  = encoding.GetDecoder();
             var charBuf  = new char[encoding.GetMaxCharCount(readBuf.Length)];
             var stdout   = Console.OpenStandardOutput();
-            var redactor = new StreamRedactor(sortedSecrets);
+            var redactor = new StreamRedactor(replacements);
             var readTask = Task.Run(() =>
             {
                 while (ReadFile(hPipeOutRd, readBuf, (uint)readBuf.Length, out uint nRead, IntPtr.Zero) && nRead > 0)

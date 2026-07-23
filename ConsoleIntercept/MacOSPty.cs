@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
+namespace ConsoleIntercept;
+
 /// <summary>
 /// macOS PTY: forkpty is declared in &lt;util.h&gt; and lives in libutil.dylib.
 /// </summary>

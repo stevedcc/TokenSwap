@@ -31,7 +31,7 @@ jobs:
         run: dotnet build TokenSwap.slnx
 
       - name: Unit tests
-        run: dotnet test TswapTests/TswapTests.csproj --no-build --filter "FullyQualifiedName!~ProgramTests"
+        run: dotnet test TokenSwap.slnx --no-build --filter "FullyQualifiedName!~ProgramTests"
 
       # ProgramTests builds tswap once (TswapBinaryFixture), then spawns the built
       # binary per test (~30 s sequentially). Verified on Linux; extending to
