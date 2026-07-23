@@ -40,19 +40,22 @@ jobs:
 
       # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
       # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
-      # the binary — this is the step that actually tests NativeAOT-compiled behaviour.
-      # Verified on Linux; extending to macOS/Windows runners is a follow-up.
+      # the binary — this step tests NativeAOT-compiled behaviour on every OS. On macOS
+      # the outer-PTY tests exercise the real MacOSPty forkpty path; on Windows the
+      # POSIX-only PTY tests self-skip and the subprocess/installscript tests run.
       - name: E2E tests (NativeAOT binary)
-        if: matrix.os == 'ubuntu-latest'
         timeout-minutes: 15
+        shell: bash
         run: |
           dotnet publish TswapCli/TswapCli.csproj -c Debug
           # Select exactly one published binary deterministically; fail fast if none.
-          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f -path '*/publish/tswap' -print -quit)
+          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f \( -path '*/publish/tswap' -o -path '*/publish/tswap.exe' \) -print -quit)
           if [ -z "$BINARY" ]; then
             echo "::error::no published tswap binary found under TswapCli/bin/Debug" >&2
             exit 1
           fi
+          # Git Bash paths (/d/a/...) are not valid for .NET on Windows; convert.
+          if command -v cygpath >/dev/null 2>&1; then BINARY=$(cygpath -w "$BINARY"); fi
           TSWAP_E2E_BINARY="$BINARY" \
             dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 

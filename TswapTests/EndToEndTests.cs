@@ -171,8 +171,11 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init");
         RunTswapWithStdin("hello-world", "ingest", "test-val");
 
-        // Use 'true' as the command — it just exits 0, proving substitution worked
-        var (exit, _, _) = RunTswap("run", "true", "{{test-val}}");
+        // A command that ignores its arguments and exits 0 — proving substitution worked.
+        // 'true' is POSIX-only; 'cmd /c rem' is the Windows no-op equivalent.
+        var (exit, _, _) = OperatingSystem.IsWindows()
+            ? RunTswap("run", "cmd", "/c", "rem", "{{test-val}}")
+            : RunTswap("run", "true", "{{test-val}}");
 
         Assert.Equal(0, exit);
     }
@@ -431,9 +434,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init");
         RunTswapWithStdin("test-password-123", "ingest", "my-pass");
 
-        // Use 'test' command to verify the substituted value is non-empty
-        // (can't use redirect/pipe due to exfiltration protection)
-        var (exit, _, _) = RunTswap("run", "test", "-n", "{{my-pass}}");
+        // Verify the substituted value is non-empty (can't use redirect/pipe due to
+        // exfiltration protection). POSIX: test -n; Windows: pwsh length check — the
+        // whole -Command script is one argv element, so substitution happens inside it.
+        var (exit, _, _) = OperatingSystem.IsWindows()
+            ? RunTswap("run", "pwsh", "-NoProfile", "-Command",
+                "if ('{{my-pass}}'.Length -gt 0) { exit 0 } else { exit 1 }")
+            : RunTswap("run", "test", "-n", "{{my-pass}}");
 
         Assert.Equal(0, exit);
     }
