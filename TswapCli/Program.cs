@@ -40,6 +40,9 @@ try
     IYubiKeyService yubiKeys = testKey != null
         ? new TestKeyYubiKeyService(testKey)
         : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
+    // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS)
+    // register here via the additionalBackends argument once implemented; the YubiKey
+    // backend is always present. VaultUnlocker picks the right one from config.Backend.
     var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);

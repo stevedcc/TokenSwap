@@ -1,101 +1,68 @@
 namespace TswapCore.Vault;
 
 /// <summary>
-/// Derives the vault master key from a connected YubiKey plus the config's XOR share.
-/// Pure logic over <see cref="IYubiKeyService"/> — serial selection UI is supplied by
-/// the caller as a callback (only invoked when more than one YubiKey is connected).
+/// Selects the hardware backend for a vault from <see cref="Config.Backend"/> and
+/// delegates unlock to it. YubiKey is the default and the only backend for a null
+/// <see cref="Config.Backend"/> — i.e. every vault created before this seam existed, so
+/// existing vaults are unaffected. Register additional <see cref="IHardwareKeyService"/>
+/// implementations (TPM, Secure Enclave) through the constructor as they land; unlocking
+/// a vault whose backend is not registered fails with a clear, actionable error rather
+/// than a crash.
 ///
-/// When <paramref name="overrideKey"/> is set (test mode), unlock returns it directly
-/// without touching hardware or the config — test vaults are encrypted with the test
-/// key itself, not a derived key.
+/// When <paramref name="overrideKey"/> is set (test mode) unlock returns it directly
+/// without touching hardware or the config.
 /// </summary>
-public sealed class VaultUnlocker(IYubiKeyService yubiKeys, byte[]? overrideKey = null)
+public sealed class VaultUnlocker
 {
     /// <summary>The challenge used by configs created before vault-unique challenges.</summary>
-    public const string LegacyChallenge = "tswap-unlock";
+    public const string LegacyChallenge = YubiKeyHardwareService.LegacyChallenge;
+
+    private readonly Dictionary<HardwareBackend, IHardwareKeyService> _backends;
+    private readonly YubiKeyHardwareService _yubiKey;
 
     /// <summary>
-    /// Unlocks the vault and returns the 32-byte master key.
+    /// Builds an unlocker with the YubiKey backend always registered, plus any
+    /// <paramref name="additionalBackends"/> (TPM, Secure Enclave) supplied by the
+    /// composition root. <paramref name="overrideKey"/> is the test-mode master key.
     /// </summary>
-    /// <param name="config">Vault configuration (serials + XOR share).</param>
+    public VaultUnlocker(
+        IYubiKeyService yubiKeys,
+        byte[]? overrideKey = null,
+        IEnumerable<IHardwareKeyService>? additionalBackends = null)
+    {
+        _yubiKey = new YubiKeyHardwareService(yubiKeys, overrideKey);
+        _backends = new Dictionary<HardwareBackend, IHardwareKeyService>
+        {
+            [HardwareBackend.YubiKey] = _yubiKey,
+        };
+        if (additionalBackends != null)
+            foreach (var backend in additionalBackends)
+                _backends[backend.Backend] = backend;
+    }
+
+    /// <summary>
+    /// Unlocks the vault and returns the 32-byte master key, routing to the backend named
+    /// by <see cref="Config.Backend"/> (YubiKey when unset).
+    /// </summary>
+    /// <param name="config">Vault configuration.</param>
     /// <param name="chooseSerial">
-    /// Called with the connected serials when more than one YubiKey is present;
-    /// returns the serial to use. Never called for zero or one connected key.
+    /// Called with the connected serials when more than one YubiKey is present; ignored by
+    /// single-device backends. Never called for zero or one connected key.
     /// </param>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
-        if (overrideKey != null)
-            return overrideKey; // Test mode: bypass YubiKey entirely — the test key is the master key
-
-        // The XOR-redundancy scheme requires exactly two enrolled keys; a corrupted or
-        // hand-edited config would otherwise surface as an opaque index-out-of-range.
-        if (config.YubiKeySerials is not { Count: 2 })
+        var backend = config.Backend ?? HardwareBackend.YubiKey;
+        if (!_backends.TryGetValue(backend, out var service))
             throw new TswapException(
-                $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-
-        var serial = SelectConnectedSerial(chooseSerial);
-
-        if (!config.YubiKeySerials.Contains(serial))
-            throw new TswapException($"YubiKey {serial} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
-
-        // Challenge current YubiKey using the vault-unique challenge (falls back to the
-        // legacy fixed challenge for configs created before this feature was added).
-        var k_current = yubiKeys.Challenge(serial, config.UnlockChallenge ?? LegacyChallenge);
-
-        // Reconstruct other key via XOR
-        var xorShare = Convert.FromHexString(config.RedundancyXor);
-        var k_other = Crypto.XorBytes(k_current, xorShare);
-
-        // Determine order (use serials to ensure consistent ordering)
-        byte[] k1, k2;
-        if (serial == config.YubiKeySerials[0])
-        {
-            k1 = k_current;
-            k2 = k_other;
-        }
-        else
-        {
-            k1 = k_other;
-            k2 = k_current;
-        }
-
-        return Crypto.DeriveKey(k1, k2);
+                $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
+                "Use a build that includes it, or restore a vault created with a supported backend.");
+        return service.Unlock(config, chooseSerial);
     }
 
     /// <summary>
-    /// Resolves which connected YubiKey to use: errors when none are connected,
-    /// returns the single key directly, or defers to the callback for multiple.
-    /// Also used by commands that need a specific connected key (init, create's
-    /// hardware-entropy path) rather than a vault unlock.
+    /// Resolves which connected YubiKey to use for enrollment/entropy flows (init,
+    /// create's hardware-entropy path). YubiKey-specific: other backends have no serials.
     /// </summary>
     public int SelectConnectedSerial(Func<IReadOnlyList<int>, int> chooseSerial, int? requiredSerial = null)
-    {
-        if (overrideKey != null)
-            return requiredSerial ?? TestKeyYubiKeyService.Serial1;
-
-        var serials = yubiKeys.ListSerials();
-
-        if (serials.Count == 0)
-            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
-
-        if (requiredSerial.HasValue)
-        {
-            if (!serials.Contains(requiredSerial.Value))
-                throw new TswapException($"YubiKey with serial {requiredSerial} not found.");
-            return requiredSerial.Value;
-        }
-
-        if (serials.Count > 1)
-        {
-            var chosen = chooseSerial(serials);
-            // Guard against a callback returning something that isn't connected —
-            // later hardware calls would otherwise fail in confusing ways.
-            if (!serials.Contains(chosen))
-                throw new TswapException($"Selected YubiKey serial {chosen} is not among the connected keys ({string.Join(", ", serials)}).");
-            return chosen;
-        }
-
-        return serials[0];
-    }
+        => _yubiKey.SelectConnectedSerial(chooseSerial, requiredSerial);
 }

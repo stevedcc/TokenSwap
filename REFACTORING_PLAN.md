@@ -14,9 +14,10 @@ composition root, and `ConsoleIntercept` is now a self-contained library. The cr
 E2E work also surfaced and fixed three real `WindowsPty` bugs (HPCON passed by pointer,
 fast-child output loss on close, std-handle inheritance) that had made interactive
 `tswap run` broken on Windows. Phase 5 (extensibility backlog) is now **partially
-shipped** — `--json` output, the `IVaultStore` seam, and shell-completion generation
-landed; the hardware-token rename and `ConsoleIntercept` repo extraction stay deferred
-(see Phase 5 for why). Phase 6 (multi-machine sharing) remains forward-looking design.
+shipped** — `--json` output, the `IVaultStore` seam, shell-completion generation, and the
+`IHardwareKeyService` reshape (readying TPM + Secure Enclave backends) landed; only the
+`ConsoleIntercept` repo extraction stays deferred (see Phase 5 for why). Phase 6
+(multi-machine sharing) remains forward-looking design.
 
 ---
 
@@ -330,10 +331,19 @@ as a localized change with no cross-cutting churn:
 - ✅ **Shell completion generation from `CommandRegistry` metadata.** A `completion
   <bash|zsh|fish>` command generates scripts from `CommandRegistry.All`, so adding a
   command needs no completion edits.
-- ⏭️ **Additional hardware tokens (FIDO2 hmac-secret, TPM).** Deferred by design: the
-  plan calls for renaming `IYubiKeyService → IHardwareKeyService` "when a second
-  implementation appears." No second implementation exists yet, so a speculative rename
-  would be pure churn. The seam (`IYubiKeyService` + `VaultUnlocker`) is already in place.
+- ✅ **Additional hardware tokens — seam reshaped for TPM + Secure Enclave.** With concrete
+  backends now planned (TPM on Windows/Linux, Apple Secure Enclave on macOS), the seam was
+  reshaped rather than renamed. A naive `IYubiKeyService → IHardwareKeyService` rename would
+  have kept challenge-response methods the Secure Enclave cannot implement (no HMAC, no key
+  export). Instead: a new `IHardwareKeyService` abstracts *"recover the vault key"* (derive
+  vs. unseal vs. unwrap); `YubiKeyHardwareService` holds the existing challenge/XOR/PBKDF2
+  logic; `VaultUnlocker` dispatches on a new optional `Config.Backend` discriminator (null ⇒
+  YubiKey, omitted from `config.json` so existing vaults are byte-identical). The low-level
+  `IYubiKeyService` stays as the YubiKey driver. TPM/Secure-Enclave backends plug in by
+  implementing `IHardwareKeyService` and registering at the composition root — see
+  `HARDWARE_BACKENDS.md`. This is the same seam Phase 6's keyring builds on (the recovered
+  value becomes the per-machine KEK). No behaviour change; the actual TPM/SE implementations
+  remain to be written.
 - ⏭️ **`ConsoleIntercept` repo extraction + NuGet publishing.** Out of scope for an
   in-repo change — it means creating a separate repository and publishing to a package
   feed, and the plan defers picking the permanent package name to that point. The library
@@ -540,7 +550,7 @@ concurrent writers, rotation atomicity) are where the risk lives.
 | 2 CLI decomposition | L | medium (touches every command; mitigated by keeping `ProgramTests` green throughout) | 0 | ✅ shipped (#97) |
 | 3 Core purification | M | low-medium (JSON compat needs golden-file tests; atomic save is isolated) | 2 | ✅ shipped (#98) |
 | 4 Test restructuring | M | low (pure test work) | 2, 3 | ✅ shipped (#99, #100) |
-| 5 Backlog | S–M | low | 4 | ⏳ partially done (`--json`, `IVaultStore`, shell completion shipped; hardware-token rename + repo extraction deferred) |
+| 5 Backlog | S–M | low | 4 | ⏳ mostly done (`--json`, `IVaultStore`, shell completion, `IHardwareKeyService` reshape shipped; only `ConsoleIntercept` repo extraction deferred) |
 | 6 Multi-machine sharing | L | high (new key model + mergeable format + rotation; needs its own design doc + threat model) | 5 (`IVaultStore`) | design only |
 
 Phases 1 and 2 are independent of each other (1 touches the PTY files + `CmdRun`

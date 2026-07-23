@@ -114,7 +114,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
 6. **`Commands/`** — one class per command implementing `ICliCommand` (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
 
-YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests) with `VaultUnlocker` holding the XOR-reconstruction unlock logic.
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `HARDWARE_BACKENDS.md`.
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
