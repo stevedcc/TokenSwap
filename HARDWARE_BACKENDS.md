@@ -54,6 +54,16 @@ HardwareBackend? Backend   // null == YubiKey; omitted from config.json when nul
 - **Additive:** each backend adds only the config fields it needs, and only writes them for
   its own vaults. Never repurpose or reorder existing YubiKey fields.
 
+## Starting point: the Secure Enclave stub
+
+`TswapCore/Vault/SecureEnclaveHardwareService.cs` is a ready-to-fill stub implementing
+`IHardwareKeyService` (with the intended `Wrap`/`Unwrap` methods and the exact
+Security.framework calls in its doc comment). `TswapTests/SecureEnclaveHardwareServiceTests.cs`
+holds trait-gated skeleton tests (`Category=SecureEnclave`, run with
+`./runtests.sh --secure-enclave` on a Mac). The composition-root wiring is shown as a commented
+example in `TswapCli/Program.cs`. Implement on a real Mac, remove the test `Skip`s, then
+uncomment the registration.
+
 ## Adding a backend
 
 1. **Implement `IHardwareKeyService`** in `TswapCore/Vault/` (e.g. `TpmHardwareService`).
