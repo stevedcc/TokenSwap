@@ -1299,9 +1299,19 @@ password2: """"  # tswap: missing-mixed-secret");
     }
 
     [Fact]
+    public void Completion_PowerShell_EmitsRegisterArgumentCompleter()
+    {
+        var (exit, stdout, _) = RunTswap("completion", "powershell");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Register-ArgumentCompleter", stdout);
+        Assert.Contains("names", stdout);
+    }
+
+    [Fact]
     public void Completion_UnknownShell_Fails()
     {
-        var (exit, _, stderr) = RunTswap("completion", "powershell");
+        var (exit, _, stderr) = RunTswap("completion", "tcsh");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("Usage", stderr);

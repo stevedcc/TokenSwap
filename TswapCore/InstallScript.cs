@@ -41,6 +41,29 @@ public static class InstallScript
         ln -sfn "$HOME/.agents/skills/tswap" "$HOME/.claude/skills/tswap"
         echo "    Created ~/.claude/skills/tswap -> ~/.agents/skills/tswap"
 
+        echo "==> Installing shell completions..."
+        # bash: auto-loaded by bash-completion from the user data dir (no rc edit needed).
+        BASH_COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+        mkdir -p "$BASH_COMP_DIR"
+        "$HOME/.local/bin/tswap" completion bash > "$BASH_COMP_DIR/tswap"
+        echo "    bash -> $BASH_COMP_DIR/tswap"
+        # fish: auto-loaded from the completions dir when fish is installed.
+        if command -v fish >/dev/null 2>&1; then
+          FISH_COMP_DIR="$HOME/.config/fish/completions"
+          mkdir -p "$FISH_COMP_DIR"
+          "$HOME/.local/bin/tswap" completion fish > "$FISH_COMP_DIR/tswap.fish"
+          echo "    fish -> $FISH_COMP_DIR/tswap.fish"
+        fi
+        # zsh: write the completion function; the dir must be on fpath (printed below).
+        if command -v zsh >/dev/null 2>&1; then
+          ZSH_COMP_DIR="$HOME/.zsh/completions"
+          mkdir -p "$ZSH_COMP_DIR"
+          "$HOME/.local/bin/tswap" completion zsh > "$ZSH_COMP_DIR/_tswap"
+          echo "    zsh  -> $ZSH_COMP_DIR/_tswap"
+          echo "         (if zsh completion doesn't load, add to ~/.zshrc: fpath+=$ZSH_COMP_DIR; autoload -Uz compinit; compinit)"
+        fi
+        echo "    Restart your shell to enable completion."
+
         echo ""
         echo "✅ tswap installed successfully."
         echo "   If ~/.local/bin is not on your PATH, add it:"
@@ -71,6 +94,30 @@ public static class InstallScript
         [ -e "$HOME/.claude/skills/tswap" ] && ! [ -L "$HOME/.claude/skills/tswap" ] && rm -rf "$HOME/.claude/skills/tswap"
         ln -sfn "$HOME/.agents/skills/tswap" "$HOME/.claude/skills/tswap"
         echo "    Created ~/.claude/skills/tswap -> ~/.agents/skills/tswap"
+
+        echo "==> Installing shell completions..."
+        # bash: auto-loaded by bash-completion from the user data dir (no rc edit needed).
+        BASH_COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+        mkdir -p "$BASH_COMP_DIR"
+        /usr/local/bin/tswap completion bash > "$BASH_COMP_DIR/tswap"
+        echo "    bash -> $BASH_COMP_DIR/tswap"
+        # fish: auto-loaded from the completions dir when fish is installed.
+        if command -v fish >/dev/null 2>&1; then
+          FISH_COMP_DIR="$HOME/.config/fish/completions"
+          mkdir -p "$FISH_COMP_DIR"
+          /usr/local/bin/tswap completion fish > "$FISH_COMP_DIR/tswap.fish"
+          echo "    fish -> $FISH_COMP_DIR/tswap.fish"
+        fi
+        # zsh: write the completion function; the dir must be on fpath (printed below).
+        # macOS ships zsh as the default shell, so this is the common path here.
+        if command -v zsh >/dev/null 2>&1; then
+          ZSH_COMP_DIR="$HOME/.zsh/completions"
+          mkdir -p "$ZSH_COMP_DIR"
+          /usr/local/bin/tswap completion zsh > "$ZSH_COMP_DIR/_tswap"
+          echo "    zsh  -> $ZSH_COMP_DIR/_tswap"
+          echo "         (if zsh completion doesn't load, add to ~/.zshrc: fpath+=$ZSH_COMP_DIR; autoload -Uz compinit; compinit)"
+        fi
+        echo "    Restart your shell to enable completion."
 
         echo ""
         echo "✅ tswap installed successfully."
@@ -108,6 +155,15 @@ public static class InstallScript
         }
         New-Item -ItemType Junction -Path $LinkPath -Target $SkillDir | Out-Null
         Write-Host "    Created $LinkPath -> $SkillDir"
+
+        Write-Host "==> Installing shell completion (PowerShell)..."
+        # PowerShell has no completion auto-load dir, so write the script and print the one
+        # line to dot-source it from the profile (we don't edit the profile automatically).
+        $CompletionFile = "$SkillDir\tswap.completion.ps1"
+        [System.IO.File]::WriteAllLines($CompletionFile, (& "$InstallDir\tswap.exe" completion powershell))
+        Write-Host "    Written to $CompletionFile"
+        Write-Host "    To enable, add this line to your PowerShell profile (path in `$PROFILE):"
+        Write-Host "        . `"$CompletionFile`""
 
         Write-Host ""
         Write-Host "✅ tswap installed successfully."

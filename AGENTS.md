@@ -53,8 +53,10 @@ Commands are split by whether they require sudo:
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
 
 `names`, `burned`, and `check` accept `--json` for machine-readable output (exit codes
-unchanged). `completion <bash|zsh|fish>` prints a shell completion script generated from
-the command registry.
+unchanged). `completion <bash|zsh|fish|powershell>` prints a shell completion script generated
+from the command registry; `installscript` also installs completions for the detected shells
+(writing to each shell's auto-load location, printing the one activation line for zsh/PowerShell
+rather than editing rc/profile files).
 
 ### YubiKey XOR Redundancy
 

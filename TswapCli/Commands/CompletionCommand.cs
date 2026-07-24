@@ -12,14 +12,14 @@ namespace TswapCli.Commands;
 public sealed class CompletionCommand : ICliCommand
 {
     public string Name => "completion";
-    public string HelpUsage => "completion <bash|zsh|fish>";
+    public string HelpUsage => "completion <bash|zsh|fish|powershell>";
     public string Description => "Print a shell completion script";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
         if (args.Length < 1)
-            throw new UsageException($"{ctx.Prefix} completion <bash|zsh|fish>");
+            throw new UsageException($"{ctx.Prefix} completion <bash|zsh|fish|powershell>");
 
         var shell = args[0].ToLowerInvariant();
         var prog = ctx.Prefix;
@@ -30,7 +30,8 @@ public sealed class CompletionCommand : ICliCommand
             "bash" => Bash(prog, commands),
             "zsh" => Zsh(prog, commands),
             "fish" => Fish(prog, commands),
-            _ => throw new UsageException($"{ctx.Prefix} completion <bash|zsh|fish>"),
+            "powershell" or "pwsh" => PowerShell(prog, commands),
+            _ => throw new UsageException($"{ctx.Prefix} completion <bash|zsh|fish|powershell>"),
         };
 
         ctx.Console.Out.WriteLine(script);
@@ -81,6 +82,24 @@ public sealed class CompletionCommand : ICliCommand
               .Append(" -n __fish_use_subcommand -a ").Append(c.Name)
               .Append(" -d '").Append(FishEscape(c.Description)).Append("'\n");
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string PowerShell(string prog, IReadOnlyList<ICliCommand> commands)
+    {
+        // Single-quoted PowerShell strings escape a quote by doubling it.
+        var names = string.Join(", ", commands.Select(c => "'" + c.Name.Replace("'", "''") + "'"));
+        return $$"""
+        Register-ArgumentCompleter -Native -CommandName {{prog}} -ScriptBlock {
+            param($wordToComplete, $commandAst, $cursorPosition)
+            $commands = @({{names}})
+            # Only complete the first argument (the subcommand): element 0 is the exe itself.
+            if ($commandAst.CommandElements.Count -le 2) {
+                $commands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                    [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+                }
+            }
+        }
+        """;
     }
 
     // Colons separate name from description in zsh _describe; backslash-escape literal ones.
