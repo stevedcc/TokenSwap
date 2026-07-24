@@ -13,8 +13,11 @@ suite went from 10 m 43 s to ~13 s, `Program.cs` from 1,387 lines to a ~60-line
 composition root, and `ConsoleIntercept` is now a self-contained library. The cross-OS
 E2E work also surfaced and fixed three real `WindowsPty` bugs (HPCON passed by pointer,
 fast-child output loss on close, std-handle inheritance) that had made interactive
-`tswap run` broken on Windows. Phase 5 (extensibility backlog) and Phase 6 (multi-machine
-sharing) remain as forward-looking design.
+`tswap run` broken on Windows. Phase 5 (extensibility backlog) is now **partially
+shipped** — `--json` output, the `IVaultStore` seam, shell-completion generation, and the
+`IHardwareKeyService` reshape (readying TPM + Secure Enclave backends) landed; only the
+`ConsoleIntercept` repo extraction stays deferred (see Phase 5 for why). Phase 6
+(multi-machine sharing) remains forward-looking design.
 
 ---
 
@@ -311,19 +314,41 @@ The payoff phase: `ProgramTests`' 90 subprocess tests become in-process tests.
    sudo-user resolution, legacy-dir migration, `ReadPassword` masking (via
    `FakeConsole`), `Storage` atomic-save crash simulation.
 
-### Phase 5 — Extensibility backlog (post-refactor, optional)
+### Phase 5 — Extensibility backlog (post-refactor, optional) — ⏳ PARTIALLY DONE
 
 Not part of the refactor proper; listed so the architecture above is checked against
-them ("does the design make these easy?"):
+them ("does the design make these easy?"). The design held up — each item below landed
+as a localized change with no cross-cutting churn:
 
-- `--json` machine-readable output for `names`/`burned`/`check` (an `IConsole`
-  sibling or per-command formatter — fits the command classes cleanly).
-- New storage backends (age-encrypted file, OS keychain) behind an `IVaultStore`
-  interface — `Storage` is already the single chokepoint after Phase 3.
-- Additional hardware tokens (FIDO2 hmac-secret, TPM) — `IYubiKeyService` is the
-  seam; rename to `IHardwareKeyService` when a second implementation appears.
-- Shell completion generation from `CommandRegistry` metadata.
-- `ConsoleIntercept` repo extraction + NuGet publishing (see Phase 1 migration path).
+- ✅ **`--json` machine-readable output for `names`/`burned`/`check`.** A per-command
+  `--json` flag (`JsonFlag.Consume`) selects a source-generated JSON path
+  (`TswapCli/CliJson.cs`, `CliJsonContext`, AOT-safe). Exit codes are unchanged —
+  `check --json` still returns 1 (missing) / 2 (burned) / 0.
+- ✅ **`IVaultStore` interface.** Load/save of config + secrets carved out of `Storage`
+  behind `TswapCore.IVaultStore`; `Storage` is the default single-file implementation
+  and `CommandContext` now depends on the interface. Pure refactor, no behaviour change
+  — the enabling step for Phase 6's `IVaultStore` item.
+- ✅ **Shell completion generation from `CommandRegistry` metadata.** A `completion
+  <bash|zsh|fish>` command generates scripts from `CommandRegistry.All`, so adding a
+  command needs no completion edits.
+- ✅ **Additional hardware tokens — seam reshaped for TPM + Secure Enclave.** With concrete
+  backends now planned (TPM on Windows/Linux, Apple Secure Enclave on macOS), the seam was
+  reshaped rather than renamed. A naive `IYubiKeyService → IHardwareKeyService` rename would
+  have kept challenge-response methods the Secure Enclave cannot implement (no HMAC, no key
+  export). Instead: a new `IHardwareKeyService` abstracts *"recover the vault key"* (derive
+  vs. unseal vs. unwrap); `YubiKeyHardwareService` holds the existing challenge/XOR/PBKDF2
+  logic; `VaultUnlocker` dispatches on a new optional `Config.Backend` discriminator (null ⇒
+  YubiKey, omitted from `config.json` so existing vaults are byte-identical). The low-level
+  `IYubiKeyService` stays as the YubiKey driver. TPM/Secure-Enclave backends plug in by
+  implementing `IHardwareKeyService` and registering at the composition root — see
+  `HARDWARE_BACKENDS.md`. This is the same seam Phase 6's keyring builds on (the recovered
+  value becomes the per-machine KEK). No behaviour change; the actual TPM/SE implementations
+  remain to be written. The key model those backends share is worked out in
+  `MULTI_MACHINE_KEYING.md` (keyring of wrapped shares, user-set unlock threshold).
+- ⏭️ **`ConsoleIntercept` repo extraction + NuGet publishing.** Out of scope for an
+  in-repo change — it means creating a separate repository and publishing to a package
+  feed, and the plan defers picking the permanent package name to that point. The library
+  is already dependency-free (Phase 1), so extraction stays a folder move when scheduled.
 
 ### Phase 6 — Multi-machine vault sharing (design, not yet scheduled)
 
@@ -332,6 +357,12 @@ usable on a workstation, synced over an untrusted transport (git, Syncthing, Dro
 with the invariant that the synced files are **useless off-fleet**. This is the
 `IVaultStore` item from Phase 5 grown into a phase of its own, because it needs a new
 key-management model and a mergeable on-disk format.
+
+> **The key-management half is now worked out in `MULTI_MACHINE_KEYING.md`** — the keyring
+> of wrapped shares, the design-space rationale (why escrow / XOR / Shamir / config-share all
+> collapse into it), why the Secure Enclave forces wrap/unwrap, and the user-set unlock
+> threshold. It is also the motivation for going multi-backend at all: TPM + Secure Enclave
+> remove the two-YubiKey adoption barrier. The sections below cover the *on-disk format* half.
 
 #### How today's crypto actually works (and why it points at the design)
 
@@ -526,7 +557,7 @@ concurrent writers, rotation atomicity) are where the risk lives.
 | 2 CLI decomposition | L | medium (touches every command; mitigated by keeping `ProgramTests` green throughout) | 0 | ✅ shipped (#97) |
 | 3 Core purification | M | low-medium (JSON compat needs golden-file tests; atomic save is isolated) | 2 | ✅ shipped (#98) |
 | 4 Test restructuring | M | low (pure test work) | 2, 3 | ✅ shipped (#99, #100) |
-| 5 Backlog | — | — | 4 | open, optional |
+| 5 Backlog | S–M | low | 4 | ⏳ mostly done (`--json`, `IVaultStore`, shell completion, `IHardwareKeyService` reshape shipped; only `ConsoleIntercept` repo extraction deferred) |
 | 6 Multi-machine sharing | L | high (new key model + mergeable format + rotation; needs its own design doc + threat model) | 5 (`IVaultStore`) | design only |
 
 Phases 1 and 2 are independent of each other (1 touches the PTY files + `CmdRun`
