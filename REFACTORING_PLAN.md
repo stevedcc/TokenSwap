@@ -317,7 +317,7 @@ The payoff phase: `ProgramTests`' 90 subprocess tests become in-process tests.
    sudo-user resolution, legacy-dir migration, `ReadPassword` masking (via
    `FakeConsole`), `Storage` atomic-save crash simulation.
 
-### Phase 5 — Extensibility backlog (post-refactor, optional) — ⏳ PARTIALLY DONE
+### Phase 5 — Extensibility backlog (post-refactor, optional) — ✅ DONE
 
 Not part of the refactor proper; listed so the architecture above is checked against
 them ("does the design make these easy?"). The design held up — each item below landed

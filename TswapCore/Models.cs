@@ -58,6 +58,9 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // Secure Enclave only: base64 ECIES wrap of the vault master key against this machine's
     // Secure Enclave key pair (see SecureEnclaveHardwareService). Single-slot precursor to
     // the Phase 6 multi-machine keyring — irrelevant, so omitted, for other backends.
+    // PoC status: this blob's internal byte layout (see AppleSecureEnclaveInterop.Wrap) has no
+    // version tag — changing it silently breaks every existing Secure Enclave vault. See
+    // HARDWARE_BACKENDS.md's "PoC-grade" section before treating this as a stable format.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SecureEnclaveWrappedKey = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);

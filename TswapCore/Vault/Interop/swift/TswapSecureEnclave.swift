@@ -15,6 +15,13 @@
 // value interoperable with .NET's ECDiffieHellman.DeriveKeyMaterial for the same keys (verified
 // empirically — same public-key derivation, same imported key material, different shared
 // secret). Keeping the whole operation on one side of the FFI boundary sidesteps that entirely.
+//
+// STATUS: PoC-grade. Verified for functional correctness (round-trips, presence-gated, fails
+// cleanly on cancellation) on one machine — Apple Silicon (M4 Pro) — only; the Intel-Mac T2
+// Secure Enclave path is untested. This hand-rolled ECIES-equivalent construction (ephemeral
+// ECDH + HKDF-SHA256 + AES-GCM) has not had independent cryptographic review. The wire format
+// produced by tswap_se_wrap (see below) is unversioned — changing it is a breaking change for
+// every existing Secure Enclave vault, silently, with no migration path.
 
 import CryptoKit
 import Foundation

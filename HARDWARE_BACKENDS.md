@@ -69,6 +69,27 @@ precursor to the Phase 6 multi-machine keyring, not the final on-disk format. Re
 holds the trait-gated tests (`Category=SecureEnclave`, run with `./runtests.sh --secure-enclave`
 on a Mac) — they now pass via plain `dotnet test`, no publishing or signing required.
 
+### Status: PoC-grade, not yet production-hardened
+
+Functionally verified end-to-end (`tswap init --secure-enclave` → `add`/`get`/`list`/`names`,
+plus the presence-cancellation failure path — see `TswapSecureEnclave.swift`'s header comment),
+but three things are still open before this should be trusted as a primary vault backend:
+
+- **Only tested on Apple Silicon** (M4 Pro/macOS 26). The Intel-Mac T2 Secure Enclave path is
+  untested — CryptoKit's `SecureEnclave` API availability/behavior there is unverified.
+- **No independent cryptographic review.** The ephemeral-ECDH + HKDF-SHA256 + AES-GCM
+  construction in `TswapSecureEnclave.swift` is a hand-rolled ECIES equivalent; it's been
+  verified for correctness (round-trips, fails cleanly on denial), not reviewed by anyone with
+  cryptography expertise for subtler issues.
+- **The wrapped-key wire format is unversioned.** `Config.SecureEnclaveWrappedKey`'s byte layout
+  (length-prefixed `dataRepresentation` blob + ECIES package, see `AppleSecureEnclaveInterop.cs`)
+  has no version tag. Changing `tswap_se_wrap`'s packing format is a silent breaking change for
+  every existing Secure Enclave vault, with no detection or migration path.
+- `tswap init --secure-enclave` is explicitly a **workaround** (see its doc comment in
+  `InitCommand.cs`) to enable this end-to-end testing ahead of a real enrollment flow — not the
+  intended long-term UX. Phase 6 (`MULTI_MACHINE_KEYING.md`) is where a proper enrollment
+  ceremony, multi-factor unlock, and a versioned keyring format belong.
+
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 
 The first implementation P/Invoked `SecKeyCreateRandomKey`/`SecItemCopyMatching` directly
