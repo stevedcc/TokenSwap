@@ -41,15 +41,12 @@ try
         ? new TestKeyYubiKeyService(testKey)
         : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
     // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS)
-    // register via the additionalBackends argument once implemented; the YubiKey backend is
-    // always present and VaultUnlocker picks the right one from config.Backend. Example once
-    // SecureEnclaveHardwareService is implemented (the OS guard satisfies the platform
-    // analyzer, since that type is [SupportedOSPlatform("macos")]):
-    //   var extra = new List<IHardwareKeyService>();
-    //   if (OperatingSystem.IsMacOS()) extra.Add(new SecureEnclaveHardwareService());
-    //   var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extra);
-    // See TswapCore/Vault/SecureEnclaveHardwareService.cs, HARDWARE_BACKENDS.md, MULTI_MACHINE_KEYING.md.
-    var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
+    // register via the additionalBackends argument; the YubiKey backend is always present
+    // and VaultUnlocker picks the right one from config.Backend.
+    var extraBackends = new List<IHardwareKeyService>();
+    if (OperatingSystem.IsMacOS()) extraBackends.Add(new SecureEnclaveHardwareService());
+    // TPM (Windows/Linux) is not implemented yet — see HARDWARE_BACKENDS.md.
+    var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);
     return CliRunner.Run(ctx, env.CommandArgs);

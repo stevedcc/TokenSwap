@@ -342,9 +342,15 @@ as a localized change with no cross-cutting churn:
   `IYubiKeyService` stays as the YubiKey driver. TPM/Secure-Enclave backends plug in by
   implementing `IHardwareKeyService` and registering at the composition root — see
   `HARDWARE_BACKENDS.md`. This is the same seam Phase 6's keyring builds on (the recovered
-  value becomes the per-machine KEK). No behaviour change; the actual TPM/SE implementations
-  remain to be written. The key model those backends share is worked out in
-  `MULTI_MACHINE_KEYING.md` (keyring of wrapped shares, user-set unlock threshold).
+  value becomes the per-machine KEK). The key model those backends share is worked out in
+  `MULTI_MACHINE_KEYING.md` (keyring of wrapped shares, user-set unlock threshold). **Secure
+  Enclave is now implemented and verified on real hardware** (`SecureEnclaveHardwareService` +
+  `AppleSecureEnclaveInterop`, single-slot `k = 1` via `Config.SecureEnclaveWrappedKey`), backed
+  by a small native Swift/CryptoKit shim rather than raw Security.framework calls — see
+  `HARDWARE_BACKENDS.md` for why (the raw `SecItem` path needs a paid Developer ID certificate
+  and provisioning profile just to create a key; CryptoKit needs neither, verified unsigned).
+  Building the shim adds a Swift-toolchain dependency for macOS builds only. TPM is not
+  implemented.
 - ⏭️ **`ConsoleIntercept` repo extraction + NuGet publishing.** Out of scope for an
   in-repo change — it means creating a separate repository and publishing to a package
   feed, and the plan defers picking the permanent package name to that point. The library

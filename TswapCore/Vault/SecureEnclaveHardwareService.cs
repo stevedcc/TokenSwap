@@ -1,47 +1,32 @@
 using System.Runtime.Versioning;
+using TswapCore.Vault.Interop;
 
 namespace TswapCore.Vault;
 
 /// <summary>
-/// Apple Secure Enclave <see cref="IHardwareKeyService"/> — <b>STUB, not yet implemented.</b>
-///
-/// Fill this in on a real Mac: it needs Security.framework and a physical Secure Enclave, so
-/// it cannot be built against or tested on Linux/Windows. The design is already settled —
-/// read these two docs first, they are the brief for this file:
-/// <list type="bullet">
-/// <item><c>HARDWARE_BACKENDS.md</c> — the "Adding a backend" checklist (steps 1–6) and the
-///   Secure Enclave row of the per-backend table.</item>
-/// <item><c>MULTI_MACHINE_KEYING.md</c> — why the Secure Enclave forces <b>wrap/unwrap</b>
-///   (it cannot HMAC and never exports key bytes), and where the wrapped key/share lives in
-///   the keyring.</item>
-/// </list>
+/// Apple Secure Enclave <see cref="IHardwareKeyService"/>. Needs a physical Secure Enclave, so
+/// it only builds/runs on macOS — see <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c>
+/// for the design this implements.
 ///
 /// <para><b>Primitive:</b> ECIES wrap/unwrap against a <b>non-extractable P-256 key</b> created
-/// in the Secure Enclave. No key material ever leaves the Enclave; unlock unwraps <c>K_v</c>
-/// (or, once k≥2 threshold lands, this machine's Shamir share) transiently in memory.</para>
+/// fresh in the Secure Enclave on enrollment, via Apple's CryptoKit <c>SecureEnclave</c> API
+/// (through the <see cref="AppleSecureEnclaveInterop"/> Swift shim — see its header comment for
+/// why CryptoKit rather than raw Security.framework <c>SecItem</c> calls). No key material ever
+/// leaves the Enclave; unlock unwraps <c>K_v</c> transiently in memory. The k≥2 threshold
+/// (Shamir shares instead of the whole key) is Phase 6 — see <c>MULTI_MACHINE_KEYING.md</c>.</para>
 ///
-/// <para><b>Security.framework calls</b> (via P/Invoke — AOT-safe, no reflection):</para>
-/// <list type="bullet">
-/// <item>Create/find the key: <c>SecKeyCreateRandomKey</c> with
-///   <c>kSecAttrTokenID = kSecAttrTokenIDSecureEnclave</c>,
-///   <c>kSecAttrKeyType = kSecAttrKeyTypeECSECPrimeRandom</c>, 256-bit,
-///   and a <c>kSecAttrAccessControl</c> that gates presence/biometry.</item>
-/// <item>Presence/biometry policy: <c>SecAccessControlCreateWithFlags</c>
-///   (<c>.biometryCurrentSet</c> / <c>.userPresence</c> / <c>.devicePasscode</c>).</item>
-/// <item>Wrap: <c>SecKeyCreateEncryptedData(pubKey,
-///   eciesEncryptionCofactorX963SHA256AESGCM, plaintext)</c>.</item>
-/// <item>Unwrap: <c>SecKeyCreateDecryptedData(privKey, &lt;same algorithm&gt;, ciphertext)</c>
-///   — this is the call that triggers the Touch ID / passcode prompt.</item>
-/// </list>
+/// <para>This is today's single-machine, <c>k = 1</c> slice (implementation-ordering step 2 in
+/// <c>MULTI_MACHINE_KEYING.md</c>): <see cref="Config.SecureEnclaveWrappedKey"/> carries a
+/// single self-contained blob — the Secure Enclave key's own <c>dataRepresentation</c> plus the
+/// ECIES ciphertext — produced and consumed by <see cref="AppleSecureEnclaveInterop"/>. There is
+/// no keychain entry and nothing to look up by tag: the key only exists as long as this blob is
+/// kept, and only the physical Secure Enclave that created it can unwrap it. The general
+/// multi-machine keyring (multiple slots, signed, `epoch`-guarded) is not built yet; this field
+/// is a single-slot precursor to it, not the final on-disk format.</para>
 ///
-/// <para><b>Enrollment</b> (writing the wrapped slot into config/keyring) is a separate flow —
-/// see <c>HARDWARE_BACKENDS.md</c> step 5. This class owns only the wrap/unwrap primitive and
-/// <see cref="Unlock"/>. The <see cref="Wrap"/>/<see cref="Unwrap"/> signatures below are a
-/// starting point that matches the design docs; adjust them as the keyring/slot format lands.</para>
-///
-/// <para>Registered at the composition root only on macOS — see the commented example in
-/// <c>TswapCli/Program.cs</c>. Until then <see cref="VaultUnlocker"/> returns a clear
-/// "backend not supported" error for a secure-enclave vault on other builds.</para>
+/// <para>Registered at the composition root only on macOS — see <c>TswapCli/Program.cs</c>.
+/// On other builds <see cref="VaultUnlocker"/> returns a clear "backend not supported" error
+/// for a secure-enclave vault.</para>
 /// </summary>
 [SupportedOSPlatform("macos")]
 public sealed class SecureEnclaveHardwareService : IHardwareKeyService
@@ -52,35 +37,30 @@ public sealed class SecureEnclaveHardwareService : IHardwareKeyService
     public bool IsSimulated => false;
 
     /// <summary>
-    /// Recovers the vault master key (<c>k = 1</c>) or this machine's Shamir share
-    /// (<c>k ≥ 2</c>) by unwrapping the Secure-Enclave slot carried in
-    /// <paramref name="config"/>. <paramref name="chooseSerial"/> is unused — the Secure
-    /// Enclave is a single, non-removable device.
-    /// <para>TODO (macOS): read this machine's slot from the config/keyring and return
-    /// <see cref="Unwrap"/> of it. See <c>MULTI_MACHINE_KEYING.md</c> for the slot format.</para>
+    /// Recovers the vault master key by unwrapping <see cref="Config.SecureEnclaveWrappedKey"/>.
+    /// <paramref name="chooseSerial"/> is unused — the Secure Enclave is a single,
+    /// non-removable device.
     /// </summary>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
-        => throw new NotImplementedException(
-            "Secure Enclave unlock is not implemented yet. See HARDWARE_BACKENDS.md and MULTI_MACHINE_KEYING.md.");
+    {
+        if (config.SecureEnclaveWrappedKey is not { Length: > 0 } wrappedBase64)
+            throw new TswapException(
+                "Config is corrupted: vault uses the 'secure-enclave' backend but has no wrapped key. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
+
+        return Unwrap(Convert.FromBase64String(wrappedBase64));
+    }
 
     /// <summary>
-    /// Enrollment side: ECIES-encrypt <paramref name="plaintextKey"/> (the vault key or a
-    /// Shamir share) to this machine's Secure Enclave public key, returning the opaque slot
-    /// payload to store in the keyring. The wrapped form is useless off this machine.
-    /// <para>TODO (macOS): <c>SecKeyCreateEncryptedData</c> with
-    /// <c>eciesEncryptionCofactorX963SHA256AESGCM</c>. See <c>HARDWARE_BACKENDS.md</c>.</para>
+    /// Enrollment side: creates a new Secure Enclave key pair and ECIES-encrypts
+    /// <paramref name="plaintextKey"/> (the vault key) to it. The returned blob is useless off
+    /// this machine.
     /// </summary>
-    public byte[] Wrap(byte[] plaintextKey)
-        => throw new NotImplementedException(
-            "SecKeyCreateEncryptedData not implemented. See HARDWARE_BACKENDS.md (Secure Enclave row).");
+    public byte[] Wrap(byte[] plaintextKey) => AppleSecureEnclaveInterop.Wrap(plaintextKey);
 
     /// <summary>
-    /// Unlock side: ECIES-decrypt a slot payload produced by <see cref="Wrap"/> using the
-    /// Secure Enclave private key (this triggers the biometry/presence prompt).
-    /// <para>TODO (macOS): <c>SecKeyCreateDecryptedData</c> with the same algorithm as
-    /// <see cref="Wrap"/>. See <c>HARDWARE_BACKENDS.md</c>.</para>
+    /// Unlock side: ECIES-decrypts a payload produced by <see cref="Wrap"/> using the Secure
+    /// Enclave private key it was wrapped to — this triggers the Touch ID / presence prompt.
     /// </summary>
-    public byte[] Unwrap(byte[] wrapped)
-        => throw new NotImplementedException(
-            "SecKeyCreateDecryptedData not implemented. See HARDWARE_BACKENDS.md (Secure Enclave row).");
+    public byte[] Unwrap(byte[] wrapped) => AppleSecureEnclaveInterop.Unwrap(wrapped);
 }

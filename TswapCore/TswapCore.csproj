@@ -10,4 +10,30 @@
     <InternalsVisibleTo Include="TswapTests" />
   </ItemGroup>
 
+  <!--
+    Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
+    thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
+    AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a
+    Swift shim is needed at all (CryptoKit's SecureEnclave API, not raw Security.framework
+    SecItem calls, is what avoids requiring a Developer ID + provisioning profile).
+    Needs the Swift toolchain (Xcode Command Line Tools) to build on macOS; skipped entirely
+    on other platforms, so this stays a no-op for Windows/Linux builds/CI.
+  -->
+  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <SecureEnclaveShimSource>$(MSBuildProjectDirectory)/Vault/Interop/swift/TswapSecureEnclave.swift</SecureEnclaveShimSource>
+    <SecureEnclaveShimOutput>$(MSBuildProjectDirectory)/Vault/Interop/swift/bin/libtswapse.dylib</SecureEnclaveShimOutput>
+  </PropertyGroup>
+
+  <Target Name="BuildSecureEnclaveShim" BeforeTargets="BeforeBuild"
+          Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'"
+          Inputs="$(SecureEnclaveShimSource)" Outputs="$(SecureEnclaveShimOutput)">
+    <MakeDir Directories="$(MSBuildProjectDirectory)/Vault/Interop/swift/bin" />
+    <Exec Command="swiftc -emit-library -O -o &quot;$(SecureEnclaveShimOutput)&quot; &quot;$(SecureEnclaveShimSource)&quot;" />
+  </Target>
+
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <None Include="$(SecureEnclaveShimOutput)" Link="libtswapse.dylib"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
