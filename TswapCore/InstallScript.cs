@@ -7,6 +7,7 @@ namespace TswapCore;
 public static class InstallScript
 {
     private const string BinaryPathPlaceholder = "TSWAP_BINARY_PATH_PLACEHOLDER";
+    private const string SecureEnclaveDylibStepPlaceholder = "TSWAP_SE_DYLIB_INSTALL_STEP_PLACEHOLDER";
 
     private static readonly string BashLinuxTemplate = """
         #!/usr/bin/env bash
@@ -83,6 +84,8 @@ public static class InstallScript
         sudo cp -f "$BINARY" /usr/local/bin/tswap
         sudo chmod +x /usr/local/bin/tswap
         echo "    Installed to /usr/local/bin/tswap"
+
+        TSWAP_SE_DYLIB_INSTALL_STEP_PLACEHOLDER
 
         echo "==> Installing tswap skill (SKILL.md)..."
         mkdir -p "$HOME/.agents/skills/tswap"
@@ -177,11 +180,28 @@ public static class InstallScript
         => BashLinuxTemplate.Replace(BinaryPathPlaceholder, binaryPath);
 
     /// <summary>
-    /// Generates a bash install script for macOS.
-    /// Installs to /usr/local/bin only (requires sudo).
+    /// Generates a bash install script for macOS. Installs to /usr/local/bin (requires sudo).
+    /// <paramref name="secureEnclaveDylib"/>, when present, is embedded in the script as a
+    /// base64 blob and written out to /usr/local/bin/libtswapse.dylib alongside the binary —
+    /// the install step is the deliberate, visible place this happens (not a lazily-extracted
+    /// runtime cache the user never asked for and that doesn't depend on the downloaded
+    /// binary still existing afterward). Null when this build has no Secure Enclave support
+    /// compiled in (non-macOS build of the generator, or the shim didn't build).
     /// </summary>
-    public static string GetMacOSScript(string binaryPath)
-        => BashMacOSTemplate.Replace(BinaryPathPlaceholder, binaryPath);
+    public static string GetMacOSScript(string binaryPath, byte[]? secureEnclaveDylib = null)
+    {
+        var dylibStep = secureEnclaveDylib is null
+            ? ""
+            : $"""
+               echo "==> Installing Secure Enclave support library..."
+               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -d | sudo tee /usr/local/bin/libtswapse.dylib > /dev/null
+               sudo chmod +x /usr/local/bin/libtswapse.dylib
+               echo "    Installed to /usr/local/bin/libtswapse.dylib"
+               """;
+        return BashMacOSTemplate
+            .Replace(BinaryPathPlaceholder, binaryPath)
+            .Replace(SecureEnclaveDylibStepPlaceholder, dylibStep);
+    }
 
     /// <summary>
     /// Generates a PowerShell install script for Windows.
@@ -191,11 +211,12 @@ public static class InstallScript
 
     /// <summary>
     /// Generates the install script appropriate for the current platform.
+    /// <paramref name="secureEnclaveDylib"/> is macOS-only — see <see cref="GetMacOSScript"/>.
     /// </summary>
-    public static string GetScript(string binaryPath)
+    public static string GetScript(string binaryPath, byte[]? secureEnclaveDylib = null)
     {
         if (OperatingSystem.IsWindows()) return GetPowerShellScript(binaryPath);
-        if (OperatingSystem.IsMacOS())  return GetMacOSScript(binaryPath);
+        if (OperatingSystem.IsMacOS())  return GetMacOSScript(binaryPath, secureEnclaveDylib);
         return GetBashScript(binaryPath);
     }
 }

@@ -14,7 +14,22 @@ public sealed class InstallScriptCommand : ICliCommand
         var binaryPath = Environment.ProcessPath
             ?? throw new TswapException("Cannot determine the path of the current binary.");
 
-        ctx.Console.Out.WriteLine(InstallScript.GetScript(binaryPath));
+        // Null on non-macOS builds (no resource embedded there at all) and, defensively, if
+        // this macOS build somehow has no Secure Enclave support compiled in — GetScript
+        // just omits the dylib-install step from the generated script in that case.
+        byte[]? secureEnclaveDylib = null;
+        if (OperatingSystem.IsMacOS())
+        {
+            using var stream = typeof(InstallScript).Assembly.GetManifestResourceStream("libtswapse.dylib");
+            if (stream != null)
+            {
+                using var ms = new MemoryStream();
+                stream.CopyTo(ms);
+                secureEnclaveDylib = ms.ToArray();
+            }
+        }
+
+        ctx.Console.Out.WriteLine(InstallScript.GetScript(binaryPath, secureEnclaveDylib));
         return 0;
     }
 }

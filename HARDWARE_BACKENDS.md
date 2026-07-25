@@ -134,8 +134,48 @@ shim — this repo's macOS build now needs the **Swift toolchain** (Xcode Comman
 `swiftc`) in addition to the .NET SDK. The MSBuild target that compiles the shim is gated to
 macOS only (`$([MSBuild]::IsOSPlatform('OSX'))`), so it's a no-op on Windows/Linux and doesn't
 affect CI there. `dotnet publish -c Release` (NativeAOT, the CI tripwire per the AOT note below)
-was verified to still produce a working, unsigned binary with `libtswapse.dylib` copied alongside
-it (P/Invoke via `NativeLibrary.Load`/`SetDllImportResolver` is reflection-free and AOT-safe).
+was verified to still produce a working, unsigned binary.
+
+**Static-linking the shim into the AOT binary was tried and doesn't work — verified on real
+hardware, not assumed.** `swiftc -emit-library -static` plus NativeAOT's `<NativeLibrary>` /
+`<DirectPInvoke>` items link cleanly (`otool -L` shows no dylib dependency at all), and the
+presence-*free* calls (`SecureEnclave.isAvailable`, key creation) work correctly. But the
+presence-*gated* call — the one that actually matters — reliably fails with
+`authenticationFailure` after genuine, repeated Touch ID authentication. Codesigning was ruled
+out as the cause (identical ad-hoc/linker-signed flags on both binaries). Best working theory:
+NativeAOT's linker isn't Swift-aware, and something about how it merges the statically-linked
+Swift object code's runtime metadata breaks whatever more complex Swift-runtime machinery
+`LocalAuthentication` depends on internally — not root-caused further since a proven alternative
+(below) existed. **Don't revisit static linking without solving that failure mode first.**
+
+### Distribution: the dylib is embedded, not shipped as a companion file
+
+`libtswapse.dylib` ships in two ways from the same build, for two different purposes:
+
+- **`None` + `Copy*Directory`** in `TswapCore.csproj` puts it next to `TswapCore.dll`/`tswap` in
+  build/publish output, exactly as before — local dev builds and the hardware test suite are
+  unaffected, still loaded via `AppContext.BaseDirectory` at runtime.
+- **`EmbeddedResource`** puts the same bytes inside the compiled assembly itself. `tswap
+  installscript` (`InstallScript.cs`) reads its own embedded copy, base64-encodes it directly
+  into the generated install script, and the script writes it to `/usr/local/bin/libtswapse.dylib`
+  as an explicit step alongside the binary install — verified end-to-end: generated the real
+  script, decoded its embedded blob and confirmed it byte-for-byte matches the compiled dylib,
+  then ran a sandboxed copy of the script (swapping `/usr/local/bin` for a temp dir) and
+  confirmed `init --secure-enclave`/`add`/`get` all work from a directory containing *only* the
+  two files the script produced — no connection to the build tree.
+
+A lazily-extracted runtime cache directory (write the embedded bytes to `~/.cache/tswap/` or
+similar on first use) was considered and rejected: installation should be one deliberate,
+visible step the user can review before running, not a hidden first-run side effect — and it
+shouldn't depend on the pre-install download surviving on disk afterward, which a user is likely
+to delete once installed.
+
+This also fully closes the packaging gap that motivated it: `release.yml`'s zip/tar step and
+`ci.yml`'s artifact-upload step both only ever captured the single `tswap`/`tswap.exe` binary,
+silently dropping any companion file — now moot, since there is no companion file to drop.
+(`release.yml` has a separate, pre-existing, unrelated break — it still references a
+root-level `tswap.csproj` that hasn't existed since the CLI-decomposition refactor moved it to
+`TswapCli/TswapCli.csproj`; not fixed here.)
 
 Codesigning (Developer ID, notarization) still matters for eventually **distributing** tswap
 smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
