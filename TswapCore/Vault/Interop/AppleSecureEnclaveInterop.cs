@@ -135,4 +135,4 @@ internal static class AppleSecureEnclaveInterop
 
 /// <summary>A Secure Enclave / CryptoKit call failed in a way that isn't a normal user-facing <see cref="TswapException"/>.</summary>
 [SupportedOSPlatform("macos")]
-public sealed class CryptographicOperationException(string message) : Exception(message);
+internal sealed class CryptographicOperationException(string message) : Exception(message);

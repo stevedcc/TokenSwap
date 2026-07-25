@@ -9,8 +9,10 @@ namespace TswapCore.Vault;
 /// a vault whose backend is not registered fails with a clear, actionable error rather
 /// than a crash.
 ///
-/// When <paramref name="overrideKey"/> is set (test mode) unlock returns it directly
-/// without touching hardware or the config.
+/// <paramref name="overrideKey"/> (test mode) is wired only into <see cref="YubiKeyHardwareService"/>
+/// — a vault whose <see cref="Config.Backend"/> selects a different backend (e.g.
+/// <c>secure-enclave</c>) always goes through real hardware regardless of <paramref name="overrideKey"/>,
+/// since that backend has no override seam of its own.
 /// </summary>
 public sealed class VaultUnlocker
 {
