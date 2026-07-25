@@ -220,4 +220,32 @@ public class VaultUnlockerTests
         Assert.Equal(1, tpm.UnlockCalls);
         Assert.Empty(yubi.ChallengeLog);
     }
+
+    [Fact]
+    public void Constructor_DuplicateBackendRegistration_ThrowsInsteadOfSilentlyOverwriting()
+    {
+        // A backend registered with Backend == HardwareBackend.YubiKey would otherwise
+        // silently replace the built-in YubiKey entry in the dictionary indexer assignment —
+        // desyncing it from the _yubiKey field SelectConnectedSerial still uses, and quietly
+        // dropping overrideKey's effect. That's a composition-root bug; must fail loudly.
+        var (yubi, _, _, _) = MakeVault();
+        var impostor = new FakeBackend(HardwareBackend.YubiKey, []);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => new VaultUnlocker(yubi, additionalBackends: [impostor]));
+        Assert.Contains("Duplicate", ex.Message);
+        Assert.Contains("yubikey", ex.Message);
+    }
+
+    [Fact]
+    public void Constructor_DuplicateBackendWithinAdditionalBackends_Throws()
+    {
+        var (yubi, _, _, _) = MakeVault();
+        var first = new FakeBackend(HardwareBackend.SecureEnclave, []);
+        var second = new FakeBackend(HardwareBackend.SecureEnclave, []);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => new VaultUnlocker(yubi, additionalBackends: [first, second]));
+        Assert.Contains("Duplicate", ex.Message);
+    }
 }

@@ -39,7 +39,15 @@ public sealed class VaultUnlocker
         };
         if (additionalBackends != null)
             foreach (var backend in additionalBackends)
-                _backends[backend.Backend] = backend;
+                // TryAdd, not indexer assignment: a duplicate Backend value (including
+                // HardwareBackend.YubiKey, already registered above) would otherwise silently
+                // replace an existing entry — e.g. desyncing this dictionary from the _yubiKey
+                // field still used by SelectConnectedSerial below, and quietly dropping
+                // overrideKey's effect. That's a composition-root wiring bug; fail loudly.
+                if (!_backends.TryAdd(backend.Backend, backend))
+                    throw new ArgumentException(
+                        $"Duplicate hardware backend registration for '{backend.Backend.DisplayName()}' " +
+                        "— a backend for this value is already registered.", nameof(additionalBackends));
     }
 
     /// <summary>

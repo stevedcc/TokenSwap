@@ -25,9 +25,19 @@ internal static class AppleSecureEnclaveInterop
     static AppleSecureEnclaveInterop()
     {
         NativeLibrary.SetDllImportResolver(typeof(AppleSecureEnclaveInterop).Assembly, (name, assembly, searchPath) =>
-            name == Lib
-                ? NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "libtswapse.dylib"))
-                : IntPtr.Zero);
+        {
+            if (name != Lib)
+                return IntPtr.Zero;
+
+            var dylibPath = Path.Combine(AppContext.BaseDirectory, "libtswapse.dylib");
+            if (!File.Exists(dylibPath))
+                throw new TswapException(
+                    $"tswap's Secure Enclave support library is missing ({dylibPath} not found). " +
+                    "This usually means only the 'tswap' binary was copied without the rest of the " +
+                    "published output — reinstall tswap, or copy the entire publish directory.");
+
+            return NativeLibrary.Load(dylibPath);
+        });
     }
 
     [DllImport(Lib)]
