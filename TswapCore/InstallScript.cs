@@ -194,7 +194,7 @@ public static class InstallScript
             ? ""
             : $"""
                echo "==> Installing Secure Enclave support library..."
-               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -d | sudo tee /usr/local/bin/libtswapse.dylib > /dev/null
+               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -D | sudo tee /usr/local/bin/libtswapse.dylib > /dev/null
                sudo chmod +x /usr/local/bin/libtswapse.dylib
                echo "    Installed to /usr/local/bin/libtswapse.dylib"
                """;
