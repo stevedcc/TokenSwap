@@ -107,6 +107,7 @@ problem — it is still just wrap/unwrap, all backends uniform.
 | YubiKey | challenge-response → `PBKDF2` → KEK; AES-256-GCM wrap | touch | ykman / HMAC-SHA1 slot 2 |
 | TPM 2.0 | seal `share` to a machine-bound key (optionally PCR/PIN policy) | PIN / none | Windows TBS + CNG PCP; Linux tpm2-tss |
 | Secure Enclave | ECIES-encrypt `share` to a non-extractable P-256 key | biometric / user-presence | Security.framework `SecKeyCreate{Encrypted,Decrypted}Data` |
+| Recovery cert | ECIES-encrypt `share` to a CSR-issued keypair's public key | none — this is the deliberately presence-free break-glass slot | Standard X.509/PKIX (CSR, CA-signed cert, optional OCSP/CRL check) |
 
 `K_v` (or a Shamir share) never leaves as plaintext except transiently in memory during
 unlock; the wrapped forms in the keyring are useless off the enrolled machine.
@@ -163,6 +164,28 @@ The seam from the `IHardwareKeyService` reshape is the right shape for this:
 - **Recovery slot.** With `k ≥ 2`, an escrowed recovery slot (a printed/stored wrapped share)
   is the safety net against device loss — but re-introduces the escrow exposure. Make it an
   explicit, opt-in slot, not a default.
+
+  **A CA-issued recovery certificate is a concrete, better-shaped answer to this than a raw
+  printed share.** The mechanism: the user generates a keypair, submits a CSR, and gets back
+  a cert signed by a CA they've configured as trusted (self-hosted — e.g. `step-ca` — or any
+  CA; tswap trusts whatever root the user points it at, no bundled default). `Wrap` targets
+  the cert's public key exactly like any other backend; the *private* key, not the cert, is
+  what recovers the share.
+
+  This is deliberately the **presence-free, offline-capable** slot — the point is that it
+  works when every other factor is gone. The private key can be printed/stored however the
+  user sees fit (this is a tool for technical users; key custody is their call, same as the
+  YubiKey XOR share already is), or — better, where practical — generated non-extractably
+  inside a TPM/Secure Enclave/YubiKey and only the public key CSR'd, so a leaked cert alone
+  grants nothing.
+
+  What the CA step actually buys you, since the wrap/unwrap crypto itself doesn't need one:
+  **revocation.** A lost or compromised YubiKey/TPM/SE slot can only be handled by removing it
+  from the keyring and rotating `K_v` (step 4 below); a lost or compromised recovery cert can
+  be revoked at the CA (OCSP/CRL) without touching anything else, *if* unlock checks
+  revocation status for this slot. That check is a network dependency — acceptable here
+  specifically because this is the break-glass path, not everyday unlock, which stays fully
+  offline on every other backend.
 - **`K_names` provenance** and **deterministic vs. randomized record filenames** — carried
   over from Phase 6; independent of the key model but must be settled with the same format.
 - **Keyring signing key** — per-machine Ed25519 derived alongside `KEK_device`? Decide in
