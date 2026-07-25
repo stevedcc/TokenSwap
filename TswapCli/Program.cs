@@ -6,7 +6,7 @@
  *
  * Composition root: resolves the environment, wires real (or test) services,
  * and dispatches to a command. All behaviour lives in TswapCli/Commands/,
- * TswapCore, and ConsoleIntercept.
+ * TswapCore, and the RedactingPty package.
  */
 
 using TswapCli;

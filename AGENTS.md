@@ -29,7 +29,7 @@ tswap installscript > installTswap.sh && bash installTswap.sh
 tswap <command>
 ```
 
-Tests live in `TswapTests/` and `ConsoleIntercept.Tests/`. On Linux/macOS use
+Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
 tests that spawn the built binary; no flag runs both). Or run directly:
 ```shell
@@ -120,7 +120,7 @@ YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
-`ConsoleIntercept/` is a self-contained library (no tswap dependencies) that runs a child process in a PTY while streaming its output through find/replace filters — used by `run` for secret redaction. It has its own README and test project (`ConsoleIntercept.Tests/`) and is designed to be extractable to a separate repository.
+Secret redaction of subprocess output (used by `run`) comes from the [`RedactingPty`](https://github.com/stevedcc/RedactingPty) NuGet package — runs a child process in a PTY while streaming its output through find/replace filters. It was originally an in-repo library (`ConsoleIntercept/`) and was extracted to its own repository once it proved dependency-free and independently useful.
 
 ## Working with tswap as an AI Agent
 

@@ -13,11 +13,14 @@ suite went from 10 m 43 s to ~13 s, `Program.cs` from 1,387 lines to a ~60-line
 composition root, and `ConsoleIntercept` is now a self-contained library. The cross-OS
 E2E work also surfaced and fixed three real `WindowsPty` bugs (HPCON passed by pointer,
 fast-child output loss on close, std-handle inheritance) that had made interactive
-`tswap run` broken on Windows. Phase 5 (extensibility backlog) is now **partially
-shipped** — `--json` output, the `IVaultStore` seam, shell-completion generation, and the
-`IHardwareKeyService` reshape (readying TPM + Secure Enclave backends) landed; only the
-`ConsoleIntercept` repo extraction stays deferred (see Phase 5 for why). Phase 6
-(multi-machine sharing) remains forward-looking design.
+`tswap run` broken on Windows. Phase 5 (extensibility backlog) is now **shipped** —
+`--json` output, the `IVaultStore` seam, shell-completion generation, the
+`IHardwareKeyService` reshape (readying TPM + Secure Enclave backends), and a working
+Secure Enclave backend all landed. **`ConsoleIntercept` has now been extracted** to
+[`stevedcc/RedactingPty`](https://github.com/stevedcc/RedactingPty), published on
+NuGet as the `RedactingPty` package (via Trusted Publishing, no stored API key); tswap
+consumes it as a `PackageReference` in `TswapCli.csproj` — Phase 5 is now fully shipped.
+Phase 6 (multi-machine sharing) remains forward-looking design.
 
 ---
 
@@ -351,10 +354,12 @@ as a localized change with no cross-cutting churn:
   and provisioning profile just to create a key; CryptoKit needs neither, verified unsigned).
   Building the shim adds a Swift-toolchain dependency for macOS builds only. TPM is not
   implemented.
-- ⏭️ **`ConsoleIntercept` repo extraction + NuGet publishing.** Out of scope for an
-  in-repo change — it means creating a separate repository and publishing to a package
-  feed, and the plan defers picking the permanent package name to that point. The library
-  is already dependency-free (Phase 1), so extraction stays a folder move when scheduled.
+- ✅ **`ConsoleIntercept` repo extraction + NuGet publishing.** Extracted to
+  [`stevedcc/RedactingPty`](https://github.com/stevedcc/RedactingPty) (renamed —
+  clearer than the generic original name, and free on both GitHub and NuGet),
+  published as the `RedactingPty` package via NuGet Trusted Publishing (OIDC,
+  no stored API key). `TswapCli.csproj` now references it as a `PackageReference`;
+  the in-repo `ConsoleIntercept`/`ConsoleIntercept.Tests` projects are gone.
 
 ### Phase 6 — Multi-machine vault sharing (design, not yet scheduled)
 
@@ -563,7 +568,7 @@ concurrent writers, rotation atomicity) are where the risk lives.
 | 2 CLI decomposition | L | medium (touches every command; mitigated by keeping `ProgramTests` green throughout) | 0 | ✅ shipped (#97) |
 | 3 Core purification | M | low-medium (JSON compat needs golden-file tests; atomic save is isolated) | 2 | ✅ shipped (#98) |
 | 4 Test restructuring | M | low (pure test work) | 2, 3 | ✅ shipped (#99, #100) |
-| 5 Backlog | S–M | low | 4 | ⏳ mostly done (`--json`, `IVaultStore`, shell completion, `IHardwareKeyService` reshape shipped; only `ConsoleIntercept` repo extraction deferred) |
+| 5 Backlog | S–M | low | 4 | ✅ shipped (`--json`, `IVaultStore`, shell completion, `IHardwareKeyService` reshape + Secure Enclave backend, `ConsoleIntercept` repo extraction to `RedactingPty`) |
 | 6 Multi-machine sharing | L | high (new key model + mergeable format + rotation; needs its own design doc + threat model) | 5 (`IVaultStore`) | design only |
 
 Phases 1 and 2 are independent of each other (1 touches the PTY files + `CmdRun`

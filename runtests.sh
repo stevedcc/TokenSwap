@@ -14,8 +14,6 @@ FILTER=()
 TARGET="./TokenSwap.slnx"
 case "${1:-}" in
   --unit)        FILTER=(--filter 'Category!=E2E&Category!=SecureEnclave') ;;
-  # E2E tests live only in TswapTests; target that project directly so the
-  # filter doesn't produce a "no tests matched" warning in ConsoleIntercept.Tests.
   --e2e|--integration)
                  FILTER=(--filter 'Category=E2E')
                  TARGET="./TswapTests/TswapTests.csproj" ;;

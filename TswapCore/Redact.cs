@@ -31,7 +31,7 @@ public static class Redact
     /// Replaces secret values in <paramref name="line"/> with <c>[REDACTED: name]</c>.
     /// Caller is responsible for ordering — pass values longest-first to prevent a shorter
     /// value from clobbering a longer one that shares a prefix.
-    /// (Streaming subprocess redaction lives in the ConsoleIntercept library; this helper
+    /// (Streaming subprocess redaction lives in the RedactingPty package; this helper
     /// remains for single-line use.)
     /// </summary>
     public static string RedactLine(string line, IEnumerable<KeyValuePair<string, string>> secretValues)
