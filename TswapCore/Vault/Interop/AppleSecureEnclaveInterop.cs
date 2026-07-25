@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -65,7 +66,7 @@ internal static class AppleSecureEnclaveInterop
             throw new CryptographicOperationException($"tswap_se_wrap failed (code {rc}).");
 
         var package = new byte[4 + blobLen + ciphertextLen];
-        BitConverter.GetBytes(blobLen).CopyTo(package, 0);
+        BinaryPrimitives.WriteInt32LittleEndian(package, blobLen);
         Buffer.BlockCopy(blob, 0, package, 4, blobLen);
         Buffer.BlockCopy(ciphertext, 0, package, 4 + blobLen, ciphertextLen);
         return package;
@@ -77,7 +78,7 @@ internal static class AppleSecureEnclaveInterop
         if (wrapped.Length < 4)
             throw new TswapException("Config is corrupted: the Secure Enclave wrapped key is too short to be valid.");
 
-        var blobLen = BitConverter.ToInt32(wrapped, 0);
+        var blobLen = BinaryPrimitives.ReadInt32LittleEndian(wrapped);
         if (blobLen < 0 || 4 + blobLen > wrapped.Length)
             throw new TswapException("Config is corrupted: the Secure Enclave wrapped key has an invalid length prefix.");
 

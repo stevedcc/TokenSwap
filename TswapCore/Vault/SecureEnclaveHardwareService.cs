@@ -48,7 +48,29 @@ public sealed class SecureEnclaveHardwareService : IHardwareKeyService
                 "Config is corrupted: vault uses the 'secure-enclave' backend but has no wrapped key. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
-        return Unwrap(Convert.FromBase64String(wrappedBase64));
+        byte[] wrapped;
+        try
+        {
+            wrapped = Convert.FromBase64String(wrappedBase64);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException(
+                "Config is corrupted: the Secure Enclave wrapped key is not valid base64. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
+        }
+
+        var key = Unwrap(wrapped);
+        // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
+        // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
+        // call site specifically claims "the vault master key," so it does: a corrupted or
+        // truncated wrapped blob that still happens to decrypt should fail here with a clear
+        // message, not surface as an opaque AES-GCM key-size exception further downstream.
+        if (key.Length != 32)
+            throw new TswapException(
+                $"Config is corrupted: expected a 32-byte vault key from the Secure Enclave, got {key.Length}. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
+        return key;
     }
 
     /// <summary>

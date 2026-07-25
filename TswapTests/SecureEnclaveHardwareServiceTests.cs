@@ -63,6 +63,34 @@ public class SecureEnclaveHardwareServiceTests
         Assert.Contains("secure-enclave", ex.Message);
     }
 
+    [Fact]
+    public void Unlock_InvalidBase64_ThrowsClearError()
+    {
+        var svc = new SecureEnclaveHardwareService();
+        var config = new Config([], "", DateTime.UtcNow,
+            Backend: HardwareBackend.SecureEnclave,
+            SecureEnclaveWrappedKey: "not valid base64!!");
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        Assert.Contains("base64", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_WrongLengthKey_ThrowsClearError()
+    {
+        // Unwrap is a generic primitive (round-trips whatever was wrapped, per
+        // WrapUnwrap_RoundTripsKey), so a 16-byte payload round-trips fine at that layer.
+        // Unlock specifically promises a 32-byte vault key, so it must reject this.
+        var svc = new SecureEnclaveHardwareService();
+        var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(16));
+        var config = new Config([], "", DateTime.UtcNow,
+            Backend: HardwareBackend.SecureEnclave,
+            SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        Assert.Contains("32-byte", ex.Message);
+    }
+
     [Fact(Skip = "Manual: requires denying/cancelling the Touch ID prompt to assert the failure path.")]
     public void Unwrap_RequiresUserPresence()
     {
