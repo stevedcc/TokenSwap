@@ -31,7 +31,7 @@ jobs:
         run: dotnet build TokenSwap.slnx
 
       - name: Unit tests (in-process)
-        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave"
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.

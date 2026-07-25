@@ -6,7 +6,8 @@ namespace TswapCore.Vault;
 /// <list type="bullet">
 /// <item><see cref="YubiKeyHardwareService"/> — HMAC challenge-response with 1-of-2 XOR
 ///   redundancy (the scheme tswap has always used).</item>
-/// <item>TPM 2.0 (Windows TBS/CNG, Linux tpm2) — seal/unseal a machine-bound key. Planned.</item>
+/// <item><see cref="LinuxTpmHardwareService"/> — seal/unseal a machine-bound key via
+///   tpm2-tools (Linux only). Windows TPM (TBS/CNG) is planned but not implemented.</item>
 /// <item><see cref="SecureEnclaveHardwareService"/> — ECIES wrap/unwrap against a
 ///   non-extractable P-256 key, via a Swift/CryptoKit shim (macOS only).</item>
 /// </list>

@@ -97,6 +97,26 @@ public class ModelsTests
     }
 
     [Fact]
+    public void Config_NullTpmSealedKey_IsOmittedFromJson()
+    {
+        // Same backward-compat guarantee as SecureEnclaveWrappedKey: a non-TPM vault must
+        // serialize with no TpmSealedKey field at all.
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.DoesNotContain("TpmSealedKey", json);
+        Assert.Null(config.TpmSealedKey);
+    }
+
+    [Fact]
+    public void Config_TpmSealedKey_RoundTrips()
+    {
+        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "c2VhbGVk");
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.Contains("\"TpmSealedKey\": \"c2VhbGVk\"", json);
+        Assert.Equal("c2VhbGVk", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.TpmSealedKey);
+    }
+
+    [Fact]
     public void ExportFile_VersionTag_Unchanged()
     {
         Assert.Equal("tswap-export-v1", ExportFile.CurrentVersion);

@@ -11,9 +11,16 @@ public static class SecurityWarnings
 {
     /// <summary>
     /// Print a warning to stderr if YubiKey slots don't require touch or status is unknown.
+    /// YubiKey-only: the wording below ("your YubiKeys", "tswap migrate") doesn't apply to
+    /// other backends, which have their own presence models and their own init-time caveats
+    /// (see SecureEnclaveHardwareService/LinuxTpmHardwareService's init flows) rather than a
+    /// shared touch-requirement warning.
     /// </summary>
     public static void WarnIfNoTouch(IConsole console, Config config)
     {
+        if (config.Backend is not (null or HardwareBackend.YubiKey))
+            return;
+
         if (config.RequiresTouch == true)
             return;
 
