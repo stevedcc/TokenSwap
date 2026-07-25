@@ -53,17 +53,30 @@ internal static class AppleSecureEnclaveInterop
 
     public static bool IsAvailable() => tswap_se_available();
 
+    private static void RequireAvailable()
+    {
+        if (!IsAvailable())
+            throw new TswapException(
+                "This Mac does not have a usable Secure Enclave. Secure Enclave requires Apple " +
+                "Silicon or a T2 chip — use a different backend (YubiKey) on this machine.");
+    }
+
     /// <summary>Enrollment: creates a new Secure Enclave key and ECIES-wraps <paramref name="plaintextKey"/> to it.</summary>
     public static byte[] Wrap(byte[] plaintextKey)
     {
+        RequireAvailable();
+
         var blob = new byte[BlobBufferSize];
         var blobLen = blob.Length;
         var ciphertext = new byte[CiphertextBufferSize];
         var ciphertextLen = ciphertext.Length;
 
         var rc = tswap_se_wrap(plaintextKey, plaintextKey.Length, blob, ref blobLen, ciphertext, ref ciphertextLen);
+        if (rc == -1)
+            throw new CryptographicOperationException(
+                "tswap_se_wrap: the Secure Enclave key or wrapped ciphertext exceeded tswap's internal buffer size — this is a tswap bug, not a config problem.");
         if (rc != 0)
-            throw new CryptographicOperationException($"tswap_se_wrap failed (code {rc}).");
+            throw new CryptographicOperationException($"tswap_se_wrap failed (code {rc}); Secure Enclave reported available but the operation still failed.");
 
         var package = new byte[4 + blobLen + ciphertextLen];
         BinaryPrimitives.WriteInt32LittleEndian(package, blobLen);
@@ -75,6 +88,8 @@ internal static class AppleSecureEnclaveInterop
     /// <summary>Unlock: reconstitutes the Secure Enclave key and decrypts the payload produced by <see cref="Wrap"/>. Triggers the Touch ID / presence prompt.</summary>
     public static byte[] Unwrap(byte[] wrapped)
     {
+        RequireAvailable();
+
         if (wrapped.Length < 4)
             throw new TswapException("Config is corrupted: the Secure Enclave wrapped key is too short to be valid.");
 
@@ -95,10 +110,23 @@ internal static class AppleSecureEnclaveInterop
         var plaintext = new byte[256];
         var plaintextLen = plaintext.Length;
         var rc = tswap_se_unwrap(blob, blob.Length, ciphertext, ciphertext.Length, plaintext, ref plaintextLen);
-        if (rc != 0)
-            throw new TswapException(
-                "Could not unlock with the Secure Enclave. It may have been enrolled on a different Mac, " +
-                "or presence/biometry verification failed or was cancelled.");
+        // tswap_se_unwrap's three failure codes are genuinely different situations — collapsing
+        // them into one message would hide config corruption and internal bugs behind "wrong
+        // machine or cancelled," which is misleading and makes both harder to diagnose.
+        switch (rc)
+        {
+            case 0:
+                break;
+            case -1:
+                throw new CryptographicOperationException(
+                    "tswap_se_unwrap: the decrypted value exceeded tswap's internal buffer size — this is a tswap bug, not a config problem.");
+            case -3:
+                throw new TswapException("Config is corrupted: the Secure Enclave ciphertext package is malformed.");
+            default:
+                throw new TswapException(
+                    "Could not unlock with the Secure Enclave. It may have been enrolled on a different Mac, " +
+                    "or presence/biometry verification failed or was cancelled.");
+        }
 
         Array.Resize(ref plaintext, plaintextLen);
         return plaintext;

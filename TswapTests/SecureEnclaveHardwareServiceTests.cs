@@ -106,6 +106,26 @@ public class SecureEnclaveHardwareServiceTests
         Assert.Contains("length prefix", ex.Message);
     }
 
+    [Fact]
+    public void Unwrap_TruncatedCiphertext_ThrowsDistinctMalformedError()
+    {
+        // Uses a *real* Secure Enclave blob (from a real Wrap call) but truncates the
+        // ciphertext package down to nothing usable. Proves tswap_se_unwrap's rc=-3 gets its
+        // own "malformed" message rather than being collapsed into the generic "wrong machine
+        // or presence cancelled" one — those are different problems, so they need different
+        // messages. Reconstituting the SE key from a valid blob doesn't itself prompt (only the
+        // key-agreement step does, which this never reaches — the length guard fails first).
+        var svc = new SecureEnclaveHardwareService();
+        var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(32));
+        var blobLen = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(wrapped);
+
+        var truncated = new byte[4 + blobLen + 1]; // 1 byte of "ciphertext" — nowhere near the 93-byte minimum
+        wrapped.AsSpan(0, 4 + blobLen).CopyTo(truncated);
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(truncated));
+        Assert.Contains("malformed", ex.Message);
+    }
+
     [Fact(Skip = "Manual: requires denying/cancelling the Touch ID prompt to assert the failure path.")]
     public void Unwrap_RequiresUserPresence()
     {
