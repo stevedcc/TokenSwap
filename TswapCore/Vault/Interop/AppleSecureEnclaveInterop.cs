@@ -79,7 +79,11 @@ internal static class AppleSecureEnclaveInterop
             throw new TswapException("Config is corrupted: the Secure Enclave wrapped key is too short to be valid.");
 
         var blobLen = BinaryPrimitives.ReadInt32LittleEndian(wrapped);
-        if (blobLen < 0 || 4 + blobLen > wrapped.Length)
+        // Subtraction, not "4 + blobLen > wrapped.Length": blobLen comes straight off the wire
+        // and addition can overflow for a huge value, wrapping to negative and defeating the
+        // check. wrapped.Length - 4 can't underflow (already checked wrapped.Length >= 4 above).
+        // ">=" (not ">") also requires at least 1 leftover byte for the ciphertext package.
+        if (blobLen < 0 || blobLen >= wrapped.Length - 4)
             throw new TswapException("Config is corrupted: the Secure Enclave wrapped key has an invalid length prefix.");
 
         var blob = new byte[blobLen];

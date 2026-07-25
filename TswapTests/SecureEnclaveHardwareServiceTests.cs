@@ -91,6 +91,21 @@ public class SecureEnclaveHardwareServiceTests
         Assert.Contains("32-byte", ex.Message);
     }
 
+    [Fact]
+    public void Unwrap_HugeLengthPrefix_ThrowsClearErrorInsteadOfOverflowing()
+    {
+        // A blobLen near int.MaxValue makes the naive "4 + blobLen > wrapped.Length" bounds
+        // check overflow (wraps to negative, so the comparison passes when it shouldn't),
+        // reaching `new byte[blobLen]` with an ~2GB size. The fix uses a subtraction-based
+        // check instead; this proves it rejects cleanly rather than attempting that allocation.
+        var svc = new SecureEnclaveHardwareService();
+        var corrupted = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(corrupted, int.MaxValue - 1);
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(corrupted));
+        Assert.Contains("length prefix", ex.Message);
+    }
+
     [Fact(Skip = "Manual: requires denying/cancelling the Touch ID prompt to assert the failure path.")]
     public void Unwrap_RequiresUserPresence()
     {
