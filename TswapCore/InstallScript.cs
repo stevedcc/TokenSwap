@@ -7,6 +7,7 @@ namespace TswapCore;
 public static class InstallScript
 {
     private const string BinaryPathPlaceholder = "TSWAP_BINARY_PATH_PLACEHOLDER";
+    private const string SecureEnclaveDylibStepPlaceholder = "TSWAP_SE_DYLIB_INSTALL_STEP_PLACEHOLDER";
 
     private static readonly string BashLinuxTemplate = """
         #!/usr/bin/env bash
@@ -41,6 +42,29 @@ public static class InstallScript
         ln -sfn "$HOME/.agents/skills/tswap" "$HOME/.claude/skills/tswap"
         echo "    Created ~/.claude/skills/tswap -> ~/.agents/skills/tswap"
 
+        echo "==> Installing shell completions..."
+        # bash: auto-loaded by bash-completion from the user data dir (no rc edit needed).
+        BASH_COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+        mkdir -p "$BASH_COMP_DIR"
+        "$HOME/.local/bin/tswap" completion bash > "$BASH_COMP_DIR/tswap"
+        echo "    bash -> $BASH_COMP_DIR/tswap"
+        # fish: auto-loaded from the completions dir when fish is installed.
+        if command -v fish >/dev/null 2>&1; then
+          FISH_COMP_DIR="$HOME/.config/fish/completions"
+          mkdir -p "$FISH_COMP_DIR"
+          "$HOME/.local/bin/tswap" completion fish > "$FISH_COMP_DIR/tswap.fish"
+          echo "    fish -> $FISH_COMP_DIR/tswap.fish"
+        fi
+        # zsh: write the completion function; the dir must be on fpath (printed below).
+        if command -v zsh >/dev/null 2>&1; then
+          ZSH_COMP_DIR="$HOME/.zsh/completions"
+          mkdir -p "$ZSH_COMP_DIR"
+          "$HOME/.local/bin/tswap" completion zsh > "$ZSH_COMP_DIR/_tswap"
+          echo "    zsh  -> $ZSH_COMP_DIR/_tswap"
+          echo "         (if zsh completion doesn't load, add to ~/.zshrc: fpath+=$ZSH_COMP_DIR; autoload -Uz compinit; compinit)"
+        fi
+        echo "    Restart your shell to enable completion."
+
         echo ""
         echo "✅ tswap installed successfully."
         echo "   If ~/.local/bin is not on your PATH, add it:"
@@ -61,6 +85,8 @@ public static class InstallScript
         sudo chmod +x /usr/local/bin/tswap
         echo "    Installed to /usr/local/bin/tswap"
 
+        TSWAP_SE_DYLIB_INSTALL_STEP_PLACEHOLDER
+
         echo "==> Installing tswap skill (SKILL.md)..."
         mkdir -p "$HOME/.agents/skills/tswap"
         /usr/local/bin/tswap prompt > "$HOME/.agents/skills/tswap/SKILL.md"
@@ -71,6 +97,30 @@ public static class InstallScript
         [ -e "$HOME/.claude/skills/tswap" ] && ! [ -L "$HOME/.claude/skills/tswap" ] && rm -rf "$HOME/.claude/skills/tswap"
         ln -sfn "$HOME/.agents/skills/tswap" "$HOME/.claude/skills/tswap"
         echo "    Created ~/.claude/skills/tswap -> ~/.agents/skills/tswap"
+
+        echo "==> Installing shell completions..."
+        # bash: auto-loaded by bash-completion from the user data dir (no rc edit needed).
+        BASH_COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+        mkdir -p "$BASH_COMP_DIR"
+        /usr/local/bin/tswap completion bash > "$BASH_COMP_DIR/tswap"
+        echo "    bash -> $BASH_COMP_DIR/tswap"
+        # fish: auto-loaded from the completions dir when fish is installed.
+        if command -v fish >/dev/null 2>&1; then
+          FISH_COMP_DIR="$HOME/.config/fish/completions"
+          mkdir -p "$FISH_COMP_DIR"
+          /usr/local/bin/tswap completion fish > "$FISH_COMP_DIR/tswap.fish"
+          echo "    fish -> $FISH_COMP_DIR/tswap.fish"
+        fi
+        # zsh: write the completion function; the dir must be on fpath (printed below).
+        # macOS ships zsh as the default shell, so this is the common path here.
+        if command -v zsh >/dev/null 2>&1; then
+          ZSH_COMP_DIR="$HOME/.zsh/completions"
+          mkdir -p "$ZSH_COMP_DIR"
+          /usr/local/bin/tswap completion zsh > "$ZSH_COMP_DIR/_tswap"
+          echo "    zsh  -> $ZSH_COMP_DIR/_tswap"
+          echo "         (if zsh completion doesn't load, add to ~/.zshrc: fpath+=$ZSH_COMP_DIR; autoload -Uz compinit; compinit)"
+        fi
+        echo "    Restart your shell to enable completion."
 
         echo ""
         echo "✅ tswap installed successfully."
@@ -109,6 +159,15 @@ public static class InstallScript
         New-Item -ItemType Junction -Path $LinkPath -Target $SkillDir | Out-Null
         Write-Host "    Created $LinkPath -> $SkillDir"
 
+        Write-Host "==> Installing shell completion (PowerShell)..."
+        # PowerShell has no completion auto-load dir, so write the script and print the one
+        # line to dot-source it from the profile (we don't edit the profile automatically).
+        $CompletionFile = "$SkillDir\tswap.completion.ps1"
+        [System.IO.File]::WriteAllLines($CompletionFile, (& "$InstallDir\tswap.exe" completion powershell))
+        Write-Host "    Written to $CompletionFile"
+        Write-Host "    To enable, add this line to your PowerShell profile (path in `$PROFILE):"
+        Write-Host "        . `"$CompletionFile`""
+
         Write-Host ""
         Write-Host "✅ tswap installed successfully."
         """;
@@ -121,11 +180,28 @@ public static class InstallScript
         => BashLinuxTemplate.Replace(BinaryPathPlaceholder, binaryPath);
 
     /// <summary>
-    /// Generates a bash install script for macOS.
-    /// Installs to /usr/local/bin only (requires sudo).
+    /// Generates a bash install script for macOS. Installs to /usr/local/bin (requires sudo).
+    /// <paramref name="secureEnclaveDylib"/>, when present, is embedded in the script as a
+    /// base64 blob and written out to /usr/local/bin/libtswapse.dylib alongside the binary —
+    /// the install step is the deliberate, visible place this happens (not a lazily-extracted
+    /// runtime cache the user never asked for and that doesn't depend on the downloaded
+    /// binary still existing afterward). Null when this build has no Secure Enclave support
+    /// compiled in (non-macOS build of the generator, or the shim didn't build).
     /// </summary>
-    public static string GetMacOSScript(string binaryPath)
-        => BashMacOSTemplate.Replace(BinaryPathPlaceholder, binaryPath);
+    public static string GetMacOSScript(string binaryPath, byte[]? secureEnclaveDylib = null)
+    {
+        var dylibStep = secureEnclaveDylib is null
+            ? ""
+            : $"""
+               echo "==> Installing Secure Enclave support library..."
+               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -D | sudo tee /usr/local/bin/libtswapse.dylib > /dev/null
+               sudo chmod +x /usr/local/bin/libtswapse.dylib
+               echo "    Installed to /usr/local/bin/libtswapse.dylib"
+               """;
+        return BashMacOSTemplate
+            .Replace(BinaryPathPlaceholder, binaryPath)
+            .Replace(SecureEnclaveDylibStepPlaceholder, dylibStep);
+    }
 
     /// <summary>
     /// Generates a PowerShell install script for Windows.
@@ -135,11 +211,12 @@ public static class InstallScript
 
     /// <summary>
     /// Generates the install script appropriate for the current platform.
+    /// <paramref name="secureEnclaveDylib"/> is macOS-only — see <see cref="GetMacOSScript"/>.
     /// </summary>
-    public static string GetScript(string binaryPath)
+    public static string GetScript(string binaryPath, byte[]? secureEnclaveDylib = null)
     {
         if (OperatingSystem.IsWindows()) return GetPowerShellScript(binaryPath);
-        if (OperatingSystem.IsMacOS())  return GetMacOSScript(binaryPath);
+        if (OperatingSystem.IsMacOS())  return GetMacOSScript(binaryPath, secureEnclaveDylib);
         return GetBashScript(binaryPath);
     }
 }

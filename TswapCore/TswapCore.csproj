@@ -10,4 +10,43 @@
     <InternalsVisibleTo Include="TswapTests" />
   </ItemGroup>
 
+  <!--
+    Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
+    thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
+    AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a
+    Swift shim is needed at all (CryptoKit's SecureEnclave API, not raw Security.framework
+    SecItem calls, is what avoids requiring a Developer ID + provisioning profile).
+    Needs the Swift toolchain (Xcode Command Line Tools) to build on macOS; skipped entirely
+    on other platforms, so this stays a no-op for Windows/Linux builds/CI.
+  -->
+  <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <SecureEnclaveShimSource>$(MSBuildProjectDirectory)/Vault/Interop/swift/TswapSecureEnclave.swift</SecureEnclaveShimSource>
+    <SecureEnclaveShimOutput>$(MSBuildProjectDirectory)/Vault/Interop/swift/bin/libtswapse.dylib</SecureEnclaveShimOutput>
+  </PropertyGroup>
+
+  <Target Name="BuildSecureEnclaveShim" BeforeTargets="BeforeBuild"
+          Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'"
+          Inputs="$(SecureEnclaveShimSource)" Outputs="$(SecureEnclaveShimOutput)">
+    <MakeDir Directories="$(MSBuildProjectDirectory)/Vault/Interop/swift/bin" />
+    <Exec Command="swiftc -emit-library -O -o &quot;$(SecureEnclaveShimOutput)&quot; &quot;$(SecureEnclaveShimSource)&quot;" />
+  </Target>
+
+  <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
+    <!--
+      Two independent uses of the same built dylib:
+      - None + Copy*Directory: sits next to TswapCore.dll/tswap in build/publish output, so
+        local dev builds and the hardware test suite keep working exactly as before (loaded
+        via AppContext.BaseDirectory at runtime, unchanged).
+      - EmbeddedResource: bytes travel inside the compiled assembly itself, so `tswap
+        installscript` (InstallScript.cs) can read its own embedded copy and write it out
+        to the real install directory as an explicit step — see that file's comment for why
+        (a lazily-extracted runtime cache dir was considered and rejected: installation
+        should be one deliberate, visible step, not a hidden first-run side effect, and
+        shouldn't depend on the pre-install download surviving on disk afterward).
+    -->
+    <None Include="$(SecureEnclaveShimOutput)" Link="libtswapse.dylib"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="$(SecureEnclaveShimOutput)" LogicalName="libtswapse.dylib" />
+  </ItemGroup>
+
 </Project>

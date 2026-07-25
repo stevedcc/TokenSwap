@@ -33,7 +33,12 @@ public static class CommandRegistry
         new DeleteCommand(),
         new ExportCommand(),
         new ImportCommand(),
+        new CompletionCommand(),
     ];
+
+    /// <summary>All registered commands in help/display order. Read by
+    /// <see cref="Commands.CompletionCommand"/> to generate shell completions.</summary>
+    public static IReadOnlyList<ICliCommand> All => Commands;
 
     public static int Dispatch(CommandContext ctx, string[] args)
     {

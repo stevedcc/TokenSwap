@@ -194,4 +194,23 @@ public class StorageTests : IDisposable
         Assert.Equal("second reason", reburned.BurnReason);
         Assert.Equal("val", reburned.Value);
     }
+
+    // --- IVaultStore seam ---
+
+    [Fact]
+    public void Storage_ImplementsIVaultStore_RoundTripsThroughInterface()
+    {
+        // The whole point of the Phase 5 seam: consumers can hold IVaultStore and be
+        // agnostic to the backend. Exercise the store purely through the interface.
+        IVaultStore store = new Storage(_tempDir);
+        var config = new Config(new List<int> { 1, 2 }, "deadbeef", DateTime.UtcNow);
+        store.SaveConfig(config);
+        store.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>
+        {
+            ["k"] = new Secret("v", DateTime.UtcNow, DateTime.UtcNow),
+        }), _key);
+
+        Assert.Equal(new List<int> { 1, 2 }, store.LoadConfig().YubiKeySerials);
+        Assert.Equal("v", store.LoadSecrets(_key).Secrets["k"].Value);
+    }
 }

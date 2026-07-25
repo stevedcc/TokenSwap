@@ -55,6 +55,48 @@ public class ModelsTests
     }
 
     [Fact]
+    public void Config_NullBackend_IsOmittedFromJson()
+    {
+        // Backward-compat guarantee: a YubiKey vault (Backend unset) must serialize with
+        // no Backend field at all, so existing config.json files are byte-for-byte unchanged.
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.DoesNotContain("Backend", json);
+        Assert.Null(config.Backend);
+    }
+
+    [Fact]
+    public void Config_Backend_SerializesAsLowercaseAndRoundTrips()
+    {
+        var tpm = new Config([1, 2], "aabb", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var json = JsonSerializer.Serialize(tpm, TswapJsonContext.Default.Config);
+        Assert.Contains("\"Backend\": \"tpm\"", json);
+        Assert.Equal(HardwareBackend.Tpm, JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.Backend);
+
+        var se = tpm with { Backend = HardwareBackend.SecureEnclave };
+        json = JsonSerializer.Serialize(se, TswapJsonContext.Default.Config);
+        Assert.Contains("\"Backend\": \"secure-enclave\"", json);
+        Assert.Equal(HardwareBackend.SecureEnclave,
+            JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.Backend);
+    }
+
+    [Fact]
+    public void Config_LegacyJsonWithoutBackend_DeserializesAsYubiKey()
+    {
+        // A config from before hardware backends existed has no Backend key; it must load
+        // with Backend == null, which VaultUnlocker treats as YubiKey.
+        const string legacy = """
+            {
+              "YubiKeySerials": [11111111, 22222222],
+              "RedundancyXor": "00ff",
+              "Created": "2024-05-01T00:00:00Z"
+            }
+            """;
+        var config = JsonSerializer.Deserialize(legacy, TswapJsonContext.Default.Config)!;
+        Assert.Null(config.Backend);
+    }
+
+    [Fact]
     public void ExportFile_VersionTag_Unchanged()
     {
         Assert.Equal("tswap-export-v1", ExportFile.CurrentVersion);

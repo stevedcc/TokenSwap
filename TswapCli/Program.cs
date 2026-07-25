@@ -6,7 +6,7 @@
  *
  * Composition root: resolves the environment, wires real (or test) services,
  * and dispatches to a command. All behaviour lives in TswapCli/Commands/,
- * TswapCore, and ConsoleIntercept.
+ * TswapCore, and the RedactingPty package.
  */
 
 using TswapCli;
@@ -40,7 +40,13 @@ try
     IYubiKeyService yubiKeys = testKey != null
         ? new TestKeyYubiKeyService(testKey)
         : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
-    var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
+    // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS)
+    // register via the additionalBackends argument; the YubiKey backend is always present
+    // and VaultUnlocker picks the right one from config.Backend.
+    var extraBackends = new List<IHardwareKeyService>();
+    if (OperatingSystem.IsMacOS()) extraBackends.Add(new SecureEnclaveHardwareService());
+    // TPM (Windows/Linux) is not implemented yet — see HARDWARE_BACKENDS.md.
+    var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);
     return CliRunner.Run(ctx, env.CommandArgs);

@@ -163,4 +163,89 @@ public class VaultUnlockerTests
             () => new VaultUnlocker(yubi).SelectConnectedSerial(NoSelection, requiredSerial: 99999999));
         Assert.Contains("not found", ex.Message);
     }
+
+    // --- Hardware-backend dispatch ---
+
+    // Minimal stand-in for a future TPM/Secure-Enclave backend: returns a fixed key so a
+    // test can prove VaultUnlocker routed to it (and not to the YubiKey backend).
+    private sealed class FakeBackend(HardwareBackend backend, byte[] key) : IHardwareKeyService
+    {
+        public int UnlockCalls;
+        public HardwareBackend Backend => backend;
+        public bool IsSimulated => true;
+        public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+        {
+            UnlockCalls++;
+            return key;
+        }
+    }
+
+    [Fact]
+    public void Unlock_ExplicitYubiKeyBackend_MatchesNullBackend()
+    {
+        // Backend == null (legacy) and Backend == YubiKey must take the identical path.
+        var (yubi, config, _, _) = MakeVault();
+        yubi.Connected = [11111111];
+
+        var viaNull = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+        var viaExplicit = new VaultUnlocker(yubi).Unlock(config with { Backend = HardwareBackend.YubiKey }, NoSelection);
+
+        Assert.Equal(viaNull, viaExplicit);
+    }
+
+    [Fact]
+    public void Unlock_UnsupportedBackend_ThrowsClearError()
+    {
+        var (yubi, config, _, _) = MakeVault();
+        var tpmConfig = config with { Backend = HardwareBackend.Tpm };
+
+        var ex = Assert.Throws<TswapException>(
+            () => new VaultUnlocker(yubi).Unlock(tpmConfig, NoSelection));
+        Assert.Contains("tpm", ex.Message);
+        Assert.Contains("does not support", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_RegisteredBackend_IsDispatchedToInsteadOfYubiKey()
+    {
+        var (yubi, config, _, _) = MakeVault();
+        yubi.Connected = []; // YubiKey backend would throw if it were consulted
+        var tpmKey = RandomNumberGenerator.GetBytes(32);
+        var tpm = new FakeBackend(HardwareBackend.SecureEnclave, tpmKey);
+
+        var unlocker = new VaultUnlocker(yubi, additionalBackends: [tpm]);
+        var key = unlocker.Unlock(config with { Backend = HardwareBackend.SecureEnclave }, NoSelection);
+
+        Assert.Same(tpmKey, key);
+        Assert.Equal(1, tpm.UnlockCalls);
+        Assert.Empty(yubi.ChallengeLog);
+    }
+
+    [Fact]
+    public void Constructor_DuplicateBackendRegistration_ThrowsInsteadOfSilentlyOverwriting()
+    {
+        // A backend registered with Backend == HardwareBackend.YubiKey would otherwise
+        // silently replace the built-in YubiKey entry in the dictionary indexer assignment —
+        // desyncing it from the _yubiKey field SelectConnectedSerial still uses, and quietly
+        // dropping overrideKey's effect. That's a composition-root bug; must fail loudly.
+        var (yubi, _, _, _) = MakeVault();
+        var impostor = new FakeBackend(HardwareBackend.YubiKey, []);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => new VaultUnlocker(yubi, additionalBackends: [impostor]));
+        Assert.Contains("Duplicate", ex.Message);
+        Assert.Contains("yubikey", ex.Message);
+    }
+
+    [Fact]
+    public void Constructor_DuplicateBackendWithinAdditionalBackends_Throws()
+    {
+        var (yubi, _, _, _) = MakeVault();
+        var first = new FakeBackend(HardwareBackend.SecureEnclave, []);
+        var second = new FakeBackend(HardwareBackend.SecureEnclave, []);
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => new VaultUnlocker(yubi, additionalBackends: [first, second]));
+        Assert.Contains("Duplicate", ex.Message);
+    }
 }

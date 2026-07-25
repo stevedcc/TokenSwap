@@ -23,7 +23,45 @@ public static class RngModeExtensions
         => mode == RngMode.YubiKey ? "yubikey" : "system";
 }
 
-public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null);
+/// <summary>
+/// The hardware root of trust that protects a vault. Serialized as lowercase strings
+/// ("yubikey"/"tpm"/"secure-enclave"). A null <see cref="Config.Backend"/> means YubiKey
+/// — the only backend that existed before this field — so pre-existing vaults keep
+/// working and their <c>config.json</c> is left unchanged (the field is omitted when null).
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<HardwareBackend>))]
+public enum HardwareBackend
+{
+    [JsonStringEnumMemberName("yubikey")]
+    YubiKey,
+    [JsonStringEnumMemberName("tpm")]
+    Tpm,
+    [JsonStringEnumMemberName("secure-enclave")]
+    SecureEnclave,
+}
+
+public static class HardwareBackendExtensions
+{
+    /// <summary>The lowercase name used in config files and error messages.</summary>
+    public static string DisplayName(this HardwareBackend backend) => backend switch
+    {
+        HardwareBackend.Tpm => "tpm",
+        HardwareBackend.SecureEnclave => "secure-enclave",
+        _ => "yubikey",
+    };
+}
+
+public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
+    // Null means YubiKey (every vault created before hardware backends existed). Omitted
+    // from config.json when null so existing YubiKey vaults serialize byte-for-byte as before.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null,
+    // Secure Enclave only: base64 ECIES wrap of the vault master key against this machine's
+    // Secure Enclave key pair (see SecureEnclaveHardwareService). Single-slot precursor to
+    // the Phase 6 multi-machine keyring — irrelevant, so omitted, for other backends.
+    // PoC status: this blob's internal byte layout (see AppleSecureEnclaveInterop.Wrap) has no
+    // version tag — changing it silently breaks every existing Secure Enclave vault. See
+    // HARDWARE_BACKENDS.md's "PoC-grade" section before treating this as a stable format.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SecureEnclaveWrappedKey = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 

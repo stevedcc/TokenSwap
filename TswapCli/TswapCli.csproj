@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
-    <ProjectReference Include="..\ConsoleIntercept\ConsoleIntercept.csproj" />
+    <PackageReference Include="RedactingPty" Version="1.0.0" />
   </ItemGroup>
 
 </Project>

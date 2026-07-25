@@ -1,4 +1,4 @@
-using ConsoleIntercept;
+using RedactingPty;
 using TswapCore;
 
 namespace TswapCli.Commands;

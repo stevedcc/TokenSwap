@@ -2,6 +2,4 @@
   <Project Path="TswapCli/TswapCli.csproj" />
   <Project Path="TswapCore/TswapCore.csproj" />
   <Project Path="TswapTests/TswapTests.csproj" />
-  <Project Path="ConsoleIntercept/ConsoleIntercept.csproj" />
-  <Project Path="ConsoleIntercept.Tests/ConsoleIntercept.Tests.csproj" />
 </Solution>

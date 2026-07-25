@@ -3,7 +3,12 @@ using System.Text.Json;
 
 namespace TswapCore;
 
-public class Storage
+/// <summary>
+/// Default <see cref="IVaultStore"/>: the single-file backend (<c>config.json</c> +
+/// <c>secrets.json.enc</c>) that has always shipped with tswap. Writes go through an
+/// atomic temp-then-rename so a crash mid-write cannot destroy an existing file.
+/// </summary>
+public class Storage : IVaultStore
 {
     public string ConfigDir { get; }
     public string ConfigFile { get; }
