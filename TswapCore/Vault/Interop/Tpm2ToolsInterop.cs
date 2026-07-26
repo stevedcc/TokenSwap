@@ -180,17 +180,17 @@ internal static class Tpm2ToolsInterop
                 "-C", "o", "-G", PrimaryAlgorithm, "-c", primaryPath);
 
             FlushTransient();
-            var (loadExit, _, _) = Run("tpm2_load", "-C", primaryPath, "-u", pubPath, "-r", privPath, "-c", loadedPath);
+            var (loadExit, _, loadErr) = Run("tpm2_load", "-C", primaryPath, "-u", pubPath, "-r", privPath, "-c", loadedPath);
             if (loadExit != 0)
-                throw UnlockFailed();
+                throw UnlockFailed(loadErr);
 
             FlushTransient();
             // No "-o file": capture tpm2_unseal's stdout directly as raw bytes so the recovered
             // vault key never touches disk — verified byte-for-byte against swtpm that this
             // matches what "-o file" would have written, with no text-encoding round-trip risk.
-            var (unsealExit, plaintext, _) = RunCapturingBinaryStdout("tpm2_unseal", "-c", loadedPath);
+            var (unsealExit, plaintext, unsealErr) = RunCapturingBinaryStdout("tpm2_unseal", "-c", loadedPath);
             if (unsealExit != 0)
-                throw UnlockFailed();
+                throw UnlockFailed(unsealErr);
 
             return plaintext;
         }
@@ -202,11 +202,15 @@ internal static class Tpm2ToolsInterop
 
     // tpm2_load/tpm2_unseal fail this way both when the blob was sealed on a different TPM
     // (integrity check failure) and when the blob is otherwise corrupted — both are genuinely
-    // "this vault can't be unlocked here," so they collapse into one message rather than
-    // string-matching tpm2-tools' log output (which isn't a stable contract to parse).
-    private static TswapException UnlockFailed() => new(
+    // "this vault can't be unlocked here," so they collapse into one high-level message rather
+    // than string-matching tpm2-tools' log output to distinguish them (not a stable contract to
+    // parse). The raw stderr is still appended, though: a genuine operational failure (TCTI
+    // misconfigured, auth/policy issue) would otherwise look identical to "wrong machine," and
+    // the stderr is exactly what tells the two apart when debugging.
+    private static TswapException UnlockFailed(string stderr) => new(
         "Could not unlock with the TPM. The sealed key may have been created on a different " +
-        "machine, the TPM may have been cleared since enrollment, or config.json may be corrupted.");
+        "machine, the TPM may have been cleared since enrollment, or config.json may be " +
+        $"corrupted. tpm2-tools reported: {stderr.Trim()}");
 
     private static void FlushTransient()
     {
