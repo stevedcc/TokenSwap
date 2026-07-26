@@ -8,8 +8,8 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => "init [--secure-enclave]";
-    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS)";
+    public string HelpUsage => "init [--secure-enclave|--tpm]";
+    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Windows)";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
@@ -25,6 +25,9 @@ public sealed class InitCommand : ICliCommand
 
         if (args.Contains("--secure-enclave"))
             return ExecuteSecureEnclave(ctx);
+
+        if (args.Contains("--tpm"))
+            return ExecuteTpm(ctx);
 
         if (ctx.TestKey != null)
         {
@@ -236,4 +239,79 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("up secrets some other way (e.g. 'tswap export') if that matters to you.");
         return 0;
     }
+
+    /// <summary>
+    /// Single-machine Windows TPM enrollment — a workaround to allow end-to-end testing of the
+    /// TPM backend ahead of a real enrollment flow. There is no redundancy or fleet keyring
+    /// here: one machine, one TPM, <c>k = 1</c>. Phase 6 (<c>MULTI_MACHINE_KEYING.md</c>) is
+    /// where a proper multi-factor / multi-machine enrollment ceremony belongs.
+    ///
+    /// <b>Status: only tested against this machine's (virtual) TPM in a Parallels VM, not
+    /// physical TPM hardware</b> — see <c>HARDWARE_BACKENDS.md</c>'s Windows TPM section.
+    /// </summary>
+    private static int ExecuteTpm(CommandContext ctx)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new TswapException("--tpm is only supported on Windows.");
+        return ExecuteTpmOnWindows(ctx);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static int ExecuteTpmOnWindows(CommandContext ctx)
+    {
+        var c = ctx.Console;
+
+        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+        c.Out.WriteLine("║  tswap - TPM Initialization            ║");
+        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+        c.Out.WriteLine("This vault will be protected by this machine's TPM — single machine");
+        c.Out.WriteLine("only for now (no second factor, no fleet keyring; see");
+        c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
+
+        var tpm = new WindowsTpmHardwareService();
+        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        c.Out.WriteLine("Wrapping a new key to this machine's TPM...");
+        var wrapped = tpm.Wrap(vaultKey);
+
+        var config = new Config(
+            YubiKeySerials: [],
+            RedundancyXor: "",
+            Created: DateTime.UtcNow,
+            RequiresTouch: false,
+            RngMode: RngMode.System,
+            Backend: HardwareBackend.Tpm,
+            TpmSealedKey: Convert.ToBase64String(wrapped));
+
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+        if (File.Exists(ctx.Storage.ConfigFile))
+        {
+            var configBackup = ctx.Storage.ConfigFile + ".bak-" + timestamp;
+            File.Copy(ctx.Storage.ConfigFile, configBackup);
+        }
+        ctx.Storage.SaveConfig(config);
+        if (File.Exists(ctx.Storage.SecretsFile))
+        {
+            var vaultBackup = ctx.Storage.SecretsFile + ".bak-" + timestamp;
+            File.Move(ctx.Storage.SecretsFile, vaultBackup);
+            c.SetForeground(ConsoleColor.Yellow);
+            c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
+            c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
+            c.Out.WriteLine("  restore both .bak files under their original names.");
+            c.ResetColor();
+        }
+        ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+
+        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+        c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+        c.Out.WriteLine("Backend: TPM (this machine only)");
+        c.Out.WriteLine($"Config saved to: {ctx.Storage.ConfigFile}");
+        c.Out.WriteLine("\nThere is no backup share for this backend, unlike the YubiKey XOR share:");
+        c.Out.WriteLine("the sealed key in config.json is meaningless without this machine's");
+        c.Out.WriteLine("physical TPM. Losing this machine (or clearing its TPM) means losing this");
+        c.Out.WriteLine("vault — back up secrets some other way (e.g. 'tswap export') if that");
+        c.Out.WriteLine("matters to you.");
+        return 0;
+    }
 }
+

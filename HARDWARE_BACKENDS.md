@@ -32,7 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response, then XOR-reconstruct + PBKDF2 | Two removable tokens, either unlocks |
-| TPM 2.0 | seal/unseal a machine-bound key | Windows TBS + CNG Platform Crypto Provider; Linux `tpm2`/tpm2-tss |
+| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Windows: CNG Platform Crypto Provider, implemented, VM-verified only. Linux: `tpm2-tools`, planned, not on this branch |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence/biometric via access control |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
@@ -181,6 +181,77 @@ Codesigning (Developer ID, notarization) still matters for eventually **distribu
 smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
 backend functions. It does not block building, testing, or using this backend locally today.
 
+## Windows TPM: implemented, verified only against this machine's (virtual) TPM
+
+`TswapCore/Vault/WindowsTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
+`TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, which reaches Windows' TPM-backed CNG
+"Microsoft Platform Crypto Provider" (PCP) entirely through managed
+`System.Security.Cryptography.Cng` APIs (`CngKey`/`RSACng`) — no P/Invoke or native shim needed,
+unlike the Secure Enclave (no C ABI) or Linux (a CLI shellout was chosen over a large P/Invoke
+surface). `Wrap` creates a non-exportable RSA-2048 key under a fixed, well-known persisted name
+and RSA-OAEP-SHA256-encrypts the vault key to it; `Unwrap` re-opens the same named key and
+decrypts. `Config.TpmSealedKey` — shared with the Linux backend, since a vault is inherently tied
+to one machine's OS already — carries only the RSA-OAEP ciphertext, a single-slot, `k = 1`
+precursor to the Phase 6 multi-machine keyring, not the final on-disk format. Registered in
+`TswapCli/Program.cs` behind `OperatingSystem.IsWindows()`.
+`TswapTests/WindowsTpmHardwareServiceTests.cs` holds the trait-gated tests
+(`Category=TpmWindows` — deliberately distinct from Linux's `Category=Tpm`, since both test
+classes compile on every OS regardless of `[SupportedOSPlatform]` and need to be independently
+excludable, see `runtests.sh --tpm-windows`).
+
+**Why wrap/unwrap, not TPM2 seal/unseal like Linux — a real, verified platform difference,
+not a stylistic choice.** A PCP key created with `ExportPolicy = None` (required for a
+TPM-backed, non-extractable key) **cannot be exported in any blob format** — verified directly
+against this backend's dev VM: `CngKeyBlobFormat.OpaqueTransportBlob` and every PCP-specific
+format name tried (`PCPKEY_TPM20`, `PCPKEY_TPM12`, `PCP_PLATFORM_ATTEST_KEY_BLOB`, etc.) all
+failed with "not supported" / "invalid type specified." So there is no self-contained blob to
+hand back the way `AppleSecureEnclaveInterop.Wrap` or `Tpm2ToolsInterop.Seal` do. The key instead
+lives under a fixed persisted name and is always re-opened by that name — **verified directly**
+that a key created in one process is opened and used successfully by a completely separate
+process via `CngKey.Open` alone, with no other state passed between them, and that re-running
+`init --tpm` (which recreates the key with `CngKeyCreationOptions.OverwriteExistingKey`) cleanly
+invalidates ciphertext from the previous generation (a TPM-reported `CryptographicException`,
+not a crash or silently-wrong plaintext).
+
+### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
+
+Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`/`list`, the full test suite,
+and a NativeAOT `dotnet publish -c Release`), all against a **Parallels VM running Windows 11
+ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still open:
+
+- **No physical TPM hardware has been used at any point.** A software/virtual TPM proves the
+  code speaks the CNG/PCP APIs correctly — key creation, wrap/unwrap round-trips, error
+  handling — it does not prove the real hardware root-of-trust property holds. Real hardware may
+  differ in lockout/anti-hammering behavior, timing, or vendor-specific PCP quirks.
+- **`Get-Tpm` (the standard PowerShell TPM-status cmdlet) fails on this VM with a TBS-level
+  HRESULT (`0x80284005`, "output buffer too small")** — a quirk specific to querying Parallels'
+  virtual TPM through that particular cmdlet's WMI provider, not a sign the TPM itself is
+  unhealthy: `tpmtool getdeviceinformation` (a different, lower-level tool) reports it present,
+  initialized, and `Ready For Storage: True` on the same machine. Worth knowing if `Get-Tpm`
+  throws during any future diagnostic work on a Parallels VM — it doesn't mean the TPM is broken.
+- **No PIN or attestation policy support** — only the unconditional wrap/unwrap case is
+  implemented, matching Linux's current scope.
+- **The sealed-key wire format is unversioned**, same caveat as the other two backends'
+  `Config` fields.
+- `tswap init --tpm` is explicitly a **workaround** (see its doc comment in `InitCommand.cs`) to
+  enable end-to-end testing ahead of a real enrollment flow, same as the other two backends.
+- **TPM availability/enablement is explicitly out of scope** — no detection wizard, no "enable
+  your TPM in BIOS" guidance. A missing TPM fails once with one clear, direct error.
+
+### Dev environment note: this VM's internet connection is a marginal cellular link
+
+Unrelated to the TPM work itself, but worth recording since it cost real time and could bite
+future work on this VM: this dev VM's internet (a Huawei WiFi router on a SIM/cellular
+connection) reliably **truncates large downloads mid-transfer** (`"unexpected EOF or 0 bytes
+from the transport stream"`) — confirmed to be genuine link marginality, not a Parallels virtual
+NIC bug, by reproducing the identical failure with a raw `Invoke-WebRequest` outside NuGet
+entirely. Small requests (KB-sized) always succeed; large ones (the 27–40MB `win-arm64` runtime
+packages this project's AOT publish needs) reliably fail on ordinary HTTP clients. The working
+fix: `curl.exe -C - --retry N --retry-delay N --retry-all-errors`, which resumes from wherever
+the connection dropped instead of restarting the whole file, then pointing NuGet at a local
+folder source (`dotnet nuget add source <folder>`) containing the resulting `.nupkg` files so
+`dotnet build`/`publish` never needs the flaky path again for those specific packages.
+
 ## Adding a backend
 
 1. **Implement `IHardwareKeyService`** in `TswapCore/Vault/` (e.g. `TpmHardwareService`).
@@ -200,9 +271,11 @@ backend functions. It does not block building, testing, or using this backend lo
    it calls `ctx.YubiKeys.Challenge`/`SelectSerial` directly. A new backend needs its own
    enrollment flow (likely new `init` branches or `fleet`-style commands); that is separate
    from unlock and is where the on-disk descriptor for the backend gets written.
-6. **AOT:** implementations are native P/Invoke (TBS/CNG, tpm2-tss, Security.framework, or — as
-   the Secure Enclave backend shows — a small native shim in another language exposing a C ABI).
-   No reflection — keep it P/Invoke + spans and it stays AOT-clean. `dotnet publish -c Release`
+6. **AOT:** implementations are native P/Invoke (Security.framework, or — as the Secure Enclave
+   backend shows — a small native shim in another language exposing a C ABI), managed-only CNG
+   APIs (Windows TPM's `System.Security.Cryptography.Cng` — no P/Invoke needed there at all), or
+   a plain CLI shellout via `System.Diagnostics.Process` (YubiKey's `ykman`, Linux TPM's planned
+   `tpm2-tools`). No reflection in any case — it stays AOT-clean. `dotnet publish -c Release`
    (AOT) is the CI tripwire.
 
 ## Redundancy and Phase 6
@@ -222,3 +295,4 @@ shares, why every alternative (escrow / XOR / Shamir / config-share) collapses i
 Secure Enclave forces wrap/unwrap, and the user-set unlock threshold (`k=1` any-device vs. `k≥2`
 two-device-required). Read it before implementing TPM/SE enrollment. See also
 `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
+

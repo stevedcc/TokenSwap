@@ -31,7 +31,7 @@ jobs:
         run: dotnet build TokenSwap.slnx
 
       - name: Unit tests (in-process)
-        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave"
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=TpmWindows"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
@@ -66,3 +66,4 @@ jobs:
           name: tswap-${{ matrix.os }}
           path: TswapCli/bin/Release/net10.0/*/publish/tswap*
           if-no-files-found: error
+

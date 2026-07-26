@@ -61,7 +61,13 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // PoC status: this blob's internal byte layout (see AppleSecureEnclaveInterop.Wrap) has no
     // version tag — changing it silently breaks every existing Secure Enclave vault. See
     // HARDWARE_BACKENDS.md's "PoC-grade" section before treating this as a stable format.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SecureEnclaveWrappedKey = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SecureEnclaveWrappedKey = null,
+    // TPM only (Windows/Linux): base64 blob of the vault master key wrapped/sealed to this
+    // machine's TPM (see WindowsTpmHardwareService/PlatformCryptoProviderInterop on Windows).
+    // Single-slot precursor to the Phase 6 multi-machine keyring — irrelevant, so omitted, for
+    // other backends. Simulator/VM-only status: see HARDWARE_BACKENDS.md's TPM sections before
+    // treating this as verified against real hardware.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TpmSealedKey = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 
@@ -75,3 +81,4 @@ public record ExportFile(string Version, DateTime Created, string Salt, string C
 [JsonSerializable(typeof(ExportFile))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 public partial class TswapJsonContext : JsonSerializerContext { }
+
