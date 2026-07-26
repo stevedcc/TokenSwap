@@ -1007,6 +1007,22 @@ password2: """"  # tswap: missing-mixed-secret");
     }
 
     [Fact]
+    public void Migrate_TpmBackend_DoesNotCrashOnEmptyYubiKeySerials()
+    {
+        // TPM/Secure Enclave vaults have YubiKeySerials: [] — migrate must not blindly index
+        // [0]/[1] into that (regression test for the Copilot-flagged crash).
+        RunTswap("init");
+        var configPath = Path.Combine(_tempDir, "config.json");
+        var tpmConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
+        File.WriteAllText(configPath, JsonSerializer.Serialize(tpmConfig, TswapJsonContext.Default.Config));
+
+        var (exit, stdout, _) = RunTswap("migrate");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("only applies to YubiKey vaults", stdout);
+    }
+
+    [Fact]
     public void Migrate_ModernConfig_ReportsUpToDate()
     {
         RunTswap("init");
@@ -1326,3 +1342,4 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("Usage", stderr);
     }
 }
+

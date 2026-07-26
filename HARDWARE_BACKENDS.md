@@ -188,16 +188,16 @@ backend functions. It does not block building, testing, or using this backend lo
 "Microsoft Platform Crypto Provider" (PCP) entirely through managed
 `System.Security.Cryptography.Cng` APIs (`CngKey`/`RSACng`) — no P/Invoke or native shim needed,
 unlike the Secure Enclave (no C ABI) or Linux (a CLI shellout was chosen over a large P/Invoke
-surface). `Wrap` creates a non-exportable RSA-2048 key under a fixed, well-known persisted name
-and RSA-OAEP-SHA256-encrypts the vault key to it; `Unwrap` re-opens the same named key and
-decrypts. `Config.TpmSealedKey` — shared with the Linux backend, since a vault is inherently tied
-to one machine's OS already — carries only the RSA-OAEP ciphertext, a single-slot, `k = 1`
-precursor to the Phase 6 multi-machine keyring, not the final on-disk format. Registered in
-`TswapCli/Program.cs` behind `OperatingSystem.IsWindows()`.
-`TswapTests/WindowsTpmHardwareServiceTests.cs` holds the trait-gated tests
-(`Category=TpmWindows` — deliberately distinct from Linux's `Category=Tpm`, since both test
-classes compile on every OS regardless of `[SupportedOSPlatform]` and need to be independently
-excludable, see `runtests.sh --tpm-windows`).
+surface). `Wrap` creates a non-exportable RSA-2048 key under a **freshly-generated random name**
+and RSA-OAEP-SHA256-encrypts the vault key to it, bundling the key's name into the returned blob;
+`Unwrap` reads the name back out and re-opens exactly that key. `Config.TpmSealedKey` — shared
+with the Linux backend, since a vault is inherently tied to one machine's OS already — carries
+this bundled (name + ciphertext) blob, a single-slot, `k = 1` precursor to the Phase 6
+multi-machine keyring, not the final on-disk format. Registered in `TswapCli/Program.cs` behind
+`OperatingSystem.IsWindows()`. `TswapTests/WindowsTpmHardwareServiceTests.cs` holds the
+trait-gated tests (`Category=TpmWindows` — deliberately distinct from Linux's `Category=Tpm`,
+since both test classes compile on every OS regardless of `[SupportedOSPlatform]` and need to be
+independently excludable, see `runtests.sh --tpm-windows`).
 
 **Why wrap/unwrap, not TPM2 seal/unseal like Linux — a real, verified platform difference,
 not a stylistic choice.** A PCP key created with `ExportPolicy = None` (required for a
@@ -205,13 +205,22 @@ TPM-backed, non-extractable key) **cannot be exported in any blob format** — v
 against this backend's dev VM: `CngKeyBlobFormat.OpaqueTransportBlob` and every PCP-specific
 format name tried (`PCPKEY_TPM20`, `PCPKEY_TPM12`, `PCP_PLATFORM_ATTEST_KEY_BLOB`, etc.) all
 failed with "not supported" / "invalid type specified." So there is no self-contained blob to
-hand back the way `AppleSecureEnclaveInterop.Wrap` or `Tpm2ToolsInterop.Seal` do. The key instead
-lives under a fixed persisted name and is always re-opened by that name — **verified directly**
-that a key created in one process is opened and used successfully by a completely separate
-process via `CngKey.Open` alone, with no other state passed between them, and that re-running
-`init --tpm` (which recreates the key with `CngKeyCreationOptions.OverwriteExistingKey`) cleanly
-invalidates ciphertext from the previous generation (a TPM-reported `CryptographicException`,
-not a crash or silently-wrong plaintext).
+hand back the way `AppleSecureEnclaveInterop.Wrap` or `Tpm2ToolsInterop.Seal` do on their own —
+**verified directly** that a key created in one process is opened and used successfully by a
+completely separate process via `CngKey.Open` alone, with no other state passed between them, so
+bundling the name into the blob and reopening by that name at unlock time works cleanly.
+
+**The key name is random per `Wrap` call, not a single fixed name — a real bug caught in code
+review before this shipped, not a hypothetical.** An earlier version used one hard-coded
+persisted name for every vault on the machine. Because PCP key names are a single flat,
+machine-wide namespace with no per-vault scoping, a *second* `tswap init --tpm` — a different
+vault via a different `TSWAP_CONFIG_DIR`, or simply running the test suite on a machine with a
+real vault already enrolled — would silently overwrite the *first* vault's key and permanently
+break its ability to unseal. Generating a fresh random name per `Wrap` call and bundling it into
+the blob eliminates the shared-namespace problem entirely: every vault, and every test run, gets
+an isolated key with nothing to configure. The tradeoff is that re-running `init --tpm` now
+leaves the old named key orphaned in the PCP key store rather than cleanly overwriting it —
+harmless key-store clutter, not a correctness issue, given this backend is single-slot today.
 
 ### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
 
@@ -295,4 +304,5 @@ shares, why every alternative (escrow / XOR / Shamir / config-share) collapses i
 Secure Enclave forces wrap/unwrap, and the user-set unlock threshold (`k=1` any-device vs. `k≥2`
 two-device-required). Read it before implementing TPM/SE enrollment. See also
 `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
+
 

@@ -13,8 +13,9 @@ namespace TswapCore.Vault;
 /// key, via <see cref="PlatformCryptoProviderInterop"/> — see its header comment for why this is
 /// wrap/unwrap rather than the TPM2 sealed-object seal/unseal the Linux backend uses (a real,
 /// verified platform difference: PCP keys cannot be exported in any blob format, so there is no
-/// self-contained key blob to hand back — the key lives under a fixed persisted name instead,
-/// re-opened by name at unlock time rather than reconstructed from <see cref="Config"/>).</para>
+/// self-contained key blob to hand back on its own — instead a fresh, randomly-named key is
+/// created on every <see cref="Wrap"/> call and its name bundled into the returned blob, so the
+/// blob as a whole is still self-contained and every vault gets its own isolated TPM key).</para>
 ///
 /// <para>This is today's single-machine, <c>k = 1</c> slice (implementation-ordering step 2 in
 /// <c>MULTI_MACHINE_KEYING.md</c>), sharing <see cref="Config.TpmSealedKey"/> with the Linux
@@ -86,3 +87,4 @@ public sealed class WindowsTpmHardwareService : IHardwareKeyService
     /// <summary>Unlock side: unwraps a payload produced by <see cref="Wrap"/> using this machine's named TPM-backed key.</summary>
     public byte[] Unwrap(byte[] wrapped) => PlatformCryptoProviderInterop.Unwrap(wrapped);
 }
+

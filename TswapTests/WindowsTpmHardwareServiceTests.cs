@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Text;
 using TswapCore;
 using TswapCore.Vault;
 using Xunit;
@@ -18,10 +20,13 @@ namespace TswapTests;
 ///   # or: dotnet test ./TswapTests/TswapTests.csproj --filter Category=TpmWindows
 /// </code>
 ///
+/// Every <see cref="WindowsTpmHardwareService.Wrap"/> call creates a fresh, randomly-named TPM
+/// key (see <c>PlatformCryptoProviderInterop</c>'s header comment), so these tests never touch
+/// or overwrite a real vault's TPM key — no isolation setup/teardown needed.
+///
 /// <b>Dev/test setup:</b> developed and verified against a Parallels VM's virtual TPM (Windows
 /// 11, ARM64) — see <c>HARDWARE_BACKENDS.md</c>'s Windows TPM section for exactly what was and
-/// wasn't verified. No extra tooling/container needed, unlike Linux's swtpm setup — Windows'
-/// "Microsoft Platform Crypto Provider" is built in and reached entirely via managed CNG APIs.
+/// wasn't verified.
 /// </summary>
 [SupportedOSPlatform("windows")]
 [Trait("Category", "TpmWindows")]
@@ -40,6 +45,23 @@ public class WindowsTpmHardwareServiceTests
 
         Assert.Equal(key, recovered);
         Assert.NotEqual(key, wrapped);
+    }
+
+    [Fact]
+    public void Wrap_TwoCallsUseIndependentKeys()
+    {
+        // The fix for the real bug Copilot flagged: a fixed key name meant a second Wrap()
+        // (e.g. a second vault, or just the test suite) would silently invalidate the first.
+        // Each call must get its own isolated, independently-unwrappable key.
+        var svc = new WindowsTpmHardwareService();
+        var key1 = RandomNumberGenerator.GetBytes(32);
+        var key2 = RandomNumberGenerator.GetBytes(32);
+
+        var wrapped1 = svc.Wrap(key1);
+        var wrapped2 = svc.Wrap(key2);
+
+        Assert.Equal(key1, svc.Unwrap(wrapped1));
+        Assert.Equal(key2, svc.Unwrap(wrapped2));
     }
 
     [Fact]
@@ -97,16 +119,61 @@ public class WindowsTpmHardwareServiceTests
     }
 
     [Fact]
+    public void Unwrap_TooShortBlob_ThrowsClearError()
+    {
+        var svc = new WindowsTpmHardwareService();
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(new byte[3]));
+        Assert.Contains("too short", ex.Message);
+    }
+
+    [Fact]
+    public void Unwrap_HugeLengthPrefix_ThrowsClearErrorInsteadOfOverflowing()
+    {
+        // A nameLen near int.MaxValue makes the naive "4 + nameLen > wrapped.Length" bounds
+        // check overflow (wraps to negative, so the comparison passes when it shouldn't),
+        // reaching an oversized allocation/read. The fix uses a subtraction-based check
+        // instead; this proves it rejects cleanly rather than attempting that read.
+        var svc = new WindowsTpmHardwareService();
+        var corrupted = new byte[8];
+        BinaryPrimitives.WriteInt32LittleEndian(corrupted, int.MaxValue - 1);
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(corrupted));
+        Assert.Contains("length prefix", ex.Message);
+    }
+
+    [Fact]
+    public void Unwrap_KeyDoesNotExist_ThrowsClearError()
+    {
+        // A blob whose embedded key name was never created by Wrap() — simulates either a
+        // corrupted blob or a genuinely different machine, since real TPM key names never
+        // collide across machines/processes (random per Wrap() call).
+        var svc = new WindowsTpmHardwareService();
+        var fakeName = Encoding.UTF8.GetBytes("tswap-vault-key-does-not-exist-" + Guid.NewGuid().ToString("N"));
+        var fakeCiphertext = new byte[256];
+        var blob = new byte[4 + fakeName.Length + fakeCiphertext.Length];
+        BinaryPrimitives.WriteInt32LittleEndian(blob, fakeName.Length);
+        fakeName.CopyTo(blob, 4);
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(blob));
+        Assert.Contains("no matching TPM key", ex.Message);
+    }
+
+    [Fact]
     public void Unwrap_MalformedCiphertext_ThrowsClearError()
     {
-        // Right-length-for-RSA-2048 (256 bytes) but garbage content — verified manually against
-        // this backend's TPM that this fails as a TPM-reported CryptographicException, not a
-        // crash or silently-wrong plaintext.
+        // A blob with a real, existing key name (so it passes the "does the key exist" check)
+        // but corrupted ciphertext content — verified manually against this backend's TPM that
+        // this fails as a TPM-reported CryptographicException, not a crash or silently-wrong
+        // plaintext.
         var svc = new WindowsTpmHardwareService();
-        // Ensure a key exists so this exercises "malformed ciphertext" rather than "no key yet".
-        svc.Wrap(RandomNumberGenerator.GetBytes(32));
+        var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(32));
+        var nameLen = BinaryPrimitives.ReadInt32LittleEndian(wrapped);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(new byte[256]));
+        var corrupted = (byte[])wrapped.Clone();
+        Array.Clear(corrupted, 4 + nameLen, corrupted.Length - (4 + nameLen));
+
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(corrupted));
         Assert.Contains("Could not unlock", ex.Message);
     }
 
@@ -114,23 +181,13 @@ public class WindowsTpmHardwareServiceTests
     public void Unwrap_WrongLengthCiphertext_ThrowsClearError()
     {
         var svc = new WindowsTpmHardwareService();
-        svc.Wrap(RandomNumberGenerator.GetBytes(32));
+        var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(32));
+        var nameLen = BinaryPrimitives.ReadInt32LittleEndian(wrapped);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(new byte[8]));
-        Assert.Contains("Could not unlock", ex.Message);
-    }
+        // Keep the real (existing) key name, but truncate the ciphertext portion.
+        var truncated = wrapped.AsSpan(0, 4 + nameLen + 8).ToArray();
 
-    [Fact]
-    public void Unwrap_SealedByAPriorGeneration_ThrowsClearError()
-    {
-        // Verified manually: re-wrapping (which overwrites the named TPM key, exactly what
-        // 're-run tswap init --tpm' does) cleanly invalidates ciphertext produced under the
-        // previous generation of the key, rather than silently decrypting to garbage.
-        var svc = new WindowsTpmHardwareService();
-        var staleWrapped = svc.Wrap(RandomNumberGenerator.GetBytes(32));
-        svc.Wrap(RandomNumberGenerator.GetBytes(32)); // overwrites the named key
-
-        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(staleWrapped));
+        var ex = Assert.Throws<TswapException>(() => svc.Unwrap(truncated));
         Assert.Contains("Could not unlock", ex.Message);
     }
 }
