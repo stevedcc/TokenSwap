@@ -23,6 +23,9 @@ public sealed class InitCommand : ICliCommand
                 return 0;
         }
 
+        if (args.Contains("--secure-enclave") && args.Contains("--tpm"))
+            throw new UsageException($"{ctx.Prefix} init [--secure-enclave|--tpm] (mutually exclusive)");
+
         if (args.Contains("--secure-enclave"))
             return ExecuteSecureEnclave(ctx);
 
@@ -314,4 +317,5 @@ public sealed class InitCommand : ICliCommand
         return 0;
     }
 }
+
 

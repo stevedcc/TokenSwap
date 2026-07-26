@@ -81,6 +81,17 @@ public class CommandTests : IDisposable
         Assert.Equal(new List<int> { 99999999, 99999998 }, config.YubiKeySerials);
     }
 
+    [Fact]
+    public void Init_SecureEnclaveAndTpmBothPassed_RejectsAsUsageError()
+    {
+        // Regression test: the checks used to be sequential (--secure-enclave always won,
+        // --tpm silently ignored) since neither branch checked for the other flag.
+        var (exit, _, stderr) = RunTswap("init", "--secure-enclave", "--tpm");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Usage:", stderr);
+    }
+
     // --- Create ---
 
     [Fact]
@@ -1342,4 +1353,5 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("Usage", stderr);
     }
 }
+
 

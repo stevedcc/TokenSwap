@@ -140,10 +140,15 @@ internal static class PlatformCryptoProviderInterop
 
         var ciphertext = wrapped.AsSpan(4 + nameLen).ToArray();
 
-        using var key = CngKey.Open(keyName, Provider);
-        using var rsa = new RSACng(key);
         try
         {
+            // CngKey.Open and the RSACng construction are inside this try too, not just
+            // Decrypt: the Exists() check above and this Open() are not atomic, so the key
+            // can still legitimately vanish in between (TPM cleared, key store cleanup, a
+            // concurrent re-init) — that must surface as the same clear TswapException, not a
+            // raw CryptographicException from Open() escaping uncaught.
+            using var key = CngKey.Open(keyName, Provider);
+            using var rsa = new RSACng(key);
             return rsa.Decrypt(ciphertext, RSAEncryptionPadding.OaepSHA256);
         }
         catch (CryptographicException)
@@ -180,3 +185,4 @@ internal static class PlatformCryptoProviderInterop
         }
     }
 }
+
