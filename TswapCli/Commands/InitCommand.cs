@@ -9,7 +9,7 @@ public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
     public string HelpUsage => "init [--secure-enclave|--tpm]";
-    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Linux)";
+    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Windows/Linux)";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
@@ -22,6 +22,9 @@ public sealed class InitCommand : ICliCommand
             if (c.ReadLine()?.ToLower() != "yes")
                 return 0;
         }
+
+        if (args.Contains("--secure-enclave") && args.Contains("--tpm"))
+            throw new UsageException($"{ctx.Prefix} init [--secure-enclave|--tpm] (mutually exclusive)");
 
         if (args.Contains("--secure-enclave"))
             return ExecuteSecureEnclave(ctx);
@@ -241,37 +244,72 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// Single-machine Linux TPM enrollment — a workaround to allow end-to-end testing of the
-    /// TPM backend ahead of a real enrollment flow. There is no redundancy or fleet keyring
-    /// here: one machine, one TPM, <c>k = 1</c>. Phase 6 (<c>MULTI_MACHINE_KEYING.md</c>) is
-    /// where a proper multi-factor / multi-machine enrollment ceremony belongs.
+    /// Single-machine TPM enrollment (Linux via <c>tpm2-tools</c>, Windows via CNG's Platform
+    /// Crypto Provider) — a workaround to allow end-to-end testing of the TPM backends ahead of
+    /// a real enrollment flow. There is no redundancy or fleet keyring here: one machine, one
+    /// TPM, <c>k = 1</c>. Phase 6 (<c>MULTI_MACHINE_KEYING.md</c>) is where a proper
+    /// multi-factor / multi-machine enrollment ceremony belongs.
     ///
-    /// <b>Status: only tested against a software TPM simulator (swtpm), not real TPM hardware</b>
-    /// — see <c>HARDWARE_BACKENDS.md</c>'s Linux TPM section.
+    /// <b>Status: only tested against a software TPM simulator (swtpm) on Linux and a virtual
+    /// TPM in a Parallels VM on Windows — neither has been verified against physical TPM
+    /// hardware</b> — see <c>HARDWARE_BACKENDS.md</c>'s Linux/Windows TPM sections.
     /// </summary>
     private static int ExecuteTpm(CommandContext ctx)
     {
-        if (!OperatingSystem.IsLinux())
-            throw new TswapException("--tpm is only supported on Linux.");
-        return ExecuteTpmOnLinux(ctx);
+        if (OperatingSystem.IsLinux())
+            return ExecuteTpmOnLinux(ctx);
+        if (OperatingSystem.IsWindows())
+            return ExecuteTpmOnWindows(ctx);
+        throw new TswapException("--tpm is only supported on Windows and Linux.");
     }
 
     [SupportedOSPlatform("linux")]
     private static int ExecuteTpmOnLinux(CommandContext ctx)
     {
         var c = ctx.Console;
+        PrintTpmInitBanner(c);
 
+        var tpm = new LinuxTpmHardwareService();
+        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        c.Out.WriteLine("Sealing a new key to this machine's TPM...");
+        var sealedKey = tpm.Seal(vaultKey);
+
+        return FinishTpmInit(ctx, vaultKey, sealedKey);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static int ExecuteTpmOnWindows(CommandContext ctx)
+    {
+        var c = ctx.Console;
+        PrintTpmInitBanner(c);
+
+        var tpm = new WindowsTpmHardwareService();
+        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        c.Out.WriteLine("Wrapping a new key to this machine's TPM...");
+        var wrapped = tpm.Wrap(vaultKey);
+
+        return FinishTpmInit(ctx, vaultKey, wrapped);
+    }
+
+    private static void PrintTpmInitBanner(IConsole c)
+    {
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - TPM Initialization            ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault will be protected by this machine's TPM — single machine");
         c.Out.WriteLine("only for now (no second factor, no fleet keyring; see");
         c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
+    }
 
-        var tpm = new LinuxTpmHardwareService();
-        var vaultKey = RandomNumberGenerator.GetBytes(32);
-        c.Out.WriteLine("Sealing a new key to this machine's TPM...");
-        var sealedKey = tpm.Seal(vaultKey);
+    /// <summary>
+    /// Shared by both TPM platforms: saves the config/vault (with the same backup dance every
+    /// other init path uses) and prints the completion banner. <paramref name="sealedOrWrappedKey"/>
+    /// is Linux's TPM2-sealed blob or Windows' RSA-OAEP-wrapped blob — opaque here, since
+    /// <see cref="Config.TpmSealedKey"/> doesn't care which platform produced it.
+    /// </summary>
+    private static int FinishTpmInit(CommandContext ctx, byte[] vaultKey, byte[] sealedOrWrappedKey)
+    {
+        var c = ctx.Console;
 
         var config = new Config(
             YubiKeySerials: [],
@@ -280,7 +318,7 @@ public sealed class InitCommand : ICliCommand
             RequiresTouch: false,
             RngMode: RngMode.System,
             Backend: HardwareBackend.Tpm,
-            TpmSealedKey: Convert.ToBase64String(sealedKey));
+            TpmSealedKey: Convert.ToBase64String(sealedOrWrappedKey));
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         if (File.Exists(ctx.Storage.ConfigFile))
@@ -314,3 +352,5 @@ public sealed class InitCommand : ICliCommand
         return 0;
     }
 }
+
+

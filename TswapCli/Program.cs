@@ -46,7 +46,7 @@ try
     var extraBackends = new List<IHardwareKeyService>();
     if (OperatingSystem.IsMacOS()) extraBackends.Add(new SecureEnclaveHardwareService());
     if (OperatingSystem.IsLinux()) extraBackends.Add(new LinuxTpmHardwareService());
-    // TPM (Windows) is not implemented yet — see HARDWARE_BACKENDS.md.
+    if (OperatingSystem.IsWindows()) extraBackends.Add(new WindowsTpmHardwareService());
     var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);
@@ -64,3 +64,4 @@ catch (Exception ex)
     Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
     return 1;
 }
+

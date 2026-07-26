@@ -19,6 +19,18 @@ public sealed class MigrateCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
 
+        // This whole command is YubiKey-specific (touch-requirement slots, XOR-redundancy
+        // entropy choices) and unconditionally indexes YubiKeySerials[0]/[1] below, which a
+        // TPM/Secure Enclave vault never populates (YubiKeySerials: []) — bail out with a clear
+        // message instead of an index-out-of-range crash, same reasoning as the backend guard
+        // in SecurityWarnings.WarnIfNoTouch.
+        if (config.Backend is not (null or HardwareBackend.YubiKey))
+        {
+            c.Out.WriteLine($"'migrate' only applies to YubiKey vaults. This vault uses the " +
+                $"'{config.Backend?.DisplayName()}' backend, which has no touch/entropy settings to migrate.");
+            return 0;
+        }
+
         // Each setting is checked independently so that a partially-migrated or
         // manually-edited config still gets prompted for whichever fields are missing.
         bool needsRngPrompt          = config.RngMode == null;
@@ -121,3 +133,4 @@ public sealed class MigrateCommand : ICliCommand
         return 0;
     }
 }
+

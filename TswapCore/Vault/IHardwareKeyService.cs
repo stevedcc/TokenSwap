@@ -7,7 +7,9 @@ namespace TswapCore.Vault;
 /// <item><see cref="YubiKeyHardwareService"/> — HMAC challenge-response with 1-of-2 XOR
 ///   redundancy (the scheme tswap has always used).</item>
 /// <item><see cref="LinuxTpmHardwareService"/> — seal/unseal a machine-bound key via
-///   tpm2-tools (Linux only). Windows TPM (TBS/CNG) is planned but not implemented.</item>
+///   tpm2-tools (Linux only).</item>
+/// <item><see cref="WindowsTpmHardwareService"/> — RSA-OAEP wrap/unwrap against a named,
+///   non-exportable TPM-backed key via Windows CNG's Platform Crypto Provider (Windows only).</item>
 /// <item><see cref="SecureEnclaveHardwareService"/> — ECIES wrap/unwrap against a
 ///   non-extractable P-256 key, via a Swift/CryptoKit shim (macOS only).</item>
 /// </list>
@@ -40,3 +42,4 @@ public interface IHardwareKeyService
     /// </summary>
     byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial);
 }
+

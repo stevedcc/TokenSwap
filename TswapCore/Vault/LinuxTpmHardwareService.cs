@@ -7,7 +7,8 @@ namespace TswapCore.Vault;
 /// Linux TPM 2.0 <see cref="IHardwareKeyService"/>. Needs a TPM 2.0 device (or a reachable
 /// simulator in dev/test — see below), so it only builds/runs on Linux — see
 /// <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c> for the design this
-/// implements.
+/// implements. The <see cref="Unlock"/> validation logic (base64 decode, 32-byte length check)
+/// lives in <see cref="TpmHardwareServiceBase"/>, shared with <see cref="WindowsTpmHardwareService"/>.
 ///
 /// <para><b>Primitive:</b> seal/unseal against a machine-bound key, via the <c>tpm2-tools</c>
 /// CLI (through <see cref="Tpm2ToolsInterop"/> — see its header comment for the shellout
@@ -33,51 +34,8 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("linux")]
-public sealed class LinuxTpmHardwareService : IHardwareKeyService
+public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase
 {
-    public HardwareBackend Backend => HardwareBackend.Tpm;
-
-    /// <summary>Real hardware (or a swtpm simulator pointed to by the environment), not a test double. (Tests substitute a fake at the seam.)</summary>
-    public bool IsSimulated => false;
-
-    /// <summary>
-    /// Recovers the vault master key by unsealing <see cref="Config.TpmSealedKey"/>.
-    /// <paramref name="chooseSerial"/> is unused — a TPM is a single, non-removable device.
-    /// </summary>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
-    {
-        _ = chooseSerial; // intentionally unused — a TPM is a single, non-removable device
-
-        if (config.TpmSealedKey is not { Length: > 0 } sealedBase64)
-            throw new TswapException(
-                "Config is corrupted: vault uses the 'tpm' backend but has no sealed key. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-
-        byte[] sealedBlob;
-        try
-        {
-            sealedBlob = Convert.FromBase64String(sealedBase64);
-        }
-        catch (FormatException)
-        {
-            throw new TswapException(
-                "Config is corrupted: the TPM sealed key is not valid base64. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-        }
-
-        var key = Unseal(sealedBlob);
-        // Unseal is a generic primitive (Phase 6 will use it for Shamir shares of varying
-        // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
-        // call site specifically claims "the vault master key," so it does: a corrupted or
-        // truncated sealed blob that still happens to unseal should fail here with a clear
-        // message, not surface as an opaque downstream error.
-        if (key.Length != 32)
-            throw new TswapException(
-                $"Config is corrupted: expected a 32-byte vault key from the TPM, got {key.Length}. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-        return key;
-    }
-
     /// <summary>
     /// Enrollment side: seals <paramref name="plaintextKey"/> (the vault key) to a fresh
     /// TPM-bound primary key. The returned blob is useless off this machine.
@@ -86,4 +44,6 @@ public sealed class LinuxTpmHardwareService : IHardwareKeyService
 
     /// <summary>Unlock side: unseals a payload produced by <see cref="Seal"/> using this TPM's regenerated primary key.</summary>
     public byte[] Unseal(byte[] wrapped) => Tpm2ToolsInterop.Unseal(wrapped);
+
+    protected override byte[] RecoverKey(byte[] wrapped) => Unseal(wrapped);
 }
