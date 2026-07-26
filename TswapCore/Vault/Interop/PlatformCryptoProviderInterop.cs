@@ -133,20 +133,23 @@ internal static class PlatformCryptoProviderInterop
             throw new TswapException("Config is corrupted: the TPM sealed key's embedded key name is not valid UTF-8.");
         }
 
-        if (!keyName.StartsWith(KeyNamePrefix, StringComparison.Ordinal) || !CngKey.Exists(keyName, Provider))
-            throw new TswapException(
-                "Config is corrupted: vault uses the 'tpm' backend but this machine has no " +
-                "matching TPM key. Restore config.json from backup or re-run 'tswap init'.");
-
         var ciphertext = wrapped.AsSpan(4 + nameLen).ToArray();
 
         try
         {
-            // CngKey.Open and the RSACng construction are inside this try too, not just
-            // Decrypt: the Exists() check above and this Open() are not atomic, so the key
-            // can still legitimately vanish in between (TPM cleared, key store cleanup, a
-            // concurrent re-init) — that must surface as the same clear TswapException, not a
-            // raw CryptographicException from Open() escaping uncaught.
+            // CngKey.Exists, CngKey.Open, and the RSACng construction are all inside this same
+            // try as Decrypt, not just Decrypt: any of them can throw CryptographicException
+            // for a genuine provider/key-store failure (distinct from Exists() simply
+            // returning false for "no such key," which is not an exception and still throws
+            // its own clear message below via the ordinary control flow) — including the case
+            // where the key vanishes between Exists() and Open() (TPM cleared, key store
+            // cleanup, a concurrent re-init), since the two calls are not atomic. Every TPM/CNG
+            // failure from this point on should surface the same clear message.
+            if (!keyName.StartsWith(KeyNamePrefix, StringComparison.Ordinal) || !CngKey.Exists(keyName, Provider))
+                throw new TswapException(
+                    "Config is corrupted: vault uses the 'tpm' backend but this machine has no " +
+                    "matching TPM key. Restore config.json from backup or re-run 'tswap init'.");
+
             using var key = CngKey.Open(keyName, Provider);
             using var rsa = new RSACng(key);
             return rsa.Decrypt(ciphertext, RSAEncryptionPadding.OaepSHA256);
@@ -185,4 +188,5 @@ internal static class PlatformCryptoProviderInterop
         }
     }
 }
+
 
