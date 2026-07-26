@@ -46,6 +46,8 @@ public sealed class LinuxTpmHardwareService : IHardwareKeyService
     /// </summary>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
+        _ = chooseSerial; // intentionally unused — a TPM is a single, non-removable device
+
         if (config.TpmSealedKey is not { Length: > 0 } sealedBase64)
             throw new TswapException(
                 "Config is corrupted: vault uses the 'tpm' backend but has no sealed key. " +
