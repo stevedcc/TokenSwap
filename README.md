@@ -576,6 +576,66 @@ helm upgrade myapp ./chart -f /tmp/values.deployed.yaml
 rm /tmp/values.deployed.yaml
 ```
 
+## Sync transports
+
+tswap never syncs anything itself — it only writes files under its config directory
+(`TSWAP_CONFIG_DIR`, see [Files](#files) below) that a separate sync tool can replicate to other
+machines. This section covers what makes that safe and what doesn't.
+
+**The rule: point `TSWAP_CONFIG_DIR` at a directory on local disk, and let a sync tool (Dropbox,
+OneDrive, Google Drive, Syncthing, Nextcloud, Seafile, git, ...) replicate that directory. Do not
+point `TSWAP_CONFIG_DIR` directly at a network mount** — an SMB share, an NFS export, an rclone
+mount, or a WebDAV mount.
+
+**Why this is a protocol distinction, not a hosting one.** Where the sync tool's *server* runs
+doesn't matter — a container on your own NAS running Syncthing, Nextcloud, or Seafile is fine,
+because each machine still keeps and writes to its own local copy of the directory and the sync
+tool reconciles copies afterward. A container on that same NAS running Samba or an NFS server
+gives you exactly what a raw NAS export gives you, because that *is* what it gives you: every
+read and write goes over the wire synchronously, with no local copy in between. Containerizing a
+network filesystem doesn't change its protocol. Same reasoning applies to mounting a cloud
+drive's WebDAV endpoint or an rclone mount instead of running its actual sync client — if
+`TSWAP_CONFIG_DIR` sees a mount, not a plain local directory with a sync daemon watching it, this
+guidance treats it as a network mount regardless of what's behind the mount.
+
+**Why network mounts specifically:** client-side caching over SMB/NFS means a write can
+complete from the writing process's point of view, and even rename successfully server-side,
+while the underlying data was never actually flushed to the server. That produces a truncated or
+zero-length record with a single writer and no concurrency involved — not a race condition, just
+a weaker durability guarantee than local disk gives you. `TswapCore/Keyring/DurableFileWriter.cs`
+implements the portable mitigation for this (temp file in the same directory, `WriteThrough` +
+`Flush(flushToDisk: true)`, then a plain rename) for the future per-secret record format
+(`TswapCore/Keyring/SecretRecordCodec.cs` et al. — issues #111-#115), which is what makes
+per-machine, per-record sync viable in the first place. **That mitigation is unit-tested only for
+its happy path** (write bytes, read them back, byte-exact) — durability under a killed process or
+a real SMB/NFS server's specific flush behavior has not been tested and isn't claimed here; see
+that file's doc comment.
+
+**NAS: supported with caveats, not prohibited.** If you genuinely want a NAS as the sync
+destination rather than a cloud provider, run an actual sync daemon against it (see above) and
+treat it as one-machine-at-a-time: no offline access on the non-primary machine, and an
+interrupted write costs at most one record, not the whole vault, once the per-secret record
+format lands. The generation counter (issue #118, not yet implemented) will eventually detect a
+broken one-machine assumption — two machines that both believe they're the only writer — but
+until it exists, that assumption is enforced by discipline, not by tswap. **NAS setups have not
+been tested by this project**; the caveats above are what the protocol-level reasoning predicts,
+not a verified result, and the honest position given that is to treat NAS as unsupported until
+someone tests it, not to claim it works.
+
+**No lock files.** tswap does not write or honor any lock file in the config directory. Advisory
+locking over NFS is unreliable enough that a lock file would be a false sense of safety rather
+than real protection; the generation counter (#118) is the intended mechanism for catching a
+conflicting write after the fact, not preventing one in advance.
+
+**Cloud placeholder files.** Google Drive for Desktop and OneDrive Files On-Demand both stream
+files from the cloud by default, leaving a placeholder/stub on disk until something reads the
+real file. Reads usually hydrate the placeholder transparently, but not when the machine is
+offline — an offline read of a not-yet-hydrated record will fail or return the wrong thing.
+**Mark the tswap config directory "always available offline"** in your sync client's settings
+(Google Drive is the worst offender of the four major providers for this; OneDrive, Dropbox, and
+Syncthing/Nextcloud either don't do on-demand streaming by default or make the always-available
+setting easy to find).
+
 ## Files
 
 | Platform | Config directory |
