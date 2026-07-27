@@ -73,6 +73,39 @@ public class VaultUnlockerTests
     }
 
     [Fact]
+    public void Unlock_WithMasterKeySalt_ProducesDifferentKeyThanLegacySalt()
+    {
+        // A vault with a per-vault MasterKeySalt set (see Config.MasterKeySalt) must derive
+        // its master key using that salt instead of the legacy hardcoded constant.
+        var (yubi, config, k1, k2) = MakeVault();
+        yubi.Connected = [11111111];
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var saltedConfig = config with { MasterKeySalt = Convert.ToBase64String(salt) };
+
+        var keyWithSalt = new VaultUnlocker(yubi).Unlock(saltedConfig, NoSelection);
+        var expectedWithSalt = Crypto.DeriveKey(k1, k2, salt);
+        var expectedLegacy = Crypto.DeriveKey(k1, k2);
+
+        Assert.Equal(expectedWithSalt, keyWithSalt);
+        Assert.NotEqual(expectedLegacy, keyWithSalt);
+    }
+
+    [Fact]
+    public void Unlock_NullMasterKeySalt_MatchesLegacyDerivation()
+    {
+        // A config with no MasterKeySalt (every vault that exists today) must keep deriving
+        // via the legacy hardcoded Crypto.MasterKeySalt constant — the core backward-compat
+        // guarantee this feature depends on.
+        var (yubi, config, k1, k2) = MakeVault();
+        yubi.Connected = [11111111];
+        Assert.Null(config.MasterKeySalt);
+
+        var key = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+
+        Assert.Equal(Crypto.DeriveKey(k1, k2), key);
+    }
+
+    [Fact]
     public void Unlock_LegacyConfigWithoutChallenge_UsesFixedChallenge()
     {
         var (yubi, config, _, _) = MakeVault();
