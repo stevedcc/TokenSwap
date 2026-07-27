@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!--
+      Required by the source-generated LibraryImport marshalling stubs (see
+      Keyring/UnixDirectoryFsync.cs): LibraryImportGenerator emits pointer-based marshalling
+      code that needs /unsafe, even though LibraryImport itself (unlike DllImport) is AOT/trim
+      safe by construction. Unsafe code has always been NativeAOT-compatible; it is reflection
+      that AOT dislikes, not pointers.
+    -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

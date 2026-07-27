@@ -58,7 +58,10 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
             k2 = k_current;
         }
 
-        return Crypto.DeriveKey(k1, k2);
+        // Null means this config predates per-vault salts (or never opted in) and must keep
+        // deriving via the legacy hardcoded Crypto.MasterKeySalt constant — see Config.MasterKeySalt.
+        var salt = config.MasterKeySalt != null ? Convert.FromBase64String(config.MasterKeySalt) : null;
+        return Crypto.DeriveKey(k1, k2, salt);
     }
 
     /// <summary>
