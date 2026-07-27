@@ -16,7 +16,12 @@ public sealed class InitCommand : ICliCommand
     {
         var c = ctx.Console;
 
-        if (File.Exists(ctx.Storage.ConfigFile))
+        // Detecting an existing config to prompt about reinitializing (and, further
+        // down, backing it up before overwriting) is inherently file-store-specific;
+        // a future non-file backend needs its own equivalent, not this one.
+        var fileStore = ctx.Storage as IFileVaultStore;
+
+        if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -44,7 +49,7 @@ public sealed class InitCommand : ICliCommand
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
             );
             ctx.Storage.SaveConfig(testConfig);
-            if (!File.Exists(ctx.Storage.SecretsFile))
+            if (fileStore == null || !File.Exists(fileStore.SecretsFile))
                 ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), ctx.TestKey);
             c.Out.WriteLine("Initialized (test mode)");
             return 0;
@@ -123,16 +128,18 @@ public sealed class InitCommand : ICliCommand
         // the old vault backup.
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
-        if (File.Exists(ctx.Storage.ConfigFile))
+        // Backing up the previous config/vault before writing over it is a file-store
+        // safety net; a non-file backend would need its own equivalent, not this one.
+        if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = ctx.Storage.ConfigFile + ".bak-" + timestamp;
-            File.Copy(ctx.Storage.ConfigFile, configBackup);
+            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
+            File.Copy(fileStore.ConfigFile, configBackup);
         }
         ctx.Storage.SaveConfig(config);
-        if (File.Exists(ctx.Storage.SecretsFile))
+        if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = ctx.Storage.SecretsFile + ".bak-" + timestamp;
-            File.Move(ctx.Storage.SecretsFile, vaultBackup);
+            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
+            File.Move(fileStore.SecretsFile, vaultBackup);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -176,7 +183,10 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("  [ ] Printed copy (home safe)");
         c.Out.WriteLine("  [ ] Second printed copy (off-site)");
         c.Out.WriteLine("  [ ] Git repository");
-        c.Out.WriteLine($"\nConfig saved to: {ctx.Storage.ConfigFile}");
+        if (fileStore != null)
+            c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
+        else
+            c.Out.WriteLine("\nConfig saved.");
         return 0;
     }
 
@@ -221,16 +231,19 @@ public sealed class InitCommand : ICliCommand
             SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        if (File.Exists(ctx.Storage.ConfigFile))
+        // Backing up the previous config/vault before writing over it is a file-store
+        // safety net; a non-file backend would need its own equivalent, not this one.
+        var fileStore = ctx.Storage as IFileVaultStore;
+        if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = ctx.Storage.ConfigFile + ".bak-" + timestamp;
-            File.Copy(ctx.Storage.ConfigFile, configBackup);
+            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
+            File.Copy(fileStore.ConfigFile, configBackup);
         }
         ctx.Storage.SaveConfig(config);
-        if (File.Exists(ctx.Storage.SecretsFile))
+        if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = ctx.Storage.SecretsFile + ".bak-" + timestamp;
-            File.Move(ctx.Storage.SecretsFile, vaultBackup);
+            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
+            File.Move(fileStore.SecretsFile, vaultBackup);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -243,7 +256,8 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("Backend: Secure Enclave (this Mac only)");
-        c.Out.WriteLine($"Config saved to: {ctx.Storage.ConfigFile}");
+        if (fileStore != null)
+            c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine("\nThere is no backup share for this backend, unlike the YubiKey XOR share:");
         c.Out.WriteLine("the wrapped key in config.json is meaningless without this machine's");
         c.Out.WriteLine("physical Secure Enclave. Losing this Mac means losing this vault — back");
@@ -329,16 +343,19 @@ public sealed class InitCommand : ICliCommand
             TpmSealedKey: Convert.ToBase64String(sealedOrWrappedKey));
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        if (File.Exists(ctx.Storage.ConfigFile))
+        // Backing up the previous config/vault before writing over it is a file-store
+        // safety net; a non-file backend would need its own equivalent, not this one.
+        var fileStore = ctx.Storage as IFileVaultStore;
+        if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = ctx.Storage.ConfigFile + ".bak-" + timestamp;
-            File.Copy(ctx.Storage.ConfigFile, configBackup);
+            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
+            File.Copy(fileStore.ConfigFile, configBackup);
         }
         ctx.Storage.SaveConfig(config);
-        if (File.Exists(ctx.Storage.SecretsFile))
+        if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = ctx.Storage.SecretsFile + ".bak-" + timestamp;
-            File.Move(ctx.Storage.SecretsFile, vaultBackup);
+            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
+            File.Move(fileStore.SecretsFile, vaultBackup);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -351,7 +368,8 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("Backend: TPM (this machine only)");
-        c.Out.WriteLine($"Config saved to: {ctx.Storage.ConfigFile}");
+        if (fileStore != null)
+            c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine("\nThere is no backup share for this backend, unlike the YubiKey XOR share:");
         c.Out.WriteLine("the sealed key in config.json is meaningless without this machine's");
         c.Out.WriteLine("physical TPM. Losing this machine (or clearing its TPM) means losing this");

@@ -7,8 +7,10 @@ namespace TswapCore;
 /// Default <see cref="IVaultStore"/>: the single-file backend (<c>config.json</c> +
 /// <c>secrets.json.enc</c>) that has always shipped with tswap. Writes go through an
 /// atomic temp-then-rename so a crash mid-write cannot destroy an existing file.
+/// Implements <see cref="IFileVaultStore"/> (not just the base interface) since it
+/// genuinely is file-backed and exposes the paths some commands need.
 /// </summary>
-public class Storage : IVaultStore
+public class Storage : IFileVaultStore
 {
     public string ConfigDir { get; }
     public string ConfigFile { get; }

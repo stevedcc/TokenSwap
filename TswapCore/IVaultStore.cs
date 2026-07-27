@@ -9,23 +9,13 @@ namespace TswapCore;
 /// this same contract, so the composition root can swap them without touching any
 /// command.
 ///
-/// The file-path members (<see cref="ConfigFile"/>, <see cref="SecretsFile"/>) are
-/// specific to file-backed stores and exist for the few commands that manage those
-/// files directly (e.g. <c>init</c> backups). Non-file backends are free to surface
-/// synthetic paths or throw; command logic that depends on them is a known
-/// file-store coupling to revisit when a second backend lands.
+/// Deliberately keyed by nothing more than "this store" — no filesystem path is
+/// assumed here, so a future blob or row store can implement this interface
+/// without adopting file-path semantics it doesn't have (see issue #124). Backends
+/// that really are file-backed additionally implement <see cref="IFileVaultStore"/>.
 /// </summary>
 public interface IVaultStore
 {
-    /// <summary>Directory holding this store's on-disk state.</summary>
-    string ConfigDir { get; }
-
-    /// <summary>Path to the config file (file-backed stores only).</summary>
-    string ConfigFile { get; }
-
-    /// <summary>Path to the encrypted secrets file (file-backed stores only).</summary>
-    string SecretsFile { get; }
-
     /// <summary>Loads and deserializes the vault config. Throws if not initialized.</summary>
     Config LoadConfig();
 
@@ -42,4 +32,26 @@ public interface IVaultStore
 
     /// <summary>Encrypts and persists the secrets database.</summary>
     void SaveSecrets(SecretsDb db, byte[] key);
+}
+
+/// <summary>
+/// An <see cref="IVaultStore"/> that is backed by plain files on disk, and is willing
+/// to say so. The three path members exist for the few commands that manage those
+/// files directly (e.g. <c>init</c> backing up the previous config/vault before
+/// re-initializing) — they are inherently file-store-specific, so they live here
+/// rather than on the base interface. A future non-file backend (blob store, row
+/// store) simply doesn't implement this interface, and command logic that wants a
+/// path narrows to it explicitly (typically via a pattern match) instead of assuming
+/// every <see cref="IVaultStore"/> has one.
+/// </summary>
+public interface IFileVaultStore : IVaultStore
+{
+    /// <summary>Directory holding this store's on-disk state.</summary>
+    string ConfigDir { get; }
+
+    /// <summary>Path to the config file.</summary>
+    string ConfigFile { get; }
+
+    /// <summary>Path to the encrypted secrets file.</summary>
+    string SecretsFile { get; }
 }
