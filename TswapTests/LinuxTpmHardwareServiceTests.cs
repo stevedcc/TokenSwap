@@ -17,7 +17,7 @@ namespace TswapTests;
 ///
 /// <b>Dev/test setup:</b> these tests were developed and are meant to run against a software
 /// TPM simulator (swtpm), not real hardware — see <c>HARDWARE_BACKENDS.md</c>'s Linux TPM
-/// section and <c>TPM_LINUX_PLAN.md</c> §4 for the container setup
+/// section ("Dev/test setup: swtpm in a container") for the container setup
 /// (<c>danieltrick/swtpm-docker</c>) and the <c>TPM2TOOLS_TCTI</c> environment variable that
 /// points <c>tpm2-tools</c> at it. On real TPM hardware no environment variable is needed —
 /// <c>tpm2-tools</c> falls back to the local device.
