@@ -32,7 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response, then XOR-reconstruct + PBKDF2 | Two removable tokens, either unlocks |
-| TPM 2.0 | seal/unseal a machine-bound key | Windows TBS + CNG Platform Crypto Provider; Linux `tpm2`/tpm2-tss |
+| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, simulator-verified only. Windows: CNG Platform Crypto Provider, VM-verified only |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence/biometric via access control |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
@@ -181,6 +181,167 @@ Codesigning (Developer ID, notarization) still matters for eventually **distribu
 smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
 backend functions. It does not block building, testing, or using this backend locally today.
 
+## Linux TPM: implemented, verified only against a software simulator
+
+`TswapCore/Vault/LinuxTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
+`TswapCore/Vault/Interop/Tpm2ToolsInterop.cs`, which shells out to the `tpm2-tools` CLI
+(`tpm2_createprimary`/`tpm2_create`/`tpm2_load`/`tpm2_unseal`) via `System.Diagnostics.Process`
+with argument arrays — the same pattern as `YkmanYubiKeyService`, not P/Invoke. `Seal` creates a
+TPM-bound primary key under the owner hierarchy and seals the vault key to it as a TPM keyed-hash
+object; `Unseal` regenerates the primary and unseals. `Config.TpmSealedKey` carries one
+self-contained base64 blob: a 4-byte length-prefixed public portion followed by the private
+(encrypted) portion — a single-slot, `k = 1` precursor to the Phase 6 multi-machine keyring, not
+the final on-disk format. Registered in `TswapCli/Program.cs` behind `OperatingSystem.IsLinux()`.
+`TswapTests/LinuxTpmHardwareServiceTests.cs` holds the trait-gated tests (`Category=Tpm`, run with
+`./runtests.sh --tpm`) — they need a reachable TPM 2.0 device or simulator.
+
+**No persisted primary key.** A TPM 2.0 primary key is deterministic — the same hierarchy plus
+the same public template always regenerates the same key, derived from that hierarchy's primary
+seed (TPM2 spec, Part 1, "Primary Seeds"). **Verified directly against swtpm for this codebase**
+(not assumed): two back-to-back `tpm2_createprimary -C o` calls on the same simulator produced a
+byte-identical RSA modulus. So `Config.TpmSealedKey` only stores the sealed object's public/private
+blobs; the primary is always regenerated fresh from the owner hierarchy, on both `Seal` and
+`Unseal`, and never written to disk. The owner hierarchy (not the null hierarchy) was chosen
+because its primary seed survives `TPM2_Startup` (a reboot) and only changes on an explicit
+`TPM2_Clear` — **also verified directly**: a blob sealed before `tpm2_startup --clear` unseals
+fine afterward, while the same blob fails to load under a primary regenerated after `tpm2_clear`
+with a TPM-reported `tpm:parameter(1):integrity check failed` error. That is exactly the
+"machine-bound, invalidated on factory reset" property this backend needs, with zero extra
+bookkeeping.
+
+### Status: PoC-grade, simulator-verified only — not yet run against real TPM hardware
+
+Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`, plus the full test suite),
+**but every verification so far is against a software TPM simulator (swtpm), never a physical
+TPM.** A software simulator proves the code speaks the TPM2 protocol correctly — seal/unseal
+round-trips, error handling, wire format — it does **not** prove the real hardware root-of-trust
+property holds. Concretely still open before this should be trusted as a primary vault backend:
+
+- **No real TPM hardware has been used at any point.** All testing ran against
+  `danieltrick/swtpm-docker` (see `TPM_LINUX_PLAN.md` §4 for the exact setup) via the `swtpm`
+  TCTI. Real hardware may behave differently in ways a simulator can't surface — timing,
+  lockout/anti-hammering behavior, vendor-specific quirks, or a stricter owner-hierarchy
+  authorization policy than the simulator's default (empty) owner auth.
+- **No PCR or PIN policy support.** `MULTI_MACHINE_KEYING.md`'s per-backend table lists TPM's
+  primitive as "seal share to a machine-bound key (**optionally** PCR/PIN policy)" — this pass
+  implements only the unconditional case (no policy digest on the sealed object at all). Boot-state
+  binding (PCR policy) and a PIN/password gate are both real, useful extensions, not implemented
+  here.
+- **The sealed-key wire format is unversioned**, same caveat as `Config.SecureEnclaveWrappedKey`:
+  changing `Tpm2ToolsInterop`'s packing format is a silent breaking change for every existing TPM
+  vault, with no detection or migration path.
+- **Small transient-object budgets are a real constraint, verified, not assumed.** The swtpm
+  instance this backend was developed against exhausted its transient-object slots after two or
+  three chained `tpm2_*` invocations without an intervening `tpm2_flushcontext -t` — every
+  subsequent command then failed with "out of memory for object contexts" until flushed. Real TPMs
+  commonly have similarly small transient-object counts, so `Tpm2ToolsInterop` flushes
+  unconditionally before every `createprimary`/`load` call (verified as a safe no-op when there's
+  nothing to flush) rather than only reacting to that failure.
+- `tswap init --tpm` is explicitly a **workaround** (see its doc comment in `InitCommand.cs`) to
+  enable end-to-end testing ahead of a real enrollment flow — not the intended long-term UX. Phase
+  6 (`MULTI_MACHINE_KEYING.md`) is where a proper enrollment ceremony, multi-factor unlock, and a
+  versioned keyring format belong.
+- **TPM availability/enablement is explicitly out of scope.** No detection wizard, no "enable your
+  TPM in BIOS" guidance. A missing TPM (or, in dev/test, an unreachable simulator) fails once with
+  one clear, direct error — matching "No YubiKey detected."
+
+### Why a shellout to tpm2-tools, not P/Invoke libtss2-esys/libtss2-fapi (the path not taken)
+
+Unlike the Secure Enclave (which needed a native Swift shim because CryptoKit has no C ABI), the
+TSS2 stack does expose a C ABI (`libtss2-esys`, `libtss2-fapi`) that a direct P/Invoke binding
+could target. That path was not taken: `tpm2-tools` is well-packaged across every major Linux
+distro (`apt install tpm2-tools` on Debian/Ubuntu, `dnf install tpm2-tools` on Fedora, `apk add
+tpm2-tools` plus the separate `tpm2-tss-tcti-*` packages on Alpine — the TCTI backend libraries
+are split into their own packages there, verified while building the dev/test environment), it's
+the same shellout pattern this codebase already uses for YubiKey (`ykman` via
+`YkmanYubiKeyService`), and it avoids a large P/Invoke surface against the TSS2 APIs' many opaque
+structs and the ESAPI's own transient-object/session lifecycle (which, per the flush-before-every-call
+finding above, has sharp edges worth keeping behind a CLI's higher-level error handling rather than
+reimplementing directly).
+
+## Windows TPM: implemented, verified only against this machine's (virtual) TPM
+
+`TswapCore/Vault/WindowsTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
+`TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, which reaches Windows' TPM-backed CNG
+"Microsoft Platform Crypto Provider" (PCP) entirely through managed
+`System.Security.Cryptography.Cng` APIs (`CngKey`/`RSACng`) — no P/Invoke or native shim needed,
+unlike the Secure Enclave (no C ABI) or Linux (a CLI shellout was chosen over a large P/Invoke
+surface). `Wrap` creates a non-exportable RSA-2048 key under a **freshly-generated random name**
+and RSA-OAEP-SHA256-encrypts the vault key to it, bundling the key's name into the returned blob;
+`Unwrap` reads the name back out and re-opens exactly that key. `Config.TpmSealedKey` — shared
+with the Linux backend, since a vault is inherently tied to one machine's OS already — carries
+this bundled (name + ciphertext) blob, a single-slot, `k = 1` precursor to the Phase 6
+multi-machine keyring, not the final on-disk format. Registered in `TswapCli/Program.cs` behind
+`OperatingSystem.IsWindows()`. `TswapTests/WindowsTpmHardwareServiceTests.cs` holds the
+trait-gated tests (`Category=TpmWindows` — deliberately distinct from Linux's `Category=Tpm`,
+since both test classes compile on every OS regardless of `[SupportedOSPlatform]` and need to be
+independently excludable, see `runtests.sh --tpm-windows`). The `Unlock` validation this shares
+with `LinuxTpmHardwareService` (base64 decode, 32-byte length check, identical error message
+text) lives once in `TswapCore/Vault/TpmHardwareServiceBase.cs` rather than being duplicated —
+each subclass overrides one `RecoverKey` method that calls its own `Unseal`/`Unwrap`.
+
+**Why wrap/unwrap, not TPM2 seal/unseal like Linux — a real, verified platform difference,
+not a stylistic choice.** A PCP key created with `ExportPolicy = None` (required for a
+TPM-backed, non-extractable key) **cannot be exported in any blob format** — verified directly
+against this backend's dev VM: `CngKeyBlobFormat.OpaqueTransportBlob` and every PCP-specific
+format name tried (`PCPKEY_TPM20`, `PCPKEY_TPM12`, `PCP_PLATFORM_ATTEST_KEY_BLOB`, etc.) all
+failed with "not supported" / "invalid type specified." So there is no self-contained blob to
+hand back the way `AppleSecureEnclaveInterop.Wrap` or `Tpm2ToolsInterop.Seal` do on their own —
+**verified directly** that a key created in one process is opened and used successfully by a
+completely separate process via `CngKey.Open` alone, with no other state passed between them, so
+bundling the name into the blob and reopening by that name at unlock time works cleanly.
+
+**The key name is random per `Wrap` call, not a single fixed name — a real bug caught in code
+review before this shipped, not a hypothetical.** An earlier version used one hard-coded
+persisted name for every vault on the machine. Because PCP key names are a single flat,
+machine-wide namespace with no per-vault scoping, a *second* `tswap init --tpm` — a different
+vault via a different `TSWAP_CONFIG_DIR`, or simply running the test suite on a machine with a
+real vault already enrolled — would silently overwrite the *first* vault's key and permanently
+break its ability to unseal. Generating a fresh random name per `Wrap` call and bundling it into
+the blob eliminates the shared-namespace problem entirely: every vault, and every test run, gets
+an isolated key with nothing to configure. The tradeoff is that re-running `init --tpm` now
+leaves the old named key orphaned in the PCP key store rather than cleanly overwriting it —
+harmless key-store clutter, not a correctness issue, given this backend is single-slot today.
+
+### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
+
+Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`/`list`, the full test suite,
+and a NativeAOT `dotnet publish -c Release`), all against a **Parallels VM running Windows 11
+ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still open:
+
+- **No physical TPM hardware has been used at any point.** A software/virtual TPM proves the
+  code speaks the CNG/PCP APIs correctly — key creation, wrap/unwrap round-trips, error
+  handling — it does not prove the real hardware root-of-trust property holds. Real hardware may
+  differ in lockout/anti-hammering behavior, timing, or vendor-specific PCP quirks.
+- **`Get-Tpm` (the standard PowerShell TPM-status cmdlet) fails on this VM with a TBS-level
+  HRESULT (`0x80284005`, "output buffer too small")** — a quirk specific to querying Parallels'
+  virtual TPM through that particular cmdlet's WMI provider, not a sign the TPM itself is
+  unhealthy: `tpmtool getdeviceinformation` (a different, lower-level tool) reports it present,
+  initialized, and `Ready For Storage: True` on the same machine. Worth knowing if `Get-Tpm`
+  throws during any future diagnostic work on a Parallels VM — it doesn't mean the TPM is broken.
+- **No PIN or attestation policy support** — only the unconditional wrap/unwrap case is
+  implemented, matching Linux's current scope.
+- **The sealed-key wire format is unversioned**, same caveat as the other two backends'
+  `Config` fields.
+- `tswap init --tpm` is explicitly a **workaround** (see its doc comment in `InitCommand.cs`) to
+  enable end-to-end testing ahead of a real enrollment flow, same as the other two backends.
+- **TPM availability/enablement is explicitly out of scope** — no detection wizard, no "enable
+  your TPM in BIOS" guidance. A missing TPM fails once with one clear, direct error.
+
+### Dev environment note: this VM's internet connection is a marginal cellular link
+
+Unrelated to the TPM work itself, but worth recording since it cost real time and could bite
+future work on this VM: this dev VM's internet (a Huawei WiFi router on a SIM/cellular
+connection) reliably **truncates large downloads mid-transfer** (`"unexpected EOF or 0 bytes
+from the transport stream"`) — confirmed to be genuine link marginality, not a Parallels virtual
+NIC bug, by reproducing the identical failure with a raw `Invoke-WebRequest` outside NuGet
+entirely. Small requests (KB-sized) always succeed; large ones (the 27–40MB `win-arm64` runtime
+packages this project's AOT publish needs) reliably fail on ordinary HTTP clients. The working
+fix: `curl.exe -C - --retry N --retry-delay N --retry-all-errors`, which resumes from wherever
+the connection dropped instead of restarting the whole file, then pointing NuGet at a local
+folder source (`dotnet nuget add source <folder>`) containing the resulting `.nupkg` files so
+`dotnet build`/`publish` never needs the flaky path again for those specific packages.
+
 ## Adding a backend
 
 1. **Implement `IHardwareKeyService`** in `TswapCore/Vault/` (e.g. `TpmHardwareService`).
@@ -200,9 +361,11 @@ backend functions. It does not block building, testing, or using this backend lo
    it calls `ctx.YubiKeys.Challenge`/`SelectSerial` directly. A new backend needs its own
    enrollment flow (likely new `init` branches or `fleet`-style commands); that is separate
    from unlock and is where the on-disk descriptor for the backend gets written.
-6. **AOT:** implementations are native P/Invoke (TBS/CNG, tpm2-tss, Security.framework, or — as
-   the Secure Enclave backend shows — a small native shim in another language exposing a C ABI).
-   No reflection — keep it P/Invoke + spans and it stays AOT-clean. `dotnet publish -c Release`
+6. **AOT:** implementations are native P/Invoke (Security.framework, or — as the Secure Enclave
+   backend shows — a small native shim in another language exposing a C ABI), managed-only CNG
+   APIs (Windows TPM's `System.Security.Cryptography.Cng` — no P/Invoke needed there at all), or
+   a plain CLI shellout via `System.Diagnostics.Process` (YubiKey's `ykman`, Linux TPM's
+   `tpm2-tools`). No reflection in any case — it stays AOT-clean. `dotnet publish -c Release`
    (AOT) is the CI tripwire.
 
 ## Redundancy and Phase 6
@@ -222,3 +385,5 @@ shares, why every alternative (escrow / XOR / Shamir / config-share) collapses i
 Secure Enclave forces wrap/unwrap, and the user-set unlock threshold (`k=1` any-device vs. `k≥2`
 two-device-required). Read it before implementing TPM/SE enrollment. See also
 `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
+
+

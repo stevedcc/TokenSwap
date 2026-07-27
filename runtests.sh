@@ -7,13 +7,19 @@
 #                                  set TSWAP_E2E_BINARY to test a pre-built/AOT binary)
 #   ./runtests.sh --secure-enclave Secure Enclave backend tests (macOS + real hardware only;
 #                                  prompts for biometry/presence)
+#   ./runtests.sh --tpm            Linux TPM backend tests (Linux + tpm2-tools required; needs
+#                                  a reachable TPM 2.0 device or swtpm simulator — see
+#                                  HARDWARE_BACKENDS.md's Linux TPM section)
+#   ./runtests.sh --tpm-windows    Windows TPM backend tests (Windows + a TPM 2.0 device or
+#                                  virtual TPM required — see HARDWARE_BACKENDS.md's Windows
+#                                  TPM section)
 set -eo pipefail
 
 # Array so the xUnit '&' (AND) in a compound filter isn't treated as a shell operator.
 FILTER=()
 TARGET="./TokenSwap.slnx"
 case "${1:-}" in
-  --unit)        FILTER=(--filter 'Category!=E2E&Category!=SecureEnclave') ;;
+  --unit)        FILTER=(--filter 'Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows') ;;
   --e2e|--integration)
                  FILTER=(--filter 'Category=E2E')
                  TARGET="./TswapTests/TswapTests.csproj" ;;
@@ -21,9 +27,15 @@ case "${1:-}" in
   --secure-enclave)
                  FILTER=(--filter 'Category=SecureEnclave')
                  TARGET="./TswapTests/TswapTests.csproj" ;;
-  # Default: everything except the hardware-gated Secure Enclave tests.
-  "")            FILTER=(--filter 'Category!=SecureEnclave') ;;
-  *) echo "Usage: $0 [--unit|--e2e|--secure-enclave]" >&2; exit 64 ;;
+  # TPM tests are Linux-only and need a reachable TPM/simulator; run them on purpose.
+  --tpm)         FILTER=(--filter 'Category=Tpm')
+                 TARGET="./TswapTests/TswapTests.csproj" ;;
+  # TPM tests are Windows-only and need a reachable TPM/virtual TPM; run them on purpose.
+  --tpm-windows) FILTER=(--filter 'Category=TpmWindows')
+                 TARGET="./TswapTests/TswapTests.csproj" ;;
+  # Default: everything except the hardware-gated Secure Enclave/TPM tests.
+  "")            FILTER=(--filter 'Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows') ;;
+  *) echo "Usage: $0 [--unit|--e2e|--secure-enclave|--tpm|--tpm-windows]" >&2; exit 64 ;;
 esac
 
 TSWAP_TEST_KEY="${TSWAP_TEST_KEY:-$(openssl rand -hex 32)}" \
