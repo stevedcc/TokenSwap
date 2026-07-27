@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 
 namespace TswapCore.Keyring;
 
@@ -91,9 +92,10 @@ public static class SecretRecordCodec
     /// <summary>
     /// Decodes and decrypts a record previously produced by <see cref="Encode"/>. Throws
     /// <see cref="TswapException"/> with a distinct message for each of: too-short input, bad
-    /// magic, unsupported format version, a corrupt/overflowing length prefix, and truncated
-    /// payload — deliberately separate from whatever <see cref="Crypto.Decrypt"/> throws for a
-    /// wrong key or tampered ciphertext, so the two classes of failure aren't conflated.
+    /// magic, unsupported format version, a corrupt/overflowing length prefix, a payload too
+    /// short to hold AES-GCM's fixed nonce+tag overhead, and truncated payload — deliberately
+    /// separate from whatever <see cref="Crypto.Decrypt"/> throws for a wrong key or tampered
+    /// ciphertext, so the two classes of failure aren't conflated.
     /// </summary>
     public static SecretRecord Decode(byte[] bytes, byte[] vaultKey)
     {
@@ -116,6 +118,14 @@ public static class SecretRecordCodec
         // it shouldn't, reaching an allocation sized by attacker-controlled length.
         if (payloadLength > bytes.Length - EnvelopeHeaderSize)
             throw new TswapException("Malformed record: payload length prefix exceeds available data");
+
+        // A payloadLength can be internally consistent with the file's remaining bytes (passing
+        // the check above) yet still be too small to hold AES-GCM's fixed nonce+tag overhead —
+        // without this check, Crypto.Decrypt would throw a raw ArgumentOutOfRangeException while
+        // slicing out the nonce instead of a catchable TswapException.
+        var minPayloadSize = AesGcm.NonceByteSizes.MaxSize + AesGcm.TagByteSizes.MaxSize;
+        if (payloadLength < minPayloadSize)
+            throw new TswapException("Malformed record: payload too short to contain a valid encrypted payload");
 
         var encryptedPayload = bytes.AsSpan(EnvelopeHeaderSize, (int)payloadLength).ToArray();
         var perRecordKey = RecordKeyDerivation.Derive(vaultKey, recordId, writeCounter);

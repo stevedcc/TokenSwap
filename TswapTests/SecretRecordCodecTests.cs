@@ -192,6 +192,26 @@ public class SecretRecordCodecTests
     }
 
     [Fact]
+    public void Decode_PayloadShorterThanAesGcmOverheadThrowsDistinctError()
+    {
+        // A payloadLength that is internally consistent with the array's actual remaining bytes
+        // (so it passes the existing bounds check) but smaller than AES-GCM's fixed 12-byte
+        // nonce + 16-byte tag overhead must not reach Crypto.Decrypt, which would throw a raw
+        // ArgumentOutOfRangeException while slicing out the nonce instead of a catchable
+        // TswapException.
+        var record = new SecretRecord(RecordId, WriteCounter: 1, OriginId, Timestamp, RecordType.Value, "x"u8.ToArray());
+        var encoded = SecretRecordCodec.Encode(record, VaultKey);
+
+        // Forge a record whose payload is only 5 bytes — well under the 28-byte AES-GCM minimum
+        // — and whose total length (49 header + 5) matches that payloadLength exactly.
+        var forged = encoded[..54];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(forged.AsSpan(45, 4), 5);
+
+        var ex = Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(forged, VaultKey));
+        Assert.Contains("payload", ex.Message);
+    }
+
+    [Fact]
     public void Decode_TruncatedPayloadThrows()
     {
         var record = new SecretRecord(RecordId, WriteCounter: 1, OriginId, Timestamp, RecordType.Value, "x"u8.ToArray());
