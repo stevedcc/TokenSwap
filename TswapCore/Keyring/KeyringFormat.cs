@@ -69,4 +69,24 @@ public static class KeyringFormat
     /// either one changes later.
     /// </summary>
     public const int SlotIdSize = 16;
+
+    /// <summary>
+    /// Format version of the Phase 6 keyring envelope (<see cref="Keyring"/>/<see cref="Slot"/>,
+    /// issue #119) — the value stored in <see cref="Keyring.FormatVersion"/> and fed into
+    /// <see cref="Keyring.SlotPayloadWrap"/>'s AAD as its <c>formatVersion</c> parameter.
+    /// Deliberately a separate constant from <see cref="RecordFormatVersion"/>: that one
+    /// versions the per-secret record envelope (issues #111-#115), a completely different wire
+    /// format this issue does not touch — bumping one must never accidentally bump the other.
+    /// </summary>
+    public const byte KeyringFormatVersion = 1;
+
+    /// <summary>
+    /// Byte length of the vault master key <c>K_v</c> — 256 bits, the same size as
+    /// <see cref="Keyring.SlotKeyPair.KeySize"/> (an X25519 key) and the AES-256 key
+    /// <see cref="SecretRecordCodec"/> already uses elsewhere. Not a coincidence:
+    /// <see cref="Keyring.SlotSecretPayload"/> relies on both halves of its payload being
+    /// exactly 32 bytes so <c>vaultKey || slotPrivateKey</c> concatenates into one unambiguous
+    /// fixed-width blob with no length prefix needed.
+    /// </summary>
+    public const int VaultKeySize = 32;
 }

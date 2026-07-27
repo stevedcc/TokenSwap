@@ -76,7 +76,19 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // Set for vaults that opt into a random per-vault salt (currently: every vault created by
     // a fresh 'tswap init' of the default YubiKey backend). Additive/backward-compatible,
     // following the same pattern as SecureEnclaveWrappedKey/TpmSealedKey above.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null,
+    // Phase 6 keyring vault only (issue #119, 'tswap init --keyring'): base64 of a
+    // Keyring.KeyringCodec-encoded Keyring holding a random K_v wrapped by this machine's slot,
+    // instead of K_v being derived directly from k1/k2 (see Crypto.DeriveKey). Backend-agnostic
+    // and purely additive on top of the existing YubiKey fields above: a keyring vault still
+    // populates YubiKeySerials/RedundancyXor/UnlockChallenge/MasterKeySalt exactly like a
+    // classic YubiKey vault, because VaultUnlocker still recovers this machine's KEK_slot via
+    // the unmodified YubiKeyHardwareService challenge/XOR/PBKDF2 dance — the mere presence of
+    // this field is what tells VaultUnlocker to treat that recovered 32 bytes as KEK_slot and
+    // unwrap K_v from the keyring, rather than use it as the master key directly (see
+    // VaultUnlocker.Unlock). Null (omitted from config.json) for every vault that predates this
+    // field or never opts in — those are completely unaffected.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Keyring = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 

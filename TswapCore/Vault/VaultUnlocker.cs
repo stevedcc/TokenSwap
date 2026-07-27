@@ -1,3 +1,5 @@
+using TswapCore.Keyring;
+
 namespace TswapCore.Vault;
 
 /// <summary>
@@ -66,7 +68,55 @@ public sealed class VaultUnlocker
             throw new TswapException(
                 $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
                 "Use a build that includes it, or restore a vault created with a supported backend.");
-        return service.Unlock(config, chooseSerial);
+
+        var recovered = service.Unlock(config, chooseSerial);
+
+        // A keyring vault (issue #119, 'tswap init --keyring'): `recovered` is this machine's
+        // slot key-encryption key (KEK_slot), not the vault master key directly — unwrap K_v
+        // from the keyring. This check is backend-agnostic and sits after backend dispatch on
+        // purpose: whichever backend recovered the 32 bytes, a keyring vault always needs this
+        // same extra unwrap step (see MULTI_MACHINE_KEYING.md §Two-layer slot wrap), so a future
+        // second backend (v0 step 2) needs no change here at all.
+        return config.Keyring == null ? recovered : UnlockKeyring(config, recovered);
+    }
+
+    /// <summary>
+    /// Decodes <see cref="Config.Keyring"/> and unwraps this machine's slot (always the
+    /// keyring's first and, in v0, only slot) to recover <c>K_v</c>. <paramref name="kekSlot"/>
+    /// is the 32 bytes the hardware backend just recovered. The slot's own X25519 private key
+    /// (the payload's other half — see <see cref="SlotSecretPayload"/>) is decoded but unused
+    /// until #121 adds slot request/approve/accept.
+    ///
+    /// <para>Throws <see cref="TswapException"/> — never a raw crash — for a non-base64
+    /// <see cref="Config.Keyring"/>, a malformed keyring blob (<see cref="KeyringCodec.Decode"/>),
+    /// an empty slot list, or a slot that fails to unwrap (<see cref="SlotPayloadWrap.Unwrap"/>:
+    /// wrong KEK_slot, tampered ciphertext, or a tampered AAD-bound field).</para>
+    /// </summary>
+    private static byte[] UnlockKeyring(Config config, byte[] kekSlot)
+    {
+        byte[] keyringBytes;
+        try
+        {
+            keyringBytes = Convert.FromBase64String(config.Keyring!);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException(
+                "Config is corrupted: Keyring is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+        }
+
+        var keyring = KeyringCodec.Decode(keyringBytes);
+
+        if (keyring.Slots.Count == 0)
+            throw new TswapException(
+                "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init --keyring'.");
+
+        // v0 is single-slot only: the keyring's first slot is always this machine's. #121 adds
+        // real slot identity/lookup once a keyring can hold more than one.
+        var slot = keyring.Slots[0];
+        var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, slot.SlotId);
+        var (vaultKey, _slotPrivateKey) = SlotSecretPayload.Decode(payload);
+        return vaultKey;
     }
 
     /// <summary>
