@@ -218,8 +218,8 @@ round-trips, error handling, wire format — it does **not** prove the real hard
 property holds. Concretely still open before this should be trusted as a primary vault backend:
 
 - **No real TPM hardware has been used at any point.** All testing ran against
-  `danieltrick/swtpm-docker` (see `TPM_LINUX_PLAN.md` §4 for the exact setup) via the `swtpm`
-  TCTI. Real hardware may behave differently in ways a simulator can't surface — timing,
+  `danieltrick/swtpm-docker` via the `swtpm` TCTI (see "Dev/test setup" below for the exact
+  setup). Real hardware may behave differently in ways a simulator can't surface — timing,
   lockout/anti-hammering behavior, vendor-specific quirks, or a stricter owner-hierarchy
   authorization policy than the simulator's default (empty) owner auth.
 - **No PCR or PIN policy support.** `MULTI_MACHINE_KEYING.md`'s per-backend table lists TPM's
@@ -247,6 +247,32 @@ property holds. Concretely still open before this should be trusted as a primary
 - **TPM availability/enablement is explicitly out of scope.** No detection wizard, no "enable your
   TPM in BIOS" guidance. A missing TPM (or, in dev/test, an unreachable simulator) fails once with
   one clear, direct error — matching "No YubiKey detected."
+
+### Dev/test setup: swtpm in a container
+
+Verified working setup (Apple Silicon Mac, Apple's `container` tool — a `docker`/`podman`
+equivalent works the same way against the same image):
+
+```
+container run -p 127.0.0.1:2321-2322:2321-2322 danieltrick/swtpm-docker:latest
+```
+
+- Image: [`danieltrick/swtpm-docker`](https://github.com/danieltrick/swtpm-docker) — Alpine-based
+  multi-stage build (compiles `libtpms`+`swtpm` from source into a minimal Alpine runtime image).
+  Multi-arch including **arm64** (runs natively, no emulation on Apple Silicon).
+- Exposes the standard swtpm ports: 2321 = TPM command port, 2322 = control port.
+- **`tpm2-tools` is not bundled in that image** — run it separately (a second container, or
+  wherever the `dotnet test`/dev loop actually runs) and point it at the simulator via the socket
+  TCTI:
+  ```
+  export TPM2TOOLS_TCTI="swtpm:host=127.0.0.1,port=2321"
+  tpm2_startup --clear   # the simulator needs an explicit startup command real hardware doesn't
+  ```
+- For a second container to run `tpm2-tools` in: any standard distro image works (`apt install
+  tpm2-tools` on Debian/Ubuntu, `dnf install tpm2-tools` on Fedora; on Alpine it's in the
+  `community` repo, alongside `libtss2-esys`/`libtss2-fapi`/etc. from `tpm2-tss`).
+- Image tags/availability can drift — re-verify this still works exactly as described before
+  trusting it blindly; this is "what worked when last checked," not a guarantee.
 
 ### Why a shellout to tpm2-tools, not P/Invoke libtss2-esys/libtss2-fapi (the path not taken)
 
