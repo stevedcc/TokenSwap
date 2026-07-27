@@ -127,7 +127,7 @@ keyring {
   slots: [
     { slotId, label, backend, enrolledAt,
       hwBlob:  backendWrap(KEK_slot),                    # 32 random bytes, per backend
-      wrapped: AEAD(payload, key: KEK_slot, aad: formatVersion‖vaultId‖k‖slotId) }
+      wrapped: AEAD(payload, key: KEK_slot, aad: formatVersion || vaultId || k || slotId) }
     ...
   ]
 }
