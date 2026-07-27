@@ -105,11 +105,11 @@ public static class SlotPayloadWrap
         {
             aes.Decrypt(nonce, ciphertext, tag, payload, aad);
         }
-        catch (CryptographicException ex)
+        catch (CryptographicException)
         {
             throw new TswapException(
                 "Slot unwrap failed: authentication check failed (wrong kekSlot, tampered ciphertext, " +
-                "or a formatVersion/vaultId/k/slotId mismatch)", ex.HResult);
+                "or a formatVersion/vaultId/k/slotId mismatch)");
         }
 
         return payload;

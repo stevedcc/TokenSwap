@@ -150,6 +150,22 @@ public class SlotPayloadWrapTests
     }
 
     [Fact]
+    public void Unwrap_WrongKekSlotUsesDefaultExitCode()
+    {
+        // Regression test: Unwrap's catch block must not leak the raw CryptographicException
+        // HResult into TswapException's exitCode parameter (they are different things — the
+        // second TswapException constructor parameter is a process exit code, not an inner
+        // exception). It must stay the default of 1, like every other TswapException thrown
+        // for an expected failure mode in this codebase.
+        var wrapped = SlotPayloadWrap.Wrap("payload"u8.ToArray(), KekSlot, FormatVersion, VaultId, K, SlotId);
+        var wrongKek = new byte[32];
+
+        var ex = Assert.Throws<TswapException>(() =>
+            SlotPayloadWrap.Unwrap(wrapped, wrongKek, FormatVersion, VaultId, K, SlotId));
+        Assert.Equal(1, ex.ExitCode);
+    }
+
+    [Fact]
     public void Unwrap_TruncatedInputThrowsTswapException()
     {
         var ex = Assert.Throws<TswapException>(() =>
