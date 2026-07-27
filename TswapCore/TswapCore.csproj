@@ -11,6 +11,18 @@
   </ItemGroup>
 
   <!--
+    Phase 6 keyring (per-slot X25519 keypair, see Keyring/SlotKeyPair.cs): as of this SDK,
+    System.Security.Cryptography has no built-in X25519 (BCL ECDH only covers NIST curves).
+    Rebex.Elliptic.Curve25519 is a small, dependency-free, pure-managed (no P/Invoke) port of
+    D.J. Bernstein's reference Curve25519 implementation (Apache-2.0) — chosen over a libsodium
+    binding (e.g. NSec) specifically because it needs no native binary per OS/arch, so it adds
+    no NativeAOT publish complexity beyond what the existing hardware-backend shims already have.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Rebex.Elliptic.Curve25519" Version="1.2.2" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a
