@@ -23,7 +23,14 @@ public static class Crypto
         return result;
     }
 
-    public static byte[] DeriveKey(byte[] k1, byte[] k2)
+    /// <summary>
+    /// Derives the vault master key from the two XOR-redundant YubiKey responses.
+    /// <paramref name="salt"/> is <see cref="Config.MasterKeySalt"/> (already base64-decoded
+    /// by the caller) when set; <c>null</c> falls back to the legacy hardcoded
+    /// <see cref="MasterKeySalt"/> constant, so existing vaults (which have no
+    /// <c>MasterKeySalt</c> in their config.json) keep deriving the identical key.
+    /// </summary>
+    public static byte[] DeriveKey(byte[] k1, byte[] k2, byte[]? salt = null)
     {
         var combined = new byte[k1.Length + k2.Length];
         k1.CopyTo(combined, 0);
@@ -31,7 +38,7 @@ public static class Crypto
 
         return Rfc2898DeriveBytes.Pbkdf2(
             combined,
-            MasterKeySalt,
+            salt ?? MasterKeySalt,
             Pbkdf2Iterations,
             HashAlgorithmName.SHA256,
             32

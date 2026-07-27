@@ -96,6 +96,71 @@ public class CryptoTests
     }
 
     [Fact]
+    public void DeriveKey_NoSaltMatchesLegacyHardcodedSalt()
+    {
+        // The single hardest requirement in this change: every vault that exists today (no
+        // MasterKeySalt in its config.json) must derive the exact same master key after
+        // introducing the optional-salt overload as it did before. Pin the byte-for-byte
+        // output against the legacy hardcoded "tswap-poc-v1" salt directly, independent of
+        // Crypto's private constant, so a future accidental edit to that constant is caught.
+        var k1 = Encoding.UTF8.GetBytes("key-one-padded!!");
+        var k2 = Encoding.UTF8.GetBytes("key-two-padded!!");
+
+        var viaDefaultOverload = Crypto.DeriveKey(k1, k2);
+        var viaExplicitNullSalt = Crypto.DeriveKey(k1, k2, null);
+        byte[] combined = [.. k1, .. k2];
+        var viaHandRolledLegacySalt = Rfc2898DeriveBytes.Pbkdf2(
+            combined,
+            Encoding.UTF8.GetBytes("tswap-poc-v1"),
+            Crypto.Pbkdf2Iterations,
+            HashAlgorithmName.SHA256,
+            32);
+
+        Assert.Equal(viaHandRolledLegacySalt, viaDefaultOverload);
+        Assert.Equal(viaHandRolledLegacySalt, viaExplicitNullSalt);
+    }
+
+    [Fact]
+    public void DeriveKey_CustomSaltDiffersFromDefaultSalt()
+    {
+        var k1 = Encoding.UTF8.GetBytes("key-one-padded!!");
+        var k2 = Encoding.UTF8.GetBytes("key-two-padded!!");
+        var customSalt = RandomNumberGenerator.GetBytes(32);
+
+        var withDefaultSalt = Crypto.DeriveKey(k1, k2);
+        var withCustomSalt = Crypto.DeriveKey(k1, k2, customSalt);
+
+        Assert.NotEqual(withDefaultSalt, withCustomSalt);
+    }
+
+    [Fact]
+    public void DeriveKey_DifferentCustomSaltsProduceDifferentOutput()
+    {
+        var k1 = Encoding.UTF8.GetBytes("key-one-padded!!");
+        var k2 = Encoding.UTF8.GetBytes("key-two-padded!!");
+        var salt1 = RandomNumberGenerator.GetBytes(32);
+        var salt2 = RandomNumberGenerator.GetBytes(32);
+
+        var derived1 = Crypto.DeriveKey(k1, k2, salt1);
+        var derived2 = Crypto.DeriveKey(k1, k2, salt2);
+
+        Assert.NotEqual(derived1, derived2);
+    }
+
+    [Fact]
+    public void DeriveKey_CustomSaltIsDeterministic()
+    {
+        var k1 = Encoding.UTF8.GetBytes("key-one-padded!!");
+        var k2 = Encoding.UTF8.GetBytes("key-two-padded!!");
+        var salt = RandomNumberGenerator.GetBytes(32);
+
+        var derived1 = Crypto.DeriveKey(k1, k2, salt);
+        var derived2 = Crypto.DeriveKey(k1, k2, salt);
+
+        Assert.Equal(derived1, derived2);
+    }
+
+    [Fact]
     public void EncryptDecrypt_RoundTrip()
     {
         var key = RandomNumberGenerator.GetBytes(32);
