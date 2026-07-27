@@ -117,6 +117,44 @@ public class ModelsTests
     }
 
     [Fact]
+    public void Config_NullMasterKeySalt_IsOmittedFromJson()
+    {
+        // Same backward-compat guarantee as TpmSealedKey/SecureEnclaveWrappedKey: a vault
+        // that hasn't opted into a per-vault salt must serialize with no MasterKeySalt field
+        // at all, so every existing config.json on disk stays byte-for-byte unchanged.
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.DoesNotContain("MasterKeySalt", json);
+        Assert.Null(config.MasterKeySalt);
+    }
+
+    [Fact]
+    public void Config_MasterKeySalt_RoundTrips()
+    {
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, MasterKeySalt: "c2FsdHNhbHQ=");
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.Contains("\"MasterKeySalt\": \"c2FsdHNhbHQ=\"", json);
+        Assert.Equal("c2FsdHNhbHQ=", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.MasterKeySalt);
+    }
+
+    [Fact]
+    public void Config_LegacyJsonWithoutMasterKeySalt_DeserializesAsNull()
+    {
+        // A config from before this field existed has no MasterKeySalt key; it must load
+        // with MasterKeySalt == null, which Crypto.DeriveKey treats as "use the legacy
+        // hardcoded salt constant".
+        const string legacy = """
+            {
+              "YubiKeySerials": [11111111, 22222222],
+              "RedundancyXor": "00ff",
+              "Created": "2024-05-01T00:00:00Z"
+            }
+            """;
+        var config = JsonSerializer.Deserialize(legacy, TswapJsonContext.Default.Config)!;
+        Assert.Null(config.MasterKeySalt);
+    }
+
+    [Fact]
     public void ExportFile_V1VersionTag_Unchanged()
     {
         // The v1 tag and its (Kdf-less) shape must never change — every export file ever

@@ -68,7 +68,15 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // multi-machine keyring — irrelevant, so omitted, for other backends. Simulator/VM-only
     // status: see HARDWARE_BACKENDS.md's TPM sections before treating this as verified against
     // real hardware.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TpmSealedKey = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TpmSealedKey = null,
+    // Base64-encoded PBKDF2 salt for master-key derivation (see Crypto.DeriveKey). Null means
+    // "use the legacy hardcoded Crypto.MasterKeySalt constant" — every vault created before
+    // this field existed has no MasterKeySalt in its config.json and must keep deriving the
+    // exact same master key, so null here is not "unset" but a deliberate, permanent fallback.
+    // Set for vaults that opt into a random per-vault salt (currently: every vault created by
+    // a fresh 'tswap init' of the default YubiKey backend). Additive/backward-compatible,
+    // following the same pattern as SecureEnclaveWrappedKey/TpmSealedKey above.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 

@@ -98,6 +98,13 @@ public sealed class InitCommand : ICliCommand
         var rngChoice = c.ReadLine()?.Trim();
         var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
 
+        // Every fresh init gets its own random master-key salt rather than the legacy shared
+        // constant (see Crypto.MasterKeySalt) — init already mints a brand-new XOR share and
+        // challenge per vault, so doing the same for the salt is free and closes off the
+        // "every tswap vault uses the identical salt" property without touching any existing
+        // vault (those have no MasterKeySalt in config.json and keep using the constant).
+        var masterKeySalt = RandomNumberGenerator.GetBytes(32);
+
         // Save config
         var config = new Config(
             new List<int> { serial1, serial2 },
@@ -105,7 +112,8 @@ public sealed class InitCommand : ICliCommand
             DateTime.UtcNow,
             requiresTouch,
             rngMode,
-            unlockChallenge
+            unlockChallenge,
+            MasterKeySalt: Convert.ToBase64String(masterKeySalt)
         );
 
         // Re-initialisation generates a new master key (new challenge + new XOR share), so any
@@ -114,7 +122,7 @@ public sealed class InitCommand : ICliCommand
         // Config is backed up first — if anything fails mid-init the old config still matches
         // the old vault backup.
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        var newVaultKey = Crypto.DeriveKey(k1, k2);
+        var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
         if (File.Exists(ctx.Storage.ConfigFile))
         {
             var configBackup = ctx.Storage.ConfigFile + ".bak-" + timestamp;

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TswapCli;
+using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Vault;
 using Xunit;
@@ -225,6 +226,32 @@ public class CommandTests : IDisposable
 
         Assert.Equal(0, exit);
         Assert.Contains("4096 chars", stdout);
+    }
+
+    [Fact]
+    public void Create_GeneratedValueIsCorrectLengthAndCharset()
+    {
+        RunTswap("init");
+        RunTswap("create", "charset-secret", "200");
+        var (exit, stdout, _) = RunTswap("get", "charset-secret");
+
+        Assert.Equal(0, exit);
+        var value = stdout.TrimEnd('\n', '\r');
+        Assert.Equal(200, value.Length);
+        Assert.All(value, c => Assert.Contains(c, CreateCommand.Charset));
+    }
+
+    [Fact]
+    public void Create_RepeatedCallsProduceDifferentValues()
+    {
+        // Regression guard: the system-RNG path must not accidentally be deterministic.
+        RunTswap("init");
+        RunTswap("create", "rand-a", "64");
+        RunTswap("create", "rand-b", "64");
+        var (_, valueA, _) = RunTswap("get", "rand-a");
+        var (_, valueB, _) = RunTswap("get", "rand-b");
+
+        Assert.NotEqual(valueA, valueB);
     }
 
     // --- Names ---
