@@ -31,6 +31,18 @@
   </ItemGroup>
 
   <!--
+    Export/import passphrase KDF (#108): as of this SDK, System.Security.Cryptography has no
+    built-in Argon2 (only PBKDF2 via Rfc2898DeriveBytes — verified by grepping the net10.0
+    reference assembly for "Argon2" and finding nothing). Konscious.Security.Cryptography.Argon2
+    is a pure-managed (no P/Invoke, no native binaries in its .nupkg — verified directly) MIT-
+    licensed implementation of the Argon2 1.3 spec, so like Rebex.Elliptic.Curve25519 above it
+    adds no NativeAOT publish complexity. See TswapCore/ExportCrypto.cs for parameter choices.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a

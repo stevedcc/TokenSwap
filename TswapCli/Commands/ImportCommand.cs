@@ -39,11 +39,8 @@ public sealed class ImportCommand : ICliCommand
             throw new TswapException($"Export file is not valid JSON: {ex.Message}");
         }
 
-        if (exportFile.Version != ExportFile.CurrentVersion)
-            throw new TswapException($"Unsupported export version: {exportFile.Version}");
-
         var salt = Convert.FromBase64String(exportFile.Salt);
-        var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+        var exportKey = ExportCrypto.DeriveKey(passphrase, salt, exportFile);
 
         byte[] plaintext;
         try { plaintext = Crypto.Decrypt(Convert.FromBase64String(exportFile.Ciphertext), exportKey); }

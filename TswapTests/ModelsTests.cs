@@ -155,12 +155,51 @@ public class ModelsTests
     }
 
     [Fact]
-    public void ExportFile_VersionTag_Unchanged()
+    public void ExportFile_V1VersionTag_Unchanged()
     {
-        Assert.Equal("tswap-export-v1", ExportFile.CurrentVersion);
-        var export = new ExportFile(ExportFile.CurrentVersion, DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy");
+        // The v1 tag and its (Kdf-less) shape must never change — every export file ever
+        // produced with this version tag must keep importing bit-for-bit as before (#108).
+        Assert.Equal("tswap-export-v1", ExportFile.V1);
+        var export = new ExportFile(ExportFile.V1, DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy");
         var json = JsonSerializer.Serialize(export, TswapJsonContext.Default.ExportFile);
         Assert.Contains("\"Version\": \"tswap-export-v1\"", json);
+        Assert.DoesNotContain("Kdf", json);
+        Assert.Null(export.Kdf);
+    }
+
+    [Fact]
+    public void ExportFile_CurrentVersion_IsV2WithExplicitKdfParams()
+    {
+        // #30 + #108: fresh exports now stamp v2 and explicit Argon2id KDF params.
+        Assert.Equal("tswap-export-v2", ExportFile.V2);
+        Assert.Equal(ExportFile.V2, ExportFile.CurrentVersion);
+
+        var kdf = new KdfParams(KdfAlgorithm.Argon2id, MemoryKiB: 19 * 1024, TimeCost: 2, Parallelism: 1);
+        var export = new ExportFile(ExportFile.CurrentVersion, DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy", kdf);
+        var json = JsonSerializer.Serialize(export, TswapJsonContext.Default.ExportFile);
+
+        Assert.Contains("\"Version\": \"tswap-export-v2\"", json);
+        Assert.Contains("\"Algorithm\": \"argon2id\"", json);
+        Assert.Contains("\"MemoryKiB\": 19456", json);
+
+        var roundTripped = JsonSerializer.Deserialize(json, TswapJsonContext.Default.ExportFile)!;
+        Assert.Equal(kdf, roundTripped.Kdf);
+    }
+
+    [Fact]
+    public void KdfParams_Pbkdf2Shape_RoundTrips()
+    {
+        // Even though nothing writes this today (v1 leaves Kdf null and implies PBKDF2), the
+        // PBKDF2 shape of KdfParams must itself serialize/deserialize correctly per #30, since
+        // the whole point is a format that can describe either algorithm.
+        var kdf = new KdfParams(KdfAlgorithm.Pbkdf2Sha256, Iterations: 100_000, HashAlgorithm: "SHA256");
+        var json = JsonSerializer.Serialize(kdf, TswapJsonContext.Default.KdfParams);
+        Assert.Contains("\"Algorithm\": \"pbkdf2-sha256\"", json);
+        Assert.Contains("\"Iterations\": 100000", json);
+        Assert.DoesNotContain("MemoryKiB", json);
+
+        var roundTripped = JsonSerializer.Deserialize(json, TswapJsonContext.Default.KdfParams);
+        Assert.Equal(kdf, roundTripped);
     }
 }
 

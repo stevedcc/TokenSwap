@@ -80,14 +80,65 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 
-public record ExportFile(string Version, DateTime Created, string Salt, string Ciphertext)
+/// <summary>
+/// KDF algorithm identifiers for an export file's passphrase-derived key (#30). Serialized as
+/// lowercase hyphenated strings so the raw JSON is self-describing without a lookup table.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<KdfAlgorithm>))]
+public enum KdfAlgorithm
 {
-    public const string CurrentVersion = "tswap-export-v1";
+    [JsonStringEnumMemberName("pbkdf2-sha256")]
+    Pbkdf2Sha256,
+    [JsonStringEnumMemberName("argon2id")]
+    Argon2id,
+}
+
+/// <summary>
+/// Explicit KDF parameters for an export file's passphrase-derived key (#30). One record covers
+/// both algorithms — fields not used by <see cref="Algorithm"/> are left null — rather than a
+/// polymorphic hierarchy, so this stays trivially source-gen JSON serializable for NativeAOT.
+/// Only present on "tswap-export-v2"+ files; v1 files have no <c>Kdf</c> at all (see
+/// <see cref="ExportFile.V1"/>) because their KDF is implied/hardcoded, not stored.
+/// </summary>
+public record KdfParams(
+    KdfAlgorithm Algorithm,
+    // PBKDF2 only.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Iterations = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HashAlgorithm = null,
+    // Argon2id only.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? MemoryKiB = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TimeCost = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Parallelism = null);
+
+public record ExportFile(string Version, DateTime Created, string Salt, string Ciphertext,
+    // Explicit KDF parameters (#30). Omitted for v1 files (KDF is implied: PBKDF2-SHA256 at
+    // Crypto.Pbkdf2Iterations, see Crypto.DeriveKeyFromPassphrase) and always present on v2+
+    // files, describing exactly how Salt should be turned into the export key — see
+    // ExportCrypto.DeriveKey for the version dispatch that reads this back.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] KdfParams? Kdf = null)
+{
+    /// <summary>
+    /// Original export format: salt + ciphertext only, no explicit KDF parameters. The KDF is
+    /// implied to be PBKDF2-SHA256 at Crypto.Pbkdf2Iterations iterations. This string and its
+    /// derivation must never change — every export file ever produced with this version tag
+    /// must keep importing bit-for-bit as before (#108).
+    /// </summary>
+    public const string V1 = "tswap-export-v1";
+
+    /// <summary>
+    /// Current export format (#30 + #108): adds explicit <see cref="Kdf"/> parameters and moves
+    /// the passphrase KDF to Argon2id. See ExportCrypto for the parameter choices/rationale.
+    /// </summary>
+    public const string V2 = "tswap-export-v2";
+
+    /// <summary>The version <c>export</c> now produces. Import accepts this and all older versions.</summary>
+    public const string CurrentVersion = V2;
 }
 
 [JsonSerializable(typeof(Config))]
 [JsonSerializable(typeof(SecretsDb))]
 [JsonSerializable(typeof(ExportFile))]
+[JsonSerializable(typeof(KdfParams))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 public partial class TswapJsonContext : JsonSerializerContext { }
 
