@@ -371,9 +371,22 @@ key-management model and a mergeable on-disk format.
 
 > **The key-management half is now worked out in `MULTI_MACHINE_KEYING.md`** — the keyring
 > of wrapped shares, the design-space rationale (why escrow / XOR / Shamir / config-share all
-> collapse into it), why the Secure Enclave forces wrap/unwrap, and the user-set unlock
-> threshold. It is also the motivation for going multi-backend at all: TPM + Secure Enclave
-> remove the two-YubiKey adoption barrier. The sections below cover the *on-disk format* half.
+> collapse into it), why the Secure Enclave forces wrap/unwrap, and why `k ≥ 2` unlock is
+> demoted to a rationale note rather than a near-term goal. It is also the motivation for going
+> multi-backend at all: TPM + Secure Enclave remove the two-YubiKey adoption barrier. The
+> sections below cover the *on-disk format* half.
+
+**A 2026-07-27 design review split this phase into v0 / v1 / v2** (full reasoning in
+`MULTI_MACHINE_KEYING.md` §Scope) — the short version, from the format side:
+
+- **v0**: per-secret records with tombstones, a keyring at `k = 1`, hand-carried enrollment.
+  No revocation, no `K_v` rotation, no merge engine.
+- **v1**: revocation, rotation, and automating the enrollment exchange over the sync transport.
+- **v2**: the merge engine (HLC, commutativity/idempotence fuzz tests) and threshold
+  enrollment governance.
+
+Everything below is written against that split; steps and open questions are labeled v0/v1/v2
+so it's clear what's gating and what can be revised later under a format-version bump.
 
 #### How today's crypto actually works (and why it points at the design)
 
@@ -447,23 +460,56 @@ secrets produce conflicting opaque blobs. Replace it with **per-secret encrypted
 records**, one file per secret:
 
 - Filename = `HMAC(K_names, secret-name)` (hex) so names never appear on disk and the
-  set of filenames does not leak the secret names to the sync transport.
-- Each record = `AEAD_encrypt(payload, key = K_v)` where the payload carries the value
-  plus **merge metadata**: a hybrid logical clock (HLC) / lamport counter, the origin
-  `machineId`, and burn/tombstone fields.
+  set of filenames does not leak the secret names to the sync transport. **This is settled,
+  not open** — see the per-file security notes below.
+- Each record = `AEAD_encrypt(payload, key = per-record key)` (see the per-file security notes
+  for why the key is per-record, not `K_v` directly) where the payload carries the value plus
+  **merge metadata**.
+
+**Record type is part of the payload, and a delete/burn is a record, not an absent file
+(v0 gate — cannot be retrofitted).** Three record types: `value`, `tombstone` (deleted),
+`burned`. The filename is unaffected by a type change — it's `HMAC(K_names, name)` and doesn't
+depend on content. Without an explicit tombstone type, machine A deletes a secret, machine B
+still has the old file, and sync silently resurrects it on the next merge — worse for `burn`
+specifically, where a resurrected secret destroys the incident record the burn exists to
+create. **Tombstones must be padded to the same size buckets as live records** (see the
+padding item below), or a tombstone is trivially distinguishable from a live secret by file
+size alone.
+
+**Ordering authority is a per-item write counter plus an id tiebreak, not a wall-clock
+timestamp (v0 gate).** UTC timestamps are unsafe as the *authority* for merge ordering across
+machines — clock skew, VMs resuming from suspend, and manual clock changes all produce wrong
+outcomes silently. Keep a timestamp in the record for display/human intuition in `names`
+output; keep the write counter + origin id for correctness. A per-item counter plus id tiebreak
+*is* a Lamport clock, so v2's HLC work (below) becomes an additive refinement on top of this,
+not a format break.
 
 Merge rules fall straight out of semantics tswap already has, so concurrent edits
 resolve deterministically without a manual "conflict" state:
 
-- **Value edits:** last-writer-wins by (HLC, machineId) tiebreak.
+- **Value edits:** last-writer-wins by (write counter, origin id) tiebreak.
 - **Burns:** earliest-burn-wins — which *matches the existing rule* that re-burning an
   already-burned secret is rejected and preserves the original incident record.
-- **Deletes:** tombstones (a delete is a record, not a missing file), so a delete on one
-  machine is not silently resurrected by an older copy on another.
+- **Deletes:** tombstones as above. **Whether tombstones should instead be delete-wins
+  (order-independent, needs no clock, cannot silently resurrect, at the cost of a delete from a
+  stale copy beating a newer edit) is still open — leaning delete-wins for v0**, since the
+  record is retained and recoverable either way; see "Open questions" below.
+
+**Add a vault generation counter and last-writer id to the record header, in the clear**, so a
+user facing two conflicted copies can be told "generation 9 from LAPTOP vs. generation 7 from
+DESKTOP" instead of guessing between two opaque files. Refuse a save when the on-disk
+generation exceeds the loaded one. Small (~20 lines), and forward-compatible with v2's HLC
+work.
 
 Sync stays entirely external (git/Syncthing/Dropbox); per-record files also give clean,
-content-free "what changed" diffs. A `tswap sync` (or auto-merge-on-load) folds a
-freshly-synced directory into the local view.
+content-free "what changed" diffs. Splitting the blob into per-secret files is itself most of
+the mergeability mechanism — the sync tool does directory-level merge for free the moment
+there's one file per secret, and two machines editing different secrets stop conflicting
+immediately. Same-secret concurrent edits still produce a conflicted copy (sync tools like
+OneDrive/Dropbox/Syncthing detect concurrent modification and produce conflicted copies rather
+than clobbering, so this is *detected*, not silent) — but for an encrypted blob a conflicted
+copy is hard to act on without the generation counter above making the two copies diagnosable.
+A `tswap sync` (or auto-merge-on-load) folds a freshly-synced directory into the local view.
 
 #### Per-file security considerations (bake into the format, not retrofit)
 
@@ -480,20 +526,21 @@ order of how much they matter:
    individual lengths by pooling them. **Mitigation: pad every record to size buckets**
    (e.g. next multiple of 256 bytes) before encrypting. Negligible cost; removes the leak.
 
-2. **Identity + timing correlation (the real tradeoff).** Deterministic
+2. **Identity + timing correlation (the real tradeoff — settled, not open).** Deterministic
    `HMAC(K_names, name)` filenames are *stable*, so a transport observer sees "the file
    with hash `abc123…` changed again at 14:03" — the name stays hidden, but per-secret
    **edit patterns over time** become trackable and correlatable with user activity. The
    single blob leaks only "something changed." This collides with mergeability, which
    *needs* a stable per-secret identity to recognise concurrent edits of the same secret.
-   Escape hatch: randomise the *filename* per write while keeping a stable record-id
-   *inside* the AEAD (each edit becomes a fresh opaque file; supersede/delete via
+   The alternative considered: randomise the *filename* per write while keeping a stable
+   record-id *inside* the AEAD (each edit becomes a fresh opaque file; supersede/delete via
    tombstones keyed on the internal id; periodic compaction). That defeats which-secret
    correlation but not "an edit of ~this size happened around now" — hiding that needs
-   batching or decoy traffic, disproportionate for a personal fleet. **Decision to make
-   explicitly in the design doc:** deterministic filenames (simpler merge, leaks edit
-   identity/timing) vs randomised filenames + internal ids (hides identity, adds
-   compaction) — most personal threat models can accept deterministic + padding.
+   batching or decoy traffic, disproportionate for a personal fleet, and the compaction
+   machinery is real ongoing complexity for a marginal privacy gain against tswap's stated
+   threat model (a personal fleet on a semi-trusted sync transport, not a hostile
+   transport operator). **Decision: deterministic filenames.** Accept the edit-timing leak;
+   document it plainly wherever the format is described to users.
 
 3. **Nonce-management surface (subtle, mandatory fix).** N files rewritten
    independently and concurrently across machines, all under one `K_v`, vastly enlarges
@@ -511,51 +558,102 @@ format is written — they are painful to retrofit once vaults exist on disk.
 
 #### Implementation ordering (each independently shippable)
 
-1. **`IVaultStore` extraction** (the Phase 5 backlog item): carve load/save of config +
-   secrets out of `Storage` behind an interface, keeping the current single-file format
-   as the default implementation. Pure refactor, no behaviour change — the enabling step.
-2. **Per-secret record format + merge engine** (single-machine first): new store
-   implementation with keyed-hash filenames, HLC metadata, and the LWW / earliest-burn /
-   tombstone merge rules. **Bake in the per-file security fixes now** (see above):
+**v0** — per-secret records + keyring at `k = 1` + hand-carried enrollment. No revocation, no
+rotation, no merge engine.
+
+1. **`IVaultStore` extraction** (the Phase 5 backlog item) — ✅ **done**, shipped in Phase 5.
+   Carved load/save of config + secrets out of `Storage` behind an interface, keeping the
+   current single-file format as the default implementation. The enabling step for everything
+   below.
+2. **Per-secret record format** (single-machine first): new store implementation with
+   keyed-hash filenames, the write-counter ordering authority, and the value / tombstone /
+   burned record types — all four detailed above. **Bake in the per-file security fixes now**:
    size-bucket padding before encryption, and per-record keys via
    `HKDF(K_v, recordId || writeCounter)` — both change the byte layout and cannot be
-   retrofitted once vaults exist. Fuzz/property-test the merge for commutativity and
-   idempotence (merge order must not matter). Still one machine, one `KEK` — no keyring yet.
-3. **Keyring + enrollment** (multi-machine, 1-of-n): `K_v` + per-machine wrapped slots;
-   `fleet init`, `fleet enroll`, `fleet machines`. Enrollment uses an **offline, two-file
-   ephemeral X25519 exchange** (new machine emits a request file with its public key +
-   attested `KEK_m`-derived wrapping key; an enrolled machine returns a slot file), so no
-   network or simultaneous presence is required — it works over the same sync transport.
-4. **Revocation + rotation:** `fleet revoke` = remove slot, rotate `K_v`, re-encrypt all
-   records, bump a keyring epoch so stale copies are detectably outdated. This is the
-   step that makes revocation real; do not ship 3 as "secure sharing" without it.
-5. **(v2) k-of-n threshold enrollment:** Shamir-split enrollment key; `fleet enroll`
-   requires k approvals. Optional hardening layered on the same keyring.
+   retrofitted once vaults exist. Still one machine, one `KEK` — no keyring, no merge engine,
+   no HLC yet; last-writer-wins by the write counter is enough for a single machine, since
+   there's nothing to merge against.
+3. **Keyring + hand-carried enrollment** (multi-machine, `k = 1`): the keyring format,
+   `K_v` + per-machine wrapped slots (see `MULTI_MACHINE_KEYING.md`'s two-layer wrap and
+   per-slot X25519 keypair), and `slot request`/`approve`/`accept` for hand-carried enrollment
+   (files moved by the user themselves — scp, USB, paste — not over the sync transport).
+   **Fingerprint display on both sides is an explicit deliverable of this step, not an
+   afterthought detail** — even though it's defense-in-depth rather than load-bearing in v0
+   (see `MULTI_MACHINE_KEYING.md` §Hand-carried enrollment), it's the seam v1's transport-borne
+   enrollment builds on, and it's a couple dozen lines of code that are much cheaper to add now
+   than to retrofit once `slot approve` output format is settled.
+
+**v0 exit criterion:** a vault usable across machines with zero shared secrets over the
+network and zero extra hardware beyond what v0's backends already support (YubiKey, TPM, SE) —
+shippable and useful on its own, without waiting for v1/v2. "To remove a machine, re-init" is
+an acceptable v0 answer for a tool with no deployed fleets yet.
+
+**v1** — revocation, rotation, transport-borne enrollment.
+
+4. **Revocation + rotation:** slot removal, `K_v` rotation, re-encrypt all records, bump a
+   keyring generation counter so stale copies are detectably outdated. This is the step that
+   makes revocation real; do not describe step 3 as "secure sharing" without it landing.
+   **Depends on step 3's per-slot X25519 keypair** (`MULTI_MACHINE_KEYING.md` §Per-slot X25519
+   keypair) — without it, re-wrapping every slot during rotation needs every enrolled device
+   physically present again, which for a token in a drawer in another country is a migration
+   that never actually happens.
+5. **Transport-borne enrollment:** automate the step-3 file exchange over the sync folder,
+   which reinstates the enrollment fingerprint from step 3 as the *primary* defense against a
+   MITM substituting their own key, not defense-in-depth. Rotation atomicity (see "Open
+   questions" below) must be fully resolved before this step, not concurrently with it.
+
+**v2** — the merge engine and threshold enrollment.
+
+6. **HLC + merge engine:** upgrade the write-counter ordering authority to a hybrid logical
+   clock for human-readable `names` timestamps, add the LWW/earliest-burn/tombstone merge
+   rules in full, and fuzz/property-test the merge for commutativity and idempotence (merge
+   order must not matter). This is additive on top of step 2's write counter, not a format
+   break — see the ordering-authority note above.
+7. **k-of-n threshold enrollment:** Shamir-split enrollment key; extending the fleet requires
+   k approvals. Distinct from `k`-of-`n` *unlock*, which `MULTI_MACHINE_KEYING.md` demotes to a
+   rationale note rather than a roadmap item — this is enrollment governance, a different
+   property.
+
+#### Shipping posture
+
+Each v0 step above is independently mergeable and useful without the later ones existing —
+same posture as Phases 0–5 of this refactor. v0 does not need v1's revocation story or v2's
+merge engine to be a real, honest improvement over today's two-YubiKey-only vault: it already
+delivers "adopt with zero extra hardware" and "one vault across my own machines." Don't let the
+phase stall waiting for rotation atomicity (the largest open question, entirely a v1 concern)
+or the merge engine (v2) to be fully designed before shipping v0.
 
 #### Open questions to resolve before coding
 
-- **Clock model:** plain lamport is simplest but loses wall-clock intuition in `names`
-  output; HLC keeps human-readable timestamps at the cost of a few more bytes and a
-  monotonicity guard. Lean HLC.
-- **Keyring authenticity:** the keyring itself must be integrity-protected (signed by an
-  enrolled machine) so the transport cannot add a rogue slot; decide the signing key
-  (per-machine Ed25519 derived alongside `KEK_m`?) in step 3.
 - **`K_names` provenance:** deriving the filename-HMAC key from `K_v` means a rotation
-  (step 4) renames every record; deriving it from a separate, non-rotated fleet constant
-  avoids mass renames but must never be reconstructible without fleet membership.
-- **Filename identity vs edit-timing privacy** (from the per-file security notes):
-  deterministic `HMAC(name)` filenames keep merge simple but let a transport observer
-  track per-secret edit patterns; randomised filenames + internal record-ids hide that at
-  the cost of compaction. Pick one before writing the format. Padding (item 1) and
-  per-record keys (item 3) are settled — apply both regardless of this choice.
+  (v1, step 4) renames every record; deriving it from a separate, non-rotated fleet constant
+  avoids mass renames but must never be reconstructible without fleet membership. Does not
+  gate v0 (no rotation yet) — see `MULTI_MACHINE_KEYING.md` §Open questions.
+- **Delete-wins vs. last-writer-wins for tombstones:** see the mergeable-format section above.
+  Leaning delete-wins for v0 — order-independent, no clock needed, cannot silently resurrect a
+  deleted secret.
 - **Interaction with export/import:** the existing encrypted single-file export stays as
   the backup/transfer format; `IVaultStore` makes "export = serialize whatever store is
   active" fall out naturally.
+- **Rotation atomicity (v1, not v0) — the largest open design question in the whole phase.**
+  A partially rotated record directory syncing against another, not-yet-rotated copy needs a
+  rotation generation per record, a merge rule tolerating mixed generations mid-rotation, and
+  resumability if interrupted. Must be fully settled before step 4 writes a single rotated
+  record — this is a byte-layout decision, not an implementation detail, and it is exactly the
+  kind of thing that cannot be retrofitted once v1 vaults exist. See
+  `MULTI_MACHINE_KEYING.md` §Deferred to v1.
+- **Keyring authenticity / fleet signing key** — deferred to v1; see
+  `MULTI_MACHINE_KEYING.md` §Deferred to v1 for the settled reasoning (a fleet signing key
+  `K_s`, not a per-slot signature) and why AAD binding, not a keyring signature, is the
+  *primary* defense against threshold downgrade even before v1 lands.
 
-Like the refactor itself, this warrants a standalone `MULTI_MACHINE_PLAN.md` with the
-threat model, exact byte layouts, and the enrollment/revocation protocols fully specified
-**before** any code — the crypto details (AEAD choice, nonce discipline under
-concurrent writers, rotation atomicity) are where the risk lives.
+Filename determinism, padding, and per-record keys are **settled** (see the mergeable-format
+section above) — the open items above are what remain before v1/v2 code, not v0. Much of the
+groundwork a standalone design doc would otherwise need to establish first now lives directly
+in `MULTI_MACHINE_KEYING.md` (the v0 byte-layout gate: record types, the write-counter ordering
+authority, deterministic filenames, the per-slot X25519 keypair) — what's left before v0 code
+is writing golden-byte-layout tests against those four decisions and settling the two leaning
+items above.
 
 ---
 
