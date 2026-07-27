@@ -223,10 +223,13 @@ property holds. Concretely still open before this should be trusted as a primary
   lockout/anti-hammering behavior, vendor-specific quirks, or a stricter owner-hierarchy
   authorization policy than the simulator's default (empty) owner auth.
 - **No PCR or PIN policy support.** `MULTI_MACHINE_KEYING.md`'s per-backend table lists TPM's
-  primitive as "seal share to a machine-bound key (**optionally** PCR/PIN policy)" — this pass
-  implements only the unconditional case (no policy digest on the sealed object at all). Boot-state
-  binding (PCR policy) and a PIN/password gate are both real, useful extensions, not implemented
-  here.
+  primitive as "seal `KEK_slot` to a machine-bound key (**optionally** PCR/PIN policy)" — this
+  pass implements only the unconditional case (no policy digest on the sealed object at all).
+  Boot-state binding (PCR policy) and a PIN/password gate are both real, useful **standalone**
+  hardening for this backend on its own merits — not a component of any future threshold-unlock
+  scheme. `MULTI_MACHINE_KEYING.md`'s "Why not k ≥ 2 (yet)" section is explicit that a TPM
+  PIN/PCR check doesn't compose into an independent second factor for multi-device unlock (same
+  root of trust as this slot); it's worth having for this backend regardless.
 - **The sealed-key wire format is unversioned**, same caveat as `Config.SecureEnclaveWrappedKey`:
   changing `Tpm2ToolsInterop`'s packing format is a silent breaking change for every existing TPM
   vault, with no detection or migration path.
@@ -375,15 +378,30 @@ not generalize to a TPM or Secure Enclave soldered to one machine. For those, re
 achieved at the fleet level: the Phase 6 "keyring of wrapped keys" gives each machine its own
 wrapped slot for a shared vault key.
 
-That is why `IHardwareKeyService` is the same seam Phase 6 builds on. Today `Unlock` returns
-the vault **master key** directly (single machine). Under Phase 6 the value a backend recovers
-becomes that machine's **key-encryption key (KEK)**, and a keyring layer unwraps the shared
-vault key with it — the backend contract is unchanged; only what sits above it grows.
+That is why `IHardwareKeyService` is the same seam Phase 6 builds on — and, per
+`MULTI_MACHINE_KEYING.md`'s two-layer slot wrap design, it needs **no interface change at
+all**: `Unlock` already returns exactly what that design needs — 32 bytes, in the backend's own
+idiom. Today those 32 bytes *are* the vault master key directly (single machine, `k = 1`,
+today's shipped behaviour). Under Phase 6's keyring, the same 32 bytes become that machine's
+slot key-encryption key (`KEK_slot`), and an AEAD layer above `IHardwareKeyService` — not
+inside any backend — unwraps the shared vault key with it. Every backend implementation in this
+file is already Phase-6-shaped; what's missing is the keyring layer above them, not a rewrite
+of any of them.
 
 **`MULTI_MACHINE_KEYING.md`** is the settled design for that key model: the keyring of wrapped
 shares, why every alternative (escrow / XOR / Shamir / config-share) collapses into it, why the
-Secure Enclave forces wrap/unwrap, and the user-set unlock threshold (`k=1` any-device vs. `k≥2`
-two-device-required). Read it before implementing TPM/SE enrollment. See also
-`REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
+Secure Enclave forces wrap/unwrap, and why `k ≥ 2` unlock is demoted to a rationale note (no
+independent zero-friction second factor exists on any target platform today — TPM PIN/PCR
+policy stays on the backlog on its own merits as standalone hardening, not as a threshold
+ingredient). Read it before implementing further TPM/SE/YubiKey enrollment work.
+See also `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
+
+**Forward note on the "unversioned wire format" caveat** raised in each backend's status
+section below (`Config.SecureEnclaveWrappedKey`, `Config.TpmSealedKey`): Phase 6's keyring
+format resolves this by construction, not by patching the current fields. Each backend's blob
+becomes a slot's `hwBlob`, and `formatVersion` becomes part of the AEAD's associated data
+(`MULTI_MACHINE_KEYING.md` §AAD binding) rather than an afterthought — so this is a rename that
+comes with the Phase 6 migration, not a change to make to today's single-slot fields in
+isolation.
 
 
