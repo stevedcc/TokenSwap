@@ -213,4 +213,20 @@ public class StorageTests : IDisposable
         Assert.Equal(new List<int> { 1, 2 }, store.LoadConfig().YubiKeySerials);
         Assert.Equal("v", store.LoadSecrets(_key).Secrets["k"].Value);
     }
+
+    [Fact]
+    public void Storage_ImplementsIFileVaultStore_PathsWorkAsBefore()
+    {
+        // Issue #124: the file-path members moved off the base IVaultStore interface
+        // onto the more specific IFileVaultStore, since a future non-file backend
+        // shouldn't be forced to have a filesystem path. Storage is genuinely
+        // file-backed, so it implements the narrower interface too, and the paths
+        // it reports must be unchanged from before the split.
+        Assert.IsAssignableFrom<IFileVaultStore>(_storage);
+
+        IFileVaultStore fileStore = _storage;
+        Assert.Equal(_tempDir, fileStore.ConfigDir);
+        Assert.Equal(Path.Combine(_tempDir, "config.json"), fileStore.ConfigFile);
+        Assert.Equal(Path.Combine(_tempDir, "secrets.json.enc"), fileStore.SecretsFile);
+    }
 }
