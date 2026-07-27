@@ -766,9 +766,12 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.Equal(0, exit);
         Assert.True(File.Exists(exportPath));
+        var written = File.ReadAllText(exportPath);
         // File must not contain the plaintext secret name
-        Assert.DoesNotContain("my-secret", File.ReadAllText(exportPath));
-        Assert.Contains("tswap-export-v1", File.ReadAllText(exportPath));
+        Assert.DoesNotContain("my-secret", written);
+        // Fresh exports now produce v2 with explicit Argon2id KDF params (#30, #108).
+        Assert.Contains("tswap-export-v2", written);
+        Assert.Contains("argon2id", written);
     }
 
     [Fact]
@@ -990,6 +993,86 @@ password2: """"  # tswap: missing-mixed-secret");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("not valid JSON", stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Import_V1ExportFile_ImportsViaLegacyPbkdf2Path()
+    {
+        // A v1-shaped ExportFile has no Kdf field at all (it didn't exist yet — #30/#108).
+        // Its key must still be derivable exactly as it always was: Crypto.DeriveKeyFromPassphrase
+        // (plain PBKDF2-SHA256 at Crypto.Pbkdf2Iterations), dispatched via ExportFile.V1.
+        RunTswap("init");
+
+        const string passphrase = "legacy-passphrase";
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+        var dbJson = JsonSerializer.Serialize(
+            new SecretsDb(new Dictionary<string, Secret> { ["legacy-secret"] = new("legacy-value", DateTime.UtcNow, DateTime.UtcNow) }),
+            TswapJsonContext.Default.SecretsDb);
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey);
+
+        var exportFile = new ExportFile(
+            ExportFile.V1, DateTime.UtcNow,
+            Convert.ToBase64String(salt),
+            Convert.ToBase64String(ciphertext));
+        Assert.Null(exportFile.Kdf);
+        var exportPath = Path.Combine(_tempDir, "legacy-v1.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, _) = RunTswapWithStdin(passphrase + "\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("legacy-secret", namesOut);
+    }
+
+    [Fact]
+    public void Import_V2ExportFile_UsesArgon2idParamsFromFile()
+    {
+        // A v2 file carries its own explicit Kdf params (#30); import must derive using those,
+        // not any hardcoded default, and must use Argon2id rather than PBKDF2 (#108).
+        RunTswap("init");
+
+        const string passphrase = "v2-passphrase";
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var kdf = ExportCrypto.DefaultArgon2idParams;
+        Assert.Equal(KdfAlgorithm.Argon2id, kdf.Algorithm);
+        var exportKey = ExportCrypto.DeriveArgon2id(passphrase, salt, kdf);
+        var dbJson = JsonSerializer.Serialize(
+            new SecretsDb(new Dictionary<string, Secret> { ["v2-secret"] = new("v2-value", DateTime.UtcNow, DateTime.UtcNow) }),
+            TswapJsonContext.Default.SecretsDb);
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey);
+
+        var exportFile = new ExportFile(
+            ExportFile.V2, DateTime.UtcNow,
+            Convert.ToBase64String(salt),
+            Convert.ToBase64String(ciphertext),
+            kdf);
+        var exportPath = Path.Combine(_tempDir, "v2.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, _) = RunTswapWithStdin(passphrase + "\n", "import", exportPath);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.Contains("v2-secret", namesOut);
+    }
+
+    [Fact]
+    public void Import_UnrecognizedVersion_ThrowsClearError()
+    {
+        RunTswap("init");
+
+        var exportFile = new ExportFile("tswap-export-v99", DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy");
+        var exportPath = Path.Combine(_tempDir, "future.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, _, stderr) = RunTswapWithStdin("anypassphrase\n", "import", exportPath);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Unsupported export version: tswap-export-v99", stderr);
     }
 
     // --- Migrate ---

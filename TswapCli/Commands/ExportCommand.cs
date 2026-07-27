@@ -41,7 +41,8 @@ public sealed class ExportCommand : ICliCommand
         var db = ctx.LoadSecrets(key);
 
         var salt = RandomNumberGenerator.GetBytes(32);
-        var exportKey = Crypto.DeriveKeyFromPassphrase(passphrase, salt);
+        var kdf = ExportCrypto.DefaultArgon2idParams;
+        var exportKey = ExportCrypto.DeriveArgon2id(passphrase, salt, kdf);
         var plaintext = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb));
         var ciphertext = Crypto.Encrypt(plaintext, exportKey);
 
@@ -49,7 +50,8 @@ public sealed class ExportCommand : ICliCommand
             ExportFile.CurrentVersion,
             DateTime.UtcNow,
             Convert.ToBase64String(salt),
-            Convert.ToBase64String(ciphertext)
+            Convert.ToBase64String(ciphertext),
+            kdf
         );
         File.WriteAllText(path, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
 
