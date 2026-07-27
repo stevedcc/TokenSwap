@@ -47,4 +47,26 @@ public static class KeyringFormat
 
     /// <summary>Byte length of an origin id (opaque per-machine/per-slot tiebreak identifier).</summary>
     public const int OriginIdSize = 16;
+
+    /// <summary>
+    /// Byte length of a vault id (opaque, randomly generated once at vault init — see
+    /// <see cref="Keyring.SlotPayloadWrap"/>'s AAD binding, issue #117). 16 bytes (128 bits) is
+    /// not a security boundary — a vaultId is not secret, and each slot's AEAD binding already
+    /// means an attacker can't substitute a different vault's slot without possessing that
+    /// slot's <c>KEK_slot</c> — it is sized purely so two independently-created vaults collide
+    /// with negligible probability, the same reasoning as a random UUID/GUID (also 16 bytes).
+    /// </summary>
+    public const int VaultIdSize = 16;
+
+    /// <summary>
+    /// Byte length of a slot id (opaque per-slot identifier, generated once when a slot is
+    /// enrolled — see <see cref="Keyring.SlotPayloadWrap"/>'s AAD binding, issue #117). Same
+    /// size and rationale as <see cref="OriginIdSize"/>, whose doc comment already anticipates
+    /// this exact "per-slot identifier" use; kept as its own constant rather than reusing
+    /// <see cref="OriginIdSize"/> directly because the two name different things at different
+    /// layers — a slot id identifies an AEAD-bound keyring entry, an origin id identifies a
+    /// per-record last-writer tiebreak — and nothing requires their sizes to move together if
+    /// either one changes later.
+    /// </summary>
+    public const int SlotIdSize = 16;
 }
