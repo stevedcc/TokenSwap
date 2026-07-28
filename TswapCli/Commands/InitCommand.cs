@@ -9,8 +9,8 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => "init [--secure-enclave|--tpm|--keyring]";
-    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Windows/Linux, --keyring for a random-K_v YubiKey vault)";
+    public string HelpUsage => "init [--secure-enclave|--tpm|--keyring] [--no-recovery]";
+    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Windows/Linux, --keyring for a random-K_v YubiKey vault with a default-on recovery slot; --no-recovery opts out)";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
@@ -33,6 +33,14 @@ public sealed class InitCommand : ICliCommand
         if (initFlagCount > 1)
             throw new UsageException($"{ctx.Prefix} init [--secure-enclave|--tpm|--keyring] (mutually exclusive)");
 
+        // --no-recovery (issue #120) only means anything on the --keyring path: the plain
+        // default/--secure-enclave/--tpm flows have no keyring to add a recovery slot to in the
+        // first place (see InitCommand's file-level scoping note). Reject it standalone rather
+        // than silently ignoring it, the same way the mutual-exclusivity check above does for
+        // the main three flags.
+        if (args.Contains("--no-recovery") && !args.Contains("--keyring"))
+            throw new UsageException($"{ctx.Prefix} init --no-recovery requires --keyring");
+
         if (args.Contains("--secure-enclave"))
             return ExecuteSecureEnclave(ctx);
 
@@ -40,7 +48,7 @@ public sealed class InitCommand : ICliCommand
             return ExecuteTpm(ctx);
 
         if (args.Contains("--keyring"))
-            return ExecuteKeyring(ctx);
+            return ExecuteKeyring(ctx, includeRecovery: !args.Contains("--no-recovery"));
 
         if (ctx.TestKey != null)
         {
@@ -210,8 +218,13 @@ public sealed class InitCommand : ICliCommand
     /// slot is additive. Under the default flow's derived key, there is no <c>K_v</c> to hand to
     /// another machine at all; a second machine could only ever be added by re-deriving a
     /// completely different master key from scratch (i.e. re-init, losing the old vault).</para>
+    ///
+    /// <para><b>Issue #120:</b> <paramref name="includeRecovery"/> (default-on; <c>--no-recovery</c>
+    /// opts out) additionally generates a break-glass recovery slot — see
+    /// <see cref="BuildKeyringConfig"/> and <c>MULTI_MACHINE_KEYING.md</c> §The recovery slot.
+    /// </para>
     /// </summary>
-    private static int ExecuteKeyring(CommandContext ctx)
+    private static int ExecuteKeyring(CommandContext ctx, bool includeRecovery)
     {
         var c = ctx.Console;
 
@@ -223,14 +236,15 @@ public sealed class InitCommand : ICliCommand
             // set (see that method's first line) — so wrapping the slot payload under
             // ctx.TestKey now is what makes VaultUnlocker's keyring unwrap succeed later, in
             // test mode, without ever touching real hardware.
-            var (testConfig, testVaultKey) = BuildKeyringConfig(
+            var (testConfig, testVaultKey, testRecoveryPrivateKey) = BuildKeyringConfig(
                 ctx.TestKey,
                 new List<int> { TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2 },
                 new string('0', 40), // 20-byte zero XOR share (hex) — unused in test mode
                 requiresTouch: null,
                 RngMode.System,
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
-                RandomNumberGenerator.GetBytes(32));
+                RandomNumberGenerator.GetBytes(32),
+                includeRecovery);
 
             ctx.Storage.SaveConfig(testConfig);
             // Unlike the default test-mode branch, K_v is freshly random on every call (it is
@@ -238,6 +252,7 @@ public sealed class InitCommand : ICliCommand
             // would be undecryptable with this run's key — always write a fresh empty vault.
             ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), testVaultKey);
             c.Out.WriteLine("Initialized (keyring, test mode)");
+            PrintRecoveryKeyBackupWarning(c, testRecoveryPrivateKey);
             return 0;
         }
 
@@ -282,7 +297,7 @@ public sealed class InitCommand : ICliCommand
         var xorShare = Crypto.XorBytes(k1, k2);
         var masterKeySalt = RandomNumberGenerator.GetBytes(32);
 
-        var (config, vaultKey) = BuildKeyringConfig(
+        var (config, vaultKey, recoveryPrivateKey) = BuildKeyringConfig(
             // KEK_slot: exactly the value the default flow above uses as K_v directly
             // (Crypto.DeriveKey(k1, k2, salt)) — here it instead unwraps a random K_v. This is
             // also exactly what YubiKeyHardwareService.Unlock recomputes later from the Config
@@ -293,7 +308,8 @@ public sealed class InitCommand : ICliCommand
             requiresTouch,
             rngMode,
             unlockChallenge,
-            masterKeySalt);
+            masterKeySalt,
+            includeRecovery);
 
         // Same re-init backup dance as the default flow: back up config first (if anything
         // fails mid-init the old config still matches the old vault backup), then move the old
@@ -322,7 +338,9 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"YubiKey Serials: {serial1}, {serial2}");
-        c.Out.WriteLine("Backend: YubiKey keyring (k = 1, single slot)");
+        c.Out.WriteLine(includeRecovery
+            ? "Backend: YubiKey keyring (k = 1, 2 slots: machine + recovery)"
+            : "Backend: YubiKey keyring (k = 1, 1 slot: machine only)");
 
         if (requiresTouch == true)
         {
@@ -351,6 +369,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("  [ ] Printed copy (home safe)");
         c.Out.WriteLine("  [ ] Second printed copy (off-site)");
         c.Out.WriteLine("  [ ] Git repository");
+        PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey);
         if (fileStore != null)
             c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
         else
@@ -359,12 +378,43 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// Shared by both the interactive and test-mode <c>--keyring</c> paths (issue #119):
-    /// generates a random <c>K_v</c> and this machine's X25519 slot keypair
+    /// Displays the recovery slot's private key exactly once (issue #120) — same custody model
+    /// as the XOR share block above: tswap never persists this value anywhere (that is the one
+    /// hard security invariant of the whole feature), so this call site is the only place it is
+    /// ever visible after generation. <paramref name="recoveryPrivateKey"/> is <c>null</c> when
+    /// <c>--no-recovery</c> was passed, in which case this prints a short "no recovery slot"
+    /// notice instead so the absence of a break-glass option isn't a silent surprise later.
+    /// </summary>
+    private static void PrintRecoveryKeyBackupWarning(IConsole c, byte[]? recoveryPrivateKey)
+    {
+        if (recoveryPrivateKey == null)
+        {
+            c.Out.WriteLine("\nNo recovery slot generated (--no-recovery): losing every enrolled");
+            c.Out.WriteLine("YubiKey means total, unrecoverable vault loss — there is no break-glass option.");
+            return;
+        }
+
+        c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW\n");
+        c.Out.WriteLine("This is a break-glass credential for total hardware loss (every enrolled");
+        c.Out.WriteLine("YubiKey lost or destroyed). tswap never stores it anywhere — display here is");
+        c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
+        c.Out.WriteLine("option is gone for good; your normal YubiKey unlock is unaffected either way.");
+        c.Out.WriteLine("\nRecovery Private Key (base64):");
+        c.Out.WriteLine(Convert.ToBase64String(recoveryPrivateKey));
+        c.Out.WriteLine("\nBackup locations required:");
+        c.Out.WriteLine("  [ ] Password manager (Bitwarden/1Password)");
+        c.Out.WriteLine("  [ ] Printed copy (home safe)");
+        c.Out.WriteLine("  [ ] Second printed copy (off-site)");
+        c.Out.WriteLine("  [ ] Git repository");
+    }
+
+    /// <summary>
+    /// Shared by both the interactive and test-mode <c>--keyring</c> paths (issue #119, extended
+    /// by #120): generates a random <c>K_v</c> and this machine's X25519 slot keypair
     /// (<see cref="SlotKeyPair.Generate"/>), wraps <c>(K_v || slot private key)</c>
     /// (<see cref="SlotSecretPayload.Encode"/>) under <paramref name="kekSlot"/> via
-    /// <see cref="SlotPayloadWrap.Wrap"/>, and assembles the resulting single-slot,
-    /// <c>k = 1</c> <see cref="Keyring"/> plus the <see cref="Config"/> that carries it.
+    /// <see cref="SlotPayloadWrap.Wrap"/>, and assembles the resulting <c>k = 1</c>
+    /// <see cref="Keyring"/> plus the <see cref="Config"/> that carries it.
     ///
     /// <para>The returned <see cref="Config"/> still carries the same
     /// <c>YubiKeySerials</c>/<c>RedundancyXor</c>/<c>UnlockChallenge</c>/<c>MasterKeySalt</c>
@@ -373,10 +423,22 @@ public sealed class InitCommand : ICliCommand
     /// Only <see cref="Config.Keyring"/> being non-null tells <see cref="VaultUnlocker"/> to
     /// treat that recovered value as <c>KEK_slot</c> and unwrap <c>K_v</c>, instead of using it
     /// as the master key directly.</para>
+    ///
+    /// <para><b>Issue #120:</b> when <paramref name="includeRecovery"/> is <c>true</c> (the
+    /// default at the CLI layer; <c>--no-recovery</c> passes <c>false</c>), also generates a
+    /// fresh recovery keypair (<see cref="SlotKeyPair.Generate"/>) and appends a
+    /// <see cref="SlotKind.Recovery"/> slot wrapping the same <c>vaultKey</c> via
+    /// <see cref="RecoverySlotWrap.Wrap"/> — see that type's doc comment for the wrap mechanics
+    /// and this issue's PR body for the payload-shape/discriminator/storage judgement calls. The
+    /// recovery private key is returned (never included in <see cref="Config"/>, never written
+    /// anywhere by this method) so the caller can display it exactly once — <c>internal</c>
+    /// rather than <c>private</c> specifically so tests can also drive this method directly to
+    /// prove the recovery slot round-trips to the same <c>K_v</c> the machine slot does, without
+    /// needing to scrape it back out of CLI console output.</para>
     /// </summary>
-    private static (Config Config, byte[] VaultKey) BuildKeyringConfig(
+    internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) BuildKeyringConfig(
         byte[] kekSlot, List<int> serials, string redundancyXorHex, bool? requiresTouch,
-        RngMode rngMode, string unlockChallenge, byte[] masterKeySalt)
+        RngMode rngMode, string unlockChallenge, byte[] masterKeySalt, bool includeRecovery = true)
     {
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var slotKeyPair = SlotKeyPair.Generate();
@@ -386,9 +448,21 @@ public sealed class InitCommand : ICliCommand
 
         var payload = SlotSecretPayload.Encode(vaultKey, slotKeyPair.PrivateKey);
         var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersion, vaultId, k, slotId);
+        var machineSlot = new Slot(slotId, slotKeyPair.PublicKey, wrapped);
 
-        var slot = new Slot(slotId, slotKeyPair.PublicKey, wrapped);
-        var keyring = new TswapCore.Keyring.Keyring(KeyringFormat.KeyringFormatVersion, vaultId, k, [slot]);
+        var slots = new List<Slot> { machineSlot };
+        byte[]? recoveryPrivateKey = null;
+        if (includeRecovery)
+        {
+            var recoveryKeyPair = SlotKeyPair.Generate();
+            var recoverySlotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+            var (ephemeralPublicKey, recoveryWrapped) = RecoverySlotWrap.Wrap(
+                vaultKey, recoveryKeyPair.PublicKey, KeyringFormat.KeyringFormatVersion, vaultId, k, recoverySlotId);
+            slots.Add(new Slot(recoverySlotId, ephemeralPublicKey, recoveryWrapped, SlotKind.Recovery));
+            recoveryPrivateKey = recoveryKeyPair.PrivateKey;
+        }
+
+        var keyring = new TswapCore.Keyring.Keyring(KeyringFormat.KeyringFormatVersion, vaultId, k, slots);
         var keyringBlob = Convert.ToBase64String(KeyringCodec.Encode(keyring));
 
         var config = new Config(
@@ -402,7 +476,7 @@ public sealed class InitCommand : ICliCommand
             Keyring: keyringBlob
         );
 
-        return (config, vaultKey);
+        return (config, vaultKey, recoveryPrivateKey);
     }
 
     /// <summary>

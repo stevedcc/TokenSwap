@@ -4,6 +4,7 @@ using System.Text.Json;
 using TswapCli;
 using TswapCli.Commands;
 using TswapCore;
+using TswapCore.Keyring;
 using TswapCore.Vault;
 using Xunit;
 
@@ -153,6 +154,146 @@ public class CommandTests : IDisposable
         var (getExit, _, getStderr) = RunTswap("get", "first-secret");
         Assert.NotEqual(0, getExit);
         Assert.Contains("not found", getStderr);
+    }
+
+    // --- Init --keyring recovery slot (Phase 6, issue #120) ---
+
+    [Fact]
+    public void InitKeyring_DefaultOn_GeneratesRecoverySlotAndDisplaysPrivateKeyOnce()
+    {
+        var (exit, stdout, _) = RunTswap("init", "--keyring");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", stdout);
+        Assert.Contains("Recovery Private Key (base64):", stdout);
+
+        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
+        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+
+        Assert.Equal(2, keyring.Slots.Count);
+        Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Machine);
+        Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Recovery);
+    }
+
+    [Fact]
+    public void InitKeyring_NoRecovery_SkipsRecoverySlotAndDoesNotDisplayAKey()
+    {
+        var (exit, stdout, _) = RunTswap("init", "--keyring", "--no-recovery");
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("Recovery Private Key", stdout);
+        Assert.Contains("No recovery slot generated", stdout);
+
+        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
+        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+
+        Assert.Single(keyring.Slots);
+        Assert.Equal(SlotKind.Machine, keyring.Slots[0].Kind);
+    }
+
+    [Fact]
+    public void InitKeyring_NoRecovery_VaultStillFullyUsable()
+    {
+        // --no-recovery must only remove the recovery slot, not otherwise change vault behavior.
+        RunTswap("init", "--keyring", "--no-recovery");
+        RunTswapWithStdin("hunter2\nhunter2\n", "add", "my-secret");
+
+        var (getExit, getStdout, _) = RunTswap("get", "my-secret");
+
+        Assert.Equal(0, getExit);
+        Assert.Contains("hunter2", getStdout);
+    }
+
+    [Fact]
+    public void Init_NoRecoveryWithoutKeyring_RejectsAsUsageError()
+    {
+        var (exit, _, stderr) = RunTswap("init", "--no-recovery");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Usage:", stderr);
+    }
+
+    [Fact]
+    public void BuildKeyringConfig_RecoveryPrivateKey_RecoversSameVaultKeyAsMachineSlot()
+    {
+        // The real verification bar for #120: generate exactly the way ExecuteKeyring does
+        // (BuildKeyringConfig is internal specifically so this test can drive it directly, per
+        // the issue's "expose it from your init logic for testing purposes" instruction), then
+        // prove the recovery private key recovers the identical K_v the machine slot's KEK_slot
+        // recovers — not just that a keypair was generated with no way to ever use it.
+        var kekSlot = RandomNumberGenerator.GetBytes(32);
+        var (config, vaultKey, recoveryPrivateKey) = InitCommand.BuildKeyringConfig(
+            kekSlot,
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: null,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: true);
+
+        Assert.NotNull(recoveryPrivateKey);
+
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+
+        var machineSlot = Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Machine);
+        var machinePayload = SlotPayloadWrap.Unwrap(
+            machineSlot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, machineSlot.SlotId);
+        var (machineVaultKey, _) = SlotSecretPayload.Decode(machinePayload);
+
+        var recoverySlot = Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Recovery);
+        var recoveredVaultKey = RecoverySlotWrap.Unwrap(
+            recoverySlot.Wrapped, recoverySlot.PublicKey, recoveryPrivateKey!,
+            keyring.FormatVersion, keyring.VaultId, keyring.K, recoverySlot.SlotId);
+
+        Assert.Equal(vaultKey, machineVaultKey);
+        Assert.Equal(vaultKey, recoveredVaultKey);
+    }
+
+    [Fact]
+    public void BuildKeyringConfig_NoRecovery_ReturnsNullPrivateKeyAndSingleSlotKeyring()
+    {
+        var kekSlot = RandomNumberGenerator.GetBytes(32);
+        var (config, _, recoveryPrivateKey) = InitCommand.BuildKeyringConfig(
+            kekSlot,
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: null,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false);
+
+        Assert.Null(recoveryPrivateKey);
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+        Assert.Single(keyring.Slots);
+        Assert.Equal(SlotKind.Machine, keyring.Slots[0].Kind);
+    }
+
+    [Fact]
+    public void BuildKeyringConfig_RecoverySlot_WrongPrivateKeyFailsCleanly()
+    {
+        var kekSlot = RandomNumberGenerator.GetBytes(32);
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            kekSlot,
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: null,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: true);
+
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+        var recoverySlot = Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Recovery);
+        var wrongPrivateKey = SlotKeyPair.Generate().PrivateKey;
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            recoverySlot.Wrapped, recoverySlot.PublicKey, wrongPrivateKey,
+            keyring.FormatVersion, keyring.VaultId, keyring.K, recoverySlot.SlotId));
+        Assert.Contains("authentication", ex.Message);
     }
 
     // --- Create ---

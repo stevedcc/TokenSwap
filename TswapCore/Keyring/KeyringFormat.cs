@@ -77,8 +77,22 @@ public static class KeyringFormat
     /// Deliberately a separate constant from <see cref="RecordFormatVersion"/>: that one
     /// versions the per-secret record envelope (issues #111-#115), a completely different wire
     /// format this issue does not touch — bumping one must never accidentally bump the other.
+    ///
+    /// <para><b>Bumped 1 -> 2 (issue #120).</b> Issue #120 appends a per-slot <c>kind</c> byte
+    /// to <see cref="KeyringCodec"/>'s slot layout (see that type's "kind (issue #120)" doc
+    /// section). That change is additive at the <em>type</em> level — <see cref="Slot"/>'s
+    /// <c>Kind</c> field has a default, so existing 3-argument <c>Slot(...)</c> call sites keep
+    /// compiling — but it is <em>not</em> additive at the serialized-<em>byte</em> level: every
+    /// slot, including one that only ever used #119's original fields, now has one extra
+    /// trailing byte it did not have before. A reader built against #119's original layout
+    /// (pre-#120) would misinterpret or truncate-fail on #120-shaped bytes, and vice versa, so
+    /// this is a breaking wire-format change requiring a version bump like any other, not merely
+    /// an additive one that could keep version 1. <see cref="KeyringCodec.Decode"/> checks this
+    /// constant explicitly (mirroring <see cref="SecretRecordCodec.Decode"/>'s existing
+    /// <c>formatVersion</c> check) so a future format change is never silently misread again.
+    /// </para>
     /// </summary>
-    public const byte KeyringFormatVersion = 1;
+    public const byte KeyringFormatVersion = 2;
 
     /// <summary>
     /// Byte length of the vault master key <c>K_v</c> — 256 bits, the same size as
