@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using TswapCore;
+using TswapCore.Keyring;
 using TswapCore.Vault;
 using Xunit;
 
@@ -280,5 +281,137 @@ public class VaultUnlockerTests
         var ex = Assert.Throws<ArgumentException>(
             () => new VaultUnlocker(yubi, additionalBackends: [first, second]));
         Assert.Contains("Duplicate", ex.Message);
+    }
+
+    // --- Phase 6 keyring vault (issue #119) ---
+
+    /// <summary>
+    /// Builds a single-slot, k = 1 keyring vault exactly the way <c>InitCommand</c>'s
+    /// <c>--keyring</c> path does: KEK_slot recovered via the ordinary YubiKey challenge/XOR
+    /// dance (no <see cref="Crypto.DeriveKey"/> step — that value <b>is</b> KEK_slot here, not
+    /// the master key), a fresh slot X25519 keypair, K_v and the slot private key concatenated
+    /// via <see cref="SlotSecretPayload"/> and wrapped via <see cref="SlotPayloadWrap"/>.
+    /// </summary>
+    private static (FakeYubiKeys Yubi, Config Config, byte[] VaultKey) MakeKeyringVault()
+    {
+        var k1 = RandomNumberGenerator.GetBytes(20);
+        var k2 = RandomNumberGenerator.GetBytes(20);
+        var masterKeySalt = RandomNumberGenerator.GetBytes(32);
+        var kekSlot = Crypto.DeriveKey(k1, k2, masterKeySalt);
+
+        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        var slotKeyPair = SlotKeyPair.Generate();
+        var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+
+        var payload = SlotSecretPayload.Encode(vaultKey, slotKeyPair.PrivateKey);
+        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersion, vaultId, k: 1, slotId);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, K: 1,
+            [new Slot(slotId, slotKeyPair.PublicKey, wrapped)]);
+
+        var config = new Config(
+            [11111111, 22222222],
+            Convert.ToHexString(Crypto.XorBytes(k1, k2)),
+            DateTime.UtcNow,
+            UnlockChallenge: "aabbcc",
+            MasterKeySalt: Convert.ToBase64String(masterKeySalt),
+            Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)));
+
+        var yubi = new FakeYubiKeys { Responses = { [11111111] = k1, [22222222] = k2 } };
+        return (yubi, config, vaultKey);
+    }
+
+    [Fact]
+    public void Unlock_KeyringVault_RecoversOriginalVaultKey()
+    {
+        var (yubi, config, vaultKey) = MakeKeyringVault();
+        yubi.Connected = [11111111];
+
+        var unlocked = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+
+        Assert.Equal(vaultKey, unlocked);
+    }
+
+    [Fact]
+    public void Unlock_KeyringVault_EitherEnrolledYubiKeyRecoversSameVaultKey()
+    {
+        // The YubiKey pair's own 1-of-2 redundancy still applies one layer down: either key
+        // reconstructs KEK_slot via the XOR share, which then unwraps the identical K_v.
+        var (yubi, config, vaultKey) = MakeKeyringVault();
+
+        yubi.Connected = [11111111];
+        var viaFirst = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+
+        yubi.Connected = [22222222];
+        var viaSecond = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+
+        Assert.Equal(vaultKey, viaFirst);
+        Assert.Equal(vaultKey, viaSecond);
+    }
+
+    [Fact]
+    public void Unlock_LegacyVaultWithoutKeyringField_IsByteForByteUnaffected()
+    {
+        // The hard requirement from issue #119: every vault that predates the keyring field
+        // (Config.Keyring == null) must keep unlocking exactly as before — no extra unwrap step.
+        var (yubi, config, k1, k2) = MakeVault();
+        yubi.Connected = [11111111];
+        Assert.Null(config.Keyring);
+
+        var key = new VaultUnlocker(yubi).Unlock(config, NoSelection);
+
+        Assert.Equal(Crypto.DeriveKey(k1, k2), key);
+    }
+
+    [Fact]
+    public void Unlock_KeyringNotValidBase64_ThrowsClearTswapException()
+    {
+        var (yubi, config, _) = MakeKeyringVault();
+        yubi.Connected = [11111111];
+        var corrupted = config with { Keyring = "not-valid-base64!!!" };
+
+        var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
+        Assert.Contains("not valid base64", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_KeyringBinaryTooShort_ThrowsClearTswapException()
+    {
+        var (yubi, config, _) = MakeKeyringVault();
+        yubi.Connected = [11111111];
+        var corrupted = config with { Keyring = Convert.ToBase64String(new byte[5]) };
+
+        var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
+        Assert.Contains("Malformed keyring", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_KeyringWithNoSlots_ThrowsClearTswapException()
+    {
+        var (yubi, config, _) = MakeKeyringVault();
+        yubi.Connected = [11111111];
+        var emptyKeyring = new Keyring(KeyringFormat.KeyringFormatVersion,
+            RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize), K: 1, []);
+        var corrupted = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(emptyKeyring)) };
+
+        var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
+        Assert.Contains("no slots", ex.Message);
+    }
+
+    [Fact]
+    public void Unlock_KeyringSlotWrappedUnderDifferentKekSlot_FailsAuthenticationCleanly()
+    {
+        // Simulates a config.json hand-edited to point at the wrong YubiKey pair's keyring
+        // entry (or a bit-flip in the wrapped bytes): must surface as a clean TswapException
+        // from the AEAD layer, not a raw crash.
+        var (yubi, config, _) = MakeKeyringVault();
+        yubi.Connected = [11111111];
+
+        var keyringBytes = Convert.FromBase64String(config.Keyring!);
+        keyringBytes[^1] ^= 0xFF; // flip a byte inside the wrapped slot payload
+        var corrupted = config with { Keyring = Convert.ToBase64String(keyringBytes) };
+
+        var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
+        Assert.Contains("authentication", ex.Message);
     }
 }

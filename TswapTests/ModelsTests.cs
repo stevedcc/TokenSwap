@@ -155,6 +155,45 @@ public class ModelsTests
     }
 
     [Fact]
+    public void Config_NullKeyring_IsOmittedFromJson()
+    {
+        // Same backward-compat guarantee as TpmSealedKey/SecureEnclaveWrappedKey/MasterKeySalt:
+        // a vault that hasn't opted into the Phase 6 keyring format (issue #119) must serialize
+        // with no Keyring field at all, so every existing config.json stays byte-for-byte
+        // unchanged.
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.DoesNotContain("Keyring", json);
+        Assert.Null(config.Keyring);
+    }
+
+    [Fact]
+    public void Config_Keyring_RoundTrips()
+    {
+        var config = new Config([1, 2], "aabb", DateTime.UtcNow, Keyring: "a2V5cmluZ2Jsb2I=");
+        var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
+        Assert.Contains("\"Keyring\": \"a2V5cmluZ2Jsb2I=\"", json);
+        Assert.Equal("a2V5cmluZ2Jsb2I=", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.Keyring);
+    }
+
+    [Fact]
+    public void Config_LegacyJsonWithoutKeyring_DeserializesAsNull()
+    {
+        // A config from before this field existed (every vault today) has no Keyring key; it
+        // must load with Keyring == null, which VaultUnlocker treats as "not a keyring vault —
+        // use the recovered 32 bytes as the master key directly, unchanged".
+        const string legacy = """
+            {
+              "YubiKeySerials": [11111111, 22222222],
+              "RedundancyXor": "00ff",
+              "Created": "2024-05-01T00:00:00Z"
+            }
+            """;
+        var config = JsonSerializer.Deserialize(legacy, TswapJsonContext.Default.Config)!;
+        Assert.Null(config.Keyring);
+    }
+
+    [Fact]
     public void ExportFile_V1VersionTag_Unchanged()
     {
         // The v1 tag and its (Kdf-less) shape must never change — every export file ever

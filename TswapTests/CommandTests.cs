@@ -93,6 +93,68 @@ public class CommandTests : IDisposable
         Assert.Contains("Usage:", stderr);
     }
 
+    [Fact]
+    public void Init_KeyringAndTpmBothPassed_RejectsAsUsageError()
+    {
+        var (exit, _, stderr) = RunTswap("init", "--keyring", "--tpm");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Usage:", stderr);
+    }
+
+    // --- Init --keyring (Phase 6, issue #119) ---
+
+    [Fact]
+    public void InitKeyring_CreatesConfigWithKeyringFieldAndNoBackend()
+    {
+        var (exit, stdout, _) = RunTswap("init", "--keyring");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("keyring", stdout);
+
+        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
+        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+
+        Assert.NotNull(config.Keyring);
+        // Still a YubiKey vault as far as VaultUnlocker's backend dispatch is concerned —
+        // only the presence of Keyring changes how the recovered 32 bytes are used.
+        Assert.Null(config.Backend);
+        Assert.Equal(new List<int> { 99999999, 99999998 }, config.YubiKeySerials);
+    }
+
+    [Fact]
+    public void InitKeyring_FullRoundTrip_AddThenGetRecoversValue()
+    {
+        // The end-to-end proof this issue's verification bar asks for: init --keyring, add a
+        // secret, get it back — through the real CLI dispatch path, not just unit-level pieces.
+        RunTswap("init", "--keyring");
+
+        var (addExit, _, _) = RunTswapWithStdin("hunter2\nhunter2\n", "add", "my-secret");
+        Assert.Equal(0, addExit);
+
+        var (getExit, getStdout, _) = RunTswap("get", "my-secret");
+
+        Assert.Equal(0, getExit);
+        Assert.Contains("hunter2", getStdout);
+    }
+
+    [Fact]
+    public void InitKeyring_Reinit_GeneratesFreshVaultKey_OldSecretNoLongerAccessible()
+    {
+        // Every 'init --keyring' generates a brand-new random K_v (unlike the default flow,
+        // where re-init with the same test key would still decrypt an old vault under some
+        // circumstances) — reinitializing must leave the old secret behind, not silently expose
+        // or destroy data without the documented backup-file dance.
+        RunTswap("init", "--keyring");
+        RunTswapWithStdin("first-value\nfirst-value\n", "add", "first-secret");
+
+        RunTswapWithStdin("yes", "init", "--keyring");
+
+        var (getExit, _, getStderr) = RunTswap("get", "first-secret");
+        Assert.NotEqual(0, getExit);
+        Assert.Contains("not found", getStderr);
+    }
+
     // --- Create ---
 
     [Fact]
