@@ -68,12 +68,16 @@ Every element of the model is visible in that one example:
   does nothing about what the agent is handed. Two different jobs (see §Where the hardware fits).
 - **It was an ops task, not a dev one.** Certificate authorities, mutual TLS, a self-hosted service.
 
-It also shows where the leak enters: **an external tool generated the credential**. `create` already
-covers the case where tswap generates it — the agent asks for a secret by name, never sees the
-value, and refers to it by label thereafter. What redaction cannot save is a value tswap does not
-yet know about, printed by a tool the agent was driving. Provisioning work should therefore be
-inverted wherever possible: `create` first, then hand the value to the tool (which for most ops
-tooling means a file path — see #165), rather than letting the tool generate and print it.
+It also shows where the leak enters, and the answer is narrower than it first appears. Both normal
+provisioning paths are already closed: `create` when tswap generates the credential, and
+`<source> | tswap ingest <name>` when an external tool does. Neither displays the value.
+
+What remains is the case this incident actually hit: **a tool that prints the credential amid other
+output**, as `step-ca` does. It cannot be piped straight into `ingest`, and extracting it means
+something reads the surrounding text — which, if that something is the agent, is the leak. The
+mitigations are ordering rather than filtering: `create` first and hand the value *to* the tool
+(which for most ops tooling means a file path — see #165), or capture cleanly into `ingest` where
+the tool can be made to emit only the secret.
 
 ## What tswap guarantees
 
@@ -82,8 +86,15 @@ tooling means a file path — see #165), rather than letting the tool generate a
 It never enters the agent's context, logs, or output — so it cannot be retained, reused, quoted
 back, or shipped to a model provider.
 
-The mechanisms:
+The mechanisms — note that these cover getting secrets *in* as well as using them, which is half the
+problem and easy to overlook:
 
+- `create` — generates a secret inside the vault and displays nothing. The agent asks for a
+  credential by name and refers to it by label thereafter, never seeing the value. Non-sudo, so
+  this is a normal part of an agent's workflow rather than an escape hatch.
+- `ingest` — takes a value from piped stdin, stores it, displays nothing. This is the capture path
+  for a credential an *external* tool generated: `<source> | tswap ingest <name>` keeps the value
+  out of the agent's view even though tswap did not create it.
 - `{{token}}` substitution via `run` — the agent composes commands referring to secrets by name,
   and never handles the value.
 - Output redaction — a subprocess that prints a secret has it filtered before the agent sees it.
