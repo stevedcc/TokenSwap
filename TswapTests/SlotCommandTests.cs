@@ -351,4 +351,83 @@ public class SlotCommandTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains("Usage:", stderr);
     }
+
+    // --- Sudo enforcement (security fix: 'slot approve' must require sudo) ---
+    //
+    // Every 'Run(...)' helper above hardcodes SudoBypass: true (like the rest of this codebase's
+    // command tests), so it cannot exercise real sudo enforcement. These two tests build a
+    // CommandContext directly with SudoBypass: false instead — there is no existing precedent for
+    // that in this codebase, so this is deliberately minimal and mirrors RequireSudo's own shape.
+    //
+    // This asserts against the *real* CommandContext.RequireSudo, which falls through to
+    // Environment.IsPrivilegedProcess — there is no test seam around that BCL property, so these
+    // tests only exercise genuine enforcement when the test process itself is unprivileged (true
+    // for this repo's CI, which runs on ordinary GitHub-hosted runners, not root containers, and
+    // for an ordinary developer/agent shell). If a test runner is ever itself privileged, both
+    // tests self-skip rather than pass or fail meaninglessly.
+
+    private static (int exitCode, string stdout, string stderr) RunWithoutSudoBypass(
+        string dir, byte[] testKey, string stdin, params string[] args)
+    {
+        var console = new FakeConsole(stdin);
+        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
+        var storage = new Storage(dir);
+        var yubiKeys = new TestKeyYubiKeyService(testKey);
+        var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
+        var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, SudoBypass: false);
+
+        var exit = CliRunner.Run(ctx, args);
+        return (exit, console.OutText, console.ErrorText);
+    }
+
+    [Fact]
+    public void Approve_WithoutSudo_FailsBeforeEvenReadingTheRequestFile()
+    {
+        if (Environment.IsPrivilegedProcess)
+            return; // see file header note: only meaningful when this process is unprivileged.
+
+        var dirA = NewTempDir();
+        Run(dirA, _keyA, "", "init", "--keyring"); // a real, existing vault to (not) unlock
+
+        // Deliberately a request file that doesn't exist: if RequireSudo ran *after* the
+        // file-existence check (or not at all, as in the pre-fix bug), this would instead fail
+        // with "Slot request file not found" — proving the sudo check fires first, not just
+        // eventually, is the whole point of this test.
+        var missingRequestFile = Path.Combine(dirA, "does-not-exist-request.json");
+        var apprFile = Path.Combine(dirA, "approve.json");
+
+        var (exit, _, stderr) = RunWithoutSudoBypass(dirA, _keyA, "", "slot", "approve", missingRequestFile, apprFile);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("slot approve", stderr);
+        Assert.Contains("requires", stderr);
+        Assert.DoesNotContain("not found", stderr);
+        Assert.False(File.Exists(apprFile));
+    }
+
+    [Fact]
+    public void Approve_WithoutSudo_ProducesNoVaultDecryptingArtifactEvenForALegitimateRequest()
+    {
+        if (Environment.IsPrivilegedProcess)
+            return; // see file header note: only meaningful when this process is unprivileged.
+
+        // This is the actual vulnerability from the security review, reproduced directly: given a
+        // perfectly well-formed request file and an already-enrolled vault, an unprivileged
+        // process must not be able to walk away with a vault-decrypting approve file. Before the
+        // fix, this entire round trip succeeded with exit 0 and wrote apprFile.
+        var dirA = NewTempDir();
+        var dirB = NewTempDir();
+
+        Run(dirA, _keyA, "", "init", "--keyring");
+        var reqFile = Path.Combine(dirB, "request.json");
+        Run(dirB, _keyB, "", "slot", "request", reqFile); // fine: request never touches an existing vault
+
+        var apprFile = Path.Combine(dirA, "approve.json");
+        var (exit, _, stderr) = RunWithoutSudoBypass(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("slot approve", stderr);
+        Assert.Contains("requires", stderr);
+        Assert.False(File.Exists(apprFile));
+    }
 }

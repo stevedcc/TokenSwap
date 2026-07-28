@@ -21,21 +21,41 @@ namespace TswapCli.Commands;
 /// which is the same shape this type follows, keyed on a subcommand word
 /// (<c>request</c>/<c>approve</c>/<c>accept</c>) instead of a flag.</para>
 ///
-/// <para><b>Non-sudo (judgement call, mirrors <c>init</c>).</b> None of these three subcommands
-/// expose a stored secret's *value* — the thing <c>RequiresSudo</c> gates elsewhere in this
-/// codebase (see AGENTS.md's privilege-boundary section). <c>slot request</c>/<c>accept</c> run on
-/// a machine with no vault yet; <c>slot approve</c> unlocks the vault the same way non-sudo
-/// commands like <c>create</c>/<c>run</c> already do, and its output file carries a wrapped
-/// <c>K_v</c>, not any named secret's plaintext — the same category of sensitive-but-not-a-value
-/// material <c>init --keyring</c> already prints to stdout in the clear (the XOR share, the
-/// recovery private key) without requiring sudo.</para>
+/// <para><b><c>approve</c> is sudo-gated; <c>request</c>/<c>accept</c> are not (corrected after
+/// security review).</b> The original judgement call here reasoned that <c>slot approve</c>'s
+/// output carries a wrapped <c>K_v</c>, not any named secret's plaintext, and so didn't need
+/// sudo — that was wrong: unlike <c>init --keyring</c>'s XOR share/recovery private key (which are
+/// only ever useful together with hardware nobody but this machine's operator possesses),
+/// <c>approve</c>'s output file, given only an attacker-suppliable request file, is a
+/// self-contained artifact that decrypts the *existing* vault's <c>K_v</c> for whoever holds the
+/// matching private key — exactly the same sensitivity class as <see cref="ExportCommand"/>, which
+/// is <c>RequiresSudo</c> for precisely this reason. <c>slot approve</c> therefore calls
+/// <c>ctx.RequireSudo("slot approve")</c> as the first thing it does, before reading the request
+/// file or unlocking anything. <c>slot request</c>/<c>accept</c> remain non-sudo: they run on a
+/// machine with no existing usable vault (mirroring <c>init</c>) and never touch an *existing*
+/// vault's secrets — see <see cref="RequiresSudo"/>'s doc comment for how that mixed reality maps
+/// onto this type's single <c>RequiresSudo</c> flag.</para>
 /// </summary>
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
     public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file>";
     public string Description => "Enroll a second machine into an existing --keyring vault via hand-carried files";
-    public bool RequiresSudo => false;
+
+    /// <summary>
+    /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
+    /// (security-review correction: <c>approve</c> unlocks an *existing* vault and produces a
+    /// vault-decrypting artifact — the same category export/get gate — while <c>request</c>/
+    /// <c>accept</c> genuinely don't touch an existing vault's secrets and would be fine as
+    /// non-sudo on their own). <see cref="ICliCommand.RequiresSudo"/> is a single per-command
+    /// flag with no "sometimes sudo" precedent in this codebase, and <see cref="CommandRegistry"/>
+    /// only ever reads it to bucket a command onto the help screen — so erring toward
+    /// <c>true</c> here costs nothing at runtime (the real enforcement is the
+    /// <c>ctx.RequireSudo("slot approve")</c> call inside <see cref="ExecuteApprove"/>) while
+    /// correctly flagging to humans and AI agents reading `--help`/AGENTS.md that `slot` touches
+    /// the sudo boundary, rather than under-representing it as fully agent-safe.
+    /// </summary>
+    public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {
@@ -219,6 +239,12 @@ public sealed class SlotCommand : ICliCommand
         var requestPath = args[0];
         var approvePath = args[1];
         var c = ctx.Console;
+
+        // Security-critical: this unlocks the *existing* vault and produces an artifact that
+        // decrypts K_v for whoever holds the private key matching the (attacker-suppliable)
+        // request file's public key — exactly export's threat model. Must run before anything
+        // else: reading the request file, unlocking, and writing output are all gated on this.
+        ctx.RequireSudo("slot approve");
 
         if (!File.Exists(requestPath))
             throw new TswapException($"Slot request file not found: {requestPath}");
