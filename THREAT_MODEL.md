@@ -157,6 +157,54 @@ general-purpose "make it more secure" instinct. Concretely, this is why an out-o
 prompt was rejected (see #164): it defends against an adversary this model does not have, at a cost
 the real use case cannot pay.
 
+## Why the blocklist stays shallow — permanently
+
+`README.md` §Design rationale states the blocklist is intentionally shallow rather than a sandbox.
+The formal reason is worth recording so this is not re-proposed every year:
+
+**Deciding whether an arbitrary command will leak a secret is undecidable.** This is Rice's
+theorem — every non-trivial semantic property of a program is undecidable, and "exfiltrates the
+value it was given" is exactly such a property. The halting problem is the familiar instance of the
+same result. No amount of shell parsing, argument analysis or syscall inspection reaches a general
+answer, because there isn't one.
+
+So any blocklist is necessarily a **syntactic approximation of a semantic property**, and will
+always have both false positives and false negatives. That is not a defect to engineer away; it is
+the shape of the problem.
+
+**The consequence is a different success metric.** The question to ask of the blocklist is not "can
+it be bypassed" — it can, always, trivially — but **"does it catch the mistakes a cooperative agent
+actually makes?"** Coverage of ordinary error, not resistance to a determined one.
+
+That is what makes #105 worth fixing and a deep analyser not worth building. `run -- bash -c
+'echo $X'` matters because *writing a small shell wrapper is a completely ordinary thing a helpful
+agent does* — it is a coverage gap in a heuristic, not a hole in a boundary. Chasing the general
+case is chasing an impossibility; closing the ordinary cases is finite, cheap, and exactly the job.
+
+### What actually scales for cooperative agents
+
+If the model is cooperation, the strongest controls are not restrictions:
+
+- **Clear instructions.** `tswap prompt`'s output is arguably this project's single most important
+  security artifact — more so than the blocklist. A cooperative agent does what it is told; telling
+  it well is the control. Keep it specific, worked-example-heavy, and current (`prompt-hash`).
+- **Make the safe path the easy path.** `create`, `ingest` and `{{token}}` substitution are all
+  *easier* than handling plaintext, which is why they get used. The corollary is sharp: **anywhere
+  the safe path is harder than the unsafe one is a real vulnerability under this model**, because a
+  helpful agent takes the path of least resistance while trying to do its job. That is the actual
+  argument for #165 — for a tool wanting `--password-file`, the safe route is currently harder than
+  writing the file, so a cooperative agent will write the file.
+- **Detect and remediate rather than prevent.** `burn`, `burned` and `check` accept that leaks
+  happen and make them visible and recoverable. Already well built, and the right investment.
+
+### The one honest wrinkle
+
+"Cooperative" is not a fixed property. A prompt-injected agent is a cooperative agent following
+someone else's instructions, and the defence against it is the same as the defence against a
+motivated one: there isn't one. This does not change the conclusion — it reinforces where the
+investment goes. Detection and rotation are the response, not deeper blocking, because deeper
+blocking is the thing Rice's theorem rules out.
+
 ## Where the hardware fits
 
 Hardware backing (YubiKey, Secure Enclave, TPM) is not what enforces the guarantee above — the
