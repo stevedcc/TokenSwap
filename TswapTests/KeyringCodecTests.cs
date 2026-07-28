@@ -21,7 +21,7 @@ public class KeyringCodecTests
     private static readonly byte[] Wrapped = Convert.FromHexString("aabbccdd");
 
     private static Keyring OneSlotKeyring() =>
-        new(FormatVersion: 1, VaultId, K: 1, Slots: [new Slot(SlotId, PublicKey, Wrapped)]);
+        new(FormatVersion: KeyringFormat.KeyringFormatVersion, VaultId, K: 1, Slots: [new Slot(SlotId, PublicKey, Wrapped)]);
 
     [Fact]
     public void Encode_MatchesGoldenBytesExactly()
@@ -32,10 +32,15 @@ public class KeyringCodecTests
         // called-out, intentional change to what #119 originally pinned, not a silent drift; see
         // this issue's PR body. OneSlotKeyring()'s 3-argument Slot(...) call defaults to
         // SlotKind.Machine (0x00), which is what the trailing byte below encodes.
+        //
+        // formatVersion is "02", not "01": #120's own follow-up fix bumped
+        // KeyringFormat.KeyringFormatVersion 1 -> 2, because the trailing `kind` byte is a
+        // breaking wire-format change (every existing slot's serialized shape changed), not a
+        // merely-additive one — see KeyringFormat.KeyringFormatVersion's doc comment.
         var bytes = KeyringCodec.Encode(OneSlotKeyring());
 
         const string expectedHex =
-            "01" +                                                                 // formatVersion
+            "02" +                                                                 // formatVersion
             "000102030405060708090a0b0c0d0e0f" +                                   // vaultId (16)
             "01" +                                                                 // k
             "01000000" +                                                           // slotCount = 1 (LE)
@@ -73,7 +78,7 @@ public class KeyringCodecTests
     [Fact]
     public void EncodeDecode_RoundTripsEmptyWrapped()
     {
-        var keyring = new Keyring(1, VaultId, 1, [new Slot(SlotId, PublicKey, [])]);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, [new Slot(SlotId, PublicKey, [])]);
 
         var decoded = KeyringCodec.Decode(KeyringCodec.Encode(keyring));
 
@@ -89,7 +94,7 @@ public class KeyringCodecTests
         // round-trips independently per slot, not just as a keyring-wide value.
         var slotId2 = Convert.FromHexString("303132333435363738393a3b3c3d3e3f");
         var publicKey2 = Convert.FromHexString("404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f");
-        var keyring = new Keyring(1, VaultId, 1,
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1,
             [new Slot(SlotId, PublicKey, Wrapped), new Slot(slotId2, publicKey2, [1, 2, 3], SlotKind.Recovery)]);
 
         var decoded = KeyringCodec.Decode(KeyringCodec.Encode(keyring));
@@ -105,7 +110,7 @@ public class KeyringCodecTests
     [Fact]
     public void Encode_WrongVaultIdLengthThrowsArgumentException()
     {
-        var keyring = new Keyring(1, new byte[4], 1, [new Slot(SlotId, PublicKey, Wrapped)]);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, new byte[4], 1, [new Slot(SlotId, PublicKey, Wrapped)]);
 
         Assert.Throws<ArgumentException>(() => KeyringCodec.Encode(keyring));
     }
@@ -113,7 +118,7 @@ public class KeyringCodecTests
     [Fact]
     public void Encode_WrongSlotIdLengthThrowsArgumentException()
     {
-        var keyring = new Keyring(1, VaultId, 1, [new Slot(new byte[4], PublicKey, Wrapped)]);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, [new Slot(new byte[4], PublicKey, Wrapped)]);
 
         Assert.Throws<ArgumentException>(() => KeyringCodec.Encode(keyring));
     }
@@ -121,7 +126,7 @@ public class KeyringCodecTests
     [Fact]
     public void Encode_WrongPublicKeyLengthThrowsArgumentException()
     {
-        var keyring = new Keyring(1, VaultId, 1, [new Slot(SlotId, new byte[4], Wrapped)]);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, [new Slot(SlotId, new byte[4], Wrapped)]);
 
         Assert.Throws<ArgumentException>(() => KeyringCodec.Encode(keyring));
     }
@@ -210,5 +215,72 @@ public class KeyringCodecTests
 
         var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(tampered));
         Assert.Contains("Malformed keyring", ex.Message);
+    }
+
+    [Fact]
+    public void Decode_MismatchedFormatVersionThrowsClearErrorNotTruncatedSlotKind()
+    {
+        // Regression test for the bug this commit fixes: byte-exact reproduction of what issue
+        // #119's original (pre-#120, already-merged in PR #147) KeyringCodec.Encode would have
+        // written for a real vault — same header/slot layout as OneSlotKeyring(), but
+        // formatVersion=1 (the pre-#120 value) and NO trailing per-slot `kind` byte (the #120
+        // addition). This is exactly what's already on disk for any vault created via the #119
+        // code.
+        //
+        // Before this fix, KeyringCodec.Decode never checked formatVersion at all, so feeding it
+        // this pre-#120 blob fell through to the subtraction-based bounds check for the missing
+        // trailing byte and threw "Malformed keyring: truncated slot kind" instead — a safe
+        // failure, but a misleading diagnostic: the real cause is a format-version mismatch, not
+        // truncation/corruption, and the fix is "re-run tswap init --keyring", not "restore
+        // config.json from backup" (which would not help, since the backup is in the same old,
+        // now-unreadable format). This test proves Decode now names the real cause instead.
+        var preIssue120Bytes = BuildPreIssue120Bytes(formatVersion: 1);
+
+        var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(preIssue120Bytes));
+
+        Assert.Contains("Unsupported keyring format version: 1", ex.Message);
+        Assert.DoesNotContain("truncated slot kind", ex.Message);
+    }
+
+    [Fact]
+    public void Decode_UnsupportedFormatVersionThrowsBeforeParsingAnySlot()
+    {
+        // Even a well-formed, fully current #120-shaped keyring (kind byte present, everything
+        // else valid) must still be rejected purely on formatVersion — proving the check runs
+        // unconditionally right after the header is read, not only as a side effect of slot
+        // parsing happening to fail later.
+        var bytes = KeyringCodec.Encode(OneSlotKeyring());
+        var tampered = (byte[])bytes.Clone();
+        tampered[0] = 99;
+
+        var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(tampered));
+
+        Assert.Contains("Unsupported keyring format version: 99", ex.Message);
+    }
+
+    /// <summary>
+    /// Builds bytes matching issue #119's original, pre-#120 <c>KeyringCodec.Encode</c> output
+    /// shape for a single machine slot: same header/slot fields as <see cref="OneSlotKeyring"/>,
+    /// but with the given <paramref name="formatVersion"/> and, deliberately, no trailing
+    /// per-slot <c>kind</c> byte — #120 added that byte, so bytes built this way pre-date it.
+    /// </summary>
+    private static byte[] BuildPreIssue120Bytes(byte formatVersion)
+    {
+        var bytes = new List<byte> { formatVersion };
+        bytes.AddRange(VaultId);
+        bytes.Add(1); // k
+        bytes.AddRange(LittleEndianUInt32(1)); // slotCount = 1
+        bytes.AddRange(SlotId);
+        bytes.AddRange(PublicKey);
+        bytes.AddRange(LittleEndianUInt32((uint)Wrapped.Length));
+        bytes.AddRange(Wrapped);
+        return bytes.ToArray();
+    }
+
+    private static byte[] LittleEndianUInt32(uint value)
+    {
+        var buffer = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(buffer, value);
+        return buffer;
     }
 }

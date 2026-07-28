@@ -172,13 +172,17 @@ public static class KeyringCodec
 
     /// <summary>
     /// Decodes a keyring previously produced by <see cref="Encode"/>. Throws
-    /// <see cref="TswapException"/> — never a raw slicing/index exception — for a truncated
-    /// header, a truncated slot header, or a length prefix (<c>slotCount</c> implied bytes, or
-    /// an individual slot's <c>wrappedLength</c>) that exceeds the data actually available.
-    /// Bounds checks are subtraction-based, not addition-based (<c>x > bytes.Length - offset</c>,
-    /// not <c>offset + x > bytes.Length</c>) — see <see cref="SecretRecordCodec.Decode"/>'s own
-    /// comment on why an addition-based check can overflow and silently pass for an
-    /// attacker-controlled length near <see cref="uint.MaxValue"/>.
+    /// <see cref="TswapException"/> — never a raw slicing/index exception — for an unsupported
+    /// <c>formatVersion</c> (checked immediately after the header's first byte is read, before
+    /// any slot is parsed — mirroring <see cref="SecretRecordCodec.Decode"/>'s own
+    /// <c>formatVersion</c> check, and added in issue #120's follow-up fix after that check was
+    /// found missing here), a truncated header, a truncated slot header, or a length prefix
+    /// (<c>slotCount</c> implied bytes, or an individual slot's <c>wrappedLength</c>) that
+    /// exceeds the data actually available. Bounds checks are subtraction-based, not
+    /// addition-based (<c>x > bytes.Length - offset</c>, not <c>offset + x > bytes.Length</c>) —
+    /// see <see cref="SecretRecordCodec.Decode"/>'s own comment on why an addition-based check
+    /// can overflow and silently pass for an attacker-controlled length near
+    /// <see cref="uint.MaxValue"/>.
     /// </summary>
     public static Keyring Decode(byte[] bytes)
     {
@@ -186,6 +190,9 @@ public static class KeyringCodec
             throw new TswapException("Malformed keyring: shorter than the header");
 
         var formatVersion = bytes[0];
+        if (formatVersion != KeyringFormat.KeyringFormatVersion)
+            throw new TswapException($"Unsupported keyring format version: {formatVersion}");
+
         var vaultId = bytes.AsSpan(1, KeyringFormat.VaultIdSize).ToArray();
         var k = bytes[1 + KeyringFormat.VaultIdSize];
         var slotCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(2 + KeyringFormat.VaultIdSize, 4));
