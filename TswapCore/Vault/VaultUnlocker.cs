@@ -63,13 +63,21 @@ public sealed class VaultUnlocker
     /// </param>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
-        var backend = config.Backend ?? HardwareBackend.YubiKey;
-        if (!_backends.TryGetValue(backend, out var service))
+        // Issue #121 pending-enrollment guard: a machine that has run 'slot request' but not yet
+        // 'slot accept' has real, working hardware fields (YubiKeySerials/RedundancyXor/etc.) but
+        // no finalized Keyring — its hardware-recovered bytes are a KEK_slot with nothing real to
+        // unwrap yet, not a usable vault key. Without this check that KEK_slot would silently be
+        // treated as the vault master key directly (the same code path a legacy non-keyring vault
+        // uses), letting a command write secrets under a key that 'slot accept' is about to make
+        // permanently unrecoverable once it recovers the *real* K_v from another machine's
+        // approve file and overwrites Config.Keyring. See Config.PendingSlotId's doc comment.
+        if (config.Keyring == null && config.PendingSlotId != null)
             throw new TswapException(
-                $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
-                "Use a build that includes it, or restore a vault created with a supported backend.");
+                "This machine has a pending 'slot request' enrollment that has not been completed yet. " +
+                "Run 'tswap slot accept <approve-file>' (using the approve file from an already-enrolled " +
+                "machine) before using this vault.");
 
-        var recovered = service.Unlock(config, chooseSerial);
+        var recovered = UnlockHardware(config, chooseSerial);
 
         // A keyring vault (issue #119, 'tswap init --keyring'): `recovered` is this machine's
         // slot key-encryption key (KEK_slot), not the vault master key directly — unwrap K_v
@@ -78,6 +86,26 @@ public sealed class VaultUnlocker
         // same extra unwrap step (see MULTI_MACHINE_KEYING.md §Two-layer slot wrap), so a future
         // second backend (v0 step 2) needs no change here at all.
         return config.Keyring == null ? recovered : UnlockKeyring(config, recovered);
+    }
+
+    /// <summary>
+    /// Recovers this machine's hardware-backed key material — <c>KEK_slot</c> for a keyring
+    /// vault, or the vault master key directly for a classic non-keyring vault — without
+    /// attempting any keyring unwrap and without the pending-enrollment guard <see cref="Unlock"/>
+    /// applies. Exposed publicly for <c>slot accept</c> (issue #121), which needs to recompute its
+    /// own <c>KEK_slot</c> from a still-pending config (<see cref="Config.Keyring"/> is still null
+    /// at that point by design — see <see cref="Config.PendingSlotId"/>) precisely in the
+    /// situation <see cref="Unlock"/> refuses to proceed for every other caller.
+    /// </summary>
+    public byte[] UnlockHardware(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    {
+        var backend = config.Backend ?? HardwareBackend.YubiKey;
+        if (!_backends.TryGetValue(backend, out var service))
+            throw new TswapException(
+                $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
+                "Use a build that includes it, or restore a vault created with a supported backend.");
+
+        return service.Unlock(config, chooseSerial);
     }
 
     /// <summary>
@@ -91,14 +119,22 @@ public sealed class VaultUnlocker
     ///
     /// <para><b>Issue #120:</b> a keyring can now hold more than one slot kind (a
     /// <see cref="SlotKind.Recovery"/> slot alongside the machine slot), so this method looks up
-    /// the <see cref="SlotKind.Machine"/> slot explicitly rather than assuming the keyring's
+    /// a <see cref="SlotKind.Machine"/> slot explicitly rather than assuming the keyring's
     /// first entry is always this machine's, the way #119's single-slot-only version did.</para>
+    ///
+    /// <para><b>Issue #121:</b> a keyring can now hold <em>more than one</em>
+    /// <see cref="SlotKind.Machine"/> slot (a second machine's, appended via <c>slot accept</c>),
+    /// so "the first Machine slot" is no longer necessarily this device's own. When
+    /// <see cref="Config.KeyringSlotId"/> is set, this method looks up that exact slot by id;
+    /// only when it is null (a keyring predating this field, which is guaranteed to hold at most
+    /// one Machine slot) does it fall back to #120's original "first Machine slot" heuristic —
+    /// exact in that case, not a guess, since there is only ever one candidate.</para>
     ///
     /// <para>Throws <see cref="TswapException"/> — never a raw crash — for a non-base64
     /// <see cref="Config.Keyring"/>, a malformed keyring blob (<see cref="KeyringCodec.Decode"/>),
-    /// an empty slot list, a keyring with no machine slot, or a slot that fails to unwrap
-    /// (<see cref="SlotPayloadWrap.Unwrap"/>: wrong KEK_slot, tampered ciphertext, or a tampered
-    /// AAD-bound field).</para>
+    /// an empty slot list, a keyring with no matching machine slot, or a slot that fails to
+    /// unwrap (<see cref="SlotPayloadWrap.Unwrap"/>: wrong KEK_slot, tampered ciphertext, or a
+    /// tampered AAD-bound field).</para>
     /// </summary>
     private static byte[] UnlockKeyring(Config config, byte[] kekSlot)
     {
@@ -119,9 +155,30 @@ public sealed class VaultUnlocker
             throw new TswapException(
                 "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init --keyring'.");
 
-        var slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
-            ?? throw new TswapException(
-                "Config is corrupted: keyring has no machine slot. Restore config.json from backup or re-run 'tswap init --keyring'.");
+        Slot? slot;
+        if (config.KeyringSlotId != null)
+        {
+            byte[] ownSlotId;
+            try
+            {
+                ownSlotId = Convert.FromBase64String(config.KeyringSlotId);
+            }
+            catch (FormatException)
+            {
+                throw new TswapException(
+                    "Config is corrupted: KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+            }
+            slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownSlotId));
+        }
+        else
+        {
+            slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
+        }
+
+        if (slot == null)
+            throw new TswapException(
+                "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init --keyring'.");
+
         var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, slot.SlotId);
         var (vaultKey, _slotPrivateKey) = SlotSecretPayload.Decode(payload);
         return vaultKey;

@@ -446,9 +446,12 @@ public sealed class InitCommand : ICliCommand
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
         const byte k = 1;
 
-        var payload = SlotSecretPayload.Encode(vaultKey, slotKeyPair.PrivateKey);
-        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersion, vaultId, k, slotId);
-        var machineSlot = new Slot(slotId, slotKeyPair.PublicKey, wrapped);
+        // Issue #121: extracted into MachineSlotWrap so 'slot accept' (functionally "the
+        // enrollment half of init --keyring" for a second machine) builds its own final slot with
+        // the exact same construction, not a re-derived copy.
+        var machineSlot = MachineSlotWrap.Wrap(
+            vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+            KeyringFormat.KeyringFormatVersion, vaultId, k);
 
         var slots = new List<Slot> { machineSlot };
         byte[]? recoveryPrivateKey = null;
@@ -473,7 +476,11 @@ public sealed class InitCommand : ICliCommand
             rngMode,
             unlockChallenge,
             MasterKeySalt: Convert.ToBase64String(masterKeySalt),
-            Keyring: keyringBlob
+            Keyring: keyringBlob,
+            // Issue #121: records which of Keyring's slots is this machine's own, so
+            // VaultUnlocker can still find it unambiguously once a second machine's slot is
+            // appended via 'slot accept' — see Config.KeyringSlotId's doc comment.
+            KeyringSlotId: Convert.ToBase64String(slotId)
         );
 
         return (config, vaultKey, recoveryPrivateKey);

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using TswapCore.Keyring;
 
 namespace TswapCore;
 
@@ -88,7 +89,39 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // unwrap K_v from the keyring, rather than use it as the master key directly (see
     // VaultUnlocker.Unlock). Null (omitted from config.json) for every vault that predates this
     // field or never opts in — those are completely unaffected.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Keyring = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Keyring = null,
+    // Phase 6 hand-carried enrollment only (issue #121, 'tswap slot request'/'slot accept'): set
+    // on the NEW, not-yet-enrolled machine between 'slot request' (which enrolls this machine's
+    // own hardware immediately — same YubiKey challenge/XOR/salt dance as 'init --keyring' — but
+    // has no K_v yet to build a real Keyring above from) and 'slot accept' (which recovers K_v
+    // from another machine's 'slot approve' file and finalizes Keyring, clearing these three
+    // fields back to null). PendingSlotId/PendingSlotPublicKey are this slot's identity, chosen
+    // at request time and carried unchanged into the finalized Machine slot 'slot accept'
+    // eventually writes (see MachineSlotWrap). PendingSlotPrivateKey is that slot's own X25519
+    // private key, held here in the clear until accept hardware-wraps it into the real keyring —
+    // the same plaintext-in-local-config custody model this file already uses for the XOR share
+    // above. VaultUnlocker.Unlock refuses ordinary use of a vault with Keyring == null and
+    // PendingSlotId != null (see that type's pending-enrollment guard), so an incomplete
+    // enrollment can never be silently mistaken for a working, derived-key vault. All three are
+    // omitted from config.json when null — every vault that predates this flow, or completes it,
+    // or never uses it, is completely unaffected.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPublicKey = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPrivateKey = null,
+    // Issue #121: base64 of this machine's own slot id within Config.Keyring. #119/#120 never
+    // needed this — a keyring held at most one Machine-kind slot (plus an optional Recovery
+    // slot), so VaultUnlocker.UnlockKeyring could safely assume "the first Machine-kind slot" was
+    // this machine's own. Once 'slot accept' can append a second machine's Machine-kind slot to
+    // the same keyring, that assumption breaks: an accepting machine's local keyring copy holds
+    // *both* machines' slots, and "first Machine slot" would silently pick whichever one happens
+    // to sort first, unwrapping with the wrong slot's AAD and failing (or, worse in a
+    // differently-shaped future format, succeeding against the wrong slot). Every keyring vault
+    // created from here on (init --keyring's single slot, or slot accept's finalized slot) sets
+    // this to its own slot id; VaultUnlocker looks it up by id when present and falls back to the
+    // old "first Machine slot" heuristic only when null — i.e. only for a keyring predating this
+    // field, which is guaranteed single-machine-slot anyway, so the fallback is exact, not a
+    // guess. Omitted from config.json when null.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KeyringSlotId = null);
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
 
@@ -151,6 +184,9 @@ public record ExportFile(string Version, DateTime Created, string Salt, string C
 [JsonSerializable(typeof(SecretsDb))]
 [JsonSerializable(typeof(ExportFile))]
 [JsonSerializable(typeof(KdfParams))]
+[JsonSerializable(typeof(SlotRequestFile))]
+[JsonSerializable(typeof(SlotApproveFile))]
+[JsonSerializable(typeof(SlotDto))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 public partial class TswapJsonContext : JsonSerializerContext { }
 

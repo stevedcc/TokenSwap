@@ -13,6 +13,7 @@ public static class CommandRegistry
     private static readonly ICliCommand[] Commands =
     [
         new InitCommand(),
+        new SlotCommand(),
         new MigrateCommand(),
         new CreateCommand(),
         new IngestCommand(),

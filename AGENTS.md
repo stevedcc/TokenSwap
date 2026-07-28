@@ -48,7 +48,17 @@ There is no linter configured.
 Commands are split by whether they require sudo:
 
 - **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `migrate` — safe for AI agents
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>` — exposes secret values
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>` — exposes secret values
+
+`slot approve` specifically: it unlocks an *existing* vault and writes out an artifact that
+decrypts that vault's master key for whoever holds the matching private key — the same
+sensitivity class as `export`. `slot`'s other two subcommands, `slot request <file>` and
+`slot accept <file>`, do *not* require sudo — they run on a machine with no existing usable
+vault yet (mirroring `init`) and never touch an existing vault's secrets. Because
+`ICliCommand.RequiresSudo` is a single per-command flag and this codebase has no "sometimes
+sudo" precedent, the `slot` command as a whole is bucketed under `[sudo]` on the `--help`
+screen and in this list; the runtime `RequireSudo` check itself only actually fires inside
+`slot approve`.
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
 
@@ -114,7 +124,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `HARDWARE_BACKENDS.md`.
 
