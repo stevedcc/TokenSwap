@@ -68,11 +68,12 @@ Every element of the model is visible in that one example:
   does nothing about what the agent is handed. Two different jobs (see §Where the hardware fits).
 - **It was an ops task, not a dev one.** Certificate authorities, mutual TLS, a self-hosted service.
 
-It also shows where the leak enters: **at creation**. The credential was generated during the
-session, by a tool the agent was driving, and printed to output the agent could read. Redaction
-cannot save a value tswap does not yet know about — which is why `create` (generate inside the
-vault, so the value never exists in the agent's view) is the load-bearing primitive for
-provisioning work, not an afterthought to `add`.
+It also shows where the leak enters: **an external tool generated the credential**. `create` already
+covers the case where tswap generates it — the agent asks for a secret by name, never sees the
+value, and refers to it by label thereafter. What redaction cannot save is a value tswap does not
+yet know about, printed by a tool the agent was driving. Provisioning work should therefore be
+inverted wherever possible: `create` first, then hand the value to the tool (which for most ops
+tooling means a file path — see #165), rather than letting the tool generate and print it.
 
 ## What tswap guarantees
 
