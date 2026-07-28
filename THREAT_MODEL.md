@@ -197,6 +197,28 @@ If the model is cooperation, the strongest controls are not restrictions:
 - **Detect and remediate rather than prevent.** `burn`, `burned` and `check` accept that leaks
   happen and make them visible and recoverable. Already well built, and the right investment.
 
+### The employee model
+
+A useful way to hold all of this: **an agent is an employee.** A badly motivated one can do damage,
+and no amount of policy prevents that. What organisations actually do instead is scope access
+narrowly, separate duties, train people well, and keep records — accepting that the residual risk
+is managed rather than eliminated.
+
+That maps onto tswap almost one-to-one, and is a fair way to audit what is missing:
+
+| Organisational control | tswap |
+|---|---|
+| Job roles / separation of duties | The sudo boundary — agent vs operator roles (README §Recommended Agent Permissions) ✅ |
+| Handbook and training | `tswap prompt`'s skill file, kept current via `prompt-hash` ✅ |
+| Incident response | `burn` / `burned` / rotate ✅ |
+| Least privilege — need-to-know | **Missing.** Any agent that can `run` can use every secret in the vault (#167) |
+| Access records | **Missing.** Nothing logs which secrets were used, when, or by what (#168) |
+
+The two gaps are the two controls that matter most precisely *because* prevention is impossible:
+they bound the blast radius and make what happened knowable afterwards. Neither stops a motivated
+agent — that is not on offer — but together they are the difference between "assume the whole vault
+is exposed" and "this project's credentials were touched on these dates."
+
 ### The one honest wrinkle
 
 "Cooperative" is not a fixed property. A prompt-injected agent is a cooperative agent following
