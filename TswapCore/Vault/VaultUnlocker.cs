@@ -81,16 +81,24 @@ public sealed class VaultUnlocker
     }
 
     /// <summary>
-    /// Decodes <see cref="Config.Keyring"/> and unwraps this machine's slot (always the
-    /// keyring's first and, in v0, only slot) to recover <c>K_v</c>. <paramref name="kekSlot"/>
-    /// is the 32 bytes the hardware backend just recovered. The slot's own X25519 private key
-    /// (the payload's other half — see <see cref="SlotSecretPayload"/>) is decoded but unused
-    /// until #121 adds slot request/approve/accept.
+    /// Decodes <see cref="Config.Keyring"/> and unwraps this machine's slot to recover
+    /// <c>K_v</c>. <paramref name="kekSlot"/> is the 32 bytes the hardware backend just
+    /// recovered — always this machine's <c>KEK_slot</c>, never a recovery credential (recovery
+    /// is a separate, offline, non-hardware path — see <see cref="RecoverySlotWrap"/> — not
+    /// something <see cref="Unlock"/>'s normal dispatch ever exercises). The slot's own X25519
+    /// private key (the payload's other half — see <see cref="SlotSecretPayload"/>) is decoded
+    /// but unused until #121 adds slot request/approve/accept.
+    ///
+    /// <para><b>Issue #120:</b> a keyring can now hold more than one slot kind (a
+    /// <see cref="SlotKind.Recovery"/> slot alongside the machine slot), so this method looks up
+    /// the <see cref="SlotKind.Machine"/> slot explicitly rather than assuming the keyring's
+    /// first entry is always this machine's, the way #119's single-slot-only version did.</para>
     ///
     /// <para>Throws <see cref="TswapException"/> — never a raw crash — for a non-base64
     /// <see cref="Config.Keyring"/>, a malformed keyring blob (<see cref="KeyringCodec.Decode"/>),
-    /// an empty slot list, or a slot that fails to unwrap (<see cref="SlotPayloadWrap.Unwrap"/>:
-    /// wrong KEK_slot, tampered ciphertext, or a tampered AAD-bound field).</para>
+    /// an empty slot list, a keyring with no machine slot, or a slot that fails to unwrap
+    /// (<see cref="SlotPayloadWrap.Unwrap"/>: wrong KEK_slot, tampered ciphertext, or a tampered
+    /// AAD-bound field).</para>
     /// </summary>
     private static byte[] UnlockKeyring(Config config, byte[] kekSlot)
     {
@@ -111,9 +119,9 @@ public sealed class VaultUnlocker
             throw new TswapException(
                 "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init --keyring'.");
 
-        // v0 is single-slot only: the keyring's first slot is always this machine's. #121 adds
-        // real slot identity/lookup once a keyring can hold more than one.
-        var slot = keyring.Slots[0];
+        var slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
+            ?? throw new TswapException(
+                "Config is corrupted: keyring has no machine slot. Restore config.json from backup or re-run 'tswap init --keyring'.");
         var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, slot.SlotId);
         var (vaultKey, _slotPrivateKey) = SlotSecretPayload.Decode(payload);
         return vaultKey;

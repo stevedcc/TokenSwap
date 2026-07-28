@@ -26,6 +26,12 @@ public class KeyringCodecTests
     [Fact]
     public void Encode_MatchesGoldenBytesExactly()
     {
+        // Issue #120: this golden-byte assertion was deliberately updated from #119's original
+        // 78-byte/no-trailing-kind-byte shape to include the new per-slot `kind` byte appended
+        // after `wrapped` (see KeyringCodec's "kind (issue #120)" doc-comment section) — a
+        // called-out, intentional change to what #119 originally pinned, not a silent drift; see
+        // this issue's PR body. OneSlotKeyring()'s 3-argument Slot(...) call defaults to
+        // SlotKind.Machine (0x00), which is what the trailing byte below encodes.
         var bytes = KeyringCodec.Encode(OneSlotKeyring());
 
         const string expectedHex =
@@ -36,15 +42,20 @@ public class KeyringCodecTests
             "101112131415161718191a1b1c1d1e1f" +                                   // slotId (16)
             "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f" +   // publicKey (32)
             "04000000" +                                                           // wrappedLength = 4 (LE)
-            "aabbccdd";                                                            // wrapped
+            "aabbccdd" +                                                           // wrapped
+            "00";                                                                  // kind = Machine (0)
 
-        Assert.Equal(78, bytes.Length);
+        Assert.Equal(79, bytes.Length);
         Assert.Equal(expectedHex, Convert.ToHexStringLower(bytes));
     }
 
     [Fact]
     public void EncodeDecode_RoundTrips()
     {
+        // This is also the "pre-#120 shape still round-trips" proof the #120 test bar asks for:
+        // OneSlotKeyring() is exactly #119's original single-machine-slot, no-recovery shape
+        // (Slot's 3-argument constructor defaults Kind to SlotKind.Machine), and it round-trips
+        // unchanged through the codec #120 extended.
         var keyring = OneSlotKeyring();
 
         var decoded = KeyringCodec.Decode(KeyringCodec.Encode(keyring));
@@ -56,6 +67,7 @@ public class KeyringCodecTests
         Assert.Equal(SlotId, decoded.Slots[0].SlotId);
         Assert.Equal(PublicKey, decoded.Slots[0].PublicKey);
         Assert.Equal(Wrapped, decoded.Slots[0].Wrapped);
+        Assert.Equal(SlotKind.Machine, decoded.Slots[0].Kind);
     }
 
     [Fact]
@@ -73,17 +85,21 @@ public class KeyringCodecTests
     {
         // v0 always writes exactly one slot, but the format supports more from day one
         // (#121 appends slots without a format bump) — prove the loop actually handles it.
+        // Also mixes slot kinds (#120): a machine slot plus a recovery slot, proving Kind
+        // round-trips independently per slot, not just as a keyring-wide value.
         var slotId2 = Convert.FromHexString("303132333435363738393a3b3c3d3e3f");
         var publicKey2 = Convert.FromHexString("404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f");
         var keyring = new Keyring(1, VaultId, 1,
-            [new Slot(SlotId, PublicKey, Wrapped), new Slot(slotId2, publicKey2, [1, 2, 3])]);
+            [new Slot(SlotId, PublicKey, Wrapped), new Slot(slotId2, publicKey2, [1, 2, 3], SlotKind.Recovery)]);
 
         var decoded = KeyringCodec.Decode(KeyringCodec.Encode(keyring));
 
         Assert.Equal(2, decoded.Slots.Count);
+        Assert.Equal(SlotKind.Machine, decoded.Slots[0].Kind);
         Assert.Equal(slotId2, decoded.Slots[1].SlotId);
         Assert.Equal(publicKey2, decoded.Slots[1].PublicKey);
         Assert.Equal(new byte[] { 1, 2, 3 }, decoded.Slots[1].Wrapped);
+        Assert.Equal(SlotKind.Recovery, decoded.Slots[1].Kind);
     }
 
     [Fact]
@@ -149,6 +165,32 @@ public class KeyringCodecTests
 
         var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(tampered));
         Assert.Contains("wrapped-slot length prefix exceeds available data", ex.Message);
+    }
+
+    [Fact]
+    public void Decode_TruncatedKindByteThrowsTswapException()
+    {
+        // A slot whose wrapped bytes decoded fine but has nothing left for the trailing kind
+        // byte #120 added — must fail loudly, not read past the end of the array.
+        var bytes = KeyringCodec.Encode(OneSlotKeyring());
+        var truncated = bytes[..^1]; // drop just the final kind byte
+
+        var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(truncated));
+        Assert.Contains("truncated slot kind", ex.Message);
+    }
+
+    [Fact]
+    public void Decode_UnknownSlotKindThrowsTswapException()
+    {
+        // A kind byte that is neither Machine (0) nor Recovery (1) — e.g. corruption, or a
+        // future slot kind this build predates — must fail loudly rather than silently cast an
+        // undefined enum value.
+        var bytes = KeyringCodec.Encode(OneSlotKeyring());
+        var tampered = (byte[])bytes.Clone();
+        tampered[^1] = 0xFF;
+
+        var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(tampered));
+        Assert.Contains("unknown slot kind", ex.Message);
     }
 
     [Fact]

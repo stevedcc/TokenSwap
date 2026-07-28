@@ -408,7 +408,10 @@ public class VaultUnlockerTests
         yubi.Connected = [11111111];
 
         var keyringBytes = Convert.FromBase64String(config.Keyring!);
-        keyringBytes[^1] ^= 0xFF; // flip a byte inside the wrapped slot payload
+        // Issue #120 appended a trailing `kind` byte after `wrapped` in the per-slot layout, so
+        // the very last byte of the encoded keyring is no longer inside the AEAD ciphertext —
+        // flip the byte just before it instead, still squarely inside the wrapped slot payload.
+        keyringBytes[^2] ^= 0xFF;
         var corrupted = config with { Keyring = Convert.ToBase64String(keyringBytes) };
 
         var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(corrupted, NoSelection));
