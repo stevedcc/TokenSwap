@@ -49,6 +49,31 @@ This is the specific thing to prevent, and it is narrower and sharper than "a se
 A developer should be able to hand an agent a task that *uses* credentials without acquiring a new
 thing to worry about. That is the product.
 
+## The incident this comes from
+
+Not hypothetical. An agent was used to set up a `step-ca` server with YubiKey-backed root
+certificates, and to issue a client certificate for mutual TLS in front of a Paperless-ngx
+deployment. **A week later, it still knew the password for that mutual TLS certificate.**
+
+Every element of the model is visible in that one example:
+
+- **Nothing attacked anything.** The agent recorded the password because recording what it did is
+  helpful — a runbook, a setup script, a note. Good assistant behaviour, and precisely the leak.
+- **The harm was persistence, not theft.** The password was not exfiltrated. It survived the
+  session, in something re-read later, and resurfaced a week on. "The agent saw it once" and "the
+  agent knows it" are different problems, and the second is the one that matters.
+- **The root of trust was hardware-backed and it did not help.** The CA's root keys were on a
+  YubiKey — properly protected, entirely irrelevant. The leak was one layer up, in a password that
+  sat in plaintext where the agent could read and repeat it. Hardware secures the vault at rest; it
+  does nothing about what the agent is handed. Two different jobs (see §Where the hardware fits).
+- **It was an ops task, not a dev one.** Certificate authorities, mutual TLS, a self-hosted service.
+
+It also shows where the leak enters: **at creation**. The credential was generated during the
+session, by a tool the agent was driving, and printed to output the agent could read. Redaction
+cannot save a value tswap does not yet know about — which is why `create` (generate inside the
+vault, so the value never exists in the agent's view) is the load-bearing primitive for
+provisioning work, not an afterthought to `add`.
+
 ## What tswap guarantees
 
 > **The agent does not learn the secret value.**
