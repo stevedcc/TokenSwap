@@ -41,7 +41,34 @@ closeable is the signal it sends: v0 is done, go use it.
 The line this milestone crosses is **personal tool → early-stage usable by others**. That makes
 its scope a question of *reach* and *honesty*, not of features.
 
-Two things gate it.
+Scope is judged against tswap's stated purpose, in the order `AGENTS.md:7-8` gives it:
+**(1) AI agent safety** — an agent can *use* a secret without *seeing* it — and **(2) YubiKey
+redundancy**. Hardware backing is the mechanism for the second, not the point of the tool. The
+adversary that matters is a local process running as the developer.
+
+Three things gate it.
+
+### Enforcement — the core claim has to actually hold
+
+These were originally filed as hardening items to be confirmed by dogfooding. Under the purpose
+above they are not hardening: they are whether the product does what it says. `AGENTS.md` rule 4
+tells the agent to use `run` for `{{token}}` substitution "without seeing them" — so every gap in
+`run`'s mediation is the central claim failing, not a rough edge.
+
+- **#105** — shell interpreters bypass the `run` exfiltration blocklist. `tswap run -- bash -c
+  '…'` walks straight through it.
+- **#106** — streaming redaction misses encoded/escaped variants.
+- **#71** — secrets substituted into argv are readable from `/proc/<pid>/cmdline` by the very
+  agent being mediated.
+- **#164** — TPM must require user interaction to unlock. Today a TPM vault unseals for any
+  process running as that user, including the agent — the one configuration where the core claim
+  has no hardware enforcement behind it, only a sudo boundary that `run` deliberately doesn't
+  cross. The hard part is the prompt channel, not the PIN: consent has to happen somewhere the
+  calling process cannot observe.
+
+Note the uniform rule #164 establishes: **any backend configuration without per-unlock human
+interaction is not agent-safe** — which covers no-touch YubiKey (`ykman otp chalresp --generate 2`)
+as well as PIN-less TPM, and should be stated at init time for both.
 
 ### Reach — Secure Enclave and TPM must be first-class
 
@@ -95,9 +122,9 @@ either resolved or visible in the README.
 - **#160** — sustained two-machine, two-backend, sync-transport use, including actually walking
   the recovery path from the README alone. Phase 6 v0 shipped a lot of machinery verified by
   tests rather than by use.
-- The already-filed correctness items most likely to surface first: **#105** (shell interpreters
-  bypass the `run` exfiltration blocklist), **#71** (env-var rather than argv substitution),
-  **#106**, **#107**, **#42**.
+- **#107** (`SUDO_USER`-derived config directory not validated) and **#42** (concurrent instances
+  race on YubiKey access) — the remaining correctness items, distinct from the enforcement gaps
+  above.
 - Test-coverage gaps worth closing while here: **#46**, **#47**, **#109**.
 
 ### What Milestone 2 deliberately excludes
@@ -135,9 +162,12 @@ Ordering is not arbitrary — #126 blocks most of the rest:
   device is involved, not *your* device. Do not ship without the fingerprint UX being genuinely
   load-bearing.
 - **#132** — HLC + full LWW/earliest-burn merge rules + commutativity fuzz tests.
-- **#133** — TPM PIN / PCR policy. Real hardening on the backend's own merits. Until it lands, a
-  TPM vault protects against disk theft and vault-file copying, and not against someone using the
-  running machine — which is why #158 requires saying so plainly at `init --tpm` time.
+- **#133** — TPM PCR policy (boot-state binding). Rescoped: the PIN half moved to #164 in
+  Milestone 2, because user interaction is what makes a TPM vault agent-resistant. PCR binding
+  defends against offline and boot-level attack, which is defence in depth at the wrong layer for
+  the core claim — a correctly-booted machine satisfies the policy by definition, so the agent
+  unseals unaided regardless. Also needs a recovery story: PCR values change on firmware and
+  kernel updates.
 - **#134** — k-of-n threshold *enrolment* (governance of who may extend the fleet). Distinct from
   k-of-n unlock, which `MULTI_MACHINE_KEYING.md` demotes to a rationale note: no independent
   zero-friction second factor exists on any target platform today.
