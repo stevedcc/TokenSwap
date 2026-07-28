@@ -33,6 +33,15 @@ public sealed record CommandContext(
         return Unlocker.Unlock(config, ChooseSerial);
     }
 
+    /// <summary>
+    /// Recovers this machine's hardware-backed key material without any keyring unwrap or
+    /// pending-enrollment guard — used by <c>slot accept</c> (issue #121) to recompute its own
+    /// <c>KEK_slot</c> from a still-pending config (<see cref="Config.Keyring"/> is null at that
+    /// point by design), where the ordinary <see cref="Unlock"/> would otherwise refuse to
+    /// proceed. See <see cref="TswapCore.Vault.VaultUnlocker.UnlockHardware"/>.
+    /// </summary>
+    public byte[] UnlockHardwareOnly(Config config) => Unlocker.UnlockHardware(config, ChooseSerial);
+
     /// <summary>Loads the secrets database, surfacing recoverable-vault warnings on stderr.</summary>
     public TswapCore.SecretsDb LoadSecrets(byte[] key)
         => Storage.LoadSecrets(key, Console.Error);
