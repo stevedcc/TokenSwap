@@ -43,8 +43,13 @@ its scope a question of *reach* and *honesty*, not of features.
 
 Scope is judged against tswap's stated purpose, in the order `AGENTS.md:7-8` gives it:
 **(1) AI agent safety** — an agent can *use* a secret without *seeing* it — and **(2) YubiKey
-redundancy**. Hardware backing is the mechanism for the second, not the point of the tool. The
-adversary that matters is a local process running as the developer.
+redundancy**. Hardware backing is the mechanism for the second, not the point of the tool.
+
+See **`THREAT_MODEL.md`** for the adversary these milestones are scoped against: a helpful AI agent
+that gets a bit greedy — one that will do what it can to reach its goal, and leaks secrets by
+working normally rather than by attacking. The harm to prevent is the secret entering the model's
+context and being remembered. That model is what ranks the work below: failure modes matter in
+proportion to how *ordinary* they are, not how clever.
 
 Three things gate it.
 
