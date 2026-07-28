@@ -18,6 +18,7 @@ public static class CommandRegistry
         new CreateCommand(),
         new IngestCommand(),
         new NamesCommand(),
+        new SlotsCommand(),
         new RunCommand(),
         new CheckCommand(),
         new RedactCommand(),
