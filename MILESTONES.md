@@ -55,10 +55,15 @@ Three things gate it.
 
 ### Enforcement — the core claim has to actually hold
 
-These were originally filed as hardening items to be confirmed by dogfooding. Under the purpose
-above they are not hardening: they are whether the product does what it says. `AGENTS.md` rule 4
-tells the agent to use `run` for `{{token}}` substitution "without seeing them" — so every gap in
-`run`'s mediation is the central claim failing, not a rough edge.
+These were originally filed as hardening items to be confirmed by dogfooding. They are better
+understood as the mediation layer failing at its own stated job.
+
+Be precise about which gaps count, because `README.md` §Design rationale already settles the
+general case: the blocklist is **shallow by design**, and `curl`, `python` or a custom binary
+exfiltrating a substituted secret is an explicit non-goal, not a bug. What is a bug is the
+blocklist being walked around on the cases it exists to catch — `echo` is on the list precisely to
+stop an agent printing a secret, and `run -- bash -c 'echo $X'` defeats that. "We don't sandbox" is
+not a reason to leave that unfixed.
 
 - **#105** — shell interpreters bypass the `run` exfiltration blocklist. `tswap run -- bash -c
   '…'` walks straight through it.

