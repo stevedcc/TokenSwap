@@ -296,6 +296,133 @@ public class CommandTests : IDisposable
         Assert.Contains("authentication", ex.Message);
     }
 
+    // --- Slots (Phase 6, issue #123) ---
+
+    [Fact]
+    public void SlotsFormat_TouchRequiredMachineSlot_DescribesTouchRequired()
+    {
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32),
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: true,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false);
+
+        var output = SlotsCommand.Format(config);
+
+        Assert.Contains("touch required", output);
+        Assert.DoesNotContain("no touch", output);
+    }
+
+    [Fact]
+    public void SlotsFormat_NoTouchMachineSlot_DescribesCustodyNotUnprotected()
+    {
+        // The exact failure mode this issue calls out by name: a no-touch YubiKey slot has a
+        // real, if unusual, control (custody) and must never be reduced to a bare
+        // "unprotected"/"insecure" label. See MULTI_MACHINE_KEYING.md §Why not k >= 2 (yet).
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32),
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: false,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false);
+
+        var output = SlotsCommand.Format(config);
+
+        Assert.Contains("custody", output);
+        Assert.Contains("no touch required", output);
+        Assert.DoesNotContain("unprotected", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("insecure", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SlotsFormat_UnknownTouchMachineSlot_DescribesCustodyHonestly()
+    {
+        // requiresTouch == null (touch detection couldn't determine the answer on both keys) is
+        // distinct from a confirmed "false" — describe it as unknown, not as a confident "no
+        // touch required", while still noting custody applies either way.
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32),
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: null,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false);
+
+        var output = SlotsCommand.Format(config);
+
+        Assert.Contains("unknown", output);
+        Assert.Contains("custody", output);
+        Assert.DoesNotContain("unprotected", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("insecure", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SlotsFormat_RecoverySlot_DescribesPresenceFreeByDesignNotAsWeakerMachineSlot()
+    {
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32),
+            new List<int> { 11111111, 22222222 },
+            new string('0', 40),
+            requiresTouch: true,
+            RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+            RandomNumberGenerator.GetBytes(32),
+            includeRecovery: true);
+
+        var output = SlotsCommand.Format(config);
+
+        Assert.Contains("recovery", output);
+        Assert.Contains("break-glass", output);
+        Assert.Contains("no presence required", output);
+
+        var recoveryLine = output.Split('\n').Single(l => l.Contains("recovery"));
+        Assert.DoesNotContain("touch", recoveryLine);
+    }
+
+    [Fact]
+    public void SlotsFormat_NonKeyringVault_ReturnsHonestMessageNotError()
+    {
+        var config = new Config(new List<int> { 1, 2 }, new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+
+        var output = SlotsCommand.Format(config);
+
+        Assert.Contains("no keyring", output);
+        Assert.DoesNotContain("Exception", output);
+    }
+
+    [Fact]
+    public void Slots_EndToEnd_InitKeyringThenSlots_ListsMachineAndRecoverySlots()
+    {
+        RunTswap("init", "--keyring");
+
+        var (exit, stdout, _) = RunTswap("slots");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("machine", stdout);
+        Assert.Contains("recovery", stdout);
+        Assert.DoesNotContain("unprotected", stdout, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Slots_NonKeyringVault_ReturnsHonestMessageWithoutError()
+    {
+        RunTswap("init");
+
+        var (exit, stdout, _) = RunTswap("slots");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("no keyring", stdout);
+    }
+
     // --- Create ---
 
     [Fact]
