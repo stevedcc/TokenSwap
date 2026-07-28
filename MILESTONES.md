@@ -60,15 +60,32 @@ tells the agent to use `run` for `{{token}}` substitution "without seeing them" 
 - **#106** — streaming redaction misses encoded/escaped variants.
 - **#71** — secrets substituted into argv are readable from `/proc/<pid>/cmdline` by the very
   agent being mediated.
-- **#164** — TPM must require user interaction to unlock. Today a TPM vault unseals for any
-  process running as that user, including the agent — the one configuration where the core claim
-  has no hardware enforcement behind it, only a sudo boundary that `run` deliberately doesn't
-  cross. The hard part is the prompt channel, not the PIN: consent has to happen somewhere the
-  calling process cannot observe.
+- **#164** — TPM must require user interaction to unlock, and specifically **presence, not a PIN**.
+  Today a TPM vault unseals for any process running as that user, including the agent — the one
+  configuration where the core claim has no hardware enforcement behind it, only a sudo boundary
+  that `run` deliberately doesn't cross. tswap unlocks once per invocation and an agent invokes
+  `run` continuously, so consent has to be touch-grade: a PIN typed every few seconds gets
+  disabled, cached, or abandoned, and each of those defeats the tool.
 
-Note the uniform rule #164 establishes: **any backend configuration without per-unlock human
-interaction is not agent-safe** — which covers no-touch YubiKey (`ykman otp chalresp --generate 2`)
-as well as PIN-less TPM, and should be stated at init time for both.
+**Presence is available on every platform without inventing anything**, and the segmentation is
+complementary — the platforms with built-in presence are the ones whose users are least likely to
+buy a token:
+
+| Platform | Presence mechanism | Cost |
+|---|---|---|
+| macOS | Secure Enclave + Touch ID | Free, built in — already implemented |
+| Windows | Windows Hello, TPM-backed | Free on most modern hardware — #164 |
+| Linux | Touch-required YubiKey | A purchase, but this population already buys them |
+
+So the Linux TPM presence problem is **closed by scoping, not by building**: no Wayland prompt app,
+no polkit/`systemd-ask-password` integration, no fprintd work. Linux TPM keeps a coherent role —
+unattended and CI contexts, where presence is impossible by definition and the real threat is disk
+theft, which sealing genuinely addresses.
+
+The uniform rule #164 establishes: **any backend configuration without per-unlock human interaction
+is not agent-safe, and is for unattended/CI use only** — covering no-touch YubiKey (`ykman otp
+chalresp --generate 2`) as well as PIN-less TPM. `AGENTS.md` already draws that line for the
+YubiKey case; apply it consistently.
 
 ### Reach — Secure Enclave and TPM must be first-class
 
