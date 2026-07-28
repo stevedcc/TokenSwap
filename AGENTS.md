@@ -138,7 +138,7 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 
 1. **Install the skill** (one-time, per project): `mkdir -p .claude/skills/tswap && tswap prompt > .claude/skills/tswap/SKILL.md`. After installation the SKILL.md is loaded automatically by your agent when relevant — no need to run `tswap prompt` at session start.
 2. **Keep it current**: Re-run the install command whenever `tswap prompt-hash` changes so your skill file stays up to date.
-3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `apply`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only.
+3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `apply`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only. **Run `tswap prompt` for what each of these does and when to reach for it** — that output (generated from `TswapCore/Prompt.cs`) is the authoritative command reference, not this list. It is easy to assume a bare allowlist is the whole story and infer the rest wrongly; `create` (generate without ever displaying) and `ingest` (`<source> | tswap ingest <name>`, capture without displaying) in particular do work that is not guessable from the name.
 4. **Use `{{token}}` substitution** via `run` to pass secrets to commands without seeing them.
 5. **Burn immediately** if you accidentally see a plaintext secret: `tswap burn <name> "<reason>"`.
 
