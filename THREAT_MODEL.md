@@ -13,6 +13,23 @@ threat-model questions in disguise, and they are far easier to answer against a 
 from first principles each time. Read this before proposing a security feature or arguing one is
 missing.
 
+## The axis, stated first
+
+The most common misreading is that this is another **secrets-at-rest** tool — Sealed Secrets, SOPS,
+Vault, age, git-crypt. Reasonable, since nearly every established tool in the area sits on that
+axis, and worth heading off explicitly:
+
+| | Threat | Moment it acts |
+|---|---|---|
+| Sealed Secrets / SOPS / age / Vault | Someone reads the repo, the disk, or the backup | Secret **at rest** |
+| **tswap** | A process you deliberately invited, running as you, **remembers** the value | Secret **in use** |
+
+These are orthogonal and compose rather than compete. The at-rest tools cannot help with tswap's
+problem: to seal or encrypt a secret you must first hold the plaintext, which means it passed
+through a terminal and possibly an agent's context — the encryption happens strictly *after* the
+moment tswap protects, and decryption surfaces it again. Conversely tswap does nothing about an
+artifact once it exists. Use both.
+
 ## The adversary
 
 **A helpful AI agent that gets a bit greedy.**
