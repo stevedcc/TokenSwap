@@ -18,14 +18,12 @@ namespace TswapCore.Vault;
 /// created on every <see cref="Wrap"/> call and its name bundled into the returned blob, so the
 /// blob as a whole is still self-contained and every vault gets its own isolated TPM key).</para>
 ///
-/// <para>This is today's single-machine, <c>k = 1</c> slice (implementation-ordering step 2 in
-/// <c>MULTI_MACHINE_KEYING.md</c>), sharing <see cref="Config.TpmSealedKey"/> with the Linux
-/// backend: both write only an opaque, platform-specific blob there (RSA-OAEP ciphertext here,
-/// a TPM2 sealed public/private pair on Linux) under the same <see cref="HardwareBackend.Tpm"/>
-/// tag — a vault is inherently tied to one machine's OS already, so there's no need for a
-/// separate config field per platform. The general multi-machine keyring (multiple slots,
-/// signed, `epoch`-guarded) is not built yet; this field is a single-slot precursor to it, not
-/// the final on-disk format.</para>
+/// <para><b>Where the blob lives (issue #154).</b> In a keyring vault (what <c>tswap init</c>
+/// makes since brief T2) the self-contained wrapped blob is this machine's machine slot's
+/// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
+/// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
+/// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
 /// <para><b>Status: developed and tested only against this machine's (virtual) TPM in a
 /// Parallels VM, not yet verified against physical TPM hardware</b> — see
@@ -37,8 +35,18 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase
+public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>
+    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
+    /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.
+    /// </summary>
+    public HardwareEnrollment Enroll()
+    {
+        var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+    }
+
     /// <summary>
     /// Enrollment side: wraps <paramref name="plaintextKey"/> (the vault key) to a fresh
     /// TPM-backed key. The returned blob is useless off this machine.

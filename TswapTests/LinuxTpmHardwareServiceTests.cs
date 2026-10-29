@@ -42,6 +42,40 @@ public class LinuxTpmHardwareServiceTests
     }
 
     [Fact]
+    public void Enroll_ThenUnlock_RecoversTheEnrolledKekSlot()
+    {
+        // Enrollment seam (issue #151): Enroll generates KEK_slot itself and returns the blob;
+        // the unlock seam must recover exactly that KEK_slot from the blob on this machine.
+        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
+        var (kekSlot, hwBlob) = enrollment.Enroll();
+
+        var config = new Config([], "", DateTime.UtcNow,
+            Backend: HardwareBackend.Tpm,
+            TpmSealedKey: Convert.ToBase64String(hwBlob));
+        var recovered = new LinuxTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"));
+
+        Assert.Equal(32, kekSlot.Length);
+        Assert.Equal(kekSlot, recovered);
+        Assert.NotEqual(kekSlot, hwBlob);
+    }
+
+    [Fact]
+    public void KeyringVault_HwBlobInTheMachineSlot_UnlocksToTheVaultKey()
+    {
+        // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a
+        // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
+        var service = new LinuxTpmHardwareService();
+        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll();
+        var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
+
+        var unlocker = new VaultUnlocker(new TestKeyYubiKeyService(new byte[32]), additionalBackends: [service]);
+        var recovered = unlocker.Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called"));
+
+        Assert.Equal(vaultKey, recovered);
+    }
+
+    [Fact]
     public void Unlock_RecoversVaultKeyFromSlot()
     {
         var svc = new LinuxTpmHardwareService();

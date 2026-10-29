@@ -20,8 +20,12 @@ public class KeyringCodecTests
         Convert.FromHexString("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f");
     private static readonly byte[] Wrapped = Convert.FromHexString("aabbccdd");
 
+    // Brief T2 item 5 (#154) bumped KeyringFormat.KeyringFormatVersion to 3, which appends a
+    // per-slot hwBlob column. Version 2 stays supported (and in use), so the golden-byte and
+    // position-based tests in this file now pin the version 2 layout explicitly; the version 3
+    // layout has its own tests in KeyringFormatV3Tests.
     private static Keyring OneSlotKeyring() =>
-        new(FormatVersion: KeyringFormat.KeyringFormatVersion, VaultId, K: 1, Slots: [new Slot(SlotId, PublicKey, Wrapped)]);
+        new(FormatVersion: KeyringFormat.KeyringFormatVersionWithoutHwBlob, VaultId, K: 1, Slots: [new Slot(SlotId, PublicKey, Wrapped)]);
 
     [Fact]
     public void Encode_MatchesGoldenBytesExactly()

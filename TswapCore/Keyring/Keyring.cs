@@ -46,18 +46,16 @@ public enum SlotKind : byte
 /// because a given slot is only ever one kind, and repurposing the field this way avoids adding a
 /// second 32-byte column that would sit empty for every other slot kind.</para>
 ///
-/// <para><b>No per-slot hardware blob field.</b> The design doc's slot sketch includes a
-/// <c>hwBlob: backendWrap(KEK_slot)</c> field alongside <c>wrapped</c>. For this issue
-/// (YubiKey only, one slot), that role is already filled by <see cref="Config"/>'s existing
-/// <c>YubiKeySerials</c>/<c>RedundancyXor</c>/<c>UnlockChallenge</c>/<c>MasterKeySalt</c>
-/// fields — <see cref="Vault.YubiKeyHardwareService.Unlock"/> already recovers
-/// <c>KEK_slot</c> from those (see <c>HARDWARE_BACKENDS.md</c>'s "no interface change needed"
-/// point). Adding a redundant per-slot <c>hwBlob</c> here would just duplicate what
-/// <see cref="Config"/> already carries at the vault level. A second, non-YubiKey backend
-/// (design doc's v0 step 2) is exactly where a real per-slot <c>hwBlob</c> becomes necessary,
-/// since Config has no vault-wide equivalent for a TPM/Secure-Enclave-wrapped KEK_slot — that
-/// is deliberately deferred, not overlooked. A recovery slot has no hardware at all, by design.
-/// </para>
+/// <para><b><see cref="HwBlob"/> (issue #154, keyring format version 3).</b> A TPM or Secure
+/// Enclave machine slot carries its backend's opaque blob here: the sealed/wrapped
+/// <c>KEK_slot</c> that only that machine's hardware can recover (the design doc's
+/// <c>hwBlob: backendWrap(KEK_slot)</c>). Keeping it in the slot puts it under
+/// <see cref="Keyring.FormatVersion"/>, which every slot's AEAD binds, instead of an unversioned
+/// <see cref="Config"/> field. A YubiKey machine slot has none (<c>null</c>): YubiKey
+/// <em>derives</em> <c>KEK_slot</c> from <see cref="Config"/>'s
+/// <c>YubiKeySerials</c>/<c>RedundancyXor</c>/<c>UnlockChallenge</c>/<c>MasterKeySalt</c>. A
+/// recovery slot never has one (no hardware by design). Version 2 keyrings have no hwBlob column
+/// at all; see <see cref="KeyringCodec"/>.</para>
 ///
 /// <para><b>Deliberately minimal otherwise.</b> No <c>label</c>/<c>backend</c>/<c>enrolledAt</c>
 /// fields. Every field a future <c>slots</c> listing (#123) or fingerprint display (#122) would
@@ -67,7 +65,7 @@ public enum SlotKind : byte
 /// <see cref="KeyringCodec"/>'s slot layout is a mechanical, backward-compatible change, not a
 /// redesign.</para>
 /// </summary>
-public sealed record Slot(byte[] SlotId, byte[] PublicKey, byte[] Wrapped, SlotKind Kind = SlotKind.Machine);
+public sealed record Slot(byte[] SlotId, byte[] PublicKey, byte[] Wrapped, SlotKind Kind = SlotKind.Machine, byte[]? HwBlob = null);
 
 /// <summary>
 /// A vault's keyring (issue #119): the format version and vault id that feed every slot's AEAD
@@ -100,7 +98,18 @@ public sealed record Keyring(byte FormatVersion, byte[] VaultId, byte K, IReadOn
 ///   wrappedLength   4 bytes
 ///   wrapped         wrappedLength bytes
 ///   kind            1 byte    SlotKind (issue #120)
+///   hwBlobLength    4 bytes   version 3 only (issue #154); 0 = no hwBlob
+///   hwBlob          hwBlobLength bytes, version 3 only
 /// </code>
+///
+/// <para><b>Versions (issue #154, brief T2 decision 3).</b> <see cref="Decode"/> reads version 2
+/// (no hwBlob columns: such a keyring only has YubiKey and recovery slots) and version 3, and
+/// <see cref="Encode"/> writes whichever version <see cref="Keyring.FormatVersion"/> names. A
+/// keyring keeps its version for life: the version is in every slot's AEAD associated data
+/// (<see cref="SlotPayloadWrap.BuildAad"/>), so re-labelling a version 2 keyring as 3 would make
+/// every existing slot fail to unwrap, and re-wrapping them needs every machine's hardware plus
+/// the offline recovery key. New keyrings are created as <see cref="KeyringFormat.KeyringFormatVersion"/>
+/// (3).</para>
 ///
 /// <para>v0 always writes exactly one slot; <c>slotCount</c> is still explicit (not assumed to
 /// be 1) so a future multi-slot keyring (#121) is purely an additive change to how many times
@@ -125,6 +134,9 @@ public static class KeyringCodec
     // kind, appended after the variable-length wrapped bytes.
     private const int SlotKindSize = 1;
 
+    // hwBlobLength (version 3), appended after kind.
+    private const int HwBlobLengthSize = 4;
+
     /// <summary>
     /// Encodes <paramref name="keyring"/>. Throws <see cref="ArgumentException"/> (a programmer
     /// error, not a data-corruption case) if <see cref="Keyring.VaultId"/> or any slot's
@@ -134,6 +146,9 @@ public static class KeyringCodec
     {
         if (keyring.VaultId.Length != KeyringFormat.VaultIdSize)
             throw new ArgumentException($"VaultId must be {KeyringFormat.VaultIdSize} bytes", nameof(keyring));
+        if (keyring.FormatVersion is not (KeyringFormat.KeyringFormatVersionWithoutHwBlob or KeyringFormat.KeyringFormatVersion))
+            throw new ArgumentException($"Cannot encode keyring format version {keyring.FormatVersion}", nameof(keyring));
+        var hasHwBlobColumn = keyring.FormatVersion >= KeyringFormat.KeyringFormatVersion;
 
         var totalSize = HeaderSize;
         foreach (var slot in keyring.Slots)
@@ -142,7 +157,13 @@ public static class KeyringCodec
                 throw new ArgumentException($"SlotId must be {KeyringFormat.SlotIdSize} bytes", nameof(keyring));
             if (slot.PublicKey.Length != SlotKeyPair.KeySize)
                 throw new ArgumentException($"PublicKey must be {SlotKeyPair.KeySize} bytes", nameof(keyring));
-            totalSize += SlotHeaderSize + slot.Wrapped.Length + SlotKindSize;
+            var hwBlobLength = slot.HwBlob?.Length ?? 0;
+            // Never drop a hwBlob silently: it is the only copy of that slot's sealed KEK_slot.
+            if (hwBlobLength > 0 && !hasHwBlobColumn)
+                throw new ArgumentException($"Keyring format version {keyring.FormatVersion} cannot carry a slot's hwBlob", nameof(keyring));
+            if (hwBlobLength > 0 && slot.Kind == SlotKind.Recovery)
+                throw new ArgumentException("A recovery slot has no hardware and cannot carry a hwBlob", nameof(keyring));
+            totalSize += SlotHeaderSize + slot.Wrapped.Length + SlotKindSize + (hasHwBlobColumn ? HwBlobLengthSize + hwBlobLength : 0);
         }
 
         var result = new byte[totalSize];
@@ -165,6 +186,14 @@ public static class KeyringCodec
             offset += slot.Wrapped.Length;
             span[offset] = (byte)slot.Kind;
             offset += SlotKindSize;
+            if (hasHwBlobColumn)
+            {
+                var hwBlob = slot.HwBlob ?? [];
+                BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset, HwBlobLengthSize), (uint)hwBlob.Length);
+                offset += HwBlobLengthSize;
+                hwBlob.CopyTo(span.Slice(offset, hwBlob.Length));
+                offset += hwBlob.Length;
+            }
         }
 
         return result;
@@ -190,8 +219,16 @@ public static class KeyringCodec
             throw new TswapException("Malformed keyring: shorter than the header");
 
         var formatVersion = bytes[0];
-        if (formatVersion != KeyringFormat.KeyringFormatVersion)
-            throw new TswapException($"Unsupported keyring format version: {formatVersion}");
+        if (formatVersion > KeyringFormat.KeyringFormatVersion)
+            throw new TswapException(
+                $"Unsupported keyring format version: {formatVersion}. This vault was created by a newer tswap " +
+                $"(this build reads keyring versions {KeyringFormat.KeyringFormatVersionWithoutHwBlob} and " +
+                $"{KeyringFormat.KeyringFormatVersion}); upgrade tswap to open it.");
+        if (formatVersion < KeyringFormat.KeyringFormatVersionWithoutHwBlob)
+            throw new TswapException(
+                $"Unsupported keyring format version: {formatVersion}. This vault was created by a pre-release tswap " +
+                "whose keyring format is no longer supported; re-run 'tswap init --keyring'.");
+        var hasHwBlobColumn = formatVersion >= KeyringFormat.KeyringFormatVersion;
 
         var vaultId = bytes.AsSpan(1, KeyringFormat.VaultIdSize).ToArray();
         var k = bytes[1 + KeyringFormat.VaultIdSize];
@@ -225,8 +262,31 @@ public static class KeyringCodec
                 throw new TswapException($"Malformed keyring: unknown slot kind {kindByte}");
             offset += SlotKindSize;
 
-            slots.Add(new Slot(slotId, publicKey, wrapped, (SlotKind)kindByte));
+            byte[]? hwBlob = null;
+            if (hasHwBlobColumn)
+            {
+                if (HwBlobLengthSize > bytes.Length - offset)
+                    throw new TswapException("Malformed keyring: truncated slot hwBlob length");
+                var hwBlobLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, HwBlobLengthSize));
+                offset += HwBlobLengthSize;
+                if (hwBlobLength > bytes.Length - offset)
+                    throw new TswapException("Malformed keyring: slot hwBlob length prefix exceeds available data");
+                if (hwBlobLength > 0)
+                {
+                    if (kindByte == (byte)SlotKind.Recovery)
+                        throw new TswapException("Malformed keyring: a recovery slot carries a hwBlob");
+                    hwBlob = bytes.AsSpan(offset, (int)hwBlobLength).ToArray();
+                    offset += (int)hwBlobLength;
+                }
+            }
+
+            slots.Add(new Slot(slotId, publicKey, wrapped, (SlotKind)kindByte, hwBlob));
         }
+
+        // Nothing may follow the last slot (security review of T2): leftover bytes mean a
+        // corrupted or mislabelled keyring, e.g. a version 3 keyring relabelled as 2.
+        if (offset != bytes.Length)
+            throw new TswapException($"Malformed keyring: {bytes.Length - offset} trailing bytes after the last slot");
 
         return new Keyring(formatVersion, vaultId, k, slots);
     }

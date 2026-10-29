@@ -23,30 +23,23 @@ try
     // to stub YubiKey operations or skip sudo checks, regardless of env vars set.
     //   TSWAP_TEST_KEY        — hex-encoded 32-byte key; stubs all YubiKey hardware calls
     //   TSWAP_TEST_SUDO_BYPASS=1 — skips RequireSudo so tests exercise export/import as non-root
-    byte[]? testKey = null;
+    //   (TSWAP_TEST_KEY also selects the simulated TPM/Secure Enclave backend; see HardwareServices.)
+    var testKey = HardwareServices.ReadTestKey(Environment.GetEnvironmentVariable);
+    if (testKey != null && env.Verbose)
+        console.Out.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey, TPM and Secure Enclave operations simulated");
     bool sudoBypass = false;
 #if DEBUG
-    var testKeyHex = Environment.GetEnvironmentVariable("TSWAP_TEST_KEY");
-    if (testKeyHex != null)
-    {
-        testKey = Convert.FromHexString(testKeyHex);
-        if (testKey.Length != 32)
-            throw new TswapException("TSWAP_TEST_KEY must be exactly 32 bytes (64 hex chars)");
-        if (env.Verbose) console.Out.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey operations bypassed");
-    }
     sudoBypass = Environment.GetEnvironmentVariable("TSWAP_TEST_SUDO_BYPASS") == "1";
 #endif
 
     IYubiKeyService yubiKeys = testKey != null
         ? new TestKeyYubiKeyService(testKey)
         : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
-    // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS)
-    // register via the additionalBackends argument; the YubiKey backend is always present
-    // and VaultUnlocker picks the right one from config.Backend.
-    var extraBackends = new List<IHardwareKeyService>();
-    if (OperatingSystem.IsMacOS()) extraBackends.Add(new SecureEnclaveHardwareService());
-    if (OperatingSystem.IsLinux()) extraBackends.Add(new LinuxTpmHardwareService());
-    if (OperatingSystem.IsWindows()) extraBackends.Add(new WindowsTpmHardwareService());
+    // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or
+    // their simulated stand-ins in test mode) register via the additionalBackends argument;
+    // the YubiKey backend is always present and VaultUnlocker picks the right one from
+    // config.Backend.
+    var extraBackends = HardwareServices.UnlockBackends(testKey);
     var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
     var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, sudoBypass);

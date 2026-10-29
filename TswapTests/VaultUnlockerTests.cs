@@ -200,19 +200,10 @@ public class VaultUnlockerTests
 
     // --- Hardware-backend dispatch ---
 
-    // Minimal stand-in for a future TPM/Secure-Enclave backend: returns a fixed key so a
-    // test can prove VaultUnlocker routed to it (and not to the YubiKey backend).
-    private sealed class FakeBackend(HardwareBackend backend, byte[] key) : IHardwareKeyService
-    {
-        public int UnlockCalls;
-        public HardwareBackend Backend => backend;
-        public bool IsSimulated => true;
-        public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
-        {
-            UnlockCalls++;
-            return key;
-        }
-    }
+    // Non-YubiKey backends here are the shared SimulatedHardwareService (issue #153), which
+    // replaced this file's former ad-hoc FakeBackend.
+    private static SimulatedHardwareService Simulated(HardwareBackend backend)
+        => new(backend, RandomNumberGenerator.GetBytes(32));
 
     [Fact]
     public void Unlock_ExplicitYubiKeyBackend_MatchesNullBackend()
@@ -244,14 +235,20 @@ public class VaultUnlockerTests
     {
         var (yubi, config, _, _) = MakeVault();
         yubi.Connected = []; // YubiKey backend would throw if it were consulted
-        var tpmKey = RandomNumberGenerator.GetBytes(32);
-        var tpm = new FakeBackend(HardwareBackend.SecureEnclave, tpmKey);
+        var secureEnclave = Simulated(HardwareBackend.SecureEnclave);
+        var (kekSlot, hwBlob) = secureEnclave.Enroll();
 
-        var unlocker = new VaultUnlocker(yubi, additionalBackends: [tpm]);
-        var key = unlocker.Unlock(config with { Backend = HardwareBackend.SecureEnclave }, NoSelection);
+        var unlocker = new VaultUnlocker(yubi, additionalBackends: [secureEnclave]);
+        var key = unlocker.Unlock(config with
+        {
+            Backend = HardwareBackend.SecureEnclave,
+            SecureEnclaveWrappedKey = Convert.ToBase64String(hwBlob),
+        }, NoSelection);
 
-        Assert.Same(tpmKey, key);
-        Assert.Equal(1, tpm.UnlockCalls);
+        // Only the registered (simulated) Secure Enclave can turn hwBlob back into kekSlot, so
+        // getting kekSlot back proves the dispatch went to it, and the empty challenge log
+        // proves the YubiKey backend was never consulted.
+        Assert.Equal(kekSlot, key);
         Assert.Empty(yubi.ChallengeLog);
     }
 
@@ -263,7 +260,7 @@ public class VaultUnlockerTests
         // desyncing it from the _yubiKey field SelectConnectedSerial still uses, and quietly
         // dropping overrideKey's effect. That's a composition-root bug; must fail loudly.
         var (yubi, _, _, _) = MakeVault();
-        var impostor = new FakeBackend(HardwareBackend.YubiKey, []);
+        var impostor = Simulated(HardwareBackend.YubiKey);
 
         var ex = Assert.Throws<ArgumentException>(
             () => new VaultUnlocker(yubi, additionalBackends: [impostor]));
@@ -275,8 +272,8 @@ public class VaultUnlockerTests
     public void Constructor_DuplicateBackendWithinAdditionalBackends_Throws()
     {
         var (yubi, _, _, _) = MakeVault();
-        var first = new FakeBackend(HardwareBackend.SecureEnclave, []);
-        var second = new FakeBackend(HardwareBackend.SecureEnclave, []);
+        var first = Simulated(HardwareBackend.SecureEnclave);
+        var second = Simulated(HardwareBackend.SecureEnclave);
 
         var ex = Assert.Throws<ArgumentException>(
             () => new VaultUnlocker(yubi, additionalBackends: [first, second]));
@@ -305,8 +302,11 @@ public class VaultUnlockerTests
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
 
         var payload = SlotSecretPayload.Encode(vaultKey, slotKeyPair.PrivateKey);
-        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersion, vaultId, k: 1, slotId);
-        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, K: 1,
+        // A version 2 keyring, the layout YubiKey keyring vaults made before brief T2 item 5
+        // (#154) have on disk; Unlock_KeyringSlotWrappedUnderDifferentKekSlot below flips a byte
+        // by position in that layout. Version 3 YubiKey keyrings are covered by the CLI tests.
+        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersionWithoutHwBlob, vaultId, k: 1, slotId);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersionWithoutHwBlob, vaultId, K: 1,
             [new Slot(slotId, slotKeyPair.PublicKey, wrapped)]);
 
         var config = new Config(

@@ -18,12 +18,12 @@ namespace TswapCore.Vault;
 /// threshold (Shamir shares instead of the whole key) is Phase 6 — see
 /// <c>MULTI_MACHINE_KEYING.md</c>.</para>
 ///
-/// <para>This is today's single-machine, <c>k = 1</c> slice (implementation-ordering step 2 in
-/// <c>MULTI_MACHINE_KEYING.md</c>): <see cref="Config.TpmSealedKey"/> carries a single
-/// self-contained blob — the sealed object's public and private portions — produced and
-/// consumed by <see cref="Tpm2ToolsInterop"/>. The general multi-machine keyring (multiple
-/// slots, signed, `epoch`-guarded) is not built yet; this field is a single-slot precursor to
-/// it, not the final on-disk format.</para>
+/// <para><b>Where the blob lives (issue #154).</b> In a keyring vault (what <c>tswap init</c>
+/// makes since brief T2) the self-contained sealed blob is this machine's machine slot's
+/// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
+/// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
+/// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
 /// <para><b>Status: developed and tested only against a software TPM simulator (swtpm), not
 /// yet verified against real Linux TPM hardware</b> — see <c>HARDWARE_BACKENDS.md</c>'s Linux
@@ -34,8 +34,18 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("linux")]
-public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase
+public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>
+    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
+    /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine.
+    /// </summary>
+    public HardwareEnrollment Enroll()
+    {
+        var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        return new HardwareEnrollment(kekSlot, Seal(kekSlot));
+    }
+
     /// <summary>
     /// Enrollment side: seals <paramref name="plaintextKey"/> (the vault key) to a fresh
     /// TPM-bound primary key. The returned blob is useless off this machine.
