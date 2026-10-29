@@ -117,6 +117,50 @@ public class CliEnvironmentTests
         Assert.Contains("TSWAP_CONFIG_DIR", ex.Message);
     }
 
+    // Issue #175, per platform: the folder the binary really uses (DefaultApplicationDataDir,
+    // what FromSystem passes) is absolute and in the user's own profile, never relative.
+    // Read-only: it resolves a path and creates or writes nothing, so it is safe on a
+    // developer's machine (unlike the Linux-only end-to-end test, which runs init).
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnMacOS_IsLibraryApplicationSupport()
+    {
+        if (!OperatingSystem.IsMacOS()) return; // until #181: reported as Passed elsewhere
+
+        // .NET resolves it through the OS (NSApplicationSupportDirectory), which always exists
+        // for a real user, so the "fresh user without the folder" case of #175 can't occur here.
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.EndsWith(Path.Combine("Library", "Application Support"), dir.TrimEnd('/'));
+    }
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnLinux_IsXdgConfigHomeOrHomeDotConfig()
+    {
+        if (!OperatingSystem.IsLinux()) return; // until #181: reported as Passed elsewhere
+
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        var expected = !string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg)
+            ? xdg
+            : Path.Combine(Environment.GetEnvironmentVariable("HOME")!, ".config");
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.Equal(expected.TrimEnd('/'), dir.TrimEnd('/'));
+    }
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnWindows_IsAppData()
+    {
+        if (!OperatingSystem.IsWindows()) return; // until #181: reported as Passed elsewhere
+
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.Equal(Environment.GetEnvironmentVariable("APPDATA")!.TrimEnd('\\'), dir.TrimEnd('\\'));
+    }
+
     [Fact]
     public void DetectInvocationPrefix_NullProcessPath_DefaultsToTswap()
     {
