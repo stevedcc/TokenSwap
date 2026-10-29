@@ -57,7 +57,7 @@ public class HelpTests : IDisposable
         var (exit, stdout, stderr) = Run(sudoBypass: true, "init", flag);
 
         Assert.True(exit == 0, $"exit {exit}: {stdout}{stderr}");
-        Assert.Contains("init [--secure-enclave|--tpm|--keyring]", stdout);
+        Assert.Contains(new TswapCli.Commands.InitCommand().HelpUsage, stdout);
         Assert.False(VaultExists, "init --help must not create a vault");
     }
 
@@ -91,7 +91,7 @@ public class HelpTests : IDisposable
         var (exit, stdout, _) = Run(sudoBypass: true, "init", "--tpm", "--help");
 
         Assert.Equal(0, exit);
-        Assert.Contains("init [--secure-enclave|--tpm|--keyring]", stdout);
+        Assert.Contains(new TswapCli.Commands.InitCommand().HelpUsage, stdout);
         Assert.False(VaultExists);
     }
 
