@@ -341,4 +341,70 @@ public class TpmInitCliTests : IDisposable
         Assert.Throws<TswapException>(() => SlotPayloadWrap.Unwrap(ownSlot.Wrapped, KeyA,
             desktopKeyring.FormatVersion, desktopKeyring.VaultId, desktopKeyring.K, ownSlot.SlotId));
     }
+
+    // --- Item 5: the hardware blob lives in the machine slot (#154, decision 3) ---
+
+    [Theory]
+    [InlineData("--tpm", HardwareBackend.Tpm)]
+    [InlineData("--secure-enclave", HardwareBackend.SecureEnclave)]
+    public void Init_StoresTheHardwareBlobInTheVersion3MachineSlot_NotInTheLegacyField(string flag, HardwareBackend backend)
+    {
+        var dir = NewTempDir();
+        Assert.Equal(0, Run(dir, KeyA, "", "init", flag).ExitCode);
+
+        var config = LoadConfig(dir);
+        var keyring = DecodeKeyring(config);
+
+        Assert.Equal(backend, config.Backend);
+        Assert.Null(config.TpmSealedKey);
+        Assert.Null(config.SecureEnclaveWrappedKey);
+        Assert.Equal(3, keyring.FormatVersion);
+        var machine = Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Machine);
+        Assert.NotNull(machine.HwBlob);
+        Assert.NotEmpty(machine.HwBlob!);
+        Assert.Null(Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Recovery).HwBlob);
+
+        // The slot's blob is what unlocks: the simulated machine recovers KEK_slot from it.
+        var kekSlot = new SimulatedHardwareService(backend, KeyA).Unlock(config, _ => 0);
+        var (kv, _) = SlotSecretPayload.Decode(SlotPayloadWrap.Unwrap(
+            machine.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, machine.SlotId));
+        Assert.Equal(UnlockVault(dir, KeyA), kv);
+    }
+
+    [Fact]
+    public void TpmKeyringVault_WhoseMachineSlotHasNoHwBlob_FailsWithAClearError()
+    {
+        var dir = NewTempDir();
+        Assert.Equal(0, Run(dir, KeyA, "", "init", "--tpm").ExitCode);
+        var config = LoadConfig(dir);
+        var keyring = DecodeKeyring(config);
+        var stripped = keyring with { Slots = keyring.Slots.Select(s => s with { HwBlob = null }).ToList() };
+        new Storage(dir).SaveConfig(config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(stripped)) });
+
+        var (exit, _, stderr) = Run(dir, KeyA, "", "names");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Config is corrupted", stderr);
+        Assert.Contains("tpm", stderr);
+    }
+
+    [Fact]
+    public void YubiKeyMachineJoiningTpmVault_KeepsTheRoutersHwBlobInItsKeyringCopy()
+    {
+        var routerDir = NewTempDir();
+        var desktopDir = NewTempDir();
+        Assert.Equal(0, Run(routerDir, KeyA, "", "init", "--tpm").ExitCode);
+        var requestFile = Path.Combine(desktopDir, "request.json");
+        var approveFile = Path.Combine(desktopDir, "approve.json");
+        Assert.Equal(0, Run(desktopDir, KeyB, "", "slot", "request", requestFile).ExitCode);
+        Assert.Equal(0, Run(routerDir, KeyA, "", "slot", "approve", requestFile, approveFile).ExitCode);
+        Assert.Equal(0, Run(desktopDir, KeyB, "", "slot", "accept", approveFile).ExitCode);
+
+        var routerKeyring = DecodeKeyring(LoadConfig(routerDir));
+        var desktopKeyring = DecodeKeyring(LoadConfig(desktopDir));
+
+        Assert.Equal(3, desktopKeyring.FormatVersion);
+        Assert.Equal(routerKeyring.Slots[0].HwBlob, desktopKeyring.Slots[0].HwBlob);
+        Assert.Null(desktopKeyring.Slots[2].HwBlob); // the desktop's YubiKey slot has none
+    }
 }

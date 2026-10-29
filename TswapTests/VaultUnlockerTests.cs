@@ -302,8 +302,11 @@ public class VaultUnlockerTests
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
 
         var payload = SlotSecretPayload.Encode(vaultKey, slotKeyPair.PrivateKey);
-        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersion, vaultId, k: 1, slotId);
-        var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, K: 1,
+        // A version 2 keyring, the layout YubiKey keyring vaults made before brief T2 item 5
+        // (#154) have on disk; Unlock_KeyringSlotWrappedUnderDifferentKekSlot below flips a byte
+        // by position in that layout. Version 3 YubiKey keyrings are covered by the CLI tests.
+        var wrapped = SlotPayloadWrap.Wrap(payload, kekSlot, KeyringFormat.KeyringFormatVersionWithoutHwBlob, vaultId, k: 1, slotId);
+        var keyring = new Keyring(KeyringFormat.KeyringFormatVersionWithoutHwBlob, vaultId, K: 1,
             [new Slot(slotId, slotKeyPair.PublicKey, wrapped)]);
 
         var config = new Config(

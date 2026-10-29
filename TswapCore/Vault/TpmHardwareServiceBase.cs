@@ -23,29 +23,19 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
     public bool IsSimulated => false;
 
     /// <summary>
-    /// Recovers the vault master key by unsealing/unwrapping <see cref="Config.TpmSealedKey"/>.
+    /// Recovers the 32 bytes this machine's TPM protects by unsealing/unwrapping its blob: the
+    /// machine slot's <see cref="Keyring.Slot.HwBlob"/> in a keyring vault (<c>KEK_slot</c>), or
+    /// <see cref="Config.TpmSealedKey"/> in a single-slot vault (the vault key itself); see
+    /// <see cref="HardwareBlobLocator"/>.
     /// <paramref name="chooseSerial"/> is unused — a TPM is a single, non-removable device.
     /// </summary>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
         _ = chooseSerial; // intentionally unused — a TPM is a single, non-removable device
 
-        if (config.TpmSealedKey is not { Length: > 0 } sealedBase64)
-            throw new TswapException(
-                "Config is corrupted: vault uses the 'tpm' backend but has no sealed key. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-
-        byte[] sealedBlob;
-        try
-        {
-            sealedBlob = Convert.FromBase64String(sealedBase64);
-        }
-        catch (FormatException)
-        {
-            throw new TswapException(
-                "Config is corrupted: the TPM sealed key is not valid base64. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-        }
+        // A keyring vault's blob is in this machine's slot (issue #154); a single-slot vault's
+        // in TpmSealedKey. Same "Config is corrupted" errors as before for the latter.
+        var sealedBlob = HardwareBlobLocator.Read(config, HardwareBackend.Tpm);
 
         var key = RecoverKey(sealedBlob);
         // RecoverKey is a generic primitive (Phase 6 will use it for Shamir shares of varying

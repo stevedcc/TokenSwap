@@ -56,19 +56,21 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // Null means YubiKey (every vault created before hardware backends existed). Omitted
     // from config.json when null so existing YubiKey vaults serialize byte-for-byte as before.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null,
-    // Secure Enclave only: base64 ECIES wrap of the vault master key against this machine's
-    // Secure Enclave key pair (see SecureEnclaveHardwareService). Single-slot precursor to
-    // the Phase 6 multi-machine keyring — irrelevant, so omitted, for other backends.
-    // PoC status: this blob's internal byte layout (see AppleSecureEnclaveInterop.Wrap) has no
-    // version tag — changing it silently breaks every existing Secure Enclave vault. See
-    // HARDWARE_BACKENDS.md's "PoC-grade" section before treating this as a stable format.
+    // LEGACY, Secure Enclave single-slot vaults only (made before keyring vaults): base64 ECIES
+    // wrap of the vault master key against this machine's Secure Enclave key pair (see
+    // SecureEnclaveHardwareService). Not written any more: 'tswap init --secure-enclave' makes a
+    // keyring vault whose machine slot carries the blob as its hwBlob, versioned by the keyring's
+    // AEAD-bound format version (issue #154). This field's own byte layout (see
+    // AppleSecureEnclaveInterop.Wrap) has no version tag; it is still read so existing vaults keep
+    // unlocking, and they are not migrated (re-create and re-add secrets). Omitted when null.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SecureEnclaveWrappedKey = null,
-    // TPM only (Windows/Linux): base64 blob of the vault master key wrapped/sealed to this
-    // machine's TPM (see WindowsTpmHardwareService/PlatformCryptoProviderInterop on Windows,
-    // LinuxTpmHardwareService/Tpm2ToolsInterop on Linux). Single-slot precursor to the Phase 6
-    // multi-machine keyring — irrelevant, so omitted, for other backends. Simulator/VM-only
-    // status: see HARDWARE_BACKENDS.md's TPM sections before treating this as verified against
-    // real hardware.
+    // LEGACY, TPM single-slot vaults only (Windows/Linux, made before keyring vaults): base64 blob
+    // of the vault master key wrapped/sealed to this machine's TPM (see
+    // WindowsTpmHardwareService/PlatformCryptoProviderInterop on Windows,
+    // LinuxTpmHardwareService/Tpm2ToolsInterop on Linux). Not written any more: 'tswap init --tpm'
+    // makes a keyring vault whose machine slot carries the blob as its hwBlob, versioned by the
+    // keyring (issue #154). Unversioned itself; still read so existing vaults keep unlocking, not
+    // migrated. Omitted when null.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TpmSealedKey = null,
     // Base64-encoded PBKDF2 salt for master-key derivation (see Crypto.DeriveKey). Null means
     // "use the legacy hardcoded Crypto.MasterKeySalt constant" — every vault created before
@@ -78,7 +80,9 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // a fresh 'tswap init' of the default YubiKey backend). Additive/backward-compatible,
     // following the same pattern as SecureEnclaveWrappedKey/TpmSealedKey above.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null,
-    // Phase 6 keyring vault only (issue #119, 'tswap init --keyring'): base64 of a
+    // Phase 6 keyring vault only (issue #119, 'tswap init --keyring', and since brief T2 also
+    // 'tswap init --tpm'/'--secure-enclave', whose machine slot carries the TPM/Secure Enclave
+    // blob as its hwBlob, issue #154): base64 of a versioned (2 or 3)
     // Keyring.KeyringCodec-encoded Keyring holding a random K_v wrapped by this machine's slot,
     // instead of K_v being derived directly from k1/k2 (see Crypto.DeriveKey). Backend-agnostic
     // and purely additive on top of the existing YubiKey fields above: a keyring vault still

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TswapCore.Keyring;
 
@@ -42,8 +43,14 @@ public sealed record SlotRequestFile(int FormatVersion, string SlotId, string Pu
 /// material — see this issue's PR body). Every field here is the base64/raw form of the
 /// corresponding <see cref="Slot"/> field; <see cref="SlotEnrollmentFileCodec"/> round-trips
 /// these back into real <see cref="Slot"/> instances at <c>slot accept</c> time.
+///
+/// <para><see cref="HwBlob"/> (issue #154): the slot's <see cref="Slot.HwBlob"/>, base64, so a
+/// TPM/Secure Enclave machine slot is copied whole into the accepting machine's keyring. Omitted
+/// from the JSON when null (YubiKey and recovery slots, and every approve file written before
+/// this field), which older readers ignore.</para>
 /// </summary>
-public sealed record SlotDto(string SlotId, string PublicKey, string Wrapped, SlotKind Kind);
+public sealed record SlotDto(string SlotId, string PublicKey, string Wrapped, SlotKind Kind,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HwBlob = null);
 
 /// <summary>
 /// Wire format for <c>tswap slot approve</c>'s output file (issue #121). Hand-carried back to the
@@ -156,10 +163,12 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException(
                 $"Unsupported slot approve file format version {file.FormatVersion} " +
                 $"(this build supports {SlotApproveFile.CurrentFormatVersion}). Use a matching tswap version on both machines.");
-        if (file.KeyringFormatVersion != KeyringFormat.KeyringFormatVersion)
+        // Version 2 (a YubiKey keyring vault from before issue #154) and 3 are both current:
+        // slot accept keeps the approving vault's version, which its slots' AEAD binds.
+        if (file.KeyringFormatVersion is not (KeyringFormat.KeyringFormatVersionWithoutHwBlob or KeyringFormat.KeyringFormatVersion))
             throw new TswapException(
                 $"Unsupported keyring format version {file.KeyringFormatVersion} in approve file " +
-                $"(this build supports {KeyringFormat.KeyringFormatVersion}).");
+                $"(this build supports {KeyringFormat.KeyringFormatVersionWithoutHwBlob} and {KeyringFormat.KeyringFormatVersion}).");
 
         return file;
     }

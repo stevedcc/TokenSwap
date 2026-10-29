@@ -278,7 +278,8 @@ public sealed class SlotCommand : ICliCommand
                 Convert.ToBase64String(s.SlotId),
                 Convert.ToBase64String(s.PublicKey),
                 Convert.ToBase64String(s.Wrapped),
-                s.Kind)).ToList(),
+                s.Kind,
+                s.HwBlob is { Length: > 0 } hwBlob ? Convert.ToBase64String(hwBlob) : null)).ToList(),
             request.SlotId,
             request.PublicKey,
             Convert.ToBase64String(ephemeralPublicKey),
@@ -358,7 +359,8 @@ public sealed class SlotCommand : ICliCommand
             SlotEnrollmentFileCodec.DecodeFixed(dto.SlotId, KeyringFormat.SlotIdSize, "approve file's existing slot id"),
             SlotEnrollmentFileCodec.DecodeFixed(dto.PublicKey, SlotKeyPair.KeySize, "approve file's existing slot public key"),
             SlotEnrollmentFileCodec.DecodeVariable(dto.Wrapped, "approve file's existing slot wrapped bytes"),
-            dto.Kind)).ToList();
+            dto.Kind,
+            dto.HwBlob == null ? null : SlotEnrollmentFileCodec.DecodeVariable(dto.HwBlob, "approve file's existing slot hardware blob"))).ToList();
 
         var finalKeyring = new TswapCore.Keyring.Keyring(
             approve.KeyringFormatVersion, vaultId, approve.K,

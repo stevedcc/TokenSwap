@@ -482,9 +482,11 @@ public sealed class InitCommand : ICliCommand
     /// under <paramref name="kekSlot"/> (<see cref="MachineSlotWrap"/>), adds the recovery slot
     /// when <paramref name="includeRecovery"/> is set (<see cref="RecoverySlotWrap"/>), and
     /// encodes the <c>k = 1</c> keyring. The recovery private key is returned, never stored.
+    /// <paramref name="hwBlob"/> (issue #154) is a TPM/Secure Enclave backend's blob for the
+    /// machine slot; null for YubiKey.
     /// </summary>
     internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) AssembleKeyring(
-        byte[] kekSlot, Config backendConfig, bool includeRecovery)
+        byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null)
     {
         if (backendConfig.Keyring != null || backendConfig.KeyringSlotId != null)
             throw new ArgumentException("The backend's config must not already carry a keyring", nameof(backendConfig));
@@ -500,7 +502,12 @@ public sealed class InitCommand : ICliCommand
         // the exact same construction, not a re-derived copy.
         var machineSlot = MachineSlotWrap.Wrap(
             vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
-            KeyringFormat.KeyringFormatVersion, vaultId, k);
+            KeyringFormat.KeyringFormatVersion, vaultId, k) with
+        {
+            // Issue #154: a TPM/Secure Enclave backend's blob lives in its machine slot, under the
+            // keyring's AEAD-bound format version. Null for YubiKey, which derives KEK_slot.
+            HwBlob = hwBlob,
+        };
 
         var slots = new List<Slot> { machineSlot };
         byte[]? recoveryPrivateKey = null;
@@ -560,26 +567,20 @@ public sealed class InitCommand : ICliCommand
         var (kekSlot, hwBlob) = enrollment.Enroll();
 
         // The backend's own fields. YubiKeySerials = [] and RedundancyXor = "" as every
-        // non-YubiKey vault has always written (issue #151's note: no on-disk change).
-        var backendConfig = backend == HardwareBackend.Tpm
-            ? new Config(
-                YubiKeySerials: [],
-                RedundancyXor: "",
-                Created: DateTime.UtcNow,
-                RequiresTouch: false,
-                RngMode: RngMode.System,
-                Backend: HardwareBackend.Tpm,
-                TpmSealedKey: Convert.ToBase64String(hwBlob))
-            : new Config(
-                YubiKeySerials: [],
-                RedundancyXor: "",
-                Created: DateTime.UtcNow,
-                RequiresTouch: true, // the Secure Enclave key always requires presence to unwrap
-                RngMode: RngMode.System,
-                Backend: HardwareBackend.SecureEnclave,
-                SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
+        // non-YubiKey vault has always written (issue #151's note: no on-disk change). The blob
+        // goes into the machine slot (issue #154), not into TpmSealedKey/SecureEnclaveWrappedKey,
+        // which only single-slot vaults made before keyring vaults use.
+        var backendConfig = new Config(
+            YubiKeySerials: [],
+            RedundancyXor: "",
+            Created: DateTime.UtcNow,
+            // The Secure Enclave key always requires presence to unwrap; a TPM key here has no
+            // PIN/PCR policy (#133).
+            RequiresTouch: backend == HardwareBackend.SecureEnclave,
+            RngMode: RngMode.System,
+            Backend: backend);
 
-        var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery);
+        var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery, hwBlob);
 
         // Same re-init backup dance as every other init path: back up config first (if anything
         // fails mid-init the old config still matches the old vault backup), then move the old
@@ -612,7 +613,7 @@ public sealed class InitCommand : ICliCommand
             : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
         if (fileStore != null)
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
-        c.Out.WriteLine($"\nThe machine slot's blob in config.json is meaningless without this machine's");
+        c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
         PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;

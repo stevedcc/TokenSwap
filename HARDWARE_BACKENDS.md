@@ -115,9 +115,10 @@ shim (`TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift`, compiled to `lib
 an MSBuild target in `TswapCore.csproj`, macOS-only). `Wrap` creates a new Secure Enclave key pair
 and ECIES-wraps the vault key to it (ephemeral P-256 key agreement + HKDF-SHA256 + AES-GCM, all
 via CryptoKit); `Unwrap` reconstitutes the key and decrypts — this is the call that triggers Touch
-ID / presence. `Config.SecureEnclaveWrappedKey` carries one self-contained base64 blob: the Secure
-Enclave key's own `dataRepresentation` plus the ciphertext package — a single-slot, `k = 1`
-precursor to the Phase 6 multi-machine keyring, not the final on-disk format. Registered in
+ID / presence. The blob is self-contained: the Secure Enclave key's own `dataRepresentation`
+plus the ciphertext package. In a keyring vault (what `tswap init --secure-enclave` makes) it is
+the machine slot's `hwBlob` and wraps that slot's `KEK_slot`; in a single-slot vault made before
+keyring vaults it is `Config.SecureEnclaveWrappedKey` and wraps the vault key. Registered in
 `TswapCli/Program.cs` behind `OperatingSystem.IsMacOS()`. `TswapTests/SecureEnclaveHardwareServiceTests.cs`
 holds the trait-gated tests (`Category=SecureEnclave`, run with `./runtests.sh --secure-enclave`
 on a Mac) — they now pass via plain `dotnet test`, no publishing or signing required.
@@ -134,14 +135,15 @@ but three things are still open before this should be trusted as a primary vault
   construction in `TswapSecureEnclave.swift` is a hand-rolled ECIES equivalent; it's been
   verified for correctness (round-trips, fails cleanly on denial), not reviewed by anyone with
   cryptography expertise for subtler issues.
-- **The wrapped-key wire format is unversioned.** `Config.SecureEnclaveWrappedKey`'s byte layout
-  (length-prefixed `dataRepresentation` blob + ECIES package, see `AppleSecureEnclaveInterop.cs`)
-  has no version tag. Changing `tswap_se_wrap`'s packing format is a silent breaking change for
-  every existing Secure Enclave vault, with no detection or migration path.
-- `tswap init --secure-enclave` is explicitly a **workaround** (see its doc comment in
-  `InitCommand.cs`) to enable this end-to-end testing ahead of a real enrollment flow — not the
-  intended long-term UX. Phase 6 (`MULTI_MACHINE_KEYING.md`) is where a proper enrollment
-  ceremony, multi-factor unlock, and a versioned keyring format belong.
+- **The wrapped-key blob is versioned by the keyring (issue #154).** In a keyring vault the
+  blob (length-prefixed `dataRepresentation` + ECIES package, see `AppleSecureEnclaveInterop.cs`)
+  is the machine slot's `hwBlob`, so the keyring's `formatVersion` (3), which every slot's AEAD
+  binds, versions it: a future packing change is a new keyring version that older builds reject
+  with a clear "created by a newer tswap" error. The legacy single-slot field
+  `Config.SecureEnclaveWrappedKey` is unversioned; vaults that use it still unlock but are not
+  migrated (re-create with `tswap init --secure-enclave` and re-add your secrets).
+- `tswap init --secure-enclave` makes a keyring vault (machine slot + recovery slot), the same
+  enrollment shape as the other backends; see "TPM and Secure Enclave vaults are keyring vaults".
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 
@@ -241,10 +243,11 @@ backend functions. It does not block building, testing, or using this backend lo
 (`tpm2_createprimary`/`tpm2_create`/`tpm2_load`/`tpm2_unseal`) via `System.Diagnostics.Process`
 with argument arrays — the same pattern as `YkmanYubiKeyService`, not P/Invoke. `Seal` creates a
 TPM-bound primary key under the owner hierarchy and seals the vault key to it as a TPM keyed-hash
-object; `Unseal` regenerates the primary and unseals. `Config.TpmSealedKey` carries one
-self-contained base64 blob: a 4-byte length-prefixed public portion followed by the private
-(encrypted) portion — a single-slot, `k = 1` precursor to the Phase 6 multi-machine keyring, not
-the final on-disk format. Registered in `TswapCli/Program.cs` behind `OperatingSystem.IsLinux()`.
+object; `Unseal` regenerates the primary and unseals. The sealed blob is self-contained: a 4-byte
+length-prefixed public portion followed by the private (encrypted) portion. In a keyring vault
+(what `tswap init --tpm` makes) it is the machine slot's `hwBlob` and seals that slot's
+`KEK_slot`; in a single-slot vault made before keyring vaults it is `Config.TpmSealedKey` and seals
+the vault key. Registered in `TswapCli/Program.cs` behind `OperatingSystem.IsLinux()`.
 `TswapTests/LinuxTpmHardwareServiceTests.cs` holds the trait-gated tests (`Category=Tpm`, run with
 `./runtests.sh --tpm`) — they need a reachable TPM 2.0 device or simulator.
 
@@ -283,9 +286,11 @@ property holds. Concretely still open before this should be trusted as a primary
   scheme. `MULTI_MACHINE_KEYING.md`'s "Why not k ≥ 2 (yet)" section is explicit that a TPM
   PIN/PCR check doesn't compose into an independent second factor for multi-device unlock (same
   root of trust as this slot); it's worth having for this backend regardless.
-- **The sealed-key wire format is unversioned**, same caveat as `Config.SecureEnclaveWrappedKey`:
-  changing `Tpm2ToolsInterop`'s packing format is a silent breaking change for every existing TPM
-  vault, with no detection or migration path.
+- **The sealed blob is versioned by the keyring (issue #154)**, as for the Secure Enclave: in a
+  keyring vault it is the machine slot's `hwBlob` under the AEAD-bound keyring `formatVersion`, so
+  a change to `Tpm2ToolsInterop`'s packing is a new keyring version, rejected clearly by older
+  builds. The legacy single-slot `Config.TpmSealedKey` is unversioned; such vaults still unlock
+  but are not migrated (re-create with `tswap init --tpm` and re-add your secrets).
 - **Small transient-object budgets are a real constraint, verified, not assumed.** The swtpm
   instance this backend was developed against exhausted its transient-object slots after two or
   three chained `tpm2_*` invocations without an intervening `tpm2_flushcontext -t` — every
@@ -293,10 +298,8 @@ property holds. Concretely still open before this should be trusted as a primary
   commonly have similarly small transient-object counts, so `Tpm2ToolsInterop` flushes
   unconditionally before every `createprimary`/`load` call (verified as a safe no-op when there's
   nothing to flush) rather than only reacting to that failure.
-- `tswap init --tpm` is explicitly a **workaround** (see its doc comment in `InitCommand.cs`) to
-  enable end-to-end testing ahead of a real enrollment flow — not the intended long-term UX. Phase
-  6 (`MULTI_MACHINE_KEYING.md`) is where a proper enrollment ceremony, multi-factor unlock, and a
-  versioned keyring format belong.
+- `tswap init --tpm` makes a keyring vault (machine slot + recovery slot); see "TPM and Secure
+  Enclave vaults are keyring vaults". Multi-factor unlock (PIN/PCR policy, #133) is still out.
 - **TPM availability/enablement is explicitly out of scope.** No detection wizard, no "enable your
   TPM in BIOS" guidance. A missing TPM (or, in dev/test, an unreachable simulator) fails once with
   one clear, direct error — matching "No YubiKey detected."
@@ -350,10 +353,10 @@ reimplementing directly).
 unlike the Secure Enclave (no C ABI) or Linux (a CLI shellout was chosen over a large P/Invoke
 surface). `Wrap` creates a non-exportable RSA-2048 key under a **freshly-generated random name**
 and RSA-OAEP-SHA256-encrypts the vault key to it, bundling the key's name into the returned blob;
-`Unwrap` reads the name back out and re-opens exactly that key. `Config.TpmSealedKey` — shared
-with the Linux backend, since a vault is inherently tied to one machine's OS already — carries
-this bundled (name + ciphertext) blob, a single-slot, `k = 1` precursor to the Phase 6
-multi-machine keyring, not the final on-disk format. Registered in `TswapCli/Program.cs` behind
+`Unwrap` reads the name back out and re-opens exactly that key. The bundled (name + ciphertext)
+blob is stored where the Linux backend's is (the machine slot's `hwBlob` in a keyring vault, or
+the legacy `Config.TpmSealedKey` in a single-slot vault), under the same `tpm` backend tag, since
+a vault is inherently tied to one machine's OS already. Registered in `TswapCli/Program.cs` behind
 `OperatingSystem.IsWindows()`. `TswapTests/WindowsTpmHardwareServiceTests.cs` holds the
 trait-gated tests (`Category=TpmWindows` — deliberately distinct from Linux's `Category=Tpm`,
 since both test classes compile on every OS regardless of `[SupportedOSPlatform]` and need to be
@@ -383,7 +386,7 @@ break its ability to unseal. Generating a fresh random name per `Wrap` call and 
 the blob eliminates the shared-namespace problem entirely: every vault, and every test run, gets
 an isolated key with nothing to configure. The tradeoff is that re-running `init --tpm` now
 leaves the old named key orphaned in the PCP key store rather than cleanly overwriting it —
-harmless key-store clutter, not a correctness issue, given this backend is single-slot today.
+harmless key-store clutter, not a correctness issue: each vault uses only its own machine slot's key.
 
 ### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
 
@@ -403,10 +406,9 @@ ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still
   throws during any future diagnostic work on a Parallels VM — it doesn't mean the TPM is broken.
 - **No PIN or attestation policy support** — only the unconditional wrap/unwrap case is
   implemented, matching Linux's current scope.
-- **The sealed-key wire format is unversioned**, same caveat as the other two backends'
-  `Config` fields.
-- `tswap init --tpm` is explicitly a **workaround** (see its doc comment in `InitCommand.cs`) to
-  enable end-to-end testing ahead of a real enrollment flow, same as the other two backends.
+- **The wrapped blob is versioned by the keyring (issue #154)**, as for the other two backends;
+  the legacy single-slot `Config.TpmSealedKey` is unversioned and not migrated.
+- `tswap init --tpm` makes a keyring vault (machine slot + recovery slot), as on Linux.
 - **TPM availability/enablement is explicitly out of scope** — no detection wizard, no "enable
   your TPM in BIOS" guidance. A missing TPM fails once with one clear, direct error.
 
@@ -477,12 +479,16 @@ policy stays on the backlog on its own merits as standalone hardening, not as a 
 ingredient). Read it before implementing further TPM/SE/YubiKey enrollment work.
 See also `REFACTORING_PLAN.md` §Phase 6 for the mergeable on-disk format and threat model.
 
-**Forward note on the "unversioned wire format" caveat** raised in each backend's status
-section below (`Config.SecureEnclaveWrappedKey`, `Config.TpmSealedKey`): Phase 6's keyring
-format resolves this by construction, not by patching the current fields. Each backend's blob
-becomes a slot's `hwBlob`, and `formatVersion` becomes part of the AEAD's associated data
-(`MULTI_MACHINE_KEYING.md` §AAD binding) rather than an afterthought — so this is a rename that
-comes with the Phase 6 migration, not a change to make to today's single-slot fields in
-isolation.
+**The "unversioned wire format" caveat is resolved for keyring vaults (issue #154, brief T2
+decision 3, option (b)).** Each backend's blob is now the machine slot's `hwBlob` inside the
+keyring, and `KeyringFormat.KeyringFormatVersion` went 2 → 3 for it. That version is in every
+slot's AEAD associated data (`MULTI_MACHINE_KEYING.md` §AAD binding), so it cannot be rewritten
+without breaking every slot, and `KeyringCodec.Decode` rejects an unknown version with "created
+by a newer tswap". Version 2 keyrings (YubiKey and recovery slots only, no `hwBlob`) still
+decode, unlock and enroll new machines; a keyring keeps its version for life, because
+re-labelling it would invalidate every existing slot's AEAD. The legacy single-slot fields
+`Config.SecureEnclaveWrappedKey` and `Config.TpmSealedKey` stay unversioned and are only read
+for vaults made before keyring vaults; there is no automatic migration (re-create and re-add
+your secrets).
 
 

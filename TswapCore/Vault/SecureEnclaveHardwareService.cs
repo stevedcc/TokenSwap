@@ -15,14 +15,12 @@ namespace TswapCore.Vault;
 /// leaves the Enclave; unlock unwraps <c>K_v</c> transiently in memory. The k≥2 threshold
 /// (Shamir shares instead of the whole key) is Phase 6 — see <c>MULTI_MACHINE_KEYING.md</c>.</para>
 ///
-/// <para>This is today's single-machine, <c>k = 1</c> slice (implementation-ordering step 2 in
-/// <c>MULTI_MACHINE_KEYING.md</c>): <see cref="Config.SecureEnclaveWrappedKey"/> carries a
-/// single self-contained blob — the Secure Enclave key's own <c>dataRepresentation</c> plus the
-/// ECIES ciphertext — produced and consumed by <see cref="AppleSecureEnclaveInterop"/>. There is
-/// no keychain entry and nothing to look up by tag: the key only exists as long as this blob is
-/// kept, and only the physical Secure Enclave that created it can unwrap it. The general
-/// multi-machine keyring (multiple slots, signed, `epoch`-guarded) is not built yet; this field
-/// is a single-slot precursor to it, not the final on-disk format.</para>
+/// <para><b>Where the blob lives (issue #154).</b> In a keyring vault (what <c>tswap init</c>
+/// makes since brief T2) the self-contained wrapped blob is this machine's machine slot's
+/// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
+/// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
+/// is the legacy, unversioned <see cref="Config.SecureEnclaveWrappedKey"/> and protects the vault key itself.
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
 /// <para>Registered at the composition root only on macOS — see <c>TswapCli/Program.cs</c>.
 /// On other builds <see cref="VaultUnlocker"/> returns a clear "backend not supported" error
@@ -47,28 +45,18 @@ public sealed class SecureEnclaveHardwareService : IHardwareKeyService, IHardwar
     public bool IsSimulated => false;
 
     /// <summary>
-    /// Recovers the vault master key by unwrapping <see cref="Config.SecureEnclaveWrappedKey"/>.
+    /// Recovers the 32 bytes this Mac's Secure Enclave protects by unwrapping its blob: the
+    /// machine slot's <see cref="Keyring.Slot.HwBlob"/> in a keyring vault (<c>KEK_slot</c>), or
+    /// <see cref="Config.SecureEnclaveWrappedKey"/> in a single-slot vault (the vault key itself);
+    /// see <see cref="HardwareBlobLocator"/>.
     /// <paramref name="chooseSerial"/> is unused — the Secure Enclave is a single,
     /// non-removable device.
     /// </summary>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
-        if (config.SecureEnclaveWrappedKey is not { Length: > 0 } wrappedBase64)
-            throw new TswapException(
-                "Config is corrupted: vault uses the 'secure-enclave' backend but has no wrapped key. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-
-        byte[] wrapped;
-        try
-        {
-            wrapped = Convert.FromBase64String(wrappedBase64);
-        }
-        catch (FormatException)
-        {
-            throw new TswapException(
-                "Config is corrupted: the Secure Enclave wrapped key is not valid base64. " +
-                "Restore config.json from backup or re-run 'tswap init'.");
-        }
+        // A keyring vault's blob is in this machine's slot (issue #154); a single-slot vault's
+        // in SecureEnclaveWrappedKey. Same "Config is corrupted" errors as before for the latter.
+        var wrapped = HardwareBlobLocator.Read(config, HardwareBackend.SecureEnclave);
 
         var key = Unwrap(wrapped);
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
