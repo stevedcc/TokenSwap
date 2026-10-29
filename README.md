@@ -146,6 +146,27 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 tswap names
 ```
 
+### Setup on a TPM or Secure Enclave machine
+
+```bash
+# Linux/Windows with a TPM 2.0 (Linux needs tpm2-tools), or a Mac's Secure Enclave
+tswap init --tpm              # or: tswap init --secure-enclave
+```
+
+This makes a **keyring vault**: a random vault key wrapped by this machine's TPM or Secure
+Enclave (the machine slot), plus a break-glass **recovery slot**. `init` prints the recovery
+private key once; store it offline (tswap never saves it). `--no-recovery` leaves the recovery
+slot out. `--keyring` is implied and accepted (`tswap init --keyring --tpm` is the same
+command); `--tpm` and `--secure-enclave` cannot be combined. `init` rejects any other argument.
+
+Another machine, for example a desktop with YubiKeys, can join the same vault with
+`tswap slot request` (on the new machine), `tswap slot approve` (on this one) and
+`tswap slot accept` (back on the new one). `tswap slots` lists the slots.
+
+**Vaults made by `tswap init --tpm` or `--secure-enclave` before keyring vaults** (one sealed key,
+no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
+vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add your secrets.
+
 ## Security: YubiKey Touch Requirement
 
 **By default, tswap recommends configuring YubiKey slots with touch requirement** for better security:
@@ -428,7 +449,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 
 | Command | Sudo | Description |
 |---------|------|-------------|
-| `init` | No | Initialize with 2 YubiKeys |
+| `init [--keyring] [--tpm\|--secure-enclave] [--no-recovery]` | No | Initialize with 2 YubiKeys, or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)) |
 | `migrate` | No | Guide to upgrade slots for touch requirement |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |
 | `ingest <name>` | No | Pipe secret from stdin (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value up to 64 KB |

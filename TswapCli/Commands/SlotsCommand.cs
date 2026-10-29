@@ -130,7 +130,16 @@ public sealed class SlotsCommand : ICliCommand
     /// physical custody of it, which is a real, if unusual, control (see
     /// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
-    private static string DescribeMachineProtection(Config config) => config.RequiresTouch switch
+    private static string DescribeMachineProtection(Config config) => (config.Backend, config.RequiresTouch) switch
+    {
+        // Brief T2: TPM and Secure Enclave keyring vaults exist now; describe their machine slot
+        // by its real hardware instead of as a YubiKey. (Presence detail per slot is #158.)
+        (HardwareBackend.Tpm, _) => "TPM, sealed to this machine's TPM",
+        (HardwareBackend.SecureEnclave, _) => "Secure Enclave, presence required",
+        (_, var touch) => DescribeYubiKeyProtection(touch),
+    };
+
+    private static string DescribeYubiKeyProtection(bool? requiresTouch) => requiresTouch switch
     {
         true => "YubiKey, touch required",
         false => "YubiKey, no touch required — protected by physical custody of the YubiKey",

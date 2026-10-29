@@ -79,6 +79,20 @@ build), and only a non-null test key selects the simulated TPM and Secure Enclav
 that test key. It proves the keyring and enrollment plumbing, never the hardware
 root-of-trust property; the trait-gated hardware suites stay as they are.
 
+### TPM and Secure Enclave vaults are keyring vaults (brief T2, decisions 2 and 4)
+
+**`--keyring` is the default for `--tpm` and `--secure-enclave`.** `tswap init --tpm` (with or
+without `--keyring`) makes a keyring vault with a Machine slot, whose `KEK_slot` the TPM
+protects, plus a Recovery slot; `--no-recovery` drops the Recovery slot, as on YubiKey. No flag
+creates the old single-slot form any more. `--tpm` and `--secure-enclave` stay mutually
+exclusive, and `init` rejects any argument that is not one of its four flags (#177).
+
+**Existing single-slot TPM/Secure Enclave vaults** (no `Keyring`, the vault key itself in
+`TpmSealedKey`/`SecureEnclaveWrappedKey`) keep unlocking unchanged: `VaultUnlocker` is untouched
+and a config without a keyring still uses the recovered 32 bytes as the vault key. **There is no
+automatic migration**: re-create the vault with `tswap init --tpm` (or `--secure-enclave`) and
+re-add your secrets. The population is the maintainer's own machines.
+
 ## Config discriminator
 
 `Config` carries an optional backend tag:

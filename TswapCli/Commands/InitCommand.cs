@@ -8,13 +8,38 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => "init [--secure-enclave|--tpm|--keyring] [--no-recovery]";
-    public string Description => "Initialize with 2 YubiKeys (or --secure-enclave on macOS, --tpm on Windows/Linux, --keyring for a random-K_v YubiKey vault with a default-on recovery slot; --no-recovery opts out)";
+    public string HelpUsage => "init [--keyring] [--tpm|--secure-enclave] [--no-recovery]";
+    public string Description => "Initialize with 2 YubiKeys; --keyring for a random-K_v YubiKey keyring vault; --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware. Keyring vaults get a recovery slot; --no-recovery opts out";
     public bool RequiresSudo => false;
+
+    /// <summary>The only arguments <c>init</c> accepts, each at most once (#177).</summary>
+    private static readonly string[] KnownFlags = ["--keyring", "--tpm", "--secure-enclave", "--no-recovery"];
 
     public int Execute(CommandContext ctx, string[] args)
     {
         var c = ctx.Console;
+
+        // Issue #177: the argument list must be exactly a combination of the known flags. Checked
+        // before anything else (the reinitialise prompt, any hardware), so a typo such as
+        // 'init --tmp' never falls through to a YubiKey initialisation.
+        var usage = $"{ctx.Prefix} init [--keyring] [--tpm|--secure-enclave] [--no-recovery] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}; --tpm and --secure-enclave are mutually exclusive)";
+        if (args.Any(a => !KnownFlags.Contains(a)) || args.Distinct().Count() != args.Length)
+            throw new UsageException(usage);
+
+        var tpm = args.Contains("--tpm");
+        var secureEnclave = args.Contains("--secure-enclave");
+        var keyring = args.Contains("--keyring");
+        var noRecovery = args.Contains("--no-recovery");
+
+        if (tpm && secureEnclave)
+            throw new UsageException(usage);
+
+        // --no-recovery (issue #120) only means anything for a keyring vault: the classic
+        // derived-key YubiKey vault has no keyring to add a recovery slot to. Reject it there
+        // rather than silently ignoring it.
+        if (noRecovery && !(keyring || tpm || secureEnclave))
+            throw new UsageException($"{ctx.Prefix} init --no-recovery requires --keyring, --tpm or --secure-enclave");
 
         // Detecting an existing config to prompt about reinitializing (and, further
         // down, backing it up before overwriting) is inherently file-store-specific;
@@ -28,26 +53,18 @@ public sealed class InitCommand : ICliCommand
                 return 0;
         }
 
-        var initFlagCount = new[] { "--secure-enclave", "--tpm", "--keyring" }.Count(args.Contains);
-        if (initFlagCount > 1)
-            throw new UsageException($"{ctx.Prefix} init [--secure-enclave|--tpm|--keyring] (mutually exclusive)");
+        // Brief T2 decision 2: --tpm and --secure-enclave always make a keyring vault (machine
+        // slot + recovery slot unless --no-recovery); --keyring is implied and accepted. No flag
+        // creates the old single-slot TPM/Secure Enclave form any more; existing single-slot
+        // vaults still unlock unchanged (VaultUnlocker reads their single-slot field).
+        if (secureEnclave)
+            return ExecuteHardwareKeyring(ctx, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery);
 
-        // --no-recovery (issue #120) only means anything on the --keyring path: the plain
-        // default/--secure-enclave/--tpm flows have no keyring to add a recovery slot to in the
-        // first place (see InitCommand's file-level scoping note). Reject it standalone rather
-        // than silently ignoring it, the same way the mutual-exclusivity check above does for
-        // the main three flags.
-        if (args.Contains("--no-recovery") && !args.Contains("--keyring"))
-            throw new UsageException($"{ctx.Prefix} init --no-recovery requires --keyring");
+        if (tpm)
+            return ExecuteHardwareKeyring(ctx, HardwareBackend.Tpm, includeRecovery: !noRecovery);
 
-        if (args.Contains("--secure-enclave"))
-            return ExecuteSecureEnclave(ctx);
-
-        if (args.Contains("--tpm"))
-            return ExecuteTpm(ctx);
-
-        if (args.Contains("--keyring"))
-            return ExecuteKeyring(ctx, includeRecovery: !args.Contains("--no-recovery"));
+        if (keyring)
+            return ExecuteKeyring(ctx, includeRecovery: !noRecovery);
 
         if (ctx.TestKey != null)
         {
@@ -384,20 +401,20 @@ public sealed class InitCommand : ICliCommand
     /// <c>--no-recovery</c> was passed, in which case this prints a short "no recovery slot"
     /// notice instead so the absence of a break-glass option isn't a silent surprise later.
     /// </summary>
-    private static void PrintRecoveryKeyBackupWarning(IConsole c, byte[]? recoveryPrivateKey)
+    private static void PrintRecoveryKeyBackupWarning(IConsole c, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
     {
         if (recoveryPrivateKey == null)
         {
-            c.Out.WriteLine("\nNo recovery slot generated (--no-recovery): losing every enrolled");
-            c.Out.WriteLine("YubiKey means total, unrecoverable vault loss — there is no break-glass option.");
+            c.Out.WriteLine($"\nNo recovery slot generated (--no-recovery): losing {hardware}");
+            c.Out.WriteLine("means total, unrecoverable vault loss — there is no break-glass option.");
             return;
         }
 
         c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW\n");
-        c.Out.WriteLine("This is a break-glass credential for total hardware loss (every enrolled");
-        c.Out.WriteLine("YubiKey lost or destroyed). tswap never stores it anywhere — display here is");
+        c.Out.WriteLine($"This is a break-glass credential for total hardware loss ({hardware}");
+        c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
         c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
-        c.Out.WriteLine("option is gone for good; your normal YubiKey unlock is unaffected either way.");
+        c.Out.WriteLine("option is gone for good; your normal hardware unlock is unaffected either way.");
         c.Out.WriteLine("\nRecovery Private Key (base64):");
         c.Out.WriteLine(Convert.ToBase64String(recoveryPrivateKey));
         c.Out.WriteLine("\nBackup locations required:");
@@ -512,132 +529,62 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// Single-machine Secure Enclave enrollment — a workaround to allow end-to-end testing
-    /// of the Secure Enclave backend ahead of a real enrollment flow. There is no redundancy
-    /// or fleet keyring here: one Mac, one Secure Enclave key, <c>k = 1</c>. Phase 6
-    /// (<c>MULTI_MACHINE_KEYING.md</c>) is where a proper multi-factor / multi-machine
-    /// enrollment ceremony (and YubiKey counts beyond two) belongs.
-    /// </summary>
-    private static int ExecuteSecureEnclave(CommandContext ctx)
-    {
-        var c = ctx.Console;
-        // Simulated in test mode (TSWAP_TEST_KEY, Debug builds only); otherwise the real
-        // Secure Enclave, or a clear error off macOS.
-        var secureEnclave = HardwareServices.Enrollment(HardwareBackend.SecureEnclave, ctx.TestKey);
-
-        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - Secure Enclave Initialization ║");
-        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("This vault will be protected by this Mac's Secure Enclave — single");
-        c.Out.WriteLine("machine only for now (no second factor, no fleet keyring; see");
-        c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
-
-        c.Out.WriteLine("Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)...");
-        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
-        var (vaultKey, wrapped) = secureEnclave.Enroll();
-
-        var config = new Config(
-            YubiKeySerials: [],
-            RedundancyXor: "",
-            Created: DateTime.UtcNow,
-            RequiresTouch: true, // the Secure Enclave key always requires presence to unwrap
-            RngMode: RngMode.System,
-            Backend: HardwareBackend.SecureEnclave,
-            SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
-
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        // Backing up the previous config/vault before writing over it is a file-store
-        // safety net; a non-file backend would need its own equivalent, not this one.
-        var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
-        {
-            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-            File.Copy(fileStore.ConfigFile, configBackup);
-        }
-        ctx.Storage.SaveConfig(config);
-        if (fileStore != null && File.Exists(fileStore.SecretsFile))
-        {
-            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
-            File.Move(fileStore.SecretsFile, vaultBackup);
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
-            c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
-            c.Out.WriteLine("  restore both .bak files under their original names.");
-            c.ResetColor();
-        }
-        ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
-
-        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
-        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("Backend: Secure Enclave (this Mac only)");
-        if (fileStore != null)
-            c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
-        c.Out.WriteLine("\nThere is no backup share for this backend, unlike the YubiKey XOR share:");
-        c.Out.WriteLine("the wrapped key in config.json is meaningless without this machine's");
-        c.Out.WriteLine("physical Secure Enclave. Losing this Mac means losing this vault — back");
-        c.Out.WriteLine("up secrets some other way (e.g. 'tswap export') if that matters to you.");
-        return 0;
-    }
-
-    /// <summary>
-    /// Single-machine TPM enrollment (Linux via <c>tpm2-tools</c>, Windows via CNG's Platform
-    /// Crypto Provider) — a workaround to allow end-to-end testing of the TPM backends ahead of
-    /// a real enrollment flow. There is no redundancy or fleet keyring here: one machine, one
-    /// TPM, <c>k = 1</c>. Phase 6 (<c>MULTI_MACHINE_KEYING.md</c>) is where a proper
-    /// multi-factor / multi-machine enrollment ceremony belongs.
+    /// Keyring init on this machine's TPM or Secure Enclave (issue #151, brief T2 decision 2):
+    /// the backend's enrollment service (<see cref="HardwareServices.Enrollment"/>: real
+    /// hardware, or the simulated backend in test mode) generates <c>KEK_slot</c> and its blob;
+    /// <see cref="AssembleKeyring"/> wraps a random <c>K_v</c> under it in a machine slot plus,
+    /// unless <c>--no-recovery</c>, a recovery slot. One machine, <c>k = 1</c>; more machines join
+    /// with <c>slot request/approve/accept</c>.
     ///
-    /// <b>Status: only tested against a software TPM simulator (swtpm) on Linux and a virtual
-    /// TPM in a Parallels VM on Windows — neither has been verified against physical TPM
-    /// hardware</b> — see <c>HARDWARE_BACKENDS.md</c>'s Linux/Windows TPM sections.
+    /// <para>The TPM backends are verified against swtpm (Linux) and a VM's virtual TPM
+    /// (Windows) and an Intel PTT (#155); see <c>HARDWARE_BACKENDS.md</c>.</para>
     /// </summary>
-    private static int ExecuteTpm(CommandContext ctx)
+    private static int ExecuteHardwareKeyring(CommandContext ctx, HardwareBackend backend, bool includeRecovery)
     {
         var c = ctx.Console;
-        // Simulated in test mode (TSWAP_TEST_KEY, Debug builds only); otherwise Linux's
-        // tpm2-tools or Windows' Platform Crypto Provider, or a clear error elsewhere.
-        var tpm = HardwareServices.Enrollment(HardwareBackend.Tpm, ctx.TestKey);
-        PrintTpmInitBanner(c);
+        // Throws a clear TswapException on an OS without this hardware, before any output.
+        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey);
+        var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
-        c.Out.WriteLine("Sealing a new key to this machine's TPM...");
-        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
-        var (vaultKey, sealedKey) = tpm.Enroll();
-
-        return FinishTpmInit(ctx, vaultKey, sealedKey);
-    }
-
-    private static void PrintTpmInitBanner(IConsole c)
-    {
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - TPM Initialization            ║");
+        c.Out.WriteLine(backend == HardwareBackend.Tpm
+            ? "║  tswap - TPM Keyring Initialization    ║"
+            : "║  tswap - Secure Enclave Keyring Init   ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("This vault will be protected by this machine's TPM — single machine");
-        c.Out.WriteLine("only for now (no second factor, no fleet keyring; see");
-        c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
-    }
+        c.Out.WriteLine($"This vault's master key (K_v) is random and wrapped by this machine's {hardware}");
+        c.Out.WriteLine("slot (k = 1). Other machines can join later with 'slot request/approve/accept'.\n");
+        c.Out.WriteLine(backend == HardwareBackend.Tpm
+            ? "Sealing a new key to this machine's TPM..."
+            : "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)...");
 
-    /// <summary>
-    /// Shared by both TPM platforms: saves the config/vault (with the same backup dance every
-    /// other init path uses) and prints the completion banner. <paramref name="sealedOrWrappedKey"/>
-    /// is Linux's TPM2-sealed blob or Windows' RSA-OAEP-wrapped blob — opaque here, since
-    /// <see cref="Config.TpmSealedKey"/> doesn't care which platform produced it.
-    /// </summary>
-    private static int FinishTpmInit(CommandContext ctx, byte[] vaultKey, byte[] sealedOrWrappedKey)
-    {
-        var c = ctx.Console;
+        var (kekSlot, hwBlob) = enrollment.Enroll();
 
-        var config = new Config(
-            YubiKeySerials: [],
-            RedundancyXor: "",
-            Created: DateTime.UtcNow,
-            RequiresTouch: false,
-            RngMode: RngMode.System,
-            Backend: HardwareBackend.Tpm,
-            TpmSealedKey: Convert.ToBase64String(sealedOrWrappedKey));
+        // The backend's own fields. YubiKeySerials = [] and RedundancyXor = "" as every
+        // non-YubiKey vault has always written (issue #151's note: no on-disk change).
+        var backendConfig = backend == HardwareBackend.Tpm
+            ? new Config(
+                YubiKeySerials: [],
+                RedundancyXor: "",
+                Created: DateTime.UtcNow,
+                RequiresTouch: false,
+                RngMode: RngMode.System,
+                Backend: HardwareBackend.Tpm,
+                TpmSealedKey: Convert.ToBase64String(hwBlob))
+            : new Config(
+                YubiKeySerials: [],
+                RedundancyXor: "",
+                Created: DateTime.UtcNow,
+                RequiresTouch: true, // the Secure Enclave key always requires presence to unwrap
+                RngMode: RngMode.System,
+                Backend: HardwareBackend.SecureEnclave,
+                SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
 
+        var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery);
+
+        // Same re-init backup dance as every other init path: back up config first (if anything
+        // fails mid-init the old config still matches the old vault backup), then move the old
+        // vault aside rather than overwrite it.
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        // Backing up the previous config/vault before writing over it is a file-store
-        // safety net; a non-file backend would need its own equivalent, not this one.
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
@@ -660,16 +607,14 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("Backend: TPM (this machine only)");
+        c.Out.WriteLine(includeRecovery
+            ? $"Backend: {hardware} keyring (k = 1, 2 slots: machine + recovery)"
+            : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
         if (fileStore != null)
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
-        c.Out.WriteLine("\nThere is no backup share for this backend, unlike the YubiKey XOR share:");
-        c.Out.WriteLine("the sealed key in config.json is meaningless without this machine's");
-        c.Out.WriteLine("physical TPM. Losing this machine (or clearing its TPM) means losing this");
-        c.Out.WriteLine("vault — back up secrets some other way (e.g. 'tswap export') if that");
-        c.Out.WriteLine("matters to you.");
+        c.Out.WriteLine($"\nThe machine slot's blob in config.json is meaningless without this machine's");
+        c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
+        PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
     }
 }
-
-

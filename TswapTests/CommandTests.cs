@@ -94,15 +94,6 @@ public class CommandTests : IDisposable
         Assert.Contains("Usage:", stderr);
     }
 
-    [Fact]
-    public void Init_KeyringAndTpmBothPassed_RejectsAsUsageError()
-    {
-        var (exit, _, stderr) = RunTswap("init", "--keyring", "--tpm");
-
-        Assert.Equal(1, exit);
-        Assert.Contains("Usage:", stderr);
-    }
-
     // --- Init --keyring (Phase 6, issue #119) ---
 
     [Fact]
