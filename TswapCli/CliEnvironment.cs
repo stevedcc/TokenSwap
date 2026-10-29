@@ -1,3 +1,5 @@
+using TswapCore;
+
 namespace TswapCli;
 
 /// <summary>
@@ -24,10 +26,19 @@ public sealed class CliEnvironment
             Directory.Exists,
             Directory.Move,
             Console.Error,
-            () => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+            DefaultApplicationDataDir),
         Verbose = args.Any(a => a is "-v" or "--verbose"),
         CommandArgs = args.Where(a => a is not ("-v" or "--verbose")).ToArray(),
     };
+
+    /// <summary>
+    /// The per-user config base: $XDG_CONFIG_HOME or $HOME/.config on Unix, %APPDATA% on Windows.
+    /// DoNotVerify because the default option returns "" when the folder doesn't exist yet (a
+    /// fresh account), which would make the config dir relative to the current folder (#175);
+    /// tswap creates its own folder below it on init.
+    /// </summary>
+    public static string DefaultApplicationDataDir()
+        => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify);
 
     /// <summary>
     /// Detect how tswap was invoked to show correct usage examples.
@@ -68,10 +79,12 @@ public sealed class CliEnvironment
         }
         else
         {
-            appDataDir = (getApplicationDataDir
-                ?? (() => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)))();
+            appDataDir = (getApplicationDataDir ?? DefaultApplicationDataDir)();
         }
         var configDir = Path.Combine(appDataDir, "tswap");
+        if (!Path.IsPathRooted(configDir))
+            throw new TswapException(
+                "Cannot determine the config folder (no home folder to put it under). Set HOME, or TSWAP_CONFIG_DIR to the folder to use.");
 
         // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
         var legacyDir = Path.Combine(appDataDir, "tswap-poc");

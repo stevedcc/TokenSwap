@@ -86,6 +86,18 @@ public class CliEnvironmentTests
         Assert.False(moved);
     }
 
+    // Issue #175: .NET's GetFolderPath returns "" for a folder that doesn't exist; a config dir
+    // built from that is relative to wherever tswap happens to run. Refuse instead.
+    [Fact]
+    public void EmptyApplicationData_Throws_NamingTheOverride()
+    {
+        var ex = Assert.Throws<TswapCore.TswapException>(() => CliEnvironment.ResolveConfigDir(
+            _ => null, _ => false, (_, _) => { }, TextWriter.Null,
+            getApplicationDataDir: () => ""));
+
+        Assert.Contains("TSWAP_CONFIG_DIR", ex.Message);
+    }
+
     [Fact]
     public void DetectInvocationPrefix_NullProcessPath_DefaultsToTswap()
     {
