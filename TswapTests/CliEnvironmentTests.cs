@@ -19,12 +19,14 @@ public class CliEnvironmentTests
         Dictionary<string, string?> env,
         Func<string, bool>? directoryExists = null,
         Action<string, string>? moveDirectory = null,
-        TextWriter? log = null)
+        TextWriter? log = null,
+        bool isPrivileged = false)
         => CliEnvironment.ResolveConfigDir(
             name => env.GetValueOrDefault(name),
             directoryExists ?? (_ => false),
             moveDirectory ?? ((_, _) => { }),
             log ?? TextWriter.Null,
+            isPrivileged,
             getApplicationDataDir: () => FakeAppData);
 
     [Fact]
@@ -39,10 +41,27 @@ public class CliEnvironmentTests
     {
         if (OperatingSystem.IsWindows()) return; // SUDO_USER handling is Unix-only
 
-        var dir = Resolve(new() { ["SUDO_USER"] = "alice" });
+        // isPrivileged: true is the input #176 adds (sudo to root, as `sudo tswap get` runs).
+        var dir = Resolve(new() { ["SUDO_USER"] = "alice" }, isPrivileged: true);
 
         var expectedHome = OperatingSystem.IsMacOS() ? "/Users/alice" : "/home/alice";
         Assert.Equal(Path.Combine(expectedHome, ".config", "tswap"), dir);
+    }
+
+    // Issue #176: `sudo -u <non-root>` keeps SUDO_USER = the caller; the target user's own
+    // vault must win, so SUDO_USER only counts when the process is privileged.
+    [Fact]
+    public void SudoUser_NotPrivileged_UsesCurrentUsersApplicationData()
+    {
+        var dir = Resolve(new() { ["SUDO_USER"] = "alice" }, isPrivileged: false);
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
+    }
+
+    [Fact]
+    public void Privileged_WithoutSudoUser_UsesApplicationData()
+    {
+        var dir = Resolve(new(), isPrivileged: true);
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
     }
 
     [Fact]
@@ -84,6 +103,62 @@ public class CliEnvironmentTests
         Resolve(new() { ["TSWAP_CONFIG_DIR"] = "/x" },
             directoryExists: _ => true, moveDirectory: (_, _) => moved = true);
         Assert.False(moved);
+    }
+
+    // Issue #175: .NET's GetFolderPath returns "" for a folder that doesn't exist; a config dir
+    // built from that is relative to wherever tswap happens to run. Refuse instead.
+    [Fact]
+    public void EmptyApplicationData_Throws_NamingTheOverride()
+    {
+        var ex = Assert.Throws<TswapCore.TswapException>(() => CliEnvironment.ResolveConfigDir(
+            _ => null, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: false,
+            getApplicationDataDir: () => ""));
+
+        Assert.Contains("TSWAP_CONFIG_DIR", ex.Message);
+    }
+
+    // Issue #175, per platform: the folder the binary really uses (DefaultApplicationDataDir,
+    // what FromSystem passes) is absolute and in the user's own profile, never relative.
+    // Read-only: it resolves a path and creates or writes nothing, so it is safe on a
+    // developer's machine (unlike the Linux-only end-to-end test, which runs init).
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnMacOS_IsLibraryApplicationSupport()
+    {
+        if (!OperatingSystem.IsMacOS()) return; // until #181: reported as Passed elsewhere
+
+        // .NET resolves it through the OS (NSApplicationSupportDirectory), which always exists
+        // for a real user, so the "fresh user without the folder" case of #175 can't occur here.
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.EndsWith(Path.Combine("Library", "Application Support"), dir.TrimEnd('/'));
+    }
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnLinux_IsXdgConfigHomeOrHomeDotConfig()
+    {
+        if (!OperatingSystem.IsLinux()) return; // until #181: reported as Passed elsewhere
+
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        var expected = !string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg)
+            ? xdg
+            : Path.Combine(Environment.GetEnvironmentVariable("HOME")!, ".config");
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.Equal(expected.TrimEnd('/'), dir.TrimEnd('/'));
+    }
+
+    [Fact]
+    public void DefaultApplicationDataDir_OnWindows_IsAppData()
+    {
+        if (!OperatingSystem.IsWindows()) return; // until #181: reported as Passed elsewhere
+
+        var dir = CliEnvironment.DefaultApplicationDataDir();
+
+        Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
+        Assert.Equal(Environment.GetEnvironmentVariable("APPDATA")!.TrimEnd('\\'), dir.TrimEnd('\\'));
     }
 
     [Fact]

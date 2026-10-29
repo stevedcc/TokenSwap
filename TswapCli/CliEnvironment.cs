@@ -1,3 +1,5 @@
+using TswapCore;
+
 namespace TswapCli;
 
 /// <summary>
@@ -24,10 +26,20 @@ public sealed class CliEnvironment
             Directory.Exists,
             Directory.Move,
             Console.Error,
-            () => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+            Environment.IsPrivilegedProcess,
+            DefaultApplicationDataDir),
         Verbose = args.Any(a => a is "-v" or "--verbose"),
         CommandArgs = args.Where(a => a is not ("-v" or "--verbose")).ToArray(),
     };
+
+    /// <summary>
+    /// The per-user config base: $XDG_CONFIG_HOME or $HOME/.config on Unix, %APPDATA% on Windows.
+    /// DoNotVerify because the default option returns "" when the folder doesn't exist yet (a
+    /// fresh account), which would make the config dir relative to the current folder (#175);
+    /// tswap creates its own folder below it on init.
+    /// </summary>
+    public static string DefaultApplicationDataDir()
+        => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify);
 
     /// <summary>
     /// Detect how tswap was invoked to show correct usage examples.
@@ -39,9 +51,12 @@ public sealed class CliEnvironment
     /// Resolves the config directory:
     /// <list type="bullet">
     /// <item>TSWAP_CONFIG_DIR overrides everything (used by tests).</item>
-    /// <item>Under sudo on Unix, resolves relative to the invoking user's home so
-    /// "sudo tswap get" finds the same database as "tswap create". SUDO_USER is only
-    /// set on Unix; on Windows, UAC elevation preserves APPDATA.</item>
+    /// <item>Under sudo <b>to root</b> on Unix (<paramref name="isPrivileged"/>), resolves
+    /// relative to the invoking user's home so "sudo tswap get" finds the same database as
+    /// "tswap create". Under <c>sudo -u &lt;non-root user&gt;</c> SUDO_USER still names the
+    /// caller, but the target user's own vault is the right one, so SUDO_USER is ignored
+    /// unless the process is privileged (#176). SUDO_USER is only set on Unix; on Windows,
+    /// UAC elevation preserves APPDATA.</item>
     /// <item>Migrates the legacy tswap-poc directory to tswap (one-time, silent, only
     /// on the standard path, not when TSWAP_CONFIG_DIR is overridden).</item>
     /// </list>
@@ -51,6 +66,7 @@ public sealed class CliEnvironment
         Func<string, bool> directoryExists,
         Action<string, string> moveDirectory,
         TextWriter log,
+        bool isPrivileged,
         Func<string>? getApplicationDataDir = null)
     {
         var configDirOverride = getEnv("TSWAP_CONFIG_DIR");
@@ -59,7 +75,7 @@ public sealed class CliEnvironment
 
         var sudoUser = getEnv("SUDO_USER");
         string appDataDir;
-        if (sudoUser != null && !OperatingSystem.IsWindows())
+        if (sudoUser != null && isPrivileged && !OperatingSystem.IsWindows())
         {
             var userHome = OperatingSystem.IsMacOS()
                 ? Path.Combine("/Users", sudoUser)
@@ -68,10 +84,12 @@ public sealed class CliEnvironment
         }
         else
         {
-            appDataDir = (getApplicationDataDir
-                ?? (() => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)))();
+            appDataDir = (getApplicationDataDir ?? DefaultApplicationDataDir)();
         }
         var configDir = Path.Combine(appDataDir, "tswap");
+        if (!Path.IsPathRooted(configDir))
+            throw new TswapException(
+                "Cannot determine the config folder (no home folder to put it under). Set HOME, or TSWAP_CONFIG_DIR to the folder to use.");
 
         // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
         var legacyDir = Path.Combine(appDataDir, "tswap-poc");
