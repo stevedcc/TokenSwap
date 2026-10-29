@@ -512,10 +512,10 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("machine only for now (no second factor, no fleet keyring; see");
         c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
 
-        var secureEnclave = new SecureEnclaveHardwareService();
-        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        IHardwareEnrollmentService secureEnclave = new SecureEnclaveHardwareService();
         c.Out.WriteLine("Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)...");
-        var wrapped = secureEnclave.Wrap(vaultKey);
+        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
+        var (vaultKey, wrapped) = secureEnclave.Enroll();
 
         var config = new Config(
             YubiKeySerials: [],
@@ -587,10 +587,10 @@ public sealed class InitCommand : ICliCommand
         var c = ctx.Console;
         PrintTpmInitBanner(c);
 
-        var tpm = new LinuxTpmHardwareService();
-        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        IHardwareEnrollmentService tpm = new LinuxTpmHardwareService();
         c.Out.WriteLine("Sealing a new key to this machine's TPM...");
-        var sealedKey = tpm.Seal(vaultKey);
+        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
+        var (vaultKey, sealedKey) = tpm.Enroll();
 
         return FinishTpmInit(ctx, vaultKey, sealedKey);
     }
@@ -601,10 +601,10 @@ public sealed class InitCommand : ICliCommand
         var c = ctx.Console;
         PrintTpmInitBanner(c);
 
-        var tpm = new WindowsTpmHardwareService();
-        var vaultKey = RandomNumberGenerator.GetBytes(32);
+        IHardwareEnrollmentService tpm = new WindowsTpmHardwareService();
         c.Out.WriteLine("Wrapping a new key to this machine's TPM...");
-        var wrapped = tpm.Wrap(vaultKey);
+        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
+        var (vaultKey, wrapped) = tpm.Enroll();
 
         return FinishTpmInit(ctx, vaultKey, wrapped);
     }

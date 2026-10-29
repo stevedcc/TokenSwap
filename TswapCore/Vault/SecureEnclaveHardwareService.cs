@@ -29,8 +29,18 @@ namespace TswapCore.Vault;
 /// for a secure-enclave vault.</para>
 /// </summary>
 [SupportedOSPlatform("macos")]
-public sealed class SecureEnclaveHardwareService : IHardwareKeyService
+public sealed class SecureEnclaveHardwareService : IHardwareKeyService, IHardwareEnrollmentService
 {
+    /// <summary>
+    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
+    /// new Secure Enclave key via <see cref="Wrap"/>. The returned blob is useless off this Mac.
+    /// </summary>
+    public HardwareEnrollment Enroll()
+    {
+        var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+    }
+
     public HardwareBackend Backend => HardwareBackend.SecureEnclave;
 
     /// <summary>Real hardware, not a simulation. (Tests substitute a fake at the seam.)</summary>

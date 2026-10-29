@@ -65,6 +65,24 @@ public class WindowsTpmHardwareServiceTests
     }
 
     [Fact]
+    public void Enroll_ThenUnlock_RecoversTheEnrolledKekSlot()
+    {
+        // Enrollment seam (issue #151): Enroll generates KEK_slot itself and returns the blob;
+        // the unlock seam must recover exactly that KEK_slot from the blob on this machine.
+        IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
+        var (kekSlot, hwBlob) = enrollment.Enroll();
+
+        var config = new Config([], "", DateTime.UtcNow,
+            Backend: HardwareBackend.Tpm,
+            TpmSealedKey: Convert.ToBase64String(hwBlob));
+        var recovered = new WindowsTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"));
+
+        Assert.Equal(32, kekSlot.Length);
+        Assert.Equal(kekSlot, recovered);
+        Assert.NotEqual(kekSlot, hwBlob);
+    }
+
+    [Fact]
     public void Unlock_RecoversVaultKeyFromSlot()
     {
         var svc = new WindowsTpmHardwareService();

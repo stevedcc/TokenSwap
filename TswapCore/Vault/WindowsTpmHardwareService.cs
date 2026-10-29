@@ -37,8 +37,18 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase
+public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>
+    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
+    /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.
+    /// </summary>
+    public HardwareEnrollment Enroll()
+    {
+        var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+    }
+
     /// <summary>
     /// Enrollment side: wraps <paramref name="plaintextKey"/> (the vault key) to a fresh
     /// TPM-backed key. The returned blob is useless off this machine.
