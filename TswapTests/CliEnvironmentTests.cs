@@ -19,12 +19,14 @@ public class CliEnvironmentTests
         Dictionary<string, string?> env,
         Func<string, bool>? directoryExists = null,
         Action<string, string>? moveDirectory = null,
-        TextWriter? log = null)
+        TextWriter? log = null,
+        bool isPrivileged = false)
         => CliEnvironment.ResolveConfigDir(
             name => env.GetValueOrDefault(name),
             directoryExists ?? (_ => false),
             moveDirectory ?? ((_, _) => { }),
             log ?? TextWriter.Null,
+            isPrivileged,
             getApplicationDataDir: () => FakeAppData);
 
     [Fact]
@@ -39,10 +41,27 @@ public class CliEnvironmentTests
     {
         if (OperatingSystem.IsWindows()) return; // SUDO_USER handling is Unix-only
 
-        var dir = Resolve(new() { ["SUDO_USER"] = "alice" });
+        // isPrivileged: true is the input #176 adds (sudo to root, as `sudo tswap get` runs).
+        var dir = Resolve(new() { ["SUDO_USER"] = "alice" }, isPrivileged: true);
 
         var expectedHome = OperatingSystem.IsMacOS() ? "/Users/alice" : "/home/alice";
         Assert.Equal(Path.Combine(expectedHome, ".config", "tswap"), dir);
+    }
+
+    // Issue #176: `sudo -u <non-root>` keeps SUDO_USER = the caller; the target user's own
+    // vault must win, so SUDO_USER only counts when the process is privileged.
+    [Fact]
+    public void SudoUser_NotPrivileged_UsesCurrentUsersApplicationData()
+    {
+        var dir = Resolve(new() { ["SUDO_USER"] = "alice" }, isPrivileged: false);
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
+    }
+
+    [Fact]
+    public void Privileged_WithoutSudoUser_UsesApplicationData()
+    {
+        var dir = Resolve(new(), isPrivileged: true);
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
     }
 
     [Fact]
@@ -92,7 +111,7 @@ public class CliEnvironmentTests
     public void EmptyApplicationData_Throws_NamingTheOverride()
     {
         var ex = Assert.Throws<TswapCore.TswapException>(() => CliEnvironment.ResolveConfigDir(
-            _ => null, _ => false, (_, _) => { }, TextWriter.Null,
+            _ => null, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: false,
             getApplicationDataDir: () => ""));
 
         Assert.Contains("TSWAP_CONFIG_DIR", ex.Message);
