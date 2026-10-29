@@ -44,7 +44,7 @@ public static class CommandRegistry
 
     public static int Dispatch(CommandContext ctx, string[] args)
     {
-        if (args.Length == 0)
+        if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
         {
             PrintHelp(ctx);
             return 0;
@@ -54,7 +54,36 @@ public static class CommandRegistry
         var command = Commands.FirstOrDefault(c => c.Name == name)
             ?? throw new TswapException($"Unknown command: {name}");
 
-        return command.Execute(ctx, args.Skip(1).ToArray());
+        var commandArgs = args.Skip(1).ToArray();
+        if (AsksForHelp(command, commandArgs))
+        {
+            PrintCommandHelp(ctx, command);
+            return 0;
+        }
+
+        return command.Execute(ctx, commandArgs);
+    }
+
+    /// <summary>
+    /// `--help`/`-h` print a command's usage and never run it (#177: `init --help` used to
+    /// start a YubiKey initialisation). Anywhere in the arguments, except for `run`: its
+    /// arguments are the child's command line, so only `run --help` itself counts and
+    /// `run curl --help` still runs `curl --help`.
+    /// </summary>
+    private static bool AsksForHelp(ICliCommand command, string[] commandArgs)
+    {
+        static bool IsHelp(string a) => a is "--help" or "-h";
+        return command is RunCommand
+            ? commandArgs.Length > 0 && IsHelp(commandArgs[0])
+            : commandArgs.Any(IsHelp);
+    }
+
+    private static void PrintCommandHelp(CommandContext ctx, ICliCommand command)
+    {
+        var o = ctx.Console.Out;
+        o.WriteLine($"Usage: {(command.RequiresSudo ? "sudo " : "")}{ctx.Prefix} {command.HelpUsage}");
+        o.WriteLine();
+        o.WriteLine(command.Description);
     }
 
     private static void PrintHelp(CommandContext ctx)
