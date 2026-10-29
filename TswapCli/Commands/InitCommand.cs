@@ -408,8 +408,9 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// Shared by both the interactive and test-mode <c>--keyring</c> paths (issue #119, extended
-    /// by #120): generates a random <c>K_v</c> and this machine's X25519 slot keypair
+    /// The YubiKey-shaped wrapper shared by both the interactive and test-mode <c>--keyring</c>
+    /// paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
+    /// YubiKey fields, and the backend-neutral <see cref="AssembleKeyring"/>): generates a random <c>K_v</c> and this machine's X25519 slot keypair
     /// (<see cref="SlotKeyPair.Generate"/>), wraps <c>(K_v || slot private key)</c>
     /// (<see cref="SlotSecretPayload.Encode"/>) under <paramref name="kekSlot"/> via
     /// <see cref="SlotPayloadWrap.Wrap"/>, and assembles the resulting <c>k = 1</c>
@@ -439,6 +440,38 @@ public sealed class InitCommand : ICliCommand
         byte[] kekSlot, List<int> serials, string redundancyXorHex, bool? requiresTouch,
         RngMode rngMode, string unlockChallenge, byte[] masterKeySalt, bool includeRecovery = true)
     {
+        // The YubiKey backend's own fields, exactly as before the split (issue #151 work item 2):
+        // the keyring part below is backend-neutral and only adds Keyring/KeyringSlotId.
+        var yubiKeyConfig = new Config(
+            serials,
+            redundancyXorHex,
+            DateTime.UtcNow,
+            requiresTouch,
+            rngMode,
+            unlockChallenge,
+            MasterKeySalt: Convert.ToBase64String(masterKeySalt));
+
+        return AssembleKeyring(kekSlot, yubiKeyConfig, includeRecovery);
+    }
+
+    /// <summary>
+    /// The backend-neutral half of keyring init (issue #151 work item 2): takes only
+    /// <paramref name="kekSlot"/> and a <paramref name="backendConfig"/> the backend has already
+    /// filled with its own fields (YubiKey's serials/XOR share/challenge/salt, or a TPM/Secure
+    /// Enclave vault's <see cref="Config.Backend"/> with <c>YubiKeySerials = []</c> and
+    /// <c>RedundancyXor = ""</c>), and returns that config with <see cref="Config.Keyring"/> and
+    /// <see cref="Config.KeyringSlotId"/> added and nothing else changed. Generates a random
+    /// <c>K_v</c> and this machine's X25519 slot keypair, wraps <c>(K_v || slot private key)</c>
+    /// under <paramref name="kekSlot"/> (<see cref="MachineSlotWrap"/>), adds the recovery slot
+    /// when <paramref name="includeRecovery"/> is set (<see cref="RecoverySlotWrap"/>), and
+    /// encodes the <c>k = 1</c> keyring. The recovery private key is returned, never stored.
+    /// </summary>
+    internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) AssembleKeyring(
+        byte[] kekSlot, Config backendConfig, bool includeRecovery)
+    {
+        if (backendConfig.Keyring != null || backendConfig.KeyringSlotId != null)
+            throw new ArgumentException("The backend's config must not already carry a keyring", nameof(backendConfig));
+
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var slotKeyPair = SlotKeyPair.Generate();
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
@@ -465,22 +498,15 @@ public sealed class InitCommand : ICliCommand
         }
 
         var keyring = new TswapCore.Keyring.Keyring(KeyringFormat.KeyringFormatVersion, vaultId, k, slots);
-        var keyringBlob = Convert.ToBase64String(KeyringCodec.Encode(keyring));
 
-        var config = new Config(
-            serials,
-            redundancyXorHex,
-            DateTime.UtcNow,
-            requiresTouch,
-            rngMode,
-            unlockChallenge,
-            MasterKeySalt: Convert.ToBase64String(masterKeySalt),
-            Keyring: keyringBlob,
+        var config = backendConfig with
+        {
+            Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)),
             // Issue #121: records which of Keyring's slots is this machine's own, so
             // VaultUnlocker can still find it unambiguously once a second machine's slot is
             // appended via 'slot accept' — see Config.KeyringSlotId's doc comment.
-            KeyringSlotId: Convert.ToBase64String(slotId)
-        );
+            KeyringSlotId = Convert.ToBase64String(slotId),
+        };
 
         return (config, vaultKey, recoveryPrivateKey);
     }
