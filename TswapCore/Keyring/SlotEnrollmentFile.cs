@@ -170,6 +170,23 @@ public static class SlotEnrollmentFileCodec
                 $"Unsupported keyring format version {file.KeyringFormatVersion} in approve file " +
                 $"(this build supports {KeyringFormat.KeyringFormatVersionWithoutHwBlob} and {KeyringFormat.KeyringFormatVersion}).");
 
+        // A slot's hwBlob must be one KeyringCodec.Encode can write (security review of T2):
+        // reject it here with a clear error instead of a raw ArgumentException at slot accept.
+        foreach (var slot in file.ExistingSlots ?? [])
+        {
+            if (slot.HwBlob == null)
+                continue;
+            if (file.KeyringFormatVersion < KeyringFormat.KeyringFormatVersion)
+                throw new TswapException(
+                    $"Malformed slot approve file: a keyring format version {file.KeyringFormatVersion} slot cannot carry a hardware blob.");
+            if (slot.Kind == SlotKind.Recovery)
+                throw new TswapException("Malformed slot approve file: a recovery slot cannot carry a hardware blob.");
+            var hwBlob = DecodeVariable(slot.HwBlob, "approve file's existing slot hardware blob");
+            if (hwBlob.Length > KeyringFormat.MaxHwBlobSize)
+                throw new TswapException(
+                    $"Malformed slot approve file: a slot's hardware blob is {hwBlob.Length} bytes, more than the {KeyringFormat.MaxHwBlobSize}-byte limit.");
+        }
+
         return file;
     }
 

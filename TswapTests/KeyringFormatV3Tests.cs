@@ -168,23 +168,35 @@ public class KeyringFormatV3Tests
     [Fact]
     public void TamperingWithTheVersionByte_FailsAuthentication()
     {
-        // A real version 3 keyring vault (YubiKey slot, test-mode KEK = the override key), whose
-        // header byte is rewritten 3 -> 2. The rewritten bytes still parse (a version 2 reader
-        // ignores the four trailing hwBlob-length bytes of the last slot), so what stops it is
-        // the AEAD: the slot was wrapped with formatVersion 3 in its associated data.
+        // A real version 3 keyring vault (YubiKey slot, test-mode KEK = the override key),
+        // relabelled as version 2 the way an attacker would: re-encoded as a well-formed version
+        // 2 keyring, so the parser has nothing to object to. What stops it is the AEAD: the slot
+        // was wrapped with formatVersion 3 in its associated data. (A bare 3 -> 2 byte flip is
+        // now rejected earlier, as trailing bytes; see the next test.)
         var kekSlot = RandomNumberGenerator.GetBytes(32);
         var (config, _, _) = TswapCli.Commands.InitCommand.BuildKeyringConfig(
             kekSlot, [1, 2], new string('0', 40), null, RngMode.System,
             Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), RandomNumberGenerator.GetBytes(32), includeRecovery: false);
-        var bytes = Convert.FromBase64String(config.Keyring!);
-        Assert.Equal(3, bytes[0]);
-        bytes[0] = 2;
-        var tampered = config with { Keyring = Convert.ToBase64String(bytes) };
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+        Assert.Equal(3, keyring.FormatVersion);
+        var relabelled = KeyringCodec.Encode(keyring with { FormatVersion = 2 });
+        Assert.Equal(2, relabelled[0]);
+        var tampered = config with { Keyring = Convert.ToBase64String(relabelled) };
         var unlocker = new VaultUnlocker(new TestKeyYubiKeyService(kekSlot), overrideKey: kekSlot);
 
         Assert.NotNull(unlocker.Unlock(config, _ => 0)); // the untampered vault opens
         var ex = Assert.Throws<TswapException>(() => unlocker.Unlock(tampered, _ => 0));
         Assert.Contains("authentication", ex.Message);
+    }
+
+    [Fact]
+    public void FlippingOnlyTheVersionByte_3To2_IsRejectedAsMalformed()
+    {
+        var bytes = KeyringCodec.Encode(new Keyring(3, VaultId, 1, [new Slot(SlotId, PublicKey, [1], SlotKind.Machine)]));
+        bytes[0] = 2;
+
+        var ex = Assert.Throws<TswapException>(() => KeyringCodec.Decode(bytes));
+        Assert.Contains("Malformed keyring", ex.Message);
     }
 
     [Fact]

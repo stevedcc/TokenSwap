@@ -115,6 +115,14 @@ public static class KeyringFormat
     public const byte KeyringFormatVersionWithoutHwBlob = 2;
 
     /// <summary>
+    /// Upper bound on a slot's hwBlob accepted from a hand-carried approve file. The largest real
+    /// blob is the Secure Enclave's, about 560 bytes (a ~430-byte key <c>dataRepresentation</c>,
+    /// a 4-byte prefix, and a 125-byte ECIES package); the Windows PCP bundle is about 310 bytes
+    /// and the Linux TPM sealed public + private about 300. 4096 leaves roughly 7x headroom.
+    /// </summary>
+    public const int MaxHwBlobSize = 4096;
+
+    /// <summary>
     /// Byte length of the vault master key <c>K_v</c> — 256 bits, the same size as
     /// <see cref="Keyring.SlotKeyPair.KeySize"/> (an X25519 key) and the AES-256 key
     /// <see cref="SecretRecordCodec"/> already uses elsewhere. Not a coincidence:

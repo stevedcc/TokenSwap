@@ -283,6 +283,11 @@ public static class KeyringCodec
             slots.Add(new Slot(slotId, publicKey, wrapped, (SlotKind)kindByte, hwBlob));
         }
 
+        // Nothing may follow the last slot (security review of T2): leftover bytes mean a
+        // corrupted or mislabelled keyring, e.g. a version 3 keyring relabelled as 2.
+        if (offset != bytes.Length)
+            throw new TswapException($"Malformed keyring: {bytes.Length - offset} trailing bytes after the last slot");
+
         return new Keyring(formatVersion, vaultId, k, slots);
     }
 }

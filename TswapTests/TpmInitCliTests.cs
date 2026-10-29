@@ -407,4 +407,35 @@ public class TpmInitCliTests : IDisposable
         Assert.Equal(routerKeyring.Slots[0].HwBlob, desktopKeyring.Slots[0].HwBlob);
         Assert.Null(desktopKeyring.Slots[2].HwBlob); // the desktop's YubiKey slot has none
     }
+
+    [Fact]
+    public void SlotAccept_ApproveFileWithAHwBlobOnTheRecoverySlot_FailsCleanlyAndWritesNothing()
+    {
+        // Review hardening: a real approve file, edited to give the recovery slot a hwBlob. The
+        // new slot still unwraps, so before the fix this reached KeyringCodec.Encode and failed
+        // with a raw ArgumentException.
+        var routerDir = NewTempDir();
+        var desktopDir = NewTempDir();
+        Assert.Equal(0, Run(routerDir, KeyA, "", "init", "--tpm").ExitCode);
+        var requestFile = Path.Combine(desktopDir, "request.json");
+        var approveFile = Path.Combine(desktopDir, "approve.json");
+        Assert.Equal(0, Run(desktopDir, KeyB, "", "slot", "request", requestFile).ExitCode);
+        Assert.Equal(0, Run(routerDir, KeyA, "", "slot", "approve", requestFile, approveFile).ExitCode);
+        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(approveFile));
+        var tampered = approve with
+        {
+            ExistingSlots = approve.ExistingSlots
+                .Select(d => d.Kind == SlotKind.Recovery ? d with { HwBlob = Convert.ToBase64String([1, 2, 3]) } : d)
+                .ToList(),
+        };
+        File.WriteAllText(approveFile, SlotEnrollmentFileCodec.SerializeApprove(tampered));
+        var pendingConfig = File.ReadAllText(Path.Combine(desktopDir, "config.json"));
+
+        var (exit, _, stderr) = Run(desktopDir, KeyB, "", "slot", "accept", approveFile);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Malformed slot approve file", stderr);
+        Assert.Contains("recovery slot", stderr);
+        Assert.Equal(pendingConfig, File.ReadAllText(Path.Combine(desktopDir, "config.json")));
+    }
 }
