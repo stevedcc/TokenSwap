@@ -94,6 +94,57 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     // --- Init ---
 
+    /// <summary>
+    /// Issue #175: a fresh user with no ~/.config (a new `useradd -m` account, XDG_CONFIG_HOME
+    /// unset) must get the vault under ~/.config/tswap — not in a "tswap" folder relative to
+    /// wherever init happened to run — and find it again from any other folder.
+    /// </summary>
+    [Fact]
+    public void FreshUserWithoutDotConfig_VaultIsUnderHome_AndFoundFromAnotherFolder()
+    {
+        // Linux only. The XDG rule ($XDG_CONFIG_HOME, else $HOME/.config) is the Linux path:
+        // on macOS .NET resolves ApplicationData to ~/Library/Application Support through the
+        // OS (NSApplicationSupportDirectory), not from $HOME, so a temp HOME isolates nothing
+        // there and init would touch the real profile's vault folder. Windows uses %APPDATA%.
+        // (Reported as Passed elsewhere until #181 turns these into real skips.)
+        if (!OperatingSystem.IsLinux()) return;
+
+        var home = Path.Combine(_tempDir, "home");
+        var initFolder = Path.Combine(_tempDir, "init-here");
+        var otherFolder = Path.Combine(_tempDir, "elsewhere");
+        foreach (var d in new[] { home, initFolder, otherFolder })
+            Directory.CreateDirectory(d);
+
+        (int exit, string stdout, string stderr) RunIn(string folder, params string[] args)
+        {
+            var psi = MakePsi();
+            psi.Environment.Remove("TSWAP_CONFIG_DIR");
+            psi.Environment.Remove("XDG_CONFIG_HOME");
+            psi.Environment.Remove("SUDO_USER");
+            psi.Environment["HOME"] = home;
+            psi.WorkingDirectory = folder;
+            foreach (var arg in args)
+                psi.ArgumentList.Add(arg);
+            using var process = Process.Start(psi)!;
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, stdout, stderr);
+        }
+
+        var init = RunIn(initFolder, "init");
+        Assert.True(init.exit == 0, $"init failed: {init.stdout}{init.stderr}");
+
+        Assert.True(File.Exists(Path.Combine(home, ".config", "tswap", "config.json")),
+            "the vault config belongs under $HOME/.config/tswap");
+        Assert.False(Directory.Exists(Path.Combine(initFolder, "tswap")),
+            "nothing may be written relative to the folder init ran in");
+
+        var names = RunIn(otherFolder, "names");
+        Assert.True(names.exit == 0, $"names from another folder failed: {names.stdout}{names.stderr}");
+        Assert.DoesNotContain("Not initialized", names.stdout + names.stderr);
+    }
+
     // --- Create ---
 
     // --- Names ---
