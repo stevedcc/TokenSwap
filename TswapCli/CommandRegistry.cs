@@ -55,7 +55,7 @@ public static class CommandRegistry
             ?? throw new TswapException($"Unknown command: {name}");
 
         var commandArgs = args.Skip(1).ToArray();
-        if (AsksForHelp(command, commandArgs))
+        if (AsksForHelp(commandArgs))
         {
             PrintCommandHelp(ctx, command);
             return 0;
@@ -66,16 +66,21 @@ public static class CommandRegistry
 
     /// <summary>
     /// `--help`/`-h` print a command's usage and never run it (#177: `init --help` used to
-    /// start a YubiKey initialisation). Anywhere in the arguments, except for `run`: its
-    /// arguments are the child's command line, so only `run --help` itself counts and
-    /// `run curl --help` still runs `curl --help`.
+    /// start a YubiKey initialisation). Only among the options before the command's first
+    /// positional argument: after it, `-h` is a value (`burn leaked-key -h` burns with reason
+    /// "-h", not exit 0 without burning), and for `run` everything from the child command on
+    /// is the child's command line (`run curl --help` runs `curl --help`).
     /// </summary>
-    private static bool AsksForHelp(ICliCommand command, string[] commandArgs)
+    private static bool AsksForHelp(string[] commandArgs)
     {
-        static bool IsHelp(string a) => a is "--help" or "-h";
-        return command is RunCommand
-            ? commandArgs.Length > 0 && IsHelp(commandArgs[0])
-            : commandArgs.Any(IsHelp);
+        foreach (var arg in commandArgs)
+        {
+            if (arg is "--help" or "-h")
+                return true;
+            if (!arg.StartsWith('-'))
+                return false;
+        }
+        return false;
     }
 
     private static void PrintCommandHelp(CommandContext ctx, ICliCommand command)

@@ -86,13 +86,29 @@ public class HelpTests : IDisposable
     }
 
     [Fact]
-    public void FlagAnywhereInTheArguments_StillPrintsUsage()
+    public void FlagAmongOptionsBeforeAnyPositional_PrintsUsage()
     {
         var (exit, stdout, _) = Run(sudoBypass: true, "init", "--tpm", "--help");
 
         Assert.Equal(0, exit);
         Assert.Contains("init [--secure-enclave|--tpm|--keyring]", stdout);
         Assert.False(VaultExists);
+    }
+
+    [Fact]
+    public void DashHAfterAPositional_IsAValue_NotHelp()
+    {
+        // Reviewer finding: `burn leaked-key -h` must burn (reason "-h"), not print usage and
+        // exit 0 with the secret unburned.
+        Run(sudoBypass: true, "init");
+        Run(sudoBypass: true, "create", "leaked-key");
+
+        var (exit, stdout, stderr) = Run(sudoBypass: true, "burn", "leaked-key", "-h");
+        Assert.True(exit == 0, $"exit {exit}: {stdout}{stderr}");
+        Assert.DoesNotContain("burn <name> [reason]", stdout);
+
+        var (_, burned, _) = Run(sudoBypass: true, "burned");
+        Assert.Contains("leaked-key", burned);
     }
 
     [Fact]
@@ -107,12 +123,14 @@ public class HelpTests : IDisposable
     [Fact]
     public void RunChildCommandHelp_GoesToTheChild()
     {
-        // `false --help` exits 1 when the child really runs; printing run's usage would exit 0.
-        // Not `echo`: run's exfiltration check blocks it.
+        // Exit code 7 can only come from the child (`sh -c "exit 7" --help <token>`: --help is
+        // sh's $0, the token $1; run needs a token); printing run's usage would exit 0, a vault
+        // or validation error 1.
         Run(sudoBypass: true, "init");
-        var (exit, stdout, _) = Run(sudoBypass: true, "run", "false", "--help");
+        Run(sudoBypass: true, "create", "child-token");
+        var (exit, stdout, stderr) = Run(sudoBypass: true, "run", "sh", "-c", "exit 7", "--help", "{{child-token}}");
 
-        Assert.NotEqual(0, exit);
+        Assert.True(exit == 7, $"exit {exit}: {stdout}{stderr}");
         Assert.DoesNotContain("run <cmd> [args...]", stdout);
     }
 }
