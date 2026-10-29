@@ -66,6 +66,19 @@ interface rather than an `Enroll` method on `IHardwareKeyService` (option (a)):
 `IHardwareKeyService` stays a pure unlock seam (a backend can be unlock-only), and no console
 I/O moves behind an interface, which option (a) would have forced for YubiKey.
 
+### The simulated backend (issue #153)
+
+`SimulatedHardwareService` (`TswapCore/Vault/`, next to `TestKeyYubiKeyService`) implements
+both seams for a TPM or Secure Enclave vault without hardware: `Enroll` AES-GCM-wraps a random
+`KEK_slot` under a 32-byte "machine" key, and `Unlock` reads the blob from where the real
+backend would and unwraps it. A blob from one simulated machine fails on another with a
+`TswapException`, as a sealed blob fails on a different TPM. It is selected only in test mode:
+`TswapCli/HardwareServices.cs` reads `TSWAP_TEST_KEY` in Debug builds only (in Release
+`ReadTestKey` always returns null, which `ReleaseBuildGateTests` checks against a real Release
+build), and only a non-null test key selects the simulated TPM and Secure Enclave, keyed by
+that test key. It proves the keyring and enrollment plumbing, never the hardware
+root-of-trust property; the trait-gated hardware suites stay as they are.
+
 ## Config discriminator
 
 `Config` carries an optional backend tag:

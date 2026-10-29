@@ -1,4 +1,3 @@
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
@@ -495,15 +494,10 @@ public sealed class InitCommand : ICliCommand
     /// </summary>
     private static int ExecuteSecureEnclave(CommandContext ctx)
     {
-        if (!OperatingSystem.IsMacOS())
-            throw new TswapException("--secure-enclave is only supported on macOS.");
-        return ExecuteSecureEnclaveOnMacOS(ctx);
-    }
-
-    [SupportedOSPlatform("macos")]
-    private static int ExecuteSecureEnclaveOnMacOS(CommandContext ctx)
-    {
         var c = ctx.Console;
+        // Simulated in test mode (TSWAP_TEST_KEY, Debug builds only); otherwise the real
+        // Secure Enclave, or a clear error off macOS.
+        var secureEnclave = HardwareServices.Enrollment(HardwareBackend.SecureEnclave, ctx.TestKey);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - Secure Enclave Initialization ║");
@@ -512,7 +506,6 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("machine only for now (no second factor, no fleet keyring; see");
         c.Out.WriteLine("MULTI_MACHINE_KEYING.md for the planned Phase 6 design).\n");
 
-        IHardwareEnrollmentService secureEnclave = new SecureEnclaveHardwareService();
         c.Out.WriteLine("Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)...");
         // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
         var (vaultKey, wrapped) = secureEnclave.Enroll();
@@ -574,39 +567,17 @@ public sealed class InitCommand : ICliCommand
     /// </summary>
     private static int ExecuteTpm(CommandContext ctx)
     {
-        if (OperatingSystem.IsLinux())
-            return ExecuteTpmOnLinux(ctx);
-        if (OperatingSystem.IsWindows())
-            return ExecuteTpmOnWindows(ctx);
-        throw new TswapException("--tpm is only supported on Windows and Linux.");
-    }
-
-    [SupportedOSPlatform("linux")]
-    private static int ExecuteTpmOnLinux(CommandContext ctx)
-    {
         var c = ctx.Console;
+        // Simulated in test mode (TSWAP_TEST_KEY, Debug builds only); otherwise Linux's
+        // tpm2-tools or Windows' Platform Crypto Provider, or a clear error elsewhere.
+        var tpm = HardwareServices.Enrollment(HardwareBackend.Tpm, ctx.TestKey);
         PrintTpmInitBanner(c);
 
-        IHardwareEnrollmentService tpm = new LinuxTpmHardwareService();
         c.Out.WriteLine("Sealing a new key to this machine's TPM...");
         // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
         var (vaultKey, sealedKey) = tpm.Enroll();
 
         return FinishTpmInit(ctx, vaultKey, sealedKey);
-    }
-
-    [SupportedOSPlatform("windows")]
-    private static int ExecuteTpmOnWindows(CommandContext ctx)
-    {
-        var c = ctx.Console;
-        PrintTpmInitBanner(c);
-
-        IHardwareEnrollmentService tpm = new WindowsTpmHardwareService();
-        c.Out.WriteLine("Wrapping a new key to this machine's TPM...");
-        // Single-slot form: the enrolled KEK_slot is used as the vault key directly.
-        var (vaultKey, wrapped) = tpm.Enroll();
-
-        return FinishTpmInit(ctx, vaultKey, wrapped);
     }
 
     private static void PrintTpmInitBanner(IConsole c)
