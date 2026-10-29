@@ -123,12 +123,16 @@ public class HelpTests : IDisposable
     [Fact]
     public void RunChildCommandHelp_GoesToTheChild()
     {
-        // Exit code 7 can only come from the child (`sh -c "exit 7" --help <token>`: --help is
-        // sh's $0, the token $1; run needs a token); printing run's usage would exit 0, a vault
-        // or validation error 1.
+        // Exit code 7 can only come from the child: a script that exits 7, given `--help` and a
+        // token (run needs one; #105 refuses inline `sh -c` code). Printing run's usage would
+        // exit 0, a vault or validation error 1.
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // POSIX sh only (until #181: reported as Passed on Windows)
         Run(sudoBypass: true, "init");
         Run(sudoBypass: true, "create", "child-token");
-        var (exit, stdout, stderr) = Run(sudoBypass: true, "run", "sh", "-c", "exit 7", "--help", "{{child-token}}");
+        var script = Path.Combine(_tempDir, "exit7.sh");
+        File.WriteAllText(script, "exit 7\n");
+        var (exit, stdout, stderr) = Run(sudoBypass: true, "run", "sh", script, "--help", "{{child-token}}");
 
         Assert.True(exit == 7, $"exit {exit}: {stdout}{stderr}");
         Assert.DoesNotContain("run <cmd> [args...]", stdout);
