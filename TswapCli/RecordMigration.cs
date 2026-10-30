@@ -15,6 +15,9 @@ public sealed class RecordMigrationSeams
 
     /// <summary>Called after steps 1, 3 and 4 with the step number; throwing simulates a crash there.</summary>
     public Action<int>? AfterStep { get; init; }
+
+    /// <summary>Called just before step 3 (the rename) with the step number (fix round 1, A2).</summary>
+    public Action<int>? BeforeStep { get; init; }
 }
 
 /// <summary>
@@ -148,9 +151,27 @@ internal static class RecordMigration
                 string.Join("\n", problems.Select(p => "  " + p)));
         }
 
-        // Step 3: the temp folder becomes the vault folder.
-        if (owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir)))
-            owner.DeleteDirectory(vaultDir); // empty, checked above
+        // Step 3: the temp folder becomes the vault folder. The target is checked again right
+        // before the rename and never deleted recursively (fix round 1, A2): absent -> rename; an
+        // empty folder -> a non-recursive delete, then rename; anything else -> refuse.
+        ctx.MigrationSeams?.BeforeStep?.Invoke(3);
+        var target = owner.AsOwner(vaultDir, () => !Directory.Exists(vaultDir) && !File.Exists(vaultDir) ? "absent"
+            : Directory.Exists(vaultDir) && new DirectoryInfo(vaultDir).LinkTarget == null && !Directory.EnumerateFileSystemEntries(vaultDir).Any() ? "empty"
+            : "occupied");
+        try
+        {
+            if (target == "empty")
+                owner.DeleteEmptyDirectory(vaultDir);
+            else if (target == "occupied")
+                throw new IOException("occupied");
+        }
+        catch (IOException)
+        {
+            owner.DeleteDirectory(tempDir);
+            throw new TswapException(
+                $"The target folder {vaultDir} is not empty any more (something was put there while converting). Nothing was " +
+                "changed; the temp folder was removed. Pick an empty folder and run this again.");
+        }
         owner.Move(tempDir, vaultDir);
         ctx.MigrationSeams?.AfterStep?.Invoke(3);
 
@@ -198,6 +219,14 @@ internal static class RecordMigration
         var stales = owner.AsOwner(parent, () => Directory.Exists(parent)
             ? Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*")
             : []);
+        // Fix round 1 (A2): only a folder untouched for an hour is taken as a crash's leftover; a
+        // younger one may belong to a conversion that is still running.
+        var cutoff = DateTime.UtcNow.AddHours(-1);
+        var young = stales.Where(s => owner.AsOwner(s, () => Directory.GetLastWriteTimeUtc(s)) > cutoff).ToList();
+        if (young.Count > 0)
+            throw new TswapException(
+                $"{string.Join(", ", young)} was changed less than an hour ago: another migration may be running. Nothing was " +
+                "changed. If no other conversion is running, remove that folder (or wait an hour) and run this again.");
         foreach (var stale in stales)
         {
             owner.DeleteDirectory(stale);

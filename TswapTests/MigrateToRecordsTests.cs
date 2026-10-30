@@ -212,6 +212,9 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Equal(secrets["secret-11"].Value, _m.Get("secret-11"));
         _keys.PluggedIn = [SerialA, SerialB];
 
+        // Fix round 1 (A2): only a temp folder older than an hour counts as left by a crash.
+        foreach (var temp in TempFolders)
+            Directory.SetLastWriteTimeUtc(temp, DateTime.UtcNow.AddHours(-2));
         var rerun = _m.Run("1\n", "migrate", "--to-records");
         switch (step)
         {
@@ -238,6 +241,44 @@ public sealed class MigrateToRecordsTests : IDisposable
         }
         _keys.PluggedIn = [SerialA];
         Assert.Equal(secrets["secret-12"].Value, _m.Get("secret-12"));
+    }
+
+    [Fact]
+    public void AFileAppearingInTheTargetBeforeTheRename_IsNeverDeleted_AndNothingElseChanges()
+    {
+        // Fix round 1 (A2): the target is re-checked right before step 3; never a recursive delete.
+        var (_, secrets) = PlainVaultWithFiftySecrets();
+        var before = File.ReadAllBytes(_m.ConfigPath);
+        Directory.CreateDirectory(DefaultVaultDir); // empty at the first check: accepted
+        var planted = Path.Combine(DefaultVaultDir, "someone-elses-file");
+        _m.MigrationSeams = new RecordMigrationSeams { BeforeStep = s => { if (s == 3) File.WriteAllText(planted, "keep me"); } };
+
+        var (exit, _, err) = _m.Run("1\n", "migrate", "--to-records");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("not empty", err);
+        Assert.Equal("keep me", File.ReadAllText(planted));
+        Assert.Empty(TempFolders);
+        Assert.Equal(before, File.ReadAllBytes(_m.ConfigPath));
+        _m.MigrationSeams = null;
+        _keys.PluggedIn = [SerialA];
+        Assert.Equal(secrets["secret-05"].Value, _m.Get("secret-05"));
+    }
+
+    [Fact]
+    public void ARecentTempFolder_RefusesTheRun_AnotherMigrationMayBeRunning()
+    {
+        PlainVaultWithFiftySecrets();
+        var young = DefaultVaultDir + ".tmp-0badc0de";
+        Directory.CreateDirectory(young);
+        File.WriteAllText(Path.Combine(young, "keyring"), "in progress");
+
+        var (exit, _, err) = _m.Run("1\n", "migrate", "--to-records");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("another migration may be running", err);
+        Assert.True(File.Exists(Path.Combine(young, "keyring")));
+        Assert.Null(_m.Config.Store);
     }
 
     [Fact]

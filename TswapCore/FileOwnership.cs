@@ -166,6 +166,17 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     }
 
     /// <summary>
+    /// Deletes the folder <paramref name="path"/> only if it is empty (non-recursive; an
+    /// <see cref="IOException"/> otherwise), as its parent's owner.
+    /// </summary>
+    public void DeleteEmptyDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        Directory.Delete(fullPath, recursive: false);
+    }
+
+    /// <summary>
     /// Runs <paramref name="action"/> as the owner of <paramref name="path"/>'s nearest existing
     /// folder (see the type's comment): for folder listings and mode changes in a vault folder.
     /// </summary>
