@@ -74,6 +74,27 @@ public class HelpTests : IDisposable
         Assert.Contains("get <name>", stdout);
     }
 
+    // Brief T7 item 1 (#178): `sudo -i` keeps using the invoking user's vault; the help says so.
+    [Fact]
+    public void TopLevelHelp_ExplainsWhichVaultSudoUses()
+    {
+        var (_, stdout, _) = Run(sudoBypass: true, "--help");
+
+        Assert.Contains("sudo -i", stdout);
+        Assert.Contains("TSWAP_CONFIG_DIR", stdout);
+    }
+
+    // Brief T7 item 4: TSWAP_YUBIKEY_SERIAL is documented, with sudo dropping it by default.
+    [Fact]
+    public void TopLevelHelp_ExplainsTswapYubiKeySerial()
+    {
+        var (_, stdout, _) = Run(sudoBypass: true, "--help");
+
+        var line = stdout.Split('\n').Single(l => l.Contains("TSWAP_YUBIKEY_SERIAL the YubiKey"));
+        Assert.Contains("several are plugged in", line);
+        Assert.Contains("sudo --preserve-env=TSWAP_YUBIKEY_SERIAL", stdout);
+    }
+
     [Fact]
     public void GetHelp_NeedsNeitherSudoNorAVault()
     {

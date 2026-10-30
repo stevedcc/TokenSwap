@@ -1,0 +1,45 @@
+# tswap broker: a credential-adding HTTP proxy for containers (docs/BROKER.md).
+#
+# A systemd *user* unit for the vault's own user (for example `vault`), the only account that
+# holds the vault and is in group `tss`. First, as root, the labelled copy of the binary and the
+# SELinux module (docs/BROKER.md, "SELinux"):
+#
+#   sudo install -D -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+#
+# Then install the unit as that user:
+#
+#   install -D -m 0644 tswap-broker.service ~/.config/systemd/user/tswap-broker.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now tswap-broker
+#   sudo loginctl enable-linger vault        # keep it running without a login session
+#
+# After `sudo tswap broker route|socket add|remove`:
+#   systemctl --user reload tswap-broker     # SIGHUP: routes, uids and allow-lists
+#   systemctl --user restart tswap-broker    # a new or removed socket, or a new socket_dir
+#
+# Log: the journal (journalctl --user -u tswap-broker) and broker.log next to broker.json.
+
+[Unit]
+Description=tswap broker (credential-adding HTTP proxy on Unix sockets)
+Documentation=https://github.com/stevedcc/TokenSwap/blob/main/docs/BROKER.md
+
+[Service]
+Type=simple
+# The labelled copy (contrib/selinux, docs/BROKER.md "SELinux"): it runs in tswap_broker_t, the
+# one domain containers may connect to. Copy it again after upgrading tswap.
+ExecStart=/usr/local/libexec/tswap-broker broker serve
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# Everything it creates is owner-only, except the sockets, which serve sets to 0666 itself in
+# socket_dir (0711, owned by this user): the peer-uid check on each connection is the gate.
+UMask=0077
+# Hardening that works in a user unit and leaves the TPM (/dev/tpmrm0 via group tss) and the
+# vault folder usable. serve also makes itself non-dumpable (prctl PR_SET_DUMPABLE 0).
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=default.target

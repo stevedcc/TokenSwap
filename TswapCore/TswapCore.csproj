@@ -19,6 +19,16 @@
   </ItemGroup>
 
   <!--
+    Brief T8 (tswap broker): Kestrel and HttpClient's handler come with the ASP.NET Core shared
+    framework (no NuGet package). The broker uses the empty WebApplication builder with
+    UseKestrelCore and a RequestDelegate (no MVC, no reflection-based routing), so the NativeAOT
+    publish stays trim- and AOT-clean.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <!--
     Phase 6 keyring (per-slot X25519 keypair, see Keyring/SlotKeyPair.cs): as of this SDK,
     System.Security.Cryptography has no built-in X25519 (BCL ECDH only covers NIST curves).
     Rebex.Elliptic.Curve25519 is a small, dependency-free, pure-managed (no P/Invoke) port of

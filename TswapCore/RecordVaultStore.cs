@@ -94,6 +94,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>The records folder in the vault folder.</summary>
     public string RecordsDir => Path.Combine(VaultDir, RecordsFolderName);
 
+    /// <summary>Test seam (brief T8): called with a record file's name each time one is decrypted.</summary>
+    internal Action<string>? RecordDecrypted { get; set; }
+
     /// <summary>Test seam: removes a redundant conflicted copy (default: through the file layer).</summary>
     internal Action<string>? DeleteFile { get; init; }
 
@@ -332,6 +335,56 @@ public sealed class RecordVaultStore : IFileVaultStore
         };
     }
 
+    /// <summary>
+    /// Brief T8 (owner decision, fix round 1): the current value of ONE secret, decrypting only its
+    /// record (<c>records/HMAC(K_names, name)</c>) and that record's sync-conflict copies, folded by
+    /// the merge rules; no other record is read. Returns null when the secret doesn't exist (no
+    /// record, or a tombstone). A record that can't be read or authenticated is a
+    /// <see cref="TswapException"/> (fail closed). The names key is zeroed before returning, the
+    /// record key inside the codec, and every value byte array except the copy returned (the
+    /// caller zeroes that).
+    /// </summary>
+    public byte[]? ReadSecretValue(string name, byte[] vaultKey)
+    {
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(vaultKey);
+        string fileName;
+        try
+        {
+            fileName = FilenameHasher.ComputeFilename(namesKey, name);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(namesKey);
+        }
+        var recordsDir = RecordsDir;
+        if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
+            return null;
+        var mainPath = Path.Combine(recordsDir, fileName);
+        var copies = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir)).Conflicts
+            .Where(c => c.RecordFilename == fileName)
+            .OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal)
+            .ToList();
+        LoadedRecord? main = _owner.FileExists(mainPath) ? ReadRecord(fileName, vaultKey) : null;
+        if (main == null && copies.Count == 0)
+            return null;
+        if (copies.Count > 0)
+            main = FoldConflictCopies(fileName, copies, main, vaultKey, _warnings);
+        if (main!.UnreadableReason is { } reason)
+            throw new TswapException($"The record of '{name}' can't be read ({reason}).");
+        if (main.State is not { } state)
+            throw new TswapException($"The record of '{name}' can't be read (no readable copy).");
+        try
+        {
+            return state.Type == RecordType.Tombstone ? null : (byte[])state.Value.Clone();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(state.Value);
+            if (state.Previous is { } previous)
+                CryptographicOperations.ZeroMemory(previous.Value);
+        }
+    }
+
     private static Secret ToSecret(SecretRecord state)
     {
         var outstanding = state.OutstandingBurn;
@@ -420,6 +473,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             try
             {
                 bytes = _owner.ReadAllBytes(path);
+                RecordDecrypted?.Invoke(copy.ConflictingFilename);
                 copyState = SecretRecordCodec.Decode(bytes, key);
                 if (FilenameHasher.ToFilename(copyState.RecordId) != fileName)
                     throw new TswapException("its record id belongs to another record");
@@ -461,6 +515,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         // (ObserveAll below); a planted header could otherwise push LastHlc anywhere.
         try
         {
+            RecordDecrypted?.Invoke(fileName);
             var state = SecretRecordCodec.Decode(bytes, key);
             if (FilenameHasher.ToFilename(state.RecordId) != fileName)
                 return new LoadedRecord(fileName, bytes, null, "its record id does not match its file name");

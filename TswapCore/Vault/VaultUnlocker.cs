@@ -71,6 +71,13 @@ public sealed class VaultUnlocker
     /// single-device backends. Never called for zero or one connected key.
     /// </param>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+        => Unlock(config, YubiKeySelection.FromChooser(chooseSerial));
+
+    /// <summary>
+    /// <see cref="Unlock(Config, Func{IReadOnlyList{int}, int})"/> with a <see cref="YubiKeySelection"/>
+    /// (brief T7 item 4): unattended, it never asks and tries the plugged-in keys in turn.
+    /// </summary>
+    public byte[] Unlock(Config config, YubiKeySelection selection)
     {
         // Issue #121 pending-enrollment guard: a machine that has run 'slot request' but not yet
         // 'slot accept' has real, working hardware fields (YubiKeySerials/RedundancyXor/etc.) but
@@ -88,7 +95,7 @@ public sealed class VaultUnlocker
 
         // A classic vault (no keyring): the backend recovers the master key itself. Unchanged.
         if (config.Keyring == null)
-            return UnlockHardware(config, chooseSerial);
+            return UnlockHardware(config, selection);
 
         // Brief T4 decision 3: a keyring may also hold one-key YubiKey slots (a machine slot whose
         // hwBlob is a YubiKeySlotBlob), any one of which opens the vault on its own, on any
@@ -105,20 +112,20 @@ public sealed class VaultUnlocker
             // With no one-key slots to fall back to this is exactly the path (and the errors) of
             // every keyring vault before brief T4.
             if (yubiKeySlots.Count == 0)
-                return OwnBackend(config, chooseSerial);
+                return OwnBackend(config, selection);
             try
             {
-                return OwnBackend(config, chooseSerial);
+                return OwnBackend(config, selection);
             }
             catch (TswapException ownBackendError)
             {
                 // Its backend isn't available here (not in this build, another machine's TPM, no
                 // enrolled pair key plugged in) or has no usable slot: try the one-key slots.
-                return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError);
+                return UnlockWithYubiKeySlot(keyring, yubiKeySlots, selection, ownBackendError);
             }
         }
 
-        return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError: null);
+        return UnlockWithYubiKeySlot(keyring, yubiKeySlots, selection, ownBackendError: null);
     }
 
     /// <summary>
@@ -127,11 +134,11 @@ public sealed class VaultUnlocker
     /// 32 bytes, a keyring vault always needs this same extra unwrap step (see
     /// MULTI_MACHINE_KEYING.md §Two-layer slot wrap).
     /// </summary>
-    private byte[] OwnBackend(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    private byte[] OwnBackend(Config config, YubiKeySelection selection)
     {
         try
         {
-            return UnlockKeyring(config, UnlockHardware(config, chooseSerial));
+            return UnlockKeyring(config, UnlockHardware(config, selection));
         }
         catch (TswapException ex) when (config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
         {
@@ -168,16 +175,18 @@ public sealed class VaultUnlocker
     }
 
     /// <summary>
-    /// Opens the vault with a one-key YubiKey slot (brief T4 decision 3): of the slots whose key
-    /// is plugged in, <paramref name="chooseSerial"/> picks the key when several match; that key
-    /// is challenged for each of its slots in keyring order, and the first slot that authenticates
-    /// wins. <paramref name="ownBackendError"/> is the vault's own backend's failure, if it was
-    /// tried, and is kept in the error message. A slot whose YubiKey blob fails to decode is
-    /// skipped (security review of T4: one corrupt slot must not block the others) and named in
-    /// the final error only if no other slot unlocks.
+    /// Opens the vault with a one-key YubiKey slot (brief T4 decision 3): of the plugged-in keys that
+    /// have a slot, <paramref name="selection"/> decides (brief T7 item 4): an explicit serial, the
+    /// user's choice on a terminal, or unattended every such key in the order no-touch, unknown,
+    /// touch-required (the posture recorded in each slot's blob). Each key is challenged for each of
+    /// its slots in keyring order, and the first slot that authenticates wins; unattended, a key that
+    /// doesn't answer or opens none of its slots passes to the next. <paramref name="ownBackendError"/>
+    /// is the vault's own backend's failure, if it was tried, and is kept in the error message. A
+    /// slot whose YubiKey blob fails to decode is skipped (security review of T4: one corrupt slot
+    /// must not block the others) and named in the final error only if no other slot unlocks.
     /// </summary>
     private byte[] UnlockWithYubiKeySlot(
-        Keyring.Keyring keyring, List<Slot> yubiKeySlots, Func<IReadOnlyList<int>, int> chooseSerial,
+        Keyring.Keyring keyring, List<Slot> yubiKeySlots, YubiKeySelection selection,
         TswapException? ownBackendError)
     {
         var candidates = new List<(Slot Slot, YubiKeySlotBlob Blob)>();
@@ -209,7 +218,7 @@ public sealed class VaultUnlocker
         }
 
         var matching = pluggedIn.Where(slotSerials.Contains).Distinct().ToList();
-        if (matching.Count == 0)
+        if (matching.Count == 0 && selection.Serial == null)
             throw new TswapException(
                 "No plugged-in YubiKey matches a slot of this vault. " +
                 (slotSerials.Count == 0 ? "This vault has no readable YubiKey slot; " :
@@ -217,16 +226,57 @@ public sealed class VaultUnlocker
                 (pluggedIn.Count == 0 ? "no YubiKey is plugged in." : $"plugged in: {string.Join(", ", pluggedIn)}.") +
                 " Plug in one of those keys and try again." + ownFailure);
 
-        var serial = matching.Count == 1 ? matching[0] : chooseSerial(matching);
-        if (!matching.Contains(serial))
-            throw new TswapException($"Selected YubiKey serial {serial} is not among the plugged-in keys with a slot in this vault ({string.Join(", ", matching)}).");
+        // A key's posture: the most permissive of its slots' recorded postures (a key has one slot 2).
+        var postures = matching
+            .Select(serial => candidates.Where(c => c.Blob.Serial == serial)
+                .Select(c => c.Blob.RequiresTouch)
+                .MinBy(YubiKeySelection.UnattendedRank))
+            .ToList();
+        var order = selection.Order(matching, postures, pluggedIn);
 
+        var failures = new List<string>();
+        foreach (var serial in order)
+        {
+            var failure = TryKey(keyring, candidates, serial, order.Count > 1, out var vaultKey);
+            if (vaultKey != null)
+                return vaultKey;
+            failures.Add(failure!);
+        }
+
+        if (order.Count == 1)
+            throw new TswapException(
+                $"YubiKey {order[0]} did not open any of its slots in this vault: its response did not authenticate " +
+                "(the key's HMAC secret was reprogrammed, or config.json is damaged). Restore config.json from backup " +
+                "or use another enrolled key." + ownFailure);
+        throw new TswapException(
+            $"None of the plugged-in YubiKeys with a slot in this vault ({string.Join(", ", order)}) opened it: " +
+            string.Join("; ", failures) + "." + ownFailure);
+    }
+
+    /// <summary>
+    /// Challenges <paramref name="serial"/> for each of its slots; the vault key, or null with why
+    /// not. A challenge that fails (busy key, touch timed out) is rethrown unless
+    /// <paramref name="moreToTry"/>.
+    /// </summary>
+    private string? TryKey(Keyring.Keyring keyring, List<(Slot Slot, YubiKeySlotBlob Blob)> candidates, int serial,
+        bool moreToTry, out byte[]? vaultKey)
+    {
+        vaultKey = null;
         foreach (var (slot, blob) in candidates.Where(c => c.Blob.Serial == serial))
         {
-            var kekSlot = YubiKeySlotKek.Recover(_yubiKeys, blob, slot.SlotId);
+            byte[] kekSlot;
             try
             {
-                return UnwrapSlot(keyring, slot, kekSlot);
+                kekSlot = YubiKeySlotKek.Recover(_yubiKeys, blob, slot.SlotId);
+            }
+            catch (TswapException ex) when (moreToTry)
+            {
+                return $"{serial} did not answer ({ex.Message})";
+            }
+            try
+            {
+                vaultKey = UnwrapSlot(keyring, slot, kekSlot);
+                return null;
             }
             catch (TswapException)
             {
@@ -237,11 +287,7 @@ public sealed class VaultUnlocker
                 System.Security.Cryptography.CryptographicOperations.ZeroMemory(kekSlot);
             }
         }
-
-        throw new TswapException(
-            $"YubiKey {serial} did not open any of its slots in this vault: its response did not authenticate " +
-            "(the key's HMAC secret was reprogrammed, or config.json is damaged). Restore config.json from backup " +
-            "or use another enrolled key." + ownFailure);
+        return $"{serial} opened none of its slots (its response did not authenticate)";
     }
 
     /// <summary>
@@ -303,6 +349,10 @@ public sealed class VaultUnlocker
     /// from its <see cref="YubiKeySlotBlob"/> instead (brief T4).
     /// </summary>
     public byte[] UnlockHardware(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+        => UnlockHardware(config, YubiKeySelection.FromChooser(chooseSerial));
+
+    /// <summary><see cref="UnlockHardware(Config, Func{IReadOnlyList{int}, int})"/> with a <see cref="YubiKeySelection"/>.</summary>
+    public byte[] UnlockHardware(Config config, YubiKeySelection selection)
     {
         var backend = config.Backend ?? HardwareBackend.YubiKey;
         if (!_backends.TryGetValue(backend, out var service))
@@ -310,7 +360,10 @@ public sealed class VaultUnlocker
                 $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
                 "Use a build that includes it, or restore a vault created with a supported backend.");
 
-        return service.Unlock(config, chooseSerial);
+        // Single-device backends (TPM, Secure Enclave) never choose a serial.
+        return backend == HardwareBackend.YubiKey
+            ? _yubiKey.Unlock(config, selection)
+            : service.Unlock(config, serials => selection.Order(serials, serials.Select(_ => (bool?)null).ToList(), serials)[0]);
     }
 
     /// <summary>
