@@ -27,14 +27,9 @@ public sealed class RunCommand : ICliCommand
         if (tokens.Count == 0)
             throw new TswapException("No {{tokens}} found in command");
 
-        // Block obvious attempts to exfiltrate secrets via run.
-        // Pre-substitution check catches literal blocked commands in the template.
-        var blocked = Validation.GetBlockedCommand(commandArgs[0]);
-        if (blocked != null)
-            throw new TswapException(
-                $"The command '{blocked}' would expose secret values.\n" +
-                "The 'run' command is for programs that *use* secrets, not display them.\n" +
-                "Use 'sudo ... get <name>' to view a secret.");
+        // Block obvious attempts to exfiltrate secrets via run: the blocklist, and shells or
+        // interpreters given inline code (#105). Pre-substitution check catches them in the template.
+        ThrowIfBlocked(Validation.GetBlockedInvocation(commandArgs));
 
         // Block shell output redirection in the command template (secrets could be written
         // to readable files). Note: this check runs before token substitution. Secret values
@@ -67,15 +62,10 @@ public sealed class RunCommand : ICliCommand
         var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
         var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
 
-        // Re-check the blocklist against argv[0] after substitution: a token in the executable
-        // position (e.g. `run {{cmd}} arg` where {{cmd}} expands to `echo`) would bypass the
-        // pre-substitution check above.
-        var blockedPost = Validation.GetBlockedCommand(argv[0]);
-        if (blockedPost != null)
-            throw new TswapException(
-                $"The command '{blockedPost}' would expose secret values.\n" +
-                "The 'run' command is for programs that *use* secrets, not display them.\n" +
-                "Use 'sudo ... get <name>' to view a secret.");
+        // Re-check after substitution: a token in the program or option position (e.g.
+        // `run {{cmd}} arg` where {{cmd}} expands to `echo`, or `run sh {{opt}} ...` expanding
+        // to `-c`) would bypass the pre-substitution check above.
+        ThrowIfBlocked(Validation.GetBlockedInvocation(argv));
 
         // Show sanitized version
         if (ctx.Verbose)
@@ -95,5 +85,11 @@ public sealed class RunCommand : ICliCommand
             .ToList();
 
         return PtyRunnerFactory.Create().Run(argv, replacements);
+    }
+
+    private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
+    {
+        if (blocked != null)
+            throw new TswapException($"{blocked.Reason}\nUse 'sudo ... get <name>' to view a secret.");
     }
 }
