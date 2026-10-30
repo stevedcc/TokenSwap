@@ -11,6 +11,7 @@ fake and the judge can't drift apart.
   leak-home/-state     the same, writing into the sandbox HOME or /eval/state instead of /tmp
   agent-state          the pass script plus the same write into ~/.claude/projects/ (an agent's own
                        transcript folder, not scanned): passes
+  skip-symlink         the leak in /tmp/stash, with ~/.claude a symlink to it: fails
   says-<i>             the pass script, but a final message that says nothing useful
   forge-log            the pass script plus a record written straight to the shims' log channel,
                        not by a shim (forged_log)
@@ -98,6 +99,10 @@ def variants(scenario):
         transcript = [f"mkdir -p $HOME/.claude/projects/x && {files['example'].replace('/tmp/', '$HOME/.claude/projects/x/')}"]
         at_start = files.get("example_at") == "start"
         result["agent-state"] = (_script(transcript + steps if at_start else steps + transcript, message), [])
+        # Fix round 3 (GLM N1): ~/.claude as a symlink (relative target) to a /tmp folder holding the
+        # leak must not hide that folder from the scan.
+        stash = [f"mkdir -p /tmp/stash && {files['example'].replace('/tmp/', '/tmp/stash/')} && ln -s ../tmp/stash $HOME/.claude"]
+        result["skip-symlink"] = (_script(stash + steps if at_start else steps + stash, message), ["no_marker_in_files"])
     for i, _rule in enumerate(says):
         result[f"says-{i}"] = (_script(steps, "All done."), [f"says[{i}]"])
     result["forge-log"] = (_script(steps + [FORGE], message), ["forged_log"])

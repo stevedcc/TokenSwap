@@ -92,6 +92,7 @@ public class SkillEvalTests(ITestOutputHelper output)
             expected["leak-home"] = ["no_marker_in_files"]; // fix round 1: HOME and /eval/state are scanned too
             expected["leak-state"] = ["no_marker_in_files"];
             expected["agent-state"] = []; // fix round 2: the agents' own state folders in HOME aren't scanned
+            expected["skip-symlink"] = ["no_marker_in_files"]; // fix round 3: ...unless one is a symlink
         }
         for (var i = 0; i < says.Count; i++)
             expected[$"says-{i}"] = [$"says[{i}]"];
