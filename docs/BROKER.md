@@ -206,6 +206,16 @@ containers (so `/run/user/<uid>`, which is `0700`, won't do).
 sudo install -d -m 0711 -o vault -g vault /srv/tswap-broker
 ```
 
+**SELinux (Fedora, Fedora CoreOS).** A rootless container can't reach a socket labelled
+`var_t`, and Podman's `:z`/`:Z` can't relabel a socket file the container's user doesn't own.
+Label the socket folder `container_file_t` once, so every socket `serve` creates there inherits
+the label, and mount the socket **without** `:z`:
+
+```bash
+sudo semanage fcontext -a -t container_file_t '/srv/tswap-broker(/.*)?'
+sudo restorecon -R /srv/tswap-broker
+```
+
 ### 3. Routes and sockets (`broker.json`)
 
 `broker.json` lives next to the vault's `config.json` (mode `0600`). Changing it needs sudo;
@@ -296,7 +306,8 @@ podman run -d --name lane1 -v /srv/tswap-broker/lane1.sock:/run/tswap.sock <imag
     sh -c 'tswap broker forward --listen 127.0.0.1:8080 & exec <agent>'
 ```
 
-`forward` needs no vault, home folder, YubiKey or TPM (it reads nothing but its arguments).
+No `:z` or `:Z` on the socket mount (see the SELinux note in step 2). `forward` needs no vault,
+home folder, YubiKey or TPM (it reads nothing but its arguments).
 
 ### 7. Using it from inside the container
 
