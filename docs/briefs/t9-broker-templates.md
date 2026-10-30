@@ -46,8 +46,8 @@ showed why they can't be built as first specified:
      (envp)** (GLM B1).
      - Never `--setenv`: that puts values in bwrap's argv, readable by every user in
        `/proc/<pid>/cmdline`.
-     - The broker starts `bwrap` with exactly the template's env plus a fixed `PATH`, nothing
-       inherited.
+     - The broker starts `bwrap` with exactly the template's env plus a fixed baseline, nothing
+       inherited: `PATH=/usr/bin:/bin`, `LC_ALL=C`, umask 077, and no `HOME` (MiMo I8).
      - Docs: the child's `/proc/<pid>/environ` is still readable by same-uid processes while it
        runs. Env narrows the leak to the same uid; it doesn't remove it (see the uid assumption
        below).
@@ -75,8 +75,19 @@ showed why they can't be built as first specified:
      nothing to use them on. Cite which `bwrap` options give each of those.
      - Why `mknod` inside isn't a way round this: `--cap-drop ALL`, and filesystems inside a user
        namespace are `nodev`.
-   - **The load-bearing assumption, stated in `BROKER.md` and `THREAT_MODEL.md` (GLM I2): no
-     container runs with the vault user's uid.**
+   - **`bwrap` fails closed** (MiMo B4):
+     - it is executed at a fixed absolute path (`/usr/bin/bwrap`, configurable), never through
+       `PATH`;
+     - `serve` checks at start that it exists and supports every option used;
+     - if `bwrap` is missing, too old, or user namespaces are disabled, a template call is
+       refused (125, logged). **Never run a template unsandboxed.**
+   - **The load-bearing assumption, stated in `BROKER.md` and `THREAT_MODEL.md` (GLM I2; MiMo B1/B2,
+     whose findings assume the opposite): no container runs with the vault user's uid.**
+     - Containers run as another user (here `lane`), so files a container writes into a shared
+       folder are owned by that user's uids. The bind rule (owned by the vault user or root)
+       refuses them.
+     - Under rootless Podman a container's root is its invoking user, so a container started by
+       the vault user would break both the bind rule and the uid check.
      - With `--userns=keep-id`, run by the vault user, every vault-owned folder would be
        container-writable.
      - T8's socket layer must refuse a peer uid equal to the broker's own uid. Add that check
@@ -86,6 +97,9 @@ showed why they can't be built as first specified:
      root, with every component on the way not writable by group or others.
    - **Never at or under `/dev`, `/proc` or `/sys`, and never a device node, socket or FIFO** (GLM
      B4: `/dev/tpmrm0` is root-owned and would otherwise pass). Only regular files and directories.
+   - **Never the vault folder, the broker's config or its socket folder, compared by
+     `st_dev:st_ino`** and not by name (MiMo I1: a bind-mount alias or a hardlink would pass a name
+     check). The same holds for anything above or below them.
    - `cwd` must be inside one of the binds.
    - The checks run when a template is added and again before every run (a path can change
      owner).
@@ -108,14 +122,21 @@ showed why they can't be built as first specified:
      - `{arg}` placeholders are allowed in `argv[1..]` only;
      - `Validation.GetBlockedInvocation` refuses inline interpreter code (#105).
    - `args`: per declared argument, a pattern the broker wraps as `\A(?:…)\z` (CultureInvariant,
-     no `Multiline`, inline option groups refused, match timeout), a max length, and
-     `allow_leading_dash` (default false). Every placeholder must be declared, and every declared
-     argument used.
+     no `Multiline`, inline option groups refused, match timeout of 100 ms), a max length, and
+     `allow_leading_dash` (default false).
+     - Every placeholder must be declared, and every declared argument used.
+     - At call time every declared argument is required, and an undeclared name is refused.
+     - **NUL and control characters in an argument value or an env literal are refused** before
+       the pattern runs (MiMo I3: a NUL truncates the C string execve sees).
+     - `BROKER.md` warns that `allow_leading_dash` with a loose pattern is flag injection
+       (`tar --checkpoint-action=exec=…`).
    - `env` (literal or `{{secret}}`), `files`, `binds`, `cwd`, `network`, `limits`, `timeout_sec`
      (default 120, 1–3600) and `max_output_bytes` (default 1 MiB, 1 byte to 64 MiB).
    - `rate`: at most N calls a minute per socket (default 6, at least 1). Over the limit the
      answer is `429` and nothing runs or unlocks (GLM I4: a template has real side effects and
      each call is a TPM unlock).
+   - **Allow-lists deny by default:** a socket without a `templates` (or `ssh_keys`) entry may
+     use none (MiMo I6). Test it.
    - The template allow-list per socket is the only gate for templates. A template's secrets
      don't also need to be on any proxy list (GLM I1). Say so in the docs.
 5. **Calling one:**
@@ -127,12 +148,20 @@ showed why they can't be built as first specified:
    - An unknown template and one the socket may not call give byte-identical answers. No unlock
      happens for a refused call.
 6. **Output:**
-   - stdout and stderr are **streamed** through the redactor (T8's forms) and counted, never
-     buffered whole (GLM I5):
+   - stdout and stderr are **streamed** through **one shared** redactor state (MiMo I2: a secret
+     split across the two streams must be caught) and counted, never buffered whole (GLM I5):
      - beyond `max_output_bytes` the rest is read and discarded;
      - the child keeps running until it exits or times out;
    - a cut never ends inside a held-back window (drop the window at the cut);
    - the response says when it was truncated;
+   - **Encoding:** the redactor works on bytes. The response carries stdout and stderr as base64,
+     so binary output (a signature) survives intact; `broker call` decodes it.
+   - **`BROKER.md` is honest about output:** whatever the tool prints, including anything it derives
+     from the secret (a decryption, a signature), goes to the caller. The broker redacts only the
+     secret's known forms, so a template that prints derived secret material is the operator's
+     choice.
+   - The secret's handling in memory is best-effort (managed strings can't be zeroed); say so (MiMo
+     I4). `PR_SET_DUMPABLE 0` is the real mitigation.
    - the exit code is passed through. A timeout kill reports 124 (as `timeout(1)` does), and a
      death by signal N reports 128+N. The response says which (`"ended": "exit"|"timeout"|"signal"`).
 7. **One unlock per call** (as T8). The secret's byte arrays are zeroed once written to the env
@@ -184,14 +213,30 @@ showed why they can't be built as first specified:
      - a read-only bind refuses writes;
      - `/etc/sudoers` and `/dev/tpmrm0` are absent;
      - the resource limits are in effect (`ulimit -u` and `ulimit -v` in the child);
+     - `/tmp` is private: a file the child writes there is absent on the host;
+     - the timeout kills a **detached grandchild** too (checked from the host);
+     - with `bwrap` made unusable (a test seam pointing at a missing binary), the call is refused
+       with 125 and nothing runs;
+     - **every negative check also asserts a positive**, so it can't pass for the wrong reason
+       (e.g. the child's own `/proc/self` exists while the broker's pid doesn't).
      - `network: none` can't reach a loopback listener on the host;
      - the timeout kills the whole process tree.
    - **Break-it-once:** bind the vault folder; the "can't see the vault" test fails. Also pass a
-  secret with `--setenv`; the cmdline test fails.
+  secret with `--setenv`; the cmdline test fails. Also run unsandboxed when `bwrap` is missing;
+  the fail-closed test fails.
+- **CI:** these tests must run on the Linux CI runner, not skip there.
+  - Add a step to `.github/workflows/ci.yml` that installs `bubblewrap` and allows unprivileged
+    user namespaces (Ubuntu 24.04 restricts them through AppArmor:
+    `kernel.apparmor_restrict_unprivileged_userns=0`).
+  - Say what you changed. On a machine without `bwrap` the tests skip with a message, but the
+    report must state whether they ran.
 3. **Calling, output and refusals** (decisions 5–8).
    - **Tests:**
      - a call runs with the secret in env, and output echoing it is redacted (also split across
-       a pipe boundary);
+       a pipe boundary, and split between stdout and stderr);
+     - binary output survives the round trip byte for byte;
+     - a NUL or a control character in an argument is refused;
+     - a socket with no `templates` entry can call none;
      - truncation at a mid-secret boundary leaks no fragment;
      - each of these refuses with nothing run and no unlock: a missing, non-matching, over-long or
        leading-dash argument, an extra undeclared argument, an unknown template, a template not
