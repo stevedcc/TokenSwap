@@ -244,7 +244,7 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(TimeSpan.FromSeconds(30), limits.MaxQueueWait);
         Assert.Equal(3, limits.FailuresBeforeLockout);
         Assert.Equal(TimeSpan.FromMinutes(5), limits.Lockout);
-        Assert.Equal(30, limits.MaxFailedUnlocksPerMinute);
+        Assert.Equal(30, limits.MaxUnlocksPerMinute);
 
         var clock = new BrokerManualClock();
         var limiter = new BrokerLimiter(limits, clock);
@@ -400,14 +400,18 @@ public class BrokerServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public void GlobalUnlockLimit_30FailedUnlocksAMinute_ThenRefused_RefusalsDontCount()
+    public void GlobalUnlockLimit_30UnlockAttemptsAMinute_SuccessfulOrNot_ThenRefused_RefusalsDontCount()
     {
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
         for (var i = 0; i < 30; i++)
         {
             Assert.Null(guard.Refusal("s" + i));
-            guard.RecordFailure("s" + i); // one failure per socket: no socket is locked out
+            guard.RecordAttempt();
+            if (i % 2 == 0)
+                guard.RecordSuccess("s" + i);   // successful unlocks count too
+            else
+                guard.RecordFailure("s" + i);   // one failure per socket: no socket is locked out
         }
 
         Assert.Equal("unlock-rate", guard.Refusal("fresh"));
@@ -417,5 +421,23 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal("unlock-rate", guard.Refusal("fresh"));
         clock.Advance(TimeSpan.FromSeconds(1));
         Assert.Null(guard.Refusal("fresh"));
+    }
+
+    [Fact]
+    public async Task Server_31stUnlockInAMinute_Gets503_EvenWhenEveryUnlockSucceeded()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync();
+        for (var i = 0; i < 30; i++)
+            Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync(i % 2 == 0 ? "lane1" : "other", i % 2 == 0 ? "/echo/a" : "/second/a")));
+
+        var refused = await _h.GetAsync("other", "/second/a");
+
+        Assert.Equal(503, BrokerHarness.StatusOf(refused));
+        Assert.Equal(30, _h.Secrets.Unlocks);
+        Assert.Contains("reason=unlock-rate", _h.LogText.ToString());
+        _h.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
     }
 }

@@ -130,6 +130,7 @@ public sealed class BrokerRequestHandler(
                 log.Request(record with { Status = 503, Reason = refusedNow });
                 return;
             }
+            unlockGuard.RecordAttempt();
             secret = await Task.Run(() => secrets.Read(route.SecretName)).ConfigureAwait(false);
             unlockGuard.RecordSuccess(peer.Socket);
         }

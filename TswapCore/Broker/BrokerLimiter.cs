@@ -9,7 +9,7 @@ public sealed record BrokerLimits
     public TimeSpan MaxQueueWait { get; init; } = TimeSpan.FromSeconds(30);
     public int FailuresBeforeLockout { get; init; } = 3;
     public TimeSpan Lockout { get; init; } = TimeSpan.FromMinutes(5);
-    public int MaxFailedUnlocksPerMinute { get; init; } = 30;
+    public int MaxUnlocksPerMinute { get; init; } = 30;
 }
 
 /// <summary>
@@ -107,7 +107,7 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, (int Failures, DateTimeOffset LockedUntil)> _sockets = new(StringComparer.Ordinal);
-    private readonly Queue<DateTimeOffset> _recentFailures = new();
+    private readonly Queue<DateTimeOffset> _recentAttempts = new();
 
     /// <summary>Why an unlock may not be tried now (<c>locked-out</c>, <c>unlock-rate</c>), or null when it may.</summary>
     public string? Refusal(string socket)
@@ -118,10 +118,18 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
             if (_sockets.TryGetValue(socket, out var state) && state.LockedUntil > now)
                 return "locked-out";
             Prune(now);
-            if (_recentFailures.Count >= limits.MaxFailedUnlocksPerMinute)
+            if (_recentAttempts.Count >= limits.MaxUnlocksPerMinute)
                 return "unlock-rate";
             return null;
         }
+    }
+
+    /// <summary>Records an unlock attempt (counted by the global per-minute limit, whatever its outcome).</summary>
+    public void RecordAttempt()
+    {
+        var now = time.GetUtcNow();
+        lock (_gate)
+            _recentAttempts.Enqueue(now);
     }
 
     /// <summary>Records a failed unlock; returns true when it locked <paramref name="socket"/> out.</summary>
@@ -130,7 +138,6 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
         var now = time.GetUtcNow();
         lock (_gate)
         {
-            _recentFailures.Enqueue(now);
             var failures = (_sockets.TryGetValue(socket, out var state) ? state.Failures : 0) + 1;
             if (failures >= limits.FailuresBeforeLockout)
             {
@@ -151,7 +158,7 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
 
     private void Prune(DateTimeOffset now)
     {
-        while (_recentFailures.Count > 0 && _recentFailures.Peek() <= now - TimeSpan.FromMinutes(1))
-            _recentFailures.Dequeue();
+        while (_recentAttempts.Count > 0 && _recentAttempts.Peek() <= now - TimeSpan.FromMinutes(1))
+            _recentAttempts.Dequeue();
     }
 }
