@@ -9,11 +9,14 @@ namespace TswapTests;
 /// the refusal off (<c>AllowOwnUidForTests</c>, which the binary sets only in a Debug build with a
 /// test key).
 /// </summary>
-public class BrokerOwnUidTests : IAsyncDisposable
+public class BrokerOwnUidTests : IAsyncLifetime
 {
     private readonly BrokerHarness _h = new();
 
-    public ValueTask DisposeAsync() => _h.DisposeAsync();
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    // IAsyncLifetime, not IAsyncDisposable: xUnit 2 only awaits the former, so the harness's temp folder is removed.
+    public async Task DisposeAsync() => await _h.DisposeAsync();
 
     [Fact]
     public async Task APeerWithTheBrokersOwnUid_IsClosedUnanswered_AndLogged_EvenWhenListed()
