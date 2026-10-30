@@ -110,7 +110,9 @@ rather than editing rc/profile files).
   the order no-touch, unknown, touch-required (the posture recorded in each slot's
   `YubiKeySlotBlob`) and the first that unwraps `K_v` wins; a classic XOR vault takes the first
   enrolled key that answers. Fail only when none can unlock.
-`create`'s YubiKey-entropy key follows the same rule (`SelectEntropySerial`). Enrolment
+`create`'s YubiKey-entropy key follows the same rule (`SelectEntropySerial`), except that
+unattended it takes the first plugged-in key without a touch order (no slot to read it from): a
+touch key first in plug order makes an unattended `create` wait for its touch. Enrolment
 (`init`, `slot add`, `slot request`: `ChooseSerial`/`ChooseSerialAmong`) still prompts which key
 to enroll. Tests: `TwoYubiKeysTests` (FleetMachine `RunOnTerminal` plays a terminal).
 

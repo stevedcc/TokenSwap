@@ -134,7 +134,9 @@ public class TouchNoticeTests : IDisposable
         Assert.True(exit == 0, stderr);
         var lines = stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var notice = Assert.Single(lines);
-        Assert.Contains("changed", notice);
+        // Fix round 1 (MiMo): a slot never acknowledged here is "not acknowledged", not "changed".
+        Assert.Contains("not acknowledged on this machine", notice);
+        Assert.DoesNotContain("changed", notice);
         Assert.Contains(SerialB.ToString(), notice);
         Assert.Contains("no touch", notice);
         Assert.Contains("tswap slots --ack", notice);
@@ -272,5 +274,22 @@ public class TouchNoticeTests : IDisposable
         Assert.False(acknowledged.ContainsKey(SlotIdOf(SerialB)));
         Assert.Contains("slot add --yubikey", stdout);
         Assert.Equal("", _m.Run("", "create", "after-keyring-migrate").Err);
+    }
+
+    // Fix round 1 (MiMo): a posture that really differs from the acknowledged one says "changed ... was".
+    [Fact]
+    public void APostureDifferentFromTheAcknowledgedOne_SaysChangedAndWhatItWas()
+    {
+        Init(SerialA, touch: false);
+        var config = _m.Config;
+        config.AcknowledgedTouch![SlotIdOf(SerialA)] = "touch";
+        File.WriteAllText(_m.ConfigPath, System.Text.Json.JsonSerializer.Serialize(config, TswapJsonContext.Default.Config));
+
+        var stderr = _m.Run("", "create", "after-change").Err;
+
+        var notice = Assert.Single(stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("changed since last acknowledged", notice);
+        Assert.Contains("no touch (was touch required)", notice);
+        Assert.DoesNotContain("not acknowledged", notice);
     }
 }

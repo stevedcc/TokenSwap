@@ -208,7 +208,12 @@ script or an agent's `tswap run`:
   (`sudo --preserve-env=TSWAP_YUBIKEY_SERIAL tswap ...`); that is intended.
 
 Enrolling a key (`init`, `slot add`, `slot request`) still asks which key to enroll when several
-qualify.
+qualify (on stderr).
+
+`create` (and `rotate`) on a vault with **YubiKey entropy** (`init`'s entropy choice 2) asks a
+key for randomness too. Unattended it takes the first plugged-in key, without looking at the
+touch setting: if that is a touch-required key, the command waits for its touch (unplug it, or set
+`TSWAP_YUBIKEY_SERIAL`, for a scripted `create`).
 
 Keyring vaults made by an older tswap with a **YubiKey pair** (two keys, an XOR share) keep
 working as they are. A pair vault whose keyring is format version 2 cannot take new slots; to
@@ -799,7 +804,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `vault merge <folder>` | Yes | Fold another copy of the vault folder into this one |
 
 Add `-v` or `--verbose` **before the command** (`tswap -v run ...`) for detailed YubiKey output;
-after the command name it belongs to the command (`tswap run grep -v ...` keeps grep's `-v`).
+after the command's first argument it belongs to the command (`tswap run grep -v ...` keeps grep's
+`-v`), and among the command's own options (`tswap names -v`) it is refused with a hint.
 `--help` / `-h` (also `tswap <command> --help`) print usage, and need no vault or home folder.
 
 On Linux/macOS, commands marked **Sudo** require `sudo tswap <command>`. On Windows, run `tswap <command>` from an elevated command prompt instead.

@@ -163,10 +163,15 @@ public static class SecurityWarnings
         var changed = Changed(config);
         if (changed.Count == 0)
             return;
-        var parts = changed.Select(c =>
-            $"{c.Slot.Label}: {Words(c.Slot.Posture)} ({(c.Was == null ? "not acknowledged yet" : "was " + Words(c.Was))})");
+        // Fix round 1 (MiMo): a slot never acknowledged here hasn't "changed"; say which case it is.
+        var parts = changed.Select(c => c.Was == null
+            ? $"{c.Slot.Label}: {Words(c.Slot.Posture)}"
+            : $"{c.Slot.Label}: {Words(c.Slot.Posture)} (was {Words(c.Was)})");
+        var what = changed.All(c => c.Was == null) ? "not acknowledged on this machine"
+            : changed.All(c => c.Was != null) ? "changed since last acknowledged"
+            : "changed or not acknowledged on this machine";
         console.Error.WriteLine(
-            $"tswap: YubiKey touch setting changed since last acknowledged: {string.Join("; ", parts)}. " +
+            $"tswap: YubiKey touch setting {what}: {string.Join("; ", parts)}. " +
             "See 'tswap slots', then run 'tswap slots --ack'.");
     }
 
