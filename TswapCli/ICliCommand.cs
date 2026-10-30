@@ -23,6 +23,12 @@ public interface ICliCommand
     bool RequiresSudo { get; }
 
     /// <summary>
+    /// False for a command that never opens a vault (brief T7 item 3, #180): it must work without
+    /// a home folder, and never resolves the config folder. True unless a command says otherwise.
+    /// </summary>
+    bool NeedsVault => true;
+
+    /// <summary>
     /// Executes with <paramref name="args"/> = everything after the command name
     /// (the leading global -v/--verbose flags already stripped). Returns the process exit code.
     /// </summary>

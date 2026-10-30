@@ -17,6 +17,30 @@ public sealed record CommandContext(
     byte[]? TestKey,
     bool SudoBypass)
 {
+    // Brief T7 item 3 (#180): the store is opened at first use, so a command that never touches
+    // it (help, prompt, completion, ...) never resolves the config folder.
+    private Lazy<IVaultStore> _storage = new(() => Storage);
+
+    /// <summary>
+    /// A context whose store is opened by <paramref name="openStorage"/> on first use (the binary's
+    /// composition, <see cref="CliHost"/>).
+    /// </summary>
+    public CommandContext(
+        IConsole console,
+        CliEnvironment env,
+        Func<IVaultStore> openStorage,
+        IYubiKeyService yubiKeys,
+        VaultUnlocker unlocker,
+        byte[]? testKey,
+        bool sudoBypass)
+        : this(console, env, (IVaultStore)null!, yubiKeys, unlocker, testKey, sudoBypass)
+    {
+        _storage = new(openStorage);
+    }
+
+    /// <summary>The vault store, opened on first use.</summary>
+    public IVaultStore Storage => _storage.Value;
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

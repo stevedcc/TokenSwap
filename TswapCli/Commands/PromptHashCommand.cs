@@ -8,6 +8,7 @@ public sealed class PromptHashCommand : ICliCommand
     public string HelpUsage => "prompt-hash";
     public string Description => "Hash of agent instructions";
     public bool RequiresSudo => false;
+    public bool NeedsVault => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {

@@ -11,26 +11,58 @@ namespace TswapCli;
 /// </summary>
 public sealed class CliEnvironment
 {
+    private Lazy<string> _configDir = new(() => throw new InvalidOperationException("No config folder was given."));
+
     public required string Prefix { get; init; }
-    public required string ConfigDir { get; init; }
+
+    /// <summary>
+    /// The config folder, resolved at first use (brief T7 item 3, #180): commands that need no
+    /// vault (help, <c>prompt</c>, <c>completion</c>, ...) never read it, so they work without a
+    /// home folder. Setting it gives a fixed folder (tests); <see cref="ConfigDirResolver"/>
+    /// gives the deferred resolution.
+    /// </summary>
+    public string ConfigDir
+    {
+        get => _configDir.Value;
+        init => _configDir = new(() => value);
+    }
+
+    /// <summary>Resolves <see cref="ConfigDir"/> on first use, once (a failure is rethrown on every use).</summary>
+    public Func<string> ConfigDirResolver
+    {
+        init => _configDir = new(value);
+    }
+
     public required bool Verbose { get; init; }
 
     /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
-    public static CliEnvironment FromSystem(string[] args) => new()
+    public static CliEnvironment FromSystem(string[] args)
+        => Create(args, Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath, Console.Error);
+
+    /// <summary>
+    /// The environment for <paramref name="args"/>, with the process environment passed in
+    /// (<see cref="CliHost"/>). The config folder is not resolved here, only on first use.
+    /// </summary>
+    public static CliEnvironment Create(
+        string[] args, Func<string, string?> getEnv, bool isPrivileged, string? processPath, TextWriter log)
     {
-        Prefix = DetectInvocationPrefix(Environment.ProcessPath),
-        ConfigDir = ResolveConfigDir(
-            Environment.GetEnvironmentVariable,
-            Directory.Exists,
-            Directory.Move,
-            Console.Error,
-            Environment.IsPrivilegedProcess,
-            DefaultApplicationDataDir),
-        Verbose = SplitGlobalFlags(args).Verbose,
-        CommandArgs = SplitGlobalFlags(args).CommandArgs,
-    };
+        var (verbose, commandArgs) = SplitGlobalFlags(args);
+        return new()
+        {
+            Prefix = DetectInvocationPrefix(processPath),
+            ConfigDirResolver = () => ResolveConfigDir(
+                getEnv,
+                Directory.Exists,
+                Directory.Move,
+                log,
+                isPrivileged,
+                () => ApplicationDataDir(getEnv)),
+            Verbose = verbose,
+            CommandArgs = commandArgs,
+        };
+    }
 
     /// <summary>
     /// Splits off tswap's global flags (<c>-v</c>/<c>--verbose</c>): only the leading run before
@@ -52,8 +84,24 @@ public sealed class CliEnvironment
     /// fresh account), which would make the config dir relative to the current folder (#175);
     /// tswap creates its own folder below it on init.
     /// </summary>
-    public static string DefaultApplicationDataDir()
-        => Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify);
+    public static string DefaultApplicationDataDir() => ApplicationDataDir(Environment.GetEnvironmentVariable);
+
+    /// <summary>
+    /// <see cref="DefaultApplicationDataDir"/> with the environment passed in. On Linux (and other
+    /// Unixes but macOS) per the XDG Base Directory spec: <c>$XDG_CONFIG_HOME</c> when it is an
+    /// absolute path (a relative one is ignored, #180), else <c>$HOME/.config</c> when HOME is an
+    /// absolute path, else "" (the caller refuses). macOS and Windows: .NET's folder.
+    /// </summary>
+    public static string ApplicationDataDir(Func<string, string?> getEnv)
+    {
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            return Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.DoNotVerify);
+        var xdg = getEnv("XDG_CONFIG_HOME");
+        if (!string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg))
+            return xdg;
+        var home = getEnv("HOME");
+        return !string.IsNullOrEmpty(home) && Path.IsPathRooted(home) ? Path.Combine(home, ".config") : "";
+    }
 
     /// <summary>
     /// Detect how tswap was invoked to show correct usage examples.
@@ -133,8 +181,14 @@ public sealed class CliEnvironment
         }
         var configDir = Path.Combine(appDataDir, "tswap");
         if (!Path.IsPathRooted(configDir))
+        {
+            var xdg = getEnv("XDG_CONFIG_HOME");
+            var xdgNote = !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !string.IsNullOrEmpty(xdg) && !Path.IsPathRooted(xdg)
+                ? $" XDG_CONFIG_HOME ('{xdg}') is ignored because it is not an absolute path."
+                : "";
             throw new TswapException(
-                "Cannot determine the config folder (no home folder to put it under). Set HOME, or TSWAP_CONFIG_DIR to the folder to use.");
+                "Cannot determine the config folder (no home folder to put it under). Set HOME, or TSWAP_CONFIG_DIR to the folder to use." + xdgNote);
+        }
 
         // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
         var legacyDir = Path.Combine(appDataDir, "tswap-poc");
