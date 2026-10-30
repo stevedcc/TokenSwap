@@ -45,6 +45,9 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     /// <summary>Every challenge answered so far: (serial, challenge string).</summary>
     public List<(int Serial, string Challenge)> Challenges { get; } = [];
 
+    /// <summary>Brief T7 item 4: plugged-in serials that don't answer a challenge (busy, or a touch that timed out).</summary>
+    public HashSet<int> NotAnswering { get; } = [];
+
     public bool IsSimulated => false;
 
     public void SetTouch(int serial, bool? requiresTouch) => _touch[serial] = requiresTouch;
@@ -56,12 +59,27 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
             throw new TswapCore.TswapException($"ykman failed: device {serial} not found");
 
-        Challenges.Add((serial, challenge));
+        Challenges.Add((serial, challenge)); // asked, even when it doesn't answer
+        if (NotAnswering.Contains(serial))
+            throw new TswapCore.TswapException($"ykman failed: timed out waiting for YubiKey {serial}");
         var padded = new byte[64];
         var input = Encoding.UTF8.GetBytes(challenge);
         Array.Copy(input, padded, Math.Min(input.Length, 64));
         return HMACSHA1.HashData(secret, padded);
     }
 
-    public bool? DetectTouchRequirement(int serial) => _touch.GetValueOrDefault(serial);
+    /// <summary>
+    /// Brief T7 item 5: false makes <see cref="DetectTouchRequirement"/> return null, like real
+    /// <c>ykman otp info</c>, which can't read a slot's touch setting.
+    /// </summary>
+    public bool DetectionWorks { get; set; } = true;
+
+    public bool? DetectTouchRequirement(int serial) => DetectionWorks ? _touch.GetValueOrDefault(serial) : null;
+
+    /// <summary>
+    /// Brief T7 item 5: the "asked for touch" flag is the key's touch setting (<see cref="SetTouch"/>),
+    /// as ykman prints "Touch your YubiKey..." exactly when the key waits for one.
+    /// </summary>
+    public YubiKeyResponse ChallengeReportingTouch(int serial, string challenge)
+        => new(Challenge(serial, challenge), _touch.GetValueOrDefault(serial));
 }

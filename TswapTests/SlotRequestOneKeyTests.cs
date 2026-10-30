@@ -140,7 +140,8 @@ public class SlotRequestOneKeyTests : IDisposable
         var (exit, stdout, stderr) = OnDesktop("2\n", "slot", "request", RequestFile);
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains("Multiple YubiKeys detected", stdout);
+        // Owner decision 2026-10-30 (T7 fix round 1): the enrolment prompt moved to stderr.
+        Assert.Contains("Multiple YubiKeys detected", stderr);
         var pending = LoadConfig(_desktopDir);
         Assert.Empty(pending.YubiKeySerials);
         Assert.Equal("", pending.RedundancyXor);

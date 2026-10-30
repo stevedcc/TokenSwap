@@ -36,6 +36,12 @@ public sealed class FleetMachine : IDisposable
 
     public bool Sudo { get; set; } = true;
 
+    /// <summary>Brief T7 item 4: the TSWAP_YUBIKEY_SERIAL value this machine's commands see (null: unset).</summary>
+    public string? YubiKeySerialVariable { get; set; }
+
+    /// <summary>The console of the last command run (brief T7 item 4: did it read stdin?).</summary>
+    public FakeConsole? LastConsole { get; private set; }
+
     /// <summary>The ownership policy this machine's storage applies (null: the real one).</summary>
     public DirectoryOwnerMatcher? Ownership { get; set; }
 
@@ -75,13 +81,21 @@ public sealed class FleetMachine : IDisposable
     public (int Exit, string Out, string Err) Run(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin), args);
 
+    /// <summary>Runs with stdout and stderr in one stream (T7 fix round 1: their order), returning it.</summary>
+    public (int Exit, string Text) RunInterleaved(string stdin, params string[] args)
+    {
+        var (exit, text, _) = Run(new FakeConsole(stdin) { Interleaved = true }, args);
+        return (exit, text);
+    }
+
     /// <summary>Runs with stdin as an interactive terminal (not redirected).</summary>
     public (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
 
     private (int Exit, string Out, string Err) Run(FakeConsole console, string[] args)
     {
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args };
+        LastConsole = console;
+        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable };
         var backends = new List<IHardwareKeyService>();
         if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));

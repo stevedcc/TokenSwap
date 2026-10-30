@@ -35,6 +35,43 @@ public sealed class MigrateCommand : ICliCommand
             return 0;
         }
 
+        // Brief T7 item 5 / fix round 1: migrate is where the touch posture is reviewed. Each slot
+        // whose posture changed since it was acknowledged is explained (its own posture, stderr) and
+        // only those are acknowledged; everyday commands then stay quiet.
+        var changed = SecurityWarnings.Changed(config);
+        if (changed.Count > 0)
+        {
+            foreach (var (slot, _) in changed)
+                SecurityWarnings.ExplainRecordedTouch(c, slot.Label, slot.Posture);
+            config = SecurityWarnings.Acknowledge(config, [.. changed.Select(x => x.Slot.Key)]);
+            ctx.Storage.SaveConfig(config);
+        }
+
+        // Fix round 2 (MiMo F2): what reaches here is a YubiKey vault (TPM and Secure Enclave vaults
+        // returned above). A pending 'slot request' has no vault yet.
+        if (config.Keyring == null && config.PendingSlotId != null)
+        {
+            c.Out.WriteLine($"This machine has a pending slot request; nothing to migrate. Finish it first: {ctx.Prefix} slot accept <approve-file>");
+            return 0;
+        }
+
+        // A classic vault (no keyring, no pending request) needs its two serials; anything else is
+        // a damaged config, reported as the unlock reports it.
+        if (config.Keyring == null && config.YubiKeySerials is not { Count: 2 })
+            throw new TswapException(
+                $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
+
+        // A one-key YubiKey keyring vault (brief T4) has no pair fields: the classic guide below
+        // doesn't apply. (A legacy pair keyring vault has both serials and takes the classic path.)
+        if (config.YubiKeySerials is not { Count: 2 })
+        {
+            c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");
+            c.Out.WriteLine("setting). To give a key a touch requirement, reprogram it (ykman otp chalresp --generate --touch 2)");
+            c.Out.WriteLine($"and enroll it again: sudo {ctx.Prefix} slot add --yubikey");
+            return 0;
+        }
+
         // Each setting is checked independently so that a partially-migrated or
         // manually-edited config still gets prompted for whichever fields are missing.
         bool needsRngPrompt          = config.RngMode == null;

@@ -119,7 +119,7 @@ public class SlotAddYubiKeyTests : IDisposable
         var (exit, stdout, stderr) = Run("", null, "slot", "add", "--yubikey");
 
         Assert.True(exit == 0, stderr);
-        Assert.DoesNotContain("Multiple YubiKeys detected", stdout);
+        Assert.DoesNotContain("Multiple YubiKeys detected", stdout + stderr); // the prompt is on stderr since T7 fix round 1
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(DecodeKeyring(LoadConfig()).Slots[^1].HwBlob!).Serial);
     }
 

@@ -80,6 +80,27 @@ public class RecoveryKeyTests : IDisposable
 
     // --- recover ---
 
+    // T7 fix round 1 (GLM minor 5): recover explains the new key's touch posture before it records
+    // the acknowledgement (before the config is written), and records it for that slot.
+    [Fact]
+    public void RecoverYubiKey_ExplainsTheTouchPosture_BeforeWritingTheAcknowledgement()
+    {
+        RouterVault();
+        _router.Tpm = null;
+        _keys.SetTouch(SerialA, false);
+        _keys.PluggedIn = [SerialA];
+
+        var (exit, text) = _router.RunInterleaved(Stdin, "recover", "--yubikey");
+
+        Assert.True(exit == 0, text);
+        var explained = text.IndexOf("any process running as you can unlock the vault while the key is plugged in", StringComparison.Ordinal);
+        Assert.True(explained >= 0, text);
+        Assert.True(explained < text.IndexOf("Previous config backed up to", StringComparison.Ordinal), text);
+        Assert.True(explained < text.IndexOf("✓ Recovered", StringComparison.Ordinal), text);
+        var newSlot = Convert.ToBase64String(_router.Keyring.Slots[2].SlotId);
+        Assert.Equal("no-touch", _router.Config.AcknowledgedTouch![newSlot]);
+    }
+
     [Fact]
     public void RecoverYubiKey_WithTheTpmLost_TheSecretsReadBack_AndTheRecoverySlotStays()
     {

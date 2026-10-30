@@ -8,6 +8,7 @@ public sealed class InstallScriptCommand : ICliCommand
     public string HelpUsage => "installscript";
     public string Description => "Generate a platform install script (redirect to a file, review, then run)";
     public bool RequiresSudo => false;
+    public bool NeedsVault => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
