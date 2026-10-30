@@ -647,3 +647,58 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
     }
 }
 
+
+/// <summary>
+/// Fix round 3, item 7: a slot added to the shared keyring between <c>slot approve</c> and
+/// <c>slot accept</c> survives the accept (the accept's keyring save is a union with the file).
+/// </summary>
+public sealed class SlotAddedBetweenApproveAndAcceptTests : IDisposable
+{
+    private readonly SimulatedYubiKeyService _keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB);
+    private readonly FleetMachine _home;
+    private readonly FleetMachine _router;
+    private readonly string _shared;
+
+    public SlotAddedBetweenApproveAndAcceptTests()
+    {
+        _keys.PluggedIn = [SerialA];
+        _home = new FleetMachine("between-home", _keys);
+        _router = new FleetMachine("between-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
+        _shared = Path.Combine(_home.Dir, "Sync", "tswap");
+        _home.Ok("", "init", "--keyring");
+        _home.Ok("v", "ingest", "s");
+        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
+    }
+
+    public void Dispose()
+    {
+        _home.Dispose();
+        _router.Dispose();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheSlotSurvivesTheAccept(bool acceptWithVaultDir)
+    {
+        if (!acceptWithVaultDir)
+            _router.Ok("", "init", "--vault-dir", _shared);
+        var request = _router.PathOf("request.json");
+        var approve = _router.PathOf("approve.json");
+        _router.Ok("yes\n", "slot", "request", "--tpm", request);
+        _home.Ok("", "slot", "approve", request, approve);
+
+        _keys.PluggedIn = [SerialA, SerialB];
+        _home.Ok("", "slot", "add", "--yubikey"); // key B joins the shared keyring in between
+        var keyB = _home.Keyring.Slots.Single(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob) && YubiKeySlotBlob.Decode(s.HwBlob!).Serial == SerialB);
+
+        if (acceptWithVaultDir)
+            _router.Ok("", "slot", "accept", approve, "--vault-dir", _shared);
+        else
+            _router.Ok("", "slot", "accept", approve);
+
+        Assert.Contains(_home.Keyring.Slots, s => s.SlotId.AsSpan().SequenceEqual(keyB.SlotId));
+        _keys.PluggedIn = [SerialB];
+        Assert.Equal("v", _home.Get("s"));
+    }
+}
