@@ -92,13 +92,7 @@ public static class Validation
     }
 
     /// <summary>A refused <c>run</c> command line: the program and why.</summary>
-    public sealed record BlockedInvocation(string Program, string Reason)
-    {
-        /// <summary>Refused only because no script file was named (code from stdin). A wrapper
-        /// ignores this for a bare name after its first positional argument, where it is usually
-        /// an argument value (sudo apt install python3).</summary>
-        internal bool NoScriptFile { get; init; }
-    }
+    public sealed record BlockedInvocation(string Program, string Reason);
 
     // Issue #105: a shell or interpreter given inline code can transform a substituted secret
     // (split, reverse, encode) before printing it, which run's output redaction can't recognise.
@@ -219,7 +213,9 @@ public static class Validation
                 || (a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Contains('c')));
             if (command != null)
                 return new(program, InlineReason(program, command));
-            return program.Equals("runuser", StringComparison.OrdinalIgnoreCase) ? CheckWrapper(program, args) : null;
+            // su without -c starts a (login) shell reading stdin; runuser [-u user] cmd runs cmd.
+            return program.Equals("runuser", StringComparison.OrdinalIgnoreCase) ? CheckWrapper(program, args)
+                : new(program, $"'{program}' without -c starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
         }
 
         if (CodeRunners.Contains(program))
@@ -316,7 +312,12 @@ public static class Validation
     // Wrapper options that take a separate value, so the value isn't taken for the command.
     private static readonly Dictionary<string, string[]> WrapperValued = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["sudo"] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group", "--chdir"],
+        ["sudo"] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-R", "-t", "-U", "-T", "--user", "--group",
+            "--chdir", "--chroot", "--close-from", "--host", "--prompt", "--role", "--type",
+            "--command-timeout", "--other-user"],
+        ["stdbuf"] = ["-i", "-o", "-e", "--input", "--output", "--error"],
+        ["time"] = ["-f", "-o", "--format", "--output"],
+        ["flock"] = ["-w", "-E", "--timeout", "--wait", "--conflict-exit-code"],
         ["doas"] = ["-u", "-C"],
         ["timeout"] = ["-s", "-k", "--signal", "--kill-after"],
         ["nice"] = ["-n", "--adjustment"],
@@ -362,9 +363,12 @@ public static class Validation
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
             return null; // command -v only looks the name up
 
-        // sudo -s/-i run a shell (with any command through its -c); npx -c runs shell code.
-        if ((program.Equals("sudo", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-s" or "-i" or "--shell" or "--login"))
-            || (program.Equals("npx", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--call")))
+        // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
+        // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
+        var ownOptions = OwnOptions(program, args);
+        if ((program.Equals("sudo", StringComparison.OrdinalIgnoreCase) && ownOptions.Any(a => a is "-s" or "-i" or "--shell" or "--login"))
+            || (program.Equals("npx", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--call"))
+            || (program.Equals("flock", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--command")))
             return new(program, $"'{program}' with a shell option runs shell code, which can transform and print secrets past redaction. {WayOut}");
 
         if (SubcommandTools.Contains(program))
@@ -381,6 +385,9 @@ public static class Validation
             var sub = args.FindIndex(a => !a.StartsWith('-'));
             if (sub < 0 || !ExecSubcommands.Contains(args[sub]))
                 return null; // pull, install, build ...: nothing is run
+            if (program.Equals("machinectl", StringComparison.OrdinalIgnoreCase) && args[sub] is "shell" or "login"
+                && !args.Skip(sub + 1).Where(a => !a.StartsWith('-')).Skip(1).Any())
+                return new(program, $"'machinectl {args[sub]}' with no command starts a shell reading stdin, which can transform and print secrets past redaction. {WayOut}");
             for (var i = sub + 1; i < args.Count; i++)
                 if (IsCheckedProgram(ProgramName(args[i])) && Wrapped(i) is { } blocked)
                     return blocked;
@@ -410,16 +417,16 @@ public static class Validation
             // The wrapped command, checked in full (a bare interpreter reading stdin is refused).
             if (IsCheckedProgram(ProgramName(arg)))
                 return Wrapped(i);
-            // Not a checked program: the command, or the value of an option this list doesn't
-            // know (npx -p pkg node -e ...). Keep scanning: a later interpreter given inline code
-            // is refused; a later bare name is an argument (sudo apt install python3) and passes.
+            // Not a checked program. For a wrapper whose options this check knows completely,
+            // it is the command (sudo apt install python3 passes). For any other wrapper it may
+            // be the value of an unknown option (bwrap --ro-bind / / python), so keep scanning
+            // and refuse any later checked program that would be refused on its own, a bare
+            // interpreter reading stdin included: failing closed.
+            if (TrustedWrappers.Contains(program))
+                return null;
             for (var k = i + 1; k < args.Count; k++)
-            {
-                if (!IsCheckedProgram(ProgramName(args[k])))
-                    continue;
-                if (Wrapped(k) is { NoScriptFile: false } later)
+                if (IsCheckedProgram(ProgramName(args[k])) && Wrapped(k) is { } later)
                     return later;
-            }
             return null;
         }
         // No command at all: these wrappers then start a shell that reads stdin.
@@ -429,7 +436,30 @@ public static class Validation
     }
 
     private static readonly HashSet<string> ShellWhenNoCommand = new(StringComparer.OrdinalIgnoreCase)
-        { "nsenter", "runuser", "sudo", "doas", "machinectl", "chroot", "unshare", "bwrap" };
+        { "nsenter", "runuser", "doas", "chroot", "unshare" };
+
+    // Wrappers whose options WrapperValued covers completely: their first positional argument
+    // is the command.
+    private static readonly HashSet<string> TrustedWrappers = new(StringComparer.OrdinalIgnoreCase)
+        { "sudo", "doas", "timeout", "nice", "nohup", "setsid", "time", "stdbuf", "ionice", "flock",
+          "chroot", "taskset", "chrt" };
+
+    // The wrapper's own options: everything before its command (the first positional argument,
+    // after skipping known option values).
+    private static List<string> OwnOptions(string program, List<string> args)
+    {
+        WrapperValued.TryGetValue(program, out var valued);
+        var own = new List<string>();
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i] == "--" || !args[i].StartsWith('-'))
+                break;
+            own.Add(args[i]);
+            if (valued != null && valued.Contains(args[i], StringComparer.Ordinal))
+                i++;
+        }
+        return own;
+    }
 
     private static bool IsInterpreter(string name) =>
         PythonName.IsMatch(name) || Interpreters.ContainsKey(name) || AwkNames.Contains(name)
@@ -533,8 +563,7 @@ public static class Validation
             }
             return null; // the script file
         }
-        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-            { NoScriptFile = true };
+        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
     }
 
     private static string InlineReason(string program, string flag) =>

@@ -128,6 +128,15 @@ public class InlineCodeBlockTests
     [InlineData("sudo", "-i", "S={{x}}")]
     [InlineData("runuser", "-u", "root", "bash")]
     [InlineData("nsenter", "-t", "1", "-m")]
+    // Review round 5 (GLM on Z.ai): stdin interpreters behind wrappers with unknown options.
+    [InlineData("bwrap", "--ro-bind", "/", "/", "python")]
+    [InlineData("npx", "--cache", "/tmp", "python")]
+    [InlineData("systemd-run", "--description", "d", "python")]
+    [InlineData("unshare", "--setuid", "0", "python")]
+    [InlineData("flock", "-c", "echo {{x}}", "/tmp/lock")]
+    [InlineData("flock", "/tmp/lock", "-c", "echo {{x}}")]
+    [InlineData("su", "-", "app")] // login shell reading stdin (was allowed before round 5)
+    [InlineData("machinectl", "shell")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -180,7 +189,6 @@ public class InlineCodeBlockTests
     [InlineData("julia", "-t", "4", "script.jl", "{{x}}")]
     [InlineData("perl", "-x", "tool.pl", "{{x}}")]
     [InlineData("npm", "run", "deploy", "--", "--token", "{{x}}")]
-    [InlineData("su", "-", "app")] // login shell, no -c
     // Review round 3: non-executing subcommands and an ordinary wrapped program pass; '--' ends
     // su/runuser option scanning; an awk cluster ending in f names the program file.
     [InlineData("runuser", "-u", "app", "--", "tar", "-czf", "out.tgz", "{{x}}")]
@@ -194,6 +202,16 @@ public class InlineCodeBlockTests
     [InlineData("runuser", "-u", "app", "./deploy.sh", "{{x}}")]
     [InlineData("nsenter", "-t", "1", "-m", "./tool", "{{x}}")]
     [InlineData("npx", "-p", "pkg", "tool", "--token", "{{x}}")]
+    // Review round 5: sudo's non-shell modes and a -i/-s belonging to the command pass.
+    [InlineData("sudo", "apt", "install", "python3")] // python3 is apt's argument, not run
+    [InlineData("sudo", "-E", "dnf", "install", "-y", "python3")]
+    [InlineData("timeout", "300", "apt-get", "install", "perl")]
+    [InlineData("sudo", "-v", "{{x}}")]
+    [InlineData("sudo", "-l", "{{x}}")]
+    [InlineData("sudo", "mv", "-i", "a", "{{x}}")]
+    [InlineData("sudo", "strace", "-s", "200", "./tool", "{{x}}")]
+    [InlineData("stdbuf", "-o", "L", "./tool", "{{x}}")]
+    [InlineData("time", "-f", "%e", "./tool", "{{x}}")]
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]
