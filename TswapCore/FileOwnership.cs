@@ -100,6 +100,81 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         }
     }
 
+    /// <summary>
+    /// Brief T6 decision 10 / issue #137 work item 1: <see cref="WriteAtomic"/> for files that may
+    /// live in a synced or network folder (records, the keyring). The temp file is opened with
+    /// <see cref="FileOptions.WriteThrough"/> and flushed to disk, then renamed with a plain
+    /// <see cref="File.Move(string, string, bool)"/> (never <see cref="File.Replace(string, string, string?)"/>,
+    /// which some SMB servers implement badly), then the folder entry is fsynced (Unix, best
+    /// effort). A symlink at the path is replaced, never written through. New files are 0600; an
+    /// existing regular file's mode is not carried over (the vault folder's files are 0600).
+    /// </summary>
+    public void WriteDurable(string path, ReadOnlySpan<byte> bytes)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        var tmp = $"{fullPath}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6))}.tmp";
+        try
+        {
+            using (var stream = CreateNew(tmp, FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, fullPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+            throw;
+        }
+        Keyring.UnixDirectoryFsync.TryFsync(Path.GetDirectoryName(fullPath)!);
+    }
+
+    /// <summary>Deletes <paramref name="path"/> (as its folder's owner); a missing file is not an error.</summary>
+    public void Delete(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        File.Delete(fullPath);
+    }
+
+    /// <summary>
+    /// Renames <paramref name="source"/> to <paramref name="destination"/> in the same folder (as
+    /// the folder's owner), never overwriting; works for files and folders.
+    /// </summary>
+    public void Move(string source, string destination)
+    {
+        var fullSource = Path.GetFullPath(source);
+        var fullDestination = Path.GetFullPath(destination);
+        using var _ = AsOwnerOf(fullDestination);
+        if (Directory.Exists(fullSource) && new DirectoryInfo(fullSource).LinkTarget == null)
+            Directory.Move(fullSource, fullDestination);
+        else
+            File.Move(fullSource, fullDestination, overwrite: false);
+    }
+
+    /// <summary>Deletes the folder <paramref name="path"/> and everything in it (as its parent's owner); never follows links.</summary>
+    public void DeleteDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        if (new DirectoryInfo(fullPath).LinkTarget != null)
+            File.Delete(fullPath); // a link to a folder: remove the link only
+        else if (Directory.Exists(fullPath))
+            Directory.Delete(fullPath, recursive: true);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> as the owner of <paramref name="path"/>'s nearest existing
+    /// folder (see the type's comment): for folder listings and mode changes in a vault folder.
+    /// </summary>
+    public T AsOwner<T>(string path, Func<T> action)
+    {
+        using var _ = AsOwnerOf(Path.GetFullPath(path));
+        return action();
+    }
+
     /// <summary>Creates <paramref name="path"/>, which must not exist (<see cref="IOException"/> if it does).</summary>
     public void WriteNew(string path, ReadOnlySpan<byte> bytes)
     {
@@ -201,9 +276,9 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     /// <summary>Single-quotes <paramref name="value"/> for a POSIX shell.</summary>
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
-    private static FileStream CreateNew(string path)
+    private static FileStream CreateNew(string path, FileOptions fileOptions = FileOptions.None)
     {
-        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = fileOptions };
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = OwnerOnly;
         return new FileStream(path, options);

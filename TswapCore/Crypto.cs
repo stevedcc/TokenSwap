@@ -73,6 +73,42 @@ public static class Crypto
         return result;
     }
 
+    /// <summary>
+    /// <see cref="Encrypt(byte[], byte[])"/> with associated data: <paramref name="associatedData"/>
+    /// is authenticated, not encrypted (brief T6: a record's cleartext header).
+    /// </summary>
+    public static byte[] Encrypt(byte[] plaintext, byte[] key, ReadOnlySpan<byte> associatedData)
+    {
+        var nonceSize = AesGcm.NonceByteSizes.MaxSize;
+        var tagSize = AesGcm.TagByteSizes.MaxSize;
+        using var aes = new AesGcm(key, tagSize);
+
+        var result = new byte[nonceSize + tagSize + plaintext.Length];
+        var nonce = result.AsSpan(0, nonceSize);
+        var tag = result.AsSpan(nonceSize, tagSize);
+        var ciphertext = result.AsSpan(nonceSize + tagSize);
+
+        RandomNumberGenerator.Fill(nonce);
+        aes.Encrypt(nonce, plaintext, ciphertext, tag, associatedData);
+        return result;
+    }
+
+    /// <summary>Decrypts what <see cref="Encrypt(byte[], byte[], ReadOnlySpan{byte})"/> produced.</summary>
+    public static byte[] Decrypt(byte[] encrypted, byte[] key, ReadOnlySpan<byte> associatedData)
+    {
+        var nonceSize = AesGcm.NonceByteSizes.MaxSize;
+        var tagSize = AesGcm.TagByteSizes.MaxSize;
+
+        var nonce = encrypted.AsSpan(0, nonceSize);
+        var tag = encrypted.AsSpan(nonceSize, tagSize);
+        var ciphertext = encrypted.AsSpan(nonceSize + tagSize);
+
+        using var aes = new AesGcm(key, tagSize);
+        var plaintext = new byte[ciphertext.Length];
+        aes.Decrypt(nonce, ciphertext, tag, plaintext, associatedData);
+        return plaintext;
+    }
+
     public static byte[] Decrypt(byte[] encrypted, byte[] key)
     {
         var nonceSize = AesGcm.NonceByteSizes.MaxSize;

@@ -139,7 +139,22 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // hardware-blob hash must all match), then removes its entry; every other new slot needs a fingerprint
     // confirmation or --yes. Not secret (ids and public keys). Never taken from another copy's
     // config.json during a merge. Omitted when null (no approval pending).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<ApprovedSlot>? ApprovedSlots = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<ApprovedSlot>? ApprovedSlots = null,
+    // Brief T6 decision 1: which store holds this vault's secrets. Null (omitted) is the classic
+    // single file (secrets.json.enc next to config.json); "records" (RecordVaultStore.StoreName)
+    // is the per-secret record store in VaultDir. Decided by this field only, never by files present.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Store = null,
+    // Brief T6 decision 1: the record store's vault folder (absolute): the shareable part, holding
+    // 'keyring' and 'records/'. This config.json stays per machine and is never synced. A record
+    // store's config.json holds no Keyring of its own: LoadConfig composes it from VaultDir/keyring.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? VaultDir = null,
+    // Brief T6 decision 3: this machine's random 16-byte origin id (base64), created once per
+    // machine config (so per vault): the tiebreak of the record store's (HLC, origin) order.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OriginId = null,
+    // Brief T6 decision 3: the highest HLC this machine has written or seen ("<ms>.<logical>", see
+    // Hlc.ToString), saved with every record write, so a clock set back between two commands still
+    // orders the second write after the first.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LastHlc = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's
@@ -150,8 +165,42 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
 /// </summary>
 public record ApprovedSlot(string SlotId, string PublicKey, DateTime Approved, string? HwBlobSha256 = null);
 
-public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-public record SecretsDb(Dictionary<string, Secret> Secrets);
+public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null)
+{
+    /// <summary>
+    /// Brief T6 decision 4 (record store only): past burns of this secret, i.e. burns of a value
+    /// version a newer value superseded (a rotation). Never serialized: the classic file and the
+    /// export format carry the current value and burn state only (decision 9).
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<PastBurn>? History { get; init; }
+}
+
+/// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>
+public sealed record PastBurn(DateTime BurnedAt, string? Reason);
+
+public record SecretsDb(Dictionary<string, Secret> Secrets)
+{
+    /// <summary>
+    /// Brief T6 decision 4 (record store only): for a name whose record file can't be read
+    /// (truncated mid-sync, fails authentication), that file's hashed name; else null. Such a
+    /// secret is present-but-unknown: never treated as absent. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string, string?>? UnreadableRecord { get; init; }
+
+    /// <summary>
+    /// Throws when <paramref name="name"/> is in a record that can't be read, naming the file (fail
+    /// closed; decision 4). Commands call this where they would otherwise report "not found".
+    /// </summary>
+    public void ThrowIfUnreadable(string name)
+    {
+        if (UnreadableRecord?.Invoke(name) is { } file)
+            throw new TswapException(
+                $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
+                "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
+    }
+}
 
 /// <summary>
 /// KDF algorithm identifiers for an export file's passphrase-derived key (#30). Serialized as

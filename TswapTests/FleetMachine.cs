@@ -39,6 +39,20 @@ public sealed class FleetMachine : IDisposable
     /// <summary>The ownership policy this machine's storage applies (null: the real one).</summary>
     public DirectoryOwnerMatcher? Ownership { get; set; }
 
+    /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
+    public Func<DateTimeOffset>? Clock { get; set; }
+
+    /// <summary>Brief T6: the record store's vault folder (from config.json), or null for a classic vault.</summary>
+    public string? VaultDir => File.Exists(ConfigPath) ? Config.VaultDir : null;
+
+    /// <summary>Brief T6: the record store's records folder.</summary>
+    public string RecordsDir => Path.Combine(VaultDir!, "records");
+
+    /// <summary>Brief T6: the record files (hashed names) in <see cref="RecordsDir"/>.</summary>
+    public string[] RecordFiles => Directory.Exists(RecordsDir)
+        ? Directory.GetFiles(RecordsDir).Select(Path.GetFileName).Where(n => n!.Length == 64).Select(n => n!).Order().ToArray()
+        : [];
+
     public string ConfigPath => Path.Combine(Dir, "config.json");
 
     public string SecretsPath => Path.Combine(Dir, "secrets.json.enc");
@@ -49,7 +63,9 @@ public sealed class FleetMachine : IDisposable
 
     public Config Config => JsonSerializer.Deserialize(ConfigText, TswapJsonContext.Default.Config)!;
 
-    public Keyring Keyring => KeyringCodec.Decode(Convert.FromBase64String(Config.Keyring!));
+    public Keyring Keyring => Config.Store == RecordVaultStore.StoreName
+        ? KeyringCodec.Decode(File.ReadAllBytes(Path.Combine(VaultDir!, "keyring")))
+        : KeyringCodec.Decode(Convert.FromBase64String(Config.Keyring!));
 
     public string[] Backups => Directory.GetFiles(Dir, "config.json.bak-*");
 
@@ -68,7 +84,7 @@ public sealed class FleetMachine : IDisposable
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
-        var ctx = new CommandContext(console, env, new Storage(Dir, Ownership), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo);
+        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, Clock), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo);
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
     }

@@ -41,4 +41,22 @@ public static class GenerationGuard
             $"is ahead of the loaded generation {loadedGeneration} from origin {Convert.ToHexString(loadedOriginId)} " +
             "-- reload before saving.");
     }
+
+    /// <summary>
+    /// Brief T6 decision 6, the record store's stale-write guard: throws when a record file's bytes
+    /// on disk (<paramref name="onDisk"/>, null when absent) differ in any way from what this command
+    /// loaded (<paramref name="loaded"/>, null when it was absent), not only when they carry a newer
+    /// stamp. Another tswap process, another machine on a shared folder, or a sync tool wrote it in
+    /// between; overwriting would lose that write.
+    /// </summary>
+    public static void CheckUnchanged(string recordFileName, byte[]? loaded, byte[]? onDisk)
+    {
+        var same = loaded == null ? onDisk == null : onDisk != null && loaded.AsSpan().SequenceEqual(onDisk);
+        if (same)
+            return;
+        throw new TswapException(
+            $"Refusing to save: record {recordFileName} changed on disk since this command read it (another tswap " +
+            "process, another machine sharing the vault folder, or a sync tool wrote it). Nothing was written; run the " +
+            "command again to work from the current version.");
+    }
 }

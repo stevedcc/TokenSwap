@@ -23,7 +23,8 @@ public enum RecordType : byte
     Tombstone = 1,
 
     /// <summary>
-    /// The secret was burned (marked compromised/seen). Carries the burn reason as its value.
+    /// The winning version is a value with an outstanding burn (marked compromised/seen; brief T6
+    /// decision 4). The record still carries the value; the burn is one of its burn entries.
     /// </summary>
     Burned = 2,
 }

@@ -1,0 +1,412 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using TswapCore.Keyring;
+
+namespace TswapCore;
+
+/// <summary>
+/// The per-secret record store (brief T6, issues #111-#114, #137): <see cref="Config.Store"/> =
+/// <c>"records"</c>. The machine's <c>config.json</c> stays in the config dir with machine fields
+/// only; the shareable <b>vault folder</b> (<see cref="Config.VaultDir"/>) holds <c>keyring</c>
+/// (the <see cref="KeyringCodec"/> bytes) and <c>records/&lt;HMAC(K_names, name) hex&gt;</c>, one
+/// file per secret (<see cref="SecretRecordCodec"/>).
+/// <para>
+/// Commands keep using <see cref="IVaultStore"/>'s whole-database calls: <see cref="LoadConfig"/>
+/// composes <see cref="Config.Keyring"/> from the vault folder, <see cref="LoadSecrets"/> reads and
+/// merges every record, and <see cref="SaveSecrets"/> writes only the records whose secret changed
+/// (a value write, a tombstone for a removed name, or a burn), each with a fresh
+/// <see cref="Hlc"/> stamp. Before each write it re-reads the file and refuses when it changed
+/// since this command loaded it (decision 6).
+/// </para>
+/// <para>Every file goes through <see cref="DirectoryOwnerMatcher"/> (decision 10).</para>
+/// </summary>
+public sealed class RecordVaultStore : IFileVaultStore
+{
+    /// <summary>The <see cref="Config.Store"/> value that selects this store.</summary>
+    public const string StoreName = "records";
+
+    /// <summary>The keyring file's name in the vault folder.</summary>
+    public const string KeyringFileName = "keyring";
+
+    /// <summary>The records folder's name in the vault folder.</summary>
+    public const string RecordsFolderName = "records";
+
+    private readonly DirectoryOwnerMatcher _owner;
+    private readonly Func<DateTimeOffset> _clock;
+
+    private Config? _machineConfig;
+    private Hlc _highestSeen = Hlc.Zero;
+    private Dictionary<string, LoadedRecord>? _loaded;
+    private TextWriter? _warnings;
+
+    /// <param name="configDir">The machine's config dir (holds <c>config.json</c>).</param>
+    /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>).</param>
+    /// <param name="clock">The time seam for HLC stamps (null: the system clock).</param>
+    public RecordVaultStore(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null)
+    {
+        ConfigDir = configDir;
+        ConfigFile = Path.Combine(configDir, "config.json");
+        SecretsFile = Path.Combine(configDir, "secrets.json.enc");
+        _owner = owner ?? DirectoryOwnerMatcher.Default;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+    }
+
+    public string ConfigDir { get; }
+
+    public string ConfigFile { get; }
+
+    /// <summary>The classic store's file (absent once a vault is a record store).</summary>
+    public string SecretsFile { get; }
+
+    /// <summary>The vault folder, from the loaded config.</summary>
+    public string VaultDir => Path.GetFullPath(MachineConfig.VaultDir
+        ?? throw new TswapException("Config is corrupted: a record store needs VaultDir. Restore config.json from backup."));
+
+    /// <summary>The keyring file in the vault folder.</summary>
+    public string KeyringFile => Path.Combine(VaultDir, KeyringFileName);
+
+    /// <summary>The records folder in the vault folder.</summary>
+    public string RecordsDir => Path.Combine(VaultDir, RecordsFolderName);
+
+    private Config MachineConfig => _machineConfig ?? ReadMachineConfig();
+
+    public string BackupConfig() => FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
+
+    public void WriteFile(string path, string contents) => _owner.WriteAtomic(path, Encoding.UTF8.GetBytes(contents));
+
+    // ---------------------------------------------------------------- config + keyring
+
+    public Config LoadConfig()
+    {
+        var config = ReadMachineConfig();
+        var keyring = ReadKeyring();
+        return config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) };
+    }
+
+    public void SaveConfig(Config config)
+    {
+        if (config.Store != StoreName)
+            throw new InvalidOperationException("A record store's config must keep Store = \"records\".");
+        _machineConfig ??= TryReadMachineConfig();
+        var lastHlc = Hlc.Max(Hlc.TryParse(config.LastHlc) ?? Hlc.Zero, Hlc.TryParse(_machineConfig?.LastHlc) ?? Hlc.Zero);
+        var machine = config with { Keyring = null, LastHlc = lastHlc == Hlc.Zero ? config.LastHlc : lastHlc.ToString() };
+        _machineConfig = machine;
+        if (config.Keyring != null)
+            WriteKeyring(DecodeKeyring(config.Keyring, "the config to save"));
+        WriteMachineConfig(machine);
+    }
+
+    private Config ReadMachineConfig()
+    {
+        var config = TryReadMachineConfig() ?? throw new TswapException("Not initialized. Run: tswap init");
+        if (config.Store != StoreName)
+            throw new TswapException($"{ConfigFile} is not a record store's config (Store is not \"{StoreName}\").");
+        if (config.Keyring != null)
+            throw new TswapException(
+                $"{ConfigFile} is a record store's config but carries its own Keyring; the keyring lives in the vault folder " +
+                "only. Restore config.json from backup.");
+        _machineConfig = config;
+        return config;
+    }
+
+    private Config? TryReadMachineConfig()
+    {
+        if (!_owner.FileExists(ConfigFile))
+            return null;
+        using var reader = new StreamReader(new MemoryStream(_owner.ReadAllBytes(ConfigFile)), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return JsonSerializer.Deserialize(reader.ReadToEnd(), TswapJsonContext.Default.Config)
+            ?? throw new TswapException("Invalid config");
+    }
+
+    private void WriteMachineConfig(Config machine)
+    {
+        _owner.CreateDirectory(ConfigDir);
+        _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(machine, TswapJsonContext.Default.Config)));
+    }
+
+    /// <summary>Reads the vault folder's keyring.</summary>
+    public Keyring.Keyring ReadKeyring()
+    {
+        var path = KeyringFile;
+        if (!_owner.FileExists(path))
+            throw new TswapException(
+                $"The vault folder {VaultDir} has no keyring file. If it is synced, wait for the sync to finish; " +
+                "otherwise restore the folder from a backup.");
+        return DecodeKeyringBytes(_owner.ReadAllBytes(path), path);
+    }
+
+    private void WriteKeyring(Keyring.Keyring keyring)
+    {
+        _owner.CreateDirectory(VaultDir);
+        _owner.WriteDurable(KeyringFile, KeyringCodec.Encode(keyring));
+    }
+
+    private static Keyring.Keyring DecodeKeyring(string base64, string what)
+    {
+        try
+        {
+            return KeyringCodec.Decode(Convert.FromBase64String(base64));
+        }
+        catch (FormatException)
+        {
+            throw new TswapException($"Keyring in {what} is not valid base64.");
+        }
+    }
+
+    private static Keyring.Keyring DecodeKeyringBytes(byte[] bytes, string path)
+    {
+        try
+        {
+            return KeyringCodec.Decode(bytes);
+        }
+        catch (TswapException ex)
+        {
+            throw new TswapException($"The keyring file {path} can't be read: {ex.Message}. Restore it from a backup or another copy.");
+        }
+    }
+
+    // ---------------------------------------------------------------- records
+
+    /// <summary>One record file as this command loaded it.</summary>
+    private sealed record LoadedRecord(string FileName, byte[]? MainBytes, SecretRecord? State, string? UnreadableReason);
+
+    public SecretsDb LoadSecrets(byte[] key, TextWriter? warnings = null)
+    {
+        _warnings = warnings;
+        var loaded = LoadRecords(key, warnings);
+        var secrets = new Dictionary<string, Secret>();
+        foreach (var record in loaded.Values)
+        {
+            if (record.State is not { Type: not RecordType.Tombstone } state)
+                continue;
+            secrets[state.Name] = ToSecret(state);
+        }
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason != null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
+        return new SecretsDb(secrets)
+        {
+            UnreadableRecord = unreadable.Count == 0
+                ? null
+                : name =>
+                {
+                    var file = FilenameHasher.ComputeFilename(namesKey, name);
+                    return unreadable.Contains(file) ? file : null;
+                },
+        };
+    }
+
+    private static Secret ToSecret(SecretRecord state)
+    {
+        var outstanding = state.OutstandingBurn;
+        var history = state.Burns
+            .Where(b => !ReferenceEquals(b, outstanding))
+            .OrderBy(b => b.Burn)
+            .Select(b => new PastBurn(Hlc.ToDisplayDate(b.Burn.Hlc.PhysicalMs), b.Reason))
+            .ToList();
+        return new Secret(
+            Encoding.UTF8.GetString(state.Value),
+            Hlc.ToDisplayDate(state.CreatedMs),
+            Hlc.ToDisplayDate(state.Version.Hlc.PhysicalMs),
+            outstanding == null ? null : Hlc.ToDisplayDate(outstanding.Burn.Hlc.PhysicalMs),
+            outstanding?.Reason)
+        {
+            History = history.Count == 0 ? null : history,
+        };
+    }
+
+    private Dictionary<string, LoadedRecord> LoadRecords(byte[] key, TextWriter? warnings)
+    {
+        _highestSeen = Hlc.TryParse(MachineConfig.LastHlc) ?? Hlc.Zero;
+        var loaded = new Dictionary<string, LoadedRecord>(StringComparer.Ordinal);
+        var recordsDir = RecordsDir;
+        if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
+        {
+            _loaded = loaded;
+            return loaded;
+        }
+
+        // Do NOT order by filesystem mtime anywhere here: sync tools rewrite it freely. The only
+        // ordering authority is the (HLC, origin) stamp inside each record.
+        var scan = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir));
+        foreach (var fileName in scan.ValidRecordFilenames.Order(StringComparer.Ordinal))
+            loaded[fileName] = ReadRecord(fileName, key);
+
+        foreach (var record in loaded.Values.Where(r => r.UnreadableReason != null))
+            warnings?.WriteLine(
+                $"Warning: record {record.FileName} can't be read ({record.UnreadableReason}). Its secret is kept as " +
+                "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
+                "from a backup or another copy, or wait for the sync to finish.");
+        var unreadableCount = loaded.Values.Count(r => r.UnreadableReason != null);
+        if (unreadableCount > 0)
+            warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
+
+        _loaded = loaded;
+        return loaded;
+    }
+
+    private LoadedRecord ReadRecord(string fileName, byte[] key)
+    {
+        var path = Path.Combine(RecordsDir, fileName);
+        byte[] bytes;
+        try
+        {
+            bytes = _owner.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+        {
+            return new LoadedRecord(fileName, null, null, ex.Message);
+        }
+        if (SecretRecordCodec.PeekHeader(bytes) is { } header)
+            Observe(header.Write.Hlc);
+        try
+        {
+            var state = SecretRecordCodec.Decode(bytes, key);
+            if (FilenameHasher.ToFilename(state.RecordId) != fileName)
+                return new LoadedRecord(fileName, bytes, null, "its record id does not match its file name");
+            ObserveAll(state);
+            return new LoadedRecord(fileName, bytes, state, null);
+        }
+        catch (Exception ex) when (ex is TswapException or CryptographicException)
+        {
+            return new LoadedRecord(fileName, bytes, null, ex is CryptographicException ? "it fails authentication" : ex.Message);
+        }
+    }
+
+    private void Observe(Hlc hlc) => _highestSeen = Hlc.Max(_highestSeen, hlc);
+
+    private void ObserveAll(SecretRecord state)
+    {
+        Observe(state.Write.Hlc);
+        Observe(state.Version.Hlc);
+        foreach (var burn in state.Burns)
+            Observe(burn.Burn.Hlc);
+    }
+
+    public void SaveSecrets(SecretsDb db, byte[] key)
+    {
+        var loaded = _loaded ?? LoadRecords(key, _warnings);
+        var origin = OriginId();
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
+        var writes = new List<(string FileName, SecretRecord State)>();
+
+        Stamp NextStamp()
+        {
+            var hlc = Hlc.Next(_highestSeen, _clock().ToUnixTimeMilliseconds());
+            _highestSeen = hlc;
+            return new Stamp(hlc, origin);
+        }
+
+        foreach (var (name, secret) in db.Secrets.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            var fileName = FilenameHasher.ComputeFilename(namesKey, name);
+            loaded.TryGetValue(fileName, out var current);
+            if (current?.UnreadableReason != null)
+                throw Unreadable(name, fileName);
+            var state = current?.State;
+            var value = Encoding.UTF8.GetBytes(secret.Value);
+            SecretRecord? next = null;
+            if (state == null || state.Type == RecordType.Tombstone || !state.Value.AsSpan().SequenceEqual(value))
+            {
+                // A new value version (create, add, rotate, import): it supersedes the old version,
+                // so an outstanding burn of that version becomes history.
+                var version = NextStamp();
+                var burns = (state?.Burns ?? []).ToList();
+                if (secret.BurnedAt != null)
+                    burns.Add(new BurnEntry(version, NextStamp(), secret.BurnReason));
+                var createdMs = state is { Type: not RecordType.Tombstone }
+                    ? state.CreatedMs
+                    : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+                next = new SecretRecord(
+                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns);
+            }
+            else if (secret.BurnedAt != null && state.OutstandingBurn == null)
+            {
+                next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, NextStamp(), secret.BurnReason)] };
+            }
+            if (next != null)
+                writes.Add((fileName, RecordMerge.Normalize(next)));
+        }
+
+        foreach (var current in loaded.Values)
+        {
+            if (current.State is not { Type: not RecordType.Tombstone } state || db.Secrets.ContainsKey(state.Name))
+                continue;
+            var tombstone = state with { Type = RecordType.Tombstone, Version = NextStamp(), Value = [] };
+            writes.Add((current.FileName, RecordMerge.Normalize(tombstone)));
+        }
+
+        WriteRecords(writes, key, loaded);
+    }
+
+    private static TswapException Unreadable(string name, string fileName) => new(
+        $"The record holding '{name}' ({fileName}) can't be read: it is damaged, truncated, or still being synced. " +
+        "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
+
+    /// <summary>
+    /// Writes <paramref name="writes"/>: every file is re-read and compared with what this command
+    /// loaded first, and any change refuses the whole save before anything is written (decision 6).
+    /// Each record gets its own write stamp; <c>LastHlc</c> is saved afterwards.
+    /// </summary>
+    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded)
+    {
+        if (writes.Count == 0)
+            return;
+        var recordsDir = RecordsDir;
+        foreach (var (fileName, _) in writes)
+        {
+            var path = Path.Combine(recordsDir, fileName);
+            var onDisk = _owner.FileExists(path) ? TryRead(path) : null;
+            loaded.TryGetValue(fileName, out var current);
+            GenerationGuard.CheckUnchanged(fileName, current?.MainBytes, onDisk);
+        }
+
+        _owner.CreateDirectory(VaultDir);
+        _owner.CreateDirectory(recordsDir);
+        var origin = OriginId();
+        foreach (var (fileName, state) in writes)
+        {
+            var hlc = Hlc.Next(_highestSeen, _clock().ToUnixTimeMilliseconds());
+            _highestSeen = hlc;
+            var written = state with { Write = new Stamp(hlc, origin) };
+            var bytes = SecretRecordCodec.Encode(written, key);
+            _owner.WriteDurable(Path.Combine(recordsDir, fileName), bytes);
+            loaded[fileName] = new LoadedRecord(fileName, bytes, written, null);
+        }
+
+        var machine = MachineConfig with { LastHlc = _highestSeen.ToString() };
+        _machineConfig = machine;
+        WriteMachineConfig(machine);
+    }
+
+    private byte[]? TryRead(string path)
+    {
+        try
+        {
+            return _owner.ReadAllBytes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private byte[] OriginId()
+    {
+        try
+        {
+            var origin = Convert.FromBase64String(MachineConfig.OriginId
+                ?? throw new TswapException("Config is corrupted: a record store needs OriginId. Restore config.json from backup."));
+            if (origin.Length != KeyringFormat.OriginIdSize)
+                throw new FormatException();
+            return origin;
+        }
+        catch (FormatException)
+        {
+            throw new TswapException("Config is corrupted: OriginId is not 16 bytes of base64. Restore config.json from backup.");
+        }
+    }
+
+    /// <summary>A new random origin id (base64) for a machine config (decision 1).</summary>
+    public static string NewOriginId() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyringFormat.OriginIdSize));
+}
