@@ -227,7 +227,7 @@ across. Plain `tswap init` (above) is unchanged.
 
 ```bash
 # Linux/Windows with a TPM 2.0 (Linux needs tpm2-tools), or a Mac's Secure Enclave
-tswap init --tpm              # or: tswap init --secure-enclave
+tswap init --tpm              # or: tswap init --secure-enclave --with-touch   (or --no-touch, below)
 ```
 
 This makes a **keyring vault**: a random vault key wrapped by this machine's TPM or Secure
@@ -236,20 +236,40 @@ private key once; store it offline (tswap never saves it). `--no-recovery` leave
 slot out. `--keyring` is implied and accepted (`tswap init --keyring --tpm` is the same
 command); `--tpm` and `--secure-enclave` cannot be combined. `init` rejects any other argument.
 
-**Secure Enclave:** the slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction,
+**Secure Enclave: touch or no touch is your explicit choice.** `--secure-enclave` needs exactly one
+of `--with-touch` (every unlock asks for Touch ID or the login password) or `--no-touch` (no
+prompt), on `init`, `slot request` and `recover` alike; there is no default. The choice is fixed
+into the Secure Enclave key when it is created and can't be read back from the key, so tswap
+records it in `config.json` (`RequiresTouch`); that record only changes what tswap says, never what
+the Secure Enclave enforces. What `--no-touch` trades away, and the warning it prints says:
+(a) this Mac's slot unlocks the vault without Touch ID or a password; (b) anything that can run code
+on this Mac and read this vault's config, from any account, including root, can unlock the vault
+without you noticing (the key still never leaves the Secure Enclave and works only on this Mac;
+the config file's permissions are what keep other accounts out); (c) the slot can't be changed or
+removed later: tswap can't remove slots, so the only way to drop it is a new vault and moving the
+secrets over. It is meant for unattended use (a scheduled job, a separate lane user). How a
+no-touch slot behaves with the screen locked, over ssh or after a reboot: see the recorded check in
+[HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
+There is no recurring per-command banner for a no-touch Secure Enclave slot (unlike a no-touch
+YubiKey, whose posture is set outside tswap): you chose it with the flag. `slot approve` on the
+approving machine can't see a requesting Mac's choice; `slot request --no-touch` says so.
+`tswap` and `libtswapse.dylib` beside it ship together: a newer `tswap` with an older dylib refuses
+to enrol ("update libtswapse.dylib together with tswap") rather than make a key it can't vouch for.
+
+The slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction,
 a hand-rolled ECIES equivalent. In the words of [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#status-poc-grade-not-yet-production-hardened):
 it has "been verified for correctness (round-trips, fails cleanly on denial), not reviewed by
 anyone with cryptography expertise for subtler issues". It has not had an independent
 cryptographic review; `init --secure-enclave` says so too. Tested on Apple Silicon only.
 **TPM:** the TPM key has no PIN or PCR policy yet, so any process running as you can unseal it
-(no presence check, unlike a touch-required YubiKey or the Secure Enclave).
+(no presence check, unlike a touch-required YubiKey or a `--with-touch` Secure Enclave slot).
 
 To let your YubiKeys open this vault too, plug each one into **this** machine and run
 `sudo tswap slot add --yubikey`: each key becomes its own slot, which opens the vault on its own
 (for example on a laptop with a copy of the vault files, or if the TPM is replaced).
 
 Another machine can join the same vault in four steps: `tswap slot request` (on the new machine:
-with one YubiKey plugged in, or `--tpm` / `--secure-enclave` for its own TPM or Secure Enclave),
+with one YubiKey plugged in, or `--tpm` / `--secure-enclave --with-touch|--no-touch` for its own TPM or Secure Enclave),
 `sudo tswap slot approve` (on this one), `tswap slot accept` (back on the new one; it writes a
 receipt) and `sudo tswap slot merge <receipt>` (on this one again, so this machine's copy opens
 with the new device too). Move the files yourself (scp, USB). `tswap slots` lists the slots.
@@ -301,7 +321,7 @@ secret in your main vault (stdin must be the base64 key alone; surrounding white
 
 ```bash
 # Total hardware loss (TPM cleared, keys lost): enroll new hardware as a new slot
-sudo tswap get recovery-key | sudo tswap recover --yubikey     # or --tpm / --secure-enclave
+sudo tswap get recovery-key | sudo tswap recover --yubikey     # or --tpm / --secure-enclave --with-touch|--no-touch
 
 # Or unlock with it for a keyring change
 sudo tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
@@ -528,7 +548,7 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
-| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; the **Secure Enclave** asks for Touch ID / presence per unwrap; a **no-touch YubiKey** and a **TPM** slot (no PIN/PCR policy yet) unlock for any process running as you while the key is plugged in / on that machine |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot (no PIN/PCR policy yet) unlock for any process running as you while the key is plugged in / on that machine |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
 
 ### What tswap does NOT protect against
@@ -777,7 +797,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 
 | Command | Sudo | Description |
 |---------|------|-------------|
-| `init [--keyring] [--tpm\|--secure-enclave] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)) |
+| `init [--keyring] [--tpm\|--secure-enclave --with-touch\|--no-touch] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)); `--secure-enclave` needs `--with-touch` or `--no-touch` |
 | `init --vault-dir <folder>` | No | Join a shared record-store vault folder (see [Sharing a vault between machines](#sharing-a-vault-between-machines)) |
 | `migrate` | No | Review a classic vault's touch/entropy settings; guide to touch-required slots |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |
@@ -792,7 +812,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
-| `slot request [--tpm\|--secure-enclave] <file>` | No | On a new machine: enroll its hardware and write a request file |
+| `slot request [--tpm\|--secure-enclave --with-touch\|--no-touch] <file>` | No | On a new machine: enroll its hardware and write a request file |
 | `slot accept <file> [--receipt <file>]` | No | On the new machine: finish enrolment with the approve file |
 | `prompt` | No | Show AI agent instructions (the skill file) |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
@@ -806,7 +826,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `slot approve <request-file> <approve-file>` | Yes | On an enrolled machine: approve a new machine's slot |
 | `slot add --yubikey` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
 | `slot merge <receipt-or-config.json> [--yes]` | Yes | Add a receipt's slot, or another copy's slots, to this machine's keyring (see [Remote enrolment](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)) |
-| `recover --yubikey\|--tpm\|--secure-enclave` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
+| `recover --yubikey\|--tpm\|--secure-enclave --with-touch\|--no-touch` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
 | `migrate --to-records [--vault-dir <dir>]` | Yes | Convert to the record store (one file per secret) |
 | `vault merge <folder>` | Yes | Fold another copy of the vault folder into this one |
 
