@@ -84,4 +84,20 @@ public sealed class PreviousValueScanTests : IDisposable
         Assert.NotEqual(0, check.Exit);
         Assert.Contains(Path.GetFileName(damaged), check.Err);
     }
+
+    [Fact]
+    public void ToComment_FailsClosedOnUnreadableRecords_AndLeavesTheFileUnchanged()
+    {
+        // Fix round 4, item 4.
+        var damaged = RecordFile(_m, _vaultKey, "other");
+        System.IO.File.WriteAllBytes(damaged, System.IO.File.ReadAllBytes(damaged)[..120]);
+        var path = File("values.yaml", "password: \"new-password-value\"\n");
+        var before = System.IO.File.ReadAllText(path);
+
+        var (exit, _, err) = _m.Run("", "tocomment", path);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(Path.GetFileName(damaged), err);
+        Assert.Equal(before, System.IO.File.ReadAllText(path));
+    }
 }
