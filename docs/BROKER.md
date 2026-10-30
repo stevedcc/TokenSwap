@@ -182,6 +182,16 @@ sudo -iu vault tswap ingest github-token < token-file    # or create / sudo tswa
 sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 ```
 
+`migrate --to-records` needs root (it unlocks the vault and rewrites it), so it can't run as
+`sudo -u vault`. Run as root on the vault user's folder, tswap does every file write in that
+folder **as the folder's owner** (T5's identity switch, `DirectoryOwnerMatcher`: effective uid
+and gid of the owner, no supplementary groups), so the keyring, the records and `config.json`
+come out owned by `vault`, mode 0600, and a link `vault` planted in its own folder gets no further
+than `vault`'s own rights (tests: `BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_Writes
+EverythingAsThatUser`, `RecordStoreFileLayerTests`). `sudo VAR=value` needs a sudoers rule that
+allows setting variables (implied for an `ALL` command); otherwise use
+`sudo env TSWAP_CONFIG_DIR=… tswap migrate --to-records`.
+
 ### 2. The socket folder
 
 Owned by the vault user, mode `0711` (others can reach a socket file they know the name of, but

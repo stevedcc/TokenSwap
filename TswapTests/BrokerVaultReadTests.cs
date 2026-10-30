@@ -105,4 +105,27 @@ public class BrokerVaultReadTests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("sudo tswap migrate --to-records", err);
     }
+
+    [Fact]
+    public void BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_WritesEverythingAsThatUser()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // no identity switch on Windows
+        // BROKER.md's setup step: `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate
+        // --to-records`, run as root on the vault user's folder (T5's DirectoryOwnerMatcher).
+        _m.Ok("", "init", "--tpm", "--no-recovery");
+        _m.Ok("value\n", "ingest", "tok");
+        var root = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0); // the folder is uid 1000's
+        _m.Ownership = new DirectoryOwnerMatcher(root);
+
+        _m.Ok("", "migrate", "--to-records");
+
+        var paths = root.Switches.Select(x => x.Path).ToList();
+        Assert.All(root.Switches, x => Assert.Equal((1000u, 1001u), (x.Uid, x.Gid)));
+        Assert.Contains(paths, p => p.Contains("vault.tmp-") && p.EndsWith("/keyring"));
+        Assert.Contains(paths, p => p.Contains("vault.tmp-") && p.Contains("/records/"));
+        Assert.Contains(Path.GetFullPath(_m.VaultDir!), paths);   // the rename into place
+        Assert.Contains(Path.GetFullPath(_m.ConfigPath), paths);  // config.json rewritten
+        Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
+    }
 }
