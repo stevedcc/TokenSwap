@@ -23,6 +23,9 @@ public sealed record BrokerServerOptions
     public TimeProvider Time { get; init; } = TimeProvider.System;
     public BrokerLimits Limits { get; init; } = new();
 
+    /// <summary>The ssh-agent endpoint (brief T10): a <c>&lt;name&gt;.ssh.sock</c> per socket with ssh keys; null for none.</summary>
+    public SshAgent.SshAgentOptions? SshAgent { get; init; }
+
     /// <summary>Owner lookups for the socket folder checks (tests fake another owner).</summary>
     public IUnixOwnership Ownership { get; init; } = new UnixOwnership();
 }
@@ -119,6 +122,15 @@ public sealed class BrokerServer : IAsyncDisposable
             var handler = new BrokerRequestHandler(options.Policy, options.Secrets, forwarder,
                 limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time,
                 options.Limits, reason => fatal.TrySetResult(reason));
+            // Brief T10: an ssh-agent socket, <name>.ssh.sock, beside each socket that lists ssh keys.
+            var sshAgent = options.SshAgent is { } ssh
+                ? new SshAgent.SshAgentListener(ssh, options, socketDir, connections, handler, reason => fatal.TrySetResult(reason))
+                : null;
+            foreach (var path in sshAgent?.SocketPaths ?? [])
+            {
+                RemoveStaleSocket(path, options.Ownership);
+                paths.Add(path);
+            }
 
             var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = "tswap-broker" });
             builder.WebHost.UseKestrelCore();
@@ -135,6 +147,7 @@ public sealed class BrokerServer : IAsyncDisposable
                         listen.Use(next => connection => GateAsync(connection, socketName, next, options, connections));
                     });
                 }
+                sshAgent?.Listen(kestrel);
             });
             app = builder.Build();
             app.Run(handler.HandleAsync);
@@ -327,7 +340,7 @@ public sealed class BrokerServer : IAsyncDisposable
         if (ok)
         {
             var current = _options.Policy.Current;
-            foreach (var path in _socketPaths)
+            foreach (var path in _socketPaths.Where(p => !SshAgent.SshAgentListener.IsAgentSocketPath(p))) // brief T10: agent sockets follow their client socket
             {
                 var name = Path.GetFileNameWithoutExtension(path);
                 if (!current.Sockets.ContainsKey(name))
