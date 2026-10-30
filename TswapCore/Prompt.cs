@@ -42,6 +42,9 @@ automated/silent unlocking by malicious processes.
 - `sudo %CMD% delete <name>` — Removes a secret
 - `sudo %CMD% export <file>` — Backup vault to encrypted file (human use only; ask the user to run this)
 - `sudo %CMD% import <file>` — Restore vault from encrypted backup (human use only; ask the user to run this)
+- `sudo %CMD% slot add --yubikey` — Adds a YubiKey as a new way to open the vault (human use only)
+- `sudo %CMD% slot merge <file>` — Adds other machines' slots, each a new way to open the vault (human use only)
+- `sudo %CMD% recover --yubikey|--tpm|--secure-enclave` — Opens the vault with the recovery key (human use only)
 
 ## Key rules:
 1. NEVER use sudo commands — they expose secret values

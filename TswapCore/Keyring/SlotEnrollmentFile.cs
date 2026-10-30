@@ -37,9 +37,19 @@ namespace TswapCore.Keyring;
 /// new machine slot. A version 1 request (an older tswap's YubiKey pair enrollment, no blob) is
 /// refused with a message saying to run <c>slot request</c> again; it is never treated as a pair
 /// slot. <c>slot approve</c> refuses a version 2 request without a blob.</para>
+///
+/// <para><b><see cref="Backend"/> (brief T5 decision 2, issue #152):</b> null (omitted) for the
+/// one-YubiKey request, whose <see cref="HwBlob"/> is a <see cref="YubiKeySlotBlob"/>;
+/// <c>"tpm"</c> or <c>"secure-enclave"</c> for <c>slot request --tpm</c>/<c>--secure-enclave</c>,
+/// whose <see cref="HwBlob"/> is that backend's opaque sealed/wrapped <c>KEK_slot</c>. An optional
+/// field rather than a format version bump: a YubiKey request is byte-for-byte what version 2
+/// always was, and an older tswap reading a TPM request fails safely on the blob (wrong YubiKey
+/// magic). The name is informational for the approver; accept checks the blob byte for byte
+/// against its own pending copy.</para>
 /// </summary>
 public sealed record SlotRequestFile(int FormatVersion, string SlotId, string PublicKey,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HwBlob = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HwBlob = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null)
 {
     /// <summary>Current format version this build writes and requires on read.</summary>
     public const int CurrentFormatVersion = 2;
@@ -102,7 +112,9 @@ public sealed record SlotApproveFile(
     string NewSlotPublicKey,
     string NewSlotEphemeralPublicKey,
     string NewSlotWrapped,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewSlotHwBlob = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewSlotHwBlob = null,
+    // Brief T5 decision 2: the request's Backend, passed on (null for a YubiKey slot).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? NewSlotBackend = null)
 {
     /// <summary>Current format version this build writes and requires on read (2 since brief T4,
     /// which added <see cref="NewSlotHwBlob"/>).</summary>
@@ -152,7 +164,7 @@ public static class SlotEnrollmentFileCodec
                 $"Unsupported slot request file format version {file.FormatVersion} " +
                 $"(this build supports {SlotRequestFile.CurrentFormatVersion}). Use a matching tswap version on both machines.");
         if (file.HwBlob != null)
-            YubiKeySlotBlob.Decode(DecodeVariable(file.HwBlob, "slot request file's YubiKey slot blob"));
+            ValidateNewSlotBlob(file.Backend, DecodeVariable(file.HwBlob, "slot request file's hardware blob"), "slot request file");
 
         return file;
     }
@@ -201,7 +213,7 @@ public static class SlotEnrollmentFileCodec
             if (file.KeyringFormatVersion < KeyringFormat.KeyringFormatVersion)
                 throw new TswapException(
                     $"Malformed slot approve file: a keyring format version {file.KeyringFormatVersion} slot cannot carry a hardware blob.");
-            YubiKeySlotBlob.Decode(DecodeVariable(file.NewSlotHwBlob, "approve file's new slot YubiKey blob"));
+            ValidateNewSlotBlob(file.NewSlotBackend, DecodeVariable(file.NewSlotHwBlob, "approve file's new slot hardware blob"), "slot approve file");
         }
 
         // A slot's hwBlob must be one KeyringCodec.Encode can write (security review of T2):
@@ -231,6 +243,25 @@ public static class SlotEnrollmentFileCodec
     /// <paramref name="what"/> in the error so a corrupted enrollment file points at the actual
     /// offending field rather than a generic decode failure.
     /// </summary>
+    /// <summary>
+    /// The new slot's blob in a request or approve file, checked against the backend the file
+    /// names (brief T5 decision 2): none or YubiKey ⇒ a strictly decoded <see cref="YubiKeySlotBlob"/>
+    /// (brief T4); TPM or Secure Enclave ⇒ an opaque blob within <see cref="KeyringFormat.MaxHwBlobSize"/>
+    /// that is not a YubiKey blob (a mislabelled request is refused rather than guessed at).
+    /// </summary>
+    private static void ValidateNewSlotBlob(HardwareBackend? backend, byte[] hwBlob, string what)
+    {
+        if ((backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey)
+        {
+            YubiKeySlotBlob.Decode(hwBlob);
+            return;
+        }
+        if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
+            throw new TswapException(
+                $"Malformed {what}: it names the '{backend!.Value.DisplayName()}' backend but carries a YubiKey slot blob.");
+        SlotReceiptCodec.ValidateHwBlob(hwBlob, what);
+    }
+
     public static byte[] DecodeFixed(string base64, int expectedLength, string what)
     {
         var bytes = DecodeVariable(base64, what);

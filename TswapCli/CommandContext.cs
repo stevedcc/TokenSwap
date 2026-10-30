@@ -67,6 +67,19 @@ public sealed record CommandContext(
         return serials[choice - 1];
     }
 
+    /// <summary>
+    /// Writes a file this command produces (receipt, request, approve or export file) through the
+    /// store's safe writer (<see cref="TswapCore.IFileVaultStore.WriteFile"/>), so under sudo it
+    /// gets its folder's owner and a symlink at the path is replaced, never written through.
+    /// </summary>
+    public void WriteOutputFile(string path, string contents)
+    {
+        if (Storage is TswapCore.IFileVaultStore fileStore)
+            fileStore.WriteFile(path, contents);
+        else
+            TswapCore.DirectoryOwnerMatcher.Default.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(contents));
+    }
+
     public void RequireSudo(string commandName)
     {
         if (SudoBypass) return;

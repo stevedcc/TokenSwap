@@ -11,6 +11,8 @@ namespace TswapCore.Vault;
 /// machine slot's <see cref="Slot.HwBlob"/>, found by <see cref="Config.KeyringSlotId"/> (or the
 /// only machine slot when that is null), the same lookup <see cref="VaultUnlocker"/> uses to pick
 /// the slot it unwraps.</item>
+/// <item><b>Pending slot request</b> (brief T5): <see cref="Config.PendingSlotHwBlob"/>, for
+/// <c>slot accept</c>.</item>
 /// <item><b>Single-slot vault</b> made before keyring vaults: <see cref="Config.TpmSealedKey"/>
 /// (TPM) or <see cref="Config.SecureEnclaveWrappedKey"/> (Secure Enclave), base64.</item>
 /// </list>
@@ -34,6 +36,29 @@ public static class HardwareBlobLocator
 
         if (config.Keyring != null)
             return ReadFromOwnMachineSlot(config, backend);
+
+        // Brief T5 decision 2: a machine between 'slot request --tpm|--secure-enclave' and 'slot
+        // accept' keeps its freshly sealed blob in PendingSlotHwBlob; accept recovers KEK_slot from
+        // it through VaultUnlocker.UnlockHardware. (VaultUnlocker.Unlock refuses a pending config
+        // before it gets here, so this never opens a vault.) Only together with PendingSlotId,
+        // which is what that guard keys on: a half-cleared config must not make the pending
+        // KEK_slot a classic vault's master key.
+        if (config.PendingSlotId != null && config.PendingSlotHwBlob == null)
+            throw new TswapException(
+                $"Config is corrupted: this machine's pending '{backend.DisplayName()}' slot request has no hardware blob. " +
+                "Run 'tswap slot request' again on this machine.");
+        if (config.PendingSlotHwBlob != null && config.PendingSlotId != null)
+        {
+            try
+            {
+                return Convert.FromBase64String(config.PendingSlotHwBlob);
+            }
+            catch (FormatException)
+            {
+                throw new TswapException(
+                    "Config is corrupted: the pending slot request's hardware blob is not valid base64. Run 'tswap slot request' again.");
+            }
+        }
 
         if (field is not { Length: > 0 })
             throw new TswapException($"Config is corrupted: {missing}. Restore config.json from backup or re-run 'tswap init'.");
