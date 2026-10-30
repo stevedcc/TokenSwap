@@ -247,8 +247,9 @@ on this Mac and read this vault's config, from any account, including root, can 
 without you noticing (the key still never leaves the Secure Enclave and works only on this Mac;
 the config file's permissions are what keep other accounts out); (c) the slot can't be changed or
 removed later: tswap can't remove slots, so the only way to drop it is a new vault and moving the
-secrets over. It is meant for unattended use (a scheduled job, a separate lane user). How a
-no-touch slot behaves with the screen locked, over ssh or after a reboot: see the recorded check in
+secrets over. It exists for unattended use, but whether a no-touch slot unlocks with the screen
+locked, over ssh or after a reboot before anyone logs in (which a scheduled job or a separate lane
+user may need) is not known yet: that depends on the recorded check in
 [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 There is no recurring per-command banner for a no-touch Secure Enclave slot (unlike a no-touch
 YubiKey, whose posture is set outside tswap): you chose it with the flag. `slot approve` on the

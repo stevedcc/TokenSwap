@@ -205,6 +205,9 @@ the two flags are mutually exclusive.
   approver.** `slot request --secure-enclave --no-touch` records `RequiresTouch = false` in the
   requesting Mac's own config, but the request file is unchanged (no posture field), so
   `slot approve` can neither verify nor show it; `slot request --no-touch` says so in its output.
+  A tswap older than T11 hard-codes "presence required" for every Secure Enclave slot, so on such a
+  binary `tswap slots` shows a no-touch slot as presence-gated (display only; the key enforces the
+  truth and unlock is unaffected).
   (A posture field would only be the requester's claim anyway: the key's policy can't be read back
   from its blob.)
 - **Recovery.** `recover --tpm` / `--secure-enclave` enroll the same way after the recovery key
@@ -305,7 +308,8 @@ requirePresence = true)`), and any other backend with `requirePresence: false` t
   (not in the manual-only category) enrols with `requirePresence: false` and unwraps on macOS when
   `tswap_se_available()` is true, with a timeout; elsewhere it writes why and returns, or fails
   with `CI_REQUIRE_SE=1`. CI's "Secure Enclave probe (macOS)" step prints whether the runner has a
-  Secure Enclave. (Whether GitHub's macOS runners have one is not yet recorded here.)
+  Secure Enclave: on `macos-latest` it printed `true` (PR #203, run 41114279617), so the macOS
+  unit-test step sets `CI_REQUIRE_SE=1` (that step only) and a round trip that can't run fails CI.
 
 ### Checking a no-touch Secure Enclave slot on a Mac
 
@@ -348,7 +352,10 @@ sysadminctl -screenLock status 2>&1                         # record: "require p
 7. After a reboot, before anyone logs in, from another machine over ssh (if Remote Login is on):
    the same command — does it unlock?
 8. Skew: a copy of the publish folder with a dylib built from the pre-T11 Swift source:
-   `OLD="$(mktemp -d)"; cp "$BIN/tswap" "$OLD/"; git show 5aa2230:TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift > "$OLD/old.swift"; swiftc -emit-library -O -o "$OLD/libtswapse.dylib" "$OLD/old.swift"`,
+   `OLD="$(mktemp -d)"; cp "$BIN/tswap" "$OLD/"; git show 4f321a0:TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift > "$OLD/old.swift"; swiftc -emit-library -O -o "$OLD/libtswapse.dylib" "$OLD/old.swift"`
+   (`4f321a0` is the last commit on `main` that changed the Swift source before T11; `main` is
+   never rewritten, so it stays valid after this brief is merged. The release tags `v0.0.1` and
+   `v0.0.2` predate the shim and can't be used),
    then `TSWAP_CONFIG_DIR="$(mktemp -d)" "$OLD/tswap" init --secure-enclave --with-touch --no-recovery`
    — does it fail with "update libtswapse.dylib together with tswap", and is no config written?
 9. Steps 4, 6 and 7 again against step 3's touch vault (`TSWAP_CONFIG_DIR="$TOUCH_DIR"`).

@@ -51,11 +51,14 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
     }
 
     /// <summary>Runs <paramref name="unwrap"/> with a timeout; a timeout fails the test.</summary>
-    private static T Bounded<T>(Func<T> unwrap)
+    private static T Bounded<T>(Func<T> unwrap, TimeSpan? timeout = null)
     {
+        var limit = timeout ?? UnwrapTimeout;
         var task = Task.Run(unwrap);
-        if (!task.Wait(UnwrapTimeout))
-            Assert.Fail($"The Secure Enclave unwrap didn't return within {UnwrapTimeout.TotalSeconds} s: " +
+        // The wait handle, not task.Wait: a faulted task then rethrows its own exception from
+        // GetResult below instead of an AggregateException around it.
+        if (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(limit))
+            Assert.Fail($"The Secure Enclave call didn't return within {limit.TotalSeconds} s: " +
                         "it is probably waiting for a presence prompt, so requirePresence: false was lost on the way.");
         return task.GetAwaiter().GetResult();
     }
@@ -92,14 +95,47 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
         // tswap_se_wrap_v2's 1 branch and its access-control guard on hardware.
         if (!CanRun() || !OperatingSystem.IsMacOS())
             return;
+        TouchKeyWraps();
+    }
 
+    [SupportedOSPlatform("macos")]
+    private static void TouchKeyWraps()
+    {
         var key = RandomNumberGenerator.GetBytes(32);
 
-        var wrapped = new SecureEnclaveHardwareService(requirePresence: true).Wrap(key);
+        var wrapped = Bounded(() => new SecureEnclaveHardwareService(requirePresence: true).Wrap(key));
 
         // 4-byte little-endian blob length || the key's dataRepresentation || the ECIES package.
         var blobLen = BinaryPrimitives.ReadInt32LittleEndian(wrapped);
         Assert.InRange(blobLen, 1, 2048);
         Assert.Equal(4 + blobLen + EciesOverhead + key.Length, wrapped.Length);
+    }
+
+    // --- the bound itself (runs everywhere) ---
+
+    [Fact]
+    public void Bounded_KeepsTheFailuresOwnException()
+    {
+        var ex = Record.Exception(() => Bounded<int>(() => throw new TswapException("the call's own message")));
+
+        Assert.IsType<TswapException>(ex); // not an AggregateException around it
+        Assert.Equal("the call's own message", ex.Message);
+    }
+
+    [Fact]
+    public void Bounded_FailsWhenTheCallDoesNotReturn()
+    {
+        using var never = new ManualResetEventSlim();
+        try
+        {
+            var ex = Record.Exception(() => Bounded(() => never.Wait(TimeSpan.FromSeconds(30)), TimeSpan.FromMilliseconds(200)));
+
+            Assert.NotNull(ex);
+            Assert.Contains("didn't return within", ex.Message);
+        }
+        finally
+        {
+            never.Set(); // let the abandoned pool thread finish
+        }
     }
 }

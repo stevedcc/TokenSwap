@@ -23,6 +23,14 @@ internal static class SecureEnclaveTouchChoice
         $"or {NoTouch} (unlocks with no prompt at all; read the warning it prints). " +
         $"Neither goes without {SecureEnclave}.";
 
+    /// <summary>For <c>slot add</c>, which creates no Secure Enclave key: where these flags belong.</summary>
+    public const string NotForSlotAdd =
+        $"slot add --yubikey creates no Secure Enclave key: {SecureEnclave} and its {WithTouch} / {NoTouch} choice " +
+        "go with init, slot request and recover.";
+
+    /// <summary><c>--secure-enclave</c>, <c>--with-touch</c> or <c>--no-touch</c>.</summary>
+    public static bool IsSecureEnclaveFlag(string arg) => arg is SecureEnclave or WithTouch or NoTouch;
+
     /// <summary>
     /// Takes the touch flags out of <paramref name="args"/>. Returns the rest and the choice:
     /// true (<c>--with-touch</c>), false (<c>--no-touch</c>), or null when

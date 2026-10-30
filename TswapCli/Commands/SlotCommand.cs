@@ -40,7 +40,7 @@ public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
     public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot; slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -672,7 +672,8 @@ public sealed class SlotCommand : ICliCommand
         // Brief T11: slot add creates no Secure Enclave key; a touch choice here is refused with
         // where it belongs, never ignored.
         var addUsage = $"{ctx.Prefix} slot add --yubikey [{RecoveryKeyFlag}]";
-        (positional, _) = SecureEnclaveTouchChoice.Split(positional, addUsage);
+        if (positional.Any(SecureEnclaveTouchChoice.IsSecureEnclaveFlag))
+            throw new UsageException($"{addUsage}\n{SecureEnclaveTouchChoice.NotForSlotAdd}");
         if (positional is not ["--yubikey"])
             throw new UsageException(addUsage);
         var c = ctx.Console;

@@ -80,8 +80,12 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
         Assert.Contains("a new vault and moving the secrets over", stderr);
     }
 
-    private static void AssertNoWarning(string stderr) =>
+    private static void AssertNoWarning(string stderr)
+    {
+        Assert.DoesNotContain("without Touch ID or a password", stderr);
+        Assert.DoesNotContain("including root", stderr);
         Assert.DoesNotContain("can't be changed or removed later", stderr);
+    }
 
     private static void AssertPostureSummary(string stdout, bool withTouch) =>
         Assert.Contains(withTouch
@@ -356,15 +360,18 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("--with-touch")]
-    [InlineData("--no-touch")]
-    public void SlotAdd_WithAChoice_IsRefused_NotIgnored(string choice)
+    [InlineData("--yubikey", "--with-touch")]
+    [InlineData("--yubikey", "--no-touch")]
+    [InlineData("--yubikey", "--secure-enclave")]
+    [InlineData("--secure-enclave", "--no-touch", "--yubikey")]
+    [InlineData("--yubikey", "--secure-enclave", "--with-touch")]
+    public void SlotAdd_WithAChoice_IsRefused_NotIgnored(params string[] flags)
     {
         var (router, recoveryKey) = Router();
         var before = Snapshot(router);
         var stdin = recoveryKey + "\n";
 
-        var (exit, _, stderr) = router.Run(stdin, "slot", "add", "--yubikey", choice, "--recovery-key-stdin");
+        var (exit, _, stderr) = router.Run(stdin, ["slot", "add", .. flags, "--recovery-key-stdin"]);
 
         AssertUsageErrorNamingSecureEnclave(exit, stderr);
         Assert.Equal(stdin, router.LastConsole!.In.ReadToEnd());
@@ -493,10 +500,11 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     [Fact]
     public void TheHelpOfEachEnrolmentCommand_NamesBothChoices()
     {
-        foreach (var usage in new[] { new InitCommand().HelpUsage, new SlotCommand().HelpUsage, new RecoverCommand().HelpUsage })
+        ICliCommand[] commands = [new InitCommand(), new SlotCommand(), new RecoverCommand()];
+        foreach (var text in commands.SelectMany(c => new[] { c.HelpUsage, c.Description }))
         {
-            Assert.Contains("--with-touch", usage);
-            Assert.Contains("--no-touch", usage);
+            Assert.Contains("--with-touch", text);
+            Assert.Contains("--no-touch", text);
         }
 
         var (exit, stdout, _) = Mac().Run("", "init", "--help");
@@ -505,8 +513,8 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, "Secure Enclave, presence required")]
-    [InlineData(false, "Secure Enclave, no presence required")]
+    [InlineData(true, "Secure Enclave, touch required (Touch ID or password)")]
+    [InlineData(false, "Secure Enclave, no touch required")]
     public void Slots_DescribesTheMachineSlotsPosture(bool withTouch, string expected)
     {
         var mac = Mac();
@@ -516,6 +524,40 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
         Assert.Contains(expected, stdout);
         if (!withTouch)
-            Assert.DoesNotContain("Secure Enclave, presence required", stdout);
+            Assert.DoesNotContain("Secure Enclave, touch required", stdout);
+        Assert.DoesNotContain("presence required", stdout.Split('\n').Single(l => l.Contains("Secure Enclave, ")));
+    }
+
+    // --- the warning comes first (decision 7): before init's reinitialise prompt and recover's stdin ---
+
+    [Fact]
+    public void Init_WarnsBeforeTheReinitialisePrompt()
+    {
+        var mac = Mac();
+        mac.Ok("", "init", "--secure-enclave", "--with-touch");
+
+        var (exit, text) = mac.RunInterleaved("no\n", "init", "--secure-enclave", "--no-touch");
+
+        Assert.Equal(0, exit);
+        var warning = text.IndexOf("can't be changed or removed later", StringComparison.Ordinal);
+        var prompt = text.IndexOf("Already initialized. Reinitialize?", StringComparison.Ordinal);
+        Assert.True(warning >= 0 && prompt > warning, text);
+    }
+
+    [Fact]
+    public void Recover_WarnsBeforeReadingStdin()
+    {
+        var (router, _) = Router();
+        var mac = Mac();
+        router.CopyVaultTo(mac);
+
+        // A wrong key: recover reads stdin, then fails on what it read. The warning comes before.
+        var (exit, text) = mac.RunInterleaved("not-a-recovery-key\n", "recover", "--secure-enclave", "--no-touch");
+
+        Assert.NotEqual(0, exit);
+        var warning = text.IndexOf("can't be changed or removed later", StringComparison.Ordinal);
+        var keyError = text.IndexOf("recovery key", warning < 0 ? 0 : warning, StringComparison.OrdinalIgnoreCase);
+        Assert.True(warning >= 0 && keyError > warning, text);
+        Assert.Equal("", mac.LastConsole!.In.ReadToEnd()); // stdin was read
     }
 }
