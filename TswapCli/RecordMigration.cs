@@ -151,6 +151,14 @@ internal static class RecordMigration
                 string.Join("\n", problems.Select(p => "  " + p)));
         }
 
+        // Fix round 1 (A4): the recovery key of a converted XOR vault is shown now, after the
+        // verification and before the config switch, so a crash later can't lose it unseen.
+        if (plainXor)
+        {
+            c.Out.WriteLine("\nThe converted copy checked out. Its recovery slot opens the vault without any YubiKey:");
+            InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, "every enrolled YubiKey");
+        }
+
         // Step 3: the temp folder becomes the vault folder. The target is checked again right
         // before the rename and never deleted recursively (fix round 1, A2): absent -> rename; an
         // empty folder -> a non-recursive delete, then rename; anything else -> refuse.
@@ -192,8 +200,7 @@ internal static class RecordMigration
         if (plainXor)
         {
             c.Out.WriteLine("\nThis vault is now a keyring vault: each YubiKey has its own slot and opens it alone; the XOR share is");
-            c.Out.WriteLine("no longer used (it stays in the config backup above).");
-            InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, "every enrolled YubiKey");
+            c.Out.WriteLine("no longer used (it stays in the config backup above). The recovery key was shown above.");
         }
         return 0;
     }

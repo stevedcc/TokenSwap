@@ -282,6 +282,35 @@ public sealed class MigrateToRecordsTests : IDisposable
     }
 
     [Fact]
+    public void TheRecoveryKey_IsShownBeforeTheConfigSwitch_SoACrashCantLoseIt()
+    {
+        // Fix round 1 (A4): shown after step 2's verification and before step 4.
+        var (masterKey, _) = PlainVaultWithFiftySecrets();
+        _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 3) throw new IOException("simulated crash after step 3"); } };
+
+        var (exit, stdout, _) = _m.Run("1\n", "migrate", "--to-records");
+
+        Assert.NotEqual(0, exit);
+        var keyring = KeyringCodec.Decode(File.ReadAllBytes(Path.Combine(DefaultVaultDir, "keyring")));
+        Assert.Equal(masterKey, RecoveryKeyUnlock.Unlock(keyring, Convert.FromBase64String(RecoveryKeyFrom(stdout))));
+    }
+
+    [Fact]
+    public void ARerunAfterACrashAfterStep4_DoesNotClaimARecoveryKey()
+    {
+        PlainVaultWithFiftySecrets();
+        _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 4) throw new IOException("simulated crash after step 4"); } };
+        var (_, firstOut, _) = _m.Run("1\n", "migrate", "--to-records");
+        Assert.Contains("Recovery Private Key", firstOut);
+        _m.MigrationSeams = null;
+
+        var rerun = _m.Ok("1\n", "migrate", "--to-records");
+
+        Assert.DoesNotContain("Recovery Private Key", rerun);
+        Assert.DoesNotContain("recovery key", rerun.ToLowerInvariant());
+    }
+
+    [Fact]
     public void ANonEmptyTargetFolder_IsRefused()
     {
         PlainVaultWithFiftySecrets();
