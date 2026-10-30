@@ -64,6 +64,12 @@ public sealed class VaultUnlocker
     /// every one-key YubiKey slot (<see cref="YubiKeySlotBlob"/>) whose key is plugged in; the
     /// first slot that authenticates wins. Those slots need no <see cref="Config.KeyringSlotId"/>.
     /// </para>
+    ///
+    /// <para>Brief T5: so that every copy of a vault opens with every enrolled device, when the own
+    /// path fails it also offers the other machine slots' TPM / Secure Enclave blobs to this
+    /// machine's TPM / Secure Enclave backends (before the YubiKey slots for a TPM / Secure Enclave
+    /// vault, after them for a YubiKey vault). With no such slots the paths and errors are as
+    /// before.</para>
     /// </summary>
     /// <param name="config">Vault configuration.</param>
     /// <param name="chooseSerial">
@@ -99,12 +105,16 @@ public sealed class VaultUnlocker
             .ToList();
 
         // A YubiKey vault whose own slot is a one-key slot has no other backend path to try.
-        if (!OwnSlotIsAYubiKeySlot(config, keyring))
+        var ownBackendTried = !OwnSlotIsAYubiKeySlot(config, keyring);
+        // Brief T5: the other machines' TPM / Secure Enclave slots this machine's hardware might
+        // open (a copy of the vault taken from another machine).
+        var hardwareTries = OtherHardwareSlotTries(config, keyring, ownBackendTried);
+        if (ownBackendTried)
         {
             // First the vault's own backend: TPM, Secure Enclave, or a legacy YubiKey pair slot.
-            // With no one-key slots to fall back to this is exactly the path (and the errors) of
-            // every keyring vault before brief T4.
-            if (yubiKeySlots.Count == 0)
+            // With nothing to fall back to this is exactly the path (and the errors) of every
+            // keyring vault before brief T4.
+            if (yubiKeySlots.Count == 0 && hardwareTries.Count == 0)
                 return OwnBackend(config, chooseSerial);
             try
             {
@@ -113,12 +123,95 @@ public sealed class VaultUnlocker
             catch (TswapException ownBackendError)
             {
                 // Its backend isn't available here (not in this build, another machine's TPM, no
-                // enrolled pair key plugged in) or has no usable slot: try the one-key slots.
+                // enrolled pair key plugged in) or has no usable slot: try another machine's
+                // hardware slot with this machine's hardware, then the one-key YubiKey slots.
+                if (TryHardwareSlots(config, keyring, hardwareTries, chooseSerial) is { } vaultKey)
+                    return vaultKey;
+                if (yubiKeySlots.Count == 0)
+                    throw;
                 return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError);
             }
         }
 
-        return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError: null);
+        if (hardwareTries.Count == 0)
+            return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError: null);
+        try
+        {
+            return UnlockWithYubiKeySlot(keyring, yubiKeySlots, chooseSerial, ownBackendError: null);
+        }
+        catch (TswapException)
+        {
+            // No YubiKey of this vault here: this machine's own TPM / Secure Enclave may hold a slot.
+            if (TryHardwareSlots(config, keyring, hardwareTries, chooseSerial) is { } vaultKey)
+                return vaultKey;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Brief T5 ("every copy of the vault opens with every enrolled device"): the machine slots with
+    /// a TPM / Secure Enclave hardware blob, paired with each registered TPM / Secure Enclave
+    /// backend (the vault's own backend first), except the own slot under the own backend when
+    /// <see cref="OwnBackend"/> already tried it. The keyring records no backend per slot, so a
+    /// blob is offered to every such backend here; one that isn't its own fails to unseal or unwrap
+    /// it with a <see cref="TswapException"/>, and the slot's AEAD rejects any wrong key.
+    /// </summary>
+    private List<(IHardwareKeyService Service, Slot Slot)> OtherHardwareSlotTries(
+        Config config, Keyring.Keyring keyring, bool ownBackendTried)
+    {
+        var ownBackend = config.Backend ?? HardwareBackend.YubiKey;
+        var own = ownBackendTried ? FindOwnMachineSlot(config, keyring) : null;
+        var hardwareSlots = keyring.Slots
+            .Where(s => s.Kind == SlotKind.Machine && s.HwBlob is { Length: > 0 } && !YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
+            .ToList();
+        var services = _backends.Values
+            .Where(b => b.Backend != HardwareBackend.YubiKey)
+            .OrderBy(b => b.Backend == ownBackend ? 0 : 1)
+            .ToList();
+        return
+        [
+            .. from service in services
+               from slot in hardwareSlots
+               where !(own != null && service.Backend == ownBackend && ReferenceEquals(slot, own))
+               select (service, slot),
+        ];
+    }
+
+    /// <summary>
+    /// Tries each (backend, slot) pair: the backend recovers <c>KEK_slot</c> from that slot's blob
+    /// (by pointing <see cref="Config.KeyringSlotId"/> at the slot, the seam
+    /// <see cref="HardwareBlobLocator"/> reads), and the slot unwraps under it. The first that
+    /// authenticates wins; null when none does. <c>KEK_slot</c> is zeroed after each try.
+    /// </summary>
+    private static byte[]? TryHardwareSlots(
+        Config config, Keyring.Keyring keyring, List<(IHardwareKeyService Service, Slot Slot)> tries,
+        Func<IReadOnlyList<int>, int> chooseSerial)
+    {
+        foreach (var (service, slot) in tries)
+        {
+            byte[] kekSlot;
+            try
+            {
+                kekSlot = service.Unlock(config with { KeyringSlotId = Convert.ToBase64String(slot.SlotId) }, chooseSerial);
+            }
+            catch (TswapException)
+            {
+                continue; // not this machine's hardware
+            }
+            try
+            {
+                return UnwrapSlot(keyring, slot, kekSlot);
+            }
+            catch (TswapException)
+            {
+                // Unsealed, but not this slot's KEK_slot.
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(kekSlot);
+            }
+        }
+        return null;
     }
 
     /// <summary>
@@ -274,9 +367,10 @@ public sealed class VaultUnlocker
     /// Recovers this machine's hardware-backed key material — <c>KEK_slot</c> for a keyring
     /// vault, or the vault master key directly for a classic non-keyring vault — without
     /// attempting any keyring unwrap and without the pending-enrollment guard <see cref="Unlock"/>
-    /// applies. Exposed for <c>slot accept</c> (issue #121) until brief T4, whose one-key slot
-    /// request keeps the slot's <see cref="YubiKeySlotBlob"/> and re-derives <c>KEK_slot</c> from it
-    /// instead; now only <see cref="Unlock"/> calls it.
+    /// applies. <c>slot accept</c> calls it for a pending <c>slot request --tpm</c> /
+    /// <c>--secure-enclave</c> (brief T5), whose blob <see cref="HardwareBlobLocator"/> reads from
+    /// <see cref="Config.PendingSlotHwBlob"/>; a one-key YubiKey request re-derives <c>KEK_slot</c>
+    /// from its <see cref="YubiKeySlotBlob"/> instead (brief T4).
     /// </summary>
     public byte[] UnlockHardware(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
