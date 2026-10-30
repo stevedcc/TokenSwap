@@ -127,8 +127,31 @@ public sealed class VaultUnlocker
     /// 32 bytes, a keyring vault always needs this same extra unwrap step (see
     /// MULTI_MACHINE_KEYING.md §Two-layer slot wrap).
     /// </summary>
-    private byte[] OwnBackend(Config config, Func<IReadOnlyList<int>, int> chooseSerial) =>
-        UnlockKeyring(config, UnlockHardware(config, chooseSerial));
+    private byte[] OwnBackend(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    {
+        try
+        {
+            return UnlockKeyring(config, UnlockHardware(config, chooseSerial));
+        }
+        catch (TswapException ex) when (config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
+        {
+            // Brief T5 (security review): a TPM / Secure Enclave slot opens only in its own
+            // machine's config; other machines' hardware slots are never tried here (a config.json
+            // writer could plant a Secure Enclave slot, and each try costs TPM dictionary-attack
+            // exposure, time or a Touch ID prompt). Say what to do instead.
+            throw new TswapException(ex.Message + " " + ForeignHardwareSlotHint, ex.ExitCode);
+        }
+    }
+
+    /// <summary>
+    /// Appended to a failed TPM / Secure Enclave unlock: the fleet model is one config per machine,
+    /// brought together with <c>slot merge</c>; a copied config only opens with a YubiKey or
+    /// recovery slot.
+    /// </summary>
+    public const string ForeignHardwareSlotHint =
+        "This config's own slot belongs to another machine or its hardware is unavailable. On this machine, use its " +
+        "own config.json (bring other machines' slots in with 'tswap slot merge'), or open this copy with a YubiKey " +
+        "slot or the recovery key ('tswap recover').";
 
     /// <summary>
     /// True for a YubiKey vault whose own machine slot (by <see cref="Config.KeyringSlotId"/>, or
@@ -274,9 +297,10 @@ public sealed class VaultUnlocker
     /// Recovers this machine's hardware-backed key material — <c>KEK_slot</c> for a keyring
     /// vault, or the vault master key directly for a classic non-keyring vault — without
     /// attempting any keyring unwrap and without the pending-enrollment guard <see cref="Unlock"/>
-    /// applies. Exposed for <c>slot accept</c> (issue #121) until brief T4, whose one-key slot
-    /// request keeps the slot's <see cref="YubiKeySlotBlob"/> and re-derives <c>KEK_slot</c> from it
-    /// instead; now only <see cref="Unlock"/> calls it.
+    /// applies. <c>slot accept</c> calls it for a pending <c>slot request --tpm</c> /
+    /// <c>--secure-enclave</c> (brief T5), whose blob <see cref="HardwareBlobLocator"/> reads from
+    /// <see cref="Config.PendingSlotHwBlob"/>; a one-key YubiKey request re-derives <c>KEK_slot</c>
+    /// from its <see cref="YubiKeySlotBlob"/> instead (brief T4).
     /// </summary>
     public byte[] UnlockHardware(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {

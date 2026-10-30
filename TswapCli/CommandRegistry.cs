@@ -35,6 +35,7 @@ public static class CommandRegistry
         new DeleteCommand(),
         new ExportCommand(),
         new ImportCommand(),
+        new RecoverCommand(),
         new CompletionCommand(),
     ];
 
