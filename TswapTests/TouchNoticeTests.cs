@@ -247,4 +247,30 @@ public class TouchNoticeTests : IDisposable
         Assert.Equal("no-touch", _m.Config.AcknowledgedTouch!["vault"]);
         Assert.Equal("", _m.Run("", "create", "after-migrate").Err);
     }
+
+    // Fix round 1 (MiMo): on a keyring vault, migrate explains each changed slot's own posture (not the
+    // classic "Couldn't check" text, not a crash on the empty pair fields), and acknowledges exactly those.
+    [Fact]
+    public void Migrate_OnAKeyringVault_ExplainsEachChangedSlot_AndAcknowledgesOnlyThose()
+    {
+        _m.Keys.DetectionWorks = false;
+        Init(SerialA, touch: null);              // a slot whose posture is unknown
+        _m.Keys.SetTouch(SerialB, true);
+        _m.Keys.PluggedIn = [SerialA, SerialB];
+        _m.Ok("", "slot", "add", "--yubikey");   // a touch slot, explained and acknowledged
+        ForgetAcknowledgements(_m);               // as from before this release
+
+        var (exit, stdout, stderr) = _m.Run("", "migrate");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.DoesNotContain("Couldn't check", stderr);
+        Assert.Contains($"YubiKey {SerialA}", stderr);
+        Assert.Contains("touch setting unknown", stderr);
+        Assert.DoesNotContain($"YubiKey {SerialB}", stderr); // a touch slot never acknowledged is not "changed"
+        var acknowledged = _m.Config.AcknowledgedTouch!;
+        Assert.Equal("unknown", acknowledged[SlotIdOf(SerialA)]);
+        Assert.False(acknowledged.ContainsKey(SlotIdOf(SerialB)));
+        Assert.Contains("slot add --yubikey", stdout);
+        Assert.Equal("", _m.Run("", "create", "after-keyring-migrate").Err);
+    }
 }

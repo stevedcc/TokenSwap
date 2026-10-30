@@ -200,6 +200,24 @@ public static class SecurityWarnings
     }
 
     /// <summary>
+    /// Explains a posture already recorded in a slot (or a classic vault), where it is reviewed
+    /// (migrate). Unlike <see cref="ExplainTouch"/> at enrolment, an unknown posture here wasn't
+    /// checked when the key was enrolled; it says so instead of "couldn't check".
+    /// </summary>
+    public static void ExplainRecordedTouch(IConsole console, string keyLabel, string posture)
+    {
+        if (posture != Unknown)
+        {
+            ExplainTouch(console, keyLabel, posture == Touch);
+            return;
+        }
+        var e = console.Error;
+        e.WriteLine($"{keyLabel}: touch setting unknown (it wasn't checked when the key was enrolled). If it needs no touch,");
+        e.WriteLine("  any process running as you can unlock the vault while the key is plugged in. To record it, enroll the");
+        e.WriteLine("  key again with yubikey-manager 5 or later on PATH. 'tswap slots' shows each key's setting.");
+    }
+
+    /// <summary>
     /// Explains a classic vault's touch posture (both keys) once, on stderr; nothing for a
     /// touch-required vault or a non-YubiKey backend. Used where the posture is reviewed (migrate).
     /// </summary>

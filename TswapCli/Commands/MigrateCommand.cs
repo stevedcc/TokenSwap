@@ -35,6 +35,27 @@ public sealed class MigrateCommand : ICliCommand
             return 0;
         }
 
+        // Brief T7 item 5 / fix round 1: migrate is where the touch posture is reviewed. Each slot
+        // whose posture changed since it was acknowledged is explained (its own posture, stderr) and
+        // only those are acknowledged; everyday commands then stay quiet.
+        var changed = SecurityWarnings.Changed(config);
+        if (changed.Count > 0)
+        {
+            foreach (var (slot, _) in changed)
+                SecurityWarnings.ExplainRecordedTouch(c, slot.Label, slot.Posture);
+            config = SecurityWarnings.Acknowledge(config, [.. changed.Select(x => x.Slot.Key)]);
+            ctx.Storage.SaveConfig(config);
+        }
+
+        // A one-key keyring vault (brief T4) has no pair fields: the classic guide below doesn't apply.
+        if (config.YubiKeySerials is not { Count: 2 })
+        {
+            c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");
+            c.Out.WriteLine("setting). To give a key a touch requirement, reprogram it (ykman otp chalresp --generate --touch 2)");
+            c.Out.WriteLine($"and enroll it again: sudo {ctx.Prefix} slot add --yubikey");
+            return 0;
+        }
+
         // Each setting is checked independently so that a partially-migrated or
         // manually-edited config still gets prompted for whichever fields are missing.
         bool needsRngPrompt          = config.RngMode == null;
@@ -52,15 +73,6 @@ public sealed class MigrateCommand : ICliCommand
             ? "  Touch:            ENABLED ✓"
             : "  Touch:            not enabled ⚠");
         c.ResetColor();
-
-        // Brief T7 item 5: migrate is where a classic vault's touch posture is reviewed, so it is
-        // explained here (once, stderr) and acknowledged; everyday commands then stay quiet.
-        if (SecurityWarnings.Changed(config).Count > 0)
-        {
-            SecurityWarnings.WarnIfNoTouch(c, config);
-            config = SecurityWarnings.Acknowledge(config);
-            ctx.Storage.SaveConfig(config);
-        }
 
         c.SetForeground(needsRngPrompt ? ConsoleColor.Yellow : ConsoleColor.Green);
         c.Out.WriteLine(needsRngPrompt
