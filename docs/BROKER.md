@@ -19,6 +19,10 @@ tswap broker forward  --(bind-mounted Unix socket)-->  peer uid check, route che
 - `tswap broker forward --listen 127.0.0.1:<port> [--socket /run/tswap.sock]` runs inside the
   container and relays each TCP connection on that loopback port to the socket, byte for byte.
 - `sudo tswap broker route|socket add|remove` changes `broker.json`.
+- **Command templates** (Linux only): `tswap broker call <template> [name=value ...]` inside the
+  container asks the broker to run an operator-defined command on the host, in a `bwrap` sandbox,
+  with a secret in its environment or a read-only file. See [Command templates](#command-templates).
+  `sudo tswap broker template add|remove` changes them.
 
 Linux and macOS only. On Windows, `tswap broker` says it is not supported.
 
@@ -149,6 +153,24 @@ containers (other uids), **not** against the vault user. So the vault user must 
 
 `serve` refuses to run as root, and makes itself non-dumpable at start
 (`prctl(PR_SET_DUMPABLE, 0)` on Linux): no same-uid `ptrace`, and no core dumps holding secrets.
+
+### The load-bearing assumption: no container runs with the vault user's uid
+
+Everything above, and the template sandbox below, assumes that **no container runs with the vault
+user's uid**:
+
+- Containers run as another user (here `lane`), so files a container writes into a shared folder
+  are owned by that user's uids. The template bind rule (owned by the vault user or root) refuses
+  them, so a template never reads or runs in a folder a container can write.
+- Under rootless Podman a container's root *is* its invoking user. A container started by the vault
+  user would therefore have the vault user's uid: it could read `broker.json`, the vault folder and
+  (in group `tss`) the TPM directly, and it would pass both the bind rule and the uid check.
+- With `--userns=keep-id`, run by the vault user, every vault-owned folder would be writable from
+  the container.
+
+So never start containers as the vault user. The socket layer enforces the part it can see: **a
+peer whose uid is the broker's own is closed before anything is parsed, unanswered, and logged
+(`reason=own-uid`), even when that uid is on the socket's list.**
 
 ### The TPM's dictionary-attack counter
 
@@ -412,6 +434,228 @@ export OPENAI_API_KEY=unused          # the SDK insists on one; the broker repla
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/anthropic
 ```
 
+## Command templates
+
+A template is a **host-side command that uses a credential**: a deploy trigger, a database CLI,
+signing with a key file. The operator defines it (with sudo); a container can only call it, with
+the arguments the template declares and validates. The program never comes from the caller, and
+there is no shell.
+
+```bash
+# inside the container (the socket bind-mounted at /run/tswap.sock, as for routes)
+tswap broker call deploy branch=brief/t9
+echo $?    # the template's own exit code; 125 = the broker refused or failed; 124 = timeout
+```
+
+`broker call` prints the command's stdout and stderr as they arrive and exits with its exit code.
+Any broker-side error (an unknown or not-allowed template, a bad argument, the rate limit, the
+sandbox unavailable, the socket unreachable) exits **125**, so it can't be mistaken for a tool's
+own 1 or 2.
+
+### What the sandbox gives
+
+Every template runs under `bwrap` (bubblewrap), started by the broker, never without it. The child
+keeps the vault user's uid and its `tss` group membership, **but has nothing to use them on**:
+
+| What | How (`bwrap` option or broker step) |
+|---|---|
+| No TPM device | `--dev /dev`: a new minimal `/dev` (null, zero, full, random, urandom, tty, pts, shm); no `/dev/tpm*` |
+| No vault folder, `broker.json`, socket folder or home | a new, empty root: only `--ro-bind /usr`, the `/bin`, `/sbin`, `/lib*` links as on the host, `--ro-bind-try` of `/etc/{resolv.conf,hosts,nsswitch.conf,ssl,pki,ca-certificates,passwd,group}`, `--tmpfs /tmp`, the template's binds and its secret files |
+| Not the broker's process | `--unshare-pid` and `--proc /proc`: the broker's pid doesn't exist inside (no `kill`, no `/proc/<pid>`); and `serve` is non-dumpable (`PR_SET_DUMPABLE 0`), so even a same-uid process outside can't `ptrace` it |
+| No new privileges, no device nodes | `--unshare-user` and `--cap-drop ALL`; `mknod` needs `CAP_MKNOD`, and filesystems mounted inside a user namespace are `nodev` anyway |
+| Its own IPC, hostname, cgroup view, session | `--unshare-ipc`, `--unshare-uts`, `--unshare-cgroup-try`, `--new-session` (no terminal injection) |
+| Dies with the broker | `--die-with-parent` |
+| No network unless asked | `--unshare-net` (the default, `"network": "none"`); `"network": "host"` is an explicit per-template opt-in |
+| No broker handles | the broker spawns `bwrap` itself (`posix_spawn` with `closefrom`): only stdin (`/dev/null`), stdout, stderr and the descriptors `bwrap` uses (`--info-fd`, `--block-fd`, one per `--ro-bind-data`) reach it, and `bwrap` closes those before the command starts |
+| Resource limits | `RLIMIT_NPROC` 64, `RLIMIT_AS` 2 GiB, `RLIMIT_NOFILE` 256, `RLIMIT_FSIZE` 256 MiB, `RLIMIT_CORE` 0 (a template may lower them): set with `prlimit` on the sandbox's first process while `bwrap` waits on `--block-fd`, i.e. inside the new user namespace, where `RLIMIT_NPROC` counts the sandbox's processes only |
+| A timeout | `timeout_sec` (default 120, at most 3600): the broker kills the sandbox's pid 1, which ends every process in its pid namespace, detached ones included; reported as exit 124 |
+| A fixed environment | exactly the template's `env` plus `PATH=/usr/bin:/bin`, `LC_ALL=C` and the `PWD` `bwrap` sets; no `HOME`, nothing inherited; umask 077 |
+
+**`bwrap` fails closed.** It runs from a fixed absolute path (`bwrap_path` in `broker.json`,
+default `/usr/bin/bwrap`), never through `PATH`, and must be a regular file owned by root and not
+writable by group or others. `serve` checks at start that it makes a sandbox with every option the
+broker uses. If `bwrap` is missing, too old (0.5 or later is needed for `--perms`; glibc 2.34 or
+later for `closefrom`), or user namespaces are disabled, template calls are refused (`503`,
+`broker call` exits 125) and logged. **A template never runs unsandboxed.** On Ubuntu 24.04,
+unprivileged user namespaces are restricted by AppArmor
+(`sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile for `bwrap`).
+
+### Secrets reach the child through env or a read-only file only
+
+- `"env": {"PGPASSWORD": "{{db-pw}}"}`: the value goes into the environment block the broker hands
+  to `bwrap` as its process environment, **never `--setenv`** (that would put it in `bwrap`'s argv,
+  readable by every local user in `/proc/<pid>/cmdline`). An env value is a literal or exactly one
+  `{{secret}}`.
+- `"files": [{"path": "/run/secrets/signing-key", "secret": "signing-key"}]`: the broker writes the
+  value into a pipe (bounded, before `bwrap` starts) whose read end goes to `bwrap` only, as
+  `--perms 0400 --ro-bind-data <fd> <path>`. The path must be a file directly under `/run/secrets/`.
+- A `{{secret}}` in `argv`, `cwd`, a bind or a `files` path is refused when the config loads.
+
+**Limits of this:** while the child runs, its `/proc/<pid>/environ` (and the open pipe) are
+readable by processes of the same uid. Env narrows the leak to the vault user's uid; it doesn't
+remove it, which is one more reason the vault user runs nothing else (see the load-bearing
+assumption above). The secret's bytes are zeroed once they are in the environment block or the
+pipe, but that is best effort: .NET strings can't be zeroed, and the real mitigation is
+`PR_SET_DUMPABLE 0`.
+
+### The bind rule (`binds`, `cwd`)
+
+A template sees only what it binds (read-only unless `"rw": true`), at the same (resolved) path.
+Each bind must, after symlink resolution:
+
+- be an absolute path to a **regular file or a folder**, never a device node, socket or FIFO, and
+  never at or under `/dev`, `/proc`, `/sys` or `/run` (sockets for systemd, D-Bus and Podman live
+  there);
+- be owned by the vault user or root and not writable by group or others, with every folder above
+  it root's or the vault user's and not writable by group or others (a root-owned sticky folder
+  such as `/tmp` is accepted above it, as for `socket_dir`);
+- never be the vault folder, `broker.json`'s folder, the socket folder or sudo's configuration
+  (`/etc/sudoers`, `/etc/sudo.conf`, `/etc/sudoers.d`), nor a folder above or inside one of them,
+  **compared by `st_dev:st_ino`**, so a bind-mount alias or a hard link doesn't get past a name
+  check; and never the vault user's home or a folder above it (a folder inside it is fine).
+
+`cwd` must be inside one of the binds (`/tmp` when unset). The checks run when a template is added,
+on every load, and again **before every run** (a path can change owner).
+
+**Why:** this excludes container-controlled folders (worktrees with hooks and config, a shared
+build folder) by construction. A template never runs in, or reads, a folder a container can write,
+so nothing a container plants (a git hook, a filter driver, a config file) runs with the vault
+user's uid. The rule checks the bind and the path to it, not every file inside it: **don't bind a
+folder holding entries others can write**, or anything else of the vault user's you wouldn't hand
+the template.
+
+### Defining a template
+
+`sudo tswap broker template add <file.json>` (or `-` for stdin) adds one; `sudo tswap broker
+template remove <name>` removes it (refused while a socket allows it). A socket's `templates` list
+is the only gate: a socket without one may call none. A template's secrets don't also need to be on
+any route. `sudo tswap broker socket add <name> --uids ... --templates deploy,sign` allows them.
+
+| Field | Meaning |
+|---|---|
+| `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
+| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path inside the sandbox (under `/usr`, `/bin`, `/sbin`, `/lib*` or a bind), never a placeholder; `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
+| `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
+| `env`, `files` | the secrets, as above; env names `PATH`, `LC_ALL` and `LD_*` are refused |
+| `binds`, `cwd` | as above |
+| `network` | `none` (default) or `host` |
+| `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
+| `timeout_sec` | 1 to 3600, default 120 |
+| `max_output_bytes` | 1 byte to 64 MiB, default 1 MiB |
+| `rate` | calls a minute per socket, 1 to 60, default 6; over it `429` and nothing runs or unlocks (each call is a TPM unlock and has real side effects) |
+
+**`allow_leading_dash` with a loose pattern is flag injection:** a value like
+`--checkpoint-action=exec=sh` handed to `tar`, or `--upload-pack=...` to `git`, turns an argument
+into code. Keep the default, or anchor the pattern so a dash can't start an option.
+
+At call time every declared argument is required and an undeclared one is refused. A value with a
+NUL or another control character is refused before its pattern runs (a NUL would truncate the
+string `execve` sees). An unknown template and one the socket may not call get the same uniform
+`404`, byte for byte (also the same as an unknown route); nothing unlocks for a refused call.
+
+### Examples
+
+A deploy trigger (no network inside except the one API it calls; the token in env):
+
+```json
+{
+  "name": "deploy",
+  "argv": ["/usr/bin/curl", "-fsS", "-X", "POST", "-H", "@/run/secrets/auth-header",
+           "https://deploy.example/api/deploy/{env}"],
+  "args": { "env": { "pattern": "staging|production" } },
+  "files": [ { "path": "/run/secrets/auth-header", "secret": "deploy-auth-header" } ],
+  "network": "host",
+  "timeout_sec": 60
+}
+```
+
+(`deploy-auth-header` holds the whole line `Authorization: Bearer ...`; `curl -H @file` reads it
+from the file, so the token never appears in argv.)
+
+`psql` with `PGPASSWORD`:
+
+```json
+{
+  "name": "db-report",
+  "argv": ["/usr/bin/psql", "-h", "db.internal", "-U", "report", "-d", "app", "-f", "/srv/reports/{report}.sql"],
+  "args": { "report": { "pattern": "[a-z0-9_]{1,40}" } },
+  "env": { "PGPASSWORD": "{{db-report-pw}}" },
+  "binds": [ { "path": "/srv/reports" } ],
+  "network": "host"
+}
+```
+
+Signing with a key held in the vault, handed over as a read-only file:
+
+```json
+{
+  "name": "sign",
+  "argv": ["/usr/bin/openssl", "dgst", "-sha256", "-sign", "/run/secrets/signing-key",
+           "-out", "/srv/release/{file}.sig", "/srv/release/{file}"],
+  "args": { "file": { "pattern": "[A-Za-z0-9._-]{1,64}" } },
+  "files": [ { "path": "/run/secrets/signing-key", "secret": "release-signing-key" } ],
+  "binds": [ { "path": "/srv/release", "rw": true } ]
+}
+```
+
+### One unlock per call, reading only the template's secrets
+
+A call takes one of its socket's request slots for its whole duration (T8's limits), then **one
+unlock**, and decrypts only the records of the secrets the template names, each on its own
+(`records/HMAC(K_names, name)`), never the whole vault; a template with no secrets doesn't unlock
+at all. The vault key is zeroed straight after, the secret bytes once they are in the environment
+block or the pipe. The unlock-failure limits and the unlock timeout are the routes' (see "The TPM's
+dictionary-attack counter").
+
+### Output
+
+- stdout and stderr are **streamed** back through **one shared redactor**, in the order they were
+  read, so a secret split between the two streams is still caught. The forms redacted are the
+  routes' (raw, base64 variants, hex, percent- and JSON-escaped) of every secret the template uses.
+- The output is counted, never buffered whole: beyond `max_output_bytes` the rest is read and
+  discarded while the child runs on to its end or timeout. A cut never ends inside the held-back
+  window: the window is dropped at the cut, so no fragment of a secret the cut separated from its
+  end gets out. The result says when output was truncated.
+- The answer is NDJSON: `{"stream":"stdout"|"stderr","data":"<base64>"}` frames, then
+  `{"ended":"exit"|"timeout"|"signal"|"refused","exit_code":N,"truncated":bool}`. The redactor works
+  on bytes and the frames carry base64, so binary output (a signature) survives byte for byte.
+- The exit code is passed through; a timeout reports 124 (as `timeout(1)` does). `bwrap` reports a
+  command killed by signal N as exit 128+N, so that is what the caller sees (`"ended": "exit"`);
+  `"signal"` means `bwrap` itself was killed.
+
+**Be honest about output:** whatever the tool prints goes to the caller, including anything it
+derives from the secret (a decryption, a signature, a token it exchanged for). The broker redacts
+only the secret's known forms. A template that prints derived secret material is the operator's
+choice.
+
+### What a compromised container can do with a template
+
+**It can** call the templates its socket lists, with arguments that pass validation, within the
+rate limit, while it runs: for example, deploy to `staging` or `production`, or sign another file in
+`/srv/release`.
+
+**It can't** choose the program, add an argument the template doesn't declare, pass a value outside
+its pattern, read the secret (it never leaves the sandbox except as redacted output), call another
+socket's templates, or make the template run in or read a folder it can write.
+
+### What a template author must not do
+
+- Bind a folder that others can write, or that holds entries others can write (the rule checks the
+  path, not every file in it).
+- Use a tool that writes the secret to disk or to a cache: `git -c credential.helper=store`,
+  `docker login` (writes `config.json`), `npm login`, `aws configure`, anything that persists a
+  token in a writable bind. Inside the private `/tmp` it vanishes with the sandbox; in a writable
+  bind it doesn't.
+- Print the secret or something derived from it (see Output).
+- Loosen `allow_leading_dash` without a tight pattern.
+
+### Logging
+
+One line per call in the journal and `broker.log`: socket, peer uid and pid, template, the argument
+values (escaped, length-capped), status, exit code, how it ended, bytes in and out, whether it was
+truncated, unlocks, duration and a reason for refusals. Never a secret, an env value, or argv after
+substitution.
+
 ## Platforms
 
 **Tested on real hardware:** Fedora CoreOS 44 (selinux-policy-targeted 44.6, Podman 5.8, Intel
@@ -448,8 +692,10 @@ Elsewhere:
 - **Registries that issue tokens from a separate realm URL** (GHCR, Docker Hub: `401` with
   `WWW-Authenticate: Bearer realm=https://ghcr.io/token`) are not covered: the client would fetch
   a token from the realm itself. Basic-auth registries are covered.
-- No TLS on the socket (it is a local Unix socket), no command templates, no arbitrary `run`
-  over the socket, no key caching.
+- No TLS on the socket (it is a local Unix socket), no arbitrary `run` over the socket, no key
+  caching.
+- Templates run on Linux only (they need `bwrap`), always as the vault user's uid (in a sandbox);
+  running them as another uid would need root or capabilities.
 - Request and response trailers are never forwarded; `Range` requests are dropped (no partial
   reads); compressed responses fail closed.
 - The client's `Authorization`, `Proxy-Authorization`, `Cookie`, `Host`, `Connection` and every
