@@ -102,7 +102,16 @@ internal static class RecordMigration
         {
             // Fix round 3, item 4: a crash between step 3 (rename) and step 4 (config switch) leaves
             // this vault's own converted copy there while config.json still names the classic store.
-            if (LooksLikeOwnConvertedCopy(owner, vaultDir, config))
+            var copy = LooksLikeOwnConvertedCopy(owner, vaultDir, config);
+            if (copy == ConvertedCopy.SameYubiKeys)
+                throw new TswapException(
+                    $"The target folder {vaultDir} is not empty: it holds what looks like a converted copy of a vault with the " +
+                    "same YubiKeys (perhaps this one, left by an interrupted run before it switched config.json; a plain XOR " +
+                    "vault's copy can only be recognised by its keys). Your classic vault is intact and still in use; check " +
+                    $"before removing it: for example point a separate config folder at it with 'TSWAP_CONFIG_DIR=<new folder> " +
+                    $"{ctx.Prefix} init --vault-dir {vaultDir}' and look at '{ctx.Prefix} names'. Then remove the folder and run " +
+                    "this again, or keep it and join it with init --vault-dir.");
+            if (copy == ConvertedCopy.ThisVault)
                 throw new TswapException(
                     $"The target folder {vaultDir} is not empty: it holds this vault's own converted copy, left by an earlier " +
                     "run that was interrupted before it switched config.json. Your classic vault is intact and still in use. " +
@@ -247,29 +256,48 @@ internal static class RecordMigration
         throw new TswapException($"This vault is already a record store (vault folder: {config.VaultDir}). Nothing to convert.");
     }
 
+    /// <summary>What a non-empty target folder's keyring says about where it came from.</summary>
+    private enum ConvertedCopy
+    {
+        /// <summary>Not recognised.</summary>
+        None,
+
+        /// <summary>This keyring vault's own vault id: certainly this vault.</summary>
+        ThisVault,
+
+        /// <summary>A plain XOR vault's conversion: same YubiKeys plus a recovery slot (a guess).</summary>
+        SameYubiKeys,
+    }
+
     /// <summary>
-    /// Fix round 3, item 4: true when <paramref name="vaultDir"/>'s keyring looks like this vault
-    /// converted: a keyring vault's own vault id, or (a plain XOR vault, whose conversion mints a new
-    /// vault id) one YubiKey slot for each of this vault's serials plus a recovery slot.
+    /// Fix round 3, item 4 / round 4, item 6: whether <paramref name="vaultDir"/>'s keyring looks
+    /// like this vault converted. A keyring vault is recognised by its own vault id (certain). A
+    /// plain XOR vault's conversion mints a new vault id, so it can only be matched by one YubiKey
+    /// slot per enrolled serial plus a recovery slot, which another XOR vault on the same keys also
+    /// matches: <see cref="ConvertedCopy.SameYubiKeys"/>.
     /// </summary>
-    private static bool LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher owner, string vaultDir, Config config)
+    private static ConvertedCopy LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher owner, string vaultDir, Config config)
     {
         try
         {
             var keyringPath = Path.Combine(vaultDir, RecordVaultStore.KeyringFileName);
             if (!owner.FileExists(keyringPath))
-                return false;
+                return ConvertedCopy.None;
             var there = KeyringCodec.Decode(owner.ReadAllBytes(keyringPath));
             if (config.Keyring != null)
-                return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId);
+                return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId)
+                    ? ConvertedCopy.ThisVault
+                    : ConvertedCopy.None;
             var serials = there.Slots.Where(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
                 .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial).Order().ToList();
             return serials.Count > 0 && serials.SequenceEqual(config.YubiKeySerials.Distinct().Order())
-                && there.Slots.Any(s => s.Kind == SlotKind.Recovery);
+                && there.Slots.Any(s => s.Kind == SlotKind.Recovery)
+                ? ConvertedCopy.SameYubiKeys
+                : ConvertedCopy.None;
         }
         catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
         {
-            return false;
+            return ConvertedCopy.None;
         }
     }
 

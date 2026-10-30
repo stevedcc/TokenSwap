@@ -231,10 +231,14 @@ public sealed class MigrateToRecordsTests : IDisposable
                 // (the folder is not empty), and the classic vault keeps working.
                 Assert.NotEqual(0, rerun.Exit);
                 Assert.Contains("not empty", rerun.Err);
-                // Fix round 3, item 4: the refusal says what is there and what to do.
-                Assert.Contains("this vault's own converted copy", rerun.Err);
+                // Fix round 3, item 4 / round 4, item 6: a plain XOR vault's copy can only be
+                // recognised by its YubiKeys, so the refusal says so and asks to check first.
+                Assert.Contains("converted copy of a vault with the same YubiKeys", rerun.Err);
+                Assert.DoesNotContain("this vault's own converted copy", rerun.Err);
                 Assert.Contains("classic vault is intact", rerun.Err);
+                Assert.Contains("check", rerun.Err);
                 Assert.Contains("init --vault-dir", rerun.Err);
+                Assert.Contains("names", rerun.Err);
                 Assert.Null(_m.Config.Store);
                 break;
             case 4:
@@ -268,6 +272,25 @@ public sealed class MigrateToRecordsTests : IDisposable
         _m.MigrationSeams = null;
         _keys.PluggedIn = [SerialA];
         Assert.Equal(secrets["secret-05"].Value, _m.Get("secret-05"));
+    }
+
+    [Fact]
+    public void AKeyringVaultsCrashBetweenRenameAndConfigSwitch_IsRecognisedByItsVaultId()
+    {
+        // Fix round 4, item 6: the confident wording only where the vault id matches.
+        _keys.PluggedIn = [SerialA];
+        _m.Ok("", "init", "--keyring");
+        _m.Ok("v", "ingest", "s");
+        _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 3) throw new IOException("simulated crash after step 3"); } };
+        Assert.NotEqual(0, _m.Run("", "migrate", "--to-records").Exit);
+        _m.MigrationSeams = null;
+
+        var rerun = _m.Run("", "migrate", "--to-records");
+
+        Assert.NotEqual(0, rerun.Exit);
+        Assert.Contains("this vault's own converted copy", rerun.Err);
+        Assert.Contains("classic vault is intact", rerun.Err);
+        Assert.Equal("v", _m.Get("s"));
     }
 
     [Fact]
