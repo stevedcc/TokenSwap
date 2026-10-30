@@ -90,6 +90,9 @@ public class FileOwnershipTests : IDisposable
         if (OperatingSystem.IsWindows())
             return; // no identity switch on Windows
         var fake = AsRoot();
+        // Brief T7 item 6: a write now narrows a wider config folder first (one more switch); this
+        // test is about the writes, so its folder is 0700, as tswap creates it since T5.
+        File.SetUnixFileMode(_dir, OwnerOnly | UnixFileMode.UserExecute);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         storage.SaveConfig(SampleConfig());
@@ -103,6 +106,28 @@ public class FileOwnershipTests : IDisposable
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
         foreach (var file in new[] { P("config.json"), P("secrets.json.enc"), backup })
             Assert.Equal(OwnerOnly, File.GetUnixFileMode(file));
+    }
+
+    // Brief T7 item 6: under sudo, a wider config folder and file are narrowed as the folder's owner.
+    [Fact]
+    public void Privileged_AWideClassicVault_IsNarrowedAsTheFoldersOwner_BeforeTheWrite()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var fake = AsRoot();
+        var warnings = new StringWriter();
+        File.WriteAllText(P("config.json"), "{}");
+        File.SetUnixFileMode(P("config.json"), OwnerOnly | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        File.SetUnixFileMode(_dir, OwnerOnly | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake), warnings);
+
+        storage.SaveConfig(SampleConfig());
+
+        Assert.Equal([P(""), P("config.json"), P("config.json")], fake.Switches.Select(s => s.Path));
+        Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
+        Assert.Equal(OwnerOnly | UnixFileMode.UserExecute, File.GetUnixFileMode(_dir));
+        Assert.Equal(OwnerOnly, File.GetUnixFileMode(P("config.json")));
+        Assert.Contains("tightened", warnings.ToString());
     }
 
     [Fact]
@@ -265,6 +290,9 @@ public class FileOwnershipTests : IDisposable
             return;
         var fake = AsRoot();
         fake.OwnerUnreadable = true;
+        // Brief T7 item 6: a 0700 folder (as tswap creates it since T5), so the write itself refuses,
+        // not the narrowing of a wider folder first (covered below).
+        File.SetUnixFileMode(_dir, OwnerOnly | UnixFileMode.UserExecute);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         var ex = Assert.Throws<TswapException>(() => storage.SaveConfig(SampleConfig()));
