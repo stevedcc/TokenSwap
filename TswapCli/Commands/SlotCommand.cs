@@ -263,8 +263,7 @@ public sealed class SlotCommand : ICliCommand
             Convert.ToBase64String(publicKey),
             hwBlob,
             backend);
-        File.WriteAllText(path, SlotEnrollmentFileCodec.SerializeRequest(file));
-        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(path);
+        ctx.WriteOutputFile(path, SlotEnrollmentFileCodec.SerializeRequest(file));
     }
 
     // --- slot approve (runs on an already-enrolled machine) ---
@@ -372,8 +371,7 @@ public sealed class SlotCommand : ICliCommand
             request.HwBlob,
             request.Backend);
 
-        File.WriteAllText(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
-        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(approvePath);
+        ctx.WriteOutputFile(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
 
         // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
         // slot without asking. Only after the approve file is written: a failed approve records
@@ -558,9 +556,8 @@ public sealed class SlotCommand : ICliCommand
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
         // copy (and every copy taken from it afterwards) opens with this machine's device too.
-        File.WriteAllText(receiptPath, SlotReceiptCodec.Serialize(
+        ctx.WriteOutputFile(receiptPath, SlotReceiptCodec.Serialize(
             new SlotReceipt(finalKeyring.FormatVersion, finalKeyring.VaultId, finalKeyring.K, machineSlot)));
-        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(receiptPath);
 
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");

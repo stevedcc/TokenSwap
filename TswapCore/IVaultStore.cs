@@ -62,8 +62,9 @@ public interface IFileVaultStore : IVaultStore
     string BackupConfig();
 
     /// <summary>
-    /// Gives a file this command wrote (receipt, approve file, export) its folder's owner when
-    /// tswap runs privileged (T5, see <see cref="DirectoryOwnerMatcher"/>).
+    /// Writes a file a command produces (receipt, request, approve or export file) like the vault's
+    /// own files: atomically, mode 0600, replacing (never writing through) a symlink, and with its
+    /// folder's owner when tswap runs privileged (T5, see <see cref="DirectoryOwnerMatcher"/>).
     /// </summary>
-    void MatchDirectoryOwner(string path);
+    void WriteFile(string path, string contents);
 }

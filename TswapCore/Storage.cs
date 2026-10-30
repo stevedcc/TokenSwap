@@ -5,8 +5,9 @@ namespace TswapCore;
 
 /// <summary>
 /// Default <see cref="IVaultStore"/>: the single-file backend (<c>config.json</c> +
-/// <c>secrets.json.enc</c>) that has always shipped with tswap. Writes go through an
-/// atomic temp-then-rename so a crash mid-write cannot destroy an existing file.
+/// <c>secrets.json.enc</c>) that has always shipped with tswap. Writes go through
+/// <see cref="DirectoryOwnerMatcher.WriteAtomic"/> (temp-then-rename) so a crash mid-write cannot
+/// destroy an existing file.
 /// Implements <see cref="IFileVaultStore"/> (not just the base interface) since it
 /// genuinely is file-backed and exposes the paths some commands need.
 /// </summary>
@@ -19,7 +20,7 @@ public class Storage : IFileVaultStore
     private readonly DirectoryOwnerMatcher _owner;
 
     /// <param name="owner">
-    /// Gives files written under sudo the config folder's owner (T5; see
+    /// Writes every file, and gives files written under sudo the config folder's owner (T5; see
     /// <see cref="DirectoryOwnerMatcher"/>). Null: <see cref="DirectoryOwnerMatcher.Default"/>.
     /// </param>
     public Storage(string configDir, DirectoryOwnerMatcher? owner = null)
@@ -33,13 +34,11 @@ public class Storage : IFileVaultStore
     /// <inheritdoc/>
     public string BackupConfig()
     {
-        var backup = FileBackup.Copy(ConfigFile, DateTime.UtcNow);
-        _owner.Apply(backup);
-        return backup;
+        return FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
     }
 
     /// <inheritdoc/>
-    public void MatchDirectoryOwner(string path) => _owner.Apply(path);
+    public void WriteFile(string path, string contents) => _owner.WriteAtomic(path, Encoding.UTF8.GetBytes(contents));
 
     public Config LoadConfig()
     {
@@ -55,8 +54,7 @@ public class Storage : IFileVaultStore
     {
         Directory.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
-        WriteFileAtomic(ConfigFile, Encoding.UTF8.GetBytes(json));
-        _owner.Apply(ConfigFile);
+        _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(json));
     }
 
     /// <summary>
@@ -100,38 +98,6 @@ public class Storage : IFileVaultStore
         var json = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
         var plaintext = Encoding.UTF8.GetBytes(json);
         var encrypted = Crypto.Encrypt(plaintext, key);
-        WriteFileAtomic(SecretsFile, encrypted);
-        _owner.Apply(SecretsFile);
-    }
-
-    // Write-temp-then-rename so a crash mid-write can never destroy the existing
-    // file: the rename either fully replaces it or leaves it untouched.
-    private static void WriteFileAtomic(string path, byte[] bytes)
-    {
-        var tmp = path + ".tmp";
-        try
-        {
-            File.WriteAllBytes(tmp, bytes);
-            if (File.Exists(path))
-            {
-                // Preserve the existing file's permissions: a plain rename would give the
-                // result the temp file's default (umask) mode, silently *widening* access
-                // to the vault/config if the user had tightened it (e.g. chmod 600).
-                if (!OperatingSystem.IsWindows())
-                    File.SetUnixFileMode(tmp, File.GetUnixFileMode(path));
-                // File.Replace preserves the destination's ACLs/attributes on Windows
-                // (rename semantics elsewhere).
-                File.Replace(tmp, path, destinationBackupFileName: null);
-            }
-            else
-            {
-                File.Move(tmp, path);
-            }
-        }
-        catch
-        {
-            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
-            throw;
-        }
+        _owner.WriteAtomic(SecretsFile, encrypted);
     }
 }

@@ -206,6 +206,26 @@ public class SlotMergeTests : IDisposable
         Assert.Null(_router.Config.ApprovedSlots);
     }
 
+    [Theory]
+    [InlineData(null)]   // an approval recorded before the blob hash existed
+    [InlineData("ABCD")] // valid hex of the wrong length
+    public void AnApprovalWithoutAUsableBlobHash_FallsBackToTheConfirmation(string? hash)
+    {
+        RouterVault();
+        var receipt = Join(_desktop, _router, SerialA);
+        var config = _router.Config;
+        File.WriteAllText(_router.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            config with { ApprovedSlots = [.. config.ApprovedSlots!.Select(a => a with { HwBlobSha256 = hash })] },
+            TswapCore.TswapJsonContext.Default.Config));
+        var before = _router.ConfigText;
+
+        var (exit, _, stderr) = _router.Run("", "slot", "merge", receipt);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("--yes", stderr);
+        Assert.Equal(before, _router.ConfigText);
+    }
+
     [Fact]
     public void TheOtherCopysApprovedSlots_AreNeverRead()
     {
