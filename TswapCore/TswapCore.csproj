@@ -53,6 +53,17 @@
   </ItemGroup>
 
   <!--
+    Brief T10 (the broker's ssh-agent endpoint), owner decision 2026-10-30: Ed25519 signing and
+    verification only. As of this SDK the BCL has no Ed25519 (ECDSA and RSA, which the agent also
+    signs with, stay on the BCL). BouncyCastle.Cryptography is pure managed (no P/Invoke, no native
+    binaries) and MIT-licensed; only Org.BouncyCastle.Math.EC.Rfc8032.Ed25519 is used, so trimming
+    keeps the NativeAOT binary small. Pinned to an exact version (brackets).
+  -->
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="[2.7.0]" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a

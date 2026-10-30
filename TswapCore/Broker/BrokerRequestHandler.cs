@@ -46,6 +46,12 @@ public sealed partial class BrokerRequestHandler(
     /// <summary>Raised when a request starts waiting for the unlock (tests wait on it instead of sleeping).</summary>
     public event Action? WaitingForUnlock;
 
+    /// <summary>The one-unlock-at-a-time lock, shared with the ssh-agent endpoint (brief T10).</summary>
+    internal SemaphoreSlim UnlockGate => _unlock;
+
+    /// <summary>The unlock-failure and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
+    internal BrokerUnlockGuard UnlockGuard => unlockGuard;
+
     public async Task HandleAsync(HttpContext http)
     {
         var items = http.Features.Get<IConnectionItemsFeature>()?.Items;

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using TswapCore;
 using TswapCore.Broker;
+using TswapCore.Broker.SshAgent;
 using TswapCore.Broker.Templates;
 
 namespace TswapCli.Commands;
@@ -80,16 +81,19 @@ public sealed class BrokerCommand : ICliCommand
         var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(owner, configDir, host: host));
         using var log = new BrokerLog(ctx.Console.Error, Path.Combine(configDir, BrokerLog.FileName));
         using var forwarder = new HttpBrokerForwarder(TimeProvider.System);
+        var sshAgent = SshAgentFor(ctx, records, holder.Current);
         var options = new BrokerServerOptions
         {
+            SshAgent = sshAgent,
             Policy = holder,
             Secrets = new VaultBrokerSecretSource(records, ctx.Unlocker),
             Forwarder = forwarder,
             Log = log,
         };
 #if DEBUG
-        // The end-to-end tests connect as their own uid, which serve otherwise refuses. Compiled
-        // into Debug builds only (fix round 1); there, only with TSWAP_TEST_KEY set (a test key).
+        // The end-to-end tests connect as their own uid, which serve otherwise refuses, on the HTTP
+        // and the ssh-agent sockets alike (one switch). Compiled into Debug builds only (fix round 1);
+        // there, only with TSWAP_TEST_KEY set (a test key).
         options = options with { AllowOwnUidForTests = ctx.TestKey != null };
 #endif
 
@@ -122,6 +126,23 @@ public sealed class BrokerCommand : ICliCommand
         if (finished == server.Fatal)
             throw new TswapException($"tswap broker serve stopped: {server.Fatal.Result}");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T10: the ssh-agent endpoint, when broker.json has ssh keys. Each key is loaded once here
+    /// (one unlock, one record) to derive its public key; a key that can't be loaded stops serve,
+    /// naming it. New keys need a restart (a reload never unlocks).
+    /// </summary>
+    private static SshAgentOptions? SshAgentFor(CommandContext ctx, RecordVaultStore records, BrokerPolicy policy)
+    {
+        if (policy.SshKeys.Count == 0)
+            return null;
+        var source = new VaultSshKeySource(records, ctx.Unlocker);
+        return new SshAgentOptions
+        {
+            Keys = SshAgentKeyLoader.Load(policy, source),
+            KeySource = source,
+        };
     }
 
     // ------------------------------------------------------------------ forward
