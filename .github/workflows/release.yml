@@ -32,7 +32,14 @@ jobs:
       - name: Test
         env:
           CI_REQUIRE_BWRAP: '1'
-        run: TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
+        shell: bash
+        run: |
+          set -o pipefail
+          TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx \
+            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows" | tee "$RUNNER_TEMP/test.log"
+          # A filter that matches no tests exits 0: require one summary line with tests in it.
+          grep -qE '^Passed! +- Failed: +0, Passed: +[1-9][0-9]*,' "$RUNNER_TEMP/test.log" \
+            || { echo "::error::no 'Passed!' summary with tests in it: no tests ran, or some failed" >&2; exit 1; }
 
   verify-version:
     name: Verify Version
@@ -121,7 +128,9 @@ jobs:
           path: ./artifacts
 
       - name: Rename and zip binaries
+        shell: bash
         run: |
+          set -euo pipefail
           cd artifacts
           for dir in */; do
             rid="${dir%/}"
