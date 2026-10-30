@@ -177,7 +177,12 @@ public static class SecretRecordCodec
             throw new TswapException("Malformed record: bad magic bytes");
         var formatVersion = bytes[4];
         if (formatVersion != KeyringFormat.RecordFormatVersion)
-            throw new TswapException($"Unsupported record format version: {formatVersion}");
+            throw new TswapException(formatVersion < KeyringFormat.RecordFormatVersion
+                ? $"Unsupported record format version {formatVersion}: written by a pre-release tswap build, which this " +
+                  $"build (record format version {KeyringFormat.RecordFormatVersion}) does not read. Re-create the vault " +
+                  "folder from a classic vault or an export."
+                : $"Unsupported record format version {formatVersion}: written by a newer tswap (this build reads version " +
+                  $"{KeyringFormat.RecordFormatVersion}); upgrade tswap to open it.");
 
         var recordId = bytes.AsSpan(5, KeyringFormat.RecordIdSize).ToArray();
         var write = ReadStamp(bytes, 5 + KeyringFormat.RecordIdSize);

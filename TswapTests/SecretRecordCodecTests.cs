@@ -33,7 +33,7 @@ public class SecretRecordCodecTests
     private const long CreatedMs = 1_699_000_000_000;
 
     private const string ExpectedHeaderHex =
-        "54535231" + "01" + ExpectedRecordIdHex +
+        "54535231" + "02" + ExpectedRecordIdHex +
         "f469e5cf8b010000" + "02000000" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" +
         "1c010000";
 
@@ -198,6 +198,26 @@ public class SecretRecordCodecTests
 
         Assert.Equal(69 + 28 + 256, fits.Length);
         Assert.Equal(69 + 28 + 512, past.Length);
+    }
+
+    [Fact]
+    public void TheRecordFormatVersion_IsPinnedAt2()
+    {
+        // Fix round 3: version 2 since fix round 1 added the previous value to the payload.
+        Assert.Equal(2, KeyringFormat.RecordFormatVersion);
+        Assert.Equal(2, SecretRecordCodec.Encode(ValueRecord(), VaultKey)[4]);
+    }
+
+    [Fact]
+    public void Decode_ARecordOfThePreviousFormatVersion_IsRefusedNamingTheVersion()
+    {
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        encoded[4] = 1;
+
+        var ex = Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey));
+
+        Assert.Contains("format version 1", ex.Message);
+        Assert.Contains("pre-release", ex.Message);
     }
 
     [Fact]
