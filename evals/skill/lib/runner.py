@@ -359,7 +359,7 @@ def run_one(args, scenario, variant, script, skill, base):
     else:
         says_judge = lambda rule, msg: (False, "not judged: no --judge-agent/--judge-model given")  # noqa: E731
     broken, notes, _records = judge.judge_run(scenario, os.path.join(run_dir, "log.jsonl"), work, tmp, message, says_judge,
-                                              forged=logger.forged, extra_roots=[home, os.path.join(ev, "state")])
+                                              forged=logger.forged, extra_roots=[home, os.path.join(ev, "state")], home=home)
     if timed_out:
         notes.append(f"timed out after {args.timeout}s")
     return broken, notes
