@@ -117,23 +117,6 @@ public sealed class CliEnvironment
         => processPath == null ? "tswap" : Path.GetFileNameWithoutExtension(processPath);
 
     /// <summary>
-    /// Resolves the config directory:
-    /// <list type="bullet">
-    /// <item>TSWAP_CONFIG_DIR overrides everything (used by tests).</item>
-    /// <item>Under sudo <b>to root</b> on Unix (<paramref name="isPrivileged"/>), resolves
-    /// relative to the invoking user's home so "sudo tswap get" finds the same database as
-    /// "tswap create". The home is the passwd entry's (<paramref name="lookupUser"/>, default
-    /// <see cref="UnixPasswd.Lookup"/>), used only when SUDO_UID matches its uid; SUDO_USER=root
-    /// or SUDO_UID=0 is root's own folder. <c>sudo -i</c> also sets SUDO_USER, so it too uses the
-    /// invoking user's vault (#178). Under <c>sudo -u &lt;non-root user&gt;</c> SUDO_USER still names the
-    /// caller, but the target user's own vault is the right one, so SUDO_USER is ignored
-    /// unless the process is privileged (#176). SUDO_USER is only set on Unix; on Windows,
-    /// UAC elevation preserves APPDATA.</item>
-    /// <item>Migrates the legacy tswap-poc directory to tswap (one-time, silent, only
-    /// on the standard path, not when TSWAP_CONFIG_DIR is overridden).</item>
-    /// </list>
-    /// </summary>
-    /// <summary>
     /// Brief T7 item 1 (#178, #107): the home of the user who ran sudo, from the system's passwd
     /// entry for <paramref name="sudoUser"/>, trusted only when <paramref name="sudoUid"/> (SUDO_UID)
     /// is that entry's uid. Null for root (SUDO_USER=root or SUDO_UID=0): root's own folder, not a
@@ -185,6 +168,23 @@ public sealed class CliEnvironment
                 "tswap didn't create or move anything.");
     }
 
+    /// <summary>
+    /// Resolves the config directory:
+    /// <list type="bullet">
+    /// <item>TSWAP_CONFIG_DIR overrides everything (used by tests).</item>
+    /// <item>Under sudo <b>to root</b> on Unix (<paramref name="isPrivileged"/>), resolves
+    /// relative to the invoking user's home so "sudo tswap get" finds the same database as
+    /// "tswap create". The home is the passwd entry's (<paramref name="lookupUser"/>, default
+    /// <see cref="UnixPasswd.Lookup"/>), used only when SUDO_UID matches its uid; SUDO_USER=root
+    /// or SUDO_UID=0 is root's own folder. <c>sudo -i</c> also sets SUDO_USER, so it too uses the
+    /// invoking user's vault (#178). Under <c>sudo -u &lt;non-root user&gt;</c> SUDO_USER still names the
+    /// caller, but the target user's own vault is the right one, so SUDO_USER is ignored
+    /// unless the process is privileged (#176). SUDO_USER is only set on Unix; on Windows,
+    /// UAC elevation preserves APPDATA.</item>
+    /// <item>Migrates the legacy tswap-poc directory to tswap (one-time, silent, only
+    /// on the standard path, not when TSWAP_CONFIG_DIR is overridden).</item>
+    /// </list>
+    /// </summary>
     public static string ResolveConfigDir(
         Func<string, string?> getEnv,
         Func<string, bool> directoryExists,

@@ -97,13 +97,16 @@ public sealed record CommandContext(
                 defaultNumber = i + 1;
             e.WriteLine($"  {i + 1}. Serial: {serials[i]} ({posture}{(isDefault ? ", default" : "")})");
         }
-        e.Write($"Select YubiKey (1-{serials.Count}, default {defaultNumber}): ");
-        var input = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(input))
-            return defaultSerial;
-        if (!int.TryParse(input, out var choice) || choice < 1 || choice > serials.Count)
-            throw new TswapException($"Invalid selection. Enter a number between 1 and {serials.Count}.");
-        return serials[choice - 1];
+        while (true)
+        {
+            e.Write($"Select YubiKey (1-{serials.Count}, default {defaultNumber}): ");
+            var input = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(input)) // a blank answer or end of input: the default
+                return defaultSerial;
+            if (int.TryParse(input, out var choice) && choice >= 1 && choice <= serials.Count)
+                return serials[choice - 1];
+            e.WriteLine($"Enter a number between 1 and {serials.Count}, or press Enter for the default.");
+        }
     }
 
     /// <summary>Loads the secrets database, surfacing recoverable-vault warnings on stderr.</summary>

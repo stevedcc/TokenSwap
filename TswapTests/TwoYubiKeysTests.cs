@@ -143,6 +143,21 @@ public class TwoYubiKeysTests : IDisposable
         Assert.Equal([SerialA], _m.Keys.Challenges.Select(c => c.Serial));
     }
 
+    // T7 fix round 1 (cosmetics): an invalid answer asks again instead of failing the command.
+    [Fact]
+    public void Terminal_AnInvalidAnswer_AsksAgain()
+    {
+        KeyringVaultWithTouchAAndNoTouchB();
+
+        var (exit, stdout, stderr) = _m.RunOnTerminal("9\nx\n\n", "names");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("two-key-secret", stdout);
+        Assert.Equal(3, stderr.Split("Select YubiKey").Length - 1);
+        Assert.Contains("Enter a number between 1 and 2", stderr);
+        Assert.Equal([SerialA], _m.Keys.Challenges.Select(c => c.Serial)); // then the default
+    }
+
     [Fact]
     public void Terminal_ChoosingTheOtherKey_UsesIt()
     {
