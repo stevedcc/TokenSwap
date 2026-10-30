@@ -39,8 +39,8 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file>";
-    public string Description => "Enroll a second machine into an existing --keyring vault via hand-carried files";
+    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files, or add a plugged-in YubiKey to this machine's keyring as its own slot";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -70,12 +70,13 @@ public sealed class SlotCommand : ICliCommand
             "request" => ExecuteRequest(ctx, rest),
             "approve" => ExecuteApprove(ctx, rest),
             "accept" => ExecuteAccept(ctx, rest),
+            "add" => ExecuteAdd(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file>";
+        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
@@ -386,6 +387,86 @@ public sealed class SlotCommand : ICliCommand
 
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");
+        return 0;
+    }
+
+    // --- slot add --yubikey (runs on this machine, adds to this machine's keyring) ---
+
+    /// <summary>
+    /// Brief T4 decision 5: adds a plugged-in YubiKey that has no slot yet to <b>this machine's</b>
+    /// keyring as a one-key slot (<see cref="YubiKeySlotBlob"/>), so that key alone opens the
+    /// vault. This is how a TPM vault on the router gets the owner's keys: plug each key into the
+    /// router and run this. Sudo-gated like <c>slot approve</c>: it unlocks the vault and creates a
+    /// new way to decrypt it. Unlocks by any slot; refuses a key that already has a slot (a
+    /// one-key slot's serial, or one of a legacy pair slot's two serials); backs up
+    /// <c>config.json</c> before writing, as <c>init</c> does. Other machines' keyring copies don't
+    /// get the slot (v0, no sync).
+    /// </summary>
+    private static int ExecuteAdd(CommandContext ctx, string[] args)
+    {
+        if (args is not ["--yubikey"])
+            throw new UsageException($"{ctx.Prefix} slot add --yubikey");
+        var c = ctx.Console;
+
+        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before anything else.
+        ctx.RequireSudo("slot add");
+
+        var config = ctx.Storage.LoadConfig();
+        if (config.Keyring == null)
+            throw new TswapException(
+                "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
+                "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+
+        var vaultKey = ctx.Unlock(config);
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+
+        // A version 2 keyring's slots carry no hardware blob, and their AEAD binds version 2, so it
+        // can never hold a one-key slot without re-wrapping every slot (which needs every device).
+        if (keyring.FormatVersion < KeyringFormat.KeyringFormatVersion)
+            throw new TswapException(
+                $"This vault's keyring is format version {keyring.FormatVersion}, made before keyring slots could carry " +
+                "a YubiKey's own parameters, so it cannot take a one-key YubiKey slot. It keeps working with its " +
+                "existing slots; to give each YubiKey its own slot, create a new vault with 'tswap init --keyring' " +
+                "and move the secrets across.");
+
+        var enrolled = keyring.Slots
+            .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
+            .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial)
+            .Concat(config.YubiKeySerials) // a legacy pair slot's keys already open this vault
+            .ToHashSet();
+
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, enrolled);
+        Slot newSlot;
+        try
+        {
+            var slotKeyPair = SlotKeyPair.Generate();
+            newSlot = MachineSlotWrap.Wrap(
+                vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+                keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
+
+        var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
+        var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
+
+        // Back up config.json before writing, the way init backs up a vault it replaces.
+        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        {
+            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+            File.Copy(fileStore.ConfigFile, backup);
+            c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
+        }
+        ctx.Storage.SaveConfig(newConfig);
+
+        c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
+        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        PrintFingerprint(c, "New slot", newSlot.PublicKey);
+        c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
+        c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
         return 0;
     }
 
