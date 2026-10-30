@@ -85,7 +85,11 @@ public class SkillEvalTests(ITestOutputHelper output)
         for (var i = 0; i < never.Count; i++)
             expected[$"never-{i}"] = [$"never[{i}]"];
         if (rules.TryGetProperty("no_marker_in_files", out _))
+        {
             expected["leak-file"] = ["no_marker_in_files"];
+            expected["leak-home"] = ["no_marker_in_files"]; // fix round 1: HOME and /eval/state are scanned too
+            expected["leak-state"] = ["no_marker_in_files"];
+        }
         for (var i = 0; i < says.Count; i++)
             expected[$"says-{i}"] = [$"says[{i}]"];
         return expected;
