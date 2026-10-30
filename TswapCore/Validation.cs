@@ -92,13 +92,7 @@ public static class Validation
     }
 
     /// <summary>A refused <c>run</c> command line: the program and why.</summary>
-    public sealed record BlockedInvocation(string Program, string Reason)
-    {
-        /// <summary>Refused only because no script file was named (code would come from stdin).
-        /// Inside a wrapper such a bare name is usually an argument value (docker pull python),
-        /// so the wrapper scan ignores it.</summary>
-        public bool NoScriptOnly { get; init; }
-    }
+    public sealed record BlockedInvocation(string Program, string Reason);
 
     // Issue #105: a shell or interpreter given inline code can transform a substituted secret
     // (split, reverse, encode) before printing it, which run's output redaction can't recognise.
@@ -206,23 +200,15 @@ public static class Validation
             return new(program, $"'{program}' would expose secret values. The 'run' command is for programs that *use* secrets, not display them.");
 
         if (Wrappers.Contains(program))
-        {
-            // Follow the wrapped command: the first later argument naming a checked program.
-            for (var i = 0; i < args.Count; i++)
-            {
-                if (!IsCheckedProgram(ProgramName(args[i])))
-                    continue;
-                var inner = GetBlockedInvocation(args.Skip(i).ToList());
-                if (inner != null && !inner.NoScriptOnly)
-                    return inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
-            }
-            return null;
-        }
+            return CheckWrapper(program, args);
 
         if (ShellAsUser.Contains(program))
         {
             // su/runuser -c runs shell code; runuser -u user -- cmd runs cmd (checked like a wrapper).
-            var command = args.FirstOrDefault(a => a == "-c" || a == "--command" || a.StartsWith("--command=", StringComparison.Ordinal)
+            // Only su's own options count: scanning stops at '--' (runuser -u u -- tar -czf ...).
+            var own = args.TakeWhile(a => a != "--").ToList();
+            var command = own.FirstOrDefault(a => a is "-c" or "--command" or "--session-command"
+                || a.StartsWith("--command=", StringComparison.Ordinal) || a.StartsWith("--session-command=", StringComparison.Ordinal)
                 || (a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Contains('c')));
             if (command != null)
                 return new(program, InlineReason(program, command));
@@ -250,8 +236,18 @@ public static class Validation
                     programFiles.Add(args[i + 1]);
                 else if (args[i].StartsWith("--file=", StringComparison.Ordinal))
                     programFiles.Add(args[i]["--file=".Length..]);
-                else if (args[i].StartsWith("-f", StringComparison.Ordinal) && args[i].Length > 2 && !args[i].StartsWith("--", StringComparison.Ordinal))
-                    programFiles.Add(args[i][2..]);
+                else if (args[i].StartsWith('-') && !args[i].StartsWith("--", StringComparison.Ordinal) && args[i].IndexOf('f') > 0)
+                {
+                    // A cluster such as -bf prog.awk or -fprog.awk: f's value is attached or next.
+                    var f = args[i].IndexOf('f');
+                    if (f == args[i].Length - 1)
+                    {
+                        if (i + 1 < args.Count)
+                            programFiles.Add(args[i + 1]);
+                    }
+                    else
+                        programFiles.Add(args[i][(f + 1)..]);
+                }
             }
             if (programFiles.Any(StdinScripts.Contains))
                 return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
@@ -297,6 +293,89 @@ public static class Validation
         if (Interpreters.TryGetValue(program, out var syntax))
             return CheckInterpreter(program, args, syntax);
 
+        return null;
+    }
+
+    // Wrapper options that take a separate value, so the value isn't taken for the command.
+    private static readonly Dictionary<string, string[]> WrapperValued = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["sudo"] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group", "--chdir"],
+        ["doas"] = ["-u", "-C"],
+        ["timeout"] = ["-s", "-k", "--signal", "--kill-after"],
+        ["nice"] = ["-n", "--adjustment"],
+        ["ionice"] = ["-c", "-n", "-p", "-t"],
+        ["strace"] = ["-o", "-e", "-p", "-s", "-u"],
+        ["ltrace"] = ["-o", "-e", "-p", "-s", "-u"],
+        ["nsenter"] = ["-t", "--target"],
+        ["taskset"] = ["-c"],
+        ["chrt"] = ["-p"],
+    };
+
+    // Wrappers whose first positional argument is not the command (timeout DURATION cmd,
+    // flock FILE cmd, chroot DIR cmd, taskset MASK cmd, chrt PRIO cmd).
+    private static readonly HashSet<string> WrapperLeadingPositional = new(StringComparer.OrdinalIgnoreCase)
+        { "timeout", "flock", "chroot", "taskset", "chrt" };
+
+    // Tools with subcommands: these subcommands run a command, the others don't.
+    private static readonly HashSet<string> SubcommandTools = new(StringComparer.OrdinalIgnoreCase)
+        { "uv", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi", "npm", "pnpm", "yarn", "bundle",
+          "docker", "podman", "nerdctl", "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl",
+          "toolbox", "distrobox" };
+
+    private static readonly HashSet<string> ExecSubcommands = new(StringComparer.OrdinalIgnoreCase)
+        { "run", "exec", "x", "dlx", "shell", "enter", "debug", "attach", "start", "create", "compose" };
+
+    // Wrapped command: for a simple wrapper, the first positional argument after its options (and a
+    // leading duration/file/dir/mask where the wrapper has one) is the command, checked in full. An
+    // ordinary program there (sudo apt install python3) is allowed. For a tool with subcommands, a
+    // non-executing subcommand (docker pull python) is allowed; under run/exec the first checked
+    // program after it is the command, checked in full, so a bare interpreter reading stdin
+    // (docker run -i img python) is refused.
+    private static BlockedInvocation? CheckWrapper(string program, List<string> args)
+    {
+        BlockedInvocation? Wrapped(int from)
+        {
+            var inner = GetBlockedInvocation(args.Skip(from).ToList());
+            return inner == null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
+        }
+
+        if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
+            return null; // command -v only looks the name up
+
+        if (SubcommandTools.Contains(program))
+        {
+            var sub = args.FindIndex(a => !a.StartsWith('-'));
+            if (sub < 0 || !ExecSubcommands.Contains(args[sub]))
+                return null; // pull, install, build ...: nothing is run
+            for (var i = sub + 1; i < args.Count; i++)
+                if (IsCheckedProgram(ProgramName(args[i])) && Wrapped(i) is { } blocked)
+                    return blocked;
+            return null;
+        }
+
+        WrapperValued.TryGetValue(program, out var valued);
+        var skipLeading = WrapperLeadingPositional.Contains(program);
+        for (var i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                continue;
+            if (arg.StartsWith('-'))
+            {
+                if (valued != null && valued.Contains(arg, StringComparer.Ordinal))
+                    i++;
+                continue;
+            }
+            if (arg.Contains('=') && !arg.StartsWith('/') && program.Equals("sudo", StringComparison.OrdinalIgnoreCase))
+                continue; // sudo VAR=value
+            if (skipLeading)
+            {
+                skipLeading = false;
+                continue;
+            }
+            // The wrapped command. Itself a wrapper (sudo timeout 5 sh -c ...)? Checked in full too.
+            return IsCheckedProgram(ProgramName(arg)) ? Wrapped(i) : null;
+        }
         return null;
     }
 
@@ -375,11 +454,14 @@ public static class Validation
                         return new(program, InlineReason(program, arg));
                     if (syntax.ScriptOption.Contains(letter))
                     {
-                        // The value is the script file: attached, or the next argument.
+                        // The value is the script file: attached, or the next argument. Options
+                        // after it can still carry inline code (expect -f s.exp -c '...').
                         var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
-                        return StdinScripts.Contains(script) || script.Length == 0
-                            ? new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-                            : null;
+                        if (StdinScripts.Contains(script) || script.Length == 0)
+                            return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+                        var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
+                            .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));
+                        return later != null ? new(program, InlineReason(program, later)) : null;
                     }
                     if (syntax.AttachedOnly.Contains(letter))
                         break; // any rest of the cluster is its value; never the next argument
@@ -394,8 +476,7 @@ public static class Validation
             }
             return null; // the script file
         }
-        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
-            { NoScriptOnly = true };
+        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
     }
 
     private static string InlineReason(string program, string flag) =>

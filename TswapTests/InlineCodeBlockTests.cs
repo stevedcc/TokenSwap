@@ -107,6 +107,15 @@ public class InlineCodeBlockTests
     [InlineData("incus", "exec", "c1", "--", "sh", "-c", "echo {{x}}")]
     [InlineData("flatpak", "run", "org.x", "sh", "-c", "echo {{x}}")]
     [InlineData("machinectl", "shell", "m", "/bin/sh", "-c", "echo {{x}}")]
+    // Review round 3 (GLM on Z.ai): a bare interpreter that IS the wrapped command reads stdin.
+    [InlineData("docker", "run", "-i", "-e", "S={{x}}", "img", "python")]
+    [InlineData("sudo", "S={{x}}", "bash")]
+    [InlineData("sudo", "-u", "root", "python3")]
+    [InlineData("timeout", "5", "python3")]
+    [InlineData("flock", "/tmp/lock", "bash")]
+    [InlineData("nice", "-n", "5", "perl")]
+    [InlineData("su", "--session-command=echo {{x}}", "root")]
+    [InlineData("expect", "-f", "script.exp", "-c", "puts {{x}}")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -160,6 +169,12 @@ public class InlineCodeBlockTests
     [InlineData("perl", "-x", "tool.pl", "{{x}}")]
     [InlineData("npm", "run", "deploy", "--", "--token", "{{x}}")]
     [InlineData("su", "-", "app")] // login shell, no -c
+    // Review round 3: non-executing subcommands and an ordinary wrapped program pass; '--' ends
+    // su/runuser option scanning; an awk cluster ending in f names the program file.
+    [InlineData("runuser", "-u", "app", "--", "tar", "-czf", "out.tgz", "{{x}}")]
+    [InlineData("awk", "-bf", "prog.awk", "{{x}}")]
+    [InlineData("sudo", "-u", "root", "apt", "install", "python3", "--token", "{{x}}")]
+    [InlineData("timeout", "30", "curl", "-H", "{{x}}", "https://example.com")]
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]
