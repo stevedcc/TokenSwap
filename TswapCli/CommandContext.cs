@@ -19,6 +19,13 @@ public sealed record CommandContext(
 {
     // Brief T7 item 3 (#180): the store is opened at first use, so a command that never touches
     // it (help, prompt, completion, ...) never resolves the config folder.
+    //
+    // `Storage` in this initializer is the primary constructor's PARAMETER (initializers see
+    // parameters before members), not the Storage property below, which reads _storage.Value.
+    // Renaming the parameter doesn't silently turn this into recursion: the initializer would then
+    // name the property, which a field initializer can't (error CS0236), so it stops compiling
+    // (checked). Don't "fix" that by moving this into a member that reads the property.
+    // CommandContextTests covers both constructors.
     private Lazy<IVaultStore> _storage = new(() => Storage);
 
     /// <summary>
