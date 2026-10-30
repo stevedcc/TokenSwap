@@ -29,6 +29,7 @@ public class SshAgentFramingTests : IAsyncLifetime
             ["k2"] = new("k2", "key-two", K2),
             ["k3"] = new("k3", "key-three", K3),
         },
+        KeySource = new FakeSshKeySource(_ => null),
         AllowOwnUidForTests = allowOwnUid,
     };
 

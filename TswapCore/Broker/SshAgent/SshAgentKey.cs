@@ -14,12 +14,16 @@ public sealed class SshAgentKey
         Name = name;
         SecretName = secretName;
         PublicBlob = publicBlob;
+        Type = SshPublicKey.Parse(publicBlob).Type;
         Fingerprint = SshFingerprint.Of(publicBlob);
     }
 
     public string Name { get; }
 
     public string SecretName { get; }
+
+    /// <summary>The key's type, from its public blob.</summary>
+    public SshKeyType Type { get; }
 
     /// <summary>The public key blob (wire doc section 7), as listed and as compared with sign requests.</summary>
     public byte[] PublicBlob { get; }

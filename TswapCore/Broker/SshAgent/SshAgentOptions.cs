@@ -6,6 +6,9 @@ public sealed record SshAgentOptions
     /// <summary>The keys loaded at start, by name (public parts only).</summary>
     public required IReadOnlyDictionary<string, SshAgentKey> Keys { get; init; }
 
+    /// <summary>Where each signature's private key comes from: a fresh unlock reading only that key's record.</summary>
+    public required ISshKeySource KeySource { get; init; }
+
     /// <summary>A connection idle this long between messages is closed.</summary>
     public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromSeconds(BrokerPolicy.DefaultIdleTimeoutSec);
 
