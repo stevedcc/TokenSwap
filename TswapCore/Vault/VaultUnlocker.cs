@@ -257,10 +257,9 @@ public sealed class VaultUnlocker
     /// Recovers this machine's hardware-backed key material — <c>KEK_slot</c> for a keyring
     /// vault, or the vault master key directly for a classic non-keyring vault — without
     /// attempting any keyring unwrap and without the pending-enrollment guard <see cref="Unlock"/>
-    /// applies. Exposed publicly for <c>slot accept</c> (issue #121), which needs to recompute its
-    /// own <c>KEK_slot</c> from a still-pending config (<see cref="Config.Keyring"/> is still null
-    /// at that point by design — see <see cref="Config.PendingSlotId"/>) precisely in the
-    /// situation <see cref="Unlock"/> refuses to proceed for every other caller.
+    /// applies. Exposed for <c>slot accept</c> (issue #121) until brief T4, whose one-key slot
+    /// request keeps the slot's <see cref="YubiKeySlotBlob"/> and re-derives <c>KEK_slot</c> from it
+    /// instead; now only <see cref="Unlock"/> calls it.
     /// </summary>
     public byte[] UnlockHardware(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {

@@ -112,6 +112,12 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPublicKey = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPrivateKey = null,
+    // Brief T4 decision 6: base64 of the pending slot's YubiKeySlotBlob (serial, challenge, salt,
+    // touch policy), saved by 'slot request' next to the three fields above, so 'slot accept' can
+    // check the approve file's copy against it and re-derive KEK_slot from the same key. Cleared
+    // by 'slot accept' with the others. Omitted when null (every config without a pending
+    // one-key request, including pending pair requests made by an older tswap).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotHwBlob = null,
     // Issue #121: base64 of this machine's own slot id within Config.Keyring. #119/#120 never
     // needed this — a keyring held at most one Machine-kind slot (plus an optional Recovery
     // slot), so VaultUnlocker.UnlockKeyring could safely assume "the first Machine-kind slot" was

@@ -30,11 +30,22 @@ namespace TswapCore.Keyring;
 /// accept</c> eventually writes. <see cref="PublicKey"/> (base64, <see cref="SlotKeyPair.KeySize"/>
 /// bytes) is that same slot's long-lived X25519 public key (<see cref="SlotKeyPair.Generate"/>) —
 /// the private half never leaves the requesting machine in this file.</para>
+///
+/// <para><b>Version 2 (brief T4 decision 6):</b> <see cref="HwBlob"/> is the requested slot's
+/// <see cref="YubiKeySlotBlob"/> (base64): <c>slot request</c> enrolls one YubiKey, <c>slot
+/// approve</c> copies the blob into the approve file and <c>slot accept</c> writes it into the
+/// new machine slot. A version 1 request (an older tswap's YubiKey pair enrollment, no blob) is
+/// refused with a message saying to run <c>slot request</c> again; it is never treated as a pair
+/// slot. <c>slot approve</c> refuses a version 2 request without a blob.</para>
 /// </summary>
-public sealed record SlotRequestFile(int FormatVersion, string SlotId, string PublicKey)
+public sealed record SlotRequestFile(int FormatVersion, string SlotId, string PublicKey,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? HwBlob = null)
 {
     /// <summary>Current format version this build writes and requires on read.</summary>
-    public const int CurrentFormatVersion = 1;
+    public const int CurrentFormatVersion = 2;
+
+    /// <summary>The pair-enrollment request format made by tswap before brief T4.</summary>
+    public const int PairFormatVersion = 1;
 }
 
 /// <summary>
@@ -75,6 +86,10 @@ public sealed record SlotDto(string SlotId, string PublicKey, string Wrapped, Sl
 /// "recovery" recipient. This is the same ephemeral-ECDH-then-AEAD construction issue #120 already
 /// built and tests, reused wholesale rather than re-implemented (see this issue's PR body for why
 /// a second, near-identical construction would not be justified here).</item>
+/// <item><see cref="NewSlotHwBlob"/> (version 2, brief T4 decision 6) — the request's
+/// <see cref="YubiKeySlotBlob"/>, echoed so <c>slot accept</c> writes it into the new slot after
+/// checking it against its own pending copy. <c>slot accept</c> refuses an approve file without
+/// it.</item>
 /// </list>
 /// </summary>
 public sealed record SlotApproveFile(
@@ -86,10 +101,12 @@ public sealed record SlotApproveFile(
     string NewSlotId,
     string NewSlotPublicKey,
     string NewSlotEphemeralPublicKey,
-    string NewSlotWrapped)
+    string NewSlotWrapped,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewSlotHwBlob = null)
 {
-    /// <summary>Current format version this build writes and requires on read.</summary>
-    public const int CurrentFormatVersion = 1;
+    /// <summary>Current format version this build writes and requires on read (2 since brief T4,
+    /// which added <see cref="NewSlotHwBlob"/>).</summary>
+    public const int CurrentFormatVersion = 2;
 }
 
 /// <summary>
@@ -125,10 +142,17 @@ public static class SlotEnrollmentFileCodec
 
         if (file == null)
             throw new TswapException("Slot request file is empty or invalid.");
+        if (file.FormatVersion == SlotRequestFile.PairFormatVersion)
+            throw new TswapException(
+                "This slot request was made by an older tswap, which enrolls a YubiKey pair. Keyring slots now take " +
+                "one YubiKey each, and pair enrollments are no longer accepted. On the requesting machine, update " +
+                "tswap and run 'tswap slot request <file>' again with one YubiKey plugged in.");
         if (file.FormatVersion != SlotRequestFile.CurrentFormatVersion)
             throw new TswapException(
                 $"Unsupported slot request file format version {file.FormatVersion} " +
                 $"(this build supports {SlotRequestFile.CurrentFormatVersion}). Use a matching tswap version on both machines.");
+        if (file.HwBlob != null)
+            YubiKeySlotBlob.Decode(DecodeVariable(file.HwBlob, "slot request file's YubiKey slot blob"));
 
         return file;
     }
@@ -169,6 +193,16 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException(
                 $"Unsupported keyring format version {file.KeyringFormatVersion} in approve file " +
                 $"(this build supports {KeyringFormat.KeyringFormatVersionWithoutHwBlob} and {KeyringFormat.KeyringFormatVersion}).");
+
+        // The new slot's YubiKey blob (brief T4): strictly decoded, and only in a keyring that has
+        // the hwBlob column. Its absence is refused by 'slot accept', which needs it.
+        if (file.NewSlotHwBlob != null)
+        {
+            if (file.KeyringFormatVersion < KeyringFormat.KeyringFormatVersion)
+                throw new TswapException(
+                    $"Malformed slot approve file: a keyring format version {file.KeyringFormatVersion} slot cannot carry a hardware blob.");
+            YubiKeySlotBlob.Decode(DecodeVariable(file.NewSlotHwBlob, "approve file's new slot YubiKey blob"));
+        }
 
         // A slot's hwBlob must be one KeyringCodec.Encode can write (security review of T2):
         // reject it here with a clear error instead of a raw ArgumentException at slot accept.
