@@ -637,6 +637,41 @@ public class BrokerServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AFailedUnlock_AlsoEndsTheRunOfTimeouts()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            for (var i = 1; i <= 2; i++)
+            {
+                var request = _h.GetAsync("lane1", "/echo/a");
+                await WaitForUnlocksStartedAsync(i);
+                _h.Clock.Advance(TimeSpan.FromSeconds(30));
+                Assert.Equal(503, BrokerHarness.StatusOf(await request));
+            }
+            // A completed unlock that fails (the TPM answered, wrongly): the run of timeouts ends.
+            _h.Secrets.Gate = null;
+            _h.Secrets.Fail = true;
+            Assert.Equal(502, BrokerHarness.StatusOf(await _h.GetAsync("other", "/second/a")));
+            _h.Secrets.Fail = false;
+            _h.Secrets.Gate = hang;
+            var again = _h.GetAsync("lane1", "/echo/a");
+            await WaitForUnlocksStartedAsync(4);
+            _h.Clock.Advance(TimeSpan.FromSeconds(30));
+            Assert.Equal(503, BrokerHarness.StatusOf(await again));
+            Assert.False(_h.Server!.Fatal.IsCompleted);
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task ClientAbortWhileQueuedForTheUnlock_IsLogged()
     {
         if (OperatingSystem.IsWindows())
