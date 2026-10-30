@@ -75,7 +75,10 @@ public static partial class BrokerNative
     /// Takes an exclusive, non-blocking <c>flock</c>; on failure <paramref name="heldElsewhere"/> says
     /// whether another holder has it (EWOULDBLOCK) rather than some other error.
     /// </summary>
-    public static bool TryLockExclusive(SafeHandle fd, out bool heldElsewhere)
+    public static bool TryLockExclusive(SafeHandle fd, out bool heldElsewhere) => TryLockExclusive(fd, out heldElsewhere, out _);
+
+    /// <summary>As above, with the <c>flock</c> errno on failure (0 on success).</summary>
+    public static bool TryLockExclusive(SafeHandle fd, out bool heldElsewhere, out int errno)
     {
         var added = false;
         try
@@ -84,9 +87,10 @@ public static partial class BrokerNative
             if (flock((int)fd.DangerousGetHandle(), LockEx | LockNb) == 0)
             {
                 heldElsewhere = false;
+                errno = 0;
                 return true;
             }
-            var errno = Marshal.GetLastPInvokeError();
+            errno = Marshal.GetLastPInvokeError();
             heldElsewhere = errno == WouldBlockErrno;
             return false;
         }

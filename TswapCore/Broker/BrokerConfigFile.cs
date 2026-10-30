@@ -82,12 +82,12 @@ public static class BrokerConfigFile
         {
             throw new TswapException($"Can't open the broker.json edit lock {path}: {ex.Message}");
         }
-        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle, out var heldElsewhere))
+        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle, out var heldElsewhere, out var errno))
         {
             stream.Dispose();
             throw heldElsewhere
                 ? new TswapException($"Another 'tswap broker' change is running on {configDir}; try again when it has finished.")
-                : new TswapException($"Can't lock the broker.json edit lock {path} (flock errno {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}).");
+                : new TswapException($"Can't lock the broker.json edit lock {path} (flock errno {errno}).");
         }
         File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return stream;

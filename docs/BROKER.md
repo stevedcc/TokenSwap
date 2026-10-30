@@ -267,7 +267,7 @@ CoreOS doesn't ship it): the libexec copy is `tswap_broker_exec_t`, and `/srv/ts
 ```bash
 sudo semodule -i contrib/selinux/tswap-broker.cil
 # the labelled copy of the binary (copy it again after upgrading tswap)
-sudo install -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+sudo install -D -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
 sudo restorecon -v /usr/local/libexec/tswap-broker
 sudo restorecon -Rv /srv/tswap-broker
 ```

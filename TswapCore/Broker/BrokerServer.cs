@@ -288,10 +288,12 @@ public sealed class BrokerServer : IAsyncDisposable
         {
             throw new TswapException($"Can't open the lock file {path}: {ex.Message}");
         }
-        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle))
+        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle, out var heldElsewhere, out var errno))
         {
             stream.Dispose();
-            throw new TswapException($"Another 'tswap broker serve' is running on {socketDir}.");
+            throw heldElsewhere
+                ? new TswapException($"Another 'tswap broker serve' is running on {socketDir}.")
+                : new TswapException($"Can't lock {path} (flock errno {errno}).");
         }
         // Like broker.log: owner-only, whatever an earlier file had.
         if (!OperatingSystem.IsWindows())

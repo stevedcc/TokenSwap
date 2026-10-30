@@ -4,7 +4,7 @@
 # holds the vault and is in group `tss`. First, as root, the labelled copy of the binary and the
 # SELinux module (docs/BROKER.md, "SELinux"):
 #
-#   sudo install -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+#   sudo install -D -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
 #
 # Then install the unit as that user:
 #

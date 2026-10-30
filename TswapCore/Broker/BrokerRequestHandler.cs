@@ -167,9 +167,10 @@ public sealed class BrokerRequestHandler(
                 // Fix round 1: an unlock that hangs (a wedged TPM) is abandoned, never waited on forever.
                 await read.WaitAsync(_limits.UnlockTimeout, time).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not TimeoutException)
+            catch (Exception ex) when (ex is not (TimeoutException or OperationCanceledException))
             {
-                // The unlock completed, by failing: that also ends a run of timeouts.
+                // The unlock completed, by failing: that also ends a run of timeouts. A cancelled
+                // unlock did not complete, so it doesn't (a wedged TPM still reaches the exit).
                 Interlocked.Exchange(ref _timeoutsInARow, 0);
                 throw;
             }

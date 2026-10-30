@@ -672,6 +672,56 @@ public class BrokerServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CancelledUnlocksAndClientAborts_DontEndTheRunOfTimeouts_AWedgedUnlockStillReachesTheFatalExit()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            async Task TimeoutAsync(int startedCount)
+            {
+                var request = _h.GetAsync("lane1", "/echo/a");
+                await WaitForUnlocksStartedAsync(startedCount);
+                _h.Clock.Advance(TimeSpan.FromSeconds(30));
+                Assert.Equal(503, BrokerHarness.StatusOf(await request));
+            }
+
+            await TimeoutAsync(1);
+            // An unlock that ends by cancellation is not a completed unlock.
+            _h.Secrets.Gate = null;
+            _h.Secrets.Throw = new OperationCanceledException();
+            Assert.Equal(502, BrokerHarness.StatusOf(await _h.GetAsync("other", "/second/a")));
+            _h.Secrets.Throw = null;
+            _h.Secrets.Gate = hang;
+            await TimeoutAsync(3);
+
+            // A client that gives up while queued behind the wedged unlock.
+            var stuck = _h.GetAsync("lane1", "/echo/a");
+            await WaitForUnlocksStartedAsync(4);
+            var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
+            var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await client.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath("other")));
+            await client.SendAsync("GET /second/b HTTP/1.1\r\nHost: b\r\n\r\n"u8.ToArray());
+            await queued.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            client.Dispose();
+            await _h.WaitForLogAsync("path=\"b\" status=499");
+            Assert.False(_h.Server.Fatal.IsCompleted);
+
+            _h.Clock.Advance(TimeSpan.FromSeconds(30)); // the third timeout in the run
+            Assert.Equal(503, BrokerHarness.StatusOf(await stuck));
+            Assert.True(_h.Server.Fatal.IsCompleted);
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task ClientAbortWhileQueuedForTheUnlock_IsLogged()
     {
         if (OperatingSystem.IsWindows())
