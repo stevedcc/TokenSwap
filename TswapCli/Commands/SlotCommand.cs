@@ -39,7 +39,7 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> | slot add --yubikey";
+    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot add --yubikey";
     public string Description => "Enroll another machine into a keyring vault via hand-carried files, or add a plugged-in YubiKey to this machine's keyring as its own slot";
 
     /// <summary>
@@ -76,7 +76,7 @@ public sealed class SlotCommand : ICliCommand
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> | {ctx.Prefix} slot add --yubikey";
+        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
@@ -263,9 +263,19 @@ public sealed class SlotCommand : ICliCommand
 
         File.WriteAllText(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
 
+        // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
+        // slot without asking. Only after the approve file is written: a failed approve records
+        // nothing. One entry per slot id (approving the same request again refreshes it).
+        var approved = (config.ApprovedSlots ?? [])
+            .Where(a => a.SlotId != request.SlotId)
+            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, DateTime.UtcNow))
+            .ToList();
+        ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
+
         c.Out.WriteLine($"✓ Approved. Approve file written to: {approvePath}");
-        c.Out.WriteLine("This machine's own keyring is unchanged: the new slot goes only into the requesting");
-        c.Out.WriteLine("machine's copy (v0, no sync).");
+        c.Out.WriteLine("This machine's own keyring is unchanged until the requesting machine's receipt is merged:");
+        c.Out.WriteLine("'slot accept' there writes a receipt; bring it back here and run");
+        c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
         c.Out.WriteLine("Carry this file back to the requesting machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder — then run 'slot accept' there.");
         return 0;
@@ -286,9 +296,28 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteAccept(CommandContext ctx, string[] args)
     {
-        if (args.Length != 1)
-            throw new UsageException($"{ctx.Prefix} slot accept <file>");
-        var path = args[0];
+        var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>]";
+        string path;
+        string? receiptPath = null;
+        switch (args)
+        {
+            case [var p]:
+                path = p;
+                break;
+            case [var p, "--receipt", var r]:
+                path = p;
+                receiptPath = r;
+                break;
+            case ["--receipt", var r, var p]:
+                path = p;
+                receiptPath = r;
+                break;
+            default:
+                throw new UsageException(acceptUsage);
+        }
+        if (path.StartsWith("--") || receiptPath?.StartsWith("--") == true)
+            throw new UsageException(acceptUsage);
+        receiptPath ??= path + ".receipt.json";
         var c = ctx.Console;
 
         if (!File.Exists(path))
@@ -392,8 +421,17 @@ public sealed class SlotCommand : ICliCommand
         if (fileStore == null || !File.Exists(fileStore.SecretsFile))
             ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
 
+        // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
+        // copy (and every copy taken from it afterwards) opens with this machine's device too.
+        File.WriteAllText(receiptPath, SlotReceiptCodec.Serialize(
+            new SlotReceipt(finalKeyring.FormatVersion, finalKeyring.VaultId, finalKeyring.K, machineSlot)));
+
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");
+        c.Out.WriteLine($"\nReceipt written to: {receiptPath}");
+        c.Out.WriteLine("Carry it back to the approving machine yourself (scp/USB/paste) and run there:");
+        c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
+        c.Out.WriteLine("Until then, only this machine's copy of the vault has the new slot.");
         return 0;
     }
 
