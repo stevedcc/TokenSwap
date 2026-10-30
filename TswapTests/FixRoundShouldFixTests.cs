@@ -44,14 +44,25 @@ public sealed class FixRoundShouldFixTests : IDisposable
         var otherStates = RecordVaultStore.ForFolder(laptop.VaultDir!, laptop.Config).LoadRecordStates(_vaultKey).States;
 
         var store = new RecordVaultStore(_m.Dir, clock: () => _now);
-        store.LoadConfig();
+        var config = store.LoadConfig();
         store.LoadSecrets(_vaultKey);
         // Another process changes the record between this command's load and its write.
         _m.Ok("", "burn", "s", "meanwhile");
+        var configBefore = File.ReadAllBytes(_m.ConfigPath);
+        var keyringPath = Path.Combine(_m.VaultDir!, "keyring");
+        var keyringBefore = File.ReadAllBytes(keyringPath);
         var beforeWriteRan = false;
 
-        Assert.Throws<TswapException>(() => store.MergeRecords(otherStates, _vaultKey, beforeWrite: () => beforeWriteRan = true));
+        // What vault merge does in beforeWrite: back up and save the config with the keyring.
+        Assert.Throws<TswapException>(() => store.MergeRecords(otherStates, _vaultKey, beforeWrite: () =>
+        {
+            beforeWriteRan = true;
+            store.SaveConfig(config with { RngMode = RngMode.YubiKey });
+        }));
         Assert.False(beforeWriteRan);
+        // Fix round 3, item 8: the outcome, not only the seam flag.
+        Assert.Equal(configBefore, File.ReadAllBytes(_m.ConfigPath));
+        Assert.Equal(keyringBefore, File.ReadAllBytes(keyringPath));
     }
 
     [Fact]
