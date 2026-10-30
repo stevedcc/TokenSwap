@@ -54,4 +54,15 @@ public class PromptTests
         Assert.Contains("burn", text);
         Assert.Contains("{{secret-name}}", text);
     }
+
+    [Fact]
+    public void Template_ListsTheKeyringSudoCommandsUnderNever()
+    {
+        // T5 review: slot add, slot merge and recover each add a way to decrypt the vault.
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        Assert.Contains("- `sudo tswap slot add --yubikey`", never);
+        Assert.Contains("- `sudo tswap slot merge <file>`", never);
+        Assert.Contains("- `sudo tswap recover --yubikey|--tpm|--secure-enclave`", never);
+    }
 }
