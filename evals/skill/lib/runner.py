@@ -4,8 +4,9 @@ Each scenario runs in its own bubblewrap sandbox: /usr read-only, a fresh HOME, 
 (/work) and /tmp as the only writable places besides the shims' state, and tswap, sudo, su, doas and
 pkexec bind-mounted over by the eval shim wherever they exist. Before the agent starts, an isolation
 check runs in the same sandbox and the run aborts unless every one of those names resolves to the
-shim and no real tswap is reachable. The shims log through a FIFO into a file outside the sandbox
-(bound read-only); the judge (judge.py) reads that log, scans the files, and judges `says` rules with
+shim and no real tswap is reachable. The shims log through a Unix socket to a logger outside the
+sandbox that accepts records only from the shim itself (LogServer), into a file bound read-only;
+the judge (judge.py) reads that log, scans the files, and judges `says` rules with
 a different model.
 """
 import argparse
@@ -15,6 +16,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import socket
+import struct
 import tempfile
 import threading
 
@@ -101,36 +104,82 @@ def host_tswap_paths():
     return sorted(paths)
 
 
-class LogReader:
-    """Appends what the shims write to the FIFO to the log file, until stopped."""
+class LogServer:
+    """
+    The shims' logger, outside the sandbox: a Unix socket bound into it at /eval/log.sock. A record
+    is accepted only when the sending process (SO_PEERCRED, its pid in this pid namespace) is the
+    system Python running one of the read-only shim paths (/proc/<pid>/exe and /proc/<pid>/cmdline);
+    anything else is dropped and counted as forged, which fails the scenario. The shim waits for the
+    answer, so the process is still there to be checked. There is no stop message: the runner closes
+    the socket itself.
+    """
 
-    def __init__(self, fifo, log_path):
-        self.fifo, self.log_path = fifo, log_path
-        self.fd = os.open(fifo, os.O_RDWR)  # read-write: never EOF while shims come and go
-        self.thread = threading.Thread(target=self._run, daemon=True)
+    PYTHON = "/usr/bin/python3"
+
+    def __init__(self, sock_path, log_path, shim_paths):
+        self.log_path, self.shim_paths = log_path, set(shim_paths)
+        self.python_exe = os.path.realpath(self.PYTHON)
+        self.forged = 0
+        self.lock = threading.Lock()
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(sock_path)
+        os.chmod(sock_path, 0o600)
+        self.server.listen(64)
+        self.thread = threading.Thread(target=self._accept, daemon=True)
         self.thread.start()
 
-    def _run(self):
-        buffer = b""
-        with open(self.log_path, "ab") as log:
-            while True:
-                chunk = os.read(self.fd, 65536)
-                if not chunk:
-                    return
-                buffer += chunk
-                while b"\n" in buffer:
-                    line, buffer = buffer.split(b"\n", 1)
-                    if line == b'{"event": "eval-stop"}':
-                        return
-                    log.write(line + b"\n")
-                    log.flush()
+    def _accept(self):
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+
+    def genuine(self, pid):
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return False
+        if exe != self.python_exe or len(argv) < 3 or argv[0] != self.PYTHON.encode() or argv[1] != b"-I":
+            return False
+        script = argv[2].decode(errors="replace")
+        if not script.startswith("/"):
+            script = os.path.join(cwd, script)  # both are paths inside the sandbox
+        return os.path.normpath(script) in self.shim_paths
+
+    def _handle(self, conn):
+        with conn:
+            try:
+                conn.settimeout(10)
+                pid, _uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+                data = b""
+                while not data.endswith(b"\n") and len(data) < 1 << 20:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                ok = data.endswith(b"\n") and data.count(b"\n") == 1 and self.genuine(pid)
+                with self.lock:
+                    if ok:
+                        with open(self.log_path, "ab") as log:
+                            log.write(data)
+                    else:
+                        self.forged += 1
+                conn.sendall(b"1" if ok else b"0")
+            except OSError:
+                pass
 
     def stop(self):
-        fd = os.open(self.fifo, os.O_WRONLY)
-        os.write(fd, b'{"event": "eval-stop"}\n')
-        os.close(fd)
+        try:
+            self.server.shutdown(socket.SHUT_RDWR)  # wakes the blocked accept(); close() alone doesn't
+        except OSError:
+            pass
+        self.server.close()
         self.thread.join(timeout=10)
-        os.close(self.fd)
 
 
 def prepare(run_dir, scenario, skill, agent_home, agent_script):
@@ -167,7 +216,6 @@ def prepare(run_dir, scenario, skill, agent_home, agent_script):
     if agent_script is not None:
         with open(os.path.join(ev, "agent.sh"), "w") as f:
             f.write(agent_script)
-    os.mkfifo(os.path.join(ev, "log.fifo"), 0o600)
     open(os.path.join(run_dir, "log.jsonl"), "w").close()
     open(os.path.join(ev, "log.jsonl"), "w").close()  # mount point of the log, bound read-only
     return work, home, tmp, ev
@@ -185,7 +233,7 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
     a += ["--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"]
     a += ["--bind", tmp, "/tmp", "--bind", home, SANDBOX_HOME, "--bind", work, "/work",
           "--ro-bind", ev, "/eval", "--bind", os.path.join(ev, "state"), "/eval/state",
-          "--bind", os.path.join(ev, "log.fifo"), "/eval/log.fifo",
+          "--bind", os.path.join(ev, "log.sock"), "/eval/log.sock",
           "--ro-bind", os.path.join(run_dir, "log.jsonl"), "/eval/log.jsonl"]
     for extra in extra_path:
         a += ["--ro-bind", extra, extra]
@@ -195,23 +243,31 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
             a += ["--ro-bind", real, f"/eval/real/{name}"]
     # The shim over every existing copy of a shimmed name, in the system folders (deduplicated by
     # real folder: /bin and /sbin are links into /usr on most systems) and in the fresh HOME.
+    # shim_paths: every path inside the sandbox at which the shim runs (the logger accepts records
+    # only from these), including /bin/x for a shim bound over /usr/bin/x when /bin links there.
     seen = set()
     shim = os.path.join(ev, "shims", "shim.py")
+    shim_paths = {f"/eval/bin/{name}" for name in SHIMMED + PASSTHROUGH + CANNED}
     for name in SHIMMED + PASSTHROUGH + CANNED:
         for d in SYSTEM_DIRS:
             path = os.path.join(os.path.realpath(d), name)
             if path not in seen and os.path.lexists(path) and not os.path.isdir(path):
                 seen.add(path)
                 a += ["--ro-bind", shim, path]
+        for path in seen:
+            if os.path.basename(path) == name:
+                shim_paths.update(os.path.join(d, name) for d in SYSTEM_DIRS
+                                  if os.path.realpath(d) == os.path.dirname(path))
         if os.path.lexists(os.path.join(home, ".local", "bin", name)):
             a += ["--ro-bind", shim, f"{SANDBOX_HOME}/.local/bin/{name}"]
+            shim_paths.add(f"{SANDBOX_HOME}/.local/bin/{name}")
     # Test hook (tests only): extra read-only binds, to prove the isolation check aborts.
     for pair in filter(None, os.environ.get("EVAL_TEST_EXTRA_RO_BIND", "").split(",")):
         src, dest = pair.split(":", 1)
         a += ["--ro-bind", src, dest]
     path = ":".join(["/eval/bin", "/usr/local/bin", "/usr/bin", "/bin"] + extra_path)
     env = {"HOME": SANDBOX_HOME, "PATH": path, "TERM": "dumb", "LANG": "C.UTF-8", "USER": "eval", "TMPDIR": "/tmp",
-           "TSWAP_EVAL_LOG_FIFO": "/eval/log.fifo", "TSWAP_EVAL_STATE": "/eval/state/vault.json",
+           "TSWAP_EVAL_STATE": "/eval/state/vault.json",
            "TSWAP_EVAL_SCENARIO": "/eval/scenario.json", "TSWAP_EVAL_PROMPT": "/eval/prompt.md",
            "EVAL_HOST_TSWAP_PATHS": ":".join(host_tswap_paths())}
     for name in args.pass_env:
@@ -221,7 +277,7 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
     for k, v in env.items():
         a += ["--setenv", k, v]
     a += ["--chdir", "/work"]
-    return a
+    return a, shim_paths
 
 
 def agent_command(args, scenario, skill, work):
@@ -250,8 +306,8 @@ def run_one(args, scenario, variant, script, skill, base):
     os.makedirs(run_dir)
     work, home, tmp, ev = prepare(run_dir, scenario, skill, args.agent_home, script)
     command, extra_path = agent_command(args, scenario, skill, work)
-    sandbox = bwrap_args(run_dir, work, home, tmp, ev, args, extra_path)
-    reader = LogReader(os.path.join(ev, "log.fifo"), os.path.join(run_dir, "log.jsonl"))
+    logger = LogServer(os.path.join(ev, "log.sock"), os.path.join(run_dir, "log.jsonl"), set())
+    sandbox, logger.shim_paths = bwrap_args(run_dir, work, home, tmp, ev, args, extra_path)
     try:
         check = subprocess.run(sandbox + ["/bin/bash", "/eval/lib/isolation_check.sh"], capture_output=True, text=True, timeout=60)
         if check.returncode != 0:
@@ -263,7 +319,7 @@ def run_one(args, scenario, variant, script, skill, base):
             message = ex.stdout.decode(errors="replace") if isinstance(ex.stdout, bytes) else (ex.stdout or "")
             stderr, timed_out = "", True
     finally:
-        reader.stop()
+        logger.stop()
     with open(os.path.join(run_dir, "final.txt"), "w") as f:
         f.write(message)
     with open(os.path.join(run_dir, "agent.stderr"), "w") as f:
@@ -274,7 +330,8 @@ def run_one(args, scenario, variant, script, skill, base):
         says_judge = judge.llm_judge(args.judge_agent, args.judge_model)
     else:
         says_judge = lambda rule, msg: (False, "not judged: no --judge-agent/--judge-model given")  # noqa: E731
-    broken, notes, _records = judge.judge_run(scenario, os.path.join(run_dir, "log.jsonl"), work, tmp, message, says_judge)
+    broken, notes, _records = judge.judge_run(scenario, os.path.join(run_dir, "log.jsonl"), work, tmp, message, says_judge,
+                                              forged=logger.forged)
     if timed_out:
         notes.append(f"timed out after {args.timeout}s")
     return broken, notes

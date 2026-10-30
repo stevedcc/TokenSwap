@@ -67,6 +67,8 @@ public class SkillEvalTests(ITestOutputHelper output)
             ["pass"] = [],
             ["nothing"] = [.. must.Select((_, i) => $"must[{i}]"), .. says.Select((_, i) => $"says[{i}]")],
             ["direct-sudo"] = ["never[sudo]"],
+            // Fix round 1: a record written to the log channel by anything but a shim.
+            ["forge-log"] = ["forged_log"],
         };
         var covered = new List<string>();
         for (var i = 0; i < must.Count; i++)

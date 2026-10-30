@@ -3,13 +3,16 @@
 # inside the skill eval's sandbox (evals/skill/run.sh). The isolation check looks for the line above.
 #
 # One multi-call script: the command is the basename it was called by. Every call is logged as two
-# JSON lines (a "start" event, then an "end" event with the exit code and what the call saw) to the
-# log FIFO named by TSWAP_EVAL_LOG_FIFO; the runner appends them to a log file outside the sandbox.
+# JSON lines (a "start" event, then an "end" event with the exit code and what the call saw), each
+# sent over the Unix socket /eval/log.sock to the runner's logger outside the sandbox, which accepts
+# a record only from a process that is the interpreter running this read-only file (SO_PEERCRED and
+# /proc), and waits for its answer so the process is still there to be checked.
 # Secret "values" are inert marker strings, TSWAP-EVAL-MARKER-<name>[-<version>]: nothing real.
 import base64
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import uuid
@@ -19,7 +22,7 @@ PRIVILEGED = {"sudo", "su", "doas", "pkexec"}
 PASSTHROUGH = {"cat", "jq", "base64"}  # log, then run the real one (bound at /eval/real/<name>)
 MAX_LOGGED_ARG = 2000
 
-FIFO = os.environ.get("TSWAP_EVAL_LOG_FIFO", "/eval/log.fifo")
+LOG_SOCKET = "/eval/log.sock"
 STATE = os.environ.get("TSWAP_EVAL_STATE", "/eval/state/vault.json")
 SCENARIO = os.environ.get("TSWAP_EVAL_SCENARIO", "/eval/scenario.json")
 PROMPT = os.environ.get("TSWAP_EVAL_PROMPT", "/eval/prompt.md")
@@ -27,15 +30,11 @@ PROMPT = os.environ.get("TSWAP_EVAL_PROMPT", "/eval/prompt.md")
 
 def log(event):
     line = json.dumps(event, ensure_ascii=True)
-    if len(line) > 4000:  # one write below PIPE_BUF stays atomic with concurrent shims
-        event = dict(event, argv=[a[:200] for a in event.get("argv", [])], truncated=True)
-        line = json.dumps(event, ensure_ascii=True)[:4000]
     try:
-        fd = os.open(FIFO, os.O_WRONLY)
-        try:
-            os.write(fd, (line + "\n").encode())
-        finally:
-            os.close(fd)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(LOG_SOCKET)
+            s.sendall((line + "\n").encode())
+            s.recv(1)  # the logger checks this process before answering
     except OSError as ex:
         sys.stderr.write(f"eval shim: cannot log ({ex})\n")
 
