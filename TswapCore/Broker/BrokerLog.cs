@@ -84,6 +84,41 @@ public sealed class BrokerLog : IDisposable
         Write(line.ToString());
     }
 
+    /// <summary>A template call's line (brief T9 decision 8): argument values escaped and capped; never a secret, an env value or argv after substitution.</summary>
+    public void Template(Templates.BrokerTemplateRecord r)
+    {
+        var args = new StringBuilder();
+        foreach (var (name, value) in r.Args)
+        {
+            if (args.Length > MaxPathLength)
+            {
+                args.Append(" ...");
+                break;
+            }
+            if (args.Length > 0)
+                args.Append(' ');
+            // Capped raw here and escaped once below (fix round 1, MiMo M9: no double escaping).
+            args.Append(name.Length > 32 ? name[..32] + "..." : name).Append('=').Append(value.Length > 64 ? value[..64] + "..." : value);
+        }
+        var line = new StringBuilder()
+            .Append("template socket=").Append(Escape(r.Socket, 64))
+            .Append(" uid=").Append(r.Uid.ToString(CultureInfo.InvariantCulture))
+            .Append(" pid=").Append(r.Pid.ToString(CultureInfo.InvariantCulture))
+            .Append(" template=").Append(Escape(r.Template, 64))
+            .Append(" args=\"").Append(Escape(args.ToString(), MaxPathLength * 2)).Append('"')
+            .Append(" status=").Append(r.Status.ToString(CultureInfo.InvariantCulture))
+            .Append(" exit=").Append(r.Exit?.ToString(CultureInfo.InvariantCulture) ?? "-")
+            .Append(" ended=").Append(r.Ended ?? "-")
+            .Append(" bytes_in=").Append(r.BytesIn.ToString(CultureInfo.InvariantCulture))
+            .Append(" bytes_out=").Append(r.BytesOut.ToString(CultureInfo.InvariantCulture))
+            .Append(" truncated=").Append(r.Truncated ? "true" : "false")
+            .Append(" unlocks=").Append(r.Unlocks.ToString(CultureInfo.InvariantCulture))
+            .Append(" ms=").Append(((long)r.Duration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
+        if (r.Reason != null)
+            line.Append(" reason=").Append(Escape(r.Reason, 64));
+        Write(line.ToString());
+    }
+
     /// <summary>A connection closed before anything was parsed (wrong uid, unreadable credentials).</summary>
     public void Connection(string socket, uint? uid, int? pid, string reason) =>
         Write($"refused-connection socket={Escape(socket, 64)} uid={(uid?.ToString(CultureInfo.InvariantCulture) ?? "?")} " +
