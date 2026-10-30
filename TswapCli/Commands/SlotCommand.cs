@@ -446,6 +446,13 @@ public sealed class SlotCommand : ICliCommand
         if (!File.Exists(path))
             throw new TswapException($"Slot approve file not found: {path}");
 
+        // Fix round 1 (A6): --vault-dir joins an existing shared folder only.
+        if (vaultDir != null && ctx.Storage is IFileVaultStore joinStore
+            && !joinStore.Owner.FileExists(Path.Combine(vaultDir, RecordVaultStore.KeyringFileName)))
+            throw new TswapException(
+                $"{vaultDir} has no keyring, so it is not a shared vault folder. Nothing was changed. Point --vault-dir at the " +
+                "folder the enrolled machines share (its 'keyring' file must be there).");
+
         var config = ctx.Storage.LoadConfig();
         if (config.PendingSlotId == null || config.PendingSlotPublicKey == null || config.PendingSlotPrivateKey == null)
             throw new TswapException("No pending 'slot request' found on this machine. Run 'tswap slot request <file>' first.");
@@ -570,6 +577,11 @@ public sealed class SlotCommand : ICliCommand
             // machine's record-store config.
             if (fileStore == null)
                 throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
+            // As init --vault-dir (fix round 1, A6): keep the previous config and secrets file.
+            if (fileStore.Owner.FileExists(fileStore.ConfigFile))
+                c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
+            if (fileStore.Owner.FileExists(fileStore.SecretsFile))
+                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
             new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
             {
                 Store = RecordVaultStore.StoreName,

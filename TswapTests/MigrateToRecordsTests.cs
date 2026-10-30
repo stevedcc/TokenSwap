@@ -495,3 +495,73 @@ public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
         Assert.Contains("slot accept <approve-file>", joinOutput);
     }
 }
+
+/// <summary>
+/// Fix round 1, A6: <c>slot accept --vault-dir</c> treats an existing local vault as
+/// <c>init --vault-dir</c> does (config.json backed up, secrets.json.enc moved aside) and refuses a
+/// folder that has no keyring, changing nothing.
+/// </summary>
+public sealed class SlotAcceptVaultDirTests : IDisposable
+{
+    private readonly SimulatedYubiKeyService _keys = SimulatedYubiKeyService.WithKeys(SerialA);
+    private readonly FleetMachine _home;
+    private readonly FleetMachine _laptop;
+    private readonly string _shared;
+    private readonly string _approve;
+
+    public SlotAcceptVaultDirTests()
+    {
+        _home = new FleetMachine("acceptdir-home", _keys);
+        _laptop = new FleetMachine("acceptdir-laptop", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
+        _shared = Path.Combine(_home.Dir, "Sync", "tswap");
+        _home.Ok("", "init", "--keyring");
+        _home.Ok("shared-value", "ingest", "s");
+        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
+
+        // The laptop has a classic vault of its own, then asks to join the shared one.
+        _laptop.Ok("", "init", "--tpm");
+        _laptop.Ok("local", "ingest", "local-secret");
+        var request = _laptop.PathOf("request.json");
+        _approve = _laptop.PathOf("approve.json");
+        _laptop.Ok("yes\n", "slot", "request", "--tpm", request);
+        _home.Ok("", "slot", "approve", request, _approve);
+    }
+
+    public void Dispose()
+    {
+        _home.Dispose();
+        _laptop.Dispose();
+    }
+
+    [Fact]
+    public void AnExistingClassicVault_Joins_WithItsConfigBackedUpAndItsSecretsMovedAside()
+    {
+        var backupsBefore = _laptop.Backups.Length;
+        var configBefore = File.ReadAllText(_laptop.ConfigPath);
+
+        _laptop.Ok("", "slot", "accept", _approve, "--vault-dir", _shared);
+
+        Assert.Equal(backupsBefore + 1, _laptop.Backups.Length);
+        Assert.Contains(_laptop.Backups, b => File.ReadAllText(b) == configBefore);
+        Assert.False(File.Exists(_laptop.SecretsPath));
+        Assert.Single(Directory.GetFiles(_laptop.Dir, "secrets.json.enc.bak-*"));
+        Assert.Equal("shared-value", _laptop.Get("s"));
+    }
+
+    [Fact]
+    public void AFolderWithoutAKeyring_IsRefused_AndNothingChanges()
+    {
+        var empty = _laptop.PathOf("not-a-vault");
+        Directory.CreateDirectory(empty);
+        var before = Directory.GetFiles(_laptop.Dir).ToDictionary(f => f, File.ReadAllBytes);
+
+        var (exit, _, err) = _laptop.Run("", "slot", "accept", _approve, "--vault-dir", empty);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("keyring", err);
+        Assert.Empty(Directory.GetFileSystemEntries(empty));
+        Assert.Equal(before.Keys.Order(), Directory.GetFiles(_laptop.Dir).Order());
+        Assert.All(before, kv => Assert.Equal(kv.Value, File.ReadAllBytes(kv.Key)));
+    }
+}
+
