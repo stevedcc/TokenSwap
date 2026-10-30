@@ -94,7 +94,7 @@ public sealed class SlotsCommand : ICliCommand
             var shortId = AbbreviateSlotId(slot.SlotId);
             var kindLabel = slot.Kind == SlotKind.Machine ? "machine" : "recovery";
             var protection = slot.Kind == SlotKind.Machine
-                ? DescribeMachineProtection(config)
+                ? DescribeMachineProtection(config, slot)
                 : DescribeRecoveryProtection();
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
         }
@@ -130,6 +130,21 @@ public sealed class SlotsCommand : ICliCommand
     /// physical custody of it, which is a real, if unusual, control (see
     /// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
+    private static string DescribeMachineProtection(Config config, Slot slot) =>
+        // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
+        // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
+        YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
+            ? DescribeYubiKeySlot(YubiKeySlotBlob.Decode(slot.HwBlob!))
+            : DescribeMachineProtection(config);
+
+    private static string DescribeYubiKeySlot(YubiKeySlotBlob blob) =>
+        $"YubiKey {blob.Serial}, " + blob.RequiresTouch switch
+        {
+            true => "touch required",
+            false => "no touch required — protected by physical custody of the YubiKey",
+            null => "touch requirement unknown — protected by physical custody of the YubiKey",
+        };
+
     private static string DescribeMachineProtection(Config config) => (config.Backend, config.RequiresTouch) switch
     {
         // Brief T2: TPM and Secure Enclave keyring vaults exist now; describe their machine slot

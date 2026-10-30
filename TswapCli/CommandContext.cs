@@ -33,15 +33,6 @@ public sealed record CommandContext(
         return Unlocker.Unlock(config, ChooseSerial);
     }
 
-    /// <summary>
-    /// Recovers this machine's hardware-backed key material without any keyring unwrap or
-    /// pending-enrollment guard — used by <c>slot accept</c> (issue #121) to recompute its own
-    /// <c>KEK_slot</c> from a still-pending config (<see cref="Config.Keyring"/> is null at that
-    /// point by design), where the ordinary <see cref="Unlock"/> would otherwise refuse to
-    /// proceed. See <see cref="TswapCore.Vault.VaultUnlocker.UnlockHardware"/>.
-    /// </summary>
-    public byte[] UnlockHardwareOnly(Config config) => Unlocker.UnlockHardware(config, ChooseSerial);
-
     /// <summary>Loads the secrets database, surfacing recoverable-vault warnings on stderr.</summary>
     public TswapCore.SecretsDb LoadSecrets(byte[] key)
         => Storage.LoadSecrets(key, Console.Error);
@@ -49,6 +40,18 @@ public sealed record CommandContext(
     /// <summary>Resolves a connected YubiKey serial, prompting when several are present.</summary>
     public int SelectSerial(int? requiredSerial = null)
         => Unlocker.SelectConnectedSerial(ChooseSerial, requiredSerial);
+
+    /// <summary>
+    /// Picks one of <paramref name="serials"/>: the only one directly, else the prompt. Throws
+    /// <see cref="TswapException"/> for an empty list. Used where only some of the plugged-in keys
+    /// qualify (brief T4: enrolling a key that has no slot yet).
+    /// </summary>
+    public int ChooseSerialAmong(IReadOnlyList<int> serials)
+    {
+        if (serials.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
+        return serials.Count == 1 ? serials[0] : ChooseSerial(serials);
+    }
 
     private int ChooseSerial(IReadOnlyList<int> serials)
     {

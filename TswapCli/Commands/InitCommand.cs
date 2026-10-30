@@ -9,7 +9,7 @@ public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
     public string HelpUsage => "init [--keyring] [--tpm|--secure-enclave] [--no-recovery]";
-    public string Description => "Initialize with 2 YubiKeys; --keyring for a random-K_v YubiKey keyring vault; --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware. Keyring vaults get a recovery slot; --no-recovery opts out";
+    public string Description => "Initialize with 2 YubiKeys; --keyring for a keyring vault with one YubiKey slot (add keys with 'slot add --yubikey'); --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware. Keyring vaults get a recovery slot; --no-recovery opts out";
     public bool RequiresSudo => false;
 
     /// <summary>The only arguments <c>init</c> accepts, each at most once (#177).</summary>
@@ -220,177 +220,101 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// Phase 6 keyring init (issue #119, <c>MULTI_MACHINE_KEYING.md</c> §Implementation ordering
-    /// step 1): a random 256-bit <c>K_v</c> wrapped by a single YubiKey-backed slot
-    /// (<c>k = 1</c>), instead of <c>K_v</c> being derived directly from the two YubiKeys'
-    /// challenge responses the way the default <c>init</c> above does. Same two-YubiKey
-    /// enrollment UX as the default flow — this is still "one machine, one enrolled key pair"
-    /// for now, not multi-machine (that is issue #121's <c>slot request/approve/accept</c>,
-    /// layered on top of the <see cref="Slot"/>/<see cref="Keyring"/> shapes this defines).
+    /// Keyring init on a YubiKey (issue #119; one key per slot since brief T4 decision 4): a
+    /// random 256-bit <c>K_v</c> wrapped by <b>one</b> plugged-in YubiKey's slot (<c>k = 1</c>),
+    /// plus a recovery slot unless <c>--no-recovery</c>. The slot's <c>KEK_slot</c> comes from
+    /// that key's HMAC-SHA1 response to a random per-slot challenge
+    /// (<see cref="YubiKeySlotKek"/>); its serial, challenge, salt and touch policy live in the
+    /// slot's hardware blob (<see cref="YubiKeySlotBlob"/>), not in config. Config keeps
+    /// <c>YubiKeySerials = []</c>, <c>RedundancyXor = ""</c> and no
+    /// <c>UnlockChallenge</c>/<c>MasterKeySalt</c>, the convention for non-pair vaults, and
+    /// <see cref="Config.Backend"/> stays null (YubiKey). More keys join with <c>slot add
+    /// --yubikey</c>, each as its own slot; there are no new pair enrollments.
     ///
-    /// <para>The payoff of the extra indirection: once <c>K_v</c> is a fixed, backend-independent
-    /// random value, a future <c>slot approve</c> can wrap it for a brand-new machine's slot
-    /// without decrypting-and-re-encrypting anything belonging to this machine — appending a
-    /// slot is additive. Under the default flow's derived key, there is no <c>K_v</c> to hand to
-    /// another machine at all; a second machine could only ever be added by re-deriving a
-    /// completely different master key from scratch (i.e. re-init, losing the old vault).</para>
-    ///
-    /// <para><b>Issue #120:</b> <paramref name="includeRecovery"/> (default-on; <c>--no-recovery</c>
-    /// opts out) additionally generates a break-glass recovery slot — see
-    /// <see cref="BuildKeyringConfig"/> and <c>MULTI_MACHINE_KEYING.md</c> §The recovery slot.
-    /// </para>
+    /// <para>No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the
+    /// challenge, and unlock challenges it again the same way.</para>
     /// </summary>
     private static int ExecuteKeyring(CommandContext ctx, bool includeRecovery)
     {
         var c = ctx.Console;
 
-        if (ctx.TestKey != null)
-        {
-            // Test mode: bypass YubiKey entirely, same idea as the default flow's test branch
-            // above. KEK_slot here is ctx.TestKey directly — the exact 32 bytes
-            // YubiKeyHardwareService.Unlock returns for *any* config once its overrideKey is
-            // set (see that method's first line) — so wrapping the slot payload under
-            // ctx.TestKey now is what makes VaultUnlocker's keyring unwrap succeed later, in
-            // test mode, without ever touching real hardware.
-            var (testConfig, testVaultKey, testRecoveryPrivateKey) = BuildKeyringConfig(
-                ctx.TestKey,
-                new List<int> { TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2 },
-                new string('0', 40), // 20-byte zero XOR share (hex) — unused in test mode
-                requiresTouch: null,
-                RngMode.System,
-                Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
-                RandomNumberGenerator.GetBytes(32),
-                includeRecovery);
-
-            ctx.Storage.SaveConfig(testConfig);
-            // Unlike the default test-mode branch, K_v is freshly random on every call (it is
-            // never derived from ctx.TestKey), so an existing secrets.json from a prior init
-            // would be undecryptable with this run's key — always write a fresh empty vault.
-            ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), testVaultKey);
-            c.Out.WriteLine("Initialized (keyring, test mode)");
-            PrintRecoveryKeyBackupWarning(c, testRecoveryPrivateKey);
-            return 0;
-        }
-
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - Keyring Initialization        ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by this YubiKey");
-        c.Out.WriteLine("pair's slot (k = 1), rather than derived from it — see");
-        c.Out.WriteLine("MULTI_MACHINE_KEYING.md. Still one machine for now: enrolling a second");
-        c.Out.WriteLine("machine's slot ('slot request/approve/accept') is future work (#121).\n");
+        c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's slot");
+        c.Out.WriteLine("(k = 1) — see MULTI_MACHINE_KEYING.md. Add more keys later, each as its own");
+        c.Out.WriteLine($"slot that opens the vault alone: sudo {ctx.Prefix} slot add --yubikey\n");
 
-        var unlockChallenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-
-        c.Out.WriteLine("Insert YubiKey #1 and press Enter...");
+        c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
         if (!c.IsInputRedirected)
             c.ReadLine();
-        var serial1 = ctx.SelectSerial();
-        var k1 = ctx.YubiKeys.Challenge(serial1, unlockChallenge);
 
-        c.Out.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
-        if (!c.IsInputRedirected)
-            c.ReadLine();
-        var serial2 = ctx.SelectSerial();
-
-        if (serial1 == serial2)
-            throw new TswapException("Same YubiKey detected. Please use two different YubiKeys.");
-
-        var k2 = ctx.YubiKeys.Challenge(serial2, unlockChallenge);
-
-        c.Out.WriteLine("\nDetecting YubiKey slot configuration...");
-        var touch1 = ctx.YubiKeys.DetectTouchRequirement(serial1);
-        var touch2 = ctx.YubiKeys.DetectTouchRequirement(serial2);
-        bool? requiresTouch = touch1.HasValue && touch2.HasValue ? touch1.Value && touch2.Value : null;
-
-        c.Out.WriteLine("\nPassword generation entropy source:");
-        c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
-        c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
-        c.Out.Write("Choose [1/2, default 1]: ");
-        var rngChoice = c.ReadLine()?.Trim();
-        var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
-
-        var xorShare = Crypto.XorBytes(k1, k2);
-        var masterKeySalt = RandomNumberGenerator.GetBytes(32);
-
-        var (config, vaultKey, recoveryPrivateKey) = BuildKeyringConfig(
-            // KEK_slot: exactly the value the default flow above uses as K_v directly
-            // (Crypto.DeriveKey(k1, k2, salt)) — here it instead unwraps a random K_v. This is
-            // also exactly what YubiKeyHardwareService.Unlock recomputes later from the Config
-            // fields this method saves, with no change to that class at all.
-            Crypto.DeriveKey(k1, k2, masterKeySalt),
-            new List<int> { serial1, serial2 },
-            Convert.ToHexString(xorShare),
-            requiresTouch,
-            rngMode,
-            unlockChallenge,
-            masterKeySalt,
-            includeRecovery);
-
-        // Same re-init backup dance as the default flow: back up config first (if anything
-        // fails mid-init the old config still matches the old vault backup), then move the old
-        // vault aside rather than overwrite it outright.
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
+        try
         {
-            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-            File.Copy(fileStore.ConfigFile, configBackup);
+            c.Out.WriteLine("\nPassword generation entropy source:");
+            c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
+            c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
+            c.Out.Write("Choose [1/2, default 1]: ");
+            var rngChoice = c.ReadLine()?.Trim();
+            var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
+
+            var backendConfig = new Config(
+                YubiKeySerials: [],
+                RedundancyXor: "",
+                Created: DateTime.UtcNow,
+                RequiresTouch: blob.RequiresTouch,
+                RngMode: rngMode);
+
+            var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(
+                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId);
+
+            // Same re-init backup dance as every other init path: back up config first (if
+            // anything fails mid-init the old config still matches the old vault backup), then
+            // move the old vault aside rather than overwrite it outright.
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+            var fileStore = ctx.Storage as IFileVaultStore;
+            if (fileStore != null && File.Exists(fileStore.ConfigFile))
+            {
+                var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
+                File.Copy(fileStore.ConfigFile, configBackup);
+            }
+            ctx.Storage.SaveConfig(config);
+            if (fileStore != null && File.Exists(fileStore.SecretsFile))
+            {
+                var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
+                File.Move(fileStore.SecretsFile, vaultBackup);
+                c.SetForeground(ConsoleColor.Yellow);
+                c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
+                c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
+                c.Out.WriteLine("  restore both .bak files under their original names.");
+                c.ResetColor();
+            }
+            ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+
+            c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+            c.Out.WriteLine($"YubiKey Serial: {blob.Serial}");
+            c.Out.WriteLine(includeRecovery
+                ? "Backend: YubiKey keyring (k = 1, 2 slots: this key + recovery)"
+                : "Backend: YubiKey keyring (k = 1, 1 slot: this key only)");
+            YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+            c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
+            c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
+            c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
+            PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
+            if (fileStore != null)
+                c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
+            else
+                c.Out.WriteLine("\nConfig saved.");
+            return 0;
         }
-        ctx.Storage.SaveConfig(config);
-        if (fileStore != null && File.Exists(fileStore.SecretsFile))
+        finally
         {
-            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
-            File.Move(fileStore.SecretsFile, vaultBackup);
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
-            c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
-            c.Out.WriteLine("  restore both .bak files under their original names.");
-            c.ResetColor();
+            CryptographicOperations.ZeroMemory(kekSlot);
         }
-        ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
-
-        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
-        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine($"YubiKey Serials: {serial1}, {serial2}");
-        c.Out.WriteLine(includeRecovery
-            ? "Backend: YubiKey keyring (k = 1, 2 slots: machine + recovery)"
-            : "Backend: YubiKey keyring (k = 1, 1 slot: machine only)");
-
-        if (requiresTouch == true)
-        {
-            c.SetForeground(ConsoleColor.Green);
-            c.Out.WriteLine("✓ Touch requirement: ENABLED (recommended)");
-            c.ResetColor();
-        }
-        else if (requiresTouch == false)
-        {
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine("⚠️  Touch requirement: DISABLED");
-            c.Out.WriteLine("\nSECURITY NOTICE: Your YubiKeys are configured without button press");
-            c.Out.WriteLine("requirement. Any process with access to inserted keys can unlock vault.");
-            c.ResetColor();
-        }
-
-        c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
-
-        c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP XOR SHARE NOW\n");
-        c.Out.WriteLine("XOR Share (hex):");
-        c.Out.WriteLine(config.RedundancyXor);
-        c.Out.WriteLine("\nThis share reconstructs this slot's key-encryption key (KEK_slot),");
-        c.Out.WriteLine("which unwraps K_v — losing it plus one physical YubiKey still loses");
-        c.Out.WriteLine("the vault, exactly as with the default init flow. Backup locations required:");
-        c.Out.WriteLine("  [ ] Password manager (Bitwarden/1Password)");
-        c.Out.WriteLine("  [ ] Printed copy (home safe)");
-        c.Out.WriteLine("  [ ] Second printed copy (off-site)");
-        c.Out.WriteLine("  [ ] Git repository");
-        PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey);
-        if (fileStore != null)
-            c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
-        else
-            c.Out.WriteLine("\nConfig saved.");
-        return 0;
     }
 
     /// <summary>
@@ -425,8 +349,10 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// The YubiKey-shaped wrapper shared by both the interactive and test-mode <c>--keyring</c>
-    /// paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
+    /// <b>Legacy pair layout, written by no command since brief T4</b> (<c>init --keyring</c> now
+    /// enrolls one key per slot); kept so tests can still build pair keyrings exactly as they
+    /// were made. Was: the YubiKey-shaped wrapper shared by both the interactive and test-mode
+    /// <c>--keyring</c> paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
     /// YubiKey fields, and the backend-neutral <see cref="AssembleKeyring"/>): generates a random <c>K_v</c> and this machine's X25519 slot keypair
     /// (<see cref="SlotKeyPair.Generate"/>), wraps <c>(K_v || slot private key)</c>
     /// (<see cref="SlotSecretPayload.Encode"/>) under <paramref name="kekSlot"/> via
@@ -483,10 +409,12 @@ public sealed class InitCommand : ICliCommand
     /// when <paramref name="includeRecovery"/> is set (<see cref="RecoverySlotWrap"/>), and
     /// encodes the <c>k = 1</c> keyring. The recovery private key is returned, never stored.
     /// <paramref name="hwBlob"/> (issue #154) is a TPM/Secure Enclave backend's blob for the
-    /// machine slot; null for YubiKey.
+    /// machine slot, or a one-key YubiKey slot's <see cref="YubiKeySlotBlob"/> (brief T4); null for
+    /// a legacy pair slot. <paramref name="slotId"/> is the machine slot's id when the caller has
+    /// already derived <paramref name="kekSlot"/> with it (a one-key YubiKey slot); else random.
     /// </summary>
     internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) AssembleKeyring(
-        byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null)
+        byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null, byte[]? slotId = null)
     {
         if (backendConfig.Keyring != null || backendConfig.KeyringSlotId != null)
             throw new ArgumentException("The backend's config must not already carry a keyring", nameof(backendConfig));
@@ -494,7 +422,11 @@ public sealed class InitCommand : ICliCommand
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var slotKeyPair = SlotKeyPair.Generate();
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
-        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        // A one-key YubiKey slot's KEK_slot is derived with its slot id (brief T4), so the caller
+        // picks the id first; every other backend lets this method draw it.
+        if (slotId != null && slotId.Length != KeyringFormat.SlotIdSize)
+            throw new ArgumentException($"slotId must be {KeyringFormat.SlotIdSize} bytes", nameof(slotId));
+        slotId ??= RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
         const byte k = 1;
 
         // Issue #121: extracted into MachineSlotWrap so 'slot accept' (functionally "the
@@ -504,8 +436,8 @@ public sealed class InitCommand : ICliCommand
             vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
             KeyringFormat.KeyringFormatVersion, vaultId, k) with
         {
-            // Issue #154: a TPM/Secure Enclave backend's blob lives in its machine slot, under the
-            // keyring's AEAD-bound format version. Null for YubiKey, which derives KEK_slot.
+            // Issue #154: a TPM/Secure Enclave backend's blob, or a one-key YubiKey slot's
+            // parameters (brief T4), lives in its machine slot. Null for a legacy pair slot.
             HwBlob = hwBlob,
         };
 
