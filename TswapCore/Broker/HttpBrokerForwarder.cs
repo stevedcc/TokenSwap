@@ -109,47 +109,119 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
             return new BrokerForwardOutcome(502, 0, 0, "secret-unusable");
         }
 
-        var requestBody = new CountingStream(http.Request.Body);
-        using var outbound = BuildRequest(http, request, authValue, requestBody);
-
-        HttpResponseMessage response;
+        // Decision 8: the forms to redact are derived now; they are zeroed when the response ends.
+        var redactor = BrokerRedactor.ForSecret(request.Secret.Value, route.AuthType == BrokerAuthType.Basic ? route.User : null);
+        // Decision 7: a stream with no bytes moving for the route's idle timeout is ended.
+        using var idle = new CancellationTokenSource(route.IdleTimeout, _time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, idle.Token);
+        void Moved() => idle.CancelAfter(route.IdleTimeout);
+        var requestBody = new CountingStream(http.Request.Body, Moved);
         try
         {
-            response = await _client.SendAsync(outbound, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or IOException
-                                       || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
-        {
-            request.Secret.Dispose();
-            await BrokerRequestHandler.WriteUniformAsync(http, StatusCodes.Status502BadGateway, _time).ConfigureAwait(false);
-            return new BrokerForwardOutcome(502, requestBody.Count, 0, "upstream-error");
-        }
-        // The outbound headers are written: the secret's bytes are not needed for the request any more.
-        request.Secret.Dispose();
-
-        using (response)
-        {
-            http.Response.StatusCode = (int)response.StatusCode;
-            CopyResponseHeaders(response, http.Response);
-
-            long bytesOut = 0;
-            if (!HasNoBody(http.Request.Method, (int)response.StatusCode))
+            using var outbound = BuildRequest(http, request, authValue, requestBody);
+            HttpResponseMessage response;
+            try
             {
-                var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                await using (stream.ConfigureAwait(false))
-                {
-                    var buffer = new byte[BufferSize];
-                    int read;
-                    while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
-                    {
-                        await http.Response.Body.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                        await http.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
-                        bytesOut += read;
-                    }
-                }
+                response = await _client.SendAsync(outbound, HttpCompletionOption.ResponseHeadersRead, linked.Token).ConfigureAwait(false);
             }
-            return new BrokerForwardOutcome((int)response.StatusCode, requestBody.Count, bytesOut);
+            catch (Exception ex) when (ex is HttpRequestException or IOException
+                                           || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+            {
+                request.Secret.Dispose();
+                await BrokerRequestHandler.WriteUniformAsync(http, StatusCodes.Status502BadGateway, _time).ConfigureAwait(false);
+                return new BrokerForwardOutcome(502, requestBody.Count, 0, idle.IsCancellationRequested ? "idle-timeout" : "upstream-error");
+            }
+            // The outbound headers are written: the secret's bytes are not needed for the request any more.
+            request.Secret.Dispose();
+            Moved();
+
+            using (response)
+                return await RelayResponseAsync(http, response, redactor, requestBody, Moved, idle, linked.Token, cancellationToken).ConfigureAwait(false);
         }
+        finally
+        {
+            redactor.Clear();
+        }
+    }
+
+    private async Task<BrokerForwardOutcome> RelayResponseAsync(HttpContext http, HttpResponseMessage response, BrokerRedactor redactor,
+        CountingStream requestBody, Action moved, CancellationTokenSource idle, CancellationToken token, CancellationToken clientAborted)
+    {
+        var status = (int)response.StatusCode;
+
+        // Decision 6: a compressed body can't be redacted, so it fails closed and is not forwarded.
+        if (IsCompressed(response))
+        {
+            await BrokerRequestHandler.WriteUniformAsync(http, StatusCodes.Status502BadGateway, _time).ConfigureAwait(false);
+            return new BrokerForwardOutcome(502, requestBody.Count, 0, "compressed");
+        }
+
+        http.Response.StatusCode = status;
+        CopyResponseHeaders(response, http.Response, redactor);
+        var noBody = HasNoBody(http.Request.Method, status);
+        // A HEAD answer keeps the upstream's length (no body flows, so redaction can't change it;
+        // registry clients read a blob's size from it). Every other body is re-framed as chunked.
+        if (HttpMethods.IsHead(http.Request.Method) && response.Content.Headers.ContentLength is { } headLength)
+            http.Response.ContentLength = headLength;
+        if (noBody)
+            return new BrokerForwardOutcome(status, requestBody.Count, 0);
+        // The headers go out now: the body may be held back by up to the redactor's window.
+        await http.Response.StartAsync(token).ConfigureAwait(false);
+
+        long bytesOut = 0;
+        try
+        {
+            var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            await using (stream.ConfigureAwait(false))
+            {
+                var buffer = new byte[BufferSize];
+                using var redacted = new MemoryStream(BufferSize + redactor.Window + 1024);
+                int read;
+                while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+                {
+                    // Bytes moved: the idle clock restarts here. A write the client doesn't take
+                    // for the idle timeout ends the stream too (no bytes moving).
+                    moved();
+                    redactor.Process(buffer.AsSpan(0, read), redacted);
+                    bytesOut += await WriteOutAsync(http, redacted, token).ConfigureAwait(false);
+                }
+                redactor.Flush(redacted);
+                bytesOut += await WriteOutAsync(http, redacted, token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or HttpRequestException)
+        {
+            // Mid-body: the headers are out, so the only honest signal is a cut connection.
+            http.Abort();
+            var reason = clientAborted.IsCancellationRequested ? "client-closed" : idle.IsCancellationRequested ? "idle-timeout" : "upstream-error";
+            return new BrokerForwardOutcome(status, requestBody.Count, bytesOut, reason);
+        }
+        return new BrokerForwardOutcome(status, requestBody.Count, bytesOut);
+    }
+
+    private static async Task<long> WriteOutAsync(HttpContext http, MemoryStream redacted, CancellationToken token)
+    {
+        var length = redacted.Length;
+        if (length > 0)
+        {
+            await http.Response.Body.WriteAsync(redacted.GetBuffer().AsMemory(0, (int)length), token).ConfigureAwait(false);
+            await http.Response.Body.FlushAsync(token).ConfigureAwait(false);
+        }
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(redacted.GetBuffer().AsSpan(0, (int)length));
+        redacted.SetLength(0);
+        return length;
+    }
+
+    /// <summary>True when any Content-Encoding other than <c>identity</c> is present.</summary>
+    private static bool IsCompressed(HttpResponseMessage response)
+    {
+        foreach (var headers in new System.Net.Http.Headers.HttpHeaders[] { response.Content.Headers, response.Headers })
+            if (headers.NonValidated.TryGetValues("Content-Encoding", out var values))
+                foreach (var value in values)
+                    foreach (var token in value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                        if (!token.Equals("identity", StringComparison.OrdinalIgnoreCase))
+                            return true;
+        return false;
     }
 
     /// <summary>HEAD, 1xx, 204 and 304 carry no body; the broker fabricates none.</summary>
@@ -233,21 +305,29 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
         return named;
     }
 
-    private static void CopyResponseHeaders(HttpResponseMessage response, HttpResponse target)
+    /// <summary>
+    /// Copies the upstream's headers except hop-by-hop ones (and those its Connection names),
+    /// Set-Cookie, Content-Length, and any header whose name or value contains a redaction form.
+    /// Trailers are never read, so never forwarded.
+    /// </summary>
+    private static void CopyResponseHeaders(HttpResponseMessage response, HttpResponse target, BrokerRedactor redactor)
     {
-        var named = ConnectionNamed(response.Headers.Connection);
+        var named = ConnectionNamed(response.Headers.NonValidated.TryGetValues("Connection", out var c) ? c : []);
         foreach (var (name, values) in response.Headers.NonValidated.Concat(response.Content.Headers.NonValidated))
         {
-            if (DroppedResponseHeaders.Contains(name) || named.Contains(name))
+            if (DroppedResponseHeaders.Contains(name) || named.Contains(name) || redactor.Contains(name))
                 continue;
-            target.Headers.Append(name, values.ToArray());
+            var list = values.ToArray();
+            if (list.Any(redactor.Contains))
+                continue;
+            target.Headers.Append(name, list);
         }
     }
 
     public void Dispose() => _client.Dispose();
 
     /// <summary>Counts the bytes read through it (the request body, for the log).</summary>
-    private sealed class CountingStream(Stream inner) : Stream
+    private sealed class CountingStream(Stream inner, Action moved) : Stream
     {
         public long Count { get; private set; }
 
@@ -262,6 +342,7 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
         {
             var n = inner.Read(buffer, offset, count);
             Count += n;
+            moved();
             return n;
         }
 
@@ -269,6 +350,7 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
         {
             var n = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             Count += n;
+            moved();
             return n;
         }
 

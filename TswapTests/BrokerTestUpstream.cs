@@ -120,3 +120,71 @@ public sealed class BrokerTestUpstream : IAsyncDisposable
         Certificate.Dispose();
     }
 }
+
+/// <summary>
+/// A one-response-per-connection HTTPS upstream that writes raw bytes (for what Kestrel can't send
+/// over HTTP/1.1, such as chunked trailers). 127.0.0.1 only. Counts its hits.
+/// </summary>
+public sealed class RawTlsUpstream : IAsyncDisposable
+{
+    private readonly System.Net.Sockets.TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly CancellationTokenSource _stop = new();
+    private readonly Task _loop;
+    private readonly X509Certificate2 _certificate;
+    private int _hits;
+
+    public RawTlsUpstream(X509Certificate2 certificate, byte[] response)
+    {
+        _certificate = certificate;
+        _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _loop = Task.Run(async () =>
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                System.Net.Sockets.TcpClient client;
+                try
+                {
+                    client = await _listener.AcceptTcpClientAsync(_stop.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                using (client)
+                {
+                    await using var tls = new System.Net.Security.SslStream(client.GetStream());
+                    await tls.AuthenticateAsServerAsync(_certificate);
+                    var seen = new List<byte>();
+                    var one = new byte[1];
+                    while (!(seen.Count >= 4 && seen[^4] == '\r' && seen[^3] == '\n' && seen[^2] == '\r' && seen[^1] == '\n'))
+                    {
+                        if (await tls.ReadAsync(one) == 0)
+                            break;
+                        seen.Add(one[0]);
+                    }
+                    Interlocked.Increment(ref _hits);
+                    await tls.WriteAsync(response);
+                    await tls.FlushAsync();
+                }
+            }
+        });
+    }
+
+    public int Port { get; }
+    public int Hits => Volatile.Read(ref _hits);
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        _listener.Stop();
+        try
+        {
+            await _loop;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or System.Net.Sockets.SocketException or ObjectDisposedException)
+        {
+            // stopping
+        }
+    }
+}
