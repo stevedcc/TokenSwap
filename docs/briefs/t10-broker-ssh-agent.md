@@ -29,6 +29,26 @@ Containers need SSH as well as HTTP: git over ssh, deploys over ssh. Handing the
 breaks the broker's rule (no credential in a container). An ssh agent fits exactly: the client asks
 for signatures, and the key stays on the host.
 
+## Before you code: pin the wire formats (MiMo B1, B6)
+
+Write `docs/ssh-agent-wire.md` first, as item 0's commit, transcribing from the sources and citing
+each (`PROTOCOL.agent`, RFC 4251/4252/4253/5656/8332/8709, draft-miller-ssh-agent):
+- every message this brief handles, byte for byte;
+- the `session-bind@openssh.com` request: `string hostkey`, `string session_identifier`,
+  `string signature`, `bool is_forwarding`. The signature is the server's key-exchange signature
+  over the exchange hash, which **is** the session identifier. Give the hash for each host-key
+  type;
+- the **userauth payload** a client asks the agent to sign (RFC 4252 §7): `string session_id`,
+  `byte SSH_MSG_USERAUTH_REQUEST`, `string user`, `string "ssh-connection"`, `string "publickey"`,
+  `boolean TRUE`, `string algorithm`, `string public key blob`;
+- the signature blob for each key type:
+  - Ed25519: `string "ssh-ed25519"`, `string sig[64]`;
+  - ECDSA: `string "ecdsa-sha2-<curve>"`, `string (mpint r ‖ mpint s)`, with the curve fixing the
+    hash (P-256 SHA-256, P-384 SHA-384, P-521 SHA-512) and the DER↔(r,s) conversion;
+  - RSA: PKCS#1 v1.5 over SHA-256 or SHA-512 by flag, with the algorithm string matching the flag.
+
+The reviewers diff this file against the sources. Everything after it implements exactly this.
+
 ## Decisions (settled here)
 
 1. **A second socket per client.** For each socket that has `ssh_keys`, `serve` also creates
@@ -61,13 +81,23 @@ for signatures, and the key stays on the host.
 4. **Destination restriction:** every key in config has `allowed_host_keys`, a non-empty list of
    `SHA256:` fingerprints of server host keys (e.g. GitHub's, from `ssh-keyscan` and
    `ssh-keygen -lf`).
-   - **Checked at sign time, every time** (GLM B1, the real boundary):
+   - **Checked at sign time, every time, all before any unlock** (GLM B1, MiMo B3/B5, the real
+     boundary):
      1. the key blob in the `SIGN_REQUEST` byte-matches a key on **this socket's** allow-list;
-     2. this connection has a verified `session-bind`;
-     3. that bind's host-key fingerprint is on **the requested key's** `allowed_host_keys`. A bind
+     2. the flags fit the key: ECDSA and Ed25519 need 0; RSA needs exactly one of `RSA_SHA2_256`
+        or `RSA_SHA2_512`; any unknown bit is refused;
+     3. this connection has a verified `session-bind`;
+     4. that bind's host-key fingerprint is on **the requested key's** `allowed_host_keys`. A bind
         allowed for key A never lets key B sign;
-     4. the data signed carries the bound `session_identifier`, parsed from the userauth request
-        being signed: refuse anything else.
+     5. **the data to sign parses completely as an SSH publickey userauth request** (the layout in
+        `docs/ssh-agent-wire.md`, with no trailing bytes):
+        - its `session_id` equals the bound one;
+        - service `ssh-connection`, method `publickey`, boolean TRUE;
+        - its algorithm string matches the key and flags;
+        - its public key blob equals the requested key.
+        **Anything else is refused.** This stops the agent being a general signing oracle (SSHSIG
+        git signatures, arbitrary blobs).
+   - `REQUEST_IDENTITIES` and every refusal cost no unlock.
    - **Bind state is per connection,** never shared across connections or sockets.
    - A second `session-bind` on the same connection is refused. OpenSSH's client binds once per
      connection; say so if its source shows otherwise, and follow it.
@@ -78,6 +108,18 @@ for signatures, and the key stays on the host.
      libssh2-based tools) can't use the agent: fail closed, and document the requirement.
    - Refuse: no `session-bind` first; a bind whose host key signature doesn't verify; a host key not
      on the list; a sign request for a different session; a bind with `is_forwarding` set.
+   - **A failed bind closes the connection** (`PROTOCOL.agent`).
+   - **Unknown extension names** answer `SSH_AGENT_EXTENSION_FAILURE` as the spec says; refused
+     message types answer `SSH_AGENT_FAILURE`, and the connection stays open.
+   - **Requests on one connection are handled in order,** one at a time.
+   - **`allowed_host_keys`:**
+     - each entry is an exact `SHA256:` unpadded-base64 fingerprint of the host key's wire blob,
+       compared exactly;
+     - an empty list, an unparsable entry, or a fingerprint of a host-key type the agent can't
+       verify stops `serve`, naming the key.
+   - **`BROKER.md` states what the restriction does and doesn't do** (MiMo B3): it limits
+     *where* the key can sign in, not *what* the server then allows. Recommend server-side
+     scoping (deploy keys, `restrict`, `command=`).
    - **Wording** (GLM I1): `is_forwarding` is the client's own flag. Standard clients mark forwarded
      binds and are refused, but a modified client or a socket relay can't be stopped
      cryptographically. A relay never extends the set of allowed hosts, because every bind is
@@ -90,7 +132,18 @@ for signatures, and the key stays on the host.
    - `PR_SET_DUMPABLE 0` comes from T8; check it is in place.
    - **Limits:** T8's connection, idle and unlock-failure rules, plus a **rate limit on successful
      signs** per socket (default 30 a minute; `429`-equivalent `SSH_AGENT_FAILURE` and a log line
-     beyond it), because each one is a TPM unlock (GLM I2).
+     beyond it), because each one is a TPM unlock (GLM I2). Signing goes through T8's global unlock
+     serialisation and global unlock limit.
+   - **Parser hygiene** (MiMo I2): the agent parses attacker-controlled bytes in the vault user's
+     process, so:
+     - no `unsafe` and no attacker-sized `stackalloc`;
+     - explicit bounds checks;
+     - caps: message 256 KiB, identity count, key-secret size;
+     - an exception on one connection closes that connection, never `serve`.
+   - **Same-uid limits, in the threat model** (MiMo B4): as in T8 and T9, containers must not run
+     as the vault user. The peer-uid check then separates containers from the broker, and the
+     single socket-file mount separates containers from each other. Mount a single socket file,
+     never the socket folder.
    - Signing happens in the broker process: no external code runs, so no sandbox is needed.
 6. **Logging:** one line per sign request: socket, peer uid and pid, key name, bound host-key
    fingerprint, result, duration. Never key material or the data signed.
@@ -108,7 +161,9 @@ for signatures, and the key stays on the host.
    expects (the signature blob format per key type).
    - **Tests:**
      - **real interop:** generate test keys with `ssh-keygen` (ed25519, ecdsa and rsa) in a temp
-       folder. The listed identity blobs fingerprint-match `ssh-keygen -lf` of the originals.
+       folder. The listed identity blobs fingerprint-match `ssh-keygen -lf` of the originals. The
+       signature checks below are self-consistent by nature, so **item 3's real `sshd` run is the
+       interop gate**, for every key type.
        Signatures from the signing layer (called directly; the bind gate is item 3's) verify by
        reconstructing the blob and verifying independently: BCL for ECDSA and RSA, BouncyCastle
        for Ed25519. `ssh-keygen -Y verify` checks SSHSIG documents, not agent signatures, so it
@@ -120,16 +175,25 @@ for signatures, and the key stays on the host.
    - **Break-it-once:** accept a sign request without the SHA-2 flag; its test fails.
 3. **`session-bind` and destination restriction** (decision 4).
    - **Tests:**
-     - **real end to end:** run `sshd` from the system on a loopback port in a temp folder,
-       unprivileged, with a test host key, an `AuthorizedKeysFile` pointing at the test key, and
-       `StrictModes no`. `ssh -o IdentityAgent=<socket>` to it succeeds when its host key is
-       allowed, and fails when it isn't. If running `sshd` unprivileged isn't possible on the CI
-       runners, test against recorded `session-bind` and sign messages generated once by real
-       OpenSSH, and say so.
+     - **real end to end, the interop gate:** run `sshd` from the system on a loopback port in a
+       temp folder, unprivileged, with a test host key, an `AuthorizedKeysFile` pointing at the
+       test key, and `StrictModes no`. For **each vault key type** (Ed25519, ECDSA, RSA) and for
+       Ed25519 and ECDSA host keys: `ssh -o IdentityAgent=<socket>` succeeds when the host key is
+       allowed, and fails when it isn't.
+       - Check and report the client's OpenSSH version (≥ 8.9).
+       - Also capture the real frames `ssh` sends (session-bind, sign request) through a
+         recording socket, and commit them as fixtures. Item 1's and item 2's parser tests replay
+         them.
+       - If `sshd` can't run unprivileged on the CI runners, the fixtures carry the CI tests; the
+         report says plainly which path ran where.
      - a forged bind signature, a missing bind, a sign request for another session, a second bind,
        and `is_forwarding` are refused;
      - **the cross product:** bind to host X (allowed for key A), sign with key B (allowed only for
        Y), refused;
+     - **not an oracle:** a correct userauth prefix followed by extra bytes, an SSHSIG-shaped
+       payload, a payload whose public key blob or algorithm differs from the requested key, a
+       wrong service or method: each refused, with no unlock;
+     - a refused request triggers no unlock (counting vault seam);
      - a sign request with a key on another socket's list is refused;
      - the sign rate limit holds (injectable clock);
      - an Ed25519 host key (GitHub's default) binds and signs end to end in the `sshd` test.
