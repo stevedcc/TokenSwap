@@ -21,6 +21,15 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
     public bool IsSimulated => yubiKeys.IsSimulated;
 
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+        => Unlock(config, YubiKeySelection.FromChooser(chooseSerial));
+
+    /// <summary>
+    /// Unlocks a classic XOR vault (brief T7 item 4): either enrolled key works with the share, so
+    /// of the plugged-in enrolled keys <paramref name="selection"/> decides; unattended, the first
+    /// that answers wins (the vault has one touch posture for both keys, so the order is the
+    /// plugged-in order).
+    /// </summary>
+    public byte[] Unlock(Config config, YubiKeySelection selection)
     {
         if (overrideKey != null)
             return overrideKey; // Test mode: bypass YubiKey entirely — the test key is the master key
@@ -32,15 +41,40 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
                 $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
-        var serial = SelectConnectedSerial(chooseSerial);
+        var connected = yubiKeys.ListSerials();
+        if (connected.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
 
-        if (!config.YubiKeySerials.Contains(serial))
-            throw new TswapException($"YubiKey {serial} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
+        var enrolled = connected.Where(config.YubiKeySerials.Contains).Distinct().ToList();
+        if (enrolled.Count == 0 && selection.Serial == null)
+            throw new TswapException(connected.Count == 1
+                ? $"YubiKey {connected[0]} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}"
+                : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
 
-        // Challenge current YubiKey using the vault-unique challenge (falls back to the
-        // legacy fixed challenge for configs created before this feature was added).
-        var k_current = yubiKeys.Challenge(serial, config.UnlockChallenge ?? LegacyChallenge);
+        var order = selection.Order(enrolled, enrolled.Select(_ => config.RequiresTouch).ToList(), connected);
+        var failures = new List<string>();
+        foreach (var serial in order)
+        {
+            byte[] k_current;
+            try
+            {
+                // Challenge current YubiKey using the vault-unique challenge (falls back to the
+                // legacy fixed challenge for configs created before this feature was added).
+                k_current = yubiKeys.Challenge(serial, config.UnlockChallenge ?? LegacyChallenge);
+            }
+            catch (TswapException ex) when (order.Count > 1)
+            {
+                failures.Add($"{serial}: {ex.Message}");
+                continue; // unattended: busy, or a touch that timed out; try the next key
+            }
+            return DeriveMasterKey(config, serial, k_current);
+        }
+        throw new TswapException(
+            $"None of the plugged-in YubiKeys ({string.Join(", ", order)}) answered: {string.Join("; ", failures)}");
+    }
 
+    private static byte[] DeriveMasterKey(Config config, int serial, byte[] k_current)
+    {
         // Reconstruct other key via XOR
         var xorShare = Convert.FromHexString(config.RedundancyXor ?? "");
         var k_other = Crypto.XorBytes(k_current, xorShare);

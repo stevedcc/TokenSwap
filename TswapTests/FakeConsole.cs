@@ -21,11 +21,19 @@ public sealed class FakeConsole(string stdin = "") : IConsole
     // for a fingerprint confirmation only on a terminal).
     public bool IsInputRedirected { get; init; } = true;
 
-    public string? ReadLine() => _in.ReadLine();
+    /// <summary>Brief T7 item 4: how many times a command read a line or password from stdin.</summary>
+    public int Reads { get; private set; }
+
+    public string? ReadLine()
+    {
+        Reads++;
+        return _in.ReadLine();
+    }
 
     // Mirrors SystemConsole's redirected-stdin path: read a line, echo a newline.
     public string ReadPassword(TextWriter? echo = null)
     {
+        Reads++;
         var line = _in.ReadLine() ?? "";
         (echo ?? Out).WriteLine();
         return line;

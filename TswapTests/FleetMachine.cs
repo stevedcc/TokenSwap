@@ -36,6 +36,12 @@ public sealed class FleetMachine : IDisposable
 
     public bool Sudo { get; set; } = true;
 
+    /// <summary>Brief T7 item 4: the TSWAP_YUBIKEY_SERIAL value this machine's commands see (null: unset).</summary>
+    public string? YubiKeySerialVariable { get; set; }
+
+    /// <summary>The console of the last command run (brief T7 item 4: did it read stdin?).</summary>
+    public FakeConsole? LastConsole { get; private set; }
+
     /// <summary>The ownership policy this machine's storage applies (null: the real one).</summary>
     public DirectoryOwnerMatcher? Ownership { get; set; }
 
@@ -81,7 +87,8 @@ public sealed class FleetMachine : IDisposable
 
     private (int Exit, string Out, string Err) Run(FakeConsole console, string[] args)
     {
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args };
+        LastConsole = console;
+        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable };
         var backends = new List<IHardwareKeyService>();
         if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));

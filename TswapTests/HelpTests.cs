@@ -84,6 +84,17 @@ public class HelpTests : IDisposable
         Assert.Contains("TSWAP_CONFIG_DIR", stdout);
     }
 
+    // Brief T7 item 4: TSWAP_YUBIKEY_SERIAL is documented, with sudo dropping it by default.
+    [Fact]
+    public void TopLevelHelp_ExplainsTswapYubiKeySerial()
+    {
+        var (_, stdout, _) = Run(sudoBypass: true, "--help");
+
+        var line = stdout.Split('\n').Single(l => l.Contains("TSWAP_YUBIKEY_SERIAL the YubiKey"));
+        Assert.Contains("several are plugged in", line);
+        Assert.Contains("sudo --preserve-env=TSWAP_YUBIKEY_SERIAL", stdout);
+    }
+
     [Fact]
     public void GetHelp_NeedsNeitherSudoNorAVault()
     {

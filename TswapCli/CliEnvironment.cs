@@ -35,6 +35,12 @@ public sealed class CliEnvironment
 
     public required bool Verbose { get; init; }
 
+    /// <summary>
+    /// <c>TSWAP_YUBIKEY_SERIAL</c> as given (brief T7 item 4): the YubiKey an unlock uses when several
+    /// are plugged in. Null when unset. <c>sudo</c> drops it by default, which is intended.
+    /// </summary>
+    public string? YubiKeySerialVariable { get; init; }
+
     /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
@@ -61,6 +67,7 @@ public sealed class CliEnvironment
                 () => ApplicationDataDir(getEnv)),
             Verbose = verbose,
             CommandArgs = commandArgs,
+            YubiKeySerialVariable = getEnv("TSWAP_YUBIKEY_SERIAL"),
         };
     }
 

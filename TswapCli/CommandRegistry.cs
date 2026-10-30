@@ -111,6 +111,11 @@ public static class CommandRegistry
         o.WriteLine("  TSWAP_CONFIG_DIR    the config folder to use (overrides everything below)");
         o.WriteLine("  Under sudo (sudo -i included), tswap uses the vault of the user who ran sudo:");
         o.WriteLine("  SUDO_USER's home from the system's user database, checked against SUDO_UID.");
+        o.WriteLine("  TSWAP_YUBIKEY_SERIAL the YubiKey to unlock with when several are plugged in (sudo drops");
+        o.WriteLine("                      it unless kept, e.g. sudo --preserve-env=TSWAP_YUBIKEY_SERIAL; intended).");
+        o.WriteLine("  With several keys and no terminal, tswap never prompts: it tries the keys with a slot,");
+        o.WriteLine("  no-touch first, then unknown, then touch-required. On a terminal it asks (on stderr),");
+        o.WriteLine("  offering the touch-required key as the default.");
         o.WriteLine("\nExamples:");
         o.WriteLine($"  {p} create storj-pass");
         o.WriteLine($"  kubectl get secret db-pass -o jsonpath='{{{{.data.password}}}}' | base64 -d | {p} ingest db-pass");
