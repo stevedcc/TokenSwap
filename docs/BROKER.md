@@ -196,6 +196,178 @@ This needs a **record-store vault** (one file per secret). `serve` refuses a cla
 vault, since that would be decrypted whole for every request; convert it with
 `sudo tswap migrate --to-records`.
 
+## SSH: an agent that signs with vault keys (brief T10)
+
+Containers need SSH too (git over ssh, deploys). Handing them a private key would break the
+broker's rule, so the broker is also an **ssh-agent**: the client asks for signatures, and the key
+stays on the host. The wire formats are pinned in [ssh-agent-wire.md](ssh-agent-wire.md).
+
+- For each socket that lists `ssh_keys`, `serve` also listens on **`<name>.ssh.sock`** next to
+  `<name>.sock`: same folder, lock, mode `0666`, peer-uid list and connection limits. The
+  container mounts that one file and sets `SSH_AUTH_SOCK` to it.
+- It answers `REQUEST_IDENTITIES` (only this socket's keys; each identity's comment is the key's
+  name), `SIGN_REQUEST`, and the `session-bind@openssh.com` extension. Adding, removing, locking
+  and smartcard requests get `SSH_AGENT_FAILURE`, and so does every other extension.
+- **Clients need OpenSSH 8.9 or newer**, which sends `session-bind@openssh.com` on its own. A
+  client that doesn't (older OpenSSH, libssh2- or libssh-based tools, agent clients of other SSH
+  libraries) gets no signature at all: the agent fails closed.
+
+### Setup
+
+1. **The key, as a vault secret.** An unencrypted OpenSSH private key (`openssh-key-v1`) or
+   unencrypted PKCS#8 PEM: Ed25519, ECDSA P-256/P-384/P-521, or RSA of at least 3072 bits (RSA
+   signs only `rsa-sha2-256` / `rsa-sha2-512`, never SHA-1). The vault is the protection, so
+   the key itself has no passphrase; a passphrase-protected or encrypted key is refused.
+
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C '' -f deploy        # in a private temp folder
+   sudo -iu vault tswap ingest deploy-key < deploy
+   shred -u deploy                                     # keep deploy.pub for the server
+   ```
+
+2. **The hosts it may sign in to.** Every key lists `allowed_host_keys`: the `SHA256:`
+   fingerprints of the server host keys, exactly as `ssh-keygen -lf` prints them. Get them with
+   `ssh-keyscan` and **check them against the provider's published fingerprints** (GitHub's are in
+   its docs):
+
+   ```bash
+   ssh-keyscan -t ed25519 github.com > github.keys
+   ssh-keygen -lf github.keys        # 256 SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU github.com (ED25519)
+   ```
+
+   List each host key the server may present (a server with several key types presents the one
+   the client negotiates; listing all of them is fine).
+
+3. **`broker.json`** (no `broker` subcommand edits ssh keys yet: edit the file with `sudo`, it
+   stays mode `0600`, and every load validates it):
+
+   ```json
+   "ssh_keys": [
+     { "name": "github-deploy", "secret": "deploy-key",
+       "allowed_host_keys": ["SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"] }
+   ],
+   "sockets": [
+     { "name": "lane1", "uids": ["100999"], "routes": ["openai"], "ssh_keys": ["github-deploy"] }
+   ]
+   ```
+
+   A key's name follows the route and socket rule (`[a-z0-9-]{1,32}`); `secret` is a plain
+   secret name; `allowed_host_keys` must not be empty, and an entry that isn't a `SHA256:`
+   fingerprint stops `serve`.
+
+4. **Restart `serve`** (`systemctl --user restart tswap-broker`). At start, `serve` unlocks the
+   vault **once per key**, reading only that key's record, to derive its public key; it keeps only
+   the public key. **A key that can't be loaded stops `serve`** with an error naming it (missing
+   secret, unparsable, encrypted, an `openssh-key-v1` file whose embedded public key differs from
+   the derived one, an unsupported type, RSA under 3072 bits): it is never silently left out. A
+   reload (SIGHUP) never unlocks, so a new key, or a socket that gains its first key, needs a
+   restart; a reload that removes a key from a socket's list, or a host from a key's list, applies
+   to the next request.
+
+5. **Register the public key** with the server (`deploy.pub`), preferably narrowly (see "What
+   the restriction does and doesn't do").
+
+6. **The container.** Bind-mount only its own agent socket, and give it its own `known_hosts`:
+
+   ```bash
+   podman run -d --name lane1 \
+       -v /srv/tswap-broker/lane1.sock:/run/tswap.sock \
+       -v /srv/tswap-broker/lane1.ssh.sock:/run/tswap-ssh.sock \
+       -e SSH_AUTH_SOCK=/run/tswap-ssh.sock <image> ...
+   # inside: the verified host keys from step 2, and strict checking
+   cat github.keys >> ~/.ssh/known_hosts
+   git clone git@github.com:stevedcc/croft.git
+   ```
+
+   The agent restricts where its key can sign in, but it doesn't make the container's ssh check
+   whom it is talking to: **the container still needs its own `known_hosts`** for each server
+   (and `StrictHostKeyChecking yes`), or a man in the middle gets its session, though never the
+   key.
+
+### How a signature is allowed
+
+Every sign request passes all of these, in this order, **before any unlock**; a refusal is
+`SSH_AGENT_FAILURE`, costs no unlock and is logged:
+
+1. the key blob byte-matches a key on **this socket's** list (in the config in force now);
+2. the flags fit the key (Ed25519 and ECDSA none; RSA exactly one of the SHA-2 flags);
+3. this connection has a verified `session-bind@openssh.com`;
+4. that bind's host-key fingerprint is on **the requested key's** `allowed_host_keys` (a bind
+   allowed for key A never lets key B sign);
+5. the data to sign parses completely as an SSH publickey userauth request (RFC 4252 §7, or
+   OpenSSH's host-bound variant) whose session identifier is the bound one, for service
+   `ssh-connection`, with this key's blob and algorithm, and (host-bound) the bound host key;
+   nothing may follow it. So the agent signs **logins only**: not SSHSIG documents (`git commit -S`
+   with an ssh key), not arbitrary data.
+
+The bind itself: the server host key's signature over the session identifier is verified
+(Ed25519, ECDSA, RSA with SHA-256/512; a SHA-1 RSA signature or any other key type is refused and
+logged); a bind with `is_forwarding` set, a second bind on the connection, or a host that no key
+of this socket allows is refused. **A failed bind closes the connection.** Bind state belongs to
+one connection; it is never shared with another connection or socket.
+
+### What the restriction does and doesn't do
+
+- **It limits where the key can sign in** (which servers, identified by their host keys), **not
+  what the server then allows.** A key accepted by GitHub for all of an account's repositories
+  can push to any of them. Scope the key on the server: a per-repository deploy key, read-only
+  where possible; on your own servers an `authorized_keys` line with `restrict` and, where it
+  fits, `command=` and `from=`.
+- **`is_forwarding` is the client's own flag.** Standard clients mark binds for a forwarded agent
+  and are refused, but a modified client, or a process relaying the socket, can't be stopped
+  cryptographically from claiming otherwise. A relay still never extends the set of allowed hosts:
+  every bind is anchored by a host-key signature over that session's identifier, so it can only
+  get signatures for a session with a listed host.
+- **Why:** a stolen or misused socket can sign only into the hosts the operator listed, not into
+  any server.
+
+### What a compromised container can and can't do (ssh)
+
+**It can**, while it runs: log in, with its socket's keys, to the listed hosts, and do there
+whatever those keys are allowed to do.
+
+**It can't:**
+
+- read a private key (it never enters the container; the agent returns signatures only);
+- sign in to a host that isn't on that key's list, or use another socket's keys;
+- use the agent as a general signing service (only this session's login request is signed);
+- forward the agent: binds marked as forwarding are refused (see above for what that flag can't
+  promise).
+
+### Memory, limits and logging
+
+- **One unlock per signature,** reading **only that key's record** (T8's single-record read),
+  serialised with every other unlock of the broker; the key is parsed, checked against the public
+  key loaded at start (a key replaced in the vault since is refused, not used), used once, and the
+  byte arrays are zeroed and the key objects disposed. Key material is **not kept beyond the
+  request, and the buffers tswap holds are cleared** — not "never in memory": BouncyCastle's and
+  the platform crypto library's internal copies, and the .NET `BigInteger`s an `openssh-key-v1` RSA
+  key's CRT values are computed with, can't be zeroed by tswap. `serve` is non-dumpable
+  (`PR_SET_DUMPABLE 0`, as above).
+- **Limits:** T8's connection limits (an agent socket counts as `<name>.ssh`), a connection idle
+  for 120 s between messages is closed, messages are at most 256 KiB (a larger, empty or truncated
+  frame closes the connection), one request at a time per connection, in order. **At most 30
+  successful signatures a minute per socket** (each is a TPM unlock); beyond that a sign request
+  is refused and logged (`reason=sign-rate`) with no unlock. T8's unlock-failure lockout and its
+  global unlock limit apply too; the lockout is shared with the client's HTTP socket.
+- **Parser hygiene:** the agent parses bytes from the container in the vault user's process: every
+  length is checked against what is left, nothing is sized by the peer on the stack, a key secret
+  over 16 KiB is refused unparsed, and an exception on one connection closes that connection,
+  never `serve`.
+- **The same-uid limits** of "Limits of the identity check" hold here too: containers must not run
+  as the vault user (the agent refuses a peer with the broker's own uid), and the single socket-file
+  mount is what separates one container from another: **mount the agent socket file, never the
+  socket folder.**
+- **Logging:** one line per bind and per sign request, for example
+
+  ```
+  ... event ssh-bind socket=lane1.ssh uid=100999 pid=4242 host=SHA256:+DiY3wvv... result=ok
+  ... event ssh-sign socket=lane1.ssh uid=100999 pid=4242 key=github-deploy host=SHA256:+DiY3wvv... result=ok unlocks=1 ms=2041
+  ... event ssh-sign socket=lane1.ssh uid=100999 pid=4242 key=github-deploy host=SHA256:+DiY3wvv... result=refused reason=not-userauth unlocks=0 ms=0
+  ```
+
+  Never key material or the data signed.
+
 ## Costs
 
 - **Every request unlocks the vault afresh** (no cached key, by design). On the router's TPM that
