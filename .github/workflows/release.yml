@@ -100,18 +100,39 @@ jobs:
 
       # Run the shipped (Release, NativeAOT) binary once on its own platform: a command that needs
       # no vault, so a binary that doesn't start fails the release here.
-      - name: Smoke test the published binary
+      # Package here, on the binary's own platform, then extract the archive into an empty folder
+      # and run what is in it: the smoke test runs the shipped bytes with the shipped permissions
+      # (upload-artifact doesn't keep the execute bit, so the archive is made before the upload).
+      # `prompt-hash` needs no vault.
+      - name: Package and smoke-test the archive (Linux, macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          bin=./publish/${{ matrix.rid }}/tswap
-          [ -f "$bin.exe" ] && bin="$bin.exe"
-          "$bin" prompt-hash
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x ./publish/${{ matrix.rid }}/tswap
+          tar czf "dist/tswap-${{ matrix.rid }}.tar.gz" -C ./publish/${{ matrix.rid }} tswap
+          check="$(mktemp -d)"
+          tar xzf "dist/tswap-${{ matrix.rid }}.tar.gz" -C "$check"
+          "$check/tswap" prompt-hash
 
-      - name: Upload artifact
+      - name: Package and smoke-test the archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path ./publish/${{ matrix.rid }}/tswap.exe -DestinationPath dist/tswap-${{ matrix.rid }}.zip
+          $check = Join-Path $env:RUNNER_TEMP 'tswap-check'
+          Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
+          & (Join-Path $check 'tswap.exe') prompt-hash
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload archive
         uses: actions/upload-artifact@v4
         with:
           name: tswap-${{ matrix.rid }}
-          path: ./publish/${{ matrix.rid }}/
+          path: dist/
           if-no-files-found: error
 
   release:
@@ -122,29 +143,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download the archives
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-
-      - name: Rename and zip binaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd artifacts
-          for dir in */; do
-            rid="${dir%/}"
-            runtime="${rid#tswap-}"
-            cd "$dir"
-            # Windows binary has .exe
-            if [[ "$runtime" == win-* ]]; then
-              zip "../tswap-${runtime}.zip" tswap.exe
-            else
-              chmod +x tswap
-              tar czf "../tswap-${runtime}.tar.gz" tswap
-            fi
-            cd ..
-          done
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
