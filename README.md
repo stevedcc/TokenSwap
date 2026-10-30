@@ -219,8 +219,9 @@ TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot accept approve.json
 sudo tswap slot merge approve.json.receipt.json
 ```
 
-After step 4 the router's vault opens with its TPM **or** that YubiKey, and every copy taken from
-the router from now on does too. Repeat for each key (the one at the desk, the one in the
+After step 4 the router's vault opens with its TPM **or** that YubiKey, and a copy of the router's
+files on another machine opens with the YubiKey too. (Each machine keeps its own `config.json`: a
+copy of a TPM machine's config does not open with another machine's TPM; merge receipts instead.) Repeat for each key (the one at the desk, the one in the
 wallet): each becomes its own slot. `slot merge` adds a slot silently only because the router
 approved it in step 2; any other new slot (for example from another copy's `config.json`, which
 `slot merge` also takes) is shown by fingerprint and must be confirmed on a terminal, or passed

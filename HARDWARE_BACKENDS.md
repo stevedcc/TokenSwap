@@ -171,15 +171,14 @@ the two flags are mutually exclusive.
   unseals or unwraps it. `VaultUnlocker.Unlock` still refuses a pending config before that, so
   the pending blob never opens a vault. Accept writes the receipt that `slot merge` takes back to
   the approver (see `MULTI_MACHINE_KEYING.md` §Fleet enrollment).
-- **Every copy opens with every device.** A copy of the vault carries the `KeyringSlotId` of the
-  machine it came from, so on another machine its own backend fails. `VaultUnlocker` then offers
-  every other machine slot's TPM / Secure Enclave blob to each registered TPM / Secure Enclave
-  backend (the vault's own backend first), before the YubiKey slots for a TPM / Secure Enclave
-  vault and after them for a YubiKey vault. A foreign blob fails to unseal with a
-  `TswapException`; a wrong `KEK_slot` fails the slot's AEAD. With no other hardware slots the
-  paths and errors are exactly as before. **To check on real hardware:** a TPM offered another
-  TPM's blob must fail without side effects (no dictionary-attack lockout), and a Secure Enclave
-  offered a TPM blob should fail before any presence prompt.
+- **One config per machine.** Each machine keeps its own config (its own `KeyringSlotId`); `slot
+  merge` brings the keyrings together. `VaultUnlocker` opens a TPM / Secure Enclave slot only as
+  the config's own slot and never offers another machine's blob to local hardware (security
+  review: a planted Secure Enclave slot could unlock with an attacker-known `K_v`, and foreign
+  tries cost TPM dictionary-attack exposure, latency or Touch ID prompts). When the own TPM /
+  Secure Enclave slot fails, the error adds `VaultUnlocker.ForeignHardwareSlotHint`: the slot
+  belongs to another machine or its hardware is unavailable; use this machine's own config and
+  `slot merge`, or a YubiKey slot or the recovery key. YubiKey slots stay portable (T4).
 - **Recovery.** `recover --tpm` / `--secure-enclave` enroll the same way after the recovery key
   opened the vault, and make the new slot this machine's own (`Backend`, `KeyringSlotId`).
 

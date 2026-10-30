@@ -369,8 +369,8 @@ work, reusing the per-slot X25519 keypair above:
   after checking the approve file's blob against its own pending copy), and writes a **receipt**
   holding the finished slot.
 - `slot merge <receipt>` back on the approving machine — adds the finished slot to the
-  approver's keyring, so its copy, and every copy taken from it afterwards, opens with the new
-  device too.
+  approver's keyring, so the approver's own config opens with the new device too (and so does
+  any copy of it, for a YubiKey device).
 
 A key for **this** machine needs no exchange at all: `slot add --yubikey` (see "YubiKey slots").
 
@@ -418,10 +418,16 @@ and the vault's home never opened with the joiner's device. Decisions made in br
    sends it in the request (an optional `Backend` field names the backend; a YubiKey request is
    unchanged). `slot accept` unseals it through the backend and builds the slot with it. A
    keyring therefore holds YubiKey, TPM and Secure Enclave machine slots side by side.
-   **Unlock** (`VaultUnlocker`) now also offers every other machine slot's TPM / Secure Enclave
-   blob to this machine's TPM / Secure Enclave backends when the vault's own path fails, so a copy
-   taken from another machine opens with this machine's hardware (the keyring records no backend
-   per slot; a foreign blob fails to unseal, and a wrong `KEK_slot` fails the slot's AEAD).
+   **One config per machine.** Each machine keeps its own `config.json` (its own
+   `KeyringSlotId`), and `slot merge` brings keyrings together. A TPM / Secure Enclave slot is
+   opened only through the config whose own slot it is: copying another machine's `config.json`
+   onto a TPM / Secure Enclave machine is not supported, and unlock never offers other machines'
+   TPM / Secure Enclave blobs to local hardware (security review: a `config.json` writer can plant
+   a Secure Enclave slot, since wrapping to the enclave's public key needs no hardware, which would
+   "unlock" with an attacker-known `K_v`; and each try would cost TPM dictionary-attack exposure,
+   time or a Touch ID prompt). A failed own TPM / Secure Enclave slot says so and points at
+   `slot merge`, a YubiKey slot or the recovery key. YubiKey-blob slots stay portable as in T4:
+   they can't be forged without the key.
 3. **The recovery key unlocks** (#187).
    - It is read **only from stdin**: `--recovery-key-stdin` for `slot add --yubikey`,
      `slot approve` and `slot merge`; `recover` always reads it from stdin. Never from an

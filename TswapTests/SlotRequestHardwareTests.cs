@@ -58,18 +58,30 @@ public class SlotRequestHardwareTests : IDisposable
     }
 
     /// <summary>
-    /// Opens <paramref name="copyOf"/>'s vault files on a fresh machine that has only the given
-    /// hardware (no YubiKey plugged in).
+    /// Puts <paramref name="copyOf"/>'s vault files on a fresh machine that has only the given
+    /// hardware (no YubiKey plugged in) and runs <c>get router</c> there.
     /// </summary>
-    private string OpenCopyOn(FleetMachine copyOf, byte[]? tpm = null, byte[]? secureEnclave = null)
+    private (int Exit, string Out, string Err) GetOnACopy(FleetMachine copyOf, byte[]? tpm = null, byte[]? secureEnclave = null)
     {
         var m = Machine("copy", tpm, secureEnclave);
         copyOf.CopyVaultTo(m);
-        return m.Get("router");
+        return m.Run("", "get", "router");
+    }
+
+    /// <summary>
+    /// Review IMPORTANT 2+3: a copy of another machine's config.json is not opened with this
+    /// machine's TPM / Secure Enclave (no foreign-blob tries); the error says what to do.
+    /// </summary>
+    private static void AssertForeignConfigRefused((int Exit, string Out, string Err) result)
+    {
+        Assert.NotEqual(0, result.Exit);
+        Assert.DoesNotContain("router-pw", result.Out);
+        Assert.Contains("belongs to another machine or its hardware is unavailable", result.Err);
+        Assert.Contains("slot merge", result.Err);
     }
 
     [Fact]
-    public void ASecondTpmMachineJoins_BothCopiesOpenWithBothTpms()
+    public void ASecondTpmMachineJoins_EachOwnConfigHasBothSlots_AndOpensWithItsOwnTpm()
     {
         RouterVault();
         var server = Machine("server", tpm: RandomNumberGenerator.GetBytes(32));
@@ -83,20 +95,16 @@ public class SlotRequestHardwareTests : IDisposable
         var own = server.Keyring.Slots.Single(s => Convert.ToBase64String(s.SlotId) == config.KeyringSlotId);
         Assert.NotNull(own.HwBlob);
         Assert.False(YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob));
+        // Each machine's own config holds both TPM slots (the router's after merging the receipt).
         Assert.Equal(server.Keyring.Slots.Select(s => s.SlotId), _router.Keyring.Slots.Select(s => s.SlotId));
 
-        // Each copy on its own machine.
+        // Each own config opens with its own TPM.
         Assert.Equal("router-pw", _router.Get("router"));
         Assert.Equal("router-pw", server.Get("router"));
-        // And each copy on the other machine's TPM.
-        Assert.Equal("router-pw", OpenCopyOn(_router, tpm: server.Tpm));
-        Assert.Equal("router-pw", OpenCopyOn(server, tpm: _router.Tpm));
-        // A third TPM opens neither.
-        var stranger = Machine("stranger", tpm: RandomNumberGenerator.GetBytes(32));
-        _router.CopyVaultTo(stranger);
-        var (exit, stdout, _) = stranger.Run("", "get", "router");
-        Assert.NotEqual(0, exit);
-        Assert.DoesNotContain("router-pw", stdout);
+        // Another machine's config on a TPM machine: the clear error, not a foreign-blob try.
+        AssertForeignConfigRefused(GetOnACopy(_router, tpm: server.Tpm));
+        AssertForeignConfigRefused(GetOnACopy(server, tpm: _router.Tpm));
+        AssertForeignConfigRefused(GetOnACopy(_router, tpm: RandomNumberGenerator.GetBytes(32)));
         Assert.Empty(_keys.Challenges);
     }
 
@@ -133,14 +141,15 @@ public class SlotRequestHardwareTests : IDisposable
 
         Assert.Equal(HardwareBackend.SecureEnclave, mac.Config.Backend);
         Assert.True(mac.Config.RequiresTouch);
+        Assert.Equal(mac.Keyring.Slots.Select(s => s.SlotId), _router.Keyring.Slots.Select(s => s.SlotId));
         Assert.Equal("router-pw", mac.Get("router"));
         Assert.Equal("router-pw", _router.Get("router"));
-        Assert.Equal("router-pw", OpenCopyOn(_router, secureEnclave: mac.SecureEnclave));
-        Assert.Equal("router-pw", OpenCopyOn(mac, tpm: _router.Tpm));
+        AssertForeignConfigRefused(GetOnACopy(_router, secureEnclave: mac.SecureEnclave));
+        AssertForeignConfigRefused(GetOnACopy(mac, tpm: _router.Tpm));
     }
 
     [Fact]
-    public void AKeyringWithYubiKeyTpmAndSecureEnclaveSlots_OpensOnEach()
+    public void AKeyringWithYubiKeyTpmAndSecureEnclaveSlots_EachOwnConfigOpens_AndTheYubiKeyOpensAnyCopy()
     {
         RouterVault();
         var server = Machine("server", tpm: RandomNumberGenerator.GetBytes(32));
@@ -153,10 +162,16 @@ public class SlotRequestHardwareTests : IDisposable
         _keys.PluggedIn = [];
 
         Assert.Equal(5, _router.Keyring.Slots.Count); // router, recovery, server, mac, desktop
-        Assert.Equal("router-pw", OpenCopyOn(_router, tpm: server.Tpm));
-        Assert.Equal("router-pw", OpenCopyOn(_router, secureEnclave: mac.SecureEnclave));
+        Assert.Equal("router-pw", _router.Get("router"));
+        Assert.Equal("router-pw", server.Get("router"));
+        Assert.Equal("router-pw", mac.Get("router"));
+        AssertForeignConfigRefused(GetOnACopy(_router, tpm: server.Tpm));
+        AssertForeignConfigRefused(GetOnACopy(_router, secureEnclave: mac.SecureEnclave));
+        // A YubiKey slot is portable (it can't be forged without the key): any copy, any machine.
         _keys.PluggedIn = [SerialA];
-        Assert.Equal("router-pw", OpenCopyOn(_router));
+        var (exit, stdout, stderr) = GetOnACopy(_router, tpm: server.Tpm);
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("router-pw", stdout.Trim());
     }
 
     [Fact]
