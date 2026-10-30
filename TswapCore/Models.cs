@@ -181,6 +181,20 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
     /// </summary>
     [JsonIgnore]
     public bool Rotated { get; init; }
+
+    /// <summary>
+    /// Fix round 1, B (record store only): the value the last rotation replaced, or null. Used by
+    /// <c>{{name:previous}}</c>; never displayed, never serialized (an export carries no history).
+    /// </summary>
+    [JsonIgnore]
+    public string? PreviousValue { get; init; }
+
+    /// <summary>
+    /// Fix round 1, B: set by <c>restore</c>: this write puts the previous value back, so the record
+    /// store makes its burn (if it had one) outstanding again. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool Restored { get; init; }
 }
 
 /// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>
@@ -202,6 +216,38 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string>? UnreadableFiles { get; init; }
+
+    /// <summary>Fix round 1, B: true for a store that keeps previous values (the record store).</summary>
+    [JsonIgnore]
+    public bool KeepsPreviousValues { get; init; }
+
+    /// <summary>The suffix of a token or marker that names a secret's previous value.</summary>
+    public const string PreviousSuffix = ":previous";
+
+    /// <summary>
+    /// Fix round 1, B: the value a <c>run</c> token or an <c>apply</c> marker names: <c>name</c>,
+    /// or <c>name:previous</c> for the value the last rotation replaced. Secret names can't contain
+    /// ':' (<see cref="Validation.ValidateName"/>), so the suffix never collides with a name. Throws
+    /// for a missing (or unreadable) secret, and for <c>:previous</c> without a previous value.
+    /// </summary>
+    public string ResolveToken(string token, string? where = null)
+    {
+        var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);
+        var name = previous ? token[..^PreviousSuffix.Length] : token;
+        if (!Secrets.TryGetValue(name, out var secret))
+        {
+            ThrowIfUnreadable(name);
+            throw new TswapException($"Secret '{name}' not found{where}");
+        }
+        if (!previous)
+            return secret.Value;
+        if (!KeepsPreviousValues)
+            throw new TswapException(
+                $"'{token}': this vault uses the classic single-file store, which keeps no previous values. Convert it with " +
+                "'sudo tswap migrate --to-records'; rotations after that keep the value they replace.");
+        return secret.PreviousValue ?? throw new TswapException(
+            $"'{token}': secret '{name}' has no previous value (it has not been rotated since it was created).");
+    }
 
     /// <summary>
     /// Throws when any record can't be read (fix round 1, A3): for commands that cover the whole

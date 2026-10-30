@@ -227,4 +227,15 @@ public class RecordMergeTests
         Assert.Equal(S(4000), RecordMerge.Merge(a, b).Write);
         Assert.Equal(S(4000), RecordMerge.Merge(b, a).Write);
     }
+
+    [Fact]
+    public void ThePreviousValue_TravelsWithItsVersion()
+    {
+        var older = Value(S(1000), "a") with { Previous = new PreviousValue(S(500), "a0"u8.ToArray()) };
+        var newer = Value(S(2000, 0, OriginB), "b") with { Previous = new PreviousValue(S(1000), "a"u8.ToArray()) };
+
+        var merged = MergeBothWays(older, newer);
+
+        Assert.Equal("a"u8.ToArray(), merged.Previous!.Value);
+    }
 }

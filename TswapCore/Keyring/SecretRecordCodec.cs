@@ -31,6 +31,8 @@ namespace TswapCore.Keyring;
 ///   createdMs          8 bytes   display only
 ///   nameLength         2 bytes   then the UTF-8 name
 ///   valueLength        4 bytes   then the value bytes (empty for a tombstone)
+///   hasPrevious        1 byte    0, or 1 then (fix round 1, B: the value a rotation replaced):
+///     versionHlcMs 8, versionHlcLogical 4, versionOrigin 16, valueLength 4, value bytes
 ///   burnCount          1 byte    at most RecordMerge.MaxBurns, then per burn:
 ///     versionHlcMs 8, versionHlcLogical 4, versionOrigin 16   the version it marks
 ///     burnHlcMs 8, burnHlcLogical 4, burnOrigin 16            the burn's own stamp
@@ -79,7 +81,10 @@ public static class SecretRecordCodec
         if (reasons.Any(r => r != null && r.Length >= NoReason))
             throw new TswapException("A burn reason is too long to store (64 KiB at most).");
 
-        var raw = InnerFixedSize + name.Length + 4 + record.Value.Length + 1
+        if (record.Previous != null && record.Type == RecordType.Tombstone)
+            throw new ArgumentException("A tombstone carries no previous value", nameof(record));
+        var raw = InnerFixedSize + name.Length + 4 + record.Value.Length
+            + 1 + (record.Previous == null ? 0 : StampSize + 4 + record.Previous.Value.Length) + 1
             + record.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
         var inner = new byte[BucketSize(raw)]; // zero-initialized: the padding tail is all zero bytes
         var span = inner.AsSpan();
@@ -96,6 +101,19 @@ public static class SecretRecordCodec
         offset += 4;
         record.Value.CopyTo(span.Slice(offset));
         offset += record.Value.Length;
+        if (record.Previous is { } previous)
+        {
+            span[offset++] = 1;
+            offset = WriteStamp(span, offset, previous.Version);
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset, 4), (uint)previous.Value.Length);
+            offset += 4;
+            previous.Value.CopyTo(span.Slice(offset));
+            offset += previous.Value.Length;
+        }
+        else
+        {
+            span[offset++] = 0;
+        }
         span[offset++] = (byte)record.Burns.Count;
         for (var i = 0; i < record.Burns.Count; i++)
         {
@@ -218,6 +236,25 @@ public static class SecretRecordCodec
             throw new TswapException("Malformed record: value length prefix exceeds decrypted payload");
         var value = inner.AsSpan(offset, (int)valueLength).ToArray();
         offset += (int)valueLength;
+        Need(inner, offset, 2, "previous value");
+        PreviousValue? previous = null;
+        var hasPrevious = inner[offset++];
+        if (hasPrevious > 1)
+            throw new TswapException("Malformed record: bad previous-value flag");
+        if (hasPrevious == 1)
+        {
+            if (typeByte == (byte)RecordType.Tombstone)
+                throw new TswapException("Malformed record: a tombstone carries a previous value");
+            Need(inner, offset, StampSize + 4, "previous value");
+            var previousVersion = ReadStamp(inner, offset);
+            offset += StampSize;
+            var previousLength = BinaryPrimitives.ReadUInt32LittleEndian(inner.AsSpan(offset, 4));
+            offset += 4;
+            if (previousLength > inner.Length - offset - 1)
+                throw new TswapException("Malformed record: previous value length prefix exceeds decrypted payload");
+            previous = new PreviousValue(previousVersion, inner.AsSpan(offset, (int)previousLength).ToArray());
+            offset += (int)previousLength;
+        }
         var burnCount = inner[offset++];
         if (burnCount > RecordMerge.MaxBurns)
             throw new TswapException($"Malformed record: {burnCount} burns (at most {RecordMerge.MaxBurns})");
@@ -249,7 +286,7 @@ public static class SecretRecordCodec
         if (!CryptographicOperations.FixedTimeEquals(expectedId, recordId))
             throw new TswapException("Malformed record: its record id does not belong to the name inside it");
 
-        return new SecretRecord(recordId, write, (RecordType)typeByte, version, name, createdMs, value, burns);
+        return new SecretRecord(recordId, write, (RecordType)typeByte, version, name, createdMs, value, burns, previous);
     }
 
     private static void Need(byte[] inner, int offset, int count, string what)

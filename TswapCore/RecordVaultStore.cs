@@ -317,6 +317,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         return new SecretsDb(secrets)
         {
+            KeepsPreviousValues = true,
             UnreadableFiles = unreadable.Count == 0 ? null : unreadable.Order(StringComparer.Ordinal).ToList(),
             UnreadableRecord = unreadable.Count == 0
                 ? null
@@ -344,6 +345,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             outstanding?.Reason)
         {
             History = history.Count == 0 ? null : history,
+            PreviousValue = state.Previous == null ? null : Encoding.UTF8.GetString(state.Previous.Value),
         };
     }
 
@@ -506,13 +508,21 @@ public sealed class RecordVaultStore : IFileVaultStore
                 // so an outstanding burn of that version becomes history.
                 var version = NextStamp();
                 var burns = (state?.Burns ?? []).ToList();
+                // Fix round 1, B: the value this version replaces is kept (one level).
+                var live = state is { Type: not RecordType.Tombstone };
+                var previous = live ? new PreviousValue(state!.Version, state.Value) : null;
+                // restore: the previous value comes back with its burn outstanding again (it is
+                // still compromised), keeping the original burn's time and reason.
+                if (secret.Restored && live && state!.Previous is { } restoredFrom)
+                    foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
+                        burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
                 if (secret.BurnedAt != null)
                     burns.Add(new BurnEntry(version, NextStamp(), secret.BurnReason));
                 var createdMs = state is { Type: not RecordType.Tombstone }
                     ? state.CreatedMs
                     : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
                 next = new SecretRecord(
-                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns);
+                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous);
             }
             else if (secret.BurnedAt != null && state.OutstandingBurn == null)
             {
@@ -526,7 +536,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             if (current.State is not { Type: not RecordType.Tombstone } state || db.Secrets.ContainsKey(state.Name))
                 continue;
-            var tombstone = state with { Type = RecordType.Tombstone, Version = NextStamp(), Value = [] };
+            var tombstone = state with { Type = RecordType.Tombstone, Version = NextStamp(), Value = [], Previous = null };
             writes.Add((current.FileName, RecordMerge.Normalize(tombstone)));
         }
 

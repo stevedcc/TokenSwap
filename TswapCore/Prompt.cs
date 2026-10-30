@@ -25,7 +25,11 @@ automated/silent unlocking by malicious processes.
 - `%CMD% ingest <name>` — Pipe a secret from an external source: `<source> | %CMD% ingest <name>`
 - `%CMD% rotate <name> [length]` — Replace a BURNED secret with a new random value (never displayed); for a
   value from an external source use `<source> | %CMD% ingest --rotate <name>`. No sudo for a burned secret;
-  rotating one that is not burned needs sudo (ask the user), because services may still use it
+  rotating one that is not burned needs sudo (ask the user), because services may still use it.
+  A rotation keeps the value it replaced: use `{{name:previous}}` in `run` (or `# tswap: name:previous` in
+  `apply`) to authenticate the change at the service with the old value, e.g.
+  `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`.
+  A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
 - `%CMD% names` — List all secret names (no values shown)
 - `%CMD% migrate` — Guide to upgrade YubiKey slots for touch requirement
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
@@ -50,6 +54,7 @@ automated/silent unlocking by malicious processes.
 - `sudo %CMD% recover --yubikey|--tpm|--secure-enclave` — Opens the vault with the recovery key (human use only)
 - `sudo %CMD% migrate --to-records [--vault-dir <dir>]` — Converts the vault to one file per secret (human use only)
 - `sudo %CMD% vault merge <folder>` — Merges another copy of the vault folder into this one (human use only)
+- `sudo %CMD% restore <name>` — Puts back the value the last rotation replaced (human use only; ask the user)
 
 ## Key rules:
 1. NEVER use sudo commands — they expose secret values

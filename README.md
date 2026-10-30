@@ -280,6 +280,18 @@ the secret exists throughout. Remember to update the system that uses it.
   secret is refused there, because that format keeps one burn per secret and no history and an
   incident record is never overwritten: convert first with `sudo tswap migrate --to-records`.
 - `create` and `ingest` without `--rotate` still refuse an existing name, and point to `rotate`.
+- **The previous value is kept (record store, one level).** Use `{{name:previous}}` in `run` (or
+  `# tswap: name:previous` in `apply`) to change the credential at the service while the old one
+  still authenticates; it is never displayed:
+
+  ```bash
+  tswap rotate db-pw && tswap run psql "postgresql://app:{{db-pw:previous}}@db/app" -c "ALTER ROLE app PASSWORD '{{db-pw}}'"
+  ```
+
+  `sudo tswap restore <name>` writes the previous value back as a new version (and if that value
+  was burned, its burn is outstanding again). So an agent's burn-then-rotate is visible (the burn
+  stays in the record) and reversible. A secret that was never rotated has no previous value; the
+  classic store keeps none and refuses both, pointing to `migrate --to-records`.
 
 ## Sharing a vault between machines
 

@@ -115,11 +115,11 @@ public sealed class RecordStoreTests : IDisposable
     [Fact]
     public void ValuesInOneSizeBucket_GiveTheSameFileSize_OneBytePastIt_TheNextBucket()
     {
-        // Inner payload for a one-letter name: 39 fixed + 1 (name) + 4 + value + 1 (burn count)
-        // = 45 + value bytes, padded to 256-byte buckets.
+        // Inner payload for a one-letter name: 39 fixed + 1 (name) + 4 + value + 1 (previous
+        // flag) + 1 (burn count) = 46 + value bytes, padded to 256-byte buckets.
         _m.Ok("x", "ingest", "a");
-        _m.Ok(new string('y', 256 - 45), "ingest", "b");
-        _m.Ok(new string('z', 256 - 45 + 1), "ingest", "c");
+        _m.Ok(new string('y', 256 - 46), "ingest", "b");
+        _m.Ok(new string('z', 256 - 46 + 1), "ingest", "c");
 
         long Size(string name) => new FileInfo(RecordFile(_m, _vaultKey, name)).Length;
         Assert.Equal(Size("a"), Size("b"));

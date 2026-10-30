@@ -427,8 +427,15 @@ decisions win:
    slots under T5's approval guard), records by the rules; the other copy is only read.
 6. **Stale-write guard:** each record is re-read before it is written; any change since this
    command loaded it refuses the save before anything is written.
-7. **Rotation (#8):** `rotate` / `ingest --rotate` write a newer version; no delete. Sudo unless
-   the winning version is burned. The classic store rotates unburned secrets only.
+7. **Rotation (#8):** `rotate` / `ingest --rotate` always write a newer version (even with the
+   same value); no delete. Sudo unless the winning version is burned. The classic store rotates
+   unburned secrets only. **The previous value is kept** (owner decision 2026-10-30, fix round
+   1): a value record carries the value it replaced (one level) with that value's version stamp,
+   inside the encrypted payload and covered by the padding; it travels with its version in a
+   merge (no new rule). `run` / `apply` take `{{name:previous}}` / `# tswap: name:previous` (never
+   displayed; ':' is not a name character), and `sudo tswap restore <name>` writes it back as a new
+   version, with its burn outstanding again if it had one. A burn-then-rotate by an agent is thus
+   visible and reversible. The classic store has no previous value and refuses both.
 8. **`migrate --to-records`** (sudo): temp folder, read back and compare, rename, switch
    `config.json`, then move `secrets.json.enc` aside; a plain XOR vault becomes a keyring vault
    in the same run (`K_v` = its derived master key, one slot per enrolled YubiKey, a recovery

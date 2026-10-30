@@ -4,7 +4,9 @@ namespace TswapCore;
 
 public static class Validation
 {
-    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
+    // Fix round 1, B: '{{name:previous}}' names the value the last rotation replaced. ':' is not a
+    // name character (ValidNameRegex), so the suffix can't collide with a secret name.
+    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+(?::previous)?)\}\}");
 
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
     private const int MaxNameLength = 64;

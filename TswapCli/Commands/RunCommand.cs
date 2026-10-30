@@ -50,19 +50,15 @@ public sealed class RunCommand : ICliCommand
 
         // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
         // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
+        // Fix round 1, B: a token is a name or 'name:previous' (SecretsDb.ResolveToken).
+        var secretValues = new Dictionary<string, string>();
         foreach (var token in tokens)
         {
-            if (!db.Secrets.ContainsKey(token))
-            {
-                db.ThrowIfUnreadable(token);
-                throw new TswapException($"Secret '{token}' not found");
-            }
-            if (db.Secrets[token].Value == null)
-                throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
+            secretValues[token] = db.ResolveToken(token)
+                ?? throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
         }
 
         // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
-        var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
         var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
 
         // Re-check after substitution: a token in the program or option position (e.g.

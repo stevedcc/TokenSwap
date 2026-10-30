@@ -86,4 +86,14 @@ public class PromptTests
         Assert.Contains("- `sudo tswap migrate --to-records", never);
         Assert.Contains("- `sudo tswap vault merge <folder>`", never);
     }
+
+    [Fact]
+    public void Template_ExplainsPreviousAndRestore()
+    {
+        // Fix round 1, B: the old value authenticates the change; a rotation is visible and reversible.
+        var text = Prompt.GetText("tswap");
+        Assert.Contains("{{db-pw:previous}}", text);
+        Assert.Contains("- `sudo tswap restore <name>`", text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..]);
+        Assert.Contains("reversible", text);
+    }
 }

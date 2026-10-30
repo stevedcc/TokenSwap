@@ -15,6 +15,18 @@ public sealed record BurnEntry(Stamp Version, Stamp Burn, string? Reason)
 }
 
 /// <summary>
+/// Fix round 1, B (owner decision 2026-10-30): the value a rotation replaced, one level, with that
+/// value's version stamp (so a restore can find its burn). Inside the encrypted payload.
+/// </summary>
+public sealed record PreviousValue(Stamp Version, byte[] Value)
+{
+    public bool Equals(PreviousValue? other) =>
+        other is not null && Version.Equals(other.Version) && Value.AsSpan().SequenceEqual(other.Value);
+
+    public override int GetHashCode() => HashCode.Combine(Version, Value.Length);
+}
+
+/// <summary>
 /// One decoded per-secret record (issues #111-#113, brief T6 decisions 3 and 4): the whole merged
 /// state of one secret, so one file is enough to merge against any other copy of it.
 /// <see cref="SecretRecordCodec"/> owns the exact on-disk byte layout.
@@ -44,6 +56,10 @@ public sealed record BurnEntry(Stamp Version, Stamp Burn, string? Reason)
 /// The outstanding burn (if any) and the bounded burn history (at most
 /// <see cref="RecordMerge.MaxBurns"/> entries), in canonical order (see <see cref="RecordMerge"/>).
 /// </param>
+/// <param name="Previous">
+/// The value this version replaced (fix round 1, B), or null (a first value, or a tombstone).
+/// It travels with its version in a merge: no merge rule of its own.
+/// </param>
 public sealed record SecretRecord(
     byte[] RecordId,
     Stamp Write,
@@ -52,7 +68,8 @@ public sealed record SecretRecord(
     string Name,
     long CreatedMs,
     byte[] Value,
-    IReadOnlyList<BurnEntry> Burns)
+    IReadOnlyList<BurnEntry> Burns,
+    PreviousValue? Previous = null)
 {
     /// <summary>The outstanding burn: a burn of the winning version, when that version is a value.</summary>
     public BurnEntry? OutstandingBurn =>
@@ -69,5 +86,6 @@ public sealed record SecretRecord(
         && Name == other.Name
         && CreatedMs == other.CreatedMs
         && Value.AsSpan().SequenceEqual(other.Value)
-        && Burns.SequenceEqual(other.Burns);
+        && Burns.SequenceEqual(other.Burns)
+        && Equals(Previous, other.Previous);
 }

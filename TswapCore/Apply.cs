@@ -4,7 +4,8 @@ namespace TswapCore;
 
 public static class Apply
 {
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
+    // Fix round 1, B: '# tswap: name:previous' names the value the last rotation replaced.
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
     
     // Match empty string patterns with quotes: key: "" or key: ''
     private static readonly Regex EmptyValueRegex = new(@"^(.*[:=]\s*)([""'])\2(\s*)$");
@@ -35,12 +36,17 @@ public static class Apply
 
             var secretName = markerMatch.Groups[1].Value;
 
-            // Check if secret exists
-            if (!db.Secrets.TryGetValue(secretName, out var secret))
+            // Check the secret exists (and, for name:previous, that it has a previous value).
+            var baseName = secretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal)
+                ? secretName[..^SecretsDb.PreviousSuffix.Length]
+                : secretName;
+            if (!db.Secrets.ContainsKey(baseName))
             {
-                db.ThrowIfUnreadable(secretName);
-                throw new Exception($"Secret '{secretName}' not found (line {i + 1})");
+                db.ThrowIfUnreadable(baseName);
+                throw new Exception($"Secret '{baseName}' not found (line {i + 1})");
             }
+            var value = db.ResolveToken(secretName, $" (line {i + 1})");
+            var burned = db.Secrets[baseName].BurnedAt.HasValue && baseName == secretName;
 
             // Find and replace empty value patterns before the marker
             // Patterns to match:
@@ -63,8 +69,8 @@ public static class Apply
                 var whitespace = match.Groups[3].Value;  // optional whitespace
 
                 // Escape the secret value for the appropriate quote style
-                var escapedValue = EscapeForQuote(secret.Value, quote);
-                if (secret.BurnedAt.HasValue)
+                var escapedValue = EscapeForQuote(value, quote);
+                if (burned)
                     warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
                 // Ensure at least one space before the marker so '#' is a valid YAML comment
                 // (without whitespace, key: "value"# tswap: name is not a comment in YAML)
@@ -80,8 +86,8 @@ public static class Apply
                 {
                     var prefix = unquotedMatch.Groups[1].Value;
                     // Default to double quotes for safety
-                    var escapedValue = EscapeForQuote(secret.Value, "\"");
-                    if (secret.BurnedAt.HasValue)
+                    var escapedValue = EscapeForQuote(value, "\"");
+                    if (burned)
                         warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
                 }
