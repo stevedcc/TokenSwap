@@ -90,9 +90,17 @@ public sealed class RecoverCommand : ICliCommand
             try
             {
                 var slotKeyPair = SlotKeyPair.Generate();
-                newSlot = MachineSlotWrap.Wrap(
-                    vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
-                    keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = hwBlob };
+                try
+                {
+                    newSlot = MachineSlotWrap.Wrap(
+                        vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+                        keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = hwBlob };
+                }
+                finally
+                {
+                    // Review minor: the slot's private key now lives only inside the wrap.
+                    CryptographicOperations.ZeroMemory(slotKeyPair.PrivateKey);
+                }
             }
             finally
             {

@@ -443,16 +443,18 @@ public sealed class SlotCommand : ICliCommand
         // Brief T4 decision 6: a pending request now enrolls one YubiKey and keeps its blob. A
         // pending pair request from an older tswap has none and cannot be finished any more.
         if (config.PendingSlotHwBlob == null)
-            throw new TswapException(
-                "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
-                "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
-                "it approved again.");
+            throw new TswapException((config.Backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey
+                ? "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
+                  "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
+                  "it approved again."
+                : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName()}' slot request has no hardware " +
+                  "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
         var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
 
-        var pendingSlotId = Convert.FromBase64String(config.PendingSlotId);
-        var pendingPublicKey = Convert.FromBase64String(config.PendingSlotPublicKey);
-        var pendingPrivateKey = Convert.FromBase64String(config.PendingSlotPrivateKey);
+        var pendingSlotId = DecodePending(config.PendingSlotId, "slot id");
+        var pendingPublicKey = DecodePending(config.PendingSlotPublicKey, "public key");
+        var pendingPrivateKey = DecodePending(config.PendingSlotPrivateKey, "private key");
 
         var approveSlotId = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotId, KeyringFormat.SlotIdSize, "approve file's slot id");
         if (!approveSlotId.AsSpan().SequenceEqual(pendingSlotId))
@@ -479,7 +481,7 @@ public sealed class SlotCommand : ICliCommand
                 $"This approve file is for a '{(approve.NewSlotBackend ?? HardwareBackend.YubiKey).DisplayName()}' slot, which does not " +
                 $"match this machine's pending request ('{backend.DisplayName()}'). " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
-        var pendingHwBlob = Convert.FromBase64String(config.PendingSlotHwBlob);
+        var pendingHwBlob = DecodePending(config.PendingSlotHwBlob, "hardware blob");
         var approveHwBlob = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot hardware blob");
         if (!approveHwBlob.AsSpan().SequenceEqual(pendingHwBlob))
             throw new TswapException(
@@ -567,6 +569,20 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
         c.Out.WriteLine("Until then, only this machine's copy of the vault has the new slot.");
         return 0;
+    }
+
+    /// <summary>A pending-request field of config.json, or an actionable "Config is corrupted" error.</summary>
+    private static byte[] DecodePending(string base64, string what)
+    {
+        try
+        {
+            return Convert.FromBase64String(base64);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException(
+                $"Config is corrupted: the pending slot request's {what} is not valid base64. Run 'tswap slot request' again on this machine.");
+        }
     }
 
     // --- slot add --yubikey (runs on this machine, adds to this machine's keyring) ---

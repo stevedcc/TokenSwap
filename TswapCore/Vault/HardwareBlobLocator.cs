@@ -43,6 +43,10 @@ public static class HardwareBlobLocator
         // before it gets here, so this never opens a vault.) Only together with PendingSlotId,
         // which is what that guard keys on: a half-cleared config must not make the pending
         // KEK_slot a classic vault's master key.
+        if (config.PendingSlotId != null && config.PendingSlotHwBlob == null)
+            throw new TswapException(
+                $"Config is corrupted: this machine's pending '{backend.DisplayName()}' slot request has no hardware blob. " +
+                "Run 'tswap slot request' again on this machine.");
         if (config.PendingSlotHwBlob != null && config.PendingSlotId != null)
         {
             try

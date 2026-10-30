@@ -175,6 +175,41 @@ public class SlotRequestHardwareTests : IDisposable
     }
 
     [Fact]
+    public void APendingSlotWithoutItsBlob_LocatorGivesATswapException()
+    {
+        // Review minor: a PendingSlotId with a null blob is a TswapException, never ArgumentNullException.
+        var pending = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm,
+            PendingSlotId: Convert.ToBase64String(new byte[16]));
+
+        var ex = Assert.Throws<TswapException>(() => TswapCore.Vault.HardwareBlobLocator.Read(pending, HardwareBackend.Tpm));
+
+        Assert.Contains("pending", ex.Message);
+        Assert.Contains("slot request", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(null, "no hardware blob")]
+    [InlineData("not base64!!", "not valid base64")]
+    public void AcceptWithADamagedPendingTpmBlob_IsAnActionableTswapError(string? blob, string expected)
+    {
+        RouterVault();
+        var server = Machine("server", tpm: RandomNumberGenerator.GetBytes(32));
+        server.Ok("", "slot", "request", "--tpm", server.PathOf("request.json"));
+        _router.Ok("", "slot", "approve", server.PathOf("request.json"), server.PathOf("approve.json"));
+        File.WriteAllText(server.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            server.Config with { PendingSlotHwBlob = blob }, TswapJsonContext.Default.Config));
+        var before = server.ConfigText;
+
+        var (exit, _, stderr) = server.Run("", "slot", "accept", server.PathOf("approve.json"));
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(expected, stderr);
+        Assert.Contains("slot request", stderr);
+        Assert.DoesNotContain("pair", stderr);
+        Assert.Equal(before, server.ConfigText);
+    }
+
+    [Fact]
     public void APendingBlobWithoutAPendingSlot_NeverOpensAsAClassicVault()
     {
         // A config with the pending blob but no PendingSlotId (hand-edited or half-cleared) must
