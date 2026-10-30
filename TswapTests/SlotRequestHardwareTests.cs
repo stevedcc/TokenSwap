@@ -159,6 +159,24 @@ public class SlotRequestHardwareTests : IDisposable
         Assert.Equal("router-pw", OpenCopyOn(_router));
     }
 
+    [Fact]
+    public void APendingBlobWithoutAPendingSlot_NeverOpensAsAClassicVault()
+    {
+        // A config with the pending blob but no PendingSlotId (hand-edited or half-cleared) must
+        // not let the unsealed KEK_slot be used as a classic vault's master key.
+        var server = Machine("server", tpm: RandomNumberGenerator.GetBytes(32));
+        server.Ok("", "slot", "request", "--tpm", server.PathOf("request.json"));
+        var halfCleared = server.Config with { PendingSlotId = null };
+        File.WriteAllText(server.ConfigPath, System.Text.Json.JsonSerializer.Serialize(halfCleared, TswapJsonContext.Default.Config));
+
+        var (exit, stdout, stderr) = server.Run("", "names");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("no sealed key", stderr);
+        Assert.False(File.Exists(server.SecretsPath));
+        Assert.DoesNotContain("No secrets", stdout);
+    }
+
     [Theory]
     [InlineData("--tpm", "--secure-enclave")]
     [InlineData("--secure-enclave", "--tpm")]

@@ -40,8 +40,10 @@ public static class HardwareBlobLocator
         // Brief T5 decision 2: a machine between 'slot request --tpm|--secure-enclave' and 'slot
         // accept' keeps its freshly sealed blob in PendingSlotHwBlob; accept recovers KEK_slot from
         // it through VaultUnlocker.UnlockHardware. (VaultUnlocker.Unlock refuses a pending config
-        // before it gets here, so this never opens a vault.)
-        if (config.PendingSlotHwBlob != null)
+        // before it gets here, so this never opens a vault.) Only together with PendingSlotId,
+        // which is what that guard keys on: a half-cleared config must not make the pending
+        // KEK_slot a classic vault's master key.
+        if (config.PendingSlotHwBlob != null && config.PendingSlotId != null)
         {
             try
             {
