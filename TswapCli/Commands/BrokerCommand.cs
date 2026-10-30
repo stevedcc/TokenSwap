@@ -91,8 +91,9 @@ public sealed class BrokerCommand : ICliCommand
             Log = log,
         };
 #if DEBUG
-        // The end-to-end tests connect as their own uid, which serve otherwise refuses. Compiled
-        // into Debug builds only (fix round 1); there, only with TSWAP_TEST_KEY set (a test key).
+        // The end-to-end tests connect as their own uid, which serve otherwise refuses, on the HTTP
+        // and the ssh-agent sockets alike (one switch). Compiled into Debug builds only (fix round 1);
+        // there, only with TSWAP_TEST_KEY set (a test key).
         options = options with { AllowOwnUidForTests = ctx.TestKey != null };
 #endif
 
@@ -141,9 +142,6 @@ public sealed class BrokerCommand : ICliCommand
         {
             Keys = SshAgentKeyLoader.Load(policy, source),
             KeySource = source,
-            // Only a Debug build with TSWAP_TEST_KEY has a test key (ReleaseBuildGateTests): the
-            // end-to-end tests connect as their own uid, which the agent otherwise refuses.
-            AllowOwnUidForTests = ctx.TestKey != null,
         };
     }
 

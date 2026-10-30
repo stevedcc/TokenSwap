@@ -44,11 +44,16 @@ public sealed class SshAgentHarness : IAsyncDisposable
     }
 
     /// <summary>Starts serve with the ssh-agent endpoint; <paramref name="agent"/> gets the policy and returns the agent options.</summary>
-    public async Task<BrokerServer> StartAsync(string configJson, Func<BrokerPolicy, SshAgentOptions> agent, BrokerLimits? limits = null)
+    /// <param name="allowOwnUid">
+    /// The harness connects as its own uid, which both the HTTP and the agent sockets refuse; true (the
+    /// default) sets the one test switch, <see cref="BrokerServerOptions.AllowOwnUidForTests"/>.
+    /// </param>
+    public async Task<BrokerServer> StartAsync(string configJson, Func<BrokerPolicy, SshAgentOptions> agent, BrokerLimits? limits = null,
+        bool allowOwnUid = true)
     {
         var policy = BrokerPolicy.Parse(configJson);
         Holder = new BrokerPolicyHolder(policy);
-        var options = Broker.Options(limits: limits) with { Policy = Holder, SshAgent = agent(policy) };
+        var options = Broker.Options(limits: limits) with { Policy = Holder, SshAgent = agent(policy), AllowOwnUidForTests = allowOwnUid };
         Server = await BrokerServer.StartAsync(options);
         return Server;
     }

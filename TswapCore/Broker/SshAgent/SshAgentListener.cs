@@ -120,8 +120,9 @@ public sealed class SshAgentListener
                 return;
             }
             (uid, pid) = (creds.Uid, creds.Pid);
-            // As brief T9 decides for the HTTP sockets: no client shares the broker's (the vault user's) uid.
-            if (creds.Uid == _server.Ownership.EffectiveUid && !_agent.AllowOwnUidForTests)
+            // As brief T9 decides for the HTTP sockets, with the same switch: no client shares the
+            // broker's (the vault user's) uid.
+            if (creds.Uid == _server.Ownership.EffectiveUid && !_server.AllowOwnUidForTests)
             {
                 log.Connection(logName, creds.Uid, creds.Pid, "own-uid");
                 return;

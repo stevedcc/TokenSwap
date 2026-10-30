@@ -211,7 +211,7 @@ public class SshAgentSshdTests(ITestOutputHelper output) : IAsyncLifetime
         {
             var loaded = SshAgentKeyLoader.Load(policy, source);
             loadReads = source.Reads;
-            return new SshAgentOptions { Keys = loaded, KeySource = source, AllowOwnUidForTests = true };
+            return new SshAgentOptions { Keys = loaded, KeySource = source };
         });
 
         // sshd: unprivileged, loopback, this temp folder only.

@@ -21,7 +21,7 @@ public class SshAgentFramingTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _h.DisposeAsync();
 
-    private static SshAgentOptions Agent(BrokerPolicy policy, bool allowOwnUid = true) => new()
+    private static SshAgentOptions Agent(BrokerPolicy policy) => new()
     {
         Keys = new Dictionary<string, SshAgentKey>
         {
@@ -30,11 +30,10 @@ public class SshAgentFramingTests : IAsyncLifetime
             ["k3"] = new("k3", "key-three", K3),
         },
         KeySource = new FakeSshKeySource(_ => null),
-        AllowOwnUidForTests = allowOwnUid,
     };
 
     private Task StartAsync(string? config = null, bool allowOwnUid = true) =>
-        _h.StartAsync(config ?? _h.Config(), p => Agent(p, allowOwnUid));
+        _h.StartAsync(config ?? _h.Config(), Agent, allowOwnUid: allowOwnUid);
 
     [Fact]
     public async Task Identities_ListOnlyTheKeysOnThisSocketsAllowList()

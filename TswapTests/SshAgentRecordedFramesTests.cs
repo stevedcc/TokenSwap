@@ -32,7 +32,7 @@ public class SshAgentRecordedFramesTests : IAsyncLifetime
         var pem = Encoding.ASCII.GetBytes(session.ClientKeyPem);
         var source = new FakeSshKeySource(_ => (byte[])pem.Clone());
         await _h.StartAsync(_h.Config(keys: [("deploy", "client-key", [allowedHost])], lane1Keys: ["deploy"], otherKeys: []),
-            policy => new SshAgentOptions { Keys = SshAgentKeyLoader.Load(policy, source), KeySource = source, AllowOwnUidForTests = true });
+            policy => new SshAgentOptions { Keys = SshAgentKeyLoader.Load(policy, source), KeySource = source });
         return source;
     }
 

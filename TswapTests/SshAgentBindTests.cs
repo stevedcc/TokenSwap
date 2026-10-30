@@ -163,7 +163,7 @@ public class SshAgentBindTests : IAsyncLifetime
         {
             var keys = SshAgentKeyLoader.Load(policy, _source);
             _loadReads = _source.Reads;
-            return new SshAgentOptions { Keys = keys, KeySource = _source, AllowOwnUidForTests = true, SignsPerMinute = signsPerMinute };
+            return new SshAgentOptions { Keys = keys, KeySource = _source, SignsPerMinute = signsPerMinute };
         });
     }
 

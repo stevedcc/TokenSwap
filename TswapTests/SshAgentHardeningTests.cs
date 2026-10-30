@@ -46,7 +46,6 @@ public class SshAgentHardeningTests : IAsyncLifetime
         {
             Keys = SshAgentKeyLoader.Load(p, source),
             KeySource = source,
-            AllowOwnUidForTests = true,
         });
         return source;
     }
@@ -112,7 +111,6 @@ public class SshAgentHardeningTests : IAsyncLifetime
             ["k3"] = new("k3", "key-three", SshAgentMessages.Ed25519Blob(3)),
         },
         KeySource = new FakeSshKeySource(_ => null),
-        AllowOwnUidForTests = true,
     };
 
     [Fact]
