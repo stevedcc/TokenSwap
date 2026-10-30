@@ -28,9 +28,13 @@ public abstract class SecretProcessor
     {
         var list = new List<(string Name, MatchType Type, string SearchText)>();
 
-        foreach (var (name, secret) in db.Secrets)
+        // Fix round 3: a rotated-away value is a live credential until the service is switched, so
+        // it is matched too, as 'name:previous' (never as 'name').
+        var entries = db.Secrets.Select(kv => (Name: kv.Key, Value: kv.Value.Value))
+            .Concat(db.Secrets.Where(kv => kv.Value.PreviousValue != null)
+                .Select(kv => (Name: kv.Key + SecretsDb.PreviousSuffix, Value: kv.Value.PreviousValue!)));
+        foreach (var (name, value) in entries)
         {
-            var value = secret.Value;
             if (string.IsNullOrEmpty(value)) continue;
 
             // Add original value
