@@ -85,18 +85,20 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // blob as its hwBlob, issue #154): base64 of a versioned (2 or 3)
     // Keyring.KeyringCodec-encoded Keyring holding a random K_v wrapped by this machine's slot,
     // instead of K_v being derived directly from k1/k2 (see Crypto.DeriveKey). Backend-agnostic
-    // and purely additive on top of the existing YubiKey fields above: a keyring vault still
-    // populates YubiKeySerials/RedundancyXor/UnlockChallenge/MasterKeySalt exactly like a
-    // classic YubiKey vault, because VaultUnlocker still recovers this machine's KEK_slot via
-    // the unmodified YubiKeyHardwareService challenge/XOR/PBKDF2 dance — the mere presence of
-    // this field is what tells VaultUnlocker to treat that recovered 32 bytes as KEK_slot and
-    // unwrap K_v from the keyring, rather than use it as the master key directly (see
-    // VaultUnlocker.Unlock). Null (omitted from config.json) for every vault that predates this
+    // and purely additive on top of the fields above. A legacy pair keyring vault (made before
+    // brief T4) still populates YubiKeySerials/RedundancyXor/UnlockChallenge/MasterKeySalt like
+    // a classic YubiKey vault, and VaultUnlocker recovers its KEK_slot via the unmodified
+    // YubiKeyHardwareService challenge/XOR/PBKDF2 dance. Since brief T4 a YubiKey keyring slot is
+    // one key whose parameters are in its slot's hwBlob (YubiKeySlotBlob), and such a vault has
+    // YubiKeySerials = [], RedundancyXor = "" and no UnlockChallenge/MasterKeySalt. Either way the
+    // mere presence of this field is what tells VaultUnlocker to treat the recovered 32 bytes as
+    // KEK_slot and unwrap K_v from the keyring, rather than use them as the master key directly
+    // (see VaultUnlocker.Unlock). Null (omitted from config.json) for every vault that predates this
     // field or never opts in — those are completely unaffected.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Keyring = null,
     // Phase 6 hand-carried enrollment only (issue #121, 'tswap slot request'/'slot accept'): set
     // on the NEW, not-yet-enrolled machine between 'slot request' (which enrolls this machine's
-    // own hardware immediately — same YubiKey challenge/XOR/salt dance as 'init --keyring' — but
+    // own hardware immediately — one YubiKey since brief T4, see PendingSlotHwBlob — but
     // has no K_v yet to build a real Keyring above from) and 'slot accept' (which recovers K_v
     // from another machine's 'slot approve' file and finalizes Keyring, clearing these three
     // fields back to null). PendingSlotId/PendingSlotPublicKey are this slot's identity, chosen
@@ -112,6 +114,12 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotId = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPublicKey = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotPrivateKey = null,
+    // Brief T4 decision 6: base64 of the pending slot's YubiKeySlotBlob (serial, challenge, salt,
+    // touch policy), saved by 'slot request' next to the three fields above, so 'slot accept' can
+    // check the approve file's copy against it and re-derive KEK_slot from the same key. Cleared
+    // by 'slot accept' with the others. Omitted when null (every config without a pending
+    // one-key request, including pending pair requests made by an older tswap).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingSlotHwBlob = null,
     // Issue #121: base64 of this machine's own slot id within Config.Keyring. #119/#120 never
     // needed this — a keyring held at most one Machine-kind slot (plus an optional Recovery
     // slot), so VaultUnlocker.UnlockKeyring could safely assume "the first Machine-kind slot" was

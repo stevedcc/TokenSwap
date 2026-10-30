@@ -111,7 +111,9 @@ public class CommandTests : IDisposable
         // Still a YubiKey vault as far as VaultUnlocker's backend dispatch is concerned —
         // only the presence of Keyring changes how the recovered 32 bytes are used.
         Assert.Null(config.Backend);
-        Assert.Equal(new List<int> { 99999999, 99999998 }, config.YubiKeySerials);
+        // Brief T4 decision 4: one key per slot, so no pair fields (the key's serial is in its
+        // slot's hardware blob, not in YubiKeySerials).
+        Assert.Empty(config.YubiKeySerials);
     }
 
     [Fact]

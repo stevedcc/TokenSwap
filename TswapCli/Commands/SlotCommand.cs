@@ -39,8 +39,8 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file>";
-    public string Description => "Enroll a second machine into an existing --keyring vault via hand-carried files";
+    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files, or add a plugged-in YubiKey to this machine's keyring as its own slot";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -70,26 +70,29 @@ public sealed class SlotCommand : ICliCommand
             "request" => ExecuteRequest(ctx, rest),
             "approve" => ExecuteApprove(ctx, rest),
             "accept" => ExecuteAccept(ctx, rest),
+            "add" => ExecuteAdd(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file>";
+        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
     /// <summary>
-    /// Design decision #2 (this issue's PR body): enrolls this machine's own hardware
-    /// immediately — the identical YubiKey challenge/XOR/salt dance <c>InitCommand.ExecuteKeyring</c>
-    /// already runs — and saves a real, working <see cref="Config"/> (so this machine can already
-    /// recompute its own <c>KEK_slot</c> later), but with no <see cref="Config.Keyring"/> yet.
-    /// Instead it stashes the freshly-generated X25519 keypair and chosen slot id in
+    /// Enrolls <b>one</b> plugged-in YubiKey for this machine's future slot (brief T4 decision 6;
+    /// before T4 this ran the two-key pair dance): a random slot id and X25519 keypair, and the
+    /// key's <see cref="YubiKeySlotBlob"/> (fresh challenge and salt, its touch policy). The key is
+    /// challenged now, so a key without slot 2 configured fails here rather than at accept. Saves a
+    /// pending <see cref="Config"/> (no pair fields: <c>YubiKeySerials = []</c>,
+    /// <c>RedundancyXor = ""</c>) holding the keypair and the blob in
     /// <see cref="Config.PendingSlotId"/>/<see cref="Config.PendingSlotPublicKey"/>/
-    /// <see cref="Config.PendingSlotPrivateKey"/> until <c>slot accept</c> finalizes things —
-    /// possibly much later, after the files are physically carried. No secrets vault is created
-    /// here at all: there is nothing to encrypt yet, and <see cref="VaultUnlocker"/>'s
+    /// <see cref="Config.PendingSlotPrivateKey"/>/<see cref="Config.PendingSlotHwBlob"/> until
+    /// <c>slot accept</c> finalizes things, and writes the request file with the blob. No secrets
+    /// vault is created here: there is nothing to encrypt yet, and <see cref="VaultUnlocker"/>'s
     /// pending-enrollment guard refuses ordinary use of this config until <c>slot accept</c> runs.
+    /// No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the challenge.
     /// </summary>
     private static int ExecuteRequest(CommandContext ctx, string[] args)
     {
@@ -106,59 +109,21 @@ public sealed class SlotCommand : ICliCommand
                 return 0;
         }
 
-        var slotKeyPair = SlotKeyPair.Generate();
-        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-
-        if (ctx.TestKey != null)
-        {
-            // Test mode: bypass YubiKey entirely, same idea as InitCommand's test branches.
-            var testConfig = new Config(
-                new List<int> { TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2 },
-                new string('0', 40),
-                DateTime.UtcNow,
-                null,
-                RngMode.System,
-                Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
-                MasterKeySalt: Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
-                PendingSlotId: Convert.ToBase64String(slotId),
-                PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
-                PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey));
-            ctx.Storage.SaveConfig(testConfig);
-            WriteRequestFile(path, slotId, slotKeyPair.PublicKey);
-            c.Out.WriteLine("Slot request created (test mode)");
-            PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
-            c.Out.WriteLine($"\nRequest file written to: {path}");
-            return 0;
-        }
-
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - Slot Request (new machine)    ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("Enrolling this machine's own hardware (same YubiKey pair dance as 'init");
-        c.Out.WriteLine("--keyring'), then generating this slot's X25519 keypair. Nothing is shared");
-        c.Out.WriteLine("or usable as a vault yet — carry the request file this produces to an");
-        c.Out.WriteLine("already-enrolled machine and run 'slot approve' there.\n");
+        c.Out.WriteLine("Enrolling one YubiKey for this machine's slot, then generating the slot's");
+        c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
+        c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
 
-        var unlockChallenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-
-        c.Out.WriteLine("Insert YubiKey #1 and press Enter...");
+        c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
         if (!c.IsInputRedirected) c.ReadLine();
-        var serial1 = ctx.SelectSerial();
-        var k1 = ctx.YubiKeys.Challenge(serial1, unlockChallenge);
 
-        c.Out.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
-        if (!c.IsInputRedirected) c.ReadLine();
-        var serial2 = ctx.SelectSerial();
-
-        if (serial1 == serial2)
-            throw new TswapException("Same YubiKey detected. Please use two different YubiKeys.");
-
-        var k2 = ctx.YubiKeys.Challenge(serial2, unlockChallenge);
-
-        c.Out.WriteLine("\nDetecting YubiKey slot configuration...");
-        var touch1 = ctx.YubiKeys.DetectTouchRequirement(serial1);
-        var touch2 = ctx.YubiKeys.DetectTouchRequirement(serial2);
-        bool? requiresTouch = touch1.HasValue && touch2.HasValue ? touch1.Value && touch2.Value : null;
+        var slotKeyPair = SlotKeyPair.Generate();
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
+        // Not kept: 'slot accept' re-derives KEK_slot from the same key and blob.
+        CryptographicOperations.ZeroMemory(kekSlot);
 
         c.Out.WriteLine("\nPassword generation entropy source:");
         c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
@@ -167,20 +132,17 @@ public sealed class SlotCommand : ICliCommand
         var rngChoice = c.ReadLine()?.Trim();
         var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
 
-        var xorShare = Crypto.XorBytes(k1, k2);
-        var masterKeySalt = RandomNumberGenerator.GetBytes(32);
-
+        var hwBlob = Convert.ToBase64String(blob.Encode());
         var config = new Config(
-            new List<int> { serial1, serial2 },
-            Convert.ToHexString(xorShare),
-            DateTime.UtcNow,
-            requiresTouch,
-            rngMode,
-            unlockChallenge,
-            MasterKeySalt: Convert.ToBase64String(masterKeySalt),
+            YubiKeySerials: [],
+            RedundancyXor: "",
+            Created: DateTime.UtcNow,
+            RequiresTouch: blob.RequiresTouch,
+            RngMode: rngMode,
             PendingSlotId: Convert.ToBase64String(slotId),
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
-            PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey));
+            PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
+            PendingSlotHwBlob: hwBlob);
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
@@ -192,27 +154,30 @@ public sealed class SlotCommand : ICliCommand
         // No SaveSecrets call: there is no vault yet — 'slot accept' is what first creates one,
         // once it has a real K_v to encrypt an empty database under.
 
-        WriteRequestFile(path, slotId, slotKeyPair.PublicKey);
+        WriteRequestFile(path, slotId, slotKeyPair.PublicKey, hwBlob);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+        c.Out.WriteLine($"YubiKey Serial: {blob.Serial}");
+        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
         PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
         c.Out.WriteLine($"\nRequest file written to: {path}");
         c.Out.WriteLine("Move this file to an already-enrolled machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder. There, run:");
-        c.Out.WriteLine($"  {ctx.Prefix} slot approve <this-file> <approve-file>");
-        c.Out.WriteLine("then bring the resulting approve file back here and run:");
+        c.Out.WriteLine($"  sudo {ctx.Prefix} slot approve <this-file> <approve-file>");
+        c.Out.WriteLine("then bring the resulting approve file back here and, with this YubiKey plugged in, run:");
         c.Out.WriteLine($"  {ctx.Prefix} slot accept <approve-file>");
         return 0;
     }
 
-    private static void WriteRequestFile(string path, byte[] slotId, byte[] publicKey)
+    private static void WriteRequestFile(string path, byte[] slotId, byte[] publicKey, string hwBlob)
     {
         var file = new SlotRequestFile(
             SlotRequestFile.CurrentFormatVersion,
             Convert.ToBase64String(slotId),
-            Convert.ToBase64String(publicKey));
+            Convert.ToBase64String(publicKey),
+            hwBlob);
         File.WriteAllText(path, SlotEnrollmentFileCodec.SerializeRequest(file));
     }
 
@@ -252,8 +217,17 @@ public sealed class SlotCommand : ICliCommand
         var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(requestPath));
         var requesterPublicKey = SlotEnrollmentFileCodec.DecodeFixed(request.PublicKey, SlotKeyPair.KeySize, "slot request file's public key");
         var newSlotId = SlotEnrollmentFileCodec.DecodeFixed(request.SlotId, KeyringFormat.SlotIdSize, "slot request file's slot id");
+        // Brief T4 decision 6: the request enrolls one YubiKey and carries its blob (strictly
+        // decoded by DeserializeRequest). Without one there is no slot to approve.
+        if (request.HwBlob == null)
+            throw new TswapException(
+                "This slot request carries no YubiKey slot blob, so it names no key to enroll. On the requesting " +
+                "machine, run 'tswap slot request <file>' again with one YubiKey plugged in.");
+        var requestedKey = YubiKeySlotBlob.Decode(
+            SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's YubiKey slot blob"));
 
         c.Out.WriteLine($"Read slot request from: {requestPath}");
+        c.Out.WriteLine($"The requesting machine enrolls YubiKey {requestedKey.Serial} as its own slot.");
         PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey);
         c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
 
@@ -265,6 +239,7 @@ public sealed class SlotCommand : ICliCommand
 
         var vaultKey = ctx.Unlock(config);
         var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+        RequireKeyringThatTakesYubiKeySlots(keyring);
 
         var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(
             vaultKey, requesterPublicKey, keyring.FormatVersion, keyring.VaultId, keyring.K, newSlotId);
@@ -283,11 +258,14 @@ public sealed class SlotCommand : ICliCommand
             request.SlotId,
             request.PublicKey,
             Convert.ToBase64String(ephemeralPublicKey),
-            Convert.ToBase64String(wrapped));
+            Convert.ToBase64String(wrapped),
+            request.HwBlob);
 
         File.WriteAllText(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
 
         c.Out.WriteLine($"✓ Approved. Approve file written to: {approvePath}");
+        c.Out.WriteLine("This machine's own keyring is unchanged: the new slot goes only into the requesting");
+        c.Out.WriteLine("machine's copy (v0, no sync).");
         c.Out.WriteLine("Carry this file back to the requesting machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder — then run 'slot accept' there.");
         return 0;
@@ -320,6 +298,14 @@ public sealed class SlotCommand : ICliCommand
         if (config.PendingSlotId == null || config.PendingSlotPublicKey == null || config.PendingSlotPrivateKey == null)
             throw new TswapException("No pending 'slot request' found on this machine. Run 'tswap slot request <file>' first.");
 
+        // Brief T4 decision 6: a pending request now enrolls one YubiKey and keeps its blob. A
+        // pending pair request from an older tswap has none and cannot be finished any more.
+        if (config.PendingSlotHwBlob == null)
+            throw new TswapException(
+                "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
+                "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
+                "it approved again.");
+
         var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
 
         var pendingSlotId = Convert.FromBase64String(config.PendingSlotId);
@@ -338,6 +324,18 @@ public sealed class SlotCommand : ICliCommand
                 "This approve file's echoed public key does not match this machine's pending request. " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
 
+        if (approve.NewSlotHwBlob == null)
+            throw new TswapException(
+                "This approve file carries no YubiKey slot blob for the new slot (made by an older tswap?). " +
+                "Have it approved again with this tswap version.");
+        var pendingHwBlob = Convert.FromBase64String(config.PendingSlotHwBlob);
+        var approveHwBlob = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot YubiKey blob");
+        if (!approveHwBlob.AsSpan().SequenceEqual(pendingHwBlob))
+            throw new TswapException(
+                "This approve file's YubiKey slot blob does not match this machine's pending request. " +
+                "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
+        var blob = YubiKeySlotBlob.Decode(pendingHwBlob);
+
         var vaultId = SlotEnrollmentFileCodec.DecodeFixed(approve.VaultId, KeyringFormat.VaultIdSize, "approve file's vault id");
         var ephemeralPublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
         var wrapped = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotWrapped, "approve file's wrapped slot payload");
@@ -346,14 +344,23 @@ public sealed class SlotCommand : ICliCommand
             wrapped, ephemeralPublicKey, pendingPrivateKey,
             approve.KeyringFormatVersion, vaultId, approve.K, approveSlotId);
 
-        // Recompute this machine's own KEK_slot from the hardware fields 'slot request' already
-        // saved — UnlockHardwareOnly bypasses VaultUnlocker's pending-enrollment guard, which
-        // would otherwise refuse this exact still-pending config.
-        var kekSlot = ctx.UnlockHardwareOnly(config);
-
-        var machineSlot = MachineSlotWrap.Wrap(
-            vaultKey, pendingPrivateKey, pendingPublicKey, pendingSlotId, kekSlot,
-            approve.KeyringFormatVersion, vaultId, approve.K);
+        // Re-derive this machine's KEK_slot from the key 'slot request' enrolled, with the blob it
+        // saved (brief T4): the same key, challenge, salt and slot id give the same KEK_slot.
+        if (!ctx.YubiKeys.ListSerials().Contains(blob.Serial))
+            throw new TswapException(
+                $"Plug in YubiKey {blob.Serial} (the key this machine's slot request enrolled) and run 'slot accept' again.");
+        var kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, pendingSlotId);
+        Slot machineSlot;
+        try
+        {
+            machineSlot = MachineSlotWrap.Wrap(
+                vaultKey, pendingPrivateKey, pendingPublicKey, pendingSlotId, kekSlot,
+                approve.KeyringFormatVersion, vaultId, approve.K) with { HwBlob = pendingHwBlob };
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
 
         var existingSlots = approve.ExistingSlots.Select(dto => new Slot(
             SlotEnrollmentFileCodec.DecodeFixed(dto.SlotId, KeyringFormat.SlotIdSize, "approve file's existing slot id"),
@@ -376,6 +383,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotId = null,
             PendingSlotPublicKey = null,
             PendingSlotPrivateKey = null,
+            PendingSlotHwBlob = null,
         };
 
         ctx.Storage.SaveConfig(finalConfig);
@@ -387,6 +395,105 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");
         return 0;
+    }
+
+    // --- slot add --yubikey (runs on this machine, adds to this machine's keyring) ---
+
+    /// <summary>
+    /// Brief T4 decision 5: adds a plugged-in YubiKey that has no slot yet to <b>this machine's</b>
+    /// keyring as a one-key slot (<see cref="YubiKeySlotBlob"/>), so that key alone opens the
+    /// vault. This is how a TPM vault on the router gets the owner's keys: plug each key into the
+    /// router and run this. Sudo-gated like <c>slot approve</c>: it unlocks the vault and creates a
+    /// new way to decrypt it. Unlocks by any slot; refuses a key that already has a slot (a
+    /// one-key slot's serial, or one of a legacy pair slot's two serials); backs up
+    /// <c>config.json</c> before writing, as <c>init</c> does. Other machines' keyring copies don't
+    /// get the slot (v0, no sync).
+    /// </summary>
+    private static int ExecuteAdd(CommandContext ctx, string[] args)
+    {
+        if (args is not ["--yubikey"])
+            throw new UsageException($"{ctx.Prefix} slot add --yubikey");
+        var c = ctx.Console;
+
+        // The keyring's version is readable from config.json without K_v (config is not secret):
+        // refuse a vault that can never take the slot before sudo, before any unlock or touch
+        // (security review of T4).
+        var config = ctx.Storage.LoadConfig();
+        if (config.Keyring == null)
+            throw new TswapException(
+                "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
+                "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+        byte[] keyringBytes;
+        try
+        {
+            keyringBytes = Convert.FromBase64String(config.Keyring);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException("Config is corrupted: Keyring is not valid base64. Restore config.json from backup.");
+        }
+        RequireKeyringThatTakesYubiKeySlots(KeyringCodec.Decode(keyringBytes));
+
+        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before any unlock.
+        ctx.RequireSudo("slot add");
+
+        var vaultKey = ctx.Unlock(config);
+        var keyring = KeyringCodec.Decode(keyringBytes);
+
+        var enrolled = keyring.Slots
+            .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
+            .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial)
+            .Concat(config.YubiKeySerials) // a legacy pair slot's keys already open this vault
+            .ToHashSet();
+
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, enrolled);
+        Slot newSlot;
+        try
+        {
+            var slotKeyPair = SlotKeyPair.Generate();
+            newSlot = MachineSlotWrap.Wrap(
+                vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+                keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
+
+        var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
+        var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
+
+        // Back up config.json before writing, the way init backs up a vault it replaces.
+        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        {
+            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+            File.Copy(fileStore.ConfigFile, backup);
+            c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
+        }
+        ctx.Storage.SaveConfig(newConfig);
+
+        c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
+        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        PrintFingerprint(c, "New slot", newSlot.PublicKey);
+        c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
+        c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
+        return 0;
+    }
+
+    /// <summary>
+    /// A version 2 keyring's slots carry no hardware blob, and their AEAD binds version 2, so it can
+    /// never hold a one-key YubiKey slot without re-wrapping every slot (which needs every device).
+    /// Refused with what to do instead; the vault keeps working with its existing slots.
+    /// </summary>
+    private static void RequireKeyringThatTakesYubiKeySlots(TswapCore.Keyring.Keyring keyring)
+    {
+        if (keyring.FormatVersion < KeyringFormat.KeyringFormatVersion)
+            throw new TswapException(
+                $"This vault's keyring is format version {keyring.FormatVersion}, made before keyring slots could carry " +
+                "a YubiKey's own parameters, so it cannot take a one-key YubiKey slot. It keeps working with its " +
+                "existing slots; to give each YubiKey its own slot, create a new vault with 'tswap init --keyring' " +
+                "and move the secrets across.");
     }
 
     /// <summary>

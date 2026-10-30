@@ -10,7 +10,7 @@ format of existing vaults.
 ```
 TswapCore/Vault/
 ├── IHardwareKeyService.cs      the seam: recover the vault master key for this machine
-├── YubiKeyHardwareService.cs   YubiKey backend (challenge-response + 1-of-2 XOR)
+├── YubiKeyHardwareService.cs   YubiKey backend for plain vaults and legacy pair slots (challenge-response + 1-of-2 XOR)
 ├── IYubiKeyService.cs          low-level ykman driver (YubiKey-specific, unchanged)
 └── VaultUnlocker.cs            picks a backend from Config.Backend and delegates
 ```
@@ -31,7 +31,7 @@ This matters because the backends do **not** share a primitive:
 
 | Backend | Recovery primitive | Notes |
 |---|---|---|
-| YubiKey | HMAC-SHA1 challenge-response, then XOR-reconstruct + PBKDF2 | Two removable tokens, either unlocks |
+| YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
 | TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, simulator-verified only. Windows: CNG Platform Crypto Provider, VM-verified only |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence/biometric via access control |
 
@@ -60,8 +60,9 @@ public interface IHardwareEnrollmentService
 services implement it, and so does the simulated test backend. Each one generates `KEK_slot`
 randomly inside `Enroll`, wraps or seals it, and returns the key with its own blob. It never
 builds a `Config`: the caller decides where the blob is stored. **YubiKey does not implement
-it**: a YubiKey cannot wrap caller-supplied bytes, it *derives* `KEK_slot` from an interactive
-two-key challenge, so `InitCommand` keeps deriving it and passes it in. Why a sibling
+it**: a YubiKey cannot wrap caller-supplied bytes, it *derives* `KEK_slot` from a challenge, so
+the CLI derives it (since brief T4, `TswapCli/YubiKeySlotEnrollment.cs`, from one key per slot;
+see "YubiKey keyring slots" below) and passes it in. Why a sibling
 interface rather than an `Enroll` method on `IHardwareKeyService` (option (a)):
 `IHardwareKeyService` stays a pure unlock seam (a backend can be unlock-only), and no console
 I/O moves behind an interface, which option (a) would have forced for YubiKey.
@@ -92,6 +93,61 @@ exclusive, and `init` rejects any argument that is not one of its four flags (#1
 and a config without a keyring still uses the recovered 32 bytes as the vault key. **There is no
 automatic migration**: re-create the vault with `tswap init --tpm` (or `--secure-enclave`) and
 re-add your secrets. The population is the maintainer's own machines.
+
+### YubiKey keyring slots: one key per slot (brief T4, issue #184)
+
+Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md` §YubiKey slots):
+
+1. **A YubiKey keyring slot is one key.** `KEK_slot = HKDF-SHA256(ikm: that key's HMAC-SHA1
+   response to the slot's challenge, salt: the slot's salt, info: "tswap/yubikey-slot/v1" ||
+   slotId)`, 32 bytes (`TswapCore/Keyring/YubiKeySlotKek.cs`). Challenge and salt are 32 random
+   bytes each, per slot, from the CSPRNG. HKDF rather than PBKDF2 because the response is a
+   uniformly random 160-bit MAC; stretching adds nothing. The response bytes are zeroed after
+   use. At enrollment the key is challenged twice and the responses compared in constant time;
+   a key that answers differently is refused before anything is written. The key is challenged
+   through the unchanged `IYubiKeyService.Challenge(serial, string)`
+   with the challenge's 64 hex characters, the same 64-byte shape a pair vault's
+   `UnlockChallenge` has always had.
+2. **The slot's parameters live in its v3 hardware blob**, a `YubiKeySlotBlob`
+   (`TswapCore/Keyring/YubiKeySlotBlob.cs`), with no keyring format change: 74 bytes,
+   `"TSYK" || version 1 || serial (int32 LE) || challenge (32) || salt (32) || touch policy (1)`.
+   Decoding is strict (wrong magic, unknown version, wrong length, trailing bytes, unknown
+   touch policy: `TswapException`). The magic tells it apart from a TPM or Secure Enclave blob.
+3. **Unlock** (`VaultUnlocker`): first the vault's own backend, unchanged (TPM, Secure Enclave,
+   or a legacy pair slot). If that throws (backend not in this build, another machine's TPM, no
+   enrolled pair key plugged in) or the vault's own slot is itself a one-key slot, every slot
+   with a YubiKey blob whose serial is plugged in is tried; `chooseSerial` picks the key when
+   several match, and the first slot that authenticates wins. Such a slot works on any machine
+   with the vault files and that key, without `KeyringSlotId`. With no key plugged in the error
+   says "No plugged-in YubiKey matches a slot of this vault" and lists the slot serials. A slot
+   whose blob fails to decode is skipped, and named in the error only if nothing else unlocks.
+4. **`init --keyring`** enrolls one plugged-in key (the serial prompt when several are plugged
+   in): one YubiKey machine slot plus the recovery slot unless `--no-recovery`;
+   `YubiKeySerials = []`, `RedundancyXor = ""`, no `UnlockChallenge`/`MasterKeySalt` (the
+   convention for non-pair vaults); `Backend` stays YubiKey (null). Plain `init` (the XOR vault)
+   is unchanged. No command makes new pair enrollments.
+5. **`slot add --yubikey`** (sudo) unlocks this machine's vault by any slot, enrolls a plugged-in
+   key that has no slot yet (it refuses a key that has one, including a legacy pair slot's
+   keys; a version 2 keyring is refused first, before sudo and any unlock), appends the new slot (its own slot id and X25519 keypair) to this machine's keyring,
+   backs up `config.json` first and prints the slot's fingerprint. This is how a TPM vault on
+   the router gets the owner's keys: plug each key into the router and run it.
+6. **`slot request`** enrolls one key and its request file (format version 2) carries the slot's
+   blob; `slot approve` copies it into the approve file (format version 2), and `slot accept`
+   checks it against its own pending copy (`Config.PendingSlotHwBlob`), re-derives `KEK_slot`
+   from the key and writes the blob into the new slot. A version 1 request (an older tswap's
+   pair request) is refused with an actionable message. `slot approve` still does not change the
+   approver's own keyring (v0, no sync) and says so.
+7. **Existing vaults keep working, byte for byte.** A YubiKey machine slot **without** a YubiKey
+   blob is a **legacy pair slot**: its `KEK_slot` still comes from the two-key XOR share and the
+   per-machine fields (`YubiKeySerials`, `RedundancyXor`, `UnlockChallenge`, `MasterKeySalt`)
+   through the unchanged `YubiKeyHardwareService`. Pair keyring vaults (versions 2 and 3) and
+   plain XOR vaults unlock as before (fixtures: `KeyringV2FixtureTests`,
+   `KeyringV3PairFixtureTests`). A **version 2** keyring cannot take a one-key slot (it has no
+   `hwBlob` column and its slots' AEAD binds version 2), so `slot add --yubikey` and `slot
+   approve` refuse it with what to do instead; it keeps working with its existing slots.
+
+`slots` describes a one-key slot by its own key ("YubiKey 12345678, touch required"), whatever
+the vault's backend.
 
 ## Config discriminator
 
@@ -445,8 +501,8 @@ folder source (`dotnet nuget add source <folder>`) containing the resulting `.nu
    `IHardwareEnrollmentService` (see "The enrollment seam" above): `Enroll` generates a random
    `KEK_slot`, protects it with the hardware and returns it with the backend's blob. `init`
    calls it and never touches the backend's own primitives. A derive-style backend like
-   YubiKey does not implement it; `init` derives its `KEK_slot` itself (and `create`'s
-   hardware-entropy path stays YubiKey-specific).
+   YubiKey does not implement it; the CLI derives its `KEK_slot` itself
+   (`YubiKeySlotEnrollment`), and `create`'s hardware-entropy path stays YubiKey-specific.
 6. **AOT:** implementations are native P/Invoke (Security.framework, or — as the Secure Enclave
    backend shows — a small native shim in another language exposing a C ABI), managed-only CNG
    APIs (Windows TPM's `System.Security.Cryptography.Cng` — no P/Invoke needed there at all), or
@@ -456,10 +512,11 @@ folder source (`dotnet nuget add source <folder>`) containing the resulting `.nu
 
 ## Redundancy and Phase 6
 
-The YubiKey 1-of-2 XOR redundancy is intrinsic to having **two removable tokens** — it does
-not generalize to a TPM or Secure Enclave soldered to one machine. For those, redundancy is
-achieved at the fleet level: the Phase 6 "keyring of wrapped keys" gives each machine its own
-wrapped slot for a shared vault key.
+The YubiKey 1-of-2 XOR redundancy of the plain vault is intrinsic to having **two removable
+tokens** — it does not generalize to a TPM or Secure Enclave soldered to one machine. For those,
+redundancy is achieved at the fleet level: the Phase 6 "keyring of wrapped keys" gives each
+machine its own wrapped slot for a shared vault key. Since brief T4 keyring vaults use the same
+answer for YubiKeys: each key is its own slot, so a spare key is a second slot, not an XOR share.
 
 That is why `IHardwareKeyService` is the same seam Phase 6 builds on — and, per
 `MULTI_MACHINE_KEYING.md`'s two-layer slot wrap design, it needs **no interface change at
@@ -485,8 +542,10 @@ keyring, and `KeyringFormat.KeyringFormatVersion` went 2 → 3 for it. That vers
 slot's AEAD associated data (`MULTI_MACHINE_KEYING.md` §AAD binding), so it cannot be rewritten
 without breaking every slot, and `KeyringCodec.Decode` rejects an unknown version with "created
 by a newer tswap". Version 2 keyrings (YubiKey and recovery slots only, no `hwBlob`) still
-decode, unlock and enroll new machines; a keyring keeps its version for life, because
-re-labelling it would invalidate every existing slot's AEAD. The legacy single-slot fields
+decode and unlock; a keyring keeps its version for life, because re-labelling it would
+invalidate every existing slot's AEAD. Since brief T4 a new machine or key joins as a one-key
+YubiKey slot with a `hwBlob`, which a version 2 keyring cannot hold, so a version 2 vault takes
+no new slots (see "YubiKey keyring slots" above). The legacy single-slot fields
 `Config.SecureEnclaveWrappedKey` and `Config.TpmSealedKey` stay unversioned and are only read
 for vaults made before keyring vaults; there is no automatic migration (re-create and re-add
 your secrets).

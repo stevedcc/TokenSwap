@@ -116,25 +116,30 @@ public class KeyringV2FixtureTests : IDisposable
     }
 
     [Fact]
-    public void Fixture_CanStillApproveANewYubiKeyMachine_WhichKeepsVersion2()
+    public void Fixture_RefusesToApproveAOneKeyYubiKeyMachine_AndKeepsWorking()
     {
-        // A version 2 vault in use must keep enrolling machines. Its slots are bound to
-        // formatVersion 2 in their AEAD, so the joined machine's keyring copy stays version 2.
+        // Brief T4: a slot request now enrolls one YubiKey, whose slot carries its parameters in a
+        // hwBlob. A version 2 keyring has no hwBlob column and its slots' AEAD binds version 2, so
+        // it cannot take such a slot: approve refuses with what to do instead, writes nothing, and
+        // the vault keeps working with its existing slots. (Before T4 this test approved a pair
+        // machine into the version 2 keyring; pair enrollments are gone.)
         var newMachineDir = Path.Combine(_dir, "new-machine");
         Directory.CreateDirectory(newMachineDir);
         var newMachineKey = Convert.FromHexString("E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5");
         var requestFile = Path.Combine(newMachineDir, "request.json");
         var approveFile = Path.Combine(newMachineDir, "approve.json");
-
         Assert.Equal(0, RunOn(newMachineDir, newMachineKey, "slot", "request", requestFile));
-        Assert.Equal(0, RunOn(_dir, _testKey, "slot", "approve", requestFile, approveFile));
-        Assert.Equal(0, RunOn(newMachineDir, newMachineKey, "slot", "accept", approveFile));
 
-        var joined = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(newMachineDir, "config.json")), TswapJsonContext.Default.Config)!;
-        var keyring = KeyringCodec.Decode(Convert.FromBase64String(joined.Keyring!));
-        Assert.Equal(2, keyring.FormatVersion);
-        Assert.Equal([SlotKind.Machine, SlotKind.Recovery, SlotKind.Machine], keyring.Slots.Select(s => s.Kind));
-        Assert.Equal(Context(new FakeConsole(), []).Unlock(FixtureConfig()), UnlockOn(newMachineDir, newMachineKey));
+        var console = new FakeConsole();
+        string[] approve = ["slot", "approve", requestFile, approveFile];
+        var exit = CliRunner.Run(MachineContext(_dir, _testKey, console, approve), approve);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("format version 2", console.ErrorText);
+        Assert.Contains("tswap init --keyring", console.ErrorText);
+        Assert.False(File.Exists(approveFile));
+        Assert.Equal(FixtureConfigJson, File.ReadAllText(Path.Combine(_dir, "config.json")));
+        Assert.Equal(0, RunOn(_dir, _testKey, "get", FixtureSecretName));
     }
 
     private static int RunOn(string dir, byte[] testKey, params string[] args)

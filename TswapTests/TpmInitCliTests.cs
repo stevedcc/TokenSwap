@@ -405,7 +405,9 @@ public class TpmInitCliTests : IDisposable
 
         Assert.Equal(3, desktopKeyring.FormatVersion);
         Assert.Equal(routerKeyring.Slots[0].HwBlob, desktopKeyring.Slots[0].HwBlob);
-        Assert.Null(desktopKeyring.Slots[2].HwBlob); // the desktop's YubiKey slot has none
+        // Brief T4 decision 6: the desktop's slot is a one-key YubiKey slot, whose parameters
+        // travel in its hwBlob (before T4 it was a pair slot with none).
+        Assert.Equal(TestKeyYubiKeyService.Serial1, YubiKeySlotBlob.Decode(desktopKeyring.Slots[2].HwBlob!).Serial);
     }
 
     [Fact]

@@ -146,6 +146,33 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 tswap names
 ```
 
+### Setup with a YubiKey keyring vault (one key per slot)
+
+```bash
+# Configure each YubiKey's slot 2 once, as above (touch recommended)
+ykman otp chalresp --generate --touch 2
+
+# Initialize with ONE key plugged in (several plugged in: tswap asks which)
+tswap init --keyring
+
+# Add each spare key as its own slot: plug it in (the first key may stay plugged in) and run
+sudo tswap slot add --yubikey
+tswap slots                   # lists the slots, with each key's serial
+```
+
+A **keyring vault** has a random vault key wrapped once per slot. Each YubiKey is **its own
+slot**, and any one enrolled key opens the vault alone; there is no XOR share to back up.
+`init --keyring` also makes a break-glass **recovery slot** and prints its private key once
+(store it offline; `--no-recovery` leaves it out). A key's serial, challenge and salt live in
+its slot, so the vault files plus any one enrolled key open the vault on any machine.
+`slot add --yubikey` refuses a key that already has a slot, and backs up `config.json` before
+it writes.
+
+Keyring vaults made by an older tswap with a **YubiKey pair** (two keys, an XOR share) keep
+working as they are. A pair vault whose keyring is format version 2 cannot take new slots; to
+give each key its own slot, create a new vault with `tswap init --keyring` and move the secrets
+across. Plain `tswap init` (above) is unchanged.
+
 ### Setup on a TPM or Secure Enclave machine
 
 ```bash
@@ -159,9 +186,15 @@ private key once; store it offline (tswap never saves it). `--no-recovery` leave
 slot out. `--keyring` is implied and accepted (`tswap init --keyring --tpm` is the same
 command); `--tpm` and `--secure-enclave` cannot be combined. `init` rejects any other argument.
 
-Another machine, for example a desktop with YubiKeys, can join the same vault with
-`tswap slot request` (on the new machine), `tswap slot approve` (on this one) and
-`tswap slot accept` (back on the new one). `tswap slots` lists the slots.
+To let your YubiKeys open this vault too, plug each one into **this** machine and run
+`sudo tswap slot add --yubikey`: each key becomes its own slot, which opens the vault on its own
+(for example on a laptop with a copy of the vault files, or if the TPM is replaced).
+
+Another machine, for example a desktop with a YubiKey, can join the same vault with
+`tswap slot request` (on the new machine, with one YubiKey plugged in), `sudo tswap slot approve`
+(on this one) and `tswap slot accept` (back on the new one, with the same key plugged in). Move
+the two files yourself (scp, USB); `slot approve` does not change this machine's own keyring.
+`tswap slots` lists the slots.
 
 **Vaults made by `tswap init --tpm` or `--secure-enclave` before keyring vaults** (one sealed key,
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
@@ -449,7 +482,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 
 | Command | Sudo | Description |
 |---------|------|-------------|
-| `init [--keyring] [--tpm\|--secure-enclave] [--no-recovery]` | No | Initialize with 2 YubiKeys, or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)) |
+| `init [--keyring] [--tpm\|--secure-enclave] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)) |
 | `migrate` | No | Guide to upgrade slots for touch requirement |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |
 | `ingest <name>` | No | Pipe secret from stdin (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value up to 64 KB |
@@ -467,6 +500,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `get <name>` | Yes | Display a secret value |
 | `list` | Yes | List secrets with creation/modification dates |
 | `delete <name>` | Yes | Remove a secret |
+| `slot add --yubikey` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
 
 Add `-v` or `--verbose` to any command for detailed YubiKey output.
 

@@ -256,6 +256,46 @@ rewrite with the new, one pass, no ceremony). Without it, rotating `K_v` later m
 every YubiKey you ever enrolled," which for a token sitting in a drawer in another country is a
 migration step that never actually happens.
 
+### YubiKey slots: one key per slot (brief T4, issue #184)
+
+Until brief T4 a YubiKey keyring slot still took its `KEK_slot` from **two** keys: `init
+--keyring` and `slot request` challenged both, XORed the responses into a share, and kept the
+serials, share, challenge and salt as per-machine config fields. That contradicted "one machine,
+one device, unlock alone" and "Do not use XOR here" above. Since T4:
+
+1. **A YubiKey slot is one key.** `KEK_slot = HKDF-SHA256(ikm: HMAC-SHA1 response of that key to
+   the slot's challenge, salt: the slot's salt, info: "tswap/yubikey-slot/v1" || slotId)`,
+   32 bytes. Challenge and salt are 32 random bytes each, per slot, from a CSPRNG. HKDF, not
+   PBKDF2: the response is a uniformly random 160-bit MAC under a secret that never leaves the
+   key, so stretching adds nothing. The slot id in `info` means two slots of one key never share
+   a `KEK_slot`. The response bytes are zeroed after use.
+2. **The slot's parameters live in its v3 hardware blob** (#154): a `YubiKeySlotBlob` with its own
+   magic (`"TSYK"`) and version byte, holding serial (int32), challenge (32 bytes), salt
+   (32 bytes) and touch policy (1 byte), strictly decoded. No keyring format change. The blob is
+   not secret (like the XOR share before it, it is useless without the key), and it is not in
+   the AAD: tampering with the challenge or salt only yields a wrong `KEK_slot`, which fails the
+   slot's AEAD; tampering with the serial only changes which key is asked.
+3. **Unlock** tries the vault's own backend first (TPM, Secure Enclave, or a legacy pair slot,
+   unchanged); if that backend isn't available or has no usable slot, it tries every slot with a
+   YubiKey blob whose serial is plugged in (the serial prompt when several match), and the first
+   slot that authenticates wins. A YubiKey slot therefore works on any machine that has the
+   vault files and that key, without `KeyringSlotId`.
+4. **`init --keyring`** enrolls one plugged-in key: one YubiKey slot plus the recovery slot,
+   with no pair fields in config. Plain `init` (the original XOR vault) is unchanged.
+5. **`slot add --yubikey`** (sudo) adds another plugged-in key to **this machine's** keyring as
+   its own slot. This is how the router's TPM vault gets the owner's keys: plug each key into the
+   router and run it. Several keys are several slots, any one of which opens the vault.
+6. **`slot request`** enrolls one key; its request file carries the slot's blob, `slot approve`
+   passes it on in the approve file and `slot accept` writes it into the new slot (see
+   "Hand-carried enrollment").
+7. **A legacy pair slot** is a YubiKey machine slot without a YubiKey blob: a pair keyring vault
+   made before T4 (keyring version 2 or 3), whose `KEK_slot` still comes from the XOR share and
+   the per-machine fields. Those vaults, and plain XOR vaults, keep working byte for byte. No
+   command makes new pair enrollments. A **version 2** keyring cannot take a one-key slot: it has
+   no `hwBlob` column, and its slots' AEAD binds version 2, so moving it to version 3 would mean
+   re-wrapping every slot with every device present. Such a vault keeps working with the slots it
+   has; to give each key its own slot, create a new vault with `init --keyring`.
+
 ## The recovery slot: a bare keypair, not a CA-issued certificate (a path not taken)
 
 An earlier draft of this doc proposed a CSR/CA-issued recovery certificate (self-hosted step-ca
@@ -296,7 +336,7 @@ revocation this credential structurally cannot offer.
 
 | Backend | KEK / wrap | Presence | Platform API |
 |---|---|---|---|
-| YubiKey | challenge-response → `PBKDF2` → `KEK_slot`; AES-256-GCM wrap | touch | ykman / HMAC-SHA1 slot 2 |
+| YubiKey | one key's challenge-response → `HKDF-SHA256` → `KEK_slot` (legacy pair slots: two keys, XOR share, `PBKDF2`); AES-256-GCM wrap | touch | ykman / HMAC-SHA1 slot 2 |
 | TPM 2.0 | seal `KEK_slot` to a machine-bound key (optionally PCR/PIN policy) | PIN / none | Windows TBS + CNG PCP; Linux tpm2-tss |
 | Secure Enclave | ECIES-encrypt `KEK_slot` to a non-extractable P-256 key | biometric / user-presence | Security.framework / CryptoKit |
 | Recovery keypair | Wrap `KEK_slot` to a bare X25519 (or EC) keypair's public key — no PKI, no CSR, no cert, no expiry | none — this is the deliberately presence-free, offline-capable break-glass slot | Custody of the private key is the only control (see above) |
@@ -316,9 +356,16 @@ If the user moves the two files themselves — scp, USB, paste into a terminal �
 trusted as their own hands, and there is no MITM to defend against. Three commands, no protocol
 work, reusing the per-slot X25519 keypair above:
 
-- `slot request` on the new machine — emits its X25519 public key.
-- `slot approve` on an already-enrolled machine — unlocks, wraps `K_v`, emits the slot.
-- `slot accept` on the new machine — imports the slot, re-wraps under its own hardware `KEK_slot`.
+- `slot request` on the new machine — enrolls one YubiKey and emits its X25519 public key and
+  the slot's `YubiKeySlotBlob` (request file format version 2; a version 1 pair request from an
+  older tswap is refused with a message to request again).
+- `slot approve` on an already-enrolled machine — unlocks, wraps `K_v`, emits the slot with the
+  blob. It does not change its own keyring (v0, no sync).
+- `slot accept` on the new machine — imports the slot, re-wraps under its own hardware `KEK_slot`
+  (re-derived from the enrolled key and the blob, after checking the approve file's blob against
+  its own pending copy).
+
+A key for **this** machine needs no exchange at all: `slot add --yubikey` (see "YubiKey slots").
 
 Still display a short fingerprint on both machines as cheap defense in depth (a few dozen lines
 of code), but it is no longer the load-bearing control in v0, so the usable-security question of
