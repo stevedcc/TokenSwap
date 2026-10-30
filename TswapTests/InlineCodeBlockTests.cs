@@ -145,6 +145,12 @@ public class InlineCodeBlockTests
     [InlineData("ionice", "-t", "python", "-", "{{x}}")]
     [InlineData("taskset", "-c", "0-3", "python3", "-c", "print('{{x}}')")]
     [InlineData("chrt", "-f", "10", "bash", "-c", "echo {{x}}")]
+    // Further review round (GLM on Z.ai): taskset -c attached list, sudo/doas -a.
+    [InlineData("taskset", "-c0-3", "python", "-c", "print('{{x}}'[::-1])")]
+    [InlineData("taskset", "--cpu-list=0-3", "python", "-")]
+    [InlineData("sudo", "-a", "pam", "sh", "-c", "rev {{x}}")]
+    [InlineData("sudo", "--auth-type", "pam", "sh", "-c", "rev {{x}}")]
+    [InlineData("doas", "-a", "style", "sh", "-c", "rev {{x}}")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -223,6 +229,9 @@ public class InlineCodeBlockTests
     // Final review round: sudo options that only contain an s or i inside a value pass.
     [InlineData("sudo", "-u", "sys", "./tool", "{{x}}")]
     [InlineData("taskset", "-c", "0-3", "./tool", "{{x}}")]
+    // Further review round: flock's -c counts only as flock's own option, not the command's.
+    [InlineData("flock", "/tmp/l", "git", "-c", "http.extraheader=x {{x}}", "fetch")]
+    [InlineData("taskset", "-c0-3", "./tool", "{{x}}")]
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]

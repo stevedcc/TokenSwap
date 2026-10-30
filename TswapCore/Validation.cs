@@ -314,11 +314,11 @@ public static class Validation
     {
         ["sudo"] = ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-R", "-t", "-U", "-T", "--user", "--group",
             "--chdir", "--chroot", "--close-from", "--host", "--prompt", "--role", "--type",
-            "--command-timeout", "--other-user"],
+            "--command-timeout", "--other-user", "-a", "--auth-type"],
         ["stdbuf"] = ["-i", "-o", "-e", "--input", "--output", "--error"],
         ["time"] = ["-f", "-o", "--format", "--output"],
         ["flock"] = ["-w", "-E", "--timeout", "--wait", "--conflict-exit-code"],
-        ["doas"] = ["-u", "-C"],
+        ["doas"] = ["-u", "-C", "-a"],
         ["timeout"] = ["-s", "-k", "--signal", "--kill-after"],
         ["nice"] = ["-n", "--adjustment"],
         ["ionice"] = ["-c", "-n", "-p", "--class", "--classdata", "--pid"],
@@ -367,7 +367,7 @@ public static class Validation
         var ownOptions = OwnOptions(program, args);
         if ((program is "sudo" or "doas" && ownOptions.Any(a => a is "--shell" or "--login" || ShortCluster(a, program == "doas" ? "s" : "si", "ugCDhprRtUT")))
             || (program.Equals("npx", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--call"))
-            || (program.Equals("flock", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--command")))
+            || (program.Equals("flock", StringComparison.OrdinalIgnoreCase) && FlockRunsShell(args)))
             return new(program, $"'{program}' with a shell option runs shell code, which can transform and print secrets past redaction. {WayOut}");
 
         if (SubcommandTools.Contains(program))
@@ -395,6 +395,12 @@ public static class Validation
 
         WrapperValued.TryGetValue(program, out var valued);
         var skipLeading = WrapperLeadingPositional.Contains(program);
+        // taskset -c LIST (or -cLIST, --cpu-list=LIST): an attached list is the leading
+        // positional itself, so nothing more is skipped; a separate list is skipped as usual.
+        if (program.Equals("taskset", StringComparison.OrdinalIgnoreCase)
+            && args.Any(a => (a.StartsWith("-c", StringComparison.Ordinal) && a.Length > 2 && !a.StartsWith("--", StringComparison.Ordinal))
+                || a.StartsWith("--cpu-list=", StringComparison.Ordinal)))
+            skipLeading = false;
         for (var i = 0; i < args.Count; i++)
         {
             var arg = args[i];
@@ -442,6 +448,29 @@ public static class Validation
     private static readonly HashSet<string> TrustedWrappers = new(StringComparer.OrdinalIgnoreCase)
         { "sudo", "doas", "timeout", "nice", "nohup", "setsid", "time", "stdbuf", "ionice", "flock",
           "chroot", "taskset", "chrt" };
+
+    // flock [options] FILE -c COMMAND: -c is flock's own when it comes before the file or right
+    // after it; a -c further on belongs to the wrapped command (flock FILE git -c x fetch).
+    private static bool FlockRunsShell(List<string> args)
+    {
+        string[] valued = ["-w", "-E", "--timeout", "--wait", "--conflict-exit-code"];
+        for (var i = 0; i < args.Count; i++)
+        {
+            var a = args[i];
+            if (a is "-c" or "--command" || a.StartsWith("--command=", StringComparison.Ordinal))
+                return true;
+            if (valued.Contains(a))
+            {
+                i++;
+                continue;
+            }
+            if (a.StartsWith('-'))
+                continue;
+            // The lock file: only the argument right after it can still be flock's -c.
+            return i + 1 < args.Count && args[i + 1] is "-c" or "--command";
+        }
+        return false;
+    }
 
     // True when a single-dash option cluster (-Es, -si) contains one of the letters before a
     // letter that takes a value (whose attached rest is that value, not more letters).
