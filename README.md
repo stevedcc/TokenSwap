@@ -479,7 +479,9 @@ it is chosen, and doesn't repeat it on every command**.
 - **Everyday commands** print nothing about it, except one line on stderr when a slot's posture
   differs from what this machine last acknowledged (for example a no-touch key's slot arriving
   from another machine with `slot merge`). `tswap slots --ack` acknowledges the current postures;
-  the acknowledgement is per machine, in `config.json` (`AcknowledgedTouch`).
+  the acknowledgement is per machine, in `config.json` (`AcknowledgedTouch`). That file is
+  writable by you and by any process running as you, so the notice is **advisory**: `tswap slots`,
+  which reads each posture from the slot itself, is the reliable view.
 - A classic two-key vault's posture is reviewed by `tswap migrate`, which also prints the guide
   below.
 
@@ -525,6 +527,7 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
+| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture |
 | Brute-force on encrypted vault | AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the vault file (`secrets.json.enc`) could be attacked offline if both the file and XOR share are obtained without a YubiKey |
 
 ### Design rationale

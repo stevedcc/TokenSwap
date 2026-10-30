@@ -121,8 +121,12 @@ public sealed class RecoverCommand : ICliCommand
                 KeyringSlotId = Convert.ToBase64String(slotId),
                 RequiresTouch = hardware == HardwareBackend.SecureEnclave,
             };
-        if (yubiKey != null) // brief T7 item 5: its posture is explained below
+        if (yubiKey != null)
+        {
+            // Brief T7 item 5 / fix round 1: explained first, then acknowledged with the config write.
+            YubiKeySlotEnrollment.PrintTouchPolicy(c, yubiKey);
             newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
+        }
 
         if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
@@ -132,8 +136,6 @@ public sealed class RecoverCommand : ICliCommand
         ctx.Storage.SaveConfig(newConfig);
 
         c.Out.WriteLine($"\n✓ Recovered: {deviceName} now opens this vault as its own slot. The recovery slot stays.");
-        if (yubiKey != null)
-            YubiKeySlotEnrollment.PrintTouchPolicy(c, yubiKey);
         SlotCommand.PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
         c.Out.WriteLine("Other copies of the vault don't have the new slot yet: on each, run");

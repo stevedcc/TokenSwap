@@ -15,7 +15,10 @@ public sealed class FakeConsole(string stdin = "") : IConsole
     private readonly StringReader _in = new(stdin);
 
     public TextWriter Out => _out;
-    public TextWriter Error => _err;
+    public TextWriter Error => Interleaved ? _out : _err;
+
+    /// <summary>T7 fix round 1: stdout and stderr into one writer, so a test can check their order.</summary>
+    public bool Interleaved { get; init; }
     public TextReader In => _in;
     // True (piped stdin) unless a test plays an interactive terminal (brief T5: slot merge asks
     // for a fingerprint confirmation only on a terminal).

@@ -81,6 +81,13 @@ public sealed class FleetMachine : IDisposable
     public (int Exit, string Out, string Err) Run(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin), args);
 
+    /// <summary>Runs with stdout and stderr in one stream (T7 fix round 1: their order), returning it.</summary>
+    public (int Exit, string Text) RunInterleaved(string stdin, params string[] args)
+    {
+        var (exit, text, _) = Run(new FakeConsole(stdin) { Interleaved = true }, args);
+        return (exit, text);
+    }
+
     /// <summary>Runs with stdin as an interactive terminal (not redirected).</summary>
     public (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
