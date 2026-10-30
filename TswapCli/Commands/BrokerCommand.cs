@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using TswapCore;
 using TswapCore.Broker;
 
@@ -38,12 +39,99 @@ public sealed class BrokerCommand : ICliCommand
 
         return args[0] switch
         {
+            "serve" when args.Length == 1 => Serve(ctx),
+            "forward" => Forward(ctx, args[1..]),
             "route" when args.Length >= 2 && args[1] == "add" => RouteAdd(ctx, args[2..]),
             "route" when args.Length >= 2 && args[1] == "remove" => RouteRemove(ctx, args[2..]),
             "socket" when args.Length >= 2 && args[1] == "add" => SocketAdd(ctx, args[2..]),
             "socket" when args.Length >= 2 && args[1] == "remove" => SocketRemove(ctx, args[2..]),
             _ => throw new TswapException(Usage),
         };
+    }
+
+    // ------------------------------------------------------------------ serve
+
+    /// <summary>
+    /// Runs the broker until SIGTERM/SIGINT; SIGHUP reloads broker.json (a valid file is swapped
+    /// in, an invalid or missing one keeps the current config).
+    /// </summary>
+    private static int Serve(CommandContext ctx)
+    {
+        // Decision 1: no same-uid ptrace, no core dumps holding secrets.
+        if (!BrokerNative.MakeNonDumpable())
+            throw new TswapException($"Could not make this process non-dumpable (prctl PR_SET_DUMPABLE, errno {Marshal.GetLastPInvokeError()}); not serving.");
+
+        var owner = Owner(ctx);
+        var configDir = ctx.Env.ConfigDir;
+        var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(owner, configDir));
+        using var log = new BrokerLog(ctx.Console.Error, Path.Combine(configDir, BrokerLog.FileName));
+        using var forwarder = new HttpBrokerForwarder(TimeProvider.System);
+        var options = new BrokerServerOptions
+        {
+            Policy = holder,
+            Secrets = new VaultBrokerSecretSource(ctx.Storage, ctx.Unlocker),
+            Forwarder = forwarder,
+            Log = log,
+        };
+
+        var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        BrokerServer? server = null;
+        void Stop(PosixSignalContext signal)
+        {
+            signal.Cancel = true;
+            stop.TrySetResult();
+        }
+        using var term = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop);
+        using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop);
+        using var hangup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, signal =>
+        {
+            signal.Cancel = true;
+            server?.Reload(() => BrokerConfigFile.Load(owner, configDir));
+        });
+
+        server = BrokerServer.StartAsync(options).GetAwaiter().GetResult();
+        try
+        {
+            stop.Task.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            server.StopAsync().GetAwaiter().GetResult();
+        }
+        return 0;
+    }
+
+    // ------------------------------------------------------------------ forward
+
+    /// <summary>Relays a loopback TCP port to the broker socket until SIGTERM/SIGINT. Needs no vault.</summary>
+    private static int Forward(CommandContext ctx, string[] args)
+    {
+        var (positional, options) = ParseOptions(args, ["--listen", "--socket"]);
+        if (positional.Count != 0)
+            throw new TswapException(Usage);
+        var listen = BrokerTcpRelay.ParseListen(Required(options, "--listen"));
+        var socket = options.GetValueOrDefault("--socket") ?? "/run/tswap.sock";
+
+        var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Stop(PosixSignalContext signal)
+        {
+            signal.Cancel = true;
+            stop.TrySetResult();
+        }
+        using var term = PosixSignalRegistration.Create(PosixSignal.SIGTERM, Stop);
+        using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, Stop);
+
+        var relay = BrokerTcpRelay.Start(listen, socket, ctx.Console.Error);
+        ctx.Console.Error.WriteLine($"tswap broker forward: {relay.LocalEndPoint} -> {socket}");
+        try
+        {
+            stop.Task.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            relay.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        return 0;
     }
 
     // ------------------------------------------------------------------ config edits (sudo)

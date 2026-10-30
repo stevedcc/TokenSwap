@@ -84,6 +84,35 @@ public sealed class BrokerManualClock : TimeProvider
     }
 }
 
+/// <summary>A log writer tests can wait on: completes waiters when a line containing their text is written.</summary>
+public sealed class ObservedLog : StringWriter
+{
+    private readonly List<(string Text, TaskCompletionSource Done)> _waiters = [];
+
+    public override void WriteLine(string? value)
+    {
+        base.WriteLine(value);
+        lock (_waiters)
+            foreach (var w in _waiters.Where(w => value?.Contains(w.Text, StringComparison.Ordinal) == true).ToList())
+            {
+                w.Done.TrySetResult();
+                _waiters.Remove(w);
+            }
+    }
+
+    public Task WaitForAsync(string text)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_waiters)
+        {
+            if (ToString().Contains(text, StringComparison.Ordinal))
+                return Task.CompletedTask;
+            _waiters.Add((text, done));
+        }
+        return done.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+}
+
 /// <summary>A secret source for broker tests: counts unlocks, and can fail or block on demand.</summary>
 public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBrokerSecretSource
 {
@@ -146,7 +175,10 @@ public sealed class BrokerHarness : IAsyncDisposable
 {
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "tswap-bk-" + Guid.NewGuid().ToString("N")[..8]);
     public string SocketDir => Path.Combine(Root, "s");
-    public StringWriter LogText { get; } = new();
+    public ObservedLog LogText { get; } = new();
+
+    /// <summary>Waits for a log line containing <paramref name="text"/> (a hang fails after 30 s).</summary>
+    public Task WaitForLogAsync(string text) => LogText.WaitForAsync(text);
     public BrokerManualClock Clock { get; } = new();
     public FakeBrokerSecrets Secrets { get; set; } = new();
     public FakeBrokerForwarder FakeForwarder { get; } = new();

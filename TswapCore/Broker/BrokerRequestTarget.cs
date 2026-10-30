@@ -11,7 +11,7 @@ public readonly record struct BrokerBuiltTarget(Uri? Outbound, string? DecodedPa
 /// <list type="number">
 /// <item>The raw request target's path (never ASP.NET's decoded <c>Request.Path</c>) is split on '/'.</item>
 /// <item>Each segment is percent-decoded exactly once; a segment that is empty (except a trailing
-/// slash after a real segment), decodes to '.' or
+/// slash), decodes to '.' or
 /// '..', or contains '/', '\', ';', '%', NUL or a control character after decoding is refused
 /// (that catches <c>%2f</c>, <c>%5c</c>, <c>..;</c> and double encoding such as <c>%252e</c>).</item>
 /// <item>The route's regex is matched against the decoded segments joined with '/'.</item>
@@ -60,9 +60,10 @@ public sealed class BrokerRequestTarget
         var decoded = new string[RawSegments.Count];
         for (var i = 0; i < decoded.Length; i++)
         {
-            // A trailing slash after a real segment (a registry's "/v2/") is kept; any other empty
-            // segment ("//", or "/<route>/" with nothing after it) is refused.
-            if (RawSegments[i].Length == 0 && i == decoded.Length - 1 && i > 0)
+            // A trailing slash is kept: "/<route>/" (the upstream's base path itself, e.g. a
+            // registry's "/v2/" ping through a route named v2) and "/<route>/a/". Any other empty
+            // segment ("//") is refused. "/<route>" with no slash has no rest: the uniform 404.
+            if (RawSegments[i].Length == 0 && i == decoded.Length - 1)
             {
                 decoded[i] = "";
                 continue;

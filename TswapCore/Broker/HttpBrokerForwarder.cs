@@ -191,9 +191,10 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or HttpRequestException)
         {
-            // Mid-body: the headers are out, so the only honest signal is a cut connection.
+            // Mid-body: the headers are out, so the only honest signal is a cut connection. The
+            // reason is read first: Abort() itself cancels the client's token.
+            var reason = idle.IsCancellationRequested ? "idle-timeout" : clientAborted.IsCancellationRequested ? "client-closed" : "upstream-error";
             http.Abort();
-            var reason = clientAborted.IsCancellationRequested ? "client-closed" : idle.IsCancellationRequested ? "idle-timeout" : "upstream-error";
             return new BrokerForwardOutcome(status, requestBody.Count, bytesOut, reason);
         }
         return new BrokerForwardOutcome(status, requestBody.Count, bytesOut);

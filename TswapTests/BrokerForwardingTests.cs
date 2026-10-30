@@ -201,6 +201,17 @@ public class BrokerForwardingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TrailingSlash_IsKept_RouteSlashAloneIsTheBasePath()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/")));
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/v2/")));
+
+        Assert.Equal(["/base/", "/base/v2/"], _up.Hits.Select(h => h.RawTarget));
+    }
+
+    [Fact]
     public async Task Redirect_IsPassedBack_NeverFollowed()
     {
         if (OperatingSystem.IsWindows())
@@ -243,8 +254,8 @@ public class BrokerForwardingTests : IAsyncLifetime
         "/bearer/a%zz",
         "/bearer/a%",
         "/bearer/%ff",
-        "/bearer/",
         "/bearer",
+        "/narrow/",                   // the base path itself, outside narrow's regex
         "//evil.com/x",
     };
 

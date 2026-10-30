@@ -384,7 +384,7 @@ public class BrokerResponseTests : IAsyncLifetime
         var text = Encoding.ASCII.GetString(received.ToArray());
         Assert.Contains("partial", text);
         Assert.DoesNotContain("\r\n0\r\n\r\n", text); // cut, not a complete chunked body
-        Assert.Contains("reason=idle-timeout", _h.LogText.ToString());
+        await _h.WaitForLogAsync("reason=idle-timeout"); // logged once the handler returns
     }
 
     [Fact]
