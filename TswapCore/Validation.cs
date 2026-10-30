@@ -326,6 +326,7 @@ public static class Validation
         ["ltrace"] = ["-o", "-e", "-p", "-s", "-u"],
         ["nsenter"] = ["-t", "--target"],
         ["chroot"] = ["--userspec", "--groups"],
+        ["chrt"] = ["-s", "-T", "-D", "--sched-runtime", "--sched-period", "--sched-deadline"],
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
@@ -457,7 +458,7 @@ public static class Validation
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];
-            if (a is "-c" or "--command" || a.StartsWith("--command=", StringComparison.Ordinal))
+            if (a is "-c" or "--command" || a.StartsWith("--command=", StringComparison.Ordinal) || ShortCluster(a, "c", "wE"))
                 return true;
             if (valued.Contains(a))
             {

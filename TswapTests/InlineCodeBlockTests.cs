@@ -151,6 +151,9 @@ public class InlineCodeBlockTests
     [InlineData("sudo", "-a", "pam", "sh", "-c", "rev {{x}}")]
     [InlineData("sudo", "--auth-type", "pam", "sh", "-c", "rev {{x}}")]
     [InlineData("doas", "-a", "style", "sh", "-c", "rev {{x}}")]
+    // Time-boxed last round (GLM on Z.ai): chrt deadline options, flock -c in a cluster.
+    [InlineData("chrt", "-d", "-s", "100000", "-T", "1000000", "-D", "400000", "0", "python", "-c", "rev {{x}}")]
+    [InlineData("flock", "-xc", "rev {{x}}", "/tmp/l")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
