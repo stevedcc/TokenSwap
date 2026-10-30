@@ -52,33 +52,44 @@ public static class BrokerConfigFile
 
     /// <summary>
     /// The lock for <c>route|socket add|remove</c>'s read-modify-write: an exclusive, non-blocking
-    /// <c>flock</c> on <c>broker.json.lock</c> (created 0600, as the folder's owner under sudo).
-    /// Another holder makes it a <see cref="TswapException"/>; nothing is read or written then.
+    /// <c>flock</c> on <c>broker.json.lock</c>, opened as the folder's owner under sudo, which must be
+    /// a regular file and is tightened to 0600 (like broker.log). Only another holder of the lock is
+    /// reported as a concurrent change; any other failure is an error naming the file. Nothing is
+    /// read or written when it fails.
     /// </summary>
     public static IDisposable LockForEdit(DirectoryOwnerMatcher owner, string configDir)
     {
         if (OperatingSystem.IsWindows())
             throw new TswapException("'tswap broker' is not supported on Windows.");
         owner.CreateDirectory(configDir);
-        var path = Path.Combine(configDir, EditLockFileName);
-        var busy = new TswapException($"Another 'tswap broker' change is running on {configDir}; try again when it has finished.");
+        var path = Path.GetFullPath(Path.Combine(configDir, EditLockFileName));
+        if (owner.AsOwner(path, () => BrokerNative.LStat(path)) is { Type: not (BrokerNative.EntryType.Missing or BrokerNative.EntryType.Regular) })
+            throw new TswapException($"{path} is not a regular file; remove it.");
         FileStream stream;
         try
         {
             var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.ReadWrite };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             stream = owner.AsOwner(path, () => new FileStream(path, options));
         }
-        catch (IOException)
+        catch (IOException ex) when (ex.HResult == BrokerNative.WouldBlockErrno)
         {
-            throw busy;
+            // .NET's own open-time flock found the lock held by another process (on Unix .NET
+            // reports the errno, EWOULDBLOCK, as the HResult).
+            throw new TswapException($"Another 'tswap broker' change is running on {configDir}; try again when it has finished.");
         }
-        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle))
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TswapException($"Can't open the broker.json edit lock {path}: {ex.Message}");
+        }
+        if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle, out var heldElsewhere))
         {
             stream.Dispose();
-            throw busy;
+            throw heldElsewhere
+                ? new TswapException($"Another 'tswap broker' change is running on {configDir}; try again when it has finished.")
+                : new TswapException($"Can't lock the broker.json edit lock {path} (flock errno {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}).");
         }
+        File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return stream;
     }
 

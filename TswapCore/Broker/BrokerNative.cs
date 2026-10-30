@@ -65,14 +65,30 @@ public static partial class BrokerNative
     private const int LockEx = 2;
     private const int LockNb = 4;
 
-    /// <summary>Takes an exclusive, non-blocking <c>flock</c> on <paramref name="fd"/>; false when another holder has it.</summary>
-    public static bool TryLockExclusive(SafeHandle fd)
+    /// <summary>EWOULDBLOCK (EAGAIN): a non-blocking lock is held by someone else.</summary>
+    public static int WouldBlockErrno => OperatingSystem.IsMacOS() ? 35 : 11;
+
+    /// <summary>Takes an exclusive, non-blocking <c>flock</c> on <paramref name="fd"/>; false when it failed (any reason).</summary>
+    public static bool TryLockExclusive(SafeHandle fd) => TryLockExclusive(fd, out _);
+
+    /// <summary>
+    /// Takes an exclusive, non-blocking <c>flock</c>; on failure <paramref name="heldElsewhere"/> says
+    /// whether another holder has it (EWOULDBLOCK) rather than some other error.
+    /// </summary>
+    public static bool TryLockExclusive(SafeHandle fd, out bool heldElsewhere)
     {
         var added = false;
         try
         {
             fd.DangerousAddRef(ref added);
-            return flock((int)fd.DangerousGetHandle(), LockEx | LockNb) == 0;
+            if (flock((int)fd.DangerousGetHandle(), LockEx | LockNb) == 0)
+            {
+                heldElsewhere = false;
+                return true;
+            }
+            var errno = Marshal.GetLastPInvokeError();
+            heldElsewhere = errno == WouldBlockErrno;
+            return false;
         }
         finally
         {

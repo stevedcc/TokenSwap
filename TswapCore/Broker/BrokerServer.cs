@@ -280,9 +280,13 @@ public sealed class BrokerServer : IAsyncDisposable
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             stream = new FileStream(path, options);
         }
-        catch (IOException)
+        catch (IOException ex) when (ex.HResult == BrokerNative.WouldBlockErrno)
         {
             throw new TswapException($"Another 'tswap broker serve' is running on {socketDir}.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TswapException($"Can't open the lock file {path}: {ex.Message}");
         }
         if (!BrokerNative.TryLockExclusive(stream.SafeFileHandle))
         {

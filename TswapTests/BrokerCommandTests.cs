@@ -166,4 +166,53 @@ public class BrokerCommandTests : IDisposable
         _m.Ok("", "broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
         Assert.Contains("\"other\"", File.ReadAllText(BrokerJson));
     }
+
+    private string EditLock => Path.Combine(_m.Dir, BrokerConfigFile.EditLockFileName);
+
+    private static readonly string[] AddOther =
+        ["broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", ""];
+
+    [Fact]
+    public void EditLock_ThatCantBeOpened_IsACleanErrorNamingTheFile_NotAConcurrentChange()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Directory.CreateDirectory(EditLock); // a folder where the lock file should be
+
+        var (exit, _, err) = _m.Run("", AddOther);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(EditLock, err);
+        Assert.DoesNotContain("Another 'tswap broker' change", err);
+        Assert.False(File.Exists(BrokerJson));
+    }
+
+    [Fact]
+    public void EditLock_ThatIsASymlink_IsRefused()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var target = Path.Combine(_m.Dir, "elsewhere");
+        File.WriteAllText(target, "");
+        File.CreateSymbolicLink(EditLock, target);
+
+        var (exit, _, err) = _m.Run("", AddOther);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("not a regular file", err);
+        Assert.False(File.Exists(BrokerJson));
+    }
+
+    [Fact]
+    public void EditLock_IsTightenedTo0600()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        File.WriteAllText(EditLock, "");
+        File.SetUnixFileMode(EditLock, (UnixFileMode)0b110_110_110);
+
+        _m.Ok("", AddOther);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(EditLock));
+    }
 }
