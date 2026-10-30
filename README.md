@@ -288,6 +288,9 @@ the secret exists throughout. Remember to update the system that uses it.
   tswap rotate db-pw && tswap run psql "postgresql://app:{{db-pw:previous}}@db/app" -c "ALTER ROLE app PASSWORD '{{db-pw}}'"
   ```
 
+  (This works without sudo only for a burned `db-pw`. If it isn't burned, the user runs the
+  rotate, with sudo: `sudo tswap rotate db-pw`; the `run` that follows needs no sudo.)
+
   `sudo tswap restore <name>` writes the previous value back as a new version (and if that value
   was burned, its burn is outstanding again). So an agent's burn-then-rotate is visible (the burn
   stays in the record) and reversible. A secret that was never rotated has no previous value; the
@@ -365,8 +368,8 @@ supersedes it and the burn becomes history. Two burns of the same value keep the
 
 **What a sync provider can see:** not names or values, and not which of an edit, a delete or a
 burn a change was, unless the change moves the record across a 256-byte padding bucket (a delete
-empties the value, a burn adds its reason, so a long value or reason can change the file's size
-class). It can see that the file with a given hash changed at a given time, so it can
+empties the value, a burn adds its reason, and a rotation keeps the previous value beside the new
+one, so a long value, reason or retained previous value can change the file's size class). It can see that the file with a given hash changed at a given time, so it can
 follow when each (unnamed) secret is edited; the single-file vault only showed that something
 changed. Each machine's origin id is in every record it writes; it is per machine and vault, so
 it doesn't link one machine across vaults. If a stamp is more than a year ahead of the clock

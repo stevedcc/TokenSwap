@@ -28,7 +28,8 @@ automated/silent unlocking by malicious processes.
   rotating one that is not burned needs sudo (ask the user), because services may still use it.
   A rotation keeps the value it replaced: use `{{name:previous}}` in `run` (or `# tswap: name:previous` in
   `apply`) to authenticate the change at the service with the old value, e.g.
-  `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`.
+  `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`
+  (that works for a burned db-pw; if it isn't burned, the user runs the rotate with sudo, then you run the `run`).
   A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
 - `%CMD% names` — List all secret names (no values shown)
 - `%CMD% migrate` — Guide to upgrade YubiKey slots for touch requirement
