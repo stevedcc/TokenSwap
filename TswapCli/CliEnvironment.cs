@@ -162,6 +162,29 @@ public sealed class CliEnvironment
         return entry.Home;
     }
 
+    /// <summary>
+    /// macOS only (T7 fix round 1): from a300bf8 until T7, sudo used <c>&lt;home&gt;/.config/tswap</c>
+    /// while the user's own commands used <c>~/Library/Application Support/tswap</c>, so a vault may
+    /// be in either. Nothing is moved or picked silently: with a vault only in the old folder, or in
+    /// both, tswap stops and says what to do.
+    /// </summary>
+    private static void RefuseAmbiguousMacVault(string configDir, string legacyDir, Func<string, bool> fileExists)
+    {
+        if (string.Equals(Path.GetFullPath(configDir), Path.GetFullPath(legacyDir), StringComparison.Ordinal))
+            return;
+        var inCurrent = fileExists(Path.Combine(configDir, "config.json"));
+        var inLegacy = fileExists(Path.Combine(legacyDir, "config.json"));
+        if (inLegacy && inCurrent)
+            throw new TswapException(
+                $"There is a tswap vault in both {configDir} and {legacyDir} (an older tswap used the second under sudo). " +
+                $"tswap won't pick one silently: keep the one you use, move the other aside, or set TSWAP_CONFIG_DIR to the folder to use.");
+        if (inLegacy)
+            throw new TswapException(
+                $"No vault in {configDir}, but there is one in {legacyDir} (an older tswap used that folder under sudo). " +
+                $"Move it: mv \"{legacyDir}\" \"{configDir}\" (with the parent folder created), or set TSWAP_CONFIG_DIR={legacyDir}. " +
+                "tswap didn't create or move anything.");
+    }
+
     public static string ResolveConfigDir(
         Func<string, string?> getEnv,
         Func<string, bool> directoryExists,
@@ -169,21 +192,30 @@ public sealed class CliEnvironment
         TextWriter log,
         bool isPrivileged,
         Func<string>? getApplicationDataDir = null,
-        Func<string, UnixPasswdEntry?>? lookupUser = null)
+        Func<string, UnixPasswdEntry?>? lookupUser = null,
+        Func<string, bool>? fileExists = null,
+        bool? isMacOS = null)
     {
         var configDirOverride = getEnv("TSWAP_CONFIG_DIR");
         if (configDirOverride != null)
             return configDirOverride;
 
+        var macOS = isMacOS ?? OperatingSystem.IsMacOS();
         var sudoUser = getEnv("SUDO_USER");
         string appDataDir;
+        string? home;
         if (sudoUser != null && isPrivileged && !OperatingSystem.IsWindows()
             && InvokingUserHome(sudoUser, getEnv("SUDO_UID"), lookupUser ?? UnixPasswd.Lookup) is { } userHome)
         {
-            appDataDir = Path.Combine(userHome, ".config");
+            // T7 fix round 1 (MiMo's review): the same per-platform folder as the user's own
+            // resolution. Linux: <home>/.config (the user's XDG_CONFIG_HOME isn't known under sudo);
+            // macOS: <home>/Library/Application Support, .NET's ApplicationData there.
+            home = userHome;
+            appDataDir = macOS ? Path.Combine(userHome, "Library", "Application Support") : Path.Combine(userHome, ".config");
         }
         else
         {
+            home = getEnv("HOME");
             appDataDir = (getApplicationDataDir ?? DefaultApplicationDataDir)();
         }
         var configDir = Path.Combine(appDataDir, "tswap");
@@ -196,6 +228,9 @@ public sealed class CliEnvironment
             throw new TswapException(
                 "Cannot determine the config folder (no home folder to put it under). Set HOME, or TSWAP_CONFIG_DIR to the folder to use." + xdgNote);
         }
+
+        if (macOS && !string.IsNullOrEmpty(home) && Path.IsPathRooted(home))
+            RefuseAmbiguousMacVault(configDir, Path.Combine(home, ".config", "tswap"), fileExists ?? File.Exists);
 
         // Migrate legacy config directory tswap-poc -> tswap (one-time, silent).
         var legacyDir = Path.Combine(appDataDir, "tswap-poc");
