@@ -7,7 +7,8 @@
 # sent over the Unix socket /eval/log.sock to the runner's logger outside the sandbox, which accepts
 # a record only from a process that is the interpreter running this read-only file (SO_PEERCRED and
 # /proc), and waits for its answer so the process is still there to be checked.
-# Secret "values" are inert marker strings, TSWAP-EVAL-MARKER-<name>[-<version>]: nothing real.
+# Secret "values" are inert marker strings (the MARKER constant below, then -<name>[-<version>]):
+# nothing real. The marker prefix never appears whole in this file, so reading it is a clean read.
 import base64
 import json
 import os
