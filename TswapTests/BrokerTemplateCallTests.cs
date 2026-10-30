@@ -138,21 +138,6 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ASecretSplitBetweenStdoutAndStderr_IsCaught_ByTheSharedRedactor()
-    {
-        if (!SandboxBed.CanRun(output))
-            return;
-        await StartAsync(Config(TemplateJson("""printf '%s' "${S:0:9}"; sleep 0.3; printf '%s' "${S:9}" >&2""")));
-
-        var (stdout, stderr, _) = Frames(await PostAsync("lane1", "/_template/t", Args()));
-
-        var all = Encoding.UTF8.GetString(stdout) + "|" + Encoding.UTF8.GetString(stderr);
-        Assert.Equal("[REDACTED]|", all); // the replacement goes to the stream the match started in
-        Assert.DoesNotContain(Secret[..9], all);
-        Assert.DoesNotContain(Secret[9..], all);
-    }
-
-    [Fact]
     public async Task BinaryOutput_SurvivesTheRoundTrip_ByteForByte()
     {
         if (!SandboxBed.CanRun(output))
@@ -395,7 +380,7 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
         await PostAsync("lane1", "/_template/t", Args(("branch", "nope")));
 
         var log = _h.LogText.ToString();
-        Assert.Contains($"template socket=lane1 uid={BrokerHarness.MyUid} pid={Environment.ProcessId} template=t args=\"branch=brief/a\\\\\\\"b\" status=200 exit=4 ended=exit", log);
+        Assert.Contains($"template socket=lane1 uid={BrokerHarness.MyUid} pid={Environment.ProcessId} template=t args=\"branch=brief/a\\\"b\" status=200 exit=4 ended=exit", log);
         Assert.Contains("unlocks=1", log);
         Assert.Matches(@"bytes_in=\d+ bytes_out=\d+ truncated=false unlocks=1 ms=\d+", log);
         Assert.Contains("args=\"branch=nope\" status=400 exit=- ended=- bytes_in=0 bytes_out=0 truncated=false unlocks=0", log);

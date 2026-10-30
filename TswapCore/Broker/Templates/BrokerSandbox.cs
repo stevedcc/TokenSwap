@@ -93,29 +93,36 @@ public sealed class BrokerSandbox(string bwrapPath)
             return "templates need Linux (bwrap)";
         if (BinaryProblem() is { } problem)
             return problem;
-            var probeTemplate = new BrokerTemplatePolicy("probe", "/usr/bin/true", [new[] { ("/usr/bin/true", false) }],
-                new Dictionary<string, BrokerTemplateArg>(), [], [new BrokerTemplateFile("/run/secrets/probe", "probe")], [], "/tmp",
-                BrokerTemplateNetwork.None, BrokerTemplateLimits.Maximum, TimeSpan.FromSeconds(30), 1024, 1);
-            var output = new StringBuilder();
-            var result = RunAsync(new BrokerSandboxLaunch(probeTemplate, ["/usr/bin/true"], [], [new BrokerSandboxFile("/run/secrets/probe", [1])]),
-                (_, data) =>
-                {
-                    lock (output)
-                        output.Append(Encoding.UTF8.GetString(data.Span));
-                    return ValueTask.CompletedTask;
-                }, CancellationToken.None, probing: true).GetAwaiter().GetResult();
-            return result is { Ended: BrokerSandboxEnded.Exit, ExitCode: 0 }
-                ? null
-                : $"{BwrapPath} can't make the template sandbox ({result.Reason ?? $"exit {result.ExitCode}"}: {output.ToString().Trim()}); it may be too old, or unprivileged user namespaces may be disabled";
+        var probeTemplate = new BrokerTemplatePolicy("probe", "/usr/bin/true", [new[] { ("/usr/bin/true", false) }],
+            new Dictionary<string, BrokerTemplateArg>(), [], [new BrokerTemplateFile("/run/secrets/probe", "probe")], [], "/tmp",
+            BrokerTemplateNetwork.None, BrokerTemplateLimits.Maximum, TimeSpan.FromSeconds(30), 1024, 1);
+        var output = new StringBuilder();
+        var result = RunAsync(new BrokerSandboxLaunch(probeTemplate, ["/usr/bin/true"], [], [new BrokerSandboxFile("/run/secrets/probe", [1])]),
+            (_, data) =>
+            {
+                lock (output)
+                    output.Append(Encoding.UTF8.GetString(data.Span));
+                return ValueTask.CompletedTask;
+            }, CancellationToken.None, probing: true).GetAwaiter().GetResult();
+        return result is { Ended: BrokerSandboxEnded.Exit, ExitCode: 0 }
+            ? null
+            : $"{BwrapPath} can't make the template sandbox ({result.Reason ?? $"exit {result.ExitCode}"}: {output.ToString().Trim()}); it may be too old, or unprivileged user namespaces may be disabled";
     }
 
-    /// <summary>The binary itself: an absolute path to a regular file owned by root and not writable by group or others.</summary>
+    /// <summary>
+    /// The binary (decision 1, fix round 1 MiMo I2): an absolute path whose resolved target is a
+    /// regular file owned by root and not writable by group or others, with every folder above the
+    /// configured path and above the resolved one root's and not writable by group or others (no
+    /// sticky exception), and the configured path itself, when a symlink, root's. So no other user
+    /// can swap it between the probe and a call. Checked at the probe and again before every run.
+    /// </summary>
     private string? BinaryProblem()
     {
         if (!BwrapPath.StartsWith('/'))
             return $"bwrap_path {BwrapPath} is not absolute";
-        var id = BrokerNative.Identify(BwrapPath, follow: true);
-        if (id is not { } b)
+        var real = BrokerNative.RealPath(BwrapPath);
+        var id = real is null ? null : BrokerNative.Identify(real, follow: false);
+        if (real is null || id is not { } b)
             return $"{BwrapPath} does not exist (install bubblewrap, or set bwrap_path)";
         if (b.Type != BrokerNative.EntryType.Regular)
             return $"{BwrapPath} is not a regular file";
@@ -123,6 +130,21 @@ public sealed class BrokerSandbox(string bwrapPath)
             return $"{BwrapPath} is owned by uid {b.Uid}, not root; the sandbox binary must be root's";
         if ((b.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
             return $"{BwrapPath} is writable by group or others";
+        foreach (var path in new[] { Path.GetFullPath(BwrapPath), real })
+        {
+            for (var parent = Path.GetDirectoryName(path); parent != null; parent = Path.GetDirectoryName(parent))
+            {
+                var p = BrokerNative.Identify(parent, follow: false);
+                if (p is not { } dir)
+                    return $"{parent} (above bwrap_path) can't be read";
+                if (dir.Uid != 0)
+                    return $"{parent} (above bwrap_path) is owned by uid {dir.Uid}, not root; every folder above the sandbox binary must be root's";
+                if ((dir.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+                    return $"{parent} (above bwrap_path) is writable by group or others";
+            }
+        }
+        if (BrokerNative.Identify(BwrapPath, follow: false) is { Type: BrokerNative.EntryType.Symlink, Uid: not 0 } link)
+            return $"{BwrapPath} is a symlink owned by uid {link.Uid}, not root";
         return null;
     }
 
@@ -219,71 +241,64 @@ public sealed class BrokerSandbox(string bwrapPath)
 
             var exited = Task.Factory.StartNew(() => BrokerSandboxNative.WaitPid(pid), CancellationToken.None,
                 TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            // Fix round 1 (MiMo M2, M5): the sandbox is signalled only through pidfds (a recycled pid
+            // can never be hit), never after the run is over, and on every way out of here.
+            using var handle = new SandboxHandle(pid);
+            try
+            {
+                // bwrap reports the sandbox's first process once the namespaces exist; its limits
+                // are set while it waits on --block-fd, before the command starts.
+                var childPid = await ReadChildPidAsync(TakeTracked(opened, infoRead), exited).ConfigureAwait(false);
+                if (childPid is not { } child || !handle.AttachChild(child))
+                {
+                    handle.Kill();
+                    var status = await exited.ConfigureAwait(false);
+                    handle.Finish();
+                    await DrainAsync(TakeTracked(opened, stdoutRead), TakeTracked(opened, stderrRead), output).ConfigureAwait(false);
+                    return Refused($"bwrap did not set up the sandbox (wait status {status})");
+                }
+                var limits = launch.Template.Limits;
+                var limited = BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitNproc, (ulong)limits.Nproc)
+                              && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitAs, (ulong)limits.AsBytes)
+                              && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitNofile, (ulong)limits.Nofile)
+                              && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitFsize, (ulong)limits.FsizeBytes)
+                              && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitCore, 0);
+                if (!limited)
+                    return Refused("the resource limits could not be set on the sandbox"); // killed in finally
+                Started?.Invoke(new BrokerSandboxStarted(pid, child));
+                var released = BrokerSandboxNative.WriteByte(blockWrite);
+                CloseTracked(opened, blockWrite);
+                if (!released)
+                    return Refused("the sandbox could not be released"); // killed in finally
 
-            // bwrap reports the sandbox's first process once the namespaces exist; its limits are set
-            // while it waits on --block-fd, before the command starts.
-            var childPid = await ReadChildPidAsync(TakeTracked(opened, infoRead), exited).ConfigureAwait(false);
-            if (childPid is not { } child)
-            {
-                BrokerSandboxNative.Kill(pid, BrokerSandboxNative.Sigkill);
-                var status = await exited.ConfigureAwait(false);
-                await DrainAsync(TakeTracked(opened, stdoutRead), TakeTracked(opened, stderrRead), output).ConfigureAwait(false);
-                return Refused($"bwrap did not set up the sandbox (wait status {status})");
+                // Output and the timeout. Killing the sandbox's pid 1 ends its whole pid namespace,
+                // detached grandchildren included; bwrap then exits.
+                using var timeout = new CancellationTokenSource(launch.Template.Timeout);
+                using var onTimeout = timeout.Token.Register(handle.KillForTimeout);
+                using var onCancel = cancellationToken.Register(handle.KillForTimeout);
+                await DrainAsync(TakeTracked(opened, stdoutRead), TakeTracked(opened, stderrRead), output, handle.Kill).ConfigureAwait(false);
+                var wait = await exited.ConfigureAwait(false);
+                if (handle.Finish())
+                    return new BrokerSandboxResult(BrokerSandboxEnded.Timeout, BrokerSandboxResult.TimeoutCode,
+                        cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
+                if (wait == -1)
+                    return new BrokerSandboxResult(BrokerSandboxEnded.Signal, 128 + BrokerSandboxNative.Sigkill, "lost");
+                var termSignal = wait & 0x7F;
+                if (termSignal == 0)
+                    return new BrokerSandboxResult(BrokerSandboxEnded.Exit, (wait >> 8) & 0xFF);
+                return new BrokerSandboxResult(BrokerSandboxEnded.Signal, 128 + termSignal);
             }
-            var limits = launch.Template.Limits;
-            var limited = BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitNproc, (ulong)limits.Nproc)
-                          && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitAs, (ulong)limits.AsBytes)
-                          && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitNofile, (ulong)limits.Nofile)
-                          && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitFsize, (ulong)limits.FsizeBytes)
-                          && BrokerSandboxNative.SetLimit(child, BrokerSandboxNative.RlimitCore, 0);
-            if (!limited)
+            finally
             {
-                BrokerSandboxNative.Kill(child, BrokerSandboxNative.Sigkill);
-                BrokerSandboxNative.Kill(pid, BrokerSandboxNative.Sigkill);
-                await exited.ConfigureAwait(false);
-                return Refused("the resource limits could not be set on the sandbox");
+                // Any way out (a refusal, the output callback throwing, a cancelled write): the
+                // sandbox dies and is reaped before this returns.
+                if (!exited.IsCompleted)
+                {
+                    handle.Kill();
+                    await exited.ConfigureAwait(false);
+                }
+                handle.Finish();
             }
-            Started?.Invoke(new BrokerSandboxStarted(pid, child));
-            var released = BrokerSandboxNative.WriteByte(blockWrite);
-            CloseTracked(opened, blockWrite);
-            if (!released)
-            {
-                BrokerSandboxNative.Kill(child, BrokerSandboxNative.Sigkill);
-                BrokerSandboxNative.Kill(pid, BrokerSandboxNative.Sigkill);
-                await exited.ConfigureAwait(false);
-                return Refused("the sandbox could not be released");
-            }
-
-            // Output and the timeout. Killing the sandbox's pid 1 ends its whole pid namespace,
-            // detached grandchildren included; bwrap then exits.
-            var killedForTimeout = 0;
-            void KillSandbox()
-            {
-                BrokerSandboxNative.Kill(child, BrokerSandboxNative.Sigkill);
-                BrokerSandboxNative.Kill(pid, BrokerSandboxNative.Sigkill);
-            }
-            using var timeout = new CancellationTokenSource(launch.Template.Timeout);
-            using var onTimeout = timeout.Token.Register(() =>
-            {
-                Interlocked.Exchange(ref killedForTimeout, 1);
-                KillSandbox();
-            });
-            using var onCancel = cancellationToken.Register(() =>
-            {
-                Interlocked.Exchange(ref killedForTimeout, 1);
-                KillSandbox();
-            });
-            await DrainAsync(TakeTracked(opened, stdoutRead), TakeTracked(opened, stderrRead), output).ConfigureAwait(false);
-            var wait = await exited.ConfigureAwait(false);
-            if (Volatile.Read(ref killedForTimeout) == 1)
-                return new BrokerSandboxResult(BrokerSandboxEnded.Timeout, BrokerSandboxResult.TimeoutCode,
-                    cancellationToken.IsCancellationRequested ? "cancelled" : "timeout");
-            if (wait == -1)
-                return new BrokerSandboxResult(BrokerSandboxEnded.Signal, 128 + BrokerSandboxNative.Sigkill, "lost");
-            var termSignal = wait & 0x7F;
-            if (termSignal == 0)
-                return new BrokerSandboxResult(BrokerSandboxEnded.Exit, (wait >> 8) & 0xFF);
-            return new BrokerSandboxResult(BrokerSandboxEnded.Signal, 128 + termSignal);
         }
         catch (IOException ex)
         {
@@ -297,6 +312,87 @@ public sealed class BrokerSandbox(string bwrapPath)
                 CryptographicOperations.ZeroMemory(env.Value);
             foreach (var file in launch.Files)
                 CryptographicOperations.ZeroMemory(file.Data);
+        }
+    }
+
+    /// <summary>
+    /// bwrap and the sandbox's pid 1 as pidfds (Linux 5.3+): a signal through one reaches that process
+    /// or nobody, never a process that later got its pid. <see cref="Finish"/> marks the run over;
+    /// after it nothing is signalled.
+    /// </summary>
+    private sealed class SandboxHandle : IDisposable
+    {
+        private readonly Lock _gate = new();
+        private readonly int _bwrapPid;
+        private int _bwrapFd = -1;
+        private int _childFd = -1;
+        private bool _finished;
+        private bool _killedForTimeout;
+
+        public SandboxHandle(int bwrapPid)
+        {
+            _bwrapPid = bwrapPid;
+            // Our own unreaped child: its pid can't be reused until we reap it, so this is safe.
+            _bwrapFd = BrokerSandboxNative.PidfdOpen(bwrapPid);
+        }
+
+        /// <summary>Takes a pidfd for the sandbox's pid 1 (blocked on --block-fd, so alive); false when it can't.</summary>
+        public bool AttachChild(int pid)
+        {
+            lock (_gate)
+            {
+                _childFd = BrokerSandboxNative.PidfdOpen(pid);
+                return _childFd >= 0;
+            }
+        }
+
+        public void Kill()
+        {
+            lock (_gate)
+                KillLocked();
+        }
+
+        public void KillForTimeout()
+        {
+            lock (_gate)
+            {
+                if (_finished)
+                    return;
+                _killedForTimeout = true;
+                KillLocked();
+            }
+        }
+
+        private void KillLocked()
+        {
+            if (_finished)
+                return;
+            BrokerSandboxNative.PidfdKill(_childFd);
+            if (_bwrapFd >= 0)
+                BrokerSandboxNative.PidfdKill(_bwrapFd);
+            else
+                BrokerSandboxNative.Kill(_bwrapPid, BrokerSandboxNative.Sigkill); // no pidfd: still unreaped, as only Finish() follows the reap
+        }
+
+        /// <summary>Marks the run over (bwrap reaped); returns whether the timeout (or a cancellation) killed it.</summary>
+        public bool Finish()
+        {
+            lock (_gate)
+            {
+                _finished = true;
+                return _killedForTimeout;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                _finished = true;
+                BrokerSandboxNative.Close(_childFd);
+                BrokerSandboxNative.Close(_bwrapFd);
+                _childFd = _bwrapFd = -1;
+            }
         }
     }
 
@@ -356,7 +452,12 @@ public sealed class BrokerSandbox(string bwrapPath)
     }
 
     /// <summary>Reads both pipes to their end, handing each chunk to <paramref name="output"/>, one call at a time.</summary>
-    private static async Task DrainAsync(FileStream stdout, FileStream stderr, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> output)
+    /// <remarks>
+    /// When the callback fails, <paramref name="onFault"/> runs at once (fix round 1, MiMo M5: it
+    /// kills the sandbox), so the other pipe reaches its end instead of waiting for the child.
+    /// </remarks>
+    private static async Task DrainAsync(FileStream stdout, FileStream stderr, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> output,
+        Action? onFault = null)
     {
         var gate = new SemaphoreSlim(1, 1);
         async Task Pump(FileStream stream, BrokerOutputKind kind)
@@ -373,6 +474,11 @@ public sealed class BrokerSandbox(string bwrapPath)
                     try
                     {
                         await output(kind, buffer.AsMemory(0, n)).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        onFault?.Invoke();
+                        throw;
                     }
                     finally
                     {

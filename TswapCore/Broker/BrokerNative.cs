@@ -252,7 +252,8 @@ public static partial class BrokerNative
     {
         if (OperatingSystem.IsWindows())
             return null;
-        var entry = stackalloc byte[64];  // struct passwd: 7 fields, at most 48 bytes on 64-bit
+        // struct passwd: 48 bytes on 64-bit Linux (7 fields), 72 on macOS (10 fields); 256 leaves room.
+        var entry = stackalloc byte[256];
         var buffer = new byte[16384];
         nint result;
         fixed (byte* b = buffer)

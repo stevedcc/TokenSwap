@@ -51,10 +51,20 @@ value past any window (reverse it, split it over two responses, encode it some o
 - hex, upper and lower case;
 - percent-encoded: upper- and lower-case hex escapes, and form encoding (`+` for space);
 - JSON-escaped: the default .NET escaping, relaxed escaping and minimal escaping, each also with
-  `/` written as `\/`.
+  `/` written as `\/`;
+- the shapes common tools print the value alone in: its base64 wrapped at 76 columns (GNU
+  `base64`; LF and CRLF) and at 64 (`openssl base64`), hex with a space between bytes (`od -An
+  -tx1`, `xxd -g1`, within one line, upper and lower case) and plain hex wrapped at 60 (`xxd -p`).
+
+**Not covered** (a fixed list of byte forms can't express them): the value inside a *longer*
+wrapped base64 or hex stream (the line breaks fall at unknown places), and dumps that split it over
+lines with offsets and an ASCII column between (`xxd`, `hexdump -C`, `od` with its default 16 bytes
+a line). Anything else that re-encodes the value (compression, encryption, reversal) is out of reach
+too; that is what "best-effort" means.
 
 The redactor holds back a sliding window of (longest form − 1) bytes between chunks and flushes
-it at the end; it never buffers a body. That window is roughly 100 bytes, so a stream of small
+it at the end; it never buffers a body. That window is roughly 100 to 200 bytes (the wrapped base64
+form of a long value is the longest), so a stream of small
 pieces (server-sent events from a model API, a progress feed) reaches the client up to that many
 bytes late: each piece arrives once more data follows it, or at the end. Response headers are
 never held back. A response with any `Content-Encoding` other than
@@ -472,13 +482,24 @@ keeps the vault user's uid and its `tss` group membership, **but has nothing to 
 | A fixed environment | exactly the template's `env` plus `PATH=/usr/bin:/bin`, `LC_ALL=C` and the `PWD` `bwrap` sets; no `HOME`, nothing inherited; umask 077 |
 
 **`bwrap` fails closed.** It runs from a fixed absolute path (`bwrap_path` in `broker.json`,
-default `/usr/bin/bwrap`), never through `PATH`, and must be a regular file owned by root and not
-writable by group or others. `serve` checks at start that it makes a sandbox with every option the
-broker uses. If `bwrap` is missing, too old (0.5 or later is needed for `--perms`; glibc 2.34 or
-later for `closefrom`), or user namespaces are disabled, template calls are refused (`503`,
+default `/usr/bin/bwrap`), never through `PATH`. It must resolve to a regular file owned by root and
+not writable by group or others, and every folder above it (above the configured path and above
+the resolved one) must be root's and not writable by group or others, with no sticky exception;
+a symlink at the configured path must be root's. So no other user can swap it between checks; the
+rule is checked at start and again before every call. `serve` also checks at start that it makes
+a sandbox with every option the broker uses. If `bwrap` is missing, fails these checks, is too
+old (0.5 or later is needed for `--perms`), the C library is older than glibc 2.36
+(`posix_spawn_file_actions_addclosefrom_np`, `pidfd_open`), or user namespaces are disabled, template calls are refused (`503`,
 `broker call` exits 125) and logged. **A template never runs unsandboxed.** On Ubuntu 24.04,
 unprivileged user namespaces are restricted by AppArmor
 (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile for `bwrap`).
+
+The broker signals the sandbox only through pidfds (`pidfd_open`), so a kill can never reach a
+process that later got a finished run's pid, and it starts every `bwrap` from one dedicated thread
+that lives as long as `serve`: `--die-with-parent` is `PR_SET_PDEATHSIG`, which fires when the
+*thread* that started `bwrap` ends, so a pool thread retiring would otherwise kill a running
+template. On every way out of a call (a refusal, a broken response, the client going away) the
+sandbox is killed and reaped and the redactor's copies are zeroed.
 
 ### Secrets reach the child through env or a read-only file only
 
@@ -488,7 +509,8 @@ unprivileged user namespaces are restricted by AppArmor
   `{{secret}}`.
 - `"files": [{"path": "/run/secrets/signing-key", "secret": "signing-key"}]`: the broker writes the
   value into a pipe (bounded, before `bwrap` starts) whose read end goes to `bwrap` only, as
-  `--perms 0400 --ro-bind-data <fd> <path>`. The path must be a file directly under `/run/secrets/`.
+  `--perms 0400 --ro-bind-data <fd> <path>`. The path must be a file directly under `/run/secrets/`;
+  a secret file holds at most 1 MiB.
 - A `{{secret}}` in `argv`, `cwd`, a bind or a `files` path is refused when the config loads.
 
 **Limits of this:** while the child runs, its `/proc/<pid>/environ` (and the open pipe) are
@@ -508,7 +530,9 @@ Each bind must, after symlink resolution:
   there);
 - be owned by the vault user or root and not writable by group or others, with every folder above
   it root's or the vault user's and not writable by group or others (a root-owned sticky folder
-  such as `/tmp` is accepted above it, as for `socket_dir`);
+  such as `/tmp` is accepted above it, as for `socket_dir`; that exception waives the folder's
+  write bits entirely, which is safe because the sticky bit keeps others from renaming or removing
+  what they don't own);
 - never be the vault folder, `broker.json`'s folder, the socket folder or sudo's configuration
   (`/etc/sudoers`, `/etc/sudo.conf`, `/etc/sudoers.d`), nor a folder above or inside one of them,
   **compared by `st_dev:st_ino`**, so a bind-mount alias or a hard link doesn't get past a name
@@ -536,17 +560,21 @@ any route. `sudo tswap broker socket add <name> --uids ... --templates deploy,si
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
 | `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path inside the sandbox (under `/usr`, `/bin`, `/sbin`, `/lib*` or a bind), never a placeholder; `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above; env names `PATH`, `LC_ALL` and `LD_*` are refused |
+| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter or git run code they name (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `BASH_FUNC_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONINSPECT`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `PERL5DB`, `RUBYOPT`, `RUBYLIB`, `NODE_OPTIONS`, `NODE_PATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_CONFIG*`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`). The list catches mistakes; it isn't complete, so choose tools you know |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
 | `timeout_sec` | 1 to 3600, default 120 |
 | `max_output_bytes` | 1 byte to 64 MiB, default 1 MiB |
-| `rate` | calls a minute per socket, 1 to 60, default 6; over it `429` and nothing runs or unlocks (each call is a TPM unlock and has real side effects) |
+| `rate` | calls a minute for each socket that may call the template (counted per socket and template, so a socket listing two templates may make both rates of calls), 1 to 60, default 6; over it `429` and nothing runs or unlocks (each call is a TPM unlock and has real side effects). A call refused before it could run (bad arguments, the sandbox or a bind) doesn't count |
 
 **`allow_leading_dash` with a loose pattern is flag injection:** a value like
 `--checkpoint-action=exec=sh` handed to `tar`, or `--upload-pack=...` to `git`, turns an argument
 into code. Keep the default, or anchor the pattern so a dash can't start an option.
+
+The worst case of every `argv` entry (each argument at its `max_length`) must fit `execve`'s
+limit of 128 KiB per entry, and the whole command 1 MiB; a template that could exceed them is
+refused at load rather than failing at a call.
 
 At call time every declared argument is required and an undeclared one is refused. A value with a
 NUL or another control character is refused before its pattern runs (a NUL would truncate the
@@ -609,9 +637,14 @@ dictionary-attack counter").
 
 ### Output
 
-- stdout and stderr are **streamed** back through **one shared redactor**, in the order they were
-  read, so a secret split between the two streams is still caught. The forms redacted are the
-  routes' (raw, base64 variants, hex, percent- and JSON-escaped) of every secret the template uses.
+- stdout and stderr are **streamed** back through **one shared redactor**, in the order the
+  broker read them. A secret split between the two streams is caught **only when its halves are
+  read in the order they were written**: the two are separate pipes with no common order, so
+  when the second half is read first (the tool wrote them close together and the reads raced),
+  neither half matches a known form and both pass. Ordering them for certain would mean holding
+  back all output, which the broker doesn't. Within one stream, a secret split across reads is
+  always caught. The forms redacted are the routes' (see "Redaction is best-effort", including
+  what it doesn't cover) for every secret the template uses.
 - The output is counted, never buffered whole: beyond `max_output_bytes` the rest is read and
   discarded while the child runs on to its end or timeout. A cut never ends inside the held-back
   window: the window is dropped at the cut, so no fragment of a secret the cut separated from its
@@ -620,8 +653,9 @@ dictionary-attack counter").
   `{"ended":"exit"|"timeout"|"signal"|"refused","exit_code":N,"truncated":bool}`. The redactor works
   on bytes and the frames carry base64, so binary output (a signature) survives byte for byte.
 - The exit code is passed through; a timeout reports 124 (as `timeout(1)` does). `bwrap` reports a
-  command killed by signal N as exit 128+N, so that is what the caller sees (`"ended": "exit"`);
-  `"signal"` means `bwrap` itself was killed.
+  command killed by signal N as exit 128+N, so that is what the caller sees, as `"ended": "exit"`:
+  **a caller can't tell a tool that exited 143 from one killed by SIGTERM.** `"signal"` means
+  `bwrap` itself was killed (then the code is 128+N of that signal).
 
 **Be honest about output:** whatever the tool prints goes to the caller, including anything it
 derives from the secret (a decryption, a signature, a token it exchanged for). The broker redacts
@@ -648,6 +682,9 @@ socket's templates, or make the template run in or read a folder it can write.
   bind it doesn't.
 - Print the secret or something derived from it (see Output).
 - Loosen `allow_leading_dash` without a tight pattern.
+- Put code-running options in the template's own literals: `find ... -exec`, `git -c alias.x=!...`,
+  `git -c core.sshCommand=...`, `tar --checkpoint-action=exec=...`, `rsync -e ...`. The inline-code
+  check (#105) looks at the shape of `argv`, not at every tool's options.
 
 ### Logging
 

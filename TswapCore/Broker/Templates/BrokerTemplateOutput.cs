@@ -26,6 +26,7 @@ public sealed class BrokerTemplateOutput
     private byte[] _carry = [];
     private BrokerOutputKind[] _carryKinds = [];
 
+    /// <param name="secrets">Copies of the secrets; this zeroes them once their forms are built.</param>
     public BrokerTemplateOutput(IEnumerable<byte[]> secrets, long maxBytes, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> emit)
     {
         var forms = new List<byte[]>();
@@ -38,6 +39,7 @@ public sealed class BrokerTemplateOutput
                 if (!forms.Any(f => f.AsSpan().SequenceEqual(form)))
                     forms.Add(form.ToArray());
             redactor.Clear();
+            CryptographicOperations.ZeroMemory(secret); // fix round 1 (GLM 7, MiMo M1): the caller's copy too
         }
         _forms = [.. forms.OrderByDescending(f => f.Length)];
         foreach (var f in _forms)

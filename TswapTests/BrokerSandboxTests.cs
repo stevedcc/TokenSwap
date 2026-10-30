@@ -263,17 +263,24 @@ public class BrokerSandboxTests(ITestOutputHelper output) : IDisposable
         if (!SandboxBed.CanRun(output))
             return;
         Environment.SetEnvironmentVariable("TSWAP_SANDBOX_LEAK_CHECK", "leaked"); // the broker's own env never passes
-        var script = _bed.Script("""tr '\0' '\n' < /proc/$$/environ; echo "umask=$(umask)" """);
-        var template = _bed.Template(script, extra: """, "env": { "GREETING": "hello", "DB_PW": "{{db-pw}}" }""");
+        try
+        {
+            var script = _bed.Script("""tr '\0' '\n' < /proc/$$/environ; echo "umask=$(umask)" """);
+            var template = _bed.Template(script, extra: """, "env": { "GREETING": "hello", "DB_PW": "{{db-pw}}" }""");
 
-        var run = await RunAsync(template, env: [("GREETING", "hello"), ("DB_PW", Secret)]);
+            var run = await RunAsync(template, env: [("GREETING", "hello"), ("DB_PW", Secret)]);
 
-        Exited0(run);
-        var lines = run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        // PWD is bwrap's own (it sets it for --chdir): part of the fixed baseline.
-        Assert.Equal(["DB_PW=" + Secret, "GREETING=hello", "LC_ALL=C", "PATH=/usr/bin:/bin", "PWD=" + _bed.Out], lines.Where(l => l.Contains('=') && !l.StartsWith("umask=")).Order(StringComparer.Ordinal));
-        Assert.Contains("umask=0077", lines);
-        Assert.DoesNotContain(lines, l => l.StartsWith("HOME=") || l.Contains("TSWAP_SANDBOX_LEAK_CHECK"));
+            Exited0(run);
+            var lines = run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            // PWD is bwrap's own (it sets it for --chdir): part of the fixed baseline.
+            Assert.Equal(["DB_PW=" + Secret, "GREETING=hello", "LC_ALL=C", "PATH=/usr/bin:/bin", "PWD=" + _bed.Out], lines.Where(l => l.Contains('=') && !l.StartsWith("umask=")).Order(StringComparer.Ordinal));
+            Assert.Contains("umask=0077", lines);
+            Assert.DoesNotContain(lines, l => l.StartsWith("HOME=") || l.Contains("TSWAP_SANDBOX_LEAK_CHECK"));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TSWAP_SANDBOX_LEAK_CHECK", null);
+        }
     }
 
     [Fact]
@@ -487,6 +494,9 @@ public class BrokerSandboxTests(ITestOutputHelper output) : IDisposable
             return;
         var run = await RunAsync(_bed.Template(_bed.Script("kill -TERM $$")));
 
+        // bwrap turns the command's signal death into its own exit 128+N, so the broker sees an exit
+        // (fix round 1, MiMo M4: pinned; the caller can't tell it from a plain exit 143).
+        Assert.Equal(BrokerSandboxEnded.Exit, run.Result.Ended);
         Assert.Equal(128 + 15, run.Result.ExitCode);
     }
 

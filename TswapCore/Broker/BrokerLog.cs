@@ -97,7 +97,8 @@ public sealed class BrokerLog : IDisposable
             }
             if (args.Length > 0)
                 args.Append(' ');
-            args.Append(Escape(name, 32)).Append('=').Append(Escape(value, 64));
+            // Capped raw here and escaped once below (fix round 1, MiMo M9: no double escaping).
+            args.Append(name.Length > 32 ? name[..32] + "..." : name).Append('=').Append(value.Length > 64 ? value[..64] + "..." : value);
         }
         var line = new StringBuilder()
             .Append("template socket=").Append(Escape(r.Socket, 64))

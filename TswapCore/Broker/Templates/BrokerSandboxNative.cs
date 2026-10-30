@@ -118,6 +118,48 @@ internal static unsafe partial class BrokerSandboxNative
     /// </summary>
     public static int Spawn(string path, IReadOnlyList<string> argv, IReadOnlyList<byte[]> envp, IReadOnlyList<int> fds)
     {
+        // bwrap's --die-with-parent is PR_SET_PDEATHSIG, which fires when the spawning THREAD
+        // exits, not the process: a thread-pool thread that retires would SIGKILL a running
+        // template. So every spawn happens on one dedicated thread that lives as long as the broker.
+        return SpawnThread.Run(() => SpawnHere(path, argv, envp, fds));
+    }
+
+    /// <summary>The broker's spawning thread (a background thread that never ends; see <see cref="Spawn"/>).</summary>
+    private static class SpawnThread
+    {
+        private static readonly System.Collections.Concurrent.BlockingCollection<Action> Work = new();
+
+        static SpawnThread()
+        {
+            var thread = new Thread(() =>
+            {
+                foreach (var job in Work.GetConsumingEnumerable())
+                    job();
+            })
+            { IsBackground = true, Name = "tswap-broker-spawn" };
+            thread.Start();
+        }
+
+        public static int Run(Func<int> spawn)
+        {
+            var done = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Work.Add(() =>
+            {
+                try
+                {
+                    done.SetResult(spawn());
+                }
+                catch (Exception ex)
+                {
+                    done.SetException(ex);
+                }
+            });
+            return done.Task.GetAwaiter().GetResult();
+        }
+    }
+
+    private static int SpawnHere(string path, IReadOnlyList<string> argv, IReadOnlyList<byte[]> envp, IReadOnlyList<int> fds)
+    {
         // Two stages, so no source descriptor is overwritten before it is copied: first every source
         // to a number above all of them, then each to its place.
         var high = fds.Max() + 1;
@@ -245,6 +287,32 @@ internal static unsafe partial class BrokerSandboxNative
     }
 
     public static bool Kill(int pid, int signal) => pid > 0 && kill(pid, signal) == 0;
+
+    /// <summary><c>pidfd_open(pid)</c>, close-on-exec by default; -1 when it fails.</summary>
+    public static int PidfdOpen(int pid)
+    {
+        try
+        {
+            return pid > 0 ? pidfd_open(pid, 0) : -1;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return -1; // glibc before 2.36
+        }
+    }
+
+    /// <summary>SIGKILL through a pidfd: reaches that process or none (never a recycled pid).</summary>
+    public static void PidfdKill(int pidfd)
+    {
+        if (pidfd >= 0)
+            _ = pidfd_send_signal(pidfd, Sigkill, null, 0);
+    }
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int pidfd_open(int pid, uint flags);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int pidfd_send_signal(int pidfd, int signal, void* info, uint flags);
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial int pipe2(int* fds, int flags);

@@ -30,6 +30,20 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
     {
         var full = Path.GetFullPath(configDir);
         var uid = BrokerNative.Identify(full, follow: true)?.Uid ?? new UnixOwnership().EffectiveUid;
+        // Fix round 1 (GLM 4, MiMo M10): find the record store's vault folder from the config
+        // folder itself, so a caller without an opened store still protects it.
+        if (vaultDir is null)
+        {
+            try
+            {
+                if (VaultStores.IsRecordStore(full))
+                    vaultDir = (VaultStores.Open(full) as RecordVaultStore)?.VaultDir;
+            }
+            catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                // No readable record-store config: only the config folder is known.
+            }
+        }
         var protectedPaths = new List<string> { full };
         if (vaultDir != null)
             protectedPaths.Add(Path.GetFullPath(vaultDir));
@@ -147,6 +161,28 @@ public static class BrokerTemplateValidator
     public const int DefaultArgMaxLength = 256;
     public const int MaxArgMaxLength = 4096;
 
+    /// <summary>execve's limit on one argument (MAX_ARG_STRLEN, 32 pages).</summary>
+    public const int MaxArgvEntryBytes = 128 * 1024;
+
+    /// <summary>A cap on the whole command line (well under the kernel's limit with the environment).</summary>
+    public const int MaxArgvTotalBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Environment variables that make a shell, an interpreter or git run code they name (fix round
+    /// 1, GLM 6 / MiMo M7): refused, like PATH and LD_*. The operator's tool, not the caller, would
+    /// run it, but with the secret in reach.
+    /// </summary>
+    private static readonly HashSet<string> CodeEnvNames = new(StringComparer.Ordinal)
+    {
+        "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH",
+        "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PERL5OPT", "PERL5LIB", "PERLLIB", "PERL5DB",
+        "RUBYOPT", "RUBYLIB", "NODE_OPTIONS", "NODE_PATH", "GLIBC_TUNABLES", "MALLOC_CHECK_",
+        "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH",
+        "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_EDITOR", "EDITOR", "VISUAL", "PAGER", "GIT_PAGER",
+    };
+
+    private static readonly string[] CodeEnvPrefixes = ["GIT_CONFIG", "BASH_FUNC_"];
+
     /// <summary>How long an argument's pattern may take on one value.</summary>
     public static readonly TimeSpan ArgMatchTimeout = TimeSpan.FromMilliseconds(100);
 
@@ -252,16 +288,31 @@ public static class BrokerTemplateValidator
         foreach (var argName in args.Keys.Where(a => !used.Contains(a)))
             throw Ex($"argument '{argName}' is declared but not used in argv.");
 
+        // Fix round 1 (MiMo M6): the worst-case command line must fit execve's limits, so a
+        // template can't pass validation and then fail at every call (after the unlock).
+        long total = 0;
+        foreach (var entry in parts)
+        {
+            long longest = entry.Sum(p => p.IsArg ? args[p.Text].MaxLength * 3L : System.Text.Encoding.UTF8.GetByteCount(p.Text)) + 1;
+            if (longest > MaxArgvEntryBytes)
+                throw Ex($"an argv entry can reach {longest} bytes with its arguments at their max_length; at most {MaxArgvEntryBytes} (execve's MAX_ARG_STRLEN).");
+            total += longest;
+        }
+        if (total > MaxArgvTotalBytes)
+            throw Ex($"argv can reach {total} bytes with its arguments at their max_length; at most {MaxArgvTotalBytes}.");
+
         // Environment: literals or exactly {{secret}}; the baseline is fixed.
         var env = new List<BrokerTemplateEnv>();
         foreach (var (envName, value) in t.Env ?? [])
         {
             if (!EnvNameRegex.IsMatch(envName))
                 throw Ex($"'{BrokerPolicy.Printable(envName)}' is not a valid environment variable name.");
-            if (envName is "PATH" or "LC_ALL")
-                throw Ex($"env may not set {envName}: the broker's baseline (PATH=/usr/bin:/bin, LC_ALL=C) is fixed.");
+            if (envName is "PATH" or "LC_ALL" or "PWD")
+                throw Ex($"env may not set {envName}: the baseline (PATH=/usr/bin:/bin, LC_ALL=C, and bwrap's PWD) is fixed.");
             if (envName.StartsWith("LD_", StringComparison.Ordinal))
                 throw Ex($"env may not set {envName} (LD_* changes how every program in the sandbox loads).");
+            if (CodeEnvNames.Contains(envName) || CodeEnvPrefixes.Any(prefix => envName.StartsWith(prefix, StringComparison.Ordinal)))
+                throw Ex($"env may not set {envName}: it makes a shell, interpreter or git run extra code (fix round 1).");
             if (value is null)
                 throw Ex($"env '{envName}' has no value.");
             var secret = BrokerPolicy.SecretRefRegex.Match(value!);

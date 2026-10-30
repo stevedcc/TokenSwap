@@ -144,11 +144,6 @@ namespace TswapCore.Broker
                 await Refuse(400, "argument", argProblem).ConfigureAwait(false);
                 return;
             }
-            if (!Templates.TryTakeRate(peer.Socket, name, template.Rate))
-            {
-                await Refuse(429, "rate").ConfigureAwait(false);
-                return;
-            }
             var (sandbox, problem) = Templates.Sandbox(policy.BwrapPath);
             if (problem != null)
             {
@@ -160,6 +155,13 @@ namespace TswapCore.Broker
             {
                 log.Event($"template '{name}' refused: {bindProblem}");
                 await Refuse(503, "binds").ConfigureAwait(false);
+                return;
+            }
+            // Fix round 1 (GLM 5): the rate is taken only by a call that could run, so calls refused
+            // for the sandbox or the binds don't use it up.
+            if (!Templates.TryTakeRate(peer.Socket, name, template.Rate))
+            {
+                await Refuse(429, "rate").ConfigureAwait(false);
                 return;
             }
             if (template.SecretNames.Count > 0 && unlockGuard.Refusal(peer.Socket) is { } refused)
@@ -248,10 +250,14 @@ namespace TswapCore.Broker
             }
             catch (Exception ex) when (ex is IOException or OperationCanceledException)
             {
-                // The client went away: the run was killed with it (RunAsync's token).
-                output.Clear();
+                // The client went away: the run was killed with it (RunAsync kills on every way out).
                 log.Template(record with { Status = 499, Reason = "client-closed", BytesIn = output.BytesIn, BytesOut = output.BytesOut, Duration = time.GetElapsedTime(started) });
                 return;
+            }
+            finally
+            {
+                // Fix round 1 (MiMo M5): the forms and the window are zeroed on every path.
+                output.Clear();
             }
             if (result.Ended == BrokerSandboxEnded.Refused)
                 log.Event($"template '{name}' refused: the sandbox could not run it: {result.Reason}");
