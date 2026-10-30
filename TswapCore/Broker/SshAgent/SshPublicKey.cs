@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Ed25519Bc = Org.BouncyCastle.Math.EC.Rfc8032.Ed25519;
 
 namespace TswapCore.Broker.SshAgent;
 
@@ -108,6 +109,76 @@ public sealed class SshPublicKey
         if (q.Length != 1 + 2 * size || q[0] != 0x04)
             throw new SshWireException("ECDSA point is not an uncompressed point of the curve's size");
         return (q.Slice(1, size).ToArray(), q.Slice(1 + size, size).ToArray());
+    }
+
+    /// <summary>The smallest RSA host key whose signature a bind may carry (OpenSSH's <c>RequiredRSASize</c> default).</summary>
+    public const int MinRsaHostBits = 2048;
+
+    /// <summary>
+    /// Verifies a signature blob (wire doc section 8) by this key over <paramref name="data"/>, as a
+    /// session-bind's host-key signature over the session identifier is checked (wire doc section 6):
+    /// Ed25519 (BouncyCastle), ECDSA with the curve's hash, RSA with <c>rsa-sha2-256/512</c> only.
+    /// Returns null when it verifies, otherwise why not (<c>sha1</c>, <c>algorithm</c>,
+    /// <c>rsa-too-small</c>, <c>invalid</c>).
+    /// </summary>
+    public string? VerifyRefusal(ReadOnlySpan<byte> data, ReadOnlySpan<byte> signatureBlob)
+    {
+        try
+        {
+            var reader = new SshReader(signatureBlob);
+            var algorithm = reader.ReadString();
+            var signature = reader.ReadString();
+            reader.EnsureEnd();
+            switch (Type)
+            {
+                case SshKeyType.Ed25519:
+                    if (!algorithm.SequenceEqual("ssh-ed25519"u8))
+                        return "algorithm";
+                    if (signature.Length != Ed25519Bc.SignatureSize)
+                        return "invalid";
+                    var message = data.ToArray();
+                    return Ed25519Bc.Verify(signature.ToArray(), 0, Ed25519!, 0, message, 0, message.Length) ? null : "invalid";
+                case SshKeyType.Rsa:
+                {
+                    HashAlgorithmName hash;
+                    if (algorithm.SequenceEqual("rsa-sha2-256"u8))
+                        hash = HashAlgorithmName.SHA256;
+                    else if (algorithm.SequenceEqual("rsa-sha2-512"u8))
+                        hash = HashAlgorithmName.SHA512;
+                    else
+                        return algorithm.SequenceEqual("ssh-rsa"u8) ? "sha1" : "algorithm";
+                    var n = Modulus!;
+                    var bits = (n.Length - 1) * 8 + (32 - System.Numerics.BitOperations.LeadingZeroCount(n[0]));
+                    if (bits < MinRsaHostBits)
+                        return "rsa-too-small";
+                    if (signature.Length > n.Length)
+                        return "invalid";
+                    var padded = new byte[n.Length]; // OpenSSH accepts a signature shorter than the modulus, left-padded
+                    signature.CopyTo(padded.AsSpan(n.Length - signature.Length));
+                    using var rsa = RSA.Create(new RSAParameters { Exponent = Exponent, Modulus = n });
+                    return rsa.VerifyData(data, padded, hash, RSASignaturePadding.Pkcs1) ? null : "invalid";
+                }
+                default:
+                {
+                    if (!algorithm.SequenceEqual(Encoding.ASCII.GetBytes(KeyTypeName(Type))))
+                        return "algorithm";
+                    var (_, curve, size, hash) = Curve(Type);
+                    var inner = new SshReader(signature);
+                    var r = inner.ReadPositiveMpint(size);
+                    var s = inner.ReadPositiveMpint(size);
+                    inner.EnsureEnd();
+                    var p1363 = new byte[2 * size];
+                    r.CopyTo(p1363.AsSpan(size - r.Length));
+                    s.CopyTo(p1363.AsSpan(2 * size - s.Length));
+                    using var ecdsa = ECDsa.Create(new ECParameters { Curve = curve, Q = new ECPoint { X = QX, Y = QY } });
+                    return ecdsa.VerifyData(data, p1363, hash, DSASignatureFormat.IeeeP1363FixedFieldConcatenation) ? null : "invalid";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is SshWireException or CryptographicException)
+        {
+            return "invalid";
+        }
     }
 
     /// <summary>The blob of an Ed25519 key.</summary>

@@ -26,12 +26,15 @@ public sealed class SshAgentListener
     private readonly IReadOnlyList<(string Socket, string Path)> _sockets;
     private readonly BrokerRequestHandler _http;
     private readonly Action<string> _onFatal;
+    private readonly SshSignRateLimiter _signRate;
+    private int _timeoutsInARow;
 
     internal SshAgentListener(SshAgentOptions agent, BrokerServerOptions server, string socketDir,
         BrokerConnectionCounter connections, BrokerRequestHandler http, Action<string> onFatal)
     {
         _http = http;
         _onFatal = onFatal;
+        _signRate = new SshSignRateLimiter(agent.SignsPerMinute, server.Time);
         _agent = agent;
         _server = server;
         _connections = connections;
@@ -198,6 +201,94 @@ public sealed class SshAgentListener
     internal BrokerPolicy Policy => _server.Policy.Current;
 
     internal IReadOnlyDictionary<string, SshAgentKey> Keys => _agent.Keys;
+
+    internal BrokerLog Log => _server.Log;
+
+    internal TimeProvider Time => _server.Time;
+
+    /// <summary>
+    /// One signature with a fresh unlock (brief T10 decision 5), after every request check passed:
+    /// the sign-rate limit, then T8's unlock-failure limits and global unlock limit
+    /// (<see cref="BrokerUnlockGuard"/>, shared with the HTTP sockets and keyed by the client socket),
+    /// then the broker's single unlock at a time (waiting at most <see cref="BrokerLimits.MaxQueueWait"/>),
+    /// abandoning an unlock that hangs past <see cref="BrokerLimits.UnlockTimeout"/>. Returns the
+    /// signature blob, or null with the reason and whether an unlock was made.
+    /// </summary>
+    internal async Task<(byte[]? Signature, string? Reason, bool Unlocked)> SignAsync(
+        string socket, SshAgentKey key, byte[] data, uint flags, CancellationToken cancellationToken)
+    {
+        var guard = _http.UnlockGuard;
+        if (!_signRate.Allows(socket))
+            return (null, "sign-rate", false);
+        if (guard.Refusal(socket) is { } refused)
+            return (null, refused, false);
+        using var queueWait = new CancellationTokenSource(_server.Limits.MaxQueueWait, _server.Time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(queueWait.Token, cancellationToken);
+        try
+        {
+            await _http.UnlockGate.WaitAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return (null, cancellationToken.IsCancellationRequested ? "client-closed" : "busy", false);
+        }
+        try
+        {
+            // Re-checked under the unlock lock: other connections may have used the window meanwhile.
+            if (!_signRate.Allows(socket))
+                return (null, "sign-rate", false);
+            if (guard.Refusal(socket) is { } refusedNow)
+                return (null, refusedNow, false);
+            guard.RecordAttempt();
+            var sign = Task.Run(() => SshKeySigner.Sign(_agent.KeySource, key, data, flags));
+            byte[] signature;
+            try
+            {
+                signature = await sign.WaitAsync(_server.Limits.UnlockTimeout, _server.Time).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _ = sign.ContinueWith(t => _ = t.Exception, TaskScheduler.Default); // abandoned; its result is never used
+                if (Interlocked.Increment(ref _timeoutsInARow) >= _server.Limits.UnlockTimeoutsBeforeExit)
+                {
+                    var reason = $"{_server.Limits.UnlockTimeoutsBeforeExit} ssh-agent unlocks in a row took longer than {_server.Limits.UnlockTimeout.TotalSeconds:0} s; exiting so the service manager restarts serve";
+                    _server.Log.Event(reason);
+                    _onFatal(reason);
+                }
+                return (null, "unlock-timeout", true);
+            }
+            catch (BrokerUnlockException)
+            {
+                Interlocked.Exchange(ref _timeoutsInARow, 0);
+                if (guard.RecordFailure(socket))
+                    _server.Log.Event($"socket '{socket}' locked out after repeated unlock failures");
+                return (null, "unlock-failed", true);
+            }
+            catch (BrokerSecretException)
+            {
+                Interlocked.Exchange(ref _timeoutsInARow, 0);
+                return (null, "secret-unusable", true);
+            }
+            catch (SshSignRefusedException ex)
+            {
+                Interlocked.Exchange(ref _timeoutsInARow, 0);
+                return (null, ex.Message, true); // key-changed, key-unusable: fixed words
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                Interlocked.Exchange(ref _timeoutsInARow, 0);
+                return (null, "signer-error", true);
+            }
+            Interlocked.Exchange(ref _timeoutsInARow, 0);
+            guard.RecordSuccess(socket);
+            _signRate.Record(socket);
+            return (signature, null, true);
+        }
+        finally
+        {
+            _http.UnlockGate.Release();
+        }
+    }
 
     private static string Num(uint value) => value.ToString(CultureInfo.InvariantCulture);
 
