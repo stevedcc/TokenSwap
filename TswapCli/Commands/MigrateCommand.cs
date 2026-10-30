@@ -47,7 +47,20 @@ public sealed class MigrateCommand : ICliCommand
             ctx.Storage.SaveConfig(config);
         }
 
-        // A one-key keyring vault (brief T4) has no pair fields: the classic guide below doesn't apply.
+        // Fix round 2 (MiMo F2): what reaches here is a YubiKey vault (TPM and Secure Enclave vaults
+        // returned above). A pending 'slot request' has no vault yet.
+        if (config.Keyring == null && config.PendingSlotId != null)
+        {
+            c.Out.WriteLine($"This machine has a pending slot request; nothing to migrate. Finish it first: {ctx.Prefix} slot accept <approve-file>");
+            return 0;
+        }
+
+        // A one-key YubiKey keyring vault (brief T4) has no pair fields: the classic guide below
+        // doesn't apply. (A legacy pair keyring vault has both serials and takes the classic path.)
+        if (config.Keyring == null && config.YubiKeySerials is not { Count: 2 })
+            throw new TswapException(
+                $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
+                "Restore config.json from backup or re-run 'tswap init'.");
         if (config.YubiKeySerials is not { Count: 2 })
         {
             c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");

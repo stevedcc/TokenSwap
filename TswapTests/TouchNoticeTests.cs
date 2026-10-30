@@ -292,4 +292,36 @@ public class TouchNoticeTests : IDisposable
         Assert.Contains("no touch (was touch required)", notice);
         Assert.DoesNotContain("not acknowledged", notice);
     }
+
+    // Fix round 2 (MiMo F2): migrate's keyring branch is for YubiKey keyring vaults only. A TPM or
+    // Secure Enclave vault (no YubiKey) gets the backend message and nothing is written.
+    [Fact]
+    public void Migrate_OnAZeroYubiKeyVault_SaysItDoesNotApply_AndWritesNothing()
+    {
+        using var router = new FleetMachine("touch-tpm", SimulatedYubiKeyService.WithKeys()) { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };
+        router.Ok("", "init", "--tpm", "--no-recovery");
+        var before = router.ConfigText;
+
+        var (exit, stdout, stderr) = router.Run("", "migrate");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("only applies to YubiKey vaults", stdout);
+        Assert.DoesNotContain("keyring vault", stdout);
+        Assert.Equal("", stderr);
+        Assert.Equal(before, router.ConfigText);
+    }
+
+    // ...and a machine with a pending `slot request` (no keyring yet) isn't told it has a keyring vault.
+    [Fact]
+    public void Migrate_OnAPendingSlotRequest_DoesNotClaimAKeyringVault()
+    {
+        _m.Keys.PluggedIn = [SerialA];
+        _m.Ok("", "slot", "request", _m.PathOf("request.json"));
+
+        var (exit, stdout, stderr) = _m.Run("", "migrate");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.DoesNotContain("This is a keyring vault", stdout);
+        Assert.Contains("slot accept", stdout);
+    }
 }
