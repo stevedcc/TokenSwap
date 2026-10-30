@@ -76,7 +76,9 @@ public class VaultFreeCommandTests
     [Fact]
     public void VaultCommand_WithoutAHomeFolder_SaysItCannotDetermineTheConfigFolder()
     {
-        if (OperatingSystem.IsWindows()) return;
+        // Linux only: the folder comes from XDG_CONFIG_HOME/HOME there. On macOS .NET asks the OS
+        // for Application Support (not HOME), and on Windows for %APPDATA%, so both still find one.
+        if (!OperatingSystem.IsLinux()) return;
 
         var (exit, _, stderr) = Run(new(), "names");
 

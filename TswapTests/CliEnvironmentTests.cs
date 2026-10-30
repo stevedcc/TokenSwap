@@ -177,7 +177,9 @@ public class CliEnvironmentTests
         var dir = Resolve(new() { ["SUDO_USER"] = "svc", ["SUDO_UID"] = "990" }, isPrivileged: true,
             lookupUser: Passwd(("svc", 990, "/var/lib/svc")));
 
-        Assert.Equal("/var/lib/svc/.config/tswap", dir);
+        // The per-platform base under that home, as without sudo: macOS uses Library/Application Support.
+        var expectedBase = OperatingSystem.IsMacOS() ? Path.Combine("Library", "Application Support") : ".config";
+        Assert.Equal(Path.Combine("/var/lib/svc", expectedBase, "tswap"), dir);
     }
 
     // Brief T7 item 1 (#107): SUDO_USER is only trusted when SUDO_UID matches its passwd uid.
