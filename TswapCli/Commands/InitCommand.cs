@@ -588,6 +588,13 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
+        if (backend == HardwareBackend.SecureEnclave)
+        {
+            // Brief T7 item 8 (#159): said where the user sees it, in proportion (HARDWARE_BACKENDS.md).
+            c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
+            c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
+            c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+        }
         PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
     }

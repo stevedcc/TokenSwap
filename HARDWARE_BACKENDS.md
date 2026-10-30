@@ -150,6 +150,28 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
 `slots` describes a one-key slot by its own key ("YubiKey 12345678, touch required"), whatever
 the vault's backend.
 
+### Several keys plugged in, and the touch posture (brief T7, issues #198 and #185)
+
+- **Which key unlocks** (`YubiKeySelection`, used by `VaultUnlocker` and `YubiKeyHardwareService`):
+  `TSWAP_YUBIKEY_SERIAL` if set (an unplugged serial, or one without a slot, is an error); on a
+  terminal the user picks, the prompt on stderr, with a touch-required key as the default; with
+  stdin redirected tswap never asks: it tries the plugged-in keys that have a slot in the order
+  no-touch, unknown, touch-required (a classic XOR vault: the enrolled keys in plugged-in order),
+  and a key that doesn't answer or opens none of its slots passes to the next. Enrolment
+  (`init`, `slot add`, `slot request`) still asks which key to enroll.
+- **The touch posture** in a slot's blob (the last byte, above) is recorded at enrolment from
+  whether the key asked for a touch during the enrolment challenge:
+  `IYubiKeyService.ChallengeReportingTouch`. `ykman otp calculate` prints "Touch your YubiKey..."
+  on stderr exactly when the key reports that it waits for one (the OTP HID keepalive status
+  "user presence needed"); a key without touch answers at once with nothing on stderr. **Checked
+  against the yubikey-manager 5.9.2 source** (`ykman/_cli/otp.py` `calculate`, which calls
+  `prompt_for_touch` in `ykman/_cli/util.py`; `yubikit/core/otp.py` signals it on
+  `RESP_TIMEOUT_WAIT_FLAG`). `ykman otp info` can't read a slot's touch setting, so slots enrolled
+  before this stay "unknown". Over USB only (tswap's only transport for `calculate`).
+- **What the user sees**: the posture is explained once where it is chosen; everyday commands
+  print one line only when a slot's posture differs from what this machine acknowledged
+  (`Config.AcknowledgedTouch`, written by the enrolling commands and `tswap slots --ack`).
+
 ### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
 
 `slot request --tpm` and `slot request --secure-enclave` enroll the joining machine's own hardware

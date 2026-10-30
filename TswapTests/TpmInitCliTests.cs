@@ -77,6 +77,21 @@ public class TpmInitCliTests : IDisposable
         Assert.Contains("s3cret-value", getOut);
     }
 
+    // Brief T7 item 8 (#159): init --secure-enclave says, in proportion, that the wrapping construction
+    // hasn't had an independent cryptographic review, next to what has been verified. TPM init doesn't.
+    [Fact]
+    public void Init_SecureEnclave_DisclosesTheUnreviewedConstruction()
+    {
+        var (seExit, seOut, seErr) = Run(NewTempDir(), KeyA, "", "init", "--secure-enclave");
+        var (tpmExit, tpmOut, _) = Run(NewTempDir(), KeyA, "", "init", "--tpm");
+
+        Assert.True(seExit == 0, seErr);
+        Assert.Contains("has not had an independent cryptographic review", seOut);
+        Assert.Contains("verified for correctness", seOut);
+        Assert.Equal(0, tpmExit);
+        Assert.DoesNotContain("cryptographic review", tpmOut);
+    }
+
     [Fact]
     public void Init_Tpm_VaultDoesNotOpenOnAnotherSimulatedMachine()
     {

@@ -41,13 +41,22 @@ $env:TSWAP_TEST_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random 
 ```
 There is no linter configured.
 
+**Sudo-refusal tests** (a command refuses without sudo): return early when
+`Environment.IsPrivilegedProcess` (Windows CI runs elevated, so the refusal can't happen there),
+and assert the platform-neutral "requires", not "sudo" (Windows says "requires an administrator
+prompt"). Run such commands with the sudo bypass off (`SudoBypass: false`, or `FleetMachine.Sudo = false`).
+
+**The skill eval** (`evals/skill/run.sh`, Linux + bubblewrap) runs agents against scenarios with
+tswap and sudo shimmed; its fake agent is exercised by `SkillEvalTests` in the unit suite. Never
+point it at real secrets: every value in it is an inert marker.
+
 ## Architecture
 
 ### Privilege Boundary (sudo separation)
 
 Commands are split by whether they require sudo:
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `migrate` — safe for AI agents
+- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `slots`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `installscript`, `migrate` — safe for AI agents
 - **No sudo for a burned secret, sudo otherwise**: `rotate <name> [len]`, `ingest --rotate <name>` — replacing a burned (already compromised) secret is the agent's job; replacing one still in use could break the services using it, so that needs sudo. Listed with the no-sudo commands on the help screen.
 - **No sudo, joining a shared vault folder**: `init --vault-dir <folder>` writes this machine's own config only. `slot accept <file>` on a record-store machine, and `slot accept <file> --vault-dir <folder>`, also write the new slot into the **shared keyring** (a union with the file) without sudo: the human gate for that slot is the earlier `sudo tswap slot approve` on an enrolled machine, which produced the approve file.
 - **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `restore <name>` — exposes secret values or changes what the vault holds
@@ -68,11 +77,46 @@ recovery private key, read from stdin only, and enrolls this machine's hardware 
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
 
+**Which vault sudo uses** (`CliEnvironment.ResolveConfigDir`): privileged on Unix with `SUDO_USER`
+set, the home folder comes from `getpwnam(SUDO_USER)` (`TswapCore/UnixPasswd.cs`) and is used only
+when `SUDO_UID` is set, numeric and equal to that entry's uid; anything else refuses with a
+`TswapException`. `SUDO_USER=root` or `SUDO_UID=0` is root's own folder; privileged without
+`SUDO_USER` (a root service, `su`) is root's own folder; `sudo -i` keeps `SUDO_USER`, so it uses
+the invoking user's vault. `TSWAP_CONFIG_DIR` overrides all of it. The config folder is resolved
+lazily, at the first command that needs the vault (`ICliCommand.NeedsVault`, default true): help,
+`prompt`, `prompt-hash`, `completion` and `installscript` work without a home folder.
+
+**Global flags**: `-v`/`--verbose` count only before the command name
+(`CliEnvironment.SplitGlobalFlags`); from the command name on, every argument is the command's
+(`tswap run grep -v ...`).
+
 `names`, `burned`, and `check` accept `--json` for machine-readable output (exit codes
 unchanged). `completion <bash|zsh|fish|powershell>` prints a shell completion script generated
 from the command registry; `installscript` also installs completions for the detected shells
 (writing to each shell's auto-load location, printing the one activation line for zsh/PowerShell
 rather than editing rc/profile files).
+
+### YubiKey selection (several keys plugged in)
+
+`YubiKeySelection` (TswapCore/Vault) decides which plugged-in key an **unlock** uses, built by
+`CommandContext.UnlockSelection()`:
+- `TSWAP_YUBIKEY_SERIAL` set: that key only; not plugged in, without a slot (keyring) or not
+  enrolled (classic), or not a number: an error.
+- stdin is a terminal (`IConsole.IsInputRedirected` false): the user picks, the prompt on
+  **stderr**, the default a touch-required key.
+- otherwise (scripts, agents): **never prompt**. Keyring vaults try the keys that have a slot in
+  the order no-touch, unknown, touch-required (the posture recorded in each slot's
+  `YubiKeySlotBlob`) and the first that unwraps `K_v` wins; a classic XOR vault takes the first
+  enrolled key that answers. Fail only when none can unlock.
+`create`'s YubiKey-entropy key follows the same rule (`SelectEntropySerial`). Enrolment
+(`init`, `slot add`, `slot request`: `ChooseSerial`/`ChooseSerialAmong`) still prompts which key
+to enroll. Tests: `TwoYubiKeysTests` (FleetMachine `RunOnTerminal` plays a terminal).
+
+**The touch posture** is explained once where it is chosen (enrolment, `migrate`) on stderr and
+acknowledged in `config.json` (`AcknowledgedTouch`); everyday commands print one line only for a
+posture that changed since (`SecurityWarnings.NoticeIfChanged`); `tswap slots --ack` acknowledges.
+It is detected from whether `ykman otp calculate` asked for a touch
+(`IYubiKeyService.ChallengeReportingTouch`). Every notice goes to stderr.
 
 ### YubiKey XOR Redundancy
 
@@ -134,8 +178,8 @@ another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
 ### Code Organization (TswapCli)
 
 The `TswapCli/` project is the executable (assembly name `tswap`):
-1. **`Program.cs`** — composition root: resolves the environment, wires real or test services, dispatches, and maps exceptions to exit codes
-2. **`CliEnvironment`** — config-dir resolution (TSWAP_CONFIG_DIR override, SUDO_USER mapping, legacy dir migration), invocation prefix, verbose flag
+1. **`Program.cs`** / **`CliHost`** — `Program.cs` hands the real console and process environment to `CliHost.Run`, the composition root: resolves the environment, wires real or test services, dispatches, and maps exceptions to exit codes (tests call `CliHost.Run` with a scripted environment)
+2. **`CliEnvironment`** — config-dir resolution, lazy (TSWAP_CONFIG_DIR override, SUDO_USER mapping via passwd, XDG, legacy dir migration), invocation prefix, leading global flags, `TSWAP_YUBIKEY_SERIAL`
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata

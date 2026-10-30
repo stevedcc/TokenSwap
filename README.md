@@ -1,34 +1,53 @@
-# tswap - YubiKey Secret Manager
+# tswap - hardware-backed secret manager
 
-Hardware-backed secret management designed for two problems:
+tswap protects a secret **while it is in use**: an AI agent (or any process you invited, running
+as you) can use a password without ever seeing, and so without remembering, its value. The threat
+is retention in a model's context, not disclosure of your repository. That is a different axis
+from Sealed Secrets, SOPS, age or Vault, which protect a secret at rest; use both.
 
-1. **AI agents need to use passwords without seeing them.** tswap substitutes `{{tokens}}` into commands at runtime — the agent never handles plaintext, and secrets never appear in shell history.
+1. **AI agents use passwords without seeing them.** tswap substitutes `{{tokens}}` into commands at runtime — the agent never handles plaintext, and secrets never appear in shell history.
 
-2. **YubiKey redundancy without re-enrollment.** Two YubiKeys are enrolled once. Either key can unlock the vault independently via XOR key reconstruction — put one in a safe and carry the other.
+2. **The vault key lives in hardware.** A vault opens with a YubiKey (HMAC-SHA1 challenge-response),
+   a TPM 2.0 (Linux, Windows) or a Mac's Secure Enclave. A **keyring vault** has one slot per
+   device, so any enrolled YubiKey, machine or the offline recovery key opens it alone; the older
+   **classic** vault enrolls two YubiKeys at once, either of which unlocks it via an XOR share.
+
+3. **Several machines, one vault.** Machines join a keyring vault by a hand-carried exchange
+   (`slot request` → `slot approve` → `slot accept` → `slot merge`), and the **record store** keeps
+   one encrypted file per secret in a folder that a sync tool can carry.
+
+Further reading: [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md) (the backends, their status and
+what has and hasn't been verified) and [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md) (the
+keyring, slots, enrolment and the record store).
 
 ## How It Works
 
 ### AI Agent Safety
 
-tswap enforces a privilege boundary using sudo. Commands that *use* secrets don't require sudo. Commands that *reveal* secrets do.
+tswap enforces a privilege boundary using sudo. Commands that *use* secrets don't require sudo.
+Commands that *reveal* a value, remove or replace a value that is still good, or administer the
+vault do.
 
 ```
-No sudo required          sudo required
-─────────────────         ─────────────
-create (random gen)       add (user sets value)
-ingest (pipe from stdin)  get (show value)
-names  (list names)       list (names + metadata)
-run    (substitute)       delete (remove)
-check  (verify markers)
-redact (safe view)
-tocomment (annotate file)
-apply  (substitute in files)
-burn   (mark compromised)
-burned (rotation report)
-prompt (agent instructions)
-prompt-hash (cache check)
-init   (setup)
+No sudo required                         sudo required
+────────────────                         ─────────────
+create (random gen)                      get, list (show values / metadata)
+ingest (pipe from stdin)                 add (user sets value)
+names  (list names)                      delete, restore, import (remove/replace values)
+run    (substitute)                      rotate / ingest --rotate of a secret NOT burned
+apply  (substitute in files)             export (encrypted backup)
+check, redact, tocomment                 slot approve / merge / add, recover
+burn, burned                             migrate --to-records, vault merge
+rotate / ingest --rotate of a BURNED secret
+slot request, slot accept, slots
+init, init --vault-dir, migrate
+prompt, prompt-hash, completion, installscript
 ```
+
+Under `sudo`, tswap uses the vault of the user who ran sudo: `SUDO_USER`'s home folder from the
+system's user database, used only when `SUDO_UID` matches that user's uid (otherwise tswap
+refuses). That includes `sudo -i`. `SUDO_USER=root` means root's own folder. `TSWAP_CONFIG_DIR`
+overrides all of this.
 
 An AI agent (Claude Code, Copilot, etc.) can:
 - Generate strong random passwords with `create` — the value is never displayed
@@ -42,9 +61,10 @@ An AI agent **cannot**:
 - Delete secrets (`delete` requires sudo)
 - Exfiltrate via `run` — `echo`, `printf`, pipes, redirects, and inline shell/interpreter code (`sh -c`, `python -c`, ...) are blocked
 
-### YubiKey Cold Storage
+### YubiKey Cold Storage (classic vault)
 
-During `init`, two YubiKeys are challenged and an XOR share is computed:
+A keyring vault (`init --keyring`, below) gives each YubiKey its own slot. The classic vault made
+by plain `tswap init` works like this: two YubiKeys are challenged and an XOR share is computed:
 
 ```
 K1 = HMAC-SHA1(YK1, challenge)
@@ -120,7 +140,7 @@ pwsh installTswap.ps1
 
 ### Windows notes
 
-- **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`) require running from an **elevated command prompt** (right-click → "Run as administrator") instead of `sudo`.
+- **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others marked Sudo in [Commands](#commands)) require running from an **elevated command prompt** (right-click → "Run as administrator") instead of `sudo`.
 - **Process substitution** (`<(tswap apply values.yaml)`) is a bash feature and is not available in cmd or PowerShell. Use Option 2 or 3 from the [Helm Deployment Patterns](#helm-deployment-patterns) section instead.
 
 ### Setup
@@ -152,7 +172,7 @@ tswap names
 # Configure each YubiKey's slot 2 once, as above (touch recommended)
 ykman otp chalresp --generate --touch 2
 
-# Initialize with ONE key plugged in (several plugged in: tswap asks which)
+# Initialize with ONE key plugged in (several plugged in: tswap asks which; TSWAP_YUBIKEY_SERIAL picks one)
 tswap init --keyring
 
 # Add each spare key as its own slot: plug it in (the first key may stay plugged in) and run
@@ -167,6 +187,27 @@ slot**, and any one enrolled key opens the vault alone; there is no XOR share to
 its slot, so the vault files plus any one enrolled key open the vault on any machine.
 `slot add --yubikey` refuses a key that already has a slot, and backs up `config.json` before
 it writes.
+
+### Two YubiKeys plugged in
+
+When several plugged-in YubiKeys can open the vault, an unlock never waits on a prompt in a
+script or an agent's `tswap run`:
+
+- **No terminal** (stdin redirected): tswap tries the keys that have a slot in this vault, the
+  ones that need **no touch first, then unknown, then touch-required**, and the first that opens
+  the vault wins (a classic vault takes the first enrolled key that answers). A touch-required key
+  tried first would stall every unattended unlock until its touch timed out; with a no-touch key
+  plugged in, an unattended unlock is possible anyway. Only when none opens it does tswap fail,
+  saying why for each key.
+- **On a terminal**, tswap asks which key to use, on stderr (stdout stays the command's output),
+  and offers the **touch-required key as the default**: plugging in the touch key means "I am here
+  and permit this".
+- **`TSWAP_YUBIKEY_SERIAL=<serial>`** picks one key explicitly; a serial that isn't plugged in, or
+  has no slot in the vault, is an error. `sudo` drops the variable unless you keep it
+  (`sudo --preserve-env=TSWAP_YUBIKEY_SERIAL tswap ...`); that is intended.
+
+Enrolling a key (`init`, `slot add`, `slot request`) still asks which key to enroll when several
+qualify.
 
 Keyring vaults made by an older tswap with a **YubiKey pair** (two keys, an XOR share) keep
 working as they are. A pair vault whose keyring is format version 2 cannot take new slots; to
@@ -185,6 +226,14 @@ Enclave (the machine slot), plus a break-glass **recovery slot**. `init` prints 
 private key once; store it offline (tswap never saves it). `--no-recovery` leaves the recovery
 slot out. `--keyring` is implied and accepted (`tswap init --keyring --tpm` is the same
 command); `--tpm` and `--secure-enclave` cannot be combined. `init` rejects any other argument.
+
+**Secure Enclave:** the slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction,
+a hand-rolled ECIES equivalent. In the words of [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#status-poc-grade-not-yet-production-hardened):
+it has "been verified for correctness (round-trips, fails cleanly on denial), not reviewed by
+anyone with cryptography expertise for subtler issues". It has not had an independent
+cryptographic review; `init --secure-enclave` says so too. Tested on Apple Silicon only.
+**TPM:** the TPM key has no PIN or PCR policy yet, so any process running as you can unseal it
+(no presence check, unlike a touch-required YubiKey or the Secure Enclave).
 
 To let your YubiKeys open this vault too, plug each one into **this** machine and run
 `sudo tswap slot add --yubikey`: each key becomes its own slot, which opens the vault on its own
@@ -251,6 +300,15 @@ sudo tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
 
 `slot approve` and `slot merge` take `--recovery-key-stdin` too. A wrong or malformed key is
 refused with one message and nothing is written; the recovery slot always stays.
+
+### Limits of this version
+
+- The keyring and record-store formats are new and may still change before they are declared
+  stable (a change comes with a new format version that older builds refuse with a clear error).
+- Move `slot request` / `slot approve` / receipt files yourself (scp, USB, paste); don't drop them
+  in a sync folder. Automating that exchange is later work.
+- There is no revocation and no rotation of the vault key yet: removing a lost or compromised
+  machine or key means re-initialising the vault and moving the secrets across.
 
 **Vaults made by `tswap init --tpm` or `--secure-enclave` before keyring vaults** (one sealed key,
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
@@ -393,7 +451,7 @@ inherit the profile folder's permissions.)
 
 ## Security: YubiKey Touch Requirement
 
-**By default, tswap recommends configuring YubiKey slots with touch requirement** for better security:
+**tswap recommends configuring YubiKey slots with a touch requirement:**
 
 ```bash
 ykman otp chalresp --generate --touch 2
@@ -404,17 +462,30 @@ This means:
 - ✓ **Protection from local malware** — processes can't silently unlock vault
 - ✓ **Better threat model** — combines "something you have" (key) + "something you do" (touch)
 
-### Without Touch (Less Secure)
+### Without Touch (a deliberate choice)
 
-Slots configured without touch (`ykman otp chalresp --generate 2`) allow any process with access to the inserted YubiKey to unlock the vault:
+Slots configured without touch (`ykman otp chalresp --generate 2`) let any process running as you
+unlock the vault while the key is plugged in. That can be the right choice (a key that lives in an
+always-on machine, a CI runner), and tswap treats it as one: it **explains the posture once, where
+it is chosen, and doesn't repeat it on every command**.
 
-- ⚠️  No physical confirmation required
-- ⚠️  Vulnerable to malware accessing inserted keys
-- ⚠️  Suitable only for CI/CD or automated scenarios where touch is impractical
+- **At enrolment** (`init`, `slot add`, `slot request`, `migrate --to-records`, `recover`) tswap
+  records each key's posture in its slot and explains it on stderr. It detects the posture from
+  whether `ykman otp calculate` asked for a touch: ykman prints "Touch your YubiKey..." on stderr
+  exactly when the key waits for one (checked against the yubikey-manager **5.9.2** source;
+  `ykman otp info` can't read a slot's touch setting). Slots enrolled before this release show as
+  "unknown". If tswap couldn't check, it says so, with the fix.
+- **`tswap slots`** shows each slot's posture at any time.
+- **Everyday commands** print nothing about it, except one line on stderr when a slot's posture
+  differs from what this machine last acknowledged (for example a no-touch key's slot arriving
+  from another machine with `slot merge`). `tswap slots --ack` acknowledges the current postures;
+  the acknowledgement is per machine, in `config.json` (`AcknowledgedTouch`).
+- A classic two-key vault's posture is reviewed by `tswap migrate`, which also prints the guide
+  below.
 
 ### Migrating to Touch-Required Slots
 
-If you have an existing installation without touch:
+If you have an existing classic installation without touch:
 
 ```bash
 # Check your configuration status
@@ -427,6 +498,9 @@ tswap migrate
 # 4. Restore secrets
 ```
 
+In a keyring vault, reprogram a key with `--touch` and enroll it again as a new slot
+(`sudo tswap slot add --yubikey`).
+
 ## Threat Model & Non-Goals
 
 tswap prevents **accidental leaks and casual exfiltration** — it does not attempt to confine a determined local actor. Understanding these boundaries is essential for evaluating whether tswap fits your deployment.
@@ -438,9 +512,9 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
 | Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
-| Single YubiKey loss | XOR key reconstruction — either key derives the other via the stored XOR share |
-| Vault access without physical presence | Touch-required YubiKey slots (recommended config) require a button press to unlock |
-| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete` require sudo; agents should never run sudo |
+| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; the **Secure Enclave** asks for Touch ID / presence per unwrap; a **no-touch YubiKey** and a **TPM** slot (no PIN/PCR policy yet) unlock for any process running as you while the key is plugged in / on that machine |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
 
 ### What tswap does NOT protect against
 
@@ -477,8 +551,10 @@ These commands are safe for AI agents and automation. They never expose secret v
 | `redact <file>` | View file with values masked | None — replaces values with `[REDACTED]` |
 | `tocomment <file>` | Annotate file with markers | Requires unlocked vault to match values |
 | `apply <file>` | Substitute markers with values | Output contains plaintext — send to stdout/process substitution only |
+| `rotate <name>` / `ingest --rotate <name>` of a **burned** secret | Replace a compromised value | None — the new value is never displayed; a secret that isn't burned needs sudo |
+| `slots` | List slots and what protects each | None — reads metadata only |
 | `prompt` / `prompt-hash` | Self-documentation | None |
-| `init` / `migrate` | Setup and migration | Requires physical YubiKey interaction |
+| `init` / `migrate` / `slot request` / `slot accept` | Setup, migration, joining a vault | Requires physical hardware interaction |
 
 ### Operator role (requires sudo)
 
@@ -490,6 +566,9 @@ These commands expose or modify secret values. They should **only** be used by h
 | `get <name>` | Display plaintext value | Directly exposes secret to the terminal |
 | `list` | List secrets with metadata | Reveals creation/modification timestamps |
 | `delete <name>` | Remove a secret | Irreversible — requires operator judgment |
+| `rotate <name>` of a secret that isn't burned, `restore <name>`, `import <file>` | Replace a value that is still good | Services using the old value stop working |
+| `export <file>` | Encrypted backup | The backup holds every value |
+| `slot approve` / `slot merge` / `slot add --yubikey`, `recover`, `migrate --to-records`, `vault merge` | Vault administration | Each adds a way to decrypt the vault, or decrypts everything |
 
 ### Example: policy enforcement
 
@@ -497,7 +576,7 @@ If your environment supports command allowlists (e.g., a wrapper script, CI/CD p
 
 ```bash
 # Example allowlist for an AI agent wrapper
-ALLOWED_COMMANDS="create|ingest|names|run|burn|burned|check|redact|tocomment|apply|prompt|prompt-hash|init|migrate"
+ALLOWED_COMMANDS="create|ingest|rotate|names|slots|run|burn|burned|check|redact|tocomment|apply|prompt|prompt-hash|init|migrate"
 
 # Reject anything not in the allowlist
 if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then
@@ -562,6 +641,15 @@ Codex CLI walks up from `$CWD` looking for `.agents/skills/`, so this also works
 ### Keeping the skill current
 
 Re-run the install command whenever `tswap prompt-hash` changes to pick up updated instructions.
+
+### Evaluating the skill
+
+`evals/skill/run.sh` runs eight scenarios (a secret in a log, a leaked secret to rotate, a
+rotation that needs sudo, "show me the password", inline secrets in a config file, a new
+credential, an import from Kubernetes, a Helm deploy) against Claude Code or OpenCode, with and
+without the skill, each in a bubblewrap sandbox (Linux) where tswap and sudo are shims and every
+value is an inert marker. A judge checks what the agent did from the shims' log and the files it
+left, not from its own report. See the script's header for the options.
 
 ## Burn & Rotate Playbook
 
@@ -674,10 +762,13 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | Command | Sudo | Description |
 |---------|------|-------------|
 | `init [--keyring] [--tpm\|--secure-enclave] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)) |
-| `migrate` | No | Guide to upgrade slots for touch requirement |
+| `init --vault-dir <folder>` | No | Join a shared record-store vault folder (see [Sharing a vault between machines](#sharing-a-vault-between-machines)) |
+| `migrate` | No | Review a classic vault's touch/entropy settings; guide to touch-required slots |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |
 | `ingest <name>` | No | Pipe secret from stdin (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value up to 64 KB |
+| `rotate <name> [length]`, `ingest --rotate <name>` | Only if not burned | Replace a secret with a new value, keeping the previous one for `{{name:previous}}` (see [Rotating a secret](#rotating-a-secret)) |
 | `names` | No | List secret names only |
+| `slots [--ack]` | No | List the vault's slots and what protects each; `--ack` acknowledges the YubiKeys' touch settings |
 | `run <cmd> [args...]` | No | Execute command with `{{token}}` substitution |
 | `burn <name> [reason]` | No | Mark a secret as burned (needs rotation) |
 | `burned` | No | List all burned secrets |
@@ -685,17 +776,27 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
-| `prompt` | No | Show AI agent instructions |
+| `slot request [--tpm\|--secure-enclave] <file>` | No | On a new machine: enroll its hardware and write a request file |
+| `slot accept <file> [--receipt <file>]` | No | On the new machine: finish enrolment with the approve file |
+| `prompt` | No | Show AI agent instructions (the skill file) |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
+| `completion <bash\|zsh\|fish\|powershell>`, `installscript` | No | Shell completion script; platform install script |
 | `add <name>` | Yes | Store a user-provided secret value |
 | `get <name>` | Yes | Display a secret value |
 | `list` | Yes | List secrets with creation/modification dates |
 | `delete <name>` | Yes | Remove a secret |
+| `restore <name>` | Yes | Put back the value the last rotation replaced |
+| `export <path>`, `import <path>` | Yes | Encrypted backup and restore |
+| `slot approve <request-file> <approve-file>` | Yes | On an enrolled machine: approve a new machine's slot |
 | `slot add --yubikey` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
 | `slot merge <receipt-or-config.json> [--yes]` | Yes | Add a receipt's slot, or another copy's slots, to this machine's keyring (see [Remote enrolment](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)) |
 | `recover --yubikey\|--tpm\|--secure-enclave` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
+| `migrate --to-records [--vault-dir <dir>]` | Yes | Convert to the record store (one file per secret) |
+| `vault merge <folder>` | Yes | Fold another copy of the vault folder into this one |
 
-Add `-v` or `--verbose` to any command for detailed YubiKey output.
+Add `-v` or `--verbose` **before the command** (`tswap -v run ...`) for detailed YubiKey output;
+after the command name it belongs to the command (`tswap run grep -v ...` keeps grep's `-v`).
+`--help` / `-h` (also `tswap <command> --help`) print usage, and need no vault or home folder.
 
 On Linux/macOS, commands marked **Sudo** require `sudo tswap <command>`. On Windows, run `tswap <command>` from an elevated command prompt instead.
 
@@ -830,14 +931,16 @@ rm /tmp/values.deployed.yaml
 
 ## Sync transports
 
-tswap never syncs anything itself — it only writes files under its config directory
-(`TSWAP_CONFIG_DIR`, see [Files](#files) below) that a separate sync tool can replicate to other
-machines. This section covers what makes that safe and what doesn't.
+tswap never syncs anything itself — it only writes files that a separate sync tool can replicate
+to other machines. What may be synced is a record-store **vault folder** (`--vault-dir`, see
+[Sharing a vault between machines](#sharing-a-vault-between-machines)); each machine's
+`config.json` stays local and is never synced. This section covers what makes that safe and what
+doesn't.
 
-**The rule: point `TSWAP_CONFIG_DIR` at a directory on local disk, and let a sync tool (Dropbox,
-OneDrive, Google Drive, Syncthing, Nextcloud, Seafile, git, ...) replicate that directory. Do not
-point `TSWAP_CONFIG_DIR` directly at a network mount** — an SMB share, an NFS export, an rclone
-mount, or a WebDAV mount.
+**The rule: keep the vault folder on local disk, and let a sync tool (Dropbox, OneDrive, Google
+Drive, Syncthing, Nextcloud, Seafile, ...) replicate it. Pointing it directly at a network mount**
+— an SMB share, an NFS export, an rclone mount, or a WebDAV mount — works one machine at a time
+only (see the network-share notes under [Sharing a vault between machines](#sharing-a-vault-between-machines)).
 
 **Why this is a protocol distinction, not a hosting one.** Where the sync tool's *server* runs
 doesn't matter — a container on your own NAS running Syncthing, Nextcloud, or Seafile is fine,
@@ -847,7 +950,7 @@ gives you exactly what a raw NAS export gives you, because that *is* what it giv
 read and write goes over the wire synchronously, with no local copy in between. Containerizing a
 network filesystem doesn't change its protocol. Same reasoning applies to mounting a cloud
 drive's WebDAV endpoint or an rclone mount instead of running its actual sync client — if
-`TSWAP_CONFIG_DIR` sees a mount, not a plain local directory with a sync daemon watching it, this
+the vault folder is a mount, not a plain local directory with a sync daemon watching it, this
 guidance treats it as a network mount regardless of what's behind the mount.
 
 **Why network mounts specifically:** client-side caching over SMB/NFS means a write can
@@ -856,8 +959,7 @@ while the underlying data was never actually flushed to the server. That produce
 zero-length record with a single writer and no concurrency involved — not a race condition, just
 a weaker durability guarantee than local disk gives you. `TswapCore/Keyring/DurableFileWriter.cs`
 implements the portable mitigation for this (temp file in the same directory, `WriteThrough` +
-`Flush(flushToDisk: true)`, then a plain rename) for the future per-secret record format
-(`TswapCore/Keyring/SecretRecordCodec.cs` et al. — issues #111-#115), which is what makes
+`Flush(flushToDisk: true)`, then a plain rename) for the record store's files, which is what makes
 per-machine, per-record sync viable in the first place. **That mitigation is unit-tested only for
 its happy path** (write bytes, read them back, byte-exact) — durability under a killed process or
 a real SMB/NFS server's specific flush behavior has not been tested and isn't claimed here; see
@@ -866,24 +968,23 @@ that file's doc comment.
 **NAS: supported with caveats, not prohibited.** If you genuinely want a NAS as the sync
 destination rather than a cloud provider, run an actual sync daemon against it (see above) and
 treat it as one-machine-at-a-time: no offline access on the non-primary machine, and an
-interrupted write costs at most one record, not the whole vault, once the per-secret record
-format lands. The generation counter (issue #118, not yet implemented) will eventually detect a
-broken one-machine assumption — two machines that both believe they're the only writer — but
-until it exists, that assumption is enforced by discipline, not by tswap. **NAS setups have not
+interrupted write costs at most one record, not the whole vault. Before writing a record, tswap
+re-reads it and refuses the write if another machine changed it in the meantime (the stale-write
+guard); it does not make two simultaneous writers safe. **NAS setups have not
 been tested by this project**; the caveats above are what the protocol-level reasoning predicts,
 not a verified result, and the honest position given that is to treat NAS as unsupported until
 someone tests it, not to claim it works.
 
-**No lock files.** tswap does not write or honor any lock file in the config directory. Advisory
-locking over NFS is unreliable enough that a lock file would be a false sense of safety rather
-than real protection; the generation counter (#118) is the intended mechanism for catching a
-conflicting write after the fact, not preventing one in advance.
+**No lock files.** tswap does not write or honor any lock file. Advisory locking over NFS is
+unreliable enough that a lock file would be a false sense of safety rather than real protection;
+the stale-write guard above catches a conflicting write after the fact rather than preventing one
+in advance.
 
 **Cloud placeholder files.** Google Drive for Desktop and OneDrive Files On-Demand both stream
 files from the cloud by default, leaving a placeholder/stub on disk until something reads the
 real file. Reads usually hydrate the placeholder transparently, but not when the machine is
 offline — an offline read of a not-yet-hydrated record will fail or return the wrong thing.
-**Mark the tswap config directory "always available offline"** in your sync client's settings
+**Mark the tswap vault folder "always available offline"** in your sync client's settings
 (Google Drive is the worst offender of the four major providers for this; OneDrive, Dropbox, and
 Syncthing/Nextcloud either don't do on-demand streaming by default or make the always-available
 setting easy to find).
@@ -892,24 +993,59 @@ setting easy to find).
 
 | Platform | Config directory |
 |----------|-----------------|
-| Linux / macOS | `~/.config/tswap/` |
+| Linux | `$XDG_CONFIG_HOME/tswap/` (only an absolute `XDG_CONFIG_HOME` counts), else `~/.config/tswap/` |
+| macOS | `~/Library/Application Support/tswap/` |
 | Windows | `%APPDATA%\tswap\` |
+
+A **classic** vault:
 
 ```
 <config directory>/
-├── config.json         # YubiKey serials + XOR share (not secret on its own)
+├── config.json         # this machine's config: YubiKey serials + XOR share, or the keyring and slot id
 └── secrets.json.enc    # AES-256-GCM encrypted secrets database
 ```
+
+A **record-store** vault (`migrate --to-records`, `init --vault-dir`) keeps only this machine's
+`config.json` in the config directory (its slot, origin id and clock; never synced) and the
+shareable part in the vault folder:
+
+```
+<vault folder>/          # default <config directory>/vault; --vault-dir puts it anywhere
+├── keyring              # the vault key, wrapped once per slot
+└── records/<hash>       # one encrypted record per secret; the file name is a keyed hash of the name
+```
+
+On Linux and macOS the folders are created 0700 and the files 0600; an existing vault with wider
+permissions is narrowed on the next write, with a notice (reads change nothing). Windows: the
+profile folder's permissions apply.
+
+### Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `TSWAP_CONFIG_DIR` | The config directory to use; overrides everything else, including the `sudo` home lookup |
+| `TSWAP_YUBIKEY_SERIAL` | The YubiKey to unlock with when several are plugged in (see [Two YubiKeys plugged in](#two-yubikeys-plugged-in)); `sudo` drops it unless kept |
+| `XDG_CONFIG_HOME` | Linux: the config base, when it is an absolute path (a relative one is ignored) |
+
+Commands that need no vault (`--help`, `<command> --help`, `prompt`, `prompt-hash`, `completion`,
+`installscript`) work without a home folder; the others say "Cannot determine the config folder"
+if there is none and `TSWAP_CONFIG_DIR` isn't set.
 
 > **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: on Linux/macOS rename `~/.config/tswap-poc/` to `~/.config/tswap/`, and on Windows rename `%APPDATA%\tswap-poc\` to `%APPDATA%\tswap\`.
 
 ## Prerequisites
 
-- `ykman` CLI (YubiKey Manager): `pip install yubikey-manager` or via system package manager
-- 2 YubiKeys with slot 2 configured:
+One hardware backend:
+- **YubiKeys**: `ykman` CLI (YubiKey Manager) 5 or later (touch detection was checked against
+  yubikey-manager 5.9.2): `pip install yubikey-manager` or via system package manager. Slot 2
+  configured for HMAC-SHA1 challenge-response on each key (two for a classic vault, one or more for
+  a keyring vault):
   - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
   - **Less secure**: `ykman otp chalresp --generate 2` (no button press)
-- .NET 10 SDK (build time only — the compiled binary has no runtime dependencies)
+- **TPM 2.0**: Windows, or Linux with `tpm2-tools` (see [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md)).
+- **Secure Enclave**: a Mac (Apple Silicon tested).
+
+.NET 10 SDK at build time only — the compiled binary has no runtime dependencies.
 
 ## License
 
