@@ -103,7 +103,9 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    slotId)`, 32 bytes (`TswapCore/Keyring/YubiKeySlotKek.cs`). Challenge and salt are 32 random
    bytes each, per slot, from the CSPRNG. HKDF rather than PBKDF2 because the response is a
    uniformly random 160-bit MAC; stretching adds nothing. The response bytes are zeroed after
-   use. The key is challenged through the unchanged `IYubiKeyService.Challenge(serial, string)`
+   use. At enrollment the key is challenged twice and the responses compared in constant time;
+   a key that answers differently is refused before anything is written. The key is challenged
+   through the unchanged `IYubiKeyService.Challenge(serial, string)`
    with the challenge's 64 hex characters, the same 64-byte shape a pair vault's
    `UnlockChallenge` has always had.
 2. **The slot's parameters live in its v3 hardware blob**, a `YubiKeySlotBlob`
@@ -117,7 +119,8 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    with a YubiKey blob whose serial is plugged in is tried; `chooseSerial` picks the key when
    several match, and the first slot that authenticates wins. Such a slot works on any machine
    with the vault files and that key, without `KeyringSlotId`. With no key plugged in the error
-   says "No plugged-in YubiKey matches a slot of this vault" and lists the slot serials.
+   says "No plugged-in YubiKey matches a slot of this vault" and lists the slot serials. A slot
+   whose blob fails to decode is skipped, and named in the error only if nothing else unlocks.
 4. **`init --keyring`** enrolls one plugged-in key (the serial prompt when several are plugged
    in): one YubiKey machine slot plus the recovery slot unless `--no-recovery`;
    `YubiKeySerials = []`, `RedundancyXor = ""`, no `UnlockChallenge`/`MasterKeySalt` (the
@@ -125,7 +128,7 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    is unchanged. No command makes new pair enrollments.
 5. **`slot add --yubikey`** (sudo) unlocks this machine's vault by any slot, enrolls a plugged-in
    key that has no slot yet (it refuses a key that has one, including a legacy pair slot's
-   keys), appends the new slot (its own slot id and X25519 keypair) to this machine's keyring,
+   keys; a version 2 keyring is refused first, before sudo and any unlock), appends the new slot (its own slot id and X25519 keypair) to this machine's keyring,
    backs up `config.json` first and prints the slot's fingerprint. This is how a TPM vault on
    the router gets the owner's keys: plug each key into the router and run it.
 6. **`slot request`** enrolls one key and its request file (format version 2) carries the slot's

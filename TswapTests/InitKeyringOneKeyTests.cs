@@ -72,8 +72,9 @@ public class InitKeyringOneKeyTests : IDisposable
         Assert.Equal(YubiKeyTouchPolicy.Required, blob.Touch);
         Assert.Contains(SerialA.ToString(), stdout);
 
-        // The key was challenged once, with the slot's own challenge.
-        Assert.Equal([(SerialA, blob.ChallengeString)], _keys.Challenges);
+        // The key was challenged with the slot's own challenge, twice (the security review's
+        // consistency check at enrollment).
+        Assert.Equal([(SerialA, blob.ChallengeString), (SerialA, blob.ChallengeString)], _keys.Challenges);
     }
 
     [Fact]
@@ -112,7 +113,7 @@ public class InitKeyringOneKeyTests : IDisposable
         var keyring = DecodeKeyring(LoadConfig());
         var machine = Assert.Single(keyring.Slots);
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(machine.HwBlob!).Serial);
-        Assert.Equal([SerialB], _keys.Challenges.Select(c => c.Serial));
+        Assert.Equal([SerialB, SerialB], _keys.Challenges.Select(c => c.Serial)); // enrollment asks twice
 
         _keys.PluggedIn = [SerialB];
         var vaultKey = Unlock();

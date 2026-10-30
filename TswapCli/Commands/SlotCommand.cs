@@ -415,19 +415,30 @@ public sealed class SlotCommand : ICliCommand
             throw new UsageException($"{ctx.Prefix} slot add --yubikey");
         var c = ctx.Console;
 
-        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before anything else.
-        ctx.RequireSudo("slot add");
-
+        // The keyring's version is readable from config.json without K_v (config is not secret):
+        // refuse a vault that can never take the slot before sudo, before any unlock or touch
+        // (security review of T4).
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring == null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
                 "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+        byte[] keyringBytes;
+        try
+        {
+            keyringBytes = Convert.FromBase64String(config.Keyring);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException("Config is corrupted: Keyring is not valid base64. Restore config.json from backup.");
+        }
+        RequireKeyringThatTakesYubiKeySlots(KeyringCodec.Decode(keyringBytes));
+
+        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before any unlock.
+        ctx.RequireSudo("slot add");
 
         var vaultKey = ctx.Unlock(config);
-        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
-
-        RequireKeyringThatTakesYubiKeySlots(keyring);
+        var keyring = KeyringCodec.Decode(keyringBytes);
 
         var enrolled = keyring.Slots
             .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))

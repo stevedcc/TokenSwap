@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
 
@@ -16,7 +17,10 @@ internal static class YubiKeySlotEnrollment
     /// Enrolls a key for the slot <paramref name="slotId"/>. Keys whose serials are in
     /// <paramref name="alreadyEnrolled"/> are never picked; when every plugged-in key is one of
     /// them, this fails with an actionable error. With several eligible keys plugged in, the
-    /// usual serial prompt decides. The caller zeroes the returned <c>KEK_slot</c> after use.
+    /// usual serial prompt decides. The key is challenged <b>twice</b> with the slot's challenge and
+    /// the responses compared in constant time (security review of T4): a key that answers the
+    /// same challenge differently would make a slot that never opens, so it is refused before
+    /// anything is written. The caller zeroes the returned <c>KEK_slot</c> after use.
     /// </summary>
     public static (YubiKeySlotBlob Blob, byte[] KekSlot) Enroll(
         CommandContext ctx, byte[] slotId, IReadOnlyCollection<int>? alreadyEnrolled = null)
@@ -34,11 +38,24 @@ internal static class YubiKeySlotEnrollment
 
         var serial = ctx.ChooseSerialAmong(eligible);
 
-        c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it if it flashes)...");
+        c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
         var requiresTouch = ctx.YubiKeys.DetectTouchRequirement(serial);
         var blob = YubiKeySlotBlob.Create(serial, requiresTouch);
-        var kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, slotId);
-        return (blob, kekSlot);
+        var first = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
+        var second = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
+        try
+        {
+            if (!CryptographicOperations.FixedTimeEquals(first, second))
+                throw new TswapException(
+                    $"YubiKey {serial} answered the same challenge differently; it can't be used as a slot. " +
+                    "Check that its slot 2 is configured for HMAC-SHA1 challenge-response, or use another key.");
+            return (blob, YubiKeySlotKek.Derive(first, blob.Salt, slotId));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(first);
+            CryptographicOperations.ZeroMemory(second);
+        }
     }
 
     /// <summary>The touch-policy lines printed after enrolling a key.</summary>

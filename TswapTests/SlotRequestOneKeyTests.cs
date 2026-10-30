@@ -149,7 +149,7 @@ public class SlotRequestOneKeyTests : IDisposable
         Assert.Null(pending.Keyring);
         Assert.NotNull(pending.PendingSlotId);
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(Convert.FromBase64String(pending.PendingSlotHwBlob!)).Serial);
-        Assert.Equal([SerialB], _desktopKeys.Challenges.Select(c => c.Serial));
+        Assert.Equal([SerialB, SerialB], _desktopKeys.Challenges.Select(c => c.Serial)); // enrollment asks twice
     }
 
     [Fact]

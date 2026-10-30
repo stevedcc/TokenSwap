@@ -149,15 +149,31 @@ public sealed class VaultUnlocker
     /// is plugged in, <paramref name="chooseSerial"/> picks the key when several match; that key
     /// is challenged for each of its slots in keyring order, and the first slot that authenticates
     /// wins. <paramref name="ownBackendError"/> is the vault's own backend's failure, if it was
-    /// tried, and is kept in the error message.
+    /// tried, and is kept in the error message. A slot whose YubiKey blob fails to decode is
+    /// skipped (security review of T4: one corrupt slot must not block the others) and named in
+    /// the final error only if no other slot unlocks.
     /// </summary>
     private byte[] UnlockWithYubiKeySlot(
         Keyring.Keyring keyring, List<Slot> yubiKeySlots, Func<IReadOnlyList<int>, int> chooseSerial,
         TswapException? ownBackendError)
     {
-        var candidates = yubiKeySlots.Select(s => (Slot: s, Blob: YubiKeySlotBlob.Decode(s.HwBlob!))).ToList();
+        var candidates = new List<(Slot Slot, YubiKeySlotBlob Blob)>();
+        var corruptSlotIds = new List<string>();
+        foreach (var s in yubiKeySlots)
+        {
+            try
+            {
+                candidates.Add((s, YubiKeySlotBlob.Decode(s.HwBlob!)));
+            }
+            catch (TswapException)
+            {
+                corruptSlotIds.Add(Convert.ToHexString(s.SlotId).ToLowerInvariant()[..8]);
+            }
+        }
         var slotSerials = candidates.Select(c => c.Blob.Serial).Distinct().ToList();
-        var ownFailure = ownBackendError == null ? "" : $" (The vault's own backend failed too: {ownBackendError.Message})";
+        var ownFailure = (ownBackendError == null ? "" : $" (The vault's own backend failed too: {ownBackendError.Message})") +
+            (corruptSlotIds.Count == 0 ? "" :
+                $" Skipped slot(s) {string.Join(", ", corruptSlotIds)}: their YubiKey slot blob is corrupt; restore config.json from backup.");
 
         IReadOnlyList<int> pluggedIn;
         try
@@ -173,7 +189,8 @@ public sealed class VaultUnlocker
         if (matching.Count == 0)
             throw new TswapException(
                 "No plugged-in YubiKey matches a slot of this vault. " +
-                $"This vault's YubiKey slots are for serial(s) {string.Join(", ", slotSerials)}; " +
+                (slotSerials.Count == 0 ? "This vault has no readable YubiKey slot; " :
+                    $"This vault's YubiKey slots are for serial(s) {string.Join(", ", slotSerials)}; ") +
                 (pluggedIn.Count == 0 ? "no YubiKey is plugged in." : $"plugged in: {string.Join(", ", pluggedIn)}.") +
                 " Plug in one of those keys and try again." + ownFailure);
 
