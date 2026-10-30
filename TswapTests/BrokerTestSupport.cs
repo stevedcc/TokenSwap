@@ -224,16 +224,21 @@ public sealed class BrokerHarness : IAsyncDisposable
         { "name": "second", "upstream": "https://second.example", "auth": { "type": "bearer", "secret": "{{tok2}}" }, "path": "" }
         """;
 
+    /// <param name="allowOwnUid">
+    /// The harness connects as its own uid, which the broker refuses (brief T9); true (the default)
+    /// turns that refusal off, as the binary's Debug-only test seam does.
+    /// </param>
     public async Task<BrokerServer> StartAsync(string? configJson = null, IBrokerForwarder? forwarder = null,
-        IUnixOwnership? ownership = null, BrokerLimits? limits = null)
+        IUnixOwnership? ownership = null, BrokerLimits? limits = null, bool allowOwnUid = true)
     {
         Holder = new BrokerPolicyHolder(BrokerPolicy.Parse(configJson ?? Config()));
-        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits));
+        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits) with { AllowOwnUidForTests = allowOwnUid });
         return Server;
     }
 
     public BrokerServerOptions Options(IBrokerForwarder? forwarder = null, IUnixOwnership? ownership = null, BrokerLimits? limits = null) => new()
     {
+        AllowOwnUidForTests = true,
         Policy = Holder!,
         Secrets = Secrets,
         Forwarder = forwarder ?? FakeForwarder,

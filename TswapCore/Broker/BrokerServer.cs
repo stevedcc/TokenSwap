@@ -25,6 +25,13 @@ public sealed record BrokerServerOptions
 
     /// <summary>Owner lookups for the socket folder checks (tests fake another owner).</summary>
     public IUnixOwnership Ownership { get; init; } = new UnixOwnership();
+
+    /// <summary>
+    /// Test seam: accept a peer with the broker's own uid (brief T9 refuses it). The in-process
+    /// tests connect as their own uid; the binary sets this only in a Debug build with
+    /// <c>TSWAP_TEST_KEY</c> (never in Release).
+    /// </summary>
+    public bool AllowOwnUidForTests { get; init; }
 }
 
 /// <summary>
@@ -188,6 +195,15 @@ public sealed class BrokerServer : IAsyncDisposable
             {
                 options.Log.Connection(socketName, null, null, "no-peer-credentials");
                 return; // returning without next closes the connection
+            }
+            // Brief T9: no client may share the broker's uid (the vault user's). A process with it
+            // could read the broker's config and the vault directly, so the socket is not its way in,
+            // and refusing it keeps a misconfigured container (rootless Podman run by the vault user)
+            // from looking like a client.
+            if (creds.Uid == options.Ownership.EffectiveUid && !options.AllowOwnUidForTests)
+            {
+                options.Log.Connection(socketName, creds.Uid, creds.Pid, "own-uid");
+                return;
             }
             var policy = options.Policy.Current;
             if (!policy.Sockets.TryGetValue(socketName, out var allowed) || !allowed.AllowsUid(creds.Uid))

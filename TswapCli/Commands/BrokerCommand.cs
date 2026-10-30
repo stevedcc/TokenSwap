@@ -84,6 +84,9 @@ public sealed class BrokerCommand : ICliCommand
             Secrets = new VaultBrokerSecretSource(records, ctx.Unlocker),
             Forwarder = forwarder,
             Log = log,
+            // Only a Debug build with TSWAP_TEST_KEY has a test key (ReleaseBuildGateTests): the
+            // end-to-end tests connect as their own uid, which serve otherwise refuses.
+            AllowOwnUidForTests = ctx.TestKey != null,
         };
 
         var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
