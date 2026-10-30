@@ -178,7 +178,11 @@ public sealed class FakeBrokerForwarder : IBrokerForwarder
 /// </summary>
 public sealed class BrokerHarness : IAsyncDisposable
 {
-    public string Root { get; } = Path.Combine(Path.GetTempPath(), "tswap-bk-" + Guid.NewGuid().ToString("N")[..8]);
+    /// <summary>
+    /// The temp folder, resolved (macOS: /var is a link to /private/var), since the broker works on
+    /// socket_dir's real path.
+    /// </summary>
+    public string Root { get; }
     public string SocketDir => Path.Combine(Root, "s");
     public ObservedLog LogText { get; } = new();
 
@@ -194,7 +198,9 @@ public sealed class BrokerHarness : IAsyncDisposable
 
     public BrokerHarness()
     {
-        Directory.CreateDirectory(Root);
+        var root = Path.Combine(Path.GetTempPath(), "tswap-bk-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        Root = OperatingSystem.IsWindows() ? root : BrokerNative.RealPath(root) ?? root;
         Directory.CreateDirectory(SocketDir);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(SocketDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

@@ -28,6 +28,8 @@ public class BrokerCommandTests : IDisposable
     [Fact]
     public void WithoutSudo_ConfigChangesAreRefused_AndNothingIsWritten()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         if (Environment.IsPrivilegedProcess)
             return; // only meaningful when this process is unprivileged (Windows CI runs elevated)
         if (OperatingSystem.IsWindows())
@@ -47,6 +49,8 @@ public class BrokerCommandTests : IDisposable
     [Fact]
     public void WithoutSudo_AnExistingFileIsLeftUnchanged()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         if (Environment.IsPrivilegedProcess || OperatingSystem.IsWindows())
             return;
         _m.Ok("", AddGithub);
@@ -214,5 +218,20 @@ public class BrokerCommandTests : IDisposable
         _m.Ok("", AddOther);
 
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(EditLock));
+    }
+
+    [Fact]
+    public void OnWindows_BrokerSaysItIsNotSupported()
+    {
+        if (!OperatingSystem.IsWindows())
+            return; // the Unix behaviour is everything else in these classes
+
+        foreach (var args in new[] { new[] { "broker", "serve" }, ["broker", "forward", "--listen", "127.0.0.1:1"], AddGithub })
+        {
+            var (exit, _, err) = _m.Run("", args);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("not supported on Windows", err);
+        }
+        Assert.False(File.Exists(BrokerJson));
     }
 }

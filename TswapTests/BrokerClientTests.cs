@@ -97,6 +97,8 @@ public class BrokerClientTests : IAsyncLifetime
     [InlineData("127.0.0.1:99999")]
     public void Forward_RefusesAnyListenAddressButALiteralLoopback(string listen)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         Assert.Throws<TswapException>(() => BrokerTcpRelay.ParseListen(listen));
     }
 
@@ -106,6 +108,8 @@ public class BrokerClientTests : IAsyncLifetime
     [InlineData("::1:8080", "::1")]
     public void Forward_AcceptsALiteralLoopback(string listen, string address)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var endPoint = BrokerTcpRelay.ParseListen(listen);
         Assert.Equal(IPAddress.Parse(address), endPoint.Address);
         Assert.Equal(8080, endPoint.Port);
@@ -167,6 +171,8 @@ public class BrokerClientTests : IAsyncLifetime
     [Fact]
     public void Escape_HandlesControlCharacters_Quotes_AndCapsTheLength()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         Assert.Equal(@"a\r\nb\""c\\d\u0007\u2028", BrokerLog.Escape("a\r\nb\"c\\d\u0007\u2028", 100));
         Assert.Equal("abc...", BrokerLog.Escape("abcdef", 3));
         Assert.Equal(BrokerLog.MaxPathLength + 3, BrokerLog.Escape(new string('p', 5000), BrokerLog.MaxPathLength).Length);

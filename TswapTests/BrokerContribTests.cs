@@ -93,6 +93,8 @@ public class BrokerContribTests(ITestOutputHelper output)
     [Fact]
     public void SelinuxModule_Parses_AndDeclaresTheDomainTheTransitionsAndOneContainerRule()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var path = RepoFile("contrib", "selinux", "tswap-broker.cil");
         var statements = ParseCil(File.ReadAllText(path)).Select(s => Assert.IsType<List<object>>(s)).ToList();
         var rendered = statements.Select(Render).ToList();
@@ -127,6 +129,8 @@ public class BrokerContribTests(ITestOutputHelper output)
     [Fact]
     public void CilReader_RefusesUnbalancedParentheses()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         Assert.ThrowsAny<Exception>(() => ParseCil("(type a"));
         Assert.ThrowsAny<Exception>(() => ParseCil("(type a))"));
     }
@@ -134,6 +138,8 @@ public class BrokerContribTests(ITestOutputHelper output)
     [Fact]
     public void SystemdUnit_RunsTheLabelledLibexecCopy_NotThePlainTswap()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var lines = File.ReadAllLines(RepoFile("contrib", "systemd", "tswap-broker.service"));
         var execStart = Assert.Single(lines, l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
 

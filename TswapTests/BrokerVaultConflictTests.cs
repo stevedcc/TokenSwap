@@ -64,6 +64,8 @@ public sealed class BrokerVaultConflictTests : IDisposable
     [Fact]
     public void MainRecordDeleted_OneConflictCopy_IsTheValue_AndOnlyItIsDecrypted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var (older, newer) = TwoVersionsOfS();
         var copy = older + " (1)";
         File.Copy(newer, copy);
@@ -78,6 +80,8 @@ public sealed class BrokerVaultConflictTests : IDisposable
     [Fact]
     public void MainRecordDeleted_TwoConflictCopies_TheMergedWinner_AndExactlyThoseTwoDecrypted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var (older, newer) = TwoVersionsOfS();
         var oldCopy = older + " (conflicted copy 2026-10-30)";
         var newCopy = older + ".sync-conflict-20261030-120000-ABCDEF";
@@ -94,6 +98,8 @@ public sealed class BrokerVaultConflictTests : IDisposable
     [Fact]
     public void MainRecordAndANewerConflictCopy_TheNewerWins_AndOnlyTheseTwoAreDecrypted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var (older, newer) = TwoVersionsOfS();
         var copy = older + " (1)";
         File.Copy(newer, copy);

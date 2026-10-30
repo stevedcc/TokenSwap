@@ -29,6 +29,8 @@ public class BrokerRedactorTests
     [Fact]
     public void Forms_CoverEveryEncodingTheBriefLists()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var bytes = Encoding.UTF8.GetBytes(Secret);
         var forms = BrokerRedactor.ForSecret(bytes, "x-access-token").Forms.Select(f => Encoding.Latin1.GetString(f)).ToHashSet();
 
@@ -49,6 +51,8 @@ public class BrokerRedactorTests
     [MemberData(nameof(Forms))]
     public void EveryForm_IsRedacted_WholeAndSplitAcrossChunks(string form)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), "x-access-token");
         var whole = Run(redactor, "before " + form + " after");
         Assert.Equal("before [REDACTED] after", whole);
@@ -67,6 +71,8 @@ public class BrokerRedactorTests
     [Fact]
     public void Base64AtAnyAlignment_InsideALongerBase64Stream_IsRedacted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var secret = Encoding.UTF8.GetBytes("a-long-enough-secret-value-123");
         foreach (var prefix in new[] { "", "x", "xy" })
         {
@@ -82,6 +88,8 @@ public class BrokerRedactorTests
     [Fact]
     public void OneByteChunks_AreRedacted_AndOtherBytesPassUnchanged()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         var text = "x" + Secret + "y" + Secret + Secret + "z\u0000ÿ";
         var output = new MemoryStream();
@@ -95,6 +103,8 @@ public class BrokerRedactorTests
     [Fact]
     public void Window_IsLongestFormMinusOne_AndProcessNeverHoldsMore()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), "x-access-token");
         Assert.Equal(redactor.Forms.Max(f => f.Length) - 1, redactor.Window);
 
@@ -110,6 +120,8 @@ public class BrokerRedactorTests
     [Fact]
     public void Contains_FindsAFormInAHeaderValue()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         Assert.True(redactor.Contains("token=" + Convert.ToHexString(Encoding.UTF8.GetBytes(Secret)).ToLowerInvariant()));
         Assert.False(redactor.Contains("nothing here"));
@@ -118,6 +130,8 @@ public class BrokerRedactorTests
     [Fact]
     public void Clear_ZeroesTheForms()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         var forms = redactor.Forms.ToList();
         redactor.Clear();

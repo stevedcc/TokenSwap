@@ -237,6 +237,8 @@ public class BrokerServerTests : IAsyncLifetime
     [Fact]
     public async Task Limiter_PerSocketAndTotalSlots_Defaults()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var limits = new BrokerLimits();
         Assert.Equal(4, limits.PerSocketInFlight);
         Assert.Equal(8, limits.TotalInFlight);
@@ -275,6 +277,8 @@ public class BrokerServerTests : IAsyncLifetime
     [Fact]
     public async Task Limiter_BoundedQueue_17thWaiterGetsNoSlotAtOnce()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var limiter = new BrokerLimiter(new BrokerLimits(), new BrokerManualClock());
         for (var i = 0; i < 8; i++)
             Assert.NotNull(await limiter.TryAcquireAsync("s" + (i % 2), default));
@@ -290,6 +294,8 @@ public class BrokerServerTests : IAsyncLifetime
     [Fact]
     public async Task Limiter_WaitsAtMost30Seconds_OnTheInjectedClock()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var clock = new BrokerManualClock();
         var limiter = new BrokerLimiter(new BrokerLimits(), clock);
         for (var i = 0; i < 4; i++)
@@ -402,6 +408,8 @@ public class BrokerServerTests : IAsyncLifetime
     [Fact]
     public void GlobalUnlockLimit_30UnlockAttemptsAMinute_SuccessfulOrNot_ThenRefused_RefusalsDontCount()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
         for (var i = 0; i < 30; i++)
@@ -795,6 +803,8 @@ public class BrokerServerTests : IAsyncLifetime
     [Fact]
     public async Task HeaderSniffer_ZeroesItsCapture_AfterUse()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var pipe = new System.IO.Pipelines.Pipe();
         var sniffer = new BrokerHeaderSniffer(pipe.Reader);
         await pipe.Writer.WriteAsync("GET / HTTP/1.1\r\nConnection: x-a\r\nAuthorization: Bearer client\r\n\r\n"u8.ToArray());

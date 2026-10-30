@@ -195,6 +195,8 @@ public class BrokerForwardingTests : IAsyncLifetime
     [Fact]
     public void BuildOutbound_RefusesAQueryWithAFragmentMark_TheQueryIsNeverAltered()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         Assert.Null(BrokerRequestTarget.BuildOutbound(route, ["x"], "?a=1#b"));
@@ -367,6 +369,8 @@ public class BrokerForwardingTests : IAsyncLifetime
     [Fact]
     public void OutboundAuthority_EqualsTheUpstreams_EvenForDoubleSlashEvilCom()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example:8443"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         var built = BrokerRequestTarget.BuildOutbound(route, ["", "evil.com", "x"], "");
@@ -383,6 +387,8 @@ public class BrokerForwardingTests : IAsyncLifetime
     [Fact]
     public void TheAssertion_RefusesAnotherAuthority_OrAPathOutsideTheBasePath()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         Assert.True(BrokerRequestTarget.IsWithinUpstream(route, new Uri("https://upstream.example/base/x")));
@@ -415,6 +421,8 @@ public class BrokerForwardingTests : IAsyncLifetime
     [Fact]
     public void ForwarderHandler_NeverFollowsRedirects_DecompressesOrUsesCookiesOrProxies()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         using var forwarder = new HttpBrokerForwarder(_h.Clock);
         Assert.False(forwarder.Handler.AllowAutoRedirect);
         Assert.Equal(System.Net.DecompressionMethods.None, forwarder.Handler.AutomaticDecompression);

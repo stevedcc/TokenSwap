@@ -63,6 +63,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void ValidConfig_RoundTrips_AndCompiles()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var policy = BrokerPolicy.Parse(ValidJson);
         var again = BrokerPolicy.Parse(BrokerPolicy.Serialize(policy.Source));
 
@@ -91,6 +93,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void PathRegex_MatchesOnlyAtTheStart_AsAPrefix()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(WithRoute(Route(path: "\"repo\\\\.git/\""))).Routes["r"];
 
         Assert.True(route.PathMatches("repo.git/info/refs"));     // prefix match
@@ -101,6 +105,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void PathRegex_AlternationCantEscapeTheStartAnchor()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(WithRoute(Route(path: "\"a/|b/\""))).Routes["r"];
 
         Assert.True(route.PathMatches("b/x"));
@@ -110,6 +116,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void PathRegex_IsCaseSensitive_AndNeverMultiline()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(WithRoute(Route(path: "\"repo/\""))).Routes["r"];
 
         Assert.False(route.PathMatches("REPO/x"));
@@ -128,6 +136,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("\"not a url\"", "absolute URL")]
     public void Upstream_Refused(string upstream, string expected)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(WithRoute(Route(upstream: upstream.Trim('"')))));
         Assert.Contains(expected, ex.Message);
     }
@@ -142,6 +152,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("(?imsx)a")]
     public void PathRegex_InlineOptionGroup_Refused(string pattern)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var json = WithRoute(Route(path: System.Text.Json.JsonSerializer.Serialize(pattern)));
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains("inline option", ex.Message);
@@ -154,6 +166,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData(@"(?<n>a)/")]
     public void PathRegex_LiteralLookalikes_Accepted(string pattern)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var json = WithRoute(Route(path: System.Text.Json.JsonSerializer.Serialize(pattern)));
         Assert.NotNull(BrokerPolicy.Parse(json));
     }
@@ -164,6 +178,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("a\\")]
     public void PathRegex_ThatCouldBreakOutOfTheWrap_Refused(string pattern)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var json = WithRoute(Route(path: System.Text.Json.JsonSerializer.Serialize(pattern)));
         Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
     }
@@ -178,6 +194,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("a23456789012345678901234567890123", "invalid")] // 33 characters
     public void RouteName_ReservedOrInvalid_Refused(string name, string expected)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var json = WithRoute(Route().Replace("\"name\": \"r\"", $"\"name\": \"{name}\""));
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains(expected, ex.Message);
@@ -186,6 +204,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void SocketName_Reserved_Refused()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var json = """{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "_x", "uids": ["1"], "routes": [] } ], "routes": [] }""";
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains("reserved", ex.Message);
@@ -197,6 +217,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""{ "type": "basic", "secret": "{{k}}" }""", "needs a 'user'")]
     public void BasicUser_Invalid_Refused(string auth, string expected)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(WithRoute(Route(auth: auth))));
         Assert.Contains(expected, ex.Message);
     }
@@ -218,6 +240,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("Accept-Language")]
     public void HeaderName_Invalid_Refused(string header)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var auth = $$$"""{ "type": "header", "header": {{{System.Text.Json.JsonSerializer.Serialize(header)}}}, "secret": "{{k}}" }""";
         Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(WithRoute(Route(auth: auth))));
     }
@@ -229,6 +253,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": ["1"], "routes": [], "mode": "0777" } ], "routes": [] }""")]
     public void UnknownFields_Refused(string json)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains("can't be read", ex.Message);
     }
@@ -245,6 +271,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": [], "routes": [] } ], "routes": [] }""", "no uids")]
     public void OtherInvalidConfigs_Refused(string json, string expected)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains(expected, ex.Message);
     }
@@ -256,6 +284,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""[]""")]
     public void Methods_Invalid_Refused(string methods)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(WithRoute(Route(extra: $", \"methods\": {methods}"))));
     }
 
@@ -265,6 +295,8 @@ public class BrokerConfigTests : IDisposable
     [InlineData("{{a}}{{b}}")]
     public void SecretReference_Invalid_Refused(string secret)
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var auth = $$"""{ "type": "bearer", "secret": {{System.Text.Json.JsonSerializer.Serialize(secret)}} }""";
         Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(WithRoute(Route(auth: auth))));
     }
@@ -274,6 +306,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void HandEditedInvalidFile_IsRefusedAtLoad()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         File.WriteAllText(BrokerConfigFile.PathIn(_dir), WithRoute(Route(upstream: "http://plain.example")));
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(BrokerConfigFile.PathIn(_dir), UnixFileMode.UserRead | UnixFileMode.UserWrite);
@@ -298,6 +332,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void Reload_InvalidOrMissingFile_KeepsTheCurrentConfig_ValidFileSwapsIn()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var path = BrokerConfigFile.PathIn(_dir);
         BrokerConfigFile.Save(DirectoryOwnerMatcher.Default, _dir, BrokerPolicy.Deserialize(ValidJson));
         var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir));
@@ -325,6 +361,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void Save_InvalidConfig_WritesNothing()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var bad = BrokerPolicy.Deserialize(WithRoute(Route())) with { Version = 7 };
 
         Assert.Throws<BrokerConfigException>(() => BrokerConfigFile.Save(DirectoryOwnerMatcher.Default, _dir, bad));
