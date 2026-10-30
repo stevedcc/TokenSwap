@@ -51,6 +51,21 @@ internal static class AppleSecureEnclaveInterop
         byte[] outBlob, ref int outBlobLen,
         byte[] outCiphertext, ref int outCiphertextLen);
 
+    /// <summary>
+    /// Brief T11 decision 3: <see cref="tswap_se_wrap"/> plus the presence choice (1: presence
+    /// required, 0: none; anything else: no key, <see cref="SecureEnclaveReturnCodes.WrapInvalidPresence"/>).
+    /// A new entry point rather than a new parameter on <see cref="tswap_se_wrap"/>, so an old
+    /// dylib beside this binary fails with <see cref="EntryPointNotFoundException"/> instead of
+    /// reading garbage as the choice. Every enrolment calls this one; the old one stays declared
+    /// (and in the dylib, unchanged) so its signature stays pinned by the tests.
+    /// </summary>
+    [DllImport(Lib)]
+    private static extern int tswap_se_wrap_v2(
+        byte[] plaintext, int plaintextLen,
+        byte[] outBlob, ref int outBlobLen,
+        byte[] outCiphertext, ref int outCiphertextLen,
+        int requirePresence);
+
     [DllImport(Lib)]
     private static extern int tswap_se_unwrap(
         byte[] blob, int blobLen,
@@ -72,8 +87,13 @@ internal static class AppleSecureEnclaveInterop
                 "Silicon or a T2 chip — use a different backend (YubiKey) on this machine.");
     }
 
-    /// <summary>Enrollment: creates a new Secure Enclave key and ECIES-wraps <paramref name="plaintextKey"/> to it.</summary>
-    public static byte[] Wrap(byte[] plaintextKey)
+    /// <summary>
+    /// Enrollment: creates a new Secure Enclave key and ECIES-wraps <paramref name="plaintextKey"/>
+    /// to it. <paramref name="requirePresence"/> is fixed into the key's access control: true,
+    /// every unwrap prompts for Touch ID or the login password; false, no prompt (brief T11). It
+    /// can't be changed or read back from the key later.
+    /// </summary>
+    public static byte[] Wrap(byte[] plaintextKey, bool requirePresence)
     {
         RequireAvailable();
 
@@ -82,12 +102,19 @@ internal static class AppleSecureEnclaveInterop
         var ciphertext = new byte[CiphertextBufferSize];
         var ciphertextLen = ciphertext.Length;
 
-        var rc = tswap_se_wrap(plaintextKey, plaintextKey.Length, blob, ref blobLen, ciphertext, ref ciphertextLen);
-        if (rc == -1)
-            throw new CryptographicOperationException(
-                "tswap_se_wrap: the Secure Enclave key or wrapped ciphertext exceeded tswap's internal buffer size — this is a tswap bug, not a config problem.");
+        int rc;
+        try
+        {
+            rc = tswap_se_wrap_v2(plaintextKey, plaintextKey.Length, blob, ref blobLen, ciphertext, ref ciphertextLen,
+                requirePresence ? 1 : 0);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            // An older dylib beside this binary: fail closed, never fall back to tswap_se_wrap.
+            throw SecureEnclaveReturnCodes.MissingWrapV2(ex);
+        }
         if (rc != 0)
-            throw new CryptographicOperationException($"tswap_se_wrap failed (code {rc}); Secure Enclave reported available but the operation still failed.");
+            throw SecureEnclaveReturnCodes.WrapFailure(rc);
 
         var package = new byte[4 + blobLen + ciphertextLen];
         BinaryPrimitives.WriteInt32LittleEndian(package, blobLen);
@@ -96,7 +123,7 @@ internal static class AppleSecureEnclaveInterop
         return package;
     }
 
-    /// <summary>Unlock: reconstitutes the Secure Enclave key and decrypts the payload produced by <see cref="Wrap"/>. Triggers the Touch ID / presence prompt.</summary>
+    /// <summary>Unlock: reconstitutes the Secure Enclave key and decrypts the payload produced by <see cref="Wrap"/>. Prompts for Touch ID or the login password when the key was created with presence required.</summary>
     public static byte[] Unwrap(byte[] wrapped)
     {
         RequireAvailable();
@@ -121,29 +148,10 @@ internal static class AppleSecureEnclaveInterop
         var plaintext = new byte[256];
         var plaintextLen = plaintext.Length;
         var rc = tswap_se_unwrap(blob, blob.Length, ciphertext, ciphertext.Length, plaintext, ref plaintextLen);
-        // tswap_se_unwrap's three failure codes are genuinely different situations — collapsing
-        // them into one message would hide config corruption and internal bugs behind "wrong
-        // machine or cancelled," which is misleading and makes both harder to diagnose.
-        switch (rc)
-        {
-            case 0:
-                break;
-            case -1:
-                throw new CryptographicOperationException(
-                    "tswap_se_unwrap: the decrypted value exceeded tswap's internal buffer size — this is a tswap bug, not a config problem.");
-            case -3:
-                throw new TswapException("Config is corrupted: the Secure Enclave ciphertext package is malformed.");
-            default:
-                throw new TswapException(
-                    "Could not unlock with the Secure Enclave. It may have been enrolled on a different Mac, " +
-                    "or presence/biometry verification failed or was cancelled.");
-        }
+        if (rc != 0)
+            throw SecureEnclaveReturnCodes.UnwrapFailure(rc);
 
         Array.Resize(ref plaintext, plaintextLen);
         return plaintext;
     }
 }
-
-/// <summary>A Secure Enclave / CryptoKit call failed in a way that isn't a normal user-facing <see cref="TswapException"/>.</summary>
-[SupportedOSPlatform("macos")]
-internal sealed class CryptographicOperationException(string message) : Exception(message);

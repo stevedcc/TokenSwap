@@ -26,8 +26,14 @@ namespace TswapCore.Vault;
 /// On other builds <see cref="VaultUnlocker"/> returns a clear "backend not supported" error
 /// for a secure-enclave vault.</para>
 /// </summary>
+/// <param name="requirePresence">
+/// Brief T11: whether a key this service creates (<see cref="Enroll"/>, <see cref="Wrap"/>)
+/// requires Touch ID or the login password on every unwrap. Defaults to true, so a code path that
+/// forgets it gets the presence-gated key; only <c>--no-touch</c> passes false. Unlock doesn't use
+/// it: the policy lives in the key.
+/// </param>
 [SupportedOSPlatform("macos")]
-public sealed class SecureEnclaveHardwareService : IHardwareKeyService, IHardwareEnrollmentService
+public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : IHardwareKeyService, IHardwareEnrollmentService
 {
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
@@ -72,15 +78,16 @@ public sealed class SecureEnclaveHardwareService : IHardwareKeyService, IHardwar
     }
 
     /// <summary>
-    /// Enrollment side: creates a new Secure Enclave key pair and ECIES-encrypts
-    /// <paramref name="plaintextKey"/> (the vault key) to it. The returned blob is useless off
-    /// this machine.
+    /// Enrollment side: creates a new Secure Enclave key pair (presence required or not, as this
+    /// service was constructed) and ECIES-encrypts <paramref name="plaintextKey"/> (the vault key)
+    /// to it. The returned blob is useless off this machine.
     /// </summary>
-    public byte[] Wrap(byte[] plaintextKey) => AppleSecureEnclaveInterop.Wrap(plaintextKey);
+    public byte[] Wrap(byte[] plaintextKey) => AppleSecureEnclaveInterop.Wrap(plaintextKey, requirePresence);
 
     /// <summary>
     /// Unlock side: ECIES-decrypts a payload produced by <see cref="Wrap"/> using the Secure
-    /// Enclave private key it was wrapped to — this triggers the Touch ID / presence prompt.
+    /// Enclave private key it was wrapped to — this prompts for Touch ID or the login password
+    /// when that key was created with presence required.
     /// </summary>
     public byte[] Unwrap(byte[] wrapped) => AppleSecureEnclaveInterop.Unwrap(wrapped);
 }

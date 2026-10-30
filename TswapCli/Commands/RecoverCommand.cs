@@ -30,17 +30,19 @@ namespace TswapCli.Commands;
 public sealed class RecoverCommand : ICliCommand
 {
     public string Name => "recover";
-    public string HelpUsage => "recover --yubikey|--tpm|--secure-enclave [--recovery-key-stdin]  (recovery key on stdin)";
-    public string Description => "Break glass: open the vault with the recovery private key (piped on stdin) and enroll this machine's YubiKey, TPM or Secure Enclave as a new slot";
+    public string HelpUsage => $"recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} [--recovery-key-stdin]  (recovery key on stdin)";
+    public string Description => "Break glass: open the vault with the recovery private key (piped on stdin) and enroll this machine's YubiKey, TPM or Secure Enclave as a new slot (--secure-enclave needs --with-touch or --no-touch)";
     public bool RequiresSudo => true;
 
     private static readonly string[] Devices = ["--yubikey", "--tpm", "--secure-enclave"];
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        var usage = $"{ctx.Prefix} recover --yubikey|--tpm|--secure-enclave [{SlotCommand.RecoveryKeyFlag}] " +
+        var usage = $"{ctx.Prefix} recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} [{SlotCommand.RecoveryKeyFlag}] " +
                     $"(the recovery key is read from stdin only, e.g. sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey)";
+        // Brief T11: the touch choice first (--secure-enclave needs exactly one), then exactly one device.
         var (rest, _) = SlotCommand.SplitRecoveryKeyFlag(args);
+        (rest, var requirePresence) = SecureEnclaveTouchChoice.Split(rest, usage);
         if (rest is not [var device] || !Devices.Contains(device))
             throw new UsageException(usage);
         HardwareBackend? hardware = device switch
@@ -50,6 +52,8 @@ public sealed class RecoverCommand : ICliCommand
             _ => null,
         };
         var c = ctx.Console;
+        // Brief T11 decision 7: as soon as the flags are valid, before sudo, a prompt or stdin.
+        SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
 
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring == null)
@@ -64,7 +68,7 @@ public sealed class RecoverCommand : ICliCommand
         ctx.RequireSudo("recover");
 
         // Throws a clear TswapException on an OS without this hardware, before the key is read.
-        var enrollment = hardware == null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey);
+        var enrollment = hardware == null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, requirePresence ?? true);
 
         var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring);
         Slot newSlot;
@@ -119,7 +123,8 @@ public sealed class RecoverCommand : ICliCommand
             {
                 Backend = hardware,
                 KeyringSlotId = Convert.ToBase64String(slotId),
-                RequiresTouch = hardware == HardwareBackend.SecureEnclave,
+                // Brief T11 decision 6: false only for a --no-touch Secure Enclave slot.
+                RequiresTouch = hardware == HardwareBackend.SecureEnclave && requirePresence != false,
             };
         if (yubiKey != null)
         {
@@ -136,6 +141,8 @@ public sealed class RecoverCommand : ICliCommand
         ctx.Storage.SaveConfig(newConfig);
 
         c.Out.WriteLine($"\n✓ Recovered: {deviceName} now opens this vault as its own slot. The recovery slot stays.");
+        if (hardware == HardwareBackend.SecureEnclave)
+            c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence != false));
         SlotCommand.PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
         c.Out.WriteLine("Other copies of the vault don't have the new slot yet: on each, run");
