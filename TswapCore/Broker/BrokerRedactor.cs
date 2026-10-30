@@ -54,8 +54,9 @@ public sealed class BrokerRedactor
     /// base64 stream); for a <c>basic</c> route (<paramref name="basicUser"/>) the exact
     /// <c>base64(user:secret)</c> the broker sent and <c>user:secret</c>; hex, upper and lower case;
     /// percent-encoded (upper and lower hex, and form encoding); JSON-escaped (default, relaxed and
-    /// minimal escaping, each also with <c>\/</c>). <c>tswap run</c>'s redaction covers the raw value,
-    /// which is included.
+    /// minimal escaping, each also with <c>\/</c>); the value's base64 wrapped at 76 (LF and CRLF)
+    /// and 64 columns, hex with spaces between bytes, and hex wrapped at 60 (T9 fix round 1).
+    /// <c>tswap run</c>'s redaction covers the raw value, which is included.
     /// </summary>
     public static BrokerRedactor ForSecret(ReadOnlySpan<byte> secret, string? basicUser)
     {
@@ -66,6 +67,11 @@ public sealed class BrokerRedactor
                 forms.Add(form);
         }
         void AddText(string text) => Add(Encoding.UTF8.GetBytes(text));
+        void AddWrapped(string text, int width, string eol)
+        {
+            if (text.Length > width)
+                AddText(string.Join(eol, text.Chunk(width).Select(c => new string(c))));
+        }
         void AddBase64(byte[] bytes)
         {
             var b64 = Convert.ToBase64String(bytes);
@@ -106,6 +112,23 @@ public sealed class BrokerRedactor
         var hex = Convert.ToHexString(raw);
         AddText(hex);
         AddText(hex.ToLowerInvariant());
+
+        // T9 fix round 1 (MiMo I3): the shapes common tools print the value alone in. Base64
+        // wrapped at 76 columns (GNU base64, MIME with CRLF) and at 64 (openssl base64); hex with a
+        // space between bytes (od -An -tx1, xxd -g1, within one line) and plain hex wrapped at 60
+        // (xxd -p). A value inside a longer wrapped stream, or split over xxd's or od's lines
+        // with offsets and an ASCII column between, is not covered (BROKER.md says so).
+        var b64Plain = Convert.ToBase64String(raw);
+        AddWrapped(b64Plain, 76, "\n");
+        AddWrapped(b64Plain, 76, "\r\n");
+        AddWrapped(b64Plain, 64, "\n");
+        var lowerHex = hex.ToLowerInvariant();
+        if (raw.Length > 1)
+        {
+            AddText(string.Join(' ', Enumerable.Range(0, raw.Length).Select(i => lowerHex.Substring(2 * i, 2))));
+            AddText(string.Join(' ', Enumerable.Range(0, raw.Length).Select(i => hex.Substring(2 * i, 2))));
+        }
+        AddWrapped(lowerHex, 60, "\n");
 
         var value = Encoding.UTF8.GetString(raw);
         var percent = Uri.EscapeDataString(value);

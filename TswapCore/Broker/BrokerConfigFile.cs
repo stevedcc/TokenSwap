@@ -1,4 +1,5 @@
 using System.Text;
+using TswapCore.Broker.Templates;
 
 namespace TswapCore.Broker;
 
@@ -40,13 +41,21 @@ public static class BrokerConfigFile
         return BrokerPolicy.Deserialize(reader.ReadToEnd());
     }
 
-    /// <summary>Loads and validates <c>broker.json</c>; a missing, unreadable or invalid file is a <see cref="BrokerConfigException"/>.</summary>
-    public static BrokerPolicy Load(DirectoryOwnerMatcher owner, string configDir, IUnixOwnership? ownership = null)
+    /// <summary>
+    /// Loads and validates <c>broker.json</c>; a missing, unreadable or invalid file is a
+    /// <see cref="BrokerConfigException"/>. Templates' binds are checked against
+    /// <paramref name="host"/> (null: <see cref="BrokerHostContext.ForVault"/> of this folder).
+    /// </summary>
+    public static BrokerPolicy Load(DirectoryOwnerMatcher owner, string configDir, IUnixOwnership? ownership = null, BrokerHostContext? host = null)
     {
         var raw = ReadRaw(owner, configDir, ownership)
             ?? throw new BrokerConfigException($"{PathIn(configDir)} does not exist. Add routes and sockets with 'sudo tswap broker route add' and 'sudo tswap broker socket add'.");
-        return BrokerPolicy.Validate(raw);
+        return BrokerPolicy.Validate(raw, HostFor(raw, configDir, host));
     }
+
+    /// <summary>The host context for a config's templates: the given one, else the vault folder's own (only built when there are templates).</summary>
+    private static BrokerHostContext? HostFor(BrokerConfig config, string configDir, BrokerHostContext? host) =>
+        host ?? (config.Templates is { Count: > 0 } && OperatingSystem.IsLinux() ? BrokerHostContext.ForVault(configDir, null) : null);
 
     public const string EditLockFileName = "broker.json.lock";
 
@@ -101,10 +110,10 @@ public static class BrokerConfigFile
         return stream;
     }
 
-    /// <summary>Validates <paramref name="config"/>, then writes it (nothing is written when it is invalid).</summary>
-    public static void Save(DirectoryOwnerMatcher owner, string configDir, BrokerConfig config)
+    /// <summary>Validates <paramref name="config"/> (templates against <paramref name="host"/>, as <see cref="Load"/>), then writes it (nothing is written when it is invalid).</summary>
+    public static void Save(DirectoryOwnerMatcher owner, string configDir, BrokerConfig config, BrokerHostContext? host = null)
     {
-        BrokerPolicy.Validate(config);
+        BrokerPolicy.Validate(config, HostFor(config, configDir, host));
         var path = PathIn(configDir);
         owner.CreateDirectory(configDir);
         owner.WriteAtomic(path, Encoding.UTF8.GetBytes(BrokerPolicy.Serialize(config) + "\n"));
