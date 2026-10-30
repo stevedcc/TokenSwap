@@ -210,6 +210,64 @@ public static partial class BrokerNative
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static unsafe partial int statx(int dirfd, string path, int flags, uint mask, byte* buffer);
+    /// <summary>What <see cref="Identify"/> found at a path (Linux).</summary>
+    public readonly record struct FileIdentity(EntryType Type, UnixFileMode Mode, uint Uid, ulong Dev, ulong Ino, bool IsDevice);
+
+    /// <summary>
+    /// Linux <c>statx</c> of <paramref name="path"/> (following a final symlink only when
+    /// <paramref name="follow"/>): type, permission bits, owner, and the <c>st_dev:st_ino</c> pair
+    /// that names a file whatever path reaches it (brief T9 decision 2: a bind-mount alias or a hard
+    /// link has the same pair). <see cref="FileIdentity.IsDevice"/> is true for a character or block
+    /// device. Null when it doesn't exist or can't be read; always null off Linux.
+    /// </summary>
+    public static unsafe FileIdentity? Identify(string path, bool follow)
+    {
+        if (!OperatingSystem.IsLinux())
+            return null;
+        var buffer = stackalloc byte[256];
+        const int AtFdCwd = -100, AtSymlinkNoFollow = 0x100;
+        const uint StatxType = 0x1, StatxMode = 0x2, StatxUid = 0x8, StatxIno = 0x100;
+        if (statx(AtFdCwd, path, follow ? 0 : AtSymlinkNoFollow, StatxType | StatxMode | StatxUid | StatxIno, buffer) != 0)
+            return null;
+        var mode = *(ushort*)(buffer + 28);
+        var uid = *(uint*)(buffer + 20);
+        var ino = *(ulong*)(buffer + 32);
+        var devMajor = *(uint*)(buffer + 136);
+        var devMinor = *(uint*)(buffer + 140);
+        var format = mode & 0xF000;
+        var type = format switch
+        {
+            0x8000 => EntryType.Regular,
+            0x4000 => EntryType.Directory,
+            0xA000 => EntryType.Symlink,
+            0xC000 => EntryType.Socket,
+            _ => EntryType.Other,
+        };
+        return new FileIdentity(type, (UnixFileMode)(mode & 0xFFF), uid, ((ulong)devMajor << 32) | devMinor, ino,
+            format is 0x2000 or 0x6000);
+    }
+
+    /// <summary>The home folder of <paramref name="uid"/> from the password database (<c>getpwuid_r</c>), or null.</summary>
+    public static unsafe string? HomeOf(uint uid)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+        var entry = stackalloc byte[64];  // struct passwd: 7 fields, at most 48 bytes on 64-bit
+        var buffer = new byte[16384];
+        nint result;
+        fixed (byte* b = buffer)
+        {
+            if (getpwuid_r(uid, entry, b, (nuint)buffer.Length, &result) != 0 || result == 0)
+                return null;
+            // struct passwd { char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid; char *pw_gecos; char *pw_dir; char *pw_shell; }
+            var dir = *(nint*)(entry + (OperatingSystem.IsMacOS() ? 48 : 32));
+            return dir == 0 ? null : Marshal.PtrToStringUTF8(dir);
+        }
+    }
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int getpwuid_r(uint uid, byte* entry, byte* buffer, nuint size, nint* result);
+
 
     [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static unsafe partial int lstat_arm64(string path, byte* buffer);

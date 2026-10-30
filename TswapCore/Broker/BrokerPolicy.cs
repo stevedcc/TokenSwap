@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using TswapCore.Broker.Templates;
 
 namespace TswapCore.Broker;
 
@@ -23,12 +24,18 @@ public enum BrokerAuthType
 public sealed class BrokerPolicy
 {
     private BrokerPolicy(BrokerConfig source, string socketDir,
-        IReadOnlyDictionary<string, BrokerSocketPolicy> sockets, IReadOnlyDictionary<string, BrokerRoutePolicy> routes)
+        IReadOnlyDictionary<string, BrokerSocketPolicy> sockets, IReadOnlyDictionary<string, BrokerRoutePolicy> routes,
+        IReadOnlyDictionary<string, BrokerTemplatePolicy> templates, IReadOnlyDictionary<string, BrokerSshKeyPolicy> sshKeys,
+        string bwrapPath, BrokerHostContext? host)
     {
         Source = source;
         SocketDir = socketDir;
         Sockets = sockets;
         Routes = routes;
+        Templates = templates;
+        SshKeys = sshKeys;
+        BwrapPath = bwrapPath;
+        Host = host;
     }
 
     /// <summary>The raw config this was built from (for edits by the CLI).</summary>
@@ -43,11 +50,25 @@ public sealed class BrokerPolicy
     /// <summary>Routes by name (ordinal).</summary>
     public IReadOnlyDictionary<string, BrokerRoutePolicy> Routes { get; }
 
+    /// <summary>Templates by name (ordinal; brief T9).</summary>
+    public IReadOnlyDictionary<string, BrokerTemplatePolicy> Templates { get; }
+
+    /// <summary>Ssh keys by name (ordinal; brief T10 reads them).</summary>
+    public IReadOnlyDictionary<string, BrokerSshKeyPolicy> SshKeys { get; }
+
+    /// <summary>The <c>bwrap</c> binary templates run under (absolute; <c>/usr/bin/bwrap</c> by default).</summary>
+    public string BwrapPath { get; }
+
+    public const string DefaultBwrapPath = "/usr/bin/bwrap";
+
+    /// <summary>The host context the templates' binds were checked against (null when there are no templates); re-used before every run.</summary>
+    public BrokerHostContext? Host { get; }
+
     /// <summary>Route and socket names: <c>[a-z0-9-]{1,32}</c>, matched ordinally.</summary>
     internal static readonly Regex NameRegex = new(@"\A[a-z0-9-]{1,32}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     /// <summary>The secret reference: <c>{{name}}</c> with a valid tswap secret name.</summary>
-    private static readonly Regex SecretRefRegex = new(@"\A\{\{([a-zA-Z0-9_-]{1,64})\}\}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    internal static readonly Regex SecretRefRegex = new(@"\A\{\{([a-zA-Z0-9_-]{1,64})\}\}\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     /// <summary>An RFC 7230 token (a header name).</summary>
     private static readonly Regex TokenRegex = new(@"\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
@@ -72,8 +93,8 @@ public sealed class BrokerPolicy
     public const int DefaultIdleTimeoutSec = 120;
     private const int MaxIdleTimeoutSec = 86400;
 
-    /// <summary>Parses and validates <c>broker.json</c> text.</summary>
-    public static BrokerPolicy Parse(string json) => Validate(Deserialize(json));
+    /// <summary>Parses and validates <c>broker.json</c> text (<paramref name="host"/>: see <see cref="Validate"/>).</summary>
+    public static BrokerPolicy Parse(string json, BrokerHostContext? host = null) => Validate(Deserialize(json), host);
 
     /// <summary>Parses <c>broker.json</c> text (unknown fields, duplicate keys and missing required fields refused); no validation.</summary>
     public static BrokerConfig Deserialize(string json)
@@ -93,8 +114,13 @@ public sealed class BrokerPolicy
     public static string Serialize(BrokerConfig config) =>
         JsonSerializer.Serialize(config, BrokerJsonContext.Default.BrokerConfig);
 
-    /// <summary>Checks everything and compiles the path regexes; throws <see cref="BrokerConfigException"/> naming the first problem.</summary>
-    public static BrokerPolicy Validate(BrokerConfig config)
+    /// <summary>
+    /// Checks everything and compiles the path regexes; throws <see cref="BrokerConfigException"/>
+    /// naming the first problem. Templates' binds are checked against <paramref name="host"/> (the
+    /// vault user and the protected paths); null means this process's user, with only its home and
+    /// the fixed paths protected.
+    /// </summary>
+    public static BrokerPolicy Validate(BrokerConfig config, BrokerHostContext? host = null)
     {
         if (config.Version != BrokerConfig.CurrentVersion)
             throw new BrokerConfigException($"broker.json version {config.Version} is not supported (this tswap reads version {BrokerConfig.CurrentVersion}).");
@@ -111,12 +137,45 @@ public sealed class BrokerPolicy
                 throw new BrokerConfigException($"Route '{compiled.Name}' is defined twice.");
         }
 
+        string? bwrap = config.BwrapPath;
+        if (bwrap != null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl) || bwrap.Split('/').Any(s => s is "." or "..")))
+            throw new BrokerConfigException($"bwrap_path must be an absolute path (got '{Printable(bwrap)}'); bwrap is never looked up on PATH.");
+
+        // Brief T9: templates (Linux only; checked against the host on every load).
+        var templates = new Dictionary<string, BrokerTemplatePolicy>(StringComparer.Ordinal);
+        if (config.Templates is { Count: > 0 })
+        {
+            if (!OperatingSystem.IsLinux())
+                throw new BrokerConfigException("broker.json has templates, which need Linux (they run under bwrap).");
+            host ??= BrokerHostContext.ForCurrentUser();
+            var socketDirForBinds = config.SocketDir is { Length: > 0 } sd && System.IO.Path.IsPathFullyQualified(sd) ? sd : null;
+            foreach (var template in config.Templates)
+            {
+                if (template is null)
+                    throw new BrokerConfigException("broker.json has a null template.");
+                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds);
+                if (!templates.TryAdd(compiled.Name, compiled))
+                    throw new BrokerConfigException($"Template '{compiled.Name}' is defined twice.");
+            }
+        }
+
+        // Brief T10's keys (only their shape is checked here).
+        var sshKeys = new Dictionary<string, BrokerSshKeyPolicy>(StringComparer.Ordinal);
+        foreach (var key in config.SshKeys ?? [])
+        {
+            if (key is null)
+                throw new BrokerConfigException("broker.json has a null ssh key.");
+            var compiled = ValidateSshKey(key);
+            if (!sshKeys.TryAdd(compiled.Name, compiled))
+                throw new BrokerConfigException($"Ssh key '{compiled.Name}' is defined twice.");
+        }
+
         var sockets = new Dictionary<string, BrokerSocketPolicy>(StringComparer.Ordinal);
         foreach (var socket in config.Sockets)
         {
             if (socket is null)
                 throw new BrokerConfigException("broker.json has a null socket.");
-            var compiled = ValidateSocket(socket, routes);
+            var compiled = ValidateSocket(socket, routes, templates, sshKeys);
             if (!sockets.TryAdd(compiled.Name, compiled))
                 throw new BrokerConfigException($"Socket '{compiled.Name}' is defined twice.");
         }
@@ -133,7 +192,8 @@ public sealed class BrokerPolicy
             throw new BrokerConfigException("broker.json has sockets but no socket_dir.");
         }
 
-        return new BrokerPolicy(config, socketDir, sockets, routes);
+        return new BrokerPolicy(config, socketDir, sockets, routes, templates, sshKeys, bwrap ?? DefaultBwrapPath,
+            templates.Count > 0 ? host : null);
     }
 
     /// <summary>Checks a route or socket name; <paramref name="kind"/> is for the message.</summary>
@@ -321,7 +381,8 @@ public sealed class BrokerPolicy
         return false;
     }
 
-    private static BrokerSocketPolicy ValidateSocket(BrokerSocketConfig socket, Dictionary<string, BrokerRoutePolicy> routes)
+    private static BrokerSocketPolicy ValidateSocket(BrokerSocketConfig socket, Dictionary<string, BrokerRoutePolicy> routes,
+        Dictionary<string, BrokerTemplatePolicy> templates, Dictionary<string, BrokerSshKeyPolicy> sshKeys)
     {
         ValidateName(socket.Name, "socket");
         var name = socket.Name;
@@ -337,7 +398,59 @@ public sealed class BrokerPolicy
                 throw new BrokerConfigException($"Socket '{name}' allows route '{Printable(route ?? "")}', which is not defined.");
             allowed.Add(route);
         }
-        return new BrokerSocketPolicy(name, ranges, allowed);
+        // Allow-lists deny by default (brief T9 decision 4): no list, no templates or keys.
+        var allowedTemplates = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var template in socket.Templates ?? [])
+        {
+            if (template is null || !templates.ContainsKey(template))
+                throw new BrokerConfigException($"Socket '{name}' allows template '{Printable(template ?? "")}', which is not defined.");
+            allowedTemplates.Add(template);
+        }
+        var allowedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in socket.SshKeys ?? [])
+        {
+            if (key is null || !sshKeys.ContainsKey(key))
+                throw new BrokerConfigException($"Socket '{name}' allows ssh key '{Printable(key ?? "")}', which is not defined.");
+            allowedKeys.Add(key);
+        }
+        return new BrokerSocketPolicy(name, ranges, allowed, allowedTemplates, allowedKeys);
+    }
+
+    /// <summary>
+    /// An ssh key's shape (brief T10 reads it): a valid name, a plain secret name, and a non-empty
+    /// list of <c>SHA256:</c> fingerprints, each the unpadded base64 of 32 bytes, as
+    /// <c>ssh-keygen -lf</c> prints them.
+    /// </summary>
+    private static BrokerSshKeyPolicy ValidateSshKey(BrokerSshKeyConfig key)
+    {
+        ValidateName(key.Name, "ssh key");
+        var name = key.Name;
+        if (!BrokerTemplateValidator.IsSecretName(key.Secret))
+            throw new BrokerConfigException($"Ssh key '{name}': 'secret' must be a secret name (letters, digits, '_' and '-'), not '{{{{...}}}}'.");
+        if (key.AllowedHostKeys is not { Count: > 0 })
+            throw new BrokerConfigException($"Ssh key '{name}': allowed_host_keys must list at least one SHA256: host-key fingerprint.");
+        var fingerprints = new List<string>();
+        foreach (var fingerprint in key.AllowedHostKeys)
+        {
+            if (!IsSha256Fingerprint(fingerprint))
+                throw new BrokerConfigException($"Ssh key '{name}': '{Printable(fingerprint ?? "")}' is not a SHA256: fingerprint (SHA256: and 43 characters of unpadded base64, as ssh-keygen -lf prints it).");
+            if (fingerprints.Contains(fingerprint!))
+                throw new BrokerConfigException($"Ssh key '{name}': host key {fingerprint} is listed twice.");
+            fingerprints.Add(fingerprint!);
+        }
+        return new BrokerSshKeyPolicy(name, key.Secret, fingerprints);
+    }
+
+    private static bool IsSha256Fingerprint(string? value)
+    {
+        const string prefix = "SHA256:";
+        if (value is null || !value.StartsWith(prefix, StringComparison.Ordinal) || value.Length != prefix.Length + 43)
+            return false;
+        var body = value[prefix.Length..];
+        if (!body.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '+' or '/'))
+            return false;
+        Span<byte> bytes = stackalloc byte[33];
+        return Convert.TryFromBase64String(body + "=", bytes, out var written) && written == 32;
     }
 
     /// <summary>Parses a uid entry: <c>"N"</c> or <c>"N-M"</c> (inclusive, N ≤ M).</summary>
@@ -362,12 +475,19 @@ public sealed class BrokerPolicy
     public static string Printable(string s) => Regex.Replace(s.Length > 80 ? s[..80] + "…" : s, @"[^\x20-\x7E…]", "?");
 }
 
-/// <summary>A validated socket: its peer-uid ranges and route allow-list.</summary>
-public sealed class BrokerSocketPolicy(string name, IReadOnlyList<(uint From, uint To)> uids, IReadOnlySet<string> routes)
+/// <summary>A validated socket: its peer-uid ranges and its route, template and ssh-key allow-lists (each empty unless listed).</summary>
+public sealed class BrokerSocketPolicy(string name, IReadOnlyList<(uint From, uint To)> uids, IReadOnlySet<string> routes,
+    IReadOnlySet<string>? templates = null, IReadOnlySet<string>? sshKeys = null)
 {
     public string Name { get; } = name;
     public IReadOnlyList<(uint From, uint To)> Uids { get; } = uids;
     public IReadOnlySet<string> Routes { get; } = routes;
+
+    /// <summary>The templates this socket may call (brief T9).</summary>
+    public IReadOnlySet<string> Templates { get; } = templates ?? new HashSet<string>();
+
+    /// <summary>The ssh keys this socket's agent may use (brief T10).</summary>
+    public IReadOnlySet<string> SshKeys { get; } = sshKeys ?? new HashSet<string>();
 
     public bool AllowsUid(uint uid) => Uids.Any(r => uid >= r.From && uid <= r.To);
 }
@@ -405,4 +525,16 @@ public sealed class BrokerRoutePolicy(
             return false;
         }
     }
+}
+
+/// <summary>A validated ssh key entry (brief T10 reads it): its vault secret and the host keys it may sign in to.</summary>
+public sealed class BrokerSshKeyPolicy(string name, string secretName, IReadOnlyList<string> allowedHostKeys)
+{
+    public string Name { get; } = name;
+
+    /// <summary>The vault secret holding the private key.</summary>
+    public string SecretName { get; } = secretName;
+
+    /// <summary><c>SHA256:</c> fingerprints of the server host keys this key may sign in to, compared exactly.</summary>
+    public IReadOnlyList<string> AllowedHostKeys { get; } = allowedHostKeys;
 }
