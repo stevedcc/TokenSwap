@@ -174,6 +174,13 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<PastBurn>? History { get; init; }
+
+    /// <summary>
+    /// Fix round 1 (A7): set by <c>rotate</c> / <c>ingest --rotate</c>, so the record store writes a
+    /// new version even when the new value equals the old one. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool Rotated { get; init; }
 }
 
 /// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>

@@ -143,6 +143,45 @@ public sealed class RotateTests : IDisposable
         Assert.Empty(_m.RecordFiles);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void IngestRotate_WithTheSameValue_StillWritesANewVersion(bool burned)
+    {
+        // Fix round 1 (A7): a rotation always writes a new version; a burn of the old one is history.
+        _m.Ok("same", "ingest", "s");
+        if (burned)
+            _m.Ok("", "burn", "s", "seen");
+        var before = ReadRecord(_m, _vaultKey, "s");
+
+        _m.Ok("same", "ingest", "--rotate", "s");
+
+        var after = ReadRecord(_m, _vaultKey, "s");
+        Assert.True(after.Version.CompareTo(before.Version) > 0);
+        Assert.Null(after.OutstandingBurn);
+        Assert.Equal(burned ? 1 : 0, after.Burns.Count);
+        Assert.DoesNotContain("[BURNED]", _m.Ok("", "names"));
+    }
+
+    [Fact]
+    public void ARotationThatHappensToDrawTheSameValue_StillWritesANewVersion()
+    {
+        // What 'rotate' hands the store: the existing secret marked as rotated.
+        _m.Ok("same", "ingest", "s");
+        _m.Ok("", "burn", "s", "seen");
+        var before = ReadRecord(_m, _vaultKey, "s");
+        var store = new RecordVaultStore(_m.Dir);
+        store.LoadConfig();
+        var db = store.LoadSecrets(_vaultKey);
+        db.Secrets["s"] = db.Secrets["s"] with { BurnedAt = null, BurnReason = null, Rotated = true };
+
+        store.SaveSecrets(db, _vaultKey);
+
+        var after = ReadRecord(_m, _vaultKey, "s");
+        Assert.True(after.Version.CompareTo(before.Version) > 0);
+        Assert.Equal(RecordType.Value, after.Type);
+    }
+
     [Fact]
     public void Rotate_ASecretBurnedTwice_KeepsBothIncidents()
     {

@@ -500,7 +500,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             var state = current?.State;
             var value = Encoding.UTF8.GetBytes(secret.Value);
             SecretRecord? next = null;
-            if (state == null || state.Type == RecordType.Tombstone || !state.Value.AsSpan().SequenceEqual(value))
+            if (state == null || state.Type == RecordType.Tombstone || secret.Rotated || !state.Value.AsSpan().SequenceEqual(value))
             {
                 // A new value version (create, add, rotate, import): it supersedes the old version,
                 // so an outstanding burn of that version becomes history.
