@@ -80,7 +80,8 @@ public sealed record CommandContext(
             TswapCore.DirectoryOwnerMatcher.Default.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(contents));
     }
 
-    public void RequireSudo(string commandName)
+    /// <param name="reason">Brief T6: why sudo is needed here, for a command that needs it only sometimes.</param>
+    public void RequireSudo(string commandName, string? reason = null)
     {
         if (SudoBypass) return;
         if (!Environment.IsPrivilegedProcess)
@@ -88,6 +89,8 @@ public sealed record CommandContext(
             var msg = OperatingSystem.IsWindows()
                 ? $"The '{commandName}' command requires an administrator prompt.\nRun tswap from an elevated command prompt."
                 : $"The '{commandName}' command requires sudo.\nRun: sudo {Prefix} {commandName} ...";
+            if (reason != null)
+                msg += "\n" + reason;
             throw new TswapException(msg);
         }
     }

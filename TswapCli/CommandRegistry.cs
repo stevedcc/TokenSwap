@@ -17,6 +17,7 @@ public static class CommandRegistry
         new MigrateCommand(),
         new CreateCommand(),
         new IngestCommand(),
+        new RotateCommand(),
         new NamesCommand(),
         new SlotsCommand(),
         new RunCommand(),

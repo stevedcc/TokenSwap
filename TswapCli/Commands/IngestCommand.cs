@@ -5,14 +5,17 @@ namespace TswapCli.Commands;
 public sealed class IngestCommand : ICliCommand
 {
     public string Name => "ingest";
-    public string HelpUsage => "ingest <name>";
-    public string Description => "Pipe secret from stdin (no display)";
+    public string HelpUsage => "ingest [--rotate] <name>";
+    public string Description => "Pipe secret from stdin (no display); --rotate replaces an existing one (sudo unless it is burned)";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
-            throw new UsageException($"<source> | {ctx.Prefix} ingest <name>");
+        // Brief T6 decision 7: --rotate writes a newer version of an existing secret.
+        var rotate = args.Contains("--rotate");
+        args = args.Where(a => a != "--rotate").ToArray();
+        if (args.Length != 1 || args[0].StartsWith("--"))
+            throw new UsageException($"<source> | {ctx.Prefix} ingest [--rotate] <name>");
         var name = args[0];
 
         Validation.ValidateName(name);
@@ -28,9 +31,18 @@ public sealed class IngestCommand : ICliCommand
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
 
+        if (rotate)
+        {
+            var existing = SecretRotation.Check(ctx, db, name, "ingest --rotate");
+            SecretRotation.Write(ctx, db, key, name, existing, value);
+            SecretRotation.Report(ctx, name, existing, "new value from stdin");
+            return 0;
+        }
+
         db.ThrowIfUnreadable(name);
         if (db.Secrets.ContainsKey(name))
-            throw new TswapException($"Secret '{name}' already exists. Use 'delete' first to rotate.");
+            throw new TswapException(
+                $"Secret '{name}' already exists. To replace its value, use: <source> | {ctx.Prefix} ingest --rotate {name}");
 
         db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
         ctx.Storage.SaveSecrets(db, key);
