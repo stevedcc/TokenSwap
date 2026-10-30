@@ -43,8 +43,10 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <param name="configDir">The machine's config dir (holds <c>config.json</c>).</param>
     /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>).</param>
     /// <param name="clock">The time seam for HLC stamps (null: the system clock).</param>
-    public RecordVaultStore(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null)
+    /// <param name="warnings">Where load-time findings go (conflicted copies, unreadable records); stderr in the CLI.</param>
+    public RecordVaultStore(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null, TextWriter? warnings = null)
     {
+        _warnings = warnings;
         ConfigDir = configDir;
         ConfigFile = Path.Combine(configDir, "config.json");
         SecretsFile = Path.Combine(configDir, "secrets.json.enc");
@@ -125,22 +127,103 @@ public sealed class RecordVaultStore : IFileVaultStore
         _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(machine, TswapJsonContext.Default.Config)));
     }
 
-    /// <summary>Reads the vault folder's keyring.</summary>
-    public Keyring.Keyring ReadKeyring()
+    /// <summary>
+    /// Reads the vault folder's keyring (decision 2): the <c>keyring</c> file plus the sync tools'
+    /// conflicted copies of it, as a union. A copy that can't be decoded is a warning (it is kept,
+    /// never used or deleted); a copy of another vault, or one slot id with different bytes, is
+    /// refused.
+    /// </summary>
+    public Keyring.Keyring ReadKeyring() => ReadKeyringWithCopies().Keyring;
+
+    private (Keyring.Keyring Keyring, List<(string Path, byte[] Bytes)> FoldedCopies) ReadKeyringWithCopies()
     {
         var path = KeyringFile;
         if (!_owner.FileExists(path))
             throw new TswapException(
                 $"The vault folder {VaultDir} has no keyring file. If it is synced, wait for the sync to finish; " +
                 "otherwise restore the folder from a backup.");
-        return DecodeKeyringBytes(_owner.ReadAllBytes(path), path);
+        var keyring = DecodeKeyringBytes(_owner.ReadAllBytes(path), path);
+        var folded = new List<(string, byte[])>();
+        var vaultDir = VaultDir;
+        var copies = _owner.AsOwner(vaultDir, () => RecordDirectoryScanner.FindConflictCopies(new DirectoryInfo(vaultDir), KeyringFileName));
+        foreach (var copy in copies)
+        {
+            var copyPath = Path.Combine(vaultDir, copy.ConflictingFilename);
+            byte[] bytes;
+            Keyring.Keyring copyKeyring;
+            try
+            {
+                bytes = _owner.ReadAllBytes(copyPath);
+                copyKeyring = KeyringCodec.Decode(bytes);
+            }
+            catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+            {
+                _warnings?.WriteLine(
+                    $"Warning: {copy.ConflictingFilename} ({ToolName(copy.Tool)} conflicted copy of the keyring) can't be read " +
+                    $"({ex.Message}); it is kept and not used.");
+                continue;
+            }
+            keyring = KeyringUnion.Union(keyring, copyKeyring, $"the keyring's conflicted copy {copy.ConflictingFilename}");
+            folded.Add((copyPath, bytes));
+        }
+        return (keyring, folded);
     }
 
+    /// <summary>
+    /// Writes the keyring as the union of <paramref name="keyring"/> and what is on disk now
+    /// (decision 2: a save never drops a slot it didn't know about), atomically and durably. The
+    /// conflicted copies folded into it are then redundant and removed (a failed removal is a
+    /// warning).
+    /// </summary>
     private void WriteKeyring(Keyring.Keyring keyring)
     {
+        var folded = new List<(string Path, byte[] Bytes)>();
+        if (_owner.FileExists(KeyringFile))
+        {
+            var (onDisk, copies) = ReadKeyringWithCopies();
+            KeyringUnion.RequireSameVault(onDisk, keyring, "The keyring to save");
+            keyring = KeyringUnion.Union(onDisk, keyring, "the keyring to save");
+            folded = copies;
+        }
         _owner.CreateDirectory(VaultDir);
         _owner.WriteDurable(KeyringFile, KeyringCodec.Encode(keyring));
+        RemoveRedundantCopies(folded);
     }
+
+    /// <summary>
+    /// Removes conflicted copies whose content is now part of what was just written, if they are
+    /// still byte-identical to what was read; a failure (a sync tool or Windows holding the file)
+    /// is a warning, never a failed write.
+    /// </summary>
+    private void RemoveRedundantCopies(IEnumerable<(string Path, byte[] Bytes)> copies)
+    {
+        foreach (var (path, bytes) in copies)
+        {
+            try
+            {
+                var now = _owner.FileExists(path) ? _owner.ReadAllBytes(path) : null;
+                if (now == null)
+                    continue;
+                if (!now.AsSpan().SequenceEqual(bytes))
+                {
+                    _warnings?.WriteLine($"Warning: {Path.GetFileName(path)} changed while this command ran; it was not removed.");
+                    continue;
+                }
+                _owner.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                _warnings?.WriteLine($"Warning: could not remove the redundant conflicted copy {Path.GetFileName(path)} ({ex.Message}); remove it by hand.");
+            }
+        }
+    }
+
+    private static string ToolName(SyncConflictTool tool) => tool switch
+    {
+        SyncConflictTool.DropboxOrGoogleDrive => "Dropbox / Google Drive",
+        SyncConflictTool.OneDrive => "OneDrive",
+        _ => "Syncthing",
+    };
 
     private static Keyring.Keyring DecodeKeyring(string base64, string what)
     {
@@ -173,6 +256,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     public SecretsDb LoadSecrets(byte[] key, TextWriter? warnings = null)
     {
+        warnings ??= _warnings;
         _warnings = warnings;
         var loaded = LoadRecords(key, warnings);
         var secrets = new Dictionary<string, Secret>();

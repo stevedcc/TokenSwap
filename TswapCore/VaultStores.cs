@@ -10,11 +10,12 @@ namespace TswapCore;
 /// </summary>
 public static class VaultStores
 {
-    public static IFileVaultStore Open(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null)
+    /// <param name="warnings">Where a record store reports what it finds on load (stderr).</param>
+    public static IFileVaultStore Open(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null, TextWriter? warnings = null)
     {
         owner ??= DirectoryOwnerMatcher.Default;
         return IsRecordStore(configDir, owner)
-            ? new RecordVaultStore(configDir, owner, clock)
+            ? new RecordVaultStore(configDir, owner, clock, warnings)
             : new Storage(configDir, owner);
     }
 

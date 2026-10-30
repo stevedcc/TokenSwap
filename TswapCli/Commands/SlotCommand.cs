@@ -898,11 +898,7 @@ public sealed class SlotCommand : ICliCommand
         }
     }
 
-    private static bool SameSlot(Slot a, Slot b) =>
-        a.Kind == b.Kind
-        && a.PublicKey.AsSpan().SequenceEqual(b.PublicKey)
-        && a.Wrapped.AsSpan().SequenceEqual(b.Wrapped)
-        && (a.HwBlob ?? []).AsSpan().SequenceEqual(b.HwBlob ?? []);
+    private static bool SameSlot(Slot a, Slot b) => KeyringUnion.SameSlot(a, b);
 
     private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
