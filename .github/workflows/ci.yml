@@ -30,7 +30,23 @@ jobs:
       - name: Build
         run: dotnet build TokenSwap.slnx
 
+      # The skill eval (evals/skill, SkillEvalTests in the unit tests) runs agents in a bubblewrap
+      # sandbox. GitHub's Ubuntu runners have no bwrap, and Ubuntu 24.04 restricts unprivileged
+      # user namespaces through AppArmor; without both the eval tests would only skip.
+      - name: Enable the skill eval sandbox (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
+
       - name: Unit tests (in-process)
+        # CI_REQUIRE_BWRAP=1 on Linux: the eval tests fail instead of skipping when bwrap is unusable.
+        env:
+          CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
         run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes

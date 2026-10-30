@@ -112,7 +112,9 @@ public sealed class InitCommand : ICliCommand
         if (!c.IsInputRedirected)
             c.ReadLine();
         var serial1 = ctx.SelectSerial();
-        var k1 = ctx.YubiKeys.Challenge(serial1, unlockChallenge);
+        // Brief T7 item 5: whether each key asked for a touch is its posture.
+        var answer1 = ctx.YubiKeys.ChallengeReportingTouch(serial1, unlockChallenge);
+        var k1 = answer1.Response;
 
         // Challenge second YubiKey
         c.Out.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
@@ -123,12 +125,12 @@ public sealed class InitCommand : ICliCommand
         if (serial1 == serial2)
             throw new TswapException("Same YubiKey detected. Please use two different YubiKeys.");
 
-        var k2 = ctx.YubiKeys.Challenge(serial2, unlockChallenge);
+        var answer2 = ctx.YubiKeys.ChallengeReportingTouch(serial2, unlockChallenge);
+        var k2 = answer2.Response;
 
-        // Detect touch requirement for both keys
-        c.Out.WriteLine("\nDetecting YubiKey slot configuration...");
-        var touch1 = ctx.YubiKeys.DetectTouchRequirement(serial1);
-        var touch2 = ctx.YubiKeys.DetectTouchRequirement(serial2);
+        // Touch requirement for both keys: from the challenges, else the service's own detection.
+        var touch1 = answer1.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial1);
+        var touch2 = answer2.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial2);
 
         bool? requiresTouch = null;
         if (touch1.HasValue && touch2.HasValue)
@@ -164,6 +166,7 @@ public sealed class InitCommand : ICliCommand
             unlockChallenge,
             MasterKeySalt: Convert.ToBase64String(masterKeySalt)
         );
+        config = SecurityWarnings.Acknowledge(config); // explained below
 
         // Re-initialisation generates a new master key (new challenge + new XOR share), so any
         // existing vault is no longer decryptable with it. Back up both files before writing
@@ -194,25 +197,8 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"YubiKey Serials: {serial1}, {serial2}");
 
-        // Report touch requirement status
-        if (requiresTouch == true)
-        {
-            c.SetForeground(ConsoleColor.Green);
-            c.Out.WriteLine("✓ Touch requirement: ENABLED (recommended)");
-            c.ResetColor();
-        }
-        else if (requiresTouch == false)
-        {
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine("⚠️  Touch requirement: DISABLED");
-            c.Out.WriteLine("\nSECURITY NOTICE: Your YubiKeys are configured without button press");
-            c.Out.WriteLine("requirement. Any process with access to inserted keys can unlock vault.");
-            c.Out.WriteLine("\nTo enable touch requirement:");
-            c.Out.WriteLine("  1. ykman otp delete 2      (for each key)");
-            c.Out.WriteLine("  2. ykman otp chalresp --generate --touch 2");
-            c.Out.WriteLine("  3. tswap init              (reinitialize)");
-            c.ResetColor();
-        }
+        // Brief T7 item 5: the touch posture, explained once (stderr), here where it is chosen.
+        SecurityWarnings.ExplainTouch(c, $"YubiKeys {serial1}, {serial2}", requiresTouch);
 
         c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
 
@@ -290,6 +276,7 @@ public sealed class InitCommand : ICliCommand
             {
                 fileStore.BackupConfig();
             }
+            config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
             ctx.Storage.SaveConfig(config);
             if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
             {
@@ -601,6 +588,13 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
+        if (backend == HardwareBackend.SecureEnclave)
+        {
+            // Brief T7 item 8 (#159): said where the user sees it, in proportion (HARDWARE_BACKENDS.md).
+            c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
+            c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
+            c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+        }
         PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
     }

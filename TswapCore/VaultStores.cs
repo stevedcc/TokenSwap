@@ -10,13 +10,14 @@ namespace TswapCore;
 /// </summary>
 public static class VaultStores
 {
-    /// <param name="warnings">Where a record store reports what it finds on load (stderr).</param>
+    /// <param name="warnings">Where a record store reports what it finds on load, and either store
+    /// its one notice about tightened permissions (stderr).</param>
     public static IFileVaultStore Open(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null, TextWriter? warnings = null)
     {
         owner ??= DirectoryOwnerMatcher.Default;
         return IsRecordStore(configDir, owner)
             ? new RecordVaultStore(configDir, owner, clock, warnings)
-            : new Storage(configDir, owner);
+            : new Storage(configDir, owner, warnings);
     }
 
     /// <summary>True when <paramref name="configDir"/>'s <c>config.json</c> names the record store.</summary>

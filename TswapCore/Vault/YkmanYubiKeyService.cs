@@ -24,7 +24,18 @@ public sealed class YkmanYubiKeyService(TextWriter? verboseOut = null) : IYubiKe
             .ToList();
     }
 
-    public byte[] Challenge(int serial, string challenge)
+    public byte[] Challenge(int serial, string challenge) => ChallengeReportingTouch(serial, challenge).Response;
+
+    /// <summary>
+    /// The challenge, and whether the key asked for a touch (brief T7 item 5): <c>ykman otp
+    /// calculate</c> prints "Touch your YubiKey..." on stderr once the key reports that it waits for
+    /// one (USB keepalive status "user presence needed"); a key without touch answers at once with
+    /// nothing on stderr. Checked against the yubikey-manager 5.9.2 source
+    /// (<c>ykman/_cli/otp.py</c> <c>calculate</c> → <c>prompt_for_touch</c> in
+    /// <c>ykman/_cli/util.py</c>; <c>yubikit/core/otp.py</c> calls it on
+    /// <c>RESP_TIMEOUT_WAIT_FLAG</c>).
+    /// </summary>
+    public YubiKeyResponse ChallengeReportingTouch(int serial, string challenge)
     {
         verboseOut?.Write($"YubiKey (serial: {serial})... ");
 
@@ -50,7 +61,7 @@ public sealed class YkmanYubiKeyService(TextWriter? verboseOut = null) : IYubiKe
                 responseBytes[i] = Convert.ToByte(hexResponse.Substring(i * 2, 2), 16);
 
             verboseOut?.WriteLine("✓");
-            return responseBytes;
+            return new YubiKeyResponse(responseBytes, AskedForTouch(error));
         }
         catch (Exception ex)
         {
@@ -58,6 +69,9 @@ public sealed class YkmanYubiKeyService(TextWriter? verboseOut = null) : IYubiKe
             throw;
         }
     }
+
+    /// <summary>True when ykman's stderr has its touch prompt ("Touch your YubiKey...").</summary>
+    internal static bool AskedForTouch(string stderr) => stderr.Contains("Touch your YubiKey", StringComparison.Ordinal);
 
     public bool? DetectTouchRequirement(int serial)
     {

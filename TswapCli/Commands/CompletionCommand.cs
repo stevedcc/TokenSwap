@@ -15,6 +15,7 @@ public sealed class CompletionCommand : ICliCommand
     public string HelpUsage => "completion <bash|zsh|fish|powershell>";
     public string Description => "Print a shell completion script";
     public bool RequiresSudo => false;
+    public bool NeedsVault => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {

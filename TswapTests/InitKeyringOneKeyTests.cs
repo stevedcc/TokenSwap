@@ -109,7 +109,8 @@ public class InitKeyringOneKeyTests : IDisposable
         var (exit, stdout, stderr) = Run("2\n", "init", "--keyring", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains("Multiple YubiKeys detected", stdout);
+        // Owner decision 2026-10-30 (T7 fix round 1): the enrolment prompt moved to stderr.
+        Assert.Contains("Multiple YubiKeys detected", stderr);
         var keyring = DecodeKeyring(LoadConfig());
         var machine = Assert.Single(keyring.Slots);
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(machine.HwBlob!).Serial);
