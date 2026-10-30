@@ -229,13 +229,13 @@ public class FileOwnershipTests : IDisposable
 
         var ex = Assert.Throws<TswapException>(() => storage.LoadConfig());
 
-        Assert.Contains($"sudo chown {UserUid}:{UserGid} '{P("config.json")}'", ex.Message);
+        Assert.Contains($"sudo chown -h {UserUid}:{UserGid} '{P("config.json")}'", ex.Message);
     }
 
     [Fact]
     public void AConfigJsonWithAByteOrderMark_StillLoads()
     {
-        // GLM re-review: File.ReadAllText skipped a BOM; reading bytes must too.
+        // GLM re-review: File.ReadAllText stripped a BOM; the byte read must too.
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
         storage.SaveConfig(SampleConfig() with { YubiKeySerials = [42] });
         File.WriteAllBytes(P("config.json"), [0xEF, 0xBB, 0xBF, .. File.ReadAllBytes(P("config.json"))]);
@@ -250,7 +250,9 @@ public class FileOwnershipTests : IDisposable
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
         Directory.CreateDirectory(Path.Combine(P("config.json"), "occupied"));
 
-        Assert.ThrowsAny<IOException>(() => storage.SaveConfig(SampleConfig()));
+        var ex = Record.Exception(() => storage.SaveConfig(SampleConfig()));
+
+        Assert.True(ex is IOException or UnauthorizedAccessException, $"{ex}"); // Windows: UnauthorizedAccess
 
         Assert.Empty(Directory.GetFiles(_dir));
     }

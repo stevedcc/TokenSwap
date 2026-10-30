@@ -140,9 +140,11 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
                 throw new TswapException(
                     $"{fullPath} is a symlink its folder's owner (uid {o.Uid}) can't read through; " +
                     "tswap won't read it as root. Replace it with the real file.");
+            // -h: if a link is swapped in after the check above, chown changes the link, not its target.
             throw new TswapException(
                 $"{fullPath} can't be read by its folder's owner (uid {o.Uid}); an earlier 'sudo tswap' " +
-                $"probably left it owned by root. Fix it with: sudo chown {o.Uid}:{o.Gid} '{fullPath}'");
+                "probably left it (or a folder above it) owned by root. If the file is root's, fix it with: " +
+                $"sudo chown -h {o.Uid}:{o.Gid} {ShellQuote(fullPath)}");
         }
     }
 
@@ -195,6 +197,9 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         owner = folderOwner;
         return scope;
     }
+
+    /// <summary>Single-quotes <paramref name="value"/> for a POSIX shell.</summary>
+    private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
     private static FileStream CreateNew(string path)
     {
