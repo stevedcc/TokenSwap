@@ -21,6 +21,11 @@
 #                 global CLAUDE.md or AGENTS.md leaks in and --skill off really is off.
 #   --skill on    the skill text goes in through Claude Code's --append-system-prompt, or as
 #                 OpenCode's AGENTS.md in the scenario folder. Off: nothing.
+#   --agent claude runs `claude -p ... --dangerously-skip-permissions`. Acceptable here, and only
+#                 here: the sandbox has a fresh HOME (the agent's login only), read-only /usr and
+#                 /etc, no capabilities (--cap-drop ALL, checked), its own user and pid namespaces,
+#                 dies with the runner, and every "secret" in it is an inert marker. The network is
+#                 open (the agent needs its API), so a misbehaving agent can still send what it has.
 #   --agent fake  runs scripts generated from each scenario's own rules (lib/fake_agent.py): the
 #                 "pass" variant does the must sequence; every other variant breaks one rule. Used by
 #                 the unit tests (SkillEvalTests); never needs a model.

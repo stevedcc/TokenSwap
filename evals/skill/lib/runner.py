@@ -60,6 +60,7 @@ def parse_args(argv):
     p.add_argument("--scenario", help="run only this scenario (file name without .json)")
     p.add_argument("--agent-home", help="folder with the agent's login only, copied into the sandbox's fresh HOME")
     p.add_argument("--fake-variant", default="pass", help="fake agent only: a variant name, or 'all'")
+    p.add_argument("--fake-script", help="fake agent only: run this bash script as the agent (variant 'script'; tests)")
     p.add_argument("--judge-agent", choices=["claude", "opencode"], help="CLI for the LLM judge of `says` rules")
     p.add_argument("--judge-model", help="model of the LLM judge; must differ from --model")
     p.add_argument("--tswap", help="the tswap binary whose `tswap prompt` is the skill (default: this repo's Debug build)")
@@ -70,8 +71,8 @@ def parse_args(argv):
     if args.agent != "fake":
         if not args.model:
             p.error("--model is required for claude and opencode")
-        if args.fake_variant != "pass":
-            p.error("--fake-variant is for --agent fake only")
+        if args.fake_variant != "pass" or args.fake_script:
+            p.error("--fake-variant and --fake-script are for --agent fake only")
     if args.judge_model and args.model and args.judge_model == args.model:
         p.error("the LLM judge must be a different model from the agent (--judge-model == --model)")
     if bool(args.judge_model) != bool(args.judge_agent):
@@ -240,6 +241,10 @@ def prepare(run_dir, scenario, skill, agent_home, agent_script):
 def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
     a = ["bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid", "--unshare-ipc",
          "--unshare-uts", "--unshare-cgroup-try", "--proc", "/proc", "--dev", "/dev",
+         # The agent is root in its user namespace: with CAP_SYS_ADMIN it could unmount the shims,
+         # with CAP_SYS_CHROOT/CAP_MKNOD build its own root. No capabilities at all (bwrap's
+         # unprivileged default, made explicit; the isolation check verifies it).
+         "--cap-drop", "ALL",
          "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc"]
     for top in ("/bin", "/sbin", "/lib", "/lib64", "/lib32"):
         if os.path.islink(top):
@@ -372,7 +377,10 @@ def main(argv):
         for scenario in scenarios:
             if args.agent == "fake":
                 all_variants = fake_agent.variants(scenario)
-                names = list(all_variants) if args.fake_variant == "all" else [args.fake_variant]
+                if args.fake_script:
+                    with open(args.fake_script) as f:
+                        all_variants = {"script": (f.read(), [])}
+                names = list(all_variants) if args.fake_variant == "all" or args.fake_script else [args.fake_variant]
                 runs = []
                 for n in names:
                     if n not in all_variants:

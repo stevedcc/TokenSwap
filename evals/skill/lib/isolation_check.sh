@@ -22,6 +22,15 @@ for name in tswap sudo su doas pkexec; do
     done
 done
 
+# No capabilities in the sandbox (the agent is root in its user namespace; CAP_SYS_ADMIN would let it
+# unmount the shims). Read with bash builtins, not grep (a logged pass-through here).
+while read -r key value; do
+    case "$key" in
+        CapEff:|CapPrm:|CapBnd:|CapAmb:)
+            [ "$value" = "0000000000000000" ] || problem "the sandbox has capabilities ($key $value)" ;;
+    esac
+done < /proc/self/status
+
 IFS=: read -r -a path_dirs <<< "$PATH"
 for dir in "${path_dirs[@]}"; do
     for candidate in "$dir"/tswap*; do
