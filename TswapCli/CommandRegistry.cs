@@ -66,7 +66,30 @@ public static class CommandRegistry
             return 0;
         }
 
+        if (HasGlobalFlagAmongOptions(commandArgs))
+            throw new TswapException(
+                $"'-v'/'--verbose' is a global flag: global flags go before the command, e.g. '{ctx.Prefix} -v {command.Name} ...'. " +
+                $"(After the command's first argument, -v belongs to the command: '{ctx.Prefix} run grep -v ...'.)");
+
         return command.Execute(ctx, commandArgs);
+    }
+
+    /// <summary>
+    /// T7 fix round 1: <c>-v</c>/<c>--verbose</c> among a command's options before its first
+    /// positional argument (<c>tswap names -v</c>) would be silently ignored, so it gets a hint.
+    /// No command has a <c>-v</c> of its own; after the first positional it is the command's
+    /// (a burn reason, <c>run</c>'s child command line), as for <c>--help</c>.
+    /// </summary>
+    private static bool HasGlobalFlagAmongOptions(string[] commandArgs)
+    {
+        foreach (var arg in commandArgs)
+        {
+            if (arg is "-v" or "--verbose")
+                return true;
+            if (!arg.StartsWith('-'))
+                return false;
+        }
+        return false;
     }
 
     /// <summary>
@@ -107,7 +130,16 @@ public static class CommandRegistry
         foreach (var c in Commands.Where(c => c.RequiresSudo))
             o.WriteLine($"  [sudo] {p} {c.HelpUsage,-13}    {c.Description}");
         o.WriteLine("\nCommands marked [sudo] require elevated privileges.");
-        o.WriteLine("Add -v or --verbose for detailed YubiKey output.");
+        o.WriteLine("Add -v or --verbose (before the command) for detailed YubiKey output.");
+        o.WriteLine("\nEnvironment:");
+        o.WriteLine("  TSWAP_CONFIG_DIR    the config folder to use (overrides everything below)");
+        o.WriteLine("  Under sudo (sudo -i included), tswap uses the vault of the user who ran sudo:");
+        o.WriteLine("  SUDO_USER's home from the system's user database, checked against SUDO_UID.");
+        o.WriteLine("  TSWAP_YUBIKEY_SERIAL the YubiKey to unlock with when several are plugged in (sudo drops");
+        o.WriteLine("                      it unless kept, e.g. sudo --preserve-env=TSWAP_YUBIKEY_SERIAL; intended).");
+        o.WriteLine("  With several keys and no terminal, tswap never prompts: it tries the keys with a slot,");
+        o.WriteLine("  no-touch first, then unknown, then touch-required. On a terminal it asks (on stderr),");
+        o.WriteLine("  offering the touch-required key as the default.");
         o.WriteLine("\nExamples:");
         o.WriteLine($"  {p} create storj-pass");
         o.WriteLine($"  kubectl get secret db-pass -o jsonpath='{{{{.data.password}}}}' | base64 -d | {p} ingest db-pass");

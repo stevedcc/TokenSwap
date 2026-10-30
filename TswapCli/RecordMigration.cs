@@ -145,6 +145,8 @@ internal static class RecordMigration
                 MasterKeySalt = null,
                 KeyringSlotId = null,
             };
+            // Brief T7 item 5: the new slots' postures were explained as they were enrolled.
+            newConfig = SecurityWarnings.Acknowledge(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
         }
         else
         {
@@ -344,6 +346,7 @@ internal static class RecordMigration
         {
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
             var (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial);
+            YubiKeySlotEnrollment.PrintTouchPolicy(ctx.Console, blob); // brief T7 item 5: acknowledged by the caller
             try
             {
                 var keyPair = SlotKeyPair.Generate();

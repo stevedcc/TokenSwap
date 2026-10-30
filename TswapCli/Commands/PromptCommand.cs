@@ -8,6 +8,7 @@ public sealed class PromptCommand : ICliCommand
     public string HelpUsage => "prompt";
     public string Description => "Show AI agent instructions";
     public bool RequiresSudo => false;
+    public bool NeedsVault => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {

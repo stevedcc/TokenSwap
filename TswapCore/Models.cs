@@ -157,7 +157,13 @@ public record Config(List<int> YubiKeySerials,
     // Brief T6 decision 3: the highest HLC this machine has written or seen ("<ms>.<logical>", see
     // Hlc.ToString), saved with every record write, so a clock set back between two commands still
     // orders the second write after the first.
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LastHlc = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LastHlc = null,
+    // Brief T7 item 5 (#185), a machine field: for each YubiKey slot (base64 slot id; "vault" for a
+    // classic XOR vault), the touch posture ("touch", "no-touch" or "unknown") last explained or
+    // acknowledged on this machine. Written by init, slot add, slot request and migrate when they
+    // explain the posture, and by 'tswap slots --ack'; everyday commands print a one-line notice only
+    // for a posture that differs from it. Omitted when null (nothing acknowledged yet).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? AcknowledgedTouch = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's

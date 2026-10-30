@@ -88,12 +88,20 @@ public sealed record YubiKeySlotBlob
         serial,
         RandomNumberGenerator.GetBytes(ChallengeSize),
         RandomNumberGenerator.GetBytes(SaltSize),
-        requiresTouch switch
-        {
-            true => YubiKeyTouchPolicy.Required,
-            false => YubiKeyTouchPolicy.NotRequired,
-            null => YubiKeyTouchPolicy.Unknown,
-        });
+        ToPolicy(requiresTouch));
+
+    /// <summary>
+    /// This blob with its touch policy set (brief T7 item 5: the posture is known only after the
+    /// first challenge, which uses this blob's challenge).
+    /// </summary>
+    public YubiKeySlotBlob WithRequiresTouch(bool? requiresTouch) => new(Serial, Challenge, Salt, ToPolicy(requiresTouch));
+
+    private static YubiKeyTouchPolicy ToPolicy(bool? requiresTouch) => requiresTouch switch
+    {
+        true => YubiKeyTouchPolicy.Required,
+        false => YubiKeyTouchPolicy.NotRequired,
+        null => YubiKeyTouchPolicy.Unknown,
+    };
 
     /// <summary>True when <paramref name="hwBlob"/> starts with this format's magic.</summary>
     public static bool IsYubiKeyBlob(byte[]? hwBlob) =>

@@ -753,11 +753,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // output). The raw secret never appears in verbose output (it is masked).
         // #105 refuses inline 'pwsh -Command' code, so the child is a script file taking the
         // secret as its argument; the printed sequence and the assertions are unchanged.
+        // Brief T7 item 2 (#182): -v is tswap's only before the command name, so it moved there.
         var printScript = Path.Combine(_tempDir, "print3.ps1");
         File.WriteAllText(printScript,
             "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
         var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: my-secret]",
-            "run", "-v", "pwsh", "-NoProfile", "-File", printScript, "{{my-secret}}");
+            "-v", "run", "pwsh", "-NoProfile", "-File", printScript, "{{my-secret}}");
 
         // Assert via Assert.True with the full escaped capture: xunit truncates the
         // haystack in Contains failures, which hides the VT stream needed to diagnose

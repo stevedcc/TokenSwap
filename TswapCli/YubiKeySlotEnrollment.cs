@@ -48,9 +48,12 @@ internal static class YubiKeySlotEnrollment
     {
         var c = ctx.Console;
         c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
-        var requiresTouch = ctx.YubiKeys.DetectTouchRequirement(serial);
-        var blob = YubiKeySlotBlob.Create(serial, requiresTouch);
-        var first = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
+        // Brief T7 item 5: the posture is whether the first challenge asked for a touch (ykman can't
+        // read a slot's touch setting); a service that can't tell falls back to its own detection.
+        var probe = YubiKeySlotBlob.Create(serial, requiresTouch: null);
+        var answer = ctx.YubiKeys.ChallengeReportingTouch(serial, probe.ChallengeString);
+        var blob = probe.WithRequiresTouch(answer.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial));
+        var first = answer.Response;
         var second = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
         try
         {
@@ -67,26 +70,10 @@ internal static class YubiKeySlotEnrollment
         }
     }
 
-    /// <summary>The touch-policy lines printed after enrolling a key.</summary>
+    /// <summary>
+    /// The touch posture of a key just enrolled, explained once on stderr (brief T7 item 5): this is
+    /// where it is chosen. The caller acknowledges it in config (<see cref="SecurityWarnings.Acknowledge"/>).
+    /// </summary>
     public static void PrintTouchPolicy(IConsole c, YubiKeySlotBlob blob)
-    {
-        switch (blob.RequiresTouch)
-        {
-            case true:
-                c.SetForeground(ConsoleColor.Green);
-                c.Out.WriteLine("✓ Touch requirement: ENABLED (recommended)");
-                c.ResetColor();
-                break;
-            case false:
-                c.SetForeground(ConsoleColor.Yellow);
-                c.Out.WriteLine("⚠️  Touch requirement: DISABLED");
-                c.Out.WriteLine("\nSECURITY NOTICE: this YubiKey is configured without a button press");
-                c.Out.WriteLine("requirement. Any process with access to the inserted key can unlock the vault.");
-                c.ResetColor();
-                break;
-            default:
-                c.Out.WriteLine("Touch requirement: unknown (detection failed)");
-                break;
-        }
-    }
+        => SecurityWarnings.ExplainTouch(c, $"YubiKey {blob.Serial}", blob.RequiresTouch);
 }

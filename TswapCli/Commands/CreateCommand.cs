@@ -74,7 +74,7 @@ public sealed class CreateCommand : ICliCommand
         if (config.RngMode == RngMode.YubiKey && ctx.TestKey == null)
         {
             ctx.Console.Out.WriteLine("Touch YubiKey for entropy generation...");
-            var entropySerial = ctx.SelectSerial();
+            var entropySerial = ctx.SelectEntropySerial();
             var challenge = RandomNumberGenerator.GetBytes(20);
             var hmac = ctx.YubiKeys.Challenge(entropySerial, Convert.ToHexString(challenge));
             // Mix challenge + HMAC into fixed-length key material, then use HKDF (a
