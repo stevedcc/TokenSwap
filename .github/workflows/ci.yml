@@ -43,6 +43,19 @@ jobs:
           fi
           bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
+      # Brief T11: GitHub's macOS runners are virtual machines and may have no Secure Enclave.
+      # Print what the probe says (tswap_se_available() returns CryptoKit's SecureEnclave.isAvailable),
+      # so the first run answers whether SecureEnclaveNoTouchRoundTripTests can run here. Those
+      # tests skip with a message when it is false; CI_REQUIRE_SE=1 would make them fail instead
+      # (not set yet: it is set once a run shows the probe is true).
+      - name: Secure Enclave probe (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          probe="$RUNNER_TEMP/se-probe.swift"
+          printf '%s\n' 'import CryptoKit' 'print("Secure Enclave available: \(SecureEnclave.isAvailable)")' > "$probe"
+          swift "$probe"
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval tests fail instead of skipping when bwrap is unusable.
         env:
