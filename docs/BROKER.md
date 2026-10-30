@@ -405,6 +405,34 @@ export OPENAI_API_KEY=unused          # the SDK insists on one; the broker repla
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/anthropic
 ```
 
+## Platforms
+
+**Tested on real hardware:** Fedora CoreOS 44 (selinux-policy-targeted 44.6, Podman 5.8, Intel
+PTT as the TPM), 2026-10-30, with the `tswap-broker` SELinux module installed with only
+`semodule -i` and `restorecon` (no `semanage`). The results:
+
+- `serve` ran as `tswap_broker_t`, and the socket inherited `container_file_t`;
+- a rootless container with SELinux **enforcing**, no `--security-opt label=disable` and no `:z`
+  on the socket mount got the credential added upstream and the echoed value redacted;
+- a `..` traversal, a not-allowed route and an unknown route were each refused, with no unlock;
+- no new AVC denials;
+- the TPM's lockout counter stayed 0.
+
+On Fedora CoreOS `/usr/local` is `/var/usrlocal`: `restorecon` reports
+`/var/usrlocal/libexec/tswap-broker`, and the module's `/usr/local/libexec/tswap-broker` file
+context still applies through the policy's path equivalence rule. Nothing extra is needed.
+
+Elsewhere:
+
+- **Current Fedora and RHEL-family hosts with container-selinux:** expected to work the same way.
+  Attribute names may differ on older RHEL releases; `semodule -i` reports any it doesn't know.
+- **Debian and Ubuntu (AppArmor):** Podman's and Docker's default AppArmor profiles don't block
+  connecting to a bind-mounted Unix socket, so no module is needed. **Untested.**
+- **Hosts without a mandatory access control system** need nothing extra.
+- **macOS and Windows:** not supported in v1. The broker identifies clients by kernel peer
+  credentials on a Unix socket, so it must run on the same Linux kernel as the containers, for
+  example inside the Podman machine VM, not on the macOS or Windows host.
+
 ## Limits (v1)
 
 - **Registries that issue tokens from a separate realm URL** (GHCR, Docker Hub: `401` with
