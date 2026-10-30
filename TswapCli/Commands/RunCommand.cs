@@ -21,7 +21,8 @@ public sealed class RunCommand : ICliCommand
         // parsed correctly (issue #75).
         var commandJoined = string.Join(" ", commandArgs);
 
-        // Find {{tokens}}
+        // Find {{tokens}} (an unknown '{{name:suffix}}' is an error, never literal text).
+        Validation.ThrowIfUnknownTokenSuffix(commandJoined);
         var tokens = Validation.ExtractTokens(commandJoined);
 
         if (tokens.Count == 0)
@@ -56,6 +57,9 @@ public sealed class RunCommand : ICliCommand
         {
             secretValues[token] = db.ResolveToken(token)
                 ?? throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
+            // Fix round 3: warn about a burned value (current or previous), as apply does.
+            if (db.IsBurnedToken(token))
+                ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
         }
 
         // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).

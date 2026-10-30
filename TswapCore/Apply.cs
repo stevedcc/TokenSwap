@@ -6,6 +6,9 @@ public static class Apply
 {
     // Fix round 1, B: '# tswap: name:previous' names the value the last rotation replaced.
     private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
+
+    // Fix round 3: '# tswap: name:<anything else>' is a typo, refused instead of applying 'name'.
+    private static readonly Regex SuffixedMarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+:\S*)");
     
     // Match empty string patterns with quotes: key: "" or key: ''
     private static readonly Regex EmptyValueRegex = new(@"^(.*[:=]\s*)([""'])\2(\s*)$");
@@ -34,6 +37,11 @@ public static class Apply
             if (!markerMatch.Success)
                 continue;
 
+            var suffixed = SuffixedMarkerRegex.Match(line);
+            if (suffixed.Success && suffixed.Groups[1].Value != markerMatch.Groups[1].Value)
+                throw new TswapException(
+                    $"Unknown marker '# tswap: {suffixed.Groups[1].Value}' (line {i + 1}): the only suffix is ':previous'.");
+
             var secretName = markerMatch.Groups[1].Value;
 
             // Check the secret exists (and, for name:previous, that it has a previous value).
@@ -46,7 +54,7 @@ public static class Apply
                 throw new Exception($"Secret '{baseName}' not found (line {i + 1})");
             }
             var value = db.ResolveToken(secretName, $" (line {i + 1})");
-            var burned = db.Secrets[baseName].BurnedAt.HasValue && baseName == secretName;
+            var burned = db.IsBurnedToken(secretName);
 
             // Find and replace empty value patterns before the marker
             // Patterns to match:

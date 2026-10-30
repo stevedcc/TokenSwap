@@ -349,6 +349,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             History = history.Count == 0 ? null : history,
             PreviousValue = state.Previous == null ? null : Encoding.UTF8.GetString(state.Previous.Value),
+            PreviousBurned = state.Previous != null && state.Burns.Any(b => b.Version.Equals(state.Previous.Version)),
         };
     }
 

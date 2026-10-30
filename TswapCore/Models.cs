@@ -192,6 +192,10 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
     [JsonIgnore]
     public string? PreviousValue { get; init; }
 
+    /// <summary>Fix round 3: true when the previous value's version was burned. Never serialized.</summary>
+    [JsonIgnore]
+    public bool PreviousBurned { get; init; }
+
     /// <summary>
     /// Fix round 1, B: set by <c>restore</c>: this write puts the previous value back, so the record
     /// store makes its burn (if it had one) outstanding again. Never serialized.
@@ -233,6 +237,17 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     /// ':' (<see cref="Validation.ValidateName"/>), so the suffix never collides with a name. Throws
     /// for a missing (or unreadable) secret, and for <c>:previous</c> without a previous value.
     /// </summary>
+    /// <summary>
+    /// Fix round 3: true when <paramref name="token"/> (a name or <c>name:previous</c>) refers to a
+    /// burned value: the current value's outstanding burn, or a burn of the previous value's version.
+    /// </summary>
+    public bool IsBurnedToken(string token)
+    {
+        var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);
+        var name = previous ? token[..^PreviousSuffix.Length] : token;
+        return Secrets.TryGetValue(name, out var secret) && (previous ? secret.PreviousBurned : secret.BurnedAt.HasValue);
+    }
+
     public string ResolveToken(string token, string? where = null)
     {
         var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);

@@ -65,7 +65,8 @@ public static class RecordMerge
     /// idempotent: the winning version is the larger <see cref="SecretRecord.Version"/> stamp
     /// (ties between identical stamps, which only damage could produce, are decided by content so
     /// the result still doesn't depend on order: a tombstone wins over a value, then the larger value
-    /// bytewise, then the later created time, then the name); burns are the union, then
+    /// bytewise, then the later created time, then the name, then the previous value: present over
+    /// absent, then its version, then its bytes); burns are the union, then
     /// <see cref="CanonicalBurns"/>; the write stamp is the larger of the two.
     /// </summary>
     public static SecretRecord Merge(SecretRecord a, SecretRecord b)
@@ -95,6 +96,16 @@ public static class RecordMerge
         if (value != 0)
             return value;
         var created = a.CreatedMs.CompareTo(b.CreatedMs);
-        return created != 0 ? created : string.CompareOrdinal(a.Name, b.Name);
+        if (created != 0)
+            return created;
+        var name = string.CompareOrdinal(a.Name, b.Name);
+        if (name != 0)
+            return name;
+        // Fix round 3: the previous value last (absent < present, then its version, then its bytes).
+        var hasPrevious = (a.Previous != null).CompareTo(b.Previous != null);
+        if (hasPrevious != 0 || a.Previous == null)
+            return hasPrevious;
+        var previousVersion = a.Previous.Version.CompareTo(b.Previous!.Version);
+        return previousVersion != 0 ? previousVersion : a.Previous.Value.AsSpan().SequenceCompareTo(b.Previous.Value);
     }
 }
