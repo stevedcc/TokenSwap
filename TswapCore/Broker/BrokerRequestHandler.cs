@@ -34,9 +34,17 @@ public sealed class BrokerRequestHandler(
     BrokerLimiter limiter,
     BrokerUnlockGuard unlockGuard,
     BrokerLog log,
-    TimeProvider time)
+    TimeProvider time,
+    BrokerLimits? limits = null,
+    Action<string>? onFatal = null)
 {
+    private readonly BrokerLimits _limits = limits ?? new BrokerLimits();
+    private int _timeoutsInARow;
+
     private readonly SemaphoreSlim _unlock = new(1, 1);
+
+    /// <summary>Raised when a request starts waiting for the unlock (tests wait on it instead of sleeping).</summary>
+    public event Action? WaitingForUnlock;
 
     public async Task HandleAsync(HttpContext http)
     {
@@ -110,7 +118,17 @@ public sealed class BrokerRequestHandler(
             return;
         }
 
-        using var slot = await limiter.TryAcquireAsync(peer.Socket, http.RequestAborted).ConfigureAwait(false);
+        IDisposable? slot;
+        try
+        {
+            slot = await limiter.TryAcquireAsync(peer.Socket, http.RequestAborted).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            log.Request(record with { Status = 499, Reason = "client-closed" });
+            return;
+        }
+        using var slotLease = slot;
         if (slot is null)
         {
             await WriteUniformAsync(http, StatusCodes.Status503ServiceUnavailable).ConfigureAwait(false);
@@ -121,7 +139,17 @@ public sealed class BrokerRequestHandler(
         // Decision 1: a fresh unlock for every request, one at a time, reading only this route's secret.
         BrokerSecret secret;
         var started = time.GetTimestamp();
-        await _unlock.WaitAsync(http.RequestAborted).ConfigureAwait(false);
+        WaitingForUnlock?.Invoke();
+        try
+        {
+            await _unlock.WaitAsync(http.RequestAborted).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            // The client gave up while queued for the unlock.
+            log.Request(record with { Status = 499, Reason = "client-closed" });
+            return;
+        }
         try
         {
             if (unlockGuard.Refusal(peer.Socket) is { } refusedNow)
@@ -131,7 +159,34 @@ public sealed class BrokerRequestHandler(
                 return;
             }
             unlockGuard.RecordAttempt();
-            secret = await Task.Run(() => secrets.Read(route.SecretName)).ConfigureAwait(false);
+            var read = Task.Run(() => secrets.Read(route.SecretName));
+            try
+            {
+                // Fix round 1: an unlock that hangs (a wedged TPM) is abandoned, never waited on forever.
+                await read.WaitAsync(_limits.UnlockTimeout, time).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // The abandoned unlock keeps running; whatever it returns is zeroed, never used.
+                _ = read.ContinueWith(t =>
+                {
+                    if (t.IsCompletedSuccessfully)
+                        t.Result.Dispose();
+                    else
+                        _ = t.Exception; // observed
+                }, TaskScheduler.Default);
+                await WriteUniformAsync(http, StatusCodes.Status503ServiceUnavailable).ConfigureAwait(false);
+                log.Request(record with { Status = 503, Unlocks = 1, UnlockDuration = time.GetElapsedTime(started), Reason = "unlock-timeout" });
+                if (Interlocked.Increment(ref _timeoutsInARow) >= _limits.UnlockTimeoutsBeforeExit)
+                {
+                    var reason = $"{_limits.UnlockTimeoutsBeforeExit} unlocks in a row took longer than {_limits.UnlockTimeout.TotalSeconds:0} s; exiting so the service manager restarts serve";
+                    log.Event(reason);
+                    onFatal?.Invoke(reason);
+                }
+                return;
+            }
+            Interlocked.Exchange(ref _timeoutsInARow, 0); // a completed unlock (success or failure) ends the run
+            secret = await read.ConfigureAwait(false);
             unlockGuard.RecordSuccess(peer.Socket);
         }
         catch (BrokerUnlockException)

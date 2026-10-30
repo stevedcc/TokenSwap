@@ -534,4 +534,138 @@ public class BrokerServerTests : IAsyncLifetime
             idle.ForEach(c => c.Dispose());
         }
     }
+
+    // ------------------------------------------------------------------ bounded unlock
+
+    private Task WaitForUnlocksStartedAsync(int count)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.UnlockStarted += n => { if (n >= count) started.TrySetResult(); };
+        if (_h.Secrets.Unlocks >= count) // subscribed first, so a start in between is not missed
+            started.TrySetResult();
+        return started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task UnlockThatHangs_IsAbandonedAfter30Seconds_With503_AndLogged()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.Equal(TimeSpan.FromSeconds(30), new BrokerLimits().UnlockTimeout);
+        Assert.Equal(3, new BrokerLimits().UnlockTimeoutsBeforeExit);
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            var request = _h.GetAsync("lane1", "/echo/a");
+            await WaitForUnlocksStartedAsync(1);
+            _h.Clock.Advance(TimeSpan.FromSeconds(29));
+            Assert.False(request.IsCompleted);
+            _h.Clock.Advance(TimeSpan.FromSeconds(1));
+
+            Assert.Equal(503, BrokerHarness.StatusOf(await request));
+            Assert.Contains("status=503", _h.LogText.ToString());
+            Assert.Contains("reason=unlock-timeout", _h.LogText.ToString());
+            Assert.Equal(0, _h.FakeForwarder.Calls);
+            Assert.False(_h.Server!.Fatal.IsCompleted);
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ThreeUnlockTimeoutsInARow_FailTheServer_SoServeExitsNonZero()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            for (var i = 1; i <= 3; i++)
+            {
+                var request = _h.GetAsync("lane1", "/echo/a");
+                await WaitForUnlocksStartedAsync(i);
+                _h.Clock.Advance(TimeSpan.FromSeconds(30));
+                Assert.Equal(503, BrokerHarness.StatusOf(await request));
+                Assert.Equal(i == 3, _h.Server!.Fatal.IsCompleted);
+            }
+            Assert.Contains("unlock", await _h.Server!.Fatal);
+            Assert.Contains("3 unlocks in a row", _h.LogText.ToString());
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ACompletedUnlock_EndsTheRunOfTimeouts()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            for (var i = 1; i <= 2; i++)
+            {
+                var request = _h.GetAsync("lane1", "/echo/a");
+                await WaitForUnlocksStartedAsync(i);
+                _h.Clock.Advance(TimeSpan.FromSeconds(30));
+                Assert.Equal(503, BrokerHarness.StatusOf(await request));
+            }
+            hang.TrySetResult();
+            _h.Secrets.Gate = null;
+            Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
+            _h.Secrets.Gate = hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var again = _h.GetAsync("lane1", "/echo/a");
+            await WaitForUnlocksStartedAsync(4);
+            _h.Clock.Advance(TimeSpan.FromSeconds(30));
+            Assert.Equal(503, BrokerHarness.StatusOf(await again));
+            Assert.False(_h.Server!.Fatal.IsCompleted);
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task ClientAbortWhileQueuedForTheUnlock_IsLogged()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        await _h.StartAsync();
+        try
+        {
+            var first = _h.GetAsync("lane1", "/echo/first");
+            await WaitForUnlocksStartedAsync(1);
+            var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
+            var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await client.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath("lane1")));
+            await client.SendAsync("GET /echo/second HTTP/1.1\r\nHost: b\r\n\r\n"u8.ToArray());
+            await queued.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            client.Dispose(); // the client gives up while queued
+
+            await _h.WaitForLogAsync("path=\"second\" status=499");
+            Assert.Contains("reason=client-closed", _h.LogText.ToString());
+            Assert.Equal(1, _h.Secrets.Unlocks);
+            hang.TrySetResult();
+            Assert.Equal(200, BrokerHarness.StatusOf(await first));
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
+    }
 }

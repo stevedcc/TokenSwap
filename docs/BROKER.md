@@ -114,8 +114,15 @@ router's sealed key has no authValue (it unseals unattended), so an unseal can't
 authorisation. **This stops being true if a PIN (authValue) is ever added to the sealed key:**
 then every failed unlock counts towards a TPM lockout.
 
-The broker limits failed unlocks anyway: after 3 failed unlocks in a row a socket is refused for
-5 minutes, and no more than 30 failed unlocks a minute are tried in total (refusals never count).
+**A hung unlock** (a wedged TPM or `tpm2-tools` call) is abandoned after 30 s: that request gets
+`503` and a log line (`reason=unlock-timeout`), and the next unlock may start. After 3 such
+timeouts in a row `serve` exits non-zero, and the unit's `Restart=on-failure` makes systemd
+start it again. A client that gives up while queued for the unlock is logged too
+(`status=499 reason=client-closed`).
+
+The broker limits unlocks anyway: after 3 failed unlocks in a row a socket is refused for
+5 minutes (only failures count there), and no more than 30 unlock attempts a minute are made in
+total, successful or not, so no client keeps the TPM busy (refusals never count).
 
 **The busy bound:** unlocks are serialised and the TPM takes about 2 s each, so one hostile
 socket can hold 4 of the 8 request slots and keep the TPM busy for its share of the time. The

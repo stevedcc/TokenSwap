@@ -16,6 +16,12 @@ public sealed record BrokerLimits
 
     /// <summary>Open connections in total (Kestrel's MaxConcurrentConnections).</summary>
     public int MaxConnections { get; init; } = 64;
+
+    /// <summary>An unlock taking longer is abandoned: the request gets 503.</summary>
+    public TimeSpan UnlockTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>After this many abandoned unlocks in a row, serve exits non-zero (systemd restarts it).</summary>
+    public int UnlockTimeoutsBeforeExit { get; init; } = 3;
 }
 
 /// <summary>

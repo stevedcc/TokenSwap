@@ -90,14 +90,18 @@ public sealed class BrokerCommand : ICliCommand
         });
 
         server = BrokerServer.StartAsync(options).GetAwaiter().GetResult();
+        Task finished;
         try
         {
-            stop.Task.GetAwaiter().GetResult();
+            finished = Task.WhenAny(stop.Task, server.Fatal).GetAwaiter().GetResult();
         }
         finally
         {
             server.StopAsync().GetAwaiter().GetResult();
         }
+        // Unlocks hanging again and again: exit non-zero so systemd (Restart=on-failure) restarts serve.
+        if (finished == server.Fatal)
+            throw new TswapException($"tswap broker serve stopped: {server.Fatal.Result}");
         return 0;
     }
 

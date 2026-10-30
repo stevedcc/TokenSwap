@@ -71,6 +71,17 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>The request slots (tests watch its queue).</summary>
     internal BrokerLimiter Limiter { get; private init; } = null!;
 
+    /// <summary>The request handler (tests watch its unlock queue).</summary>
+    internal BrokerRequestHandler Handler { get; private init; } = null!;
+
+
+    /// <summary>
+    /// Completes (with the reason) when the broker can't go on, such as unlocks hanging
+    /// <see cref="BrokerLimits.UnlockTimeoutsBeforeExit"/> times in a row: serve then exits non-zero
+    /// so systemd restarts it.
+    /// </summary>
+    public Task<string> Fatal { get; private init; } = null!;
+
     /// <summary>Open connections per socket (tests watch it).</summary>
     internal BrokerConnectionCounter Connections { get; private init; } = null!;
 
@@ -110,8 +121,10 @@ public sealed class BrokerServer : IAsyncDisposable
             forwarder = options.Forwarder;
             var limiter = new BrokerLimiter(options.Limits, options.Time);
             var connections = new BrokerConnectionCounter(options.Limits);
+            var fatal = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var handler = new BrokerRequestHandler(options.Policy, options.Secrets, forwarder,
-                limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time);
+                limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time,
+                options.Limits, reason => fatal.TrySetResult(reason));
 
             var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = "tswap-broker" });
             builder.WebHost.UseKestrelCore();
@@ -139,7 +152,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
-            return new BrokerServer(options, lockFile, app, forwarder, ownsForwarder, paths) { Limiter = limiter, Connections = connections };
+            return new BrokerServer(options, lockFile, app, forwarder, ownsForwarder, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task };
         }
         catch
         {
