@@ -144,6 +144,23 @@ public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBr
             throw new BrokerUnlockException("simulated unlock failure");
         return new BrokerSecret(Encoding.UTF8.GetBytes(_values(secretName)));
     }
+
+    /// <summary>The names each <see cref="ReadMany"/> call asked for (one unlock each).</summary>
+    public List<IReadOnlyCollection<string>> ManyReads { get; } = [];
+
+    public IReadOnlyDictionary<string, BrokerSecret> ReadMany(IReadOnlyCollection<string> secretNames)
+    {
+        var n = Interlocked.Increment(ref _unlocks);
+        lock (ManyReads)
+            ManyReads.Add([.. secretNames]);
+        UnlockStarted?.Invoke(n);
+        Gate?.Task.GetAwaiter().GetResult();
+        if (Throw != null)
+            throw Throw;
+        if (Fail)
+            throw new BrokerUnlockException("simulated unlock failure");
+        return secretNames.ToDictionary(name => name, name => new BrokerSecret(Encoding.UTF8.GetBytes(_values(name))), StringComparer.Ordinal);
+    }
 }
 
 /// <summary>A forwarder for server tests: answers 200 "ok &lt;outbound&gt;" (or what <see cref="Respond"/> says), can block.</summary>

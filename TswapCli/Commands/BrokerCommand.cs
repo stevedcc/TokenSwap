@@ -25,6 +25,7 @@ public sealed class BrokerCommand : ICliCommand
         "Usage:\n" +
         "  tswap broker serve\n" +
         "  tswap broker forward --listen 127.0.0.1:<port> [--socket /run/tswap.sock]\n" +
+        "  tswap broker call <template> [name=value ...] [--socket /run/tswap.sock]   (exit 125: the broker refused or failed)\n" +
         "  sudo tswap broker route add <name> --upstream https://host[/base] --auth bearer|basic|header --secret <secret-name>\n" +
         "        [--user <basic-user>] [--header <header-name>] --path <regex> [--methods GET,HEAD,POST] [--idle-timeout <sec>]\n" +
         "  sudo tswap broker route remove <name>\n" +
@@ -44,6 +45,7 @@ public sealed class BrokerCommand : ICliCommand
         {
             "serve" when args.Length == 1 => Serve(ctx),
             "forward" => Forward(ctx, args[1..]),
+            "call" => Call(ctx, args[1..]),
             "route" when args.Length >= 2 && args[1] == "add" => RouteAdd(ctx, args[2..]),
             "route" when args.Length >= 2 && args[1] == "remove" => RouteRemove(ctx, args[2..]),
             "socket" when args.Length >= 2 && args[1] == "add" => SocketAdd(ctx, args[2..]),
@@ -151,6 +153,71 @@ public sealed class BrokerCommand : ICliCommand
             relay.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
         return 0;
+    }
+
+    // ------------------------------------------------------------------ call
+
+    /// <summary>
+    /// Calls a template on the broker socket (brief T9 decision 5): prints its stdout and stderr and
+    /// exits with its exit code; a broker-side error (refused, unreachable, sandbox unavailable)
+    /// exits 125. Needs no vault.
+    /// </summary>
+    private static int Call(CommandContext ctx, string[] args)
+    {
+        string? socket = null;
+        string? template = null;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--socket" && i + 1 < args.Length && socket is null)
+            {
+                socket = args[++i];
+                continue;
+            }
+            if (template is null)
+            {
+                template = args[i];
+                continue;
+            }
+            var eq = args[i].IndexOf('=');
+            if (eq <= 0 || !values.TryAdd(args[i][..eq], args[i][(eq + 1)..]))
+            {
+                ctx.Console.Error.WriteLine($"tswap broker call: '{BrokerPolicy.Printable(args[i])}' is not name=value (or is given twice).\n{Usage}");
+                return BrokerTemplateClient.BrokerError;
+            }
+        }
+        if (template is null)
+        {
+            ctx.Console.Error.WriteLine(Usage);
+            return BrokerTemplateClient.BrokerError;
+        }
+        var real = ctx.Console is SystemConsole;
+        using var stdout = real ? Console.OpenStandardOutput() : new TextWriterStream(ctx.Console.Out);
+        using var stderr = real ? Console.OpenStandardError() : new TextWriterStream(ctx.Console.Error);
+        return BrokerTemplateClient.CallAsync(socket ?? "/run/tswap.sock", template, values, stdout, stderr, ctx.Console.Error)
+            .GetAwaiter().GetResult();
+    }
+
+    /// <summary>Bytes to a <see cref="TextWriter"/> as UTF-8 text (an in-process console; the real one gets raw bytes).</summary>
+    private sealed class TextWriterStream(TextWriter writer) : Stream
+    {
+        private readonly System.Text.Decoder _decoder = new System.Text.UTF8Encoding(false).GetDecoder();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => writer.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var chars = new char[_decoder.GetCharCount(buffer, offset, count)];
+            _decoder.GetChars(buffer, offset, count, chars, 0);
+            writer.Write(chars);
+        }
     }
 
     // ------------------------------------------------------------------ config edits (sudo)

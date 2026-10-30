@@ -125,7 +125,13 @@ public sealed class BrokerServer : IAsyncDisposable
             var fatal = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var handler = new BrokerRequestHandler(options.Policy, options.Secrets, forwarder,
                 limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time,
-                options.Limits, reason => fatal.TrySetResult(reason));
+                options.Limits, reason => fatal.TrySetResult(reason))
+            {
+                Templates = new Templates.BrokerTemplateRuntime(options.Time),
+            };
+            // Brief T9: bwrap is checked at start; a sandbox that can't run refuses template calls (logged), never runs them bare.
+            if (policy.Templates.Count > 0 && handler.Templates.Sandbox(policy.BwrapPath).Problem is { } sandboxProblem)
+                options.Log.Event($"templates are refused: the sandbox can't run: {sandboxProblem}");
 
             var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = "tswap-broker" });
             builder.WebHost.UseKestrelCore();
