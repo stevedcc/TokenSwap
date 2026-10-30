@@ -92,7 +92,7 @@ internal static class RecordMigration
             if (config.YubiKeySerials.Count == 0)
                 throw new TswapException("This vault's config.json names no YubiKeys; it can't be converted.");
         }
-        if (Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any())
+        if (owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any()))
             throw new TswapException(
                 $"The target folder {vaultDir} is not empty. Pick an empty or new folder with --vault-dir. (To use a vault folder " +
                 $"another machine already shares, run '{ctx.Prefix} init --vault-dir <folder>' or 'slot accept ... --vault-dir <folder>' " +
@@ -149,7 +149,7 @@ internal static class RecordMigration
         }
 
         // Step 3: the temp folder becomes the vault folder.
-        if (Directory.Exists(vaultDir))
+        if (owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir)))
             owner.DeleteDirectory(vaultDir); // empty, checked above
         owner.Move(tempDir, vaultDir);
         ctx.MigrationSeams?.AfterStep?.Invoke(3);
@@ -161,7 +161,7 @@ internal static class RecordMigration
         ctx.MigrationSeams?.AfterStep?.Invoke(4);
 
         // Step 5: only now the classic file goes aside.
-        var secretsBackup = File.Exists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, owner) : null;
+        var secretsBackup = owner.FileExists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, owner) : null;
 
         c.Out.WriteLine($"\n✓ Converted to the record store: {db.Secrets.Count} secret(s), one file each.");
         c.Out.WriteLine($"Vault folder (share this one, never config.json): {vaultDir}");
@@ -183,7 +183,7 @@ internal static class RecordMigration
     /// </summary>
     private static int FinishOrRefuse(CommandContext ctx, RecordVaultStore records, Config config)
     {
-        if (File.Exists(records.SecretsFile))
+        if (records.Owner.FileExists(records.SecretsFile))
         {
             var backup = FileBackup.Move(records.SecretsFile, DateTime.UtcNow, records.Owner);
             ctx.Console.Out.WriteLine(
@@ -195,9 +195,10 @@ internal static class RecordMigration
 
     private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent)
     {
-        if (!Directory.Exists(parent))
-            return;
-        foreach (var stale in Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*"))
+        var stales = owner.AsOwner(parent, () => Directory.Exists(parent)
+            ? Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*")
+            : []);
+        foreach (var stale in stales)
         {
             owner.DeleteDirectory(stale);
             c.Out.WriteLine($"Removed a temp folder left by an interrupted conversion: {stale}");

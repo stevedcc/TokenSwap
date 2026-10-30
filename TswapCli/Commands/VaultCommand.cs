@@ -44,7 +44,7 @@ public sealed class VaultCommand : ICliCommand
         var otherDir = Path.GetFullPath(otherArg);
         if (string.Equals(otherDir.TrimEnd(Path.DirectorySeparatorChar), store.VaultDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal))
             throw new TswapException("That is this vault's own folder; give the folder of the other copy.");
-        if (!Directory.Exists(otherDir))
+        if (!store.Owner.AsOwner(otherDir, () => Directory.Exists(otherDir)))
             throw new TswapException($"Folder not found: {otherDir}");
 
         // The other copy, read only, through a store over the bare folder.

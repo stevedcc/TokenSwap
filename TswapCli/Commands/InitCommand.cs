@@ -341,7 +341,7 @@ public sealed class InitCommand : ICliCommand
                 $"'{ctx.Prefix} init' (or --keyring / --tpm / --secure-enclave), then 'sudo {ctx.Prefix} migrate --to-records --vault-dir {vaultDir}'.");
         var keyring = folderStore.ReadKeyring();
 
-        if (File.Exists(fileStore.ConfigFile))
+        if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Point this machine at the shared folder instead? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -352,7 +352,7 @@ public sealed class InitCommand : ICliCommand
         fileStore.Owner.CreateDirectory(fileStore.ConfigDir);
         fileStore.Owner.WriteAtomic(fileStore.ConfigFile, System.Text.Encoding.UTF8.GetBytes(
             System.Text.Json.JsonSerializer.Serialize(config, TswapJsonContext.Default.Config)));
-        if (File.Exists(fileStore.SecretsFile))
+        if (fileStore.Owner.FileExists(fileStore.SecretsFile))
             c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
 
         var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));

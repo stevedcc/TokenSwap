@@ -37,6 +37,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private Config? _machineConfig;
     private readonly bool _detached;
+    private bool _modesChecked;
     private Hlc _highestSeen = Hlc.Zero;
     private Dictionary<string, LoadedRecord>? _loaded;
     private TextWriter? _warnings;
@@ -157,6 +158,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             _machineConfig = machine;
             return;
         }
+        TightenModes();
         _owner.CreateDirectory(ConfigDir);
         _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(machine, TswapJsonContext.Default.Config)));
     }
@@ -219,6 +221,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             keyring = KeyringUnion.Union(onDisk, keyring, "the keyring to save");
             folded = copies;
         }
+        TightenModes();
         _owner.CreateDirectory(VaultDir);
         _owner.WriteDurable(KeyringFile, KeyringCodec.Encode(keyring));
         RemoveRedundantCopies(folded);
@@ -630,6 +633,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             GenerationGuard.CheckUnchanged(fileName, current?.MainBytes, onDisk);
         }
 
+        TightenModes();
         _owner.CreateDirectory(VaultDir);
         _owner.CreateDirectory(recordsDir);
         var origin = OriginId();
@@ -649,6 +653,45 @@ public sealed class RecordVaultStore : IFileVaultStore
         var machine = MachineConfig with { LastHlc = _highestSeen.ToString() };
         _machineConfig = machine;
         WriteMachineConfig(machine);
+    }
+
+    /// <summary>
+    /// Decision 10 (#194): before this command's first write, narrows the config dir, the vault
+    /// folder and records/ to 0700 and their files (config.json, the keyring, records, conflicted
+    /// copies) to 0600 where they are wider, with one notice naming what changed. Never on a read;
+    /// never through a symlink; Windows: no change.
+    /// </summary>
+    private void TightenModes()
+    {
+        if (_modesChecked || _detached || OperatingSystem.IsWindows())
+            return;
+        _modesChecked = true;
+        var candidates = new List<string> { ConfigDir, ConfigFile };
+        if (_machineConfig?.VaultDir != null)
+        {
+            var vaultDir = VaultDir;
+            var recordsDir = RecordsDir;
+            candidates.Add(vaultDir);
+            candidates.AddRange(_owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) ? Directory.GetFiles(vaultDir) : []));
+            candidates.Add(recordsDir);
+            candidates.AddRange(_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir) ? Directory.GetFiles(recordsDir) : []));
+        }
+        var changed = new List<string>();
+        foreach (var path in candidates)
+        {
+            try
+            {
+                if (_owner.Tighten(path))
+                    changed.Add(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _warnings?.WriteLine($"Warning: could not narrow the permissions of {path} ({ex.Message}).");
+            }
+        }
+        if (changed.Count > 0)
+            _warnings?.WriteLine(
+                $"Notice: tightened permissions (folders 0700, files 0600; they were readable by others) on: {string.Join(", ", changed)}");
     }
 
     private byte[]? TryRead(string path)

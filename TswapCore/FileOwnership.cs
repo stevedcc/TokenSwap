@@ -231,7 +231,10 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         return File.Exists(fullPath);
     }
 
-    /// <summary>Creates <paramref name="path"/> and missing parents, mode 0700 on Unix.</summary>
+    /// <summary>
+    /// Creates <paramref name="path"/> and missing parents, each mode 0700 on Unix whatever the
+    /// umask (brief T6: .NET applies the mode to the last folder only, so each level is made here).
+    /// </summary>
     public void CreateDirectory(string path)
     {
         var fullPath = Path.GetFullPath(path);
@@ -239,9 +242,46 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             return;
         using var _ = AsOwnerOf(fullPath);
         if (OperatingSystem.IsWindows())
+        {
             Directory.CreateDirectory(fullPath);
+            return;
+        }
+        var missing = new Stack<string>();
+        for (var dir = fullPath; dir != null && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir))
+            missing.Push(dir);
+        foreach (var dir in missing)
+        {
+            Directory.CreateDirectory(dir, FolderOwnerOnly);
+            File.SetUnixFileMode(dir, FolderOwnerOnly); // mkdir applies the umask
+        }
+    }
+
+    /// <summary>
+    /// Brief T6 decision 10 (#194): narrows <paramref name="path"/> to 0700 (a folder) or 0600 (a
+    /// regular file) when its mode is wider, as the folder's owner. A symlink is never changed (nor
+    /// followed). Returns true when it changed something. Windows: no change (profile ACLs).
+    /// </summary>
+    public bool Tighten(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return false;
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        var info = new FileInfo(fullPath);
+        if (info.LinkTarget != null)
+            return false;
+        UnixFileMode limit;
+        if (Directory.Exists(fullPath))
+            limit = FolderOwnerOnly;
+        else if (info.Exists)
+            limit = OwnerOnly;
         else
-            Directory.CreateDirectory(fullPath, FolderOwnerOnly);
+            return false;
+        var mode = File.GetUnixFileMode(fullPath);
+        if ((mode & ~limit) == 0)
+            return false;
+        File.SetUnixFileMode(fullPath, mode & limit);
+        return true;
     }
 
     /// <summary>

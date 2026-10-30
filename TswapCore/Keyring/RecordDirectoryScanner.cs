@@ -65,6 +65,10 @@ public static class RecordDirectoryScanner
     // any of the conflict patterns below, not to validate GetRandomFileName precisely.
     private static readonly Regex TswapTempFile = new(@"^[a-z0-9]{8}\.[a-z0-9]{3}$", RegexOptions.None, TimeSpan.FromSeconds(1));
 
+    // Since brief T6 every write goes through DirectoryOwnerMatcher, whose in-flight temp file is
+    // "<target>.<12 hex>.tmp" (DurableFileWriter is built on it too). Not a record, not a conflict.
+    private static readonly Regex MatcherTempFile = new(@"^.+\.[0-9A-F]{12}\.tmp$", RegexOptions.None, TimeSpan.FromSeconds(1));
+
     // Dropbox / Google Drive: "<name> (conflicted copy 2026-07-27)" or a bare duplicate suffix
     // "<name> (1)". Both insert a space before the parenthesised suffix.
     private static readonly Regex DropboxGoogleDriveConflictedCopy =
@@ -170,7 +174,7 @@ public static class RecordDirectoryScanner
                 return true;
         }
 
-        return TswapTempFile.IsMatch(filename);
+        return TswapTempFile.IsMatch(filename) || MatcherTempFile.IsMatch(filename);
     }
 
     /// <summary>
