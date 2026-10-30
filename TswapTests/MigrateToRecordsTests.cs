@@ -231,6 +231,10 @@ public sealed class MigrateToRecordsTests : IDisposable
                 // (the folder is not empty), and the classic vault keeps working.
                 Assert.NotEqual(0, rerun.Exit);
                 Assert.Contains("not empty", rerun.Err);
+                // Fix round 3, item 4: the refusal says what is there and what to do.
+                Assert.Contains("this vault's own converted copy", rerun.Err);
+                Assert.Contains("classic vault is intact", rerun.Err);
+                Assert.Contains("init --vault-dir", rerun.Err);
                 Assert.Null(_m.Config.Store);
                 break;
             case 4:
@@ -264,6 +268,35 @@ public sealed class MigrateToRecordsTests : IDisposable
         _m.MigrationSeams = null;
         _keys.PluggedIn = [SerialA];
         Assert.Equal(secrets["secret-05"].Value, _m.Get("secret-05"));
+    }
+
+    [Fact]
+    public void ATargetAppearingBetweenTheEmptyCheckAndTheRename_IsRefusedCleanly()
+    {
+        // Fix round 3, item 4: an IOException from the rename is a clean refusal, and the temp
+        // folder is removed (so a re-run isn't blamed on "another migration").
+        var (_, secrets) = PlainVaultWithFiftySecrets();
+        var before = File.ReadAllBytes(_m.ConfigPath);
+        var planted = Path.Combine(DefaultVaultDir, "someone-elses-file");
+        _m.MigrationSeams = new RecordMigrationSeams
+        {
+            BeforeRename = () =>
+            {
+                Directory.CreateDirectory(DefaultVaultDir);
+                File.WriteAllText(planted, "keep me");
+            },
+        };
+
+        var (exit, _, err) = _m.Run("1\n", "migrate", "--to-records");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("not empty", err);
+        Assert.Equal("keep me", File.ReadAllText(planted));
+        Assert.Empty(TempFolders);
+        Assert.Equal(before, File.ReadAllBytes(_m.ConfigPath));
+        _m.MigrationSeams = null;
+        _keys.PluggedIn = [SerialA];
+        Assert.Equal(secrets["secret-09"].Value, _m.Get("secret-09"));
     }
 
     [Fact]

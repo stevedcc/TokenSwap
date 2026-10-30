@@ -18,6 +18,9 @@ public sealed class RecordMigrationSeams
 
     /// <summary>Called just before step 3 (the rename) with the step number (fix round 1, A2).</summary>
     public Action<int>? BeforeStep { get; init; }
+
+    /// <summary>Called between the target re-check and the rename itself (fix round 3, item 4).</summary>
+    public Action? BeforeRename { get; init; }
 }
 
 /// <summary>
@@ -96,11 +99,22 @@ internal static class RecordMigration
                 throw new TswapException("This vault's config.json names no YubiKeys; it can't be converted.");
         }
         if (owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any()))
+        {
+            // Fix round 3, item 4: a crash between step 3 (rename) and step 4 (config switch) leaves
+            // this vault's own converted copy there while config.json still names the classic store.
+            if (LooksLikeOwnConvertedCopy(owner, vaultDir, config))
+                throw new TswapException(
+                    $"The target folder {vaultDir} is not empty: it holds this vault's own converted copy, left by an earlier " +
+                    "run that was interrupted before it switched config.json. Your classic vault is intact and still in use. " +
+                    $"Either remove that folder and run this again, or, if you want to keep that copy, point this machine at it " +
+                    $"with '{ctx.Prefix} init --vault-dir {vaultDir}' (changes made to the classic vault since the interrupted run " +
+                    "are not in it).");
             throw new TswapException(
                 $"The target folder {vaultDir} is not empty. Pick an empty or new folder with --vault-dir. (To use a vault folder " +
                 $"another machine already shares, run '{ctx.Prefix} init --vault-dir <folder>' or 'slot accept ... --vault-dir <folder>' " +
                 "instead. If the folder is left over from an interrupted conversion and this vault still opens classically, " +
                 "remove the folder and run this again.)");
+        }
 
         RemoveStaleTempFolders(c, owner, vaultDir, parent);
 
@@ -180,7 +194,19 @@ internal static class RecordMigration
                 $"The target folder {vaultDir} is not empty any more (something was put there while converting). Nothing was " +
                 "changed; the temp folder was removed. Pick an empty folder and run this again.");
         }
-        owner.Move(tempDir, vaultDir);
+        ctx.MigrationSeams?.BeforeRename?.Invoke();
+        try
+        {
+            owner.Move(tempDir, vaultDir);
+        }
+        catch (IOException)
+        {
+            // Fix round 3, item 4: the target appeared between the check and the rename.
+            owner.DeleteDirectory(tempDir);
+            throw new TswapException(
+                $"The target folder {vaultDir} is not empty any more (something was put there while converting). Nothing was " +
+                "changed; the temp folder was removed. Pick an empty folder and run this again.");
+        }
         ctx.MigrationSeams?.AfterStep?.Invoke(3);
 
         // Step 4: config.json names the record store (its keyring now lives in the vault folder).
@@ -219,6 +245,32 @@ internal static class RecordMigration
             return 0;
         }
         throw new TswapException($"This vault is already a record store (vault folder: {config.VaultDir}). Nothing to convert.");
+    }
+
+    /// <summary>
+    /// Fix round 3, item 4: true when <paramref name="vaultDir"/>'s keyring looks like this vault
+    /// converted: a keyring vault's own vault id, or (a plain XOR vault, whose conversion mints a new
+    /// vault id) one YubiKey slot for each of this vault's serials plus a recovery slot.
+    /// </summary>
+    private static bool LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher owner, string vaultDir, Config config)
+    {
+        try
+        {
+            var keyringPath = Path.Combine(vaultDir, RecordVaultStore.KeyringFileName);
+            if (!owner.FileExists(keyringPath))
+                return false;
+            var there = KeyringCodec.Decode(owner.ReadAllBytes(keyringPath));
+            if (config.Keyring != null)
+                return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId);
+            var serials = there.Slots.Where(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
+                .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial).Order().ToList();
+            return serials.Count > 0 && serials.SequenceEqual(config.YubiKeySerials.Distinct().Order())
+                && there.Slots.Any(s => s.Kind == SlotKind.Recovery);
+        }
+        catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent)
