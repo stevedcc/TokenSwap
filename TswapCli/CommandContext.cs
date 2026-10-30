@@ -50,6 +50,18 @@ public sealed record CommandContext(
     public int SelectSerial(int? requiredSerial = null)
         => Unlocker.SelectConnectedSerial(ChooseSerial, requiredSerial);
 
+    /// <summary>
+    /// Picks one of <paramref name="serials"/>: the only one directly, else the prompt. Throws
+    /// <see cref="TswapException"/> for an empty list. Used where only some of the plugged-in keys
+    /// qualify (brief T4: enrolling a key that has no slot yet).
+    /// </summary>
+    public int ChooseSerialAmong(IReadOnlyList<int> serials)
+    {
+        if (serials.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
+        return serials.Count == 1 ? serials[0] : ChooseSerial(serials);
+    }
+
     private int ChooseSerial(IReadOnlyList<int> serials)
     {
         Console.Out.WriteLine("\nMultiple YubiKeys detected:");
