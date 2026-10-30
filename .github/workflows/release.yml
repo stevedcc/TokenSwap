@@ -16,10 +16,10 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
 
-      # The same unit tests as ci.yml's Linux leg (E2E needs a published binary and the hardware
-      # categories need real devices, so they are left out here as there).
+      # The unit tests ci.yml runs (its Linux leg also runs E2E against a Debug AOT binary; the
+      # hardware categories need real devices). The build legs below smoke-test each shipped binary.
       - name: Install bubblewrap (sandbox tests)
         run: |
           sudo apt-get update
@@ -27,6 +27,7 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+          bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
       - name: Test
         env:
@@ -62,7 +63,7 @@ jobs:
           - rid: linux-x64
             os: ubuntu-latest
           - rid: linux-arm64
-            os: ubuntu-22.04-arm
+            os: ubuntu-24.04-arm
           - rid: osx-arm64
             os: macos-latest
           - rid: win-x64
@@ -75,7 +76,7 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
 
       - name: Install native build tools (Linux)
         if: runner.os == 'Linux'
@@ -90,11 +91,21 @@ jobs:
           --runtime ${{ matrix.rid }}
           --output ./publish/${{ matrix.rid }}
 
+      # Run the shipped (Release, NativeAOT) binary once on its own platform: a command that needs
+      # no vault, so a binary that doesn't start fails the release here.
+      - name: Smoke test the published binary
+        shell: bash
+        run: |
+          bin=./publish/${{ matrix.rid }}/tswap
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          "$bin" prompt-hash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tswap-${{ matrix.rid }}
           path: ./publish/${{ matrix.rid }}/
+          if-no-files-found: error
 
   release:
     name: Create Release
@@ -131,6 +142,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             artifacts/tswap-linux-x64.tar.gz
             artifacts/tswap-linux-arm64.tar.gz
