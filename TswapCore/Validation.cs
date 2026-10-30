@@ -92,7 +92,13 @@ public static class Validation
     }
 
     /// <summary>A refused <c>run</c> command line: the program and why.</summary>
-    public sealed record BlockedInvocation(string Program, string Reason);
+    public sealed record BlockedInvocation(string Program, string Reason)
+    {
+        /// <summary>Refused only because no script file was named (code would come from stdin).
+        /// Inside a wrapper such a bare name is usually an argument value (docker pull python),
+        /// so the wrapper scan ignores it.</summary>
+        public bool NoScriptOnly { get; init; }
+    }
 
     // Issue #105: a shell or interpreter given inline code can transform a substituted secret
     // (split, reverse, encode) before printing it, which run's output redaction can't recognise.
@@ -108,8 +114,13 @@ public static class Validation
     //   ValuedLong: long options whose value is the next argument (--rcfile rc).
     //   EndsOptions: an option that ends option parsing like a script does (python -m module).
     //   Plus:       '+' options exist (bash +o posix).
+    //   AttachedOnly: letters whose (optional) value can only be attached (julia -O3, perl -xdir):
+    //               the rest of the cluster is the value, never the next argument.
+    //   ScriptOption: a letter whose value is the script file (expect -f script.exp), checked
+    //               like a script name (stdin is refused).
     private sealed record InterpreterSyntax(string Inline, string[] InlineLong, string Valued,
-        string[] ValuedLong, string? EndsOptions = null, bool Plus = false);
+        string[] ValuedLong, string? EndsOptions = null, bool Plus = false, string AttachedOnly = "",
+        string ScriptOption = "");
 
     private static readonly InterpreterSyntax ShellSyntax = new("cs", [], "oO", ["--rcfile", "--init-file"], Plus: true);
 
@@ -119,17 +130,19 @@ public static class Validation
         ["ksh"] = ShellSyntax, ["mksh"] = ShellSyntax, ["ash"] = ShellSyntax, ["tcsh"] = ShellSyntax,
         ["csh"] = ShellSyntax,
         ["fish"] = ShellSyntax with { InlineLong = ["--command"] },
-        ["perl"] = new("eE", [], "IMmx", []),
+        ["perl"] = new("eE", [], "IMm", [], AttachedOnly: "x"),
         ["ruby"] = new("e", [], "IrCE", []),
         ["node"] = new("ep", ["--eval", "--print"], "rC", ["--require", "--import", "--loader", "--conditions"]),
         ["nodejs"] = new("ep", ["--eval", "--print"], "rC", ["--require", "--import", "--loader", "--conditions"]),
         ["bun"] = new("ep", ["--eval", "--print"], "r", ["--preload", "--cwd", "--config"]),
         ["php"] = new("rBRE", [], "cdzt", []),
         ["lua"] = new("e", [], "l", []),
-        ["julia"] = new("eE", ["--eval", "--print"], "JLOp", ["--project", "--sysimage", "--load"]),
+        ["julia"] = new("eE", ["--eval", "--print"], "JLtpC",
+            ["--sysimage", "--load", "--threads", "--procs", "--cpu-target", "--machine-file", "--gcthreads"],
+            AttachedOnly: "Og"),
         ["rscript"] = new("e", [], "", []),
         ["osascript"] = new("e", [], "ls", []),
-        ["expect"] = new("c", [], "f", []),
+        ["expect"] = new("c", [], "", [], ScriptOption: "f"),
         ["tclsh"] = new("", [], "", []),
         ["wish"] = new("", [], "", []),
         ["jshell"] = new("", [], "", []),
@@ -155,8 +168,12 @@ public static class Validation
           "ionice", "chrt", "taskset", "flock", "unbuffer", "exec", "strace", "ltrace", "valgrind",
           "xvfb-run", "dbus-run-session", "systemd-run", "firejail", "bwrap", "unshare", "nsenter",
           "chroot", "caffeinate", "uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "conda", "pixi",
-          "npx", "pnpx", "bunx", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl", "kubectl",
-          "oc" };
+          "npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bundle", "docker", "podman", "nerdctl",
+          "kubectl", "oc", "lxc", "incus", "flatpak", "snap", "machinectl", "toolbox", "distrobox" };
+
+    // Run their -c/--command argument through the target user's shell.
+    private static readonly HashSet<string> ShellAsUser = new(StringComparer.OrdinalIgnoreCase)
+        { "su", "runuser" };
 
     // ssh options that take a value; a non-option argument after the host is a remote command.
     private const string SshValued = "BbcDEeFIiJLlmOoPpQRSWw";
@@ -196,6 +213,23 @@ public static class Validation
                 if (!IsCheckedProgram(ProgramName(args[i])))
                     continue;
                 var inner = GetBlockedInvocation(args.Skip(i).ToList());
+                if (inner != null && !inner.NoScriptOnly)
+                    return inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
+            }
+            return null;
+        }
+
+        if (ShellAsUser.Contains(program))
+        {
+            // su/runuser -c runs shell code; runuser -u user -- cmd runs cmd (checked like a wrapper).
+            var command = args.FirstOrDefault(a => a == "-c" || a == "--command" || a.StartsWith("--command=", StringComparison.Ordinal)
+                || (a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Contains('c')));
+            if (command != null)
+                return new(program, InlineReason(program, command));
+            var dashDash = args.IndexOf("--");
+            if (dashDash >= 0 && dashDash + 1 < args.Count)
+            {
+                var inner = GetBlockedInvocation(args.Skip(dashDash + 1).ToList());
                 if (inner != null)
                     return inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
             }
@@ -209,7 +243,19 @@ public static class Validation
         {
             // Program text from a file (-f) is allowed; inline program text or -e/--source isn't.
             var inlineSource = args.Any(a => a == "-e" || a.StartsWith("--source", StringComparison.Ordinal));
-            var fromFile = args.Any(a => a == "-f" || a.StartsWith("--file", StringComparison.Ordinal) || (a.StartsWith("-f", StringComparison.Ordinal) && a.Length > 2));
+            var programFiles = new List<string>();
+            for (var i = 0; i < args.Count; i++)
+            {
+                if ((args[i] == "-f" || args[i] == "--file") && i + 1 < args.Count)
+                    programFiles.Add(args[i + 1]);
+                else if (args[i].StartsWith("--file=", StringComparison.Ordinal))
+                    programFiles.Add(args[i]["--file=".Length..]);
+                else if (args[i].StartsWith("-f", StringComparison.Ordinal) && args[i].Length > 2 && !args[i].StartsWith("--", StringComparison.Ordinal))
+                    programFiles.Add(args[i][2..]);
+            }
+            if (programFiles.Any(StdinScripts.Contains))
+                return new(program, $"'{program} -f -' reads its program from stdin, which can transform and print secrets past redaction. Put the program in a file.");
+            var fromFile = programFiles.Count > 0;
             return fromFile && !inlineSource ? null
                 : new(program, $"'{program}' with an inline program can transform and print secrets past redaction. Put the program in a file and use '{program} -f prog.awk'.");
         }
@@ -327,6 +373,16 @@ public static class Validation
                         return null; // e.g. python -m module: the module is the script
                     if (syntax.Inline.Contains(letter) && arg[0] == '-')
                         return new(program, InlineReason(program, arg));
+                    if (syntax.ScriptOption.Contains(letter))
+                    {
+                        // The value is the script file: attached, or the next argument.
+                        var script = j < arg.Length - 1 ? arg[(j + 1)..] : (i + 1 < args.Count ? args[i + 1] : "");
+                        return StdinScripts.Contains(script) || script.Length == 0
+                            ? new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
+                            : null;
+                    }
+                    if (syntax.AttachedOnly.Contains(letter))
+                        break; // any rest of the cluster is its value; never the next argument
                     if (syntax.Valued.Contains(letter))
                     {
                         if (j == arg.Length - 1)
@@ -338,7 +394,8 @@ public static class Validation
             }
             return null; // the script file
         }
-        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
+        return new(program, $"'{program}' with no script file reads code from stdin, which can transform and print secrets past redaction. {WayOut}")
+            { NoScriptOnly = true };
     }
 
     private static string InlineReason(string program, string flag) =>
@@ -346,7 +403,7 @@ public static class Validation
 
     private static bool IsCheckedProgram(string name) =>
         BlockedCommands.Contains(name) || PythonName.IsMatch(name) || Interpreters.ContainsKey(name)
-        || CodeRunners.Contains(name) || AwkNames.Contains(name) || Wrappers.Contains(name)
+        || CodeRunners.Contains(name) || AwkNames.Contains(name) || Wrappers.Contains(name) || ShellAsUser.Contains(name)
         || name.Equals("find", StringComparison.OrdinalIgnoreCase) || name.Equals("ssh", StringComparison.OrdinalIgnoreCase)
         || name.Equals("deno", StringComparison.OrdinalIgnoreCase) || name.Equals("cmd", StringComparison.OrdinalIgnoreCase)
         || name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase);

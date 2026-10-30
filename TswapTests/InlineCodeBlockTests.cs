@@ -90,6 +90,23 @@ public class InlineCodeBlockTests
     [InlineData("pwsh", "-EncodedC", "ZQBjAGgAbwA=", "{{x}}")]
     [InlineData("awk", "BEGIN { print }", "{{x}}")]
     [InlineData("find", ".", "-exec", "sh", "-c", "echo {{x}}", ";")]
+    // Review round 2 (GLM): optional attached values, stdin programs, more wrappers.
+    [InlineData("julia", "-O", "-e", "println(\"{{x}}\")")]
+    [InlineData("julia", "-t", "4", "-e", "println(\"{{x}}\")")]
+    [InlineData("julia", "--threads", "4", "-e", "println(\"{{x}}\")")]
+    [InlineData("julia", "--procs", "4", "-e", "println(\"{{x}}\")")]
+    [InlineData("julia", "-C", "native", "-e", "println(\"{{x}}\")")]
+    [InlineData("perl", "-x", "-e", "print 1", "{{x}}")]
+    [InlineData("awk", "-f", "-", "{{x}}")]
+    [InlineData("awk", "-f", "/dev/stdin", "{{x}}")]
+    [InlineData("gawk", "--file=-", "{{x}}")]
+    [InlineData("expect", "-f", "-", "{{x}}")]
+    [InlineData("su", "root", "-c", "v={{x}}; echo ${v:0:8}")]
+    [InlineData("runuser", "-u", "app", "--", "sh", "-c", "echo {{x}}")]
+    [InlineData("npm", "exec", "--", "sh", "-c", "echo {{x}}")]
+    [InlineData("incus", "exec", "c1", "--", "sh", "-c", "echo {{x}}")]
+    [InlineData("flatpak", "run", "org.x", "sh", "-c", "echo {{x}}")]
+    [InlineData("machinectl", "shell", "m", "/bin/sh", "-c", "echo {{x}}")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -131,6 +148,18 @@ public class InlineCodeBlockTests
     [InlineData("pwsh", "-ConfigurationName", "x", "-File", "deploy.ps1", "{{x}}")]
     [InlineData("deno", "run", "app.ts", "{{x}}")]
     [InlineData("julia", "script.jl", "{{x}}")]
+    // Review round 2 (GLM): a bare interpreter name as a wrapper's argument value is not a
+    // wrapped command; an option whose value is the script file names the script.
+    [InlineData("docker", "pull", "python", "{{x}}")]
+    [InlineData("sudo", "apt", "install", "python3", "--auth", "{{x}}")]
+    [InlineData("command", "-v", "bash", "{{x}}")]
+    [InlineData("conda", "install", "python", "--token", "{{x}}")]
+    [InlineData("expect", "-f", "script.exp", "{{x}}")]
+    [InlineData("julia", "-O3", "script.jl", "{{x}}")]
+    [InlineData("julia", "-t", "4", "script.jl", "{{x}}")]
+    [InlineData("perl", "-x", "tool.pl", "{{x}}")]
+    [InlineData("npm", "run", "deploy", "--", "--token", "{{x}}")]
+    [InlineData("su", "-", "app")] // login shell, no -c
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]
