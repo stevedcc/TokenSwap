@@ -21,6 +21,11 @@ namespace TswapCore.Vault;
 /// <para>It proves plumbing (dispatch, config shape, slot construction, round trips, error
 /// paths), never the hardware root-of-trust property; that is what the trait-gated hardware
 /// suites and the real-hardware verification are for.</para>
+///
+/// <para>Brief T11 decision 5: the presence choice it was constructed with is appended to the blob
+/// as one flag byte (<c>1</c> presence required, <c>0</c> none), so tests read what reached the
+/// backend from the saved slot blob. This blob format is test-only. <see cref="Unlock"/> accepts
+/// the old length (read as presence) and the new one; it doesn't enforce the flag.</para>
 /// </summary>
 public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
 {
@@ -29,13 +34,21 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     private static readonly int TagSize = AesGcm.TagByteSizes.MaxSize;
 
     private readonly byte[] _machineKey;
+    private readonly bool _requirePresence;
 
-    public SimulatedHardwareService(HardwareBackend backend, byte[] machineKey)
+    /// <param name="requirePresence">
+    /// Brief T11: false only for a Secure Enclave enrolled with <c>--no-touch</c>; any other backend
+    /// without presence throws, as <c>HardwareServices.Enrollment</c> does.
+    /// </param>
+    public SimulatedHardwareService(HardwareBackend backend, byte[] machineKey, bool requirePresence = true)
     {
         if (machineKey.Length != KeySize)
             throw new ArgumentException($"The simulated machine key must be {KeySize} bytes", nameof(machineKey));
+        if (!requirePresence && backend != HardwareBackend.SecureEnclave)
+            throw new ArgumentException($"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName()}'", nameof(requirePresence));
         Backend = backend;
         _machineKey = (byte[])machineKey.Clone();
+        _requirePresence = requirePresence;
     }
 
     public HardwareBackend Backend { get; }
@@ -47,11 +60,12 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     {
         var kekSlot = RandomNumberGenerator.GetBytes(KeySize);
 
-        var blob = new byte[NonceSize + TagSize + kekSlot.Length];
+        var blob = new byte[NonceSize + TagSize + kekSlot.Length + 1];
         var nonce = blob.AsSpan(0, NonceSize);
         RandomNumberGenerator.Fill(nonce);
         using var aes = new AesGcm(_machineKey, TagSize);
-        aes.Encrypt(nonce, kekSlot, blob.AsSpan(NonceSize + TagSize), blob.AsSpan(NonceSize, TagSize));
+        aes.Encrypt(nonce, kekSlot, blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize));
+        blob[^1] = _requirePresence ? (byte)1 : (byte)0; // the test seam (brief T11 decision 5)
 
         return new HardwareEnrollment(kekSlot, blob);
     }
@@ -65,7 +79,9 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         _ = chooseSerial;
         var blob = HardwareBlobLocator.Read(config, Backend);
 
-        if (blob.Length != NonceSize + TagSize + KeySize)
+        // The old length (no flag byte, read as presence) or the new one with a flag of 0 or 1.
+        var sealedLength = NonceSize + TagSize + KeySize;
+        if (!(blob.Length == sealedLength || (blob.Length == sealedLength + 1 && blob[^1] is 0 or 1)))
             throw new TswapException(
                 $"Config is corrupted: the simulated '{Backend.DisplayName()}' blob has the wrong length. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
@@ -74,7 +90,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         using var aes = new AesGcm(_machineKey, TagSize);
         try
         {
-            aes.Decrypt(blob.AsSpan(0, NonceSize), blob.AsSpan(NonceSize + TagSize), blob.AsSpan(NonceSize, TagSize), kekSlot);
+            aes.Decrypt(blob.AsSpan(0, NonceSize), blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize), kekSlot);
         }
         catch (CryptographicException)
         {

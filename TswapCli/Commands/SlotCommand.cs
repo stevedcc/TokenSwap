@@ -39,8 +39,8 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request [--tpm|--secure-enclave] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot";
+    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot; slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -77,7 +77,7 @@ public sealed class SlotCommand : ICliCommand
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request [--tpm|--secure-enclave] <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --yubikey";
+        $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
@@ -100,7 +100,9 @@ public sealed class SlotCommand : ICliCommand
         // Brief T5 decision 2: --tpm / --secure-enclave enroll this machine's own hardware
         // instead of a YubiKey (no flag: the one-YubiKey request, unchanged). Checked before any
         // prompt, hardware or write.
-        var usage = $"{ctx.Prefix} slot request [--tpm|--secure-enclave] <file> (--tpm and --secure-enclave are mutually exclusive)";
+        // Brief T11: --secure-enclave needs --with-touch or --no-touch, taken out (and checked) first.
+        var usage = $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> (--tpm and --secure-enclave are mutually exclusive)";
+        (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         var flags = args.Where(a => a.StartsWith("--")).ToArray();
         var positional = args.Where(a => !a.StartsWith("--")).ToArray();
         if (positional.Length != 1 || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
@@ -112,8 +114,10 @@ public sealed class SlotCommand : ICliCommand
             ["--secure-enclave"] => HardwareBackend.SecureEnclave,
             _ => null,
         };
+        // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
+        SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
         if (hardware != null)
-            return ExecuteHardwareRequest(ctx, hardware.Value, path);
+            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true);
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
@@ -194,11 +198,11 @@ public sealed class SlotCommand : ICliCommand
     /// blob in the request file. <c>KEK_slot</c> itself is zeroed: <c>slot accept</c> recovers it
     /// from the blob. No YubiKey is touched.
     /// </summary>
-    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path)
+    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path, bool requirePresence)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
-        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey);
+        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, requirePresence);
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;
@@ -227,9 +231,10 @@ public sealed class SlotCommand : ICliCommand
             YubiKeySerials: [],
             RedundancyXor: "",
             Created: DateTime.UtcNow,
-            // As init --tpm/--secure-enclave: the Secure Enclave key always requires presence; a
-            // TPM key here has no PIN/PCR policy (#133).
-            RequiresTouch: backend == HardwareBackend.SecureEnclave,
+            // As init --tpm/--secure-enclave (brief T11 decision 6): the Secure Enclave key requires
+            // presence unless --no-touch; a TPM key here has no PIN/PCR policy (#133). 'slot accept'
+            // carries this through to the final config.
+            RequiresTouch: backend == HardwareBackend.SecureEnclave && requirePresence,
             RngMode: RngMode.System,
             Backend: backend,
             PendingSlotId: Convert.ToBase64String(slotId),
@@ -249,6 +254,13 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"Backend: {hardware}");
+        if (backend == HardwareBackend.SecureEnclave)
+        {
+            c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
+            // Known gap (HARDWARE_BACKENDS.md): the request file doesn't carry the posture.
+            if (!requirePresence)
+                c.Out.WriteLine("The approving machine can't see that this slot needs no presence: tell whoever approves it.");
+        }
         PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
         c.Out.WriteLine($"\nRequest file written to: {path}");
         c.Out.WriteLine("Move this file to an already-enrolled machine yourself (scp/USB/paste) —");
@@ -657,8 +669,13 @@ public sealed class SlotCommand : ICliCommand
     private static int ExecuteAdd(CommandContext ctx, string[] args)
     {
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        // Brief T11: slot add creates no Secure Enclave key; a touch choice here is refused with
+        // where it belongs, never ignored.
+        var addUsage = $"{ctx.Prefix} slot add --yubikey [{RecoveryKeyFlag}]";
+        if (positional.Any(SecureEnclaveTouchChoice.IsSecureEnclaveFlag))
+            throw new UsageException($"{addUsage}\n{SecureEnclaveTouchChoice.NotForSlotAdd}");
         if (positional is not ["--yubikey"])
-            throw new UsageException($"{ctx.Prefix} slot add --yubikey [{RecoveryKeyFlag}]");
+            throw new UsageException(addUsage);
         var c = ctx.Console;
 
         // The keyring's version is readable from config.json without K_v (config is not secret):

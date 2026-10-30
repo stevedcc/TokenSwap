@@ -180,7 +180,10 @@ public sealed class SlotsCommand : ICliCommand
         // Brief T2: TPM and Secure Enclave keyring vaults exist now; describe their machine slot
         // by its real hardware instead of as a YubiKey. (Presence detail per slot is #158.)
         (HardwareBackend.Tpm, _) => "TPM, sealed to this machine's TPM",
-        (HardwareBackend.SecureEnclave, _) => "Secure Enclave, presence required",
+        // Brief T11: a --no-touch Secure Enclave slot records RequiresTouch = false.
+        // The words match the enrolment flags (--with-touch / --no-touch).
+        (HardwareBackend.SecureEnclave, false) => "Secure Enclave, no touch required",
+        (HardwareBackend.SecureEnclave, _) => "Secure Enclave, touch required (Touch ID or password)",
         (_, var touch) => DescribeYubiKeyProtection(touch),
     };
 

@@ -8,8 +8,8 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => "init [--keyring] [--tpm|--secure-enclave] [--no-recovery] | init --vault-dir <shared folder>";
-    public string Description => "Initialize with 2 YubiKeys; --keyring for a keyring vault with one YubiKey slot (add keys with 'slot add --yubikey'); --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware. Keyring vaults get a recovery slot; --no-recovery opts out";
+    public string HelpUsage => $"init [--keyring] [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] | init --vault-dir <shared folder>";
+    public string Description => "Initialize with 2 YubiKeys; --keyring for a keyring vault with one YubiKey slot (add keys with 'slot add --yubikey'); --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware; --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). Keyring vaults get a recovery slot; --no-recovery opts out";
     public bool RequiresSudo => false;
 
     /// <summary>The only arguments <c>init</c> accepts, each at most once (#177).</summary>
@@ -27,18 +27,14 @@ public sealed class InitCommand : ICliCommand
             return ExecuteJoin(ctx, folder);
         }
 
-        // A record-store machine's config points at a shared vault folder; a new init here would
-        // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
-        if (ctx.Storage is RecordVaultStore shared)
-            throw new TswapException(
-                $"This machine's {shared.ConfigFile} belongs to a shared record-store vault ({shared.LoadConfig().VaultDir}). To set up " +
-                "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
-
         // Issue #177: the argument list must be exactly a combination of the known flags. Checked
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
-        // 'init --tmp' never falls through to a YubiKey initialisation.
-        var usage = $"{ctx.Prefix} init [--keyring] [--tpm|--secure-enclave] [--no-recovery] " +
-                    $"(valid flags: {string.Join(", ", KnownFlags)}; --tpm and --secure-enclave are mutually exclusive)";
+        // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
+        // needs --with-touch or --no-touch, taken out (and checked) first.
+        var usage = $"{ctx.Prefix} init [--keyring] [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}, {SecureEnclaveTouchChoice.WithTouch}, {SecureEnclaveTouchChoice.NoTouch}; " +
+                    "--tpm and --secure-enclave are mutually exclusive)";
+        (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         if (args.Any(a => !KnownFlags.Contains(a)) || args.Distinct().Count() != args.Length)
             throw new UsageException(usage);
 
@@ -55,6 +51,16 @@ public sealed class InitCommand : ICliCommand
         // rather than silently ignoring it.
         if (noRecovery && !(keyring || tpm || secureEnclave))
             throw new UsageException($"{ctx.Prefix} init --no-recovery requires --keyring, --tpm or --secure-enclave");
+
+        // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
+        SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
+
+        // A record-store machine's config points at a shared vault folder; a new init here would
+        // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
+        if (ctx.Storage is RecordVaultStore shared)
+            throw new TswapException(
+                $"This machine's {shared.ConfigFile} belongs to a shared record-store vault ({shared.LoadConfig().VaultDir}). To set up " +
+                "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
 
         // Detecting an existing config to prompt about reinitializing (and, further
         // down, backing it up before overwriting) is inherently file-store-specific;
@@ -73,7 +79,7 @@ public sealed class InitCommand : ICliCommand
         // creates the old single-slot TPM/Secure Enclave form any more; existing single-slot
         // vaults still unlock unchanged (VaultUnlocker reads their single-slot field).
         if (secureEnclave)
-            return ExecuteHardwareKeyring(ctx, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery);
+            return ExecuteHardwareKeyring(ctx, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, requirePresence: requirePresence!.Value);
 
         if (tpm)
             return ExecuteHardwareKeyring(ctx, HardwareBackend.Tpm, includeRecovery: !noRecovery);
@@ -522,11 +528,11 @@ public sealed class InitCommand : ICliCommand
     /// <para>The TPM backends are verified against swtpm (Linux) and a VM's virtual TPM
     /// (Windows) and an Intel PTT (#155); see <c>HARDWARE_BACKENDS.md</c>.</para>
     /// </summary>
-    private static int ExecuteHardwareKeyring(CommandContext ctx, HardwareBackend backend, bool includeRecovery)
+    private static int ExecuteHardwareKeyring(CommandContext ctx, HardwareBackend backend, bool includeRecovery, bool requirePresence = true)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
-        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey);
+        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, requirePresence);
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
@@ -538,7 +544,9 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("slot (k = 1). Other machines can join later with 'slot request/approve/accept'.\n");
         c.Out.WriteLine(backend == HardwareBackend.Tpm
             ? "Sealing a new key to this machine's TPM..."
-            : "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)...");
+            : requirePresence
+                ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
+                : "Creating a Secure Enclave key with no presence requirement (--no-touch)...");
 
         var (kekSlot, hwBlob) = enrollment.Enroll();
 
@@ -550,9 +558,9 @@ public sealed class InitCommand : ICliCommand
             YubiKeySerials: [],
             RedundancyXor: "",
             Created: DateTime.UtcNow,
-            // The Secure Enclave key always requires presence to unwrap; a TPM key here has no
-            // PIN/PCR policy (#133).
-            RequiresTouch: backend == HardwareBackend.SecureEnclave,
+            // Brief T11 decision 6: the Secure Enclave key requires presence unless --no-touch (the
+            // only record of the key's policy); a TPM key here has no PIN/PCR policy (#133).
+            RequiresTouch: backend == HardwareBackend.SecureEnclave && requirePresence,
             RngMode: RngMode.System,
             Backend: backend);
 
@@ -584,6 +592,8 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine(includeRecovery
             ? $"Backend: {hardware} keyring (k = 1, 2 slots: machine + recovery)"
             : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
+        if (backend == HardwareBackend.SecureEnclave)
+            c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
         if (fileStore != null)
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");

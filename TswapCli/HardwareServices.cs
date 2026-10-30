@@ -61,16 +61,23 @@ internal static class HardwareServices
     /// The enrollment service for <paramref name="backend"/> (<c>init --tpm</c> /
     /// <c>--secure-enclave</c>): simulated in test mode, else the real one for this OS. Throws
     /// <see cref="TswapException"/> when this OS has no such hardware.
+    /// <paramref name="requirePresence"/> (brief T11) is false only for a Secure Enclave enrolled
+    /// with <c>--no-touch</c>; it defaults to presence required, so a caller that forgets it gets
+    /// the safe key, and any other backend without presence throws.
     /// </summary>
-    public static IHardwareEnrollmentService Enrollment(HardwareBackend backend, byte[]? testKey)
+    public static IHardwareEnrollmentService Enrollment(HardwareBackend backend, byte[]? testKey, bool requirePresence = true)
     {
+        if (!requirePresence && backend != HardwareBackend.SecureEnclave)
+            throw new ArgumentException(
+                $"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName()}'", nameof(requirePresence));
+
         if (testKey != null && backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
-            return new SimulatedHardwareService(backend, testKey);
+            return new SimulatedHardwareService(backend, testKey, requirePresence);
 
         switch (backend)
         {
             case HardwareBackend.SecureEnclave:
-                if (OperatingSystem.IsMacOS()) return new SecureEnclaveHardwareService();
+                if (OperatingSystem.IsMacOS()) return new SecureEnclaveHardwareService(requirePresence);
                 throw new TswapException("--secure-enclave is only supported on macOS.");
             case HardwareBackend.Tpm:
                 if (OperatingSystem.IsLinux()) return new LinuxTpmHardwareService();

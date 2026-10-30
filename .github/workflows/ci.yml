@@ -44,10 +44,25 @@ jobs:
           fi
           bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
+      # Brief T11: print whether this runner has a Secure Enclave (tswap_se_available() returns
+      # CryptoKit's SecureEnclave.isAvailable). It printed true on macos-latest (PR #203, run
+      # 41114279617), so the unit-test step below sets CI_REQUIRE_SE=1 on macOS.
+      - name: Secure Enclave probe (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          probe="$RUNNER_TEMP/se-probe.swift"
+          printf '%s\n' 'import CryptoKit' 'print("Secure Enclave available: \(SecureEnclave.isAvailable)")' > "$probe"
+          swift "$probe"
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
+        # CI_REQUIRE_SE=1 on macOS only (it means "this machine must have a Secure Enclave", so never
+        # workflow-wide): SecureEnclaveNoTouchRoundTripTests fail instead of skipping when the
+        # Secure Enclave round trip can't run, because the probe showed these runners have one.
         env:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
+          CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
         run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
