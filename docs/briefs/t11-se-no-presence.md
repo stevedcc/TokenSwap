@@ -66,7 +66,7 @@ the recording.
    `recover --secure-enclave`: existing tests that call them without a choice get `--with-touch`
    added (a test input changed because the brief changed the rules; say so in the commit), and the
    README's examples change with them. tswap is pre-1.0; no deprecation path.
-2. **No default anywhere.** No config setting, environment variable or prompt answer chooses the
+2. **No default at the command line.** No config setting, environment variable or prompt answer chooses the
    posture; only the flag on the enrolment command does. Below the CLI, every internal parameter
    still defaults to presence required, so a code path that forgets it gets the safe key.
 3. **A new native entry point, so a mismatched binary and dylib fail closed.** The dylib ships
@@ -112,8 +112,9 @@ the recording.
      be changed or removed later: the only way to drop it is a new vault and moving the secrets over.
      Not a yes/no prompt: the flag is the decision. Don't compare it to a YubiKey without touch in
      user-facing text (a YubiKey can be unplugged; this key is always present).
-   - Each command's completion summary echoes the posture ("Secure Enclave slot: no presence
-     required" / "Touch ID or password required").
+   - Each command's completion summary echoes the posture, exactly: `Secure Enclave slot: touch
+     (Touch ID or password on every unlock)` / `Secure Enclave slot: no touch (unlocks without
+     Touch ID or password)`.
    - `slot request --secure-enclave --no-touch` says in its output that the approving machine
      can't see this posture. **Known gap, recorded in `HARDWARE_BACKENDS.md`:** `slot approve` can't
      verify (or show) a requesting slot's posture; the request file is unchanged in this brief.
@@ -122,7 +123,7 @@ the recording.
      was cancelled", docs) is only said when `RequiresTouch` is not `false`, or reworded to be true
      for both.
    - The help text, `HelpUsage`/`Description` and usage-error strings of `init`, `slot request` and
-     `recover` name the flag.
+     `recover` name both flags.
    - No recurring per-command banner for a no-touch Secure Enclave slot (the YubiKey no-touch
      banner exists because that posture is set outside tswap; here the owner chose it with the flag).
      Say this in README.
@@ -140,20 +141,25 @@ parameter). Item 2 is the Swift side.
 Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enclave command tests do):
 - For **each** of `init`, `recover` and `slot request` → `slot approve` → `slot accept`, with `--with-touch`
   and with `--no-touch`:
-  - the slot blob has the new length (old length + 1) and its flag byte is `0` / `1` (assert the
-    length first, so a dropped byte can't pass on a coincidental tail);
-  - the final config's `RequiresTouch` is `false` / `true`;
+  - the slot blob has the new length (old length + 1) and its flag byte is `1` for `--with-touch`
+    and `0` for `--no-touch` (assert the length first, so a dropped byte can't pass on a coincidental tail);
+  - the final config's `RequiresTouch` is `true` for `--with-touch` and `false` for `--no-touch`;
   - the vault unlocks: create a secret, then `names` lists it;
   - with `--no-touch`: stderr holds all three warning claims (a), (b), (c) (assert each, not one
-    keyword) and the completion summary names the posture; stdout promises no prompt;
-  - with `--with-touch`: no warning; the existing prompt line is still there, and the summary
-    names the posture.
+    keyword), the completion summary says exactly `Secure Enclave slot: no touch (unlocks without
+    Touch ID or password)`, and stdout promises no prompt;
+  - with `--with-touch`: no warning; that command's existing prompt line is still there (name the
+    exact line per command), and the summary says exactly `Secure Enclave slot: touch (Touch ID or
+    password on every unlock)`.
 - Flag orders (`--no-touch --secure-enclave` and reversed) for each command.
 - Usage errors, one test per row, each asserting the message names `--secure-enclave` **and** that
   the config dir is unchanged byte for byte (or still empty), and that no stdin was read on
-  `recover`: `--secure-enclave` with neither choice (the message names both); both choices;
-  `--no-touch` twice; `--no-touch` and `--with-touch` alone; each with `--tpm`; with `--keyring`
-  (init); with `--yubikey` (recover); `slot request --no-touch <file>` without a device flag.
+  `recover`. Each row below is run against **each** of `init`, `slot request` and `recover` where the
+  shape applies, and **each** of `--with-touch` and `--no-touch` where it names "a choice":
+  `--secure-enclave` with no choice (the message names both); both choices; a choice twice; a
+  choice alone (no device flag); a choice with `--tpm`; a choice with `--keyring` (init); a choice
+  with `--yubikey` (recover); `slot request <choice> <file>` without a device flag; `slot add
+  --yubikey <choice>` (refused, not ignored).
 - `HardwareServices.Enrollment(HardwareBackend.Tpm, key, requirePresence: false)` throws, and so
   does `new SimulatedHardwareService(HardwareBackend.Tpm, key, requirePresence: false)`.
 - `HardwareServices.Enrollment(HardwareBackend.SecureEnclave, key)` with the parameter omitted
@@ -161,14 +167,14 @@ Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enc
 - The reflection check on `AppleSecureEnclaveInterop`: `tswap_se_wrap_v2` has exactly seven
   parameters, the first six the same types as `tswap_se_wrap`'s and the last an `int`; `tswap_se_wrap`
   keeps its six; and `Wrap` takes `(byte[], bool)`. Resolve the
-  type by name or suppress CA1416 around it; the build stays warning-free.
+  type by name or suppress CA1416 around it; the build stays warning-free. (This is the guard
+  against the C#/Swift signature drift that decision 3 is about.)
 - `--help` / `HelpUsage` of `init`, `slot request` and `recover` names both flags.
 - The C# message for each native return code (old and new), one row each: plain C#, no shim needed.
 - Note in item 1's commit: the C# now calls `tswap_se_wrap_v2`, which the Swift gets in item 2, so a
   Mac build of this one commit fails every enrolment with the "update together" error (fail-closed);
   and the `SecureEnclaveHardwareService` → `Wrap` line has no Linux-runnable test (item 3 step 1 and
-  the CI round trip check it). (This is the guard against
-  the C#/Swift signature drift that decision 3 is about.)
+  the CI round trip check it).
 Break-it-once, each named in the commit:
 - hard-code `requirePresence: true` in `HardwareServices.Enrollment` → the `--no-touch` blob-flag
   tests fail;
@@ -191,7 +197,10 @@ Break-it-once, each named in the commit:
   tests are manual): a new test class, not in the manual-only category, that enrols with
   `requirePresence: false`, unwraps in the same process and compares the key, then unwraps a
   tampered package and expects the existing error. Bound the unwrap with a timeout, so a flag that
-  got lost (a presence prompt on a runner) fails cleanly instead of hanging. It runs on macOS when `tswap_se_available()` is
+  got lost (a presence prompt on a runner) fails the test (not a skip) instead of hanging.
+  Also wrap with `requirePresence: true` and assert success and the package shape, without
+  unwrapping (creating a presence-gated key doesn't prompt; only using it does): this runs
+  `tswap_se_wrap_v2`'s `1` branch and the `guard` on hardware. It runs on macOS when `tswap_se_available()` is
   true. GitHub's macOS runners are virtual machines and may have no Secure Enclave; nobody has
   checked. So:
   - add a CI step on `macos-latest` that prints the probe's result (`Secure Enclave available:
@@ -224,7 +233,8 @@ with the results.
 9. Steps 4, 6 and 7 again against step 3's touch vault (the other half of the table; step 3 is also
    the only real-hardware run of `tswap_se_wrap_v2` with `1`).
 
-**Release gate:** v0.1.0 waits until steps 1–3 and 8 are recorded. If any recorded step contradicts
+**Release gate:** v0.1.0 waits until steps 1–3, 5 (with its `sudo` half: claim (b)) and 8 are
+recorded. If any recorded step contradicts
 a warning claim (a)–(c), the warning text and its test assertions are corrected before release, not
 only the docs.
 
@@ -233,7 +243,7 @@ Update README (the Secure Enclave setup paragraphs, the "no recurring banner" no
 row: the choice is now explicit; what `--no-touch` trades away (claims (a)–(c));
 the approve-side known gap; that both files ship together; and that the policy lives in the key:
 `Config.RequiresTouch` only changes what tswap says, never what the Secure Enclave enforces. Where the docs would describe the lock
-behaviour of steps 4–7, write "see the recorded check" instead of a claim. The orchestrator finishes
+behaviour of steps 4–7 and 9, write "see the recorded check" instead of a claim. The orchestrator finishes
 those sentences from the owner's results before release.
 
 ## Out of scope
