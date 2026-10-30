@@ -60,6 +60,8 @@ the recording.
    (alone, with `--tpm`, `--keyring`, `--yubikey`, or `slot request` without a device flag) is a usage
    error too. All of these are raised before anything is read, prompted for or written, and before
    the sudo check. `recover`'s parser (today `rest is not [var device]`) is reworked for this.
+   `slot add` takes `--yubikey` only and creates no Secure Enclave key; these three are the only
+   enrolment paths (`HardwareServices.Enrollment` has exactly these three callers).
    This changes the command line of `init --secure-enclave`, `slot request --secure-enclave` and
    `recover --secure-enclave`: existing tests that call them without a choice get `--with-touch`
    added (a test input changed because the brief changed the rules; say so in the commit), and the
@@ -71,22 +73,26 @@ the recording.
    beside the binary (and as an embedded resource) and can be replaced on its own. Adding a parameter
    to `tswap_se_wrap` would let an old binary call a new dylib with garbage in the new argument
    (possibly 0: a no-touch key the config calls presence-gated). So:
-   - keep `tswap_se_wrap` exactly as it is (always presence);
+   - keep `tswap_se_wrap` byte for byte as it is (always presence, its force-unwrap included);
    - add `tswap_se_wrap_v2(..., requirePresence: Int32)`: `1` → `[.privateKeyUsage, .userPresence]`,
      `0` → `[.privateKeyUsage]`, **any other value → return a new negative code without creating a
      key**;
    - the C# side calls `tswap_se_wrap_v2` for every enrolment (with or without presence). A new
      binary with an old dylib then fails with a clear "update libtswapse.dylib together with tswap"
      error (catch `EntryPointNotFoundException`), never a silent key;
-   - replace the force-unwrap of `SecAccessControlCreateWithFlags` with a `guard` returning its own
+   - in `tswap_se_wrap_v2`, use a `guard` instead of the force-unwrap of
+     `SecAccessControlCreateWithFlags`, returning its own
      negative code, and give each new code its own C# message (today everything but `-1` becomes
      "reported available but the operation still failed").
    `tswap_se_unwrap` is unchanged: the policy lives in the key.
+   Which dylib is used: only the file beside the binary (`AppContext.BaseDirectory`, loaded by the
+   resolver); the embedded copy is only what `tswap installscript` writes out. So a stale file beside
+   a new binary is exactly the skew case above.
 4. **Plumbing.** `AppleSecureEnclaveInterop.Wrap(byte[] plaintextKey, bool requirePresence)`;
    `SecureEnclaveHardwareService(bool requirePresence = true)`;
    `HardwareServices.Enrollment(HardwareBackend backend, byte[]? testKey, bool requirePresence = true)`.
-   A TPM or YubiKey enrolment with `requirePresence: false` throws, both in `Enrollment` and in the
-   `SimulatedHardwareService` constructor. Keep `[DllImport]` + the existing resolver; don't move
+   An enrolment of any backend other than `SecureEnclave` with `requirePresence: false` throws, both
+   in `Enrollment` and in the `SimulatedHardwareService` constructor. Keep `[DllImport]` + the existing resolver; don't move
    the interop to `LibraryImport` (it changes how the resolver applies).
 5. **How tests see what reached the backend:** `SimulatedHardwareService` gains the
    `requirePresence` value and **writes it into the blob it returns** (its blob format is test-only:
@@ -134,7 +140,8 @@ parameter). Item 2 is the Swift side.
 Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enclave command tests do):
 - For **each** of `init`, `recover` and `slot request` → `slot approve` → `slot accept`, with `--with-touch`
   and with `--no-touch`:
-  - the slot blob's flag byte is `0` / `1`;
+  - the slot blob has the new length (old length + 1) and its flag byte is `0` / `1` (assert the
+    length first, so a dropped byte can't pass on a coincidental tail);
   - the final config's `RequiresTouch` is `false` / `true`;
   - the vault unlocks: create a secret, then `names` lists it;
   - with `--no-touch`: stderr holds all three warning claims (a), (b), (c) (assert each, not one
@@ -151,9 +158,16 @@ Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enc
   does `new SimulatedHardwareService(HardwareBackend.Tpm, key, requirePresence: false)`.
 - `HardwareServices.Enrollment(HardwareBackend.SecureEnclave, key)` with the parameter omitted
   enrols with presence (blob flag `1`): the default in one line.
-- The reflection check on `AppleSecureEnclaveInterop`: `tswap_se_wrap_v2` exists with a trailing
-  `int` parameter, `tswap_se_wrap` keeps its six, and `Wrap` takes `(byte[], bool)`. Resolve the
-  type by name or suppress CA1416 around it; the build stays warning-free. (This is the guard against
+- The reflection check on `AppleSecureEnclaveInterop`: `tswap_se_wrap_v2` has exactly seven
+  parameters, the first six the same types as `tswap_se_wrap`'s and the last an `int`; `tswap_se_wrap`
+  keeps its six; and `Wrap` takes `(byte[], bool)`. Resolve the
+  type by name or suppress CA1416 around it; the build stays warning-free.
+- `--help` / `HelpUsage` of `init`, `slot request` and `recover` names both flags.
+- The C# message for each native return code (old and new), one row each: plain C#, no shim needed.
+- Note in item 1's commit: the C# now calls `tswap_se_wrap_v2`, which the Swift gets in item 2, so a
+  Mac build of this one commit fails every enrolment with the "update together" error (fail-closed);
+  and the `SecureEnclaveHardwareService` → `Wrap` line has no Linux-runnable test (item 3 step 1 and
+  the CI round trip check it). (This is the guard against
   the C#/Swift signature drift that decision 3 is about.)
 Break-it-once, each named in the commit:
 - hard-code `requirePresence: true` in `HardwareServices.Enrollment` → the `--no-touch` blob-flag
@@ -169,13 +183,15 @@ Break-it-once, each named in the commit:
 - `tswap_se_wrap_v2` as in decision 3 (the 0/1 check, the `guard`, new return codes); `tswap_se_wrap`
   untouched.
 - A Linux-runnable source-level test that `TswapSecureEnclave.swift` declares
-  `tswap_se_wrap_v2` with `requirePresence: Int32` as its last parameter and still declares the
-  six-parameter `tswap_se_wrap` (catches drift from the Swift side; the reflection test in item 1
+  `@_cdecl("tswap_se_wrap_v2")` on a function with seven parameters, the first six as
+  `tswap_se_wrap`'s and the last `requirePresence: Int32`, and still declares the six-parameter
+  `@_cdecl("tswap_se_wrap")` (catches drift from the Swift side; the reflection test in item 1
   covers the C# side).
 - **A no-touch round trip that CI can run** (the prompt was the only reason the Secure Enclave
   tests are manual): a new test class, not in the manual-only category, that enrols with
   `requirePresence: false`, unwraps in the same process and compares the key, then unwraps a
-  tampered package and expects the existing error. It runs on macOS when `tswap_se_available()` is
+  tampered package and expects the existing error. Bound the unwrap with a timeout, so a flag that
+  got lost (a presence prompt on a runner) fails cleanly instead of hanging. It runs on macOS when `tswap_se_available()` is
   true. GitHub's macOS runners are virtual machines and may have no Secure Enclave; nobody has
   checked. So:
   - add a CI step on `macos-latest` that prints the probe's result (`Secure Enclave available:
@@ -199,16 +215,24 @@ with the results.
 3. A fresh temp dir with `init --secure-enclave --with-touch`, then `tswap names`: does it prompt?
 4. Same user over `ssh localhost` while the screen is unlocked: does step 2's vault unlock?
 5. Another local account, after copying the config dir there (readable by that account): does it
-   unlock? (This is claim (b); without the copy a refusal would only show file permissions.)
+   unlock? (This is claim (b); without the copy a refusal would only show file permissions.) Then the
+   same as root with `sudo` (the "including root" part of (b)).
 6. Screen locked, from ssh: does it unlock?
 7. After a reboot, before anyone logs in, from ssh (if remote login is on): does it unlock?
-8. A new `tswap` binary with the previous release's `libtswapse.dylib` beside it: does `init
-   --secure-enclave --with-touch` fail with the "update together" error?
+8. A new `tswap` binary with a `libtswapse.dylib` built from the pre-change Swift source beside it:
+   does `init --secure-enclave --with-touch` fail with the "update together" error?
+9. Steps 4, 6 and 7 again against step 3's touch vault (the other half of the table; step 3 is also
+   the only real-hardware run of `tswap_se_wrap_v2` with `1`).
+
+**Release gate:** v0.1.0 waits until steps 1–3 and 8 are recorded. If any recorded step contradicts
+a warning claim (a)–(c), the warning text and its test assertions are corrected before release, not
+only the docs.
 
 Update README (the Secure Enclave setup paragraphs, the "no recurring banner" note, and the `init`,
 `slot request`, `recover` rows of the command table) and the `HARDWARE_BACKENDS.md` Secure Enclave
 row: the choice is now explicit; what `--no-touch` trades away (claims (a)–(c));
-the approve-side known gap; that both files ship together. Where the docs would describe the lock
+the approve-side known gap; that both files ship together; and that the policy lives in the key:
+`Config.RequiresTouch` only changes what tswap says, never what the Secure Enclave enforces. Where the docs would describe the lock
 behaviour of steps 4–7, write "see the recorded check" instead of a claim. The orchestrator finishes
 those sentences from the owner's results before release.
 
