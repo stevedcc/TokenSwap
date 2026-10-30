@@ -51,8 +51,9 @@ public enum SlotKind : byte
 /// <c>KEK_slot</c> that only that machine's hardware can recover (the design doc's
 /// <c>hwBlob: backendWrap(KEK_slot)</c>). Keeping it in the slot puts it under
 /// <see cref="Keyring.FormatVersion"/>, which every slot's AEAD binds, instead of an unversioned
-/// <see cref="Config"/> field. A YubiKey machine slot has none (<c>null</c>): YubiKey
-/// <em>derives</em> <c>KEK_slot</c> from <see cref="Config"/>'s
+/// <see cref="Config"/> field. A one-key YubiKey machine slot (brief T4) carries its
+/// <see cref="YubiKeySlotBlob"/> here (serial, challenge, salt, touch policy). A legacy pair slot
+/// has none (<c>null</c>): it <em>derives</em> <c>KEK_slot</c> from <see cref="Config"/>'s
 /// <c>YubiKeySerials</c>/<c>RedundancyXor</c>/<c>UnlockChallenge</c>/<c>MasterKeySalt</c>. A
 /// recovery slot never has one (no hardware by design). Version 2 keyrings have no hwBlob column
 /// at all; see <see cref="KeyringCodec"/>.</para>
