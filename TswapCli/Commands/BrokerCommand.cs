@@ -182,6 +182,7 @@ public sealed class BrokerCommand : ICliCommand
             IdleTimeoutSec = idle,
         };
 
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         BrokerPolicy.ValidateName(name, "route");
         if (config.Routes.Any(r => r.Name == name))
@@ -197,6 +198,7 @@ public sealed class BrokerCommand : ICliCommand
         if (args.Length != 1)
             throw new TswapException(Usage);
         var name = args[0];
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         if (config.Routes.All(r => r.Name != name))
             throw new TswapException($"No route named '{BrokerPolicy.Printable(name)}'.");
@@ -221,6 +223,7 @@ public sealed class BrokerCommand : ICliCommand
             Uids = SplitList(Required(options, "--uids")),
             Routes = options.TryGetValue("--routes", out var r) ? SplitList(r) : [],
         };
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         BrokerPolicy.ValidateName(name, "socket");
         if (config.Sockets.Any(s => s.Name == name))
@@ -238,6 +241,7 @@ public sealed class BrokerCommand : ICliCommand
         if (args.Length != 1)
             throw new TswapException(Usage);
         var name = args[0];
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         if (config.Sockets.All(s => s.Name != name))
             throw new TswapException($"No socket named '{BrokerPolicy.Printable(name)}'.");

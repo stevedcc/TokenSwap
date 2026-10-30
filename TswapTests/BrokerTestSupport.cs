@@ -121,6 +121,9 @@ public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBr
 
     public int Unlocks => Volatile.Read(ref _unlocks);
 
+    /// <summary>When set, every unlock throws this (any exception type).</summary>
+    public Exception? Throw { get; set; }
+
     /// <summary>When set, every unlock fails.</summary>
     public bool Fail { get; set; }
 
@@ -135,6 +138,8 @@ public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBr
         var n = Interlocked.Increment(ref _unlocks);
         UnlockStarted?.Invoke(n);
         Gate?.Task.GetAwaiter().GetResult();
+        if (Throw != null)
+            throw Throw;
         if (Fail)
             throw new BrokerUnlockException("simulated unlock failure");
         return new BrokerSecret(Encoding.UTF8.GetBytes(_values(secretName)));

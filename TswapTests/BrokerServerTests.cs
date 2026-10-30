@@ -668,4 +668,58 @@ public class BrokerServerTests : IAsyncLifetime
             hang.TrySetResult();
         }
     }
+
+    // ------------------------------------------------------------------ fix round 1, minors
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("other")]
+    public async Task AnyOtherExceptionFromTheSecretSource_IsTheUniform502_AndLogged(string kind)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _h.Secrets.Throw = kind == "cancel" ? new OperationCanceledException() : new InvalidOperationException("boom");
+        await _h.StartAsync();
+
+        var response = await _h.GetAsync("lane1", "/echo/a");
+
+        Assert.Equal(502, BrokerHarness.StatusOf(response));
+        Assert.Equal("Bad Gateway\n", BrokerHarness.BodyOf(response));
+        Assert.Contains("status=502", _h.LogText.ToString());
+        Assert.Contains("reason=secret-source-error", _h.LogText.ToString());
+        Assert.DoesNotContain("boom", _h.LogText.ToString());
+        _h.Secrets.Throw = null;
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a"))); // the unlock lock was released
+    }
+
+    [Fact]
+    public async Task ConnectionOnASocketRemovedByReload_IsLoggedAsSocketRemoved()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var server = await _h.StartAsync();
+        var config = BrokerPolicy.Deserialize(_h.Config());
+        Assert.True(server.Reload(() => BrokerPolicy.Validate(config with { Sockets = [.. config.Sockets.Where(x => x.Name != "lane1")] })));
+
+        Assert.Empty(await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"));
+        Assert.Contains("refused-connection socket=lane1", _h.LogText.ToString());
+        Assert.Contains("reason=socket-removed", _h.LogText.ToString());
+        Assert.DoesNotContain("uid-not-allowed", _h.LogText.ToString());
+    }
+
+    [Fact]
+    public async Task HeaderSniffer_ZeroesItsCapture_AfterUse()
+    {
+        var pipe = new System.IO.Pipelines.Pipe();
+        var sniffer = new BrokerHeaderSniffer(pipe.Reader);
+        await pipe.Writer.WriteAsync("GET / HTTP/1.1\r\nConnection: x-a\r\nAuthorization: Bearer client\r\n\r\n"u8.ToArray());
+        Assert.True(sniffer.TryRead(out var result));
+        sniffer.AdvanceTo(result.Buffer.End);
+
+        var named = sniffer.TakeConnectionNamedHeaders();
+
+        Assert.Equal(["x-a"], named);
+        Assert.Equal(0, sniffer.CapturedLength);
+        Assert.All(sniffer.CaptureBufferForTests, b => Assert.Equal(0, b));
+    }
 }

@@ -50,7 +50,10 @@ value past any window (reverse it, split it over two responses, encode it some o
   `/` written as `\/`.
 
 The redactor holds back a sliding window of (longest form − 1) bytes between chunks and flushes
-it at the end; it never buffers a body. A response with any `Content-Encoding` other than
+it at the end; it never buffers a body. That window is roughly 100 bytes, so a stream of small
+pieces (server-sent events from a model API, a progress feed) reaches the client up to that many
+bytes late: each piece arrives once more data follows it, or at the end. Response headers are
+never held back. A response with any `Content-Encoding` other than
 `identity` can't be redacted, so it fails closed: `502`, the body is not forwarded, and it is
 logged (the broker asks every upstream for `Accept-Encoding: identity`).
 
@@ -71,7 +74,9 @@ logged (the broker asks every upstream for `Accept-Encoding: identity`).
 - reach another container's socket (only its own is bind-mounted, and the peer uid must be on
   that socket's list);
 - push or fetch where the path regex excludes, or step outside the upstream's base path with
-  `..`, `%2e%2e`, `%2f`, `..;`, `//host` or double encoding (each a uniform `404`);
+  `..`, `%2e%2e`, `%2f`, `..;`, `//host` or double encoding (each a uniform `404`: every refusal
+  of a route, socket, method or path gets the same bytes, headers included, except the `Date`
+  header, which says when it was sent);
 - send the credential anywhere but the route's upstream (the broker builds the outbound URL
   itself and asserts the scheme, host, port and base path before sending; redirects are passed
   back, never followed, and a client that follows one elsewhere carries no credential).

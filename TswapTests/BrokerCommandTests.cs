@@ -146,4 +146,24 @@ public class BrokerCommandTests : IDisposable
         Assert.Contains("already exists", err);
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
+
+    [Fact]
+    public void ConcurrentEdit_HoldingTheEditLock_IsRefused_AndNothingIsWritten()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _m.Ok("", AddGithub);
+        var before = File.ReadAllBytes(BrokerJson);
+
+        using (BrokerConfigFile.LockForEdit(DirectoryOwnerMatcher.Default, _m.Dir))
+        {
+            var (exit, _, err) = _m.Run("", "broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
+            Assert.NotEqual(0, exit);
+            Assert.Contains("Another 'tswap broker' change", err);
+            Assert.Equal(before, File.ReadAllBytes(BrokerJson));
+        }
+
+        _m.Ok("", "broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
+        Assert.Contains("\"other\"", File.ReadAllText(BrokerJson));
+    }
 }

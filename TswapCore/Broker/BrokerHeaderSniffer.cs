@@ -9,7 +9,7 @@ namespace TswapCore.Broker;
 /// header names a client lists there (decision 6: dropped, never forwarded) are not visible in
 /// <c>Request.Headers</c>. This reader sits between the socket and Kestrel, passes every byte through
 /// unchanged, and copies the first request's header block (up to <see cref="MaxCapture"/> bytes) so
-/// <see cref="ConnectionNamedHeaders"/> can read the raw <c>Connection</c> lines. The broker answers
+/// <see cref="TakeConnectionNamedHeaders"/> can read the raw <c>Connection</c> lines. The broker answers
 /// every request with <c>Connection: close</c>, so the first request is the only one on a connection.
 /// </summary>
 public sealed class BrokerHeaderSniffer : PipeReader
@@ -28,8 +28,28 @@ public sealed class BrokerHeaderSniffer : PipeReader
     /// <summary>True once the first header block ended (or the capture limit was reached).</summary>
     public bool HeadersSeen => _complete;
 
-    /// <summary>The header names the first request's raw <c>Connection</c> lines list (lower case), excluding close/keep-alive/upgrade.</summary>
-    public IReadOnlySet<string> ConnectionNamedHeaders => ParseConnectionTokens(_capture.ToArray());
+    /// <summary>
+    /// The header names the first request's raw <c>Connection</c> lines list (lower case), excluding
+    /// close and keep-alive. The captured header block (which holds the client's own header values)
+    /// is zeroed afterwards; later calls return an empty set.
+    /// </summary>
+    public IReadOnlySet<string> TakeConnectionNamedHeaders()
+    {
+        var block = _capture.ToArray();
+        try
+        {
+            return ParseConnectionTokens(block);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(block);
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(_capture.GetBuffer());
+            _capture.SetLength(0);
+            _complete = true;
+        }
+    }
+    internal long CapturedLength => _capture.Length;
+    internal byte[] CaptureBufferForTests => _capture.GetBuffer();
 
     public override async ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
     {

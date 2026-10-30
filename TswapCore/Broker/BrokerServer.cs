@@ -49,19 +49,15 @@ public sealed class BrokerServer : IAsyncDisposable
     private readonly BrokerServerOptions _options;
     private readonly FileStream _lock;
     private readonly WebApplication _app;
-    private readonly IBrokerForwarder _forwarder;
-    private readonly bool _ownsForwarder;
     private readonly IReadOnlyList<string> _socketPaths;
     private int _stopped;
 
-    private BrokerServer(BrokerServerOptions options, FileStream lockFile, WebApplication app, IBrokerForwarder forwarder,
-        bool ownsForwarder, IReadOnlyList<string> socketPaths)
+    private BrokerServer(BrokerServerOptions options, FileStream lockFile, WebApplication app,
+        IReadOnlyList<string> socketPaths)
     {
         _options = options;
         _lock = lockFile;
         _app = app;
-        _forwarder = forwarder;
-        _ownsForwarder = ownsForwarder;
         _socketPaths = socketPaths;
     }
 
@@ -106,8 +102,6 @@ public sealed class BrokerServer : IAsyncDisposable
         var socketDir = CheckSocketDir(policy.SocketDir, options.Ownership);
         var lockFile = TakeLock(socketDir);
         WebApplication? app = null;
-        IBrokerForwarder? forwarder = null;
-        var ownsForwarder = false;
         try
         {
             var paths = new List<string>();
@@ -118,7 +112,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 paths.Add(path);
             }
 
-            forwarder = options.Forwarder;
+            var forwarder = options.Forwarder; // the caller owns and disposes it
             var limiter = new BrokerLimiter(options.Limits, options.Time);
             var connections = new BrokerConnectionCounter(options.Limits);
             var fatal = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -152,14 +146,12 @@ public sealed class BrokerServer : IAsyncDisposable
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
-            return new BrokerServer(options, lockFile, app, forwarder, ownsForwarder, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task };
+            return new BrokerServer(options, lockFile, app, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task };
         }
         catch
         {
             if (app != null)
                 await app.DisposeAsync().ConfigureAwait(false);
-            if (ownsForwarder && forwarder is IDisposable d)
-                d.Dispose();
             lockFile.Dispose();
             throw;
         }
@@ -200,7 +192,7 @@ public sealed class BrokerServer : IAsyncDisposable
             var policy = options.Policy.Current;
             if (!policy.Sockets.TryGetValue(socketName, out var allowed) || !allowed.AllowsUid(creds.Uid))
             {
-                options.Log.Connection(socketName, creds.Uid, creds.Pid, "uid-not-allowed");
+                options.Log.Connection(socketName, creds.Uid, creds.Pid, allowed is null ? "socket-removed" : "uid-not-allowed");
                 return;
             }
             connection.Items[PeerItemKey] = new BrokerPeer(socketName, creds.Uid, creds.Pid);
@@ -329,8 +321,6 @@ public sealed class BrokerServer : IAsyncDisposable
                     // Removed under the lock at the next start.
                 }
             }
-            if (_ownsForwarder && _forwarder is IDisposable d)
-                d.Dispose();
             _options.Log.Event("stopped");
             _lock.Dispose();
         }

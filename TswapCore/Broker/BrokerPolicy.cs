@@ -63,6 +63,7 @@ public sealed class BrokerPolicy
     {
         "Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive", "TE", "Trailer",
         "Upgrade", "Proxy-Connection", "Expect", "Cookie", "Content-Encoding",
+        "Accept-Encoding", "Range", "If-Range", // the broker sets or drops these itself
     };
 
     /// <summary>The time a route's path regex may take on one path.</summary>

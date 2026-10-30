@@ -209,6 +209,9 @@ public class BrokerConfigTests : IDisposable
     [InlineData("Host")]
     [InlineData("Content-Length")]
     [InlineData("transfer-encoding")]
+    [InlineData("Accept-Encoding")]
+    [InlineData("Range")]
+    [InlineData("if-range")]
     public void HeaderName_Invalid_Refused(string header)
     {
         var auth = $$$"""{ "type": "header", "header": {{{System.Text.Json.JsonSerializer.Serialize(header)}}}, "secret": "{{k}}" }""";
@@ -322,5 +325,52 @@ public class BrokerConfigTests : IDisposable
 
         Assert.Throws<BrokerConfigException>(() => BrokerConfigFile.Save(DirectoryOwnerMatcher.Default, _dir, bad));
         Assert.False(File.Exists(BrokerConfigFile.PathIn(_dir)));
+    }
+
+    // ------------------------------------------------------------------ fix round 1
+
+    [Fact]
+    public void UnreadableFile_IsACleanConfigError()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // root reads a 000 file anyway
+        var path = BrokerConfigFile.PathIn(_dir);
+        File.WriteAllText(path, ValidJson);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var ex = Assert.Throws<BrokerConfigException>(() => BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir));
+            Assert.Contains("can't be read", ex.Message);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    /// <summary>Owners by path: the config folder's and broker.json's can differ.</summary>
+    private sealed class PathOwnership(uint dirUid, uint fileUid) : IUnixOwnership
+    {
+        public bool IsPrivileged => false;
+        public uint EffectiveUid => dirUid;
+        public (uint Uid, uint Gid)? GetOwner(string path) =>
+            Path.GetFileName(path) == BrokerConfigFile.FileName ? (fileUid, fileUid) : (dirUid, dirUid);
+        public IDisposable ActAs(uint uid, uint gid, string path) => throw new InvalidOperationException("no switch expected");
+    }
+
+    [Fact]
+    public void FileNotOwnedByTheVaultFoldersOwner_IsRefusedAtLoad()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var path = BrokerConfigFile.PathIn(_dir);
+        File.WriteAllText(path, ValidJson);
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        var ex = Assert.Throws<BrokerConfigException>(() =>
+            BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir, new PathOwnership(dirUid: 1000, fileUid: 1001)));
+        Assert.Contains("owned by uid 1001", ex.Message);
+
+        Assert.NotNull(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir, new PathOwnership(dirUid: 1000, fileUid: 1000)));
     }
 }

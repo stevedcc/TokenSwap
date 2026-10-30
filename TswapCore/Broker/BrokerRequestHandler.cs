@@ -74,10 +74,12 @@ public sealed class BrokerRequestHandler(
             Path = rawTarget,
         };
 
+        // Read (and zero) the raw Connection header's names at once.
+        var connectionNamed = sniffer.TakeConnectionNamedHeaders();
         if (!policy.Sockets.TryGetValue(peer.Socket, out var socket) || !socket.AllowsUid(peer.Uid))
         {
-            // The config changed under a kept-alive connection: close it, unanswered.
-            log.Connection(peer.Socket, peer.Uid, peer.Pid, "uid-not-allowed");
+            // The config changed between accepting the connection and this request: close it, unanswered.
+            log.Connection(peer.Socket, peer.Uid, peer.Pid, socket is null ? "socket-removed" : "uid-not-allowed");
             http.Abort();
             return;
         }
@@ -204,6 +206,14 @@ public sealed class BrokerRequestHandler(
             log.Request(record with { Status = 502, Unlocks = 1, UnlockDuration = time.GetElapsedTime(started), Reason = "secret-unusable" });
             return;
         }
+        catch (Exception)
+        {
+            // Any other failure of the secret source (a cancellation, a bug): the same uniform
+            // answer and a log line, never an unanswered 500. The message is not logged.
+            await WriteUniformAsync(http, StatusCodes.Status502BadGateway).ConfigureAwait(false);
+            log.Request(record with { Status = 502, Unlocks = 1, UnlockDuration = time.GetElapsedTime(started), Reason = "secret-source-error" });
+            return;
+        }
         finally
         {
             _unlock.Release();
@@ -215,7 +225,7 @@ public sealed class BrokerRequestHandler(
         {
             try
             {
-                outcome = await forwarder.ForwardAsync(http, new BrokerForwardRequest(route, built.Outbound!, secret, sniffer.ConnectionNamedHeaders), http.RequestAborted).ConfigureAwait(false);
+                outcome = await forwarder.ForwardAsync(http, new BrokerForwardRequest(route, built.Outbound!, secret, connectionNamed), http.RequestAborted).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
             {
