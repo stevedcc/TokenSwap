@@ -137,6 +137,14 @@ public class InlineCodeBlockTests
     [InlineData("flock", "/tmp/lock", "-c", "echo {{x}}")]
     [InlineData("su", "-", "app")] // login shell reading stdin (was allowed before round 5)
     [InlineData("machinectl", "shell")]
+    // Final review round (GLM on Z.ai): clustered sudo options, wrongly valued options.
+    [InlineData("sudo", "-si")]
+    [InlineData("sudo", "-Es", "rev {{x}}")]
+    [InlineData("doas", "-s")]
+    [InlineData("chroot", "--userspec", "root", "/", "sh", "-c", "rev {{x}}")]
+    [InlineData("ionice", "-t", "python", "-", "{{x}}")]
+    [InlineData("taskset", "-c", "0-3", "python3", "-c", "print('{{x}}')")]
+    [InlineData("chrt", "-f", "10", "bash", "-c", "echo {{x}}")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -212,6 +220,9 @@ public class InlineCodeBlockTests
     [InlineData("sudo", "strace", "-s", "200", "./tool", "{{x}}")]
     [InlineData("stdbuf", "-o", "L", "./tool", "{{x}}")]
     [InlineData("time", "-f", "%e", "./tool", "{{x}}")]
+    // Final review round: sudo options that only contain an s or i inside a value pass.
+    [InlineData("sudo", "-u", "sys", "./tool", "{{x}}")]
+    [InlineData("taskset", "-c", "0-3", "./tool", "{{x}}")]
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]

@@ -321,12 +321,11 @@ public static class Validation
         ["doas"] = ["-u", "-C"],
         ["timeout"] = ["-s", "-k", "--signal", "--kill-after"],
         ["nice"] = ["-n", "--adjustment"],
-        ["ionice"] = ["-c", "-n", "-p", "-t"],
+        ["ionice"] = ["-c", "-n", "-p", "--class", "--classdata", "--pid"],
         ["strace"] = ["-o", "-e", "-p", "-s", "-u"],
         ["ltrace"] = ["-o", "-e", "-p", "-s", "-u"],
         ["nsenter"] = ["-t", "--target"],
-        ["taskset"] = ["-c"],
-        ["chrt"] = ["-p"],
+        ["chroot"] = ["--userspec", "--groups"],
         ["runuser"] = ["-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell"],
         ["npx"] = ["-p", "--package"],
         ["systemd-run"] = ["-p", "--property", "-u", "--unit", "-E", "--setenv", "-M", "--machine"],
@@ -366,7 +365,7 @@ public static class Validation
         // sudo -s/-i run a shell (with any command through its -c), npx -c and flock -c run shell
         // code. Only the wrapper's own options count, before its command (sudo mv -i a b passes).
         var ownOptions = OwnOptions(program, args);
-        if ((program.Equals("sudo", StringComparison.OrdinalIgnoreCase) && ownOptions.Any(a => a is "-s" or "-i" or "--shell" or "--login"))
+        if ((program is "sudo" or "doas" && ownOptions.Any(a => a is "--shell" or "--login" || ShortCluster(a, program == "doas" ? "s" : "si", "ugCDhprRtUT")))
             || (program.Equals("npx", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--call"))
             || (program.Equals("flock", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-c" or "--command")))
             return new(program, $"'{program}' with a shell option runs shell code, which can transform and print secrets past redaction. {WayOut}");
@@ -443,6 +442,22 @@ public static class Validation
     private static readonly HashSet<string> TrustedWrappers = new(StringComparer.OrdinalIgnoreCase)
         { "sudo", "doas", "timeout", "nice", "nohup", "setsid", "time", "stdbuf", "ionice", "flock",
           "chroot", "taskset", "chrt" };
+
+    // True when a single-dash option cluster (-Es, -si) contains one of the letters before a
+    // letter that takes a value (whose attached rest is that value, not more letters).
+    private static bool ShortCluster(string arg, string letters, string valuedLetters)
+    {
+        if (!arg.StartsWith('-') || arg.StartsWith("--", StringComparison.Ordinal))
+            return false;
+        foreach (var letter in arg.AsSpan(1))
+        {
+            if (letters.Contains(letter))
+                return true;
+            if (valuedLetters.Contains(letter))
+                return false;
+        }
+        return false;
+    }
 
     // The wrapper's own options: everything before its command (the first positional argument,
     // after skipping known option values).
