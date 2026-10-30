@@ -256,6 +256,116 @@ refused with one message and nothing is written; the recovery slot always stays.
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
 vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add your secrets.
 
+## Rotating a secret
+
+```bash
+tswap burned                              # what needs rotating
+tswap rotate api-token 48                 # new random 48-char value, never displayed
+kubectl get secret x -o json | jq -r '.data["token"]' | base64 -d | tswap ingest --rotate api-token
+tswap run kubectl create secret generic x --from-literal=token={{api-token}} --dry-run=client -o yaml
+```
+
+`rotate <name> [length]` writes a new random value for an existing secret as a newer version
+(like `create`: the value is never shown, and the entropy mode from `init` applies);
+`ingest --rotate <name>` does the same with a value from stdin. There is no delete and no gap:
+the secret exists throughout. Remember to update the system that uses it.
+
+- **Sudo unless the secret is burned.** A burned secret is already compromised, so replacing it
+  is safe to leave to an agent and needs no sudo. Rotating a secret that is **not** burned needs
+  sudo, because the services using the old value stop working until they get the new one.
+- **The burn is kept as history.** On a record-store vault (below) the old version's burn stays
+  in the record, and `tswap burned` lists it under "Rotated" instead of as outstanding
+  (`burned --json` marks it `"status": "rotated"`).
+- **Classic vaults** (one `secrets.json.enc`) can rotate secrets that are not burned. A burned
+  secret is refused there, because that format keeps one burn per secret and no history and an
+  incident record is never overwritten: convert first with `sudo tswap migrate --to-records`.
+- `create` and `ingest` without `--rotate` still refuse an existing name, and point to `rotate`.
+
+## Sharing a vault between machines
+
+A classic vault is one encrypted file, so two copies can't be combined: the newer file wins and
+edits made on the other machine are lost. The **record store** keeps one encrypted file per
+secret in a **vault folder**, which a sync tool, a network share or a plain copy can carry, and
+which two copies of can be merged.
+
+```bash
+# Convert this machine's vault (sudo: it decrypts everything). Default folder: ~/.config/tswap/vault
+sudo tswap migrate --to-records --vault-dir ~/OneDrive/tswap-vault
+
+# Another machine joins the same folder:
+tswap init --vault-dir ~/OneDrive/tswap-vault        # opens with a YubiKey slot or the recovery key
+# ...or, for that machine's own TPM / Secure Enclave slot:
+tswap slot request --tpm request.json                # then 'sudo tswap slot approve' on an enrolled machine
+tswap slot accept approve.json --vault-dir ~/OneDrive/tswap-vault
+```
+
+**What is in the vault folder:** `keyring` (the wrapped vault key, one slot per device) and
+`records/<hash>`, one file per secret. The file name is a keyed hash of the secret's name, so
+names never appear on disk; every record is padded to 256-byte size buckets, and deletes and
+burns are records too, so a deleted secret can't come back from an old copy. **Only the vault
+folder is shared.** Each machine's `config.json` (its own slot, its origin id, its clock) stays
+in its config folder and must never be synced. The default vault folder sits inside the config
+folder, so if you sync the config folder you sync `config.json` too: give `--vault-dir` a folder
+of its own and sync that.
+
+**The conversion** writes everything into a temporary folder next to the target, reads it all
+back and compares, renames it into place, switches `config.json`, and only then moves
+`secrets.json.enc` aside to a `.bak` file (`config.json` is backed up as well). A crash at any
+point leaves a vault that opens; running it again finishes or tells you what to do. The target
+folder must be empty or absent. A **plain XOR vault** (two YubiKeys, `tswap init`) becomes a
+keyring vault in the same run: plug in **every** enrolled YubiKey (each gets its own slot), and
+store the recovery key it prints once. Its secrets keep their key; the XOR share is no longer
+used afterwards.
+
+**Three ways to share:**
+
+- **A sync folder** (OneDrive, Dropbox, Google Drive, Syncthing, Nextcloud): point `--vault-dir`
+  at a folder the tool syncs. Two machines editing different secrets never conflict. When both
+  edit the **same** secret before a sync, the tool keeps a "conflicted copy"; tswap reads it, the
+  later change wins (a hybrid logical clock, so a machine with a wrong clock can't make an older
+  change win), and the copy is removed the next time that secret is written. A copy tswap can't
+  decrypt is reported and left alone. Mark the folder "available offline" (OneDrive Files
+  On-Demand and Google Drive stream files by default, and a placeholder can't be read offline).
+- **A network share** (SMB, NFS): works one machine at a time. Writes are flushed and renamed
+  into place, but client caching means an interrupted write can still cost the record it was
+  writing; a record that can't be read is reported, kept, and never overwritten or treated as
+  deleted until you restore it. tswap uses no lock files: a command re-reads each record just before writing it, and if
+  another machine changed it in the meantime the write is refused and nothing is written. Running Samba or NFS
+  in a container changes nothing about this; a sync tool in a container (Syncthing, Nextcloud)
+  gives each machine its own local copy and is the better choice.
+- **scp, rsync or a USB stick**: copy the other machine's vault folder anywhere and fold it in:
+
+  ```bash
+  sudo tswap vault merge /mnt/usb/tswap-vault
+  ```
+
+  The other copy must be the same vault; it is only read. Keyrings are combined slot by slot
+  (a new slot from the other copy is shown by fingerprint and must be confirmed, or passed with
+  `--yes`, as with `slot merge`), and records by the same rules as conflicted copies. Merging the
+  same copy twice changes nothing; run it on the other machine too to bring that copy up to date.
+
+**The merge rules:** the last change wins, for values and deletes alike, so a deleted secret
+only comes back if someone really wrote a value after the delete. A burn marks the value it was
+issued against: while that value is current the secret is burned; a newer value (a rotation)
+supersedes it and the burn becomes history. Two burns of the same value keep the earliest.
+
+**What a sync provider can see:** not names or values, and not whether a change was an edit, a
+delete or a burn. It can see that the file with a given hash changed at a given time, so it can
+follow when each (unnamed) secret is edited; the single-file vault only showed that something
+changed. Each machine's origin id is in every record it writes; it is per machine and vault, so
+it doesn't link one machine across vaults. If a stamp is more than a year ahead of the clock
+(a machine with a badly wrong clock), tswap warns, and `tswap names` shows "far future".
+
+**Export and import** keep the single-file encrypted format. An export is a snapshot of the
+current values and burn state (no deletes, no history). Importing into a record-store vault
+writes each secret as a new version, so importing an old export **can bring back a secret you
+deleted since**: that is your explicit choice.
+
+**Permissions:** the vault folder, `records/` and the config folder are created 0700 and their
+files 0600; an existing vault with wider permissions is narrowed on the next write, with a
+notice. Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files
+inherit the profile folder's permissions.)
+
 ## Security: YubiKey Touch Requirement
 
 **By default, tswap recommends configuring YubiKey slots with touch requirement** for better security:
