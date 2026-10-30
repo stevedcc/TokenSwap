@@ -105,6 +105,30 @@ public static partial class BrokerNative
     [LibraryImport("libc", SetLastError = true)]
     private static partial int prctl(int option, nuint arg2, nuint arg3, nuint arg4, nuint arg5);
 
+    // ------------------------------------------------------------------ realpath
+
+    /// <summary><c>realpath(3)</c>: <paramref name="path"/> with every symlink and dot segment resolved, or null.</summary>
+    public static string? RealPath(string path)
+    {
+        var resolved = realpath(path, 0);
+        if (resolved == 0)
+            return null;
+        try
+        {
+            return Marshal.PtrToStringUTF8(resolved);
+        }
+        finally
+        {
+            free(resolved);
+        }
+    }
+
+    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint realpath(string path, nint resolved);
+
+    [LibraryImport("libc")]
+    private static partial void free(nint pointer);
+
     // ------------------------------------------------------------------ lstat
 
     /// <summary>The kind of file system entry at a path, without following a symlink.</summary>

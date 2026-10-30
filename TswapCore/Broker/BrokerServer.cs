@@ -210,7 +210,8 @@ public sealed class BrokerServer : IAsyncDisposable
 
     /// <summary>
     /// Decision 3: <c>socket_dir</c> must exist, not be a symlink, be owned by this uid and not be
-    /// group- or world-writable. Returns its full path.
+    /// group- or world-writable; every folder above its real path must be root's or this uid's and
+    /// not group- or world-writable (fix round 1). Returns the real path, which serve then uses.
     /// </summary>
     internal static string CheckSocketDir(string socketDir, IUnixOwnership ownership)
     {
@@ -233,7 +234,31 @@ public sealed class BrokerServer : IAsyncDisposable
             throw new TswapException($"socket_dir {dir} is not owned by this user (uid {ownership.EffectiveUid}); it must be the vault user's own folder.");
         if ((stat.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
             throw new TswapException($"socket_dir {dir} is writable by group or others; make it 0711 (chmod 0711 {dir}).");
-        return dir;
+
+        // Fix round 1 (MiMo): resolve the whole path, then check every folder above it, so nobody
+        // else can swap a parent (and so the folder) for one of their own.
+        var real = BrokerNative.RealPath(dir)
+            ?? throw new TswapException($"Can't resolve socket_dir {dir}.");
+        for (var parent = Path.GetDirectoryName(real); parent != null; parent = Path.GetDirectoryName(parent))
+            CheckParent(parent, ownership);
+        return real;
+    }
+
+    /// <summary>
+    /// A folder above socket_dir must be owned by root or this user and not writable by group or
+    /// others, except a root-owned folder with the sticky bit (like /tmp): there others can't
+    /// rename or remove what isn't theirs.
+    /// </summary>
+    private static void CheckParent(string parent, IUnixOwnership ownership)
+    {
+        var stat = BrokerNative.LStat(parent) ?? throw new TswapException($"Can't read {parent} (a folder above socket_dir).");
+        var uid = ownership.GetOwner(parent)?.Uid;
+        if (uid is null || (uid != 0 && uid != ownership.EffectiveUid))
+            throw new TswapException($"{parent} (a folder above socket_dir) is owned by uid {uid?.ToString() ?? "?"}; every folder above it must be root's or the vault user's.");
+        var writable = (stat.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0;
+        var rootSticky = uid == 0 && (stat.Mode & UnixFileMode.StickyBit) != 0;
+        if (writable && !rootSticky)
+            throw new TswapException($"{parent} (a folder above socket_dir) is writable by group or others; every folder above socket_dir must not be (a root-owned sticky folder such as /tmp is allowed).");
     }
 
     /// <summary>One <c>serve</c> per socket folder: an exclusive <c>flock</c> on its lock file, held until stop.</summary>

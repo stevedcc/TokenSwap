@@ -722,4 +722,75 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(0, sniffer.CapturedLength);
         Assert.All(sniffer.CaptureBufferForTests, b => Assert.Equal(0, b));
     }
+
+    // ------------------------------------------------------------------ fix round 1: socket_dir's parents
+
+    /// <summary>A config whose socket_dir is <paramref name="socketDir"/>.</summary>
+    private string ConfigWithSocketDir(string socketDir) =>
+        _h.Config().Replace(System.Text.Json.JsonSerializer.Serialize(_h.SocketDir), System.Text.Json.JsonSerializer.Serialize(socketDir));
+
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static string NewOwnerOnlyDir(string path)
+    {
+        Directory.CreateDirectory(path);
+        File.SetUnixFileMode(path, (UnixFileMode)0b111_001_001);
+        return path;
+    }
+
+    [Fact]
+    public async Task SocketDir_UnderAGroupOrWorldWritableParent_RefusesToStart()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var parent = Path.Combine(_h.Root, "open");
+        Directory.CreateDirectory(parent);
+        File.SetUnixFileMode(parent, (UnixFileMode)0b111_111_111); // 0777, no sticky bit
+        var socketDir = NewOwnerOnlyDir(Path.Combine(parent, "s"));
+
+        var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync(ConfigWithSocketDir(socketDir)));
+
+        Assert.Contains(parent, ex.Message);
+        Assert.Contains("writable by group or others", ex.Message);
+        Assert.Empty(Directory.GetFileSystemEntries(socketDir));
+    }
+
+    [Fact]
+    public async Task SocketDir_UnderASymlinkedParent_IsResolved_AndItsRealParentsChecked()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        // A symlinked parent pointing into a world-writable folder: the real chain is checked.
+        var open = Path.Combine(_h.Root, "open");
+        Directory.CreateDirectory(open);
+        File.SetUnixFileMode(open, (UnixFileMode)0b111_111_111);
+        NewOwnerOnlyDir(Path.Combine(open, "s"));
+        var badLink = Path.Combine(_h.Root, "badlink");
+        Directory.CreateSymbolicLink(badLink, open);
+
+        var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync(ConfigWithSocketDir(Path.Combine(badLink, "s"))));
+        Assert.Contains(open, ex.Message);
+
+        // A symlinked parent pointing at a safe folder: serve listens on the real path.
+        var safe = Path.Combine(_h.Root, "safe");
+        Directory.CreateDirectory(safe);
+        var realSocketDir = NewOwnerOnlyDir(Path.Combine(safe, "s"));
+        var goodLink = Path.Combine(_h.Root, "goodlink");
+        Directory.CreateSymbolicLink(goodLink, safe);
+
+        var server = await _h.StartAsync(ConfigWithSocketDir(Path.Combine(goodLink, "s")));
+
+        Assert.All(server.SocketPaths, p => Assert.StartsWith(realSocketDir + "/", p));
+        Assert.Equal(BrokerNative.EntryType.Socket, BrokerNative.LStat(Path.Combine(realSocketDir, "lane1.sock"))!.Value.Type);
+    }
+
+    [Fact]
+    public void ParentChain_AcceptsARootOwnedStickyFolderLikeTmp()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var tmp = BrokerNative.LStat("/tmp")!.Value;
+        if (tmp.Uid != 0 || (tmp.Mode & UnixFileMode.StickyBit) == 0)
+            return; // not the usual /tmp
+        Assert.Equal(_h.SocketDir, BrokerServer.CheckSocketDir(_h.SocketDir, new UnixOwnership()));
+    }
 }

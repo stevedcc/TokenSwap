@@ -98,7 +98,8 @@ logged (the broker asks every upstream for `Accept-Encoding: identity`).
   process on the host that can reach the path could connect. **The peer-uid check is the real
   gate:** a uid not on the socket's list is closed before anything is parsed, unanswered, and
   logged. `socket_dir` must be owned by the vault user, not group- or world-writable, and not a
-  symlink; `serve` refuses to start otherwise.
+  symlink, and every folder above its real path must be root's (or the vault user's) and not
+  group- or world-writable; `serve` refuses to start otherwise.
 
 ### The vault user is root-equivalent for its secrets
 
@@ -178,14 +179,18 @@ sudo usermod -aG tss vault
 sudo loginctl enable-linger vault      # its user units run without a login session
 sudo -iu vault tswap init --tpm
 sudo -iu vault tswap ingest github-token < token-file    # or create / sudo tswap add
-sudo tswap migrate --to-records      # as root with SUDO_USER=vault, or TSWAP_CONFIG_DIR=~vault/.config/tswap
+sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 ```
 
 ### 2. The socket folder
 
 Owned by the vault user, mode `0711` (others can reach a socket file they know the name of, but
-can't list or create entries), not a symlink. Every folder above it must be traversable by the
-user that starts the containers (so `/run/user/<uid>`, which is `0700`, won't do).
+can't list or create entries), not a symlink. `serve` resolves its real path (following any
+symlinked parent) and checks **every folder above it**: each must be owned by root (or the vault
+user) and not writable by group or others, so nobody else can swap a parent for one of their
+own; a root-owned folder with the sticky bit, such as `/tmp`, is accepted. `serve` refuses to
+start otherwise. Every folder above it must also be traversable by the user that starts the
+containers (so `/run/user/<uid>`, which is `0700`, won't do).
 
 ```bash
 sudo install -d -m 0711 -o vault -g vault /srv/tswap-broker
