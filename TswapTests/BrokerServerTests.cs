@@ -934,4 +934,40 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/b")));
         Assert.Contains("route=echo", _h.LogText.ToString());
     }
+
+    [Fact]
+    public async Task ServeLock_HeldByAnotherProcess_IsAnotherServe()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
+        var lockPath = Path.Combine(_h.SocketDir, BrokerServer.LockFileName);
+        File.WriteAllText(lockPath, "");
+        using var held = await BrokerHarness.HoldLockInAnotherProcessAsync(lockPath);
+        if (held is null)
+            return; // no flock(1) on this machine
+
+        var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync());
+
+        Assert.Contains("Another 'tswap broker serve' is running", ex.Message);
+        Assert.Empty(Directory.GetFiles(_h.SocketDir, "*.sock"));
+    }
+
+    [Fact]
+    public async Task ServeLock_ThatCantBeCreated_EACCES_IsAnErrorNamingTheFile()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // root creates the file anyway
+        File.SetUnixFileMode(_h.SocketDir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // 0500
+        try
+        {
+            var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync());
+
+            Assert.Contains($"Can't open the lock file {Path.Combine(_h.SocketDir, BrokerServer.LockFileName)}", ex.Message);
+            Assert.DoesNotContain("Another", ex.Message);
+        }
+        finally
+        {
+            File.SetUnixFileMode(_h.SocketDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
 }

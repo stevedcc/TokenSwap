@@ -234,4 +234,43 @@ public class BrokerCommandTests : IDisposable
         }
         Assert.False(File.Exists(BrokerJson));
     }
+
+    [Fact]
+    public async Task EditLock_HeldByAnotherProcess_IsAConcurrentChange_AndNothingIsWritten()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
+        _m.Ok("", AddGithub);
+        var before = File.ReadAllBytes(BrokerJson);
+        using var held = await BrokerHarness.HoldLockInAnotherProcessAsync(EditLock);
+        if (held is null)
+            return; // no flock(1) on this machine
+
+        var (exit, _, err) = _m.Run("", AddOther);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Another 'tswap broker' change is running", err);
+        Assert.Equal(before, File.ReadAllBytes(BrokerJson));
+    }
+
+    [Fact]
+    public void EditLock_ThatCantBeCreated_EACCES_IsAnErrorNamingTheFile()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // root creates the file anyway
+        File.SetUnixFileMode(_m.Dir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // 0500: no new files
+        try
+        {
+            var (exit, _, err) = _m.Run("", AddOther);
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains($"Can't open the broker.json edit lock {EditLock}", err);
+            Assert.DoesNotContain("Another 'tswap broker' change", err);
+        }
+        finally
+        {
+            File.SetUnixFileMode(_m.Dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Assert.False(File.Exists(BrokerJson));
+    }
 }

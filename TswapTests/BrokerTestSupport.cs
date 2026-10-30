@@ -276,6 +276,35 @@ public sealed class BrokerHarness : IAsyncDisposable
     public async Task<string> GetAsync(string socketName, string target, string extraHeaders = "", string method = "GET") =>
         Encoding.Latin1.GetString(await SendRawAsync(socketName, $"{method} {target} HTTP/1.1\r\nHost: broker\r\n{extraHeaders}Connection: close\r\n\r\n"));
 
+    /// <summary>
+    /// Another process (flock(1)) holding an exclusive lock on <paramref name="path"/> until disposed;
+    /// returns once it holds it. Null when flock(1) isn't installed.
+    /// </summary>
+    internal static async Task<IDisposable?> HoldLockInAnotherProcessAsync(string path)
+    {
+        if (!File.Exists("/usr/bin/flock"))
+            return null;
+        var psi = new System.Diagnostics.ProcessStartInfo("/usr/bin/flock", ["-x", path, "-c", "echo held; cat"])
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+        };
+        var holder = System.Diagnostics.Process.Start(psi)!;
+        var line = await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Xunit.Assert.Equal("held", line);
+        return new OtherProcessLock(holder);
+    }
+
+    private sealed class OtherProcessLock(System.Diagnostics.Process process) : IDisposable
+    {
+        public void Dispose()
+        {
+            process.StandardInput.Close(); // cat ends, flock releases the lock
+            process.WaitForExit();
+            process.Dispose();
+        }
+    }
+
     /// <summary>The body of an HTTP/1.1 response (de-chunked when chunked).</summary>
     public static string BodyOf(string response)
     {
