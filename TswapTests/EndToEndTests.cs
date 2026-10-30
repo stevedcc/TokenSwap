@@ -223,9 +223,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("hello-world", "ingest", "test-val");
 
         // A command that ignores its arguments and exits 0 — proving substitution worked.
-        // 'true' is POSIX-only; 'cmd /c rem' is the Windows no-op equivalent.
+        // 'true' is POSIX-only; on Windows a PowerShell script file that exits 0 (#105 refuses
+        // inline 'cmd /c' / 'pwsh -Command' code, so the Windows child is a script file).
+        var noop = Path.Combine(_tempDir, "noop.ps1");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(noop, "exit 0\n");
         var (exit, _, _) = OperatingSystem.IsWindows()
-            ? RunTswap("run", "cmd", "/c", "rem", "{{test-val}}")
+            ? RunTswap("run", "pwsh", "-NoProfile", "-File", noop, "{{test-val}}")
             : RunTswap("run", "true", "{{test-val}}");
 
         Assert.Equal(0, exit);
@@ -259,20 +263,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
-        // Regression test for issue #74 / fix for issue #75.
-        // tswap now execs argv[0] directly (no shell wrapper), so the compound command
-        // is passed as a single literal argument to sh -c — exactly as the user's shell
-        // already parsed it. No artificial quoting workaround is needed.
+        // Regression test for issue #74: the first line of the child's stdout must not be
+        // dropped. Since #105 inline shell code (`sh -c`) is refused, so the child is a
+        // script file that prints before / the secret / after; the redactor must catch the
+        // raw value (s3cr3t) in the output.
         //
         // Coverage note: the test harness redirects all three streams so tswap always
         // uses FallbackPty, not UnixPty. This test guards the FallbackPty (pipe) path
         // and the shared StreamRedactor logic against future regressions.
-        //
-        // 'echo' is not blocked (only the top-level command, "sh", is checked against
-        // the blocklist). The redactor must catch the raw value (s3cr3t) in the output.
-        var (exit, stdout, _) = RunTswap(
-            "run", "sh", "-c",
-            "echo before; echo {{my-secret}}; echo after");
+        var script = Path.Combine(_tempDir, "print3.sh");
+        File.WriteAllText(script, "echo before\necho \"$1\"\necho after\n");
+        var (exit, stdout, _) = RunTswap("run", "sh", script, "{{my-secret}}");
 
         Assert.Equal(0, exit);
         Assert.Contains("before",  stdout);
@@ -282,33 +283,28 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
-    /// Regression test for issue #75: compound shell commands passed via sh -c work
-    /// correctly end-to-end. This is the exact user scenario from the bug report:
+    /// Issue #105 (owner decision, 2026-10-29): inline shell code is refused, reversing the
+    /// compound-command support of #75. The exact #75 scenario,
     ///   tswap run sh -c 'echo before; echo {{my-secret}}; echo after'
-    /// The user's shell strips the outer single quotes; tswap receives the compound
-    /// command as a single argv element and execs sh directly with it — no intermediate
-    /// bash re-parsing that would split the compound command on semicolons.
+    /// must now fail before anything runs and point to a script file. (The redaction and
+    /// first-line coverage #75's test also gave lives on in the two
+    /// Run_FirstLineOfStdoutNotDropped tests, which use a script file.)
     /// </summary>
     [Fact]
-    public void Run_CompoundCommandViaShellDashC()
+    public void Run_CompoundCommandViaShellDashC_IsRefused()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX sh/echo only
-
         RunTswap("init");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
-        // Simulate what the user's shell delivers to tswap after stripping outer quotes:
-        // the compound command arrives as one argument, not split on the semicolons.
-        var (exit, stdout, _) = RunTswap(
+        var (exit, stdout, stderr) = RunTswap(
             "run", "sh", "-c",
             "echo before; echo {{my-secret}}; echo after");
 
-        Assert.Equal(0, exit);
-        Assert.Contains("before",  stdout);
-        Assert.Contains("after",   stdout);
-        Assert.DoesNotContain("s3cr3t", stdout);
-        Assert.Contains("[REDACTED: my-secret]", stdout);
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("before", stdout);
+        Assert.DoesNotContain("s3cr3t", stdout + stderr);
+        Assert.Contains("inline code", stderr);
+        Assert.Contains("script file", stderr);
     }
 
     /// <summary>
@@ -347,15 +343,16 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         //   1. Replace bash's own fds 0/1/2 with the slave PTY (making tswap see a real TTY).
         //   2. Replace bash with the tswap binary so it inherits those slave fds.
         //
-        // The compound command is passed as a plain double-quoted string in the bash script.
-        // Bash passes it as a single argv element to tswap, and tswap exec's sh directly
-        // with that element as the -c argument — no intermediate shell re-parsing.
+        // The child is a script file printing before / the secret / after (#105 refuses
+        // inline `sh -c` code); tswap execs sh directly with the script and the secret as $1.
+        var childScript = Path.Combine(_tempDir, "print3.sh");
+        File.WriteAllText(childScript, "echo before\necho \"$1\"\necho after\n");
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
             $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
             $"exec \"{_binaryPath}\"" +
-            $" run sh -c \"echo before; echo {{{{my-secret}}}}; echo after\"\n");
+            $" run sh \"{childScript}\" {{{{my-secret}}}}\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add(scriptPath);
@@ -486,11 +483,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("test-password-123", "ingest", "my-pass");
 
         // Verify the substituted value is non-empty (can't use redirect/pipe due to
-        // exfiltration protection). POSIX: test -n; Windows: pwsh length check — the
-        // whole -Command script is one argv element, so substitution happens inside it.
+        // exfiltration protection). POSIX: test -n; Windows: a PowerShell script file that
+        // checks its argument's length (#105 refuses inline 'pwsh -Command' code).
+        var check = Path.Combine(_tempDir, "check.ps1");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(check, "param($v)\nif ($v.Length -gt 0) { exit 0 } else { exit 1 }\n");
         var (exit, _, _) = OperatingSystem.IsWindows()
-            ? RunTswap("run", "pwsh", "-NoProfile", "-Command",
-                "if ('{{my-pass}}'.Length -gt 0) { exit 0 } else { exit 1 }")
+            ? RunTswap("run", "pwsh", "-NoProfile", "-File", check, "{{my-pass}}")
             : RunTswap("run", "test", "-n", "{{my-pass}}");
 
         Assert.Equal(0, exit);
@@ -752,9 +751,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // use only strings unique to each pipeline stage: the verbose token line
         // (pre-PTY) and the redaction marker (only ever emitted from redacted child
         // output). The raw secret never appears in verbose output (it is masked).
+        // #105 refuses inline 'pwsh -Command' code, so the child is a script file taking the
+        // secret as its argument; the printed sequence and the assertions are unchanged.
+        var printScript = Path.Combine(_tempDir, "print3.ps1");
+        File.WriteAllText(printScript,
+            "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
         var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: my-secret]",
-            "run", "-v", "pwsh", "-NoProfile", "-Command",
-            "Write-Output before; Write-Output {{my-secret}}; Write-Output after; Start-Sleep -Milliseconds 1500");
+            "run", "-v", "pwsh", "-NoProfile", "-File", printScript, "{{my-secret}}");
 
         // Assert via Assert.True with the full escaped capture: xunit truncates the
         // haystack in Contains failures, which hides the VT stream needed to diagnose

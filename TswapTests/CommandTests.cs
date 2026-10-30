@@ -828,6 +828,66 @@ public class CommandTests : IDisposable
         Assert.Contains("expose secret", stderr);
     }
 
+    // Issue #105: inline code is refused, a script file is the way out.
+    [Fact]
+    public void Run_ShellWithInlineCode_IsRefused_AndRunsNothing()
+    {
+        RunTswap("init");
+        RunTswap("create", "inline-test");
+        var marker = Path.Combine(_tempDir, "ran");
+
+        var (exit, _, stderr) = RunTswap("run", "sh", "-c", $"touch {marker}; true {{{{inline-test}}}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("inline code", stderr);
+        Assert.Contains("script file", stderr);
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
+    [Fact]
+    public void Run_InlineCodeFlagFromATokenAfterSubstitution_IsRefused()
+    {
+        // `run sh {{opt}} ...` where opt = "-c": the pre-substitution check sees "{{opt}}";
+        // the post-substitution re-check must see "-c".
+        RunTswap("init");
+        RunTswapWithStdin("-c", "ingest", "opt");
+        var marker = Path.Combine(_tempDir, "ran");
+
+        var (exit, _, stderr) = RunTswap("run", "sh", "{{opt}}", $"touch {marker}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("inline code", stderr);
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
+    [Fact]
+    public void Run_ShellWithAScriptFile_RunsIt()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // POSIX sh only (until #181: reported as Passed on Windows)
+
+        RunTswap("init");
+        RunTswap("create", "script-test");
+        var script = Path.Combine(_tempDir, "script.sh");
+        File.WriteAllText(script, "test -n \"$1\" && exit 7\n");
+
+        var (exit, stdout, stderr) = RunTswap("run", "sh", script, "{{script-test}}");
+
+        Assert.True(exit == 7, $"the script should get the secret as $1 and exit 7; exit {exit}: {stdout}{stderr}");
+    }
+
+    [Fact]
+    public void Run_ShellBehindAWrapper_IsRefused()
+    {
+        RunTswap("init");
+        RunTswap("create", "wrapped-test");
+
+        var (exit, _, stderr) = RunTswap("run", "timeout", "5", "sh", "-c", "true {{wrapped-test}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'timeout' runs 'sh'", stderr);
+    }
+
     [Fact]
     public void Run_PipeBlockedFails()
     {
