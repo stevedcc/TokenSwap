@@ -142,10 +142,10 @@ public sealed record CommandContext(
 
     private int ChooseSerial(IReadOnlyList<int> serials)
     {
-        Console.Out.WriteLine("\nMultiple YubiKeys detected:");
+        Console.Error.WriteLine("\nMultiple YubiKeys detected:");
         for (int i = 0; i < serials.Count; i++)
-            Console.Out.WriteLine($"  {i + 1}. Serial: {serials[i]}");
-        Console.Out.Write($"Select YubiKey (1-{serials.Count}): ");
+            Console.Error.WriteLine($"  {i + 1}. Serial: {serials[i]}");
+        Console.Error.Write($"Select YubiKey (1-{serials.Count}): ");
         var input = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))
             return serials[0]; // blank/EOF = default to the first key

@@ -221,6 +221,22 @@ public class TwoYubiKeysTests : IDisposable
         Assert.Contains("entropy-secret", _m.Ok("", "names"));
     }
 
+    // Owner decision 2026-10-30 (T7 fix round 1): the enrolment key prompt is on stderr too.
+    [Fact]
+    public void Enrolment_TheWhichKeyPromptIsOnStderr()
+    {
+        _m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, stdout, stderr) = _m.Run("2\n", "init", "--keyring", "--no-recovery");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Multiple YubiKeys detected", stderr);
+        Assert.Contains("Select YubiKey (1-2)", stderr);
+        Assert.DoesNotContain("Multiple YubiKeys detected", stdout);
+        Assert.DoesNotContain("Select YubiKey", stdout);
+        Assert.Equal(SerialB, YubiKeySlotBlob.Decode(_m.Keyring.Slots.Single().HwBlob!).Serial);
+    }
+
     // A classic XOR vault: either enrolled key opens it, so unattended takes the first that answers.
     private void ClassicVaultWithAAndB()
     {
