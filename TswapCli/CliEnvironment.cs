@@ -15,7 +15,7 @@ public sealed class CliEnvironment
     public required string ConfigDir { get; init; }
     public required bool Verbose { get; init; }
 
-    /// <summary>Command-line args with -v/--verbose removed.</summary>
+    /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
     public static CliEnvironment FromSystem(string[] args) => new()
@@ -28,9 +28,23 @@ public sealed class CliEnvironment
             Console.Error,
             Environment.IsPrivilegedProcess,
             DefaultApplicationDataDir),
-        Verbose = args.Any(a => a is "-v" or "--verbose"),
-        CommandArgs = args.Where(a => a is not ("-v" or "--verbose")).ToArray(),
+        Verbose = SplitGlobalFlags(args).Verbose,
+        CommandArgs = SplitGlobalFlags(args).CommandArgs,
     };
+
+    /// <summary>
+    /// Splits off tswap's global flags (<c>-v</c>/<c>--verbose</c>): only the leading run before
+    /// the command name (brief T7 item 2, #182). Everything from the command name on is the
+    /// command's, so <c>tswap run grep -v x {{s}}</c> keeps grep's <c>-v</c> and a burn reason
+    /// that is literally <c>-v</c> is kept.
+    /// </summary>
+    public static (bool Verbose, string[] CommandArgs) SplitGlobalFlags(string[] args)
+    {
+        var i = 0;
+        while (i < args.Length && args[i] is "-v" or "--verbose")
+            i++;
+        return (i > 0, args[i..]);
+    }
 
     /// <summary>
     /// The per-user config base: $XDG_CONFIG_HOME or $HOME/.config on Unix, %APPDATA% on Windows.

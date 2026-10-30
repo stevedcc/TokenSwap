@@ -24,7 +24,7 @@ public interface ICliCommand
 
     /// <summary>
     /// Executes with <paramref name="args"/> = everything after the command name
-    /// (global -v/--verbose flags already stripped). Returns the process exit code.
+    /// (the leading global -v/--verbose flags already stripped). Returns the process exit code.
     /// </summary>
     int Execute(CommandContext ctx, string[] args);
 }

@@ -44,12 +44,14 @@ public class CommandTests : IDisposable
     private (int exitCode, string stdout, string stderr) Execute(string stdin, string[] args)
     {
         var console = new FakeConsole(stdin);
+        // The global flags are split off as the binary does (CliEnvironment.FromSystem).
+        var (verbose, commandArgs) = CliEnvironment.SplitGlobalFlags(args);
         var env = new CliEnvironment
         {
             Prefix = "tswap",
             ConfigDir = _tempDir,
-            Verbose = args.Any(a => a is "-v" or "--verbose"),
-            CommandArgs = args.Where(a => a is not ("-v" or "--verbose")).ToArray(),
+            Verbose = verbose,
+            CommandArgs = commandArgs,
         };
         var storage = new Storage(_tempDir);
         var yubiKeys = new TestKeyYubiKeyService(_testKey);
@@ -874,6 +876,66 @@ public class CommandTests : IDisposable
         var (exit, stdout, stderr) = RunTswap("run", "sh", script, "{{script-test}}");
 
         Assert.True(exit == 7, $"the script should get the secret as $1 and exit 7; exit {exit}: {stdout}{stderr}");
+    }
+
+    // Brief T7 item 2 (#182): -v after the command name belongs to the command. `grep -v -x -e
+    // <value> file` over a file holding only the value matches nothing inverted (exit 1); with
+    // its -v stripped it would match the line (exit 0).
+    [Theory]
+    [InlineData("-v")]
+    [InlineData("--verbose")]
+    [InlineData(null)]
+    public void Run_ChildsOwnVerboseFlag_ReachesTheChild(string? globalFlag)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return; // POSIX grep only (until #181: reported as Passed on Windows)
+
+        RunTswap("init");
+        RunTswapWithStdin("grep-pattern-value", "ingest", "grep-pat");
+        var file = Path.Combine(_tempDir, "lines.txt");
+        File.WriteAllText(file, "grep-pattern-value\n");
+        string[] command = ["run", "grep", "-v", "-x", "-e", "{{grep-pat}}", file];
+
+        var (exit, stdout, stderr) = RunTswap(globalFlag == null ? command : [globalFlag, .. command]);
+
+        Assert.True(exit == 1, $"grep must get its -v (exit 1: no non-matching line); exit {exit}: {stdout}{stderr}");
+        if (globalFlag != null)
+            Assert.Contains("Found tokens: grep-pat", stdout); // tswap's own -v still makes it verbose
+        else
+            Assert.DoesNotContain("Found tokens", stdout);
+    }
+
+    [Fact]
+    public void Burn_ReasonThatIsLiterallyDashV_IsKept()
+    {
+        RunTswap("init");
+        RunTswap("create", "dash-v-key");
+
+        var (exit, _, stderr) = RunTswap("burn", "dash-v-key", "-v");
+        Assert.True(exit == 0, stderr);
+
+        var (_, json, _) = RunTswap("burned", "--json");
+        Assert.Contains("\"-v\"", json);
+    }
+
+    [Theory]
+    [InlineData("-v")]
+    [InlineData("--verbose")]
+    public void GlobalVerboseFlag_BeforeTheCommand_IsStillVerbose(string flag)
+    {
+        var (verbose, commandArgs) = CliEnvironment.SplitGlobalFlags([flag, "names"]);
+
+        Assert.True(verbose);
+        Assert.Equal(["names"], commandArgs);
+    }
+
+    [Fact]
+    public void SplitGlobalFlags_KeepsEveryFlagAfterTheCommandName()
+    {
+        var (verbose, commandArgs) = CliEnvironment.SplitGlobalFlags(["run", "curl", "-v", "--verbose", "https://x", "{{t}}"]);
+
+        Assert.False(verbose);
+        Assert.Equal(["run", "curl", "-v", "--verbose", "https://x", "{{t}}"], commandArgs);
     }
 
     [Fact]
