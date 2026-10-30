@@ -26,15 +26,40 @@ public class SkillEvalTests(ITestOutputHelper output)
         return data;
     }
 
+    /// <summary>
+    /// Whether the eval can run here: Linux, and a bubblewrap that can actually make a sandbox (a
+    /// user namespace; Ubuntu 24.04 restricts them through AppArmor). Otherwise the test says so and
+    /// returns, except when CI_REQUIRE_BWRAP=1 (the Linux CI job sets it): then it fails, so CI can't
+    /// skip the eval silently (fix round 3).
+    /// </summary>
     private bool CanRun()
     {
         if (!OperatingSystem.IsLinux())
             return false; // the eval is Linux-only (until #181: reported as Passed elsewhere)
-        if (File.Exists("/usr/bin/bwrap") || File.Exists("/bin/bwrap"))
+        var problem = BwrapProblem.Value;
+        if (problem == null)
             return true;
-        output.WriteLine("SKIPPED: bubblewrap (bwrap) is not installed, so the skill eval can't run here.");
+        if (Environment.GetEnvironmentVariable("CI_REQUIRE_BWRAP") == "1")
+            Assert.Fail($"CI_REQUIRE_BWRAP=1 but the skill eval can't run: {problem}");
+        output.WriteLine($"SKIPPED: the skill eval can't run here: {problem}");
         return false;
     }
+
+    /// <summary>Null when bwrap is installed and makes a sandbox; otherwise why not.</summary>
+    private static readonly Lazy<string?> BwrapProblem = new(() =>
+    {
+        var bwrap = new[] { "/usr/bin/bwrap", "/bin/bwrap" }.FirstOrDefault(File.Exists);
+        if (bwrap == null)
+            return "bubblewrap (bwrap) is not installed";
+        var psi = new ProcessStartInfo(bwrap) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (var a in new[] { "--unshare-user", "--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--", "/bin/true" })
+            psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        var err = p.StandardError.ReadToEndAsync();
+        if (!p.WaitForExit(TimeSpan.FromSeconds(30)))
+            return "bwrap did not finish a trivial sandbox in 30 s";
+        return p.ExitCode == 0 ? null : $"bwrap can't make a sandbox (exit {p.ExitCode}: {err.Result.Trim()}); unprivileged user namespaces may be disabled";
+    });
 
     private static (int Exit, string Out) RunEval(IEnumerable<string> arguments, Action<ProcessStartInfo>? configure = null)
     {
