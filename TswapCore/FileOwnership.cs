@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using Microsoft.Win32.SafeHandles;
 
 namespace TswapCore;
 
@@ -16,33 +15,44 @@ public interface IUnixOwnership
     /// <summary>The process's effective uid.</summary>
     uint EffectiveUid { get; }
 
-    /// <summary>The owner and group of <paramref name="path"/>, or null when they can't be read.</summary>
+    /// <summary>
+    /// The owner and group of <paramref name="path"/> itself (<c>lstat</c>: a symlink's own owner,
+    /// not its target's), or null when they can't be read.
+    /// </summary>
     (uint Uid, uint Gid)? GetOwner(string path);
 
     /// <summary>
-    /// Sets the owner and group of the open <paramref name="file"/> (<c>fchown</c>: never by
-    /// name, so no symlink is followed); <paramref name="path"/> is for the message. Throws on failure.
+    /// Switches the effective uid and gid to <paramref name="uid"/>/<paramref name="gid"/> (with no
+    /// supplementary groups) until the result is disposed; <paramref name="path"/> is for the
+    /// message. Throws, having changed nothing, when the switch fails.
     /// </summary>
-    void Chown(SafeFileHandle file, string path, uint uid, uint gid);
+    IDisposable ActAs(uint uid, uint gid, string path);
 }
 
 /// <summary>
-/// Every file tswap writes (config, secrets, backups, receipts, approve and export files) goes
-/// through here. Files are created mode 0600 (whatever the umask), with <c>O_EXCL</c>, so an
-/// existing name or symlink is never written through.
+/// Every file tswap reads or writes in a vault folder or as a command's output (config, secrets,
+/// backups, receipts, request, approve and export files) goes through here. Files are created
+/// mode 0600 (whatever the umask) under a random temp name with <c>O_EXCL</c>, then renamed over
+/// the target (which replaces a symlink there instead of writing through it). New folders are 0700.
 /// <para>
-/// T5 (found in the real-hardware test): a file written while privileged (sudo) into a folder
-/// owned by another user (the vault's user, via <c>SUDO_USER</c> or <c>TSWAP_CONFIG_DIR</c>) would
-/// be <c>root:root</c>, and the vault's user then can't read their own config. So, privileged on
-/// Unix and the folder owned by another uid ⇒ the file gets the folder's owner and group. That
-/// happens on the open file, before it gets its final name (MiMo review: a chown by name would
-/// follow a symlink the folder's owner planted there, e.g. to <c>/etc/shadow</c>). Windows,
-/// unprivileged runs and a folder this uid owns: no owner change.
+/// T5: run as root (sudo) on a folder owned by another user (the vault's user, via
+/// <c>SUDO_USER</c> or <c>TSWAP_CONFIG_DIR</c>), tswap does that file work <b>as the folder's
+/// owner</b> (effective uid and gid, no supplementary groups; the <c>sudoedit</c> approach), and
+/// keeps root only for the hardware. So files come out owned by that user, and anything the user
+/// planted in their own folder (a symlink to <c>/etc/shadow</c>, a folder swapped for a link
+/// halfway through) gets no further than the user's own rights. Chowning as root instead (the
+/// first fix) followed such links, on the read side too (reviews by MiMo and GLM).
+/// </para>
+/// <para>
+/// The owner is read with <c>lstat</c>, of the nearest existing folder: a user can only create
+/// entries they own, so a planted link makes tswap act as that user, never as root. A folder that
+/// really is root's (or this uid's) is worked on unchanged. Windows and unprivileged runs: no switch.
 /// </para>
 /// </summary>
 public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
 {
     private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    private const UnixFileMode FolderOwnerOnly = OwnerOnly | UnixFileMode.UserExecute;
 
     private readonly IUnixOwnership _ownership = ownership ?? new UnixOwnership();
 
@@ -51,13 +61,12 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
 
     /// <summary>
     /// Replaces <paramref name="path"/> atomically: a new temp file in the same folder, then a
-    /// rename over the name (which replaces a symlink there instead of writing through it). An
-    /// existing regular file keeps its mode unless the owner changes (then 0600).
+    /// rename over the name. An existing regular file keeps a mode the user chose for it.
     /// </summary>
     public void WriteAtomic(string path, ReadOnlySpan<byte> bytes)
     {
         var fullPath = Path.GetFullPath(path);
-        var owner = OwnerFor(fullPath);
+        using var _ = AsOwnerOf(fullPath);
         var tmp = $"{fullPath}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6))}.tmp";
         try
         {
@@ -65,19 +74,18 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             {
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
-                if (owner is { } o)
-                    _ownership.Chown(stream.SafeFileHandle, fullPath, o.Uid, o.Gid);
             }
             var existing = new FileInfo(fullPath);
             if (OperatingSystem.IsWindows() && existing.Exists)
             {
-                // File.Replace keeps the destination's ACLs and attributes on Windows.
+                // File.Replace keeps the destination's ACLs and attributes on Windows (no
+                // symlink-follow concern there: nothing runs as another account).
                 File.Replace(tmp, fullPath, destinationBackupFileName: null);
                 return;
             }
             // Keep a mode the user chose for this file (e.g. a tightened one); never copied from
             // a symlink's target.
-            if (!OperatingSystem.IsWindows() && owner == null && existing.Exists && existing.LinkTarget == null)
+            if (!OperatingSystem.IsWindows() && existing.Exists && existing.LinkTarget == null)
                 File.SetUnixFileMode(tmp, existing.UnixFileMode);
             File.Move(tmp, fullPath, overwrite: true);
         }
@@ -92,7 +100,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     public void WriteNew(string path, ReadOnlySpan<byte> bytes)
     {
         var fullPath = Path.GetFullPath(path);
-        var owner = OwnerFor(fullPath);
+        using var _ = AsOwnerOf(fullPath);
         var created = false;
         try
         {
@@ -100,8 +108,6 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             created = true;
             stream.Write(bytes);
             stream.Flush(flushToDisk: true);
-            if (owner is { } o)
-                _ownership.Chown(stream.SafeFileHandle, fullPath, o.Uid, o.Gid);
         }
         catch when (created)
         {
@@ -110,23 +116,54 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         }
     }
 
+    /// <summary>Reads <paramref name="path"/> (as its folder's owner, see the type's comment).</summary>
+    public byte[] ReadAllBytes(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        return File.ReadAllBytes(fullPath);
+    }
+
+    /// <summary>True when <paramref name="path"/> is an existing file (as its folder's owner).</summary>
+    public bool FileExists(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        return File.Exists(fullPath);
+    }
+
+    /// <summary>Creates <paramref name="path"/> and missing parents, mode 0700 on Unix.</summary>
+    public void CreateDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (Directory.Exists(fullPath))
+            return;
+        using var _ = AsOwnerOf(fullPath);
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(fullPath);
+        else
+            Directory.CreateDirectory(fullPath, FolderOwnerOnly);
+    }
+
     /// <summary>
-    /// The owner a file written to <paramref name="fullPath"/> must get, or null for no change.
-    /// Privileged and the folder's owner unreadable: refuses, before anything is written (MiMo
-    /// review: falling back silently would leave a root-owned file the vault's user can't read).
+    /// Acts as the owner of <paramref name="fullPath"/>'s nearest existing parent folder until
+    /// disposed, when privileged and that owner is another uid (see the type's comment).
+    /// Privileged and the owner unreadable: refuses, before anything is read or written.
     /// </summary>
-    private (uint Uid, uint Gid)? OwnerFor(string fullPath)
+    private IDisposable? AsOwnerOf(string fullPath)
     {
         if (OperatingSystem.IsWindows() || !_ownership.IsPrivileged)
             return null;
         var directory = Path.GetDirectoryName(fullPath);
+        while (directory != null && !Directory.Exists(directory) && !File.Exists(directory))
+            directory = Path.GetDirectoryName(directory);
         if (directory == null)
             return null;
         if (_ownership.GetOwner(directory) is not { } owner)
             throw new TswapException(
-                $"Running as root, but could not read the owner of {directory}; refusing to write " +
-                $"{Path.GetFileName(fullPath)} there as root (its user could not read it afterwards).");
-        return owner.Uid == _ownership.EffectiveUid ? null : owner;
+                $"Running as root, but could not read the owner of {directory}; refusing to touch " +
+                $"{Path.GetFileName(fullPath)} there as root.");
+        return owner.Uid == _ownership.EffectiveUid ? null : _ownership.ActAs(owner.Uid, owner.Gid, fullPath);
     }
 
     private static FileStream CreateNew(string path)
@@ -139,14 +176,17 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
 }
 
 /// <summary>
-/// The real <see cref="IUnixOwnership"/>: <c>geteuid</c>, <c>fchown</c>, and the owner from
-/// <c>statx</c> on Linux (its struct layout is the same on every architecture) or <c>stat</c> on
-/// macOS (64-bit-inode layout: <c>st_uid</c> at 16, <c>st_gid</c> at 20). Source-generated
-/// <see cref="LibraryImportAttribute"/> marshalling, so NativeAOT-safe.
+/// The real <see cref="IUnixOwnership"/>: <c>geteuid</c>; the owner from <c>statx</c> with
+/// <c>AT_SYMLINK_NOFOLLOW</c> on Linux (its struct layout is the same on every architecture) or
+/// <c>lstat</c> on macOS (64-bit-inode layout: <c>st_uid</c> at 16, <c>st_gid</c> at 20); and
+/// <c>setgroups</c>/<c>setegid</c>/<c>seteuid</c> for <see cref="ActAs"/> (process-wide on both:
+/// glibc applies them to every thread). Source-generated <see cref="LibraryImportAttribute"/>
+/// marshalling, so NativeAOT-safe.
 /// </summary>
 public sealed partial class UnixOwnership : IUnixOwnership
 {
     private const int AtFdCwd = -100;
+    private const int AtSymlinkNoFollow = 0x100;
     private const uint StatxUid = 0x00000008U;
     private const uint StatxGid = 0x00000010U;
     private const int StatxSize = 256;
@@ -166,15 +206,15 @@ public sealed partial class UnixOwnership : IUnixOwnership
             if (OperatingSystem.IsLinux())
             {
                 // struct statx: stx_mask(4) stx_blksize(4) stx_attributes(8) stx_nlink(4) stx_uid(4) stx_gid(4)
-                if (statx(AtFdCwd, path, 0, StatxUid | StatxGid, buffer) != 0)
+                if (statx(AtFdCwd, path, AtSymlinkNoFollow, StatxUid | StatxGid, buffer) != 0)
                     return null;
                 return (*(uint*)(buffer + 20), *(uint*)(buffer + 24));
             }
             if (OperatingSystem.IsMacOS())
             {
                 var result = RuntimeInformation.ProcessArchitecture == Architecture.Arm64
-                    ? stat_arm64(path, buffer)
-                    : stat_inode64(path, buffer);
+                    ? lstat_arm64(path, buffer)
+                    : lstat_inode64(path, buffer);
                 if (result != 0)
                     return null;
                 return (*(uint*)(buffer + 16), *(uint*)(buffer + 20));
@@ -182,33 +222,74 @@ public sealed partial class UnixOwnership : IUnixOwnership
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
-            // An old libc without statx: unknown (DirectoryOwnerMatcher then refuses to write as root).
+            // An old libc without statx: unknown (DirectoryOwnerMatcher then refuses as root).
         }
         return null;
     }
 
-    public void Chown(SafeFileHandle file, string path, uint uid, uint gid)
+    public unsafe IDisposable ActAs(uint uid, uint gid, string path)
     {
-        if (fchown(file, uid, gid) != 0)
+        var count = getgroups(0, null);
+        var groups = new uint[Math.Max(count, 0)];
+        fixed (uint* list = groups)
+            if (count < 0 || getgroups(groups.Length, list) != groups.Length)
+                throw new TswapException($"Could not read this process's groups (errno {Marshal.GetLastPInvokeError()}); nothing was done with {path}.");
+        var identity = new Identity(geteuid(), getegid(), groups);
+        if (SetGroups([]) != 0 || setegid(gid) != 0 || seteuid(uid) != 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            identity.Dispose();
             throw new TswapException(
-                $"Wrote {path}, but could not give it to uid {uid} (errno {Marshal.GetLastPInvokeError()}). " +
-                $"Fix its owner with: sudo chown {uid}:{gid} '{path}'");
+                $"Could not switch to uid {uid} (the owner of the folder) for {path} (errno {errno}); nothing was done with it.");
+        }
+        return identity;
+    }
+
+    /// <summary>Restores the saved identity: root's uid first (needed to set the rest).</summary>
+    private sealed class Identity(uint uid, uint gid, uint[] groups) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (seteuid(uid) != 0 || setegid(gid) != 0 || SetGroups(groups) != 0)
+                Environment.FailFast($"tswap: could not switch back to uid {uid} (errno {Marshal.GetLastPInvokeError()}).");
+        }
+    }
+
+    private static unsafe int SetGroups(uint[] groups)
+    {
+        fixed (uint* list = groups)
+            return OperatingSystem.IsMacOS() ? setgroups_mac(groups.Length, list) : setgroups_linux((nuint)groups.Length, list);
     }
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial uint geteuid();
 
     [LibraryImport("libc", SetLastError = true)]
-    private static partial int fchown(SafeFileHandle fd, uint owner, uint group);
+    private static partial uint getegid();
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int seteuid(uint uid);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int setegid(uint gid);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int getgroups(int size, uint* list);
+
+    [LibraryImport("libc", EntryPoint = "setgroups", SetLastError = true)]
+    private static unsafe partial int setgroups_linux(nuint size, uint* list);
+
+    [LibraryImport("libc", EntryPoint = "setgroups", SetLastError = true)]
+    private static unsafe partial int setgroups_mac(int size, uint* list);
 
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static unsafe partial int statx(int dirfd, string path, int flags, uint mask, byte* buffer);
 
-    [LibraryImport("libc", EntryPoint = "stat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    private static unsafe partial int stat_arm64(string path, byte* buffer);
+    [LibraryImport("libc", EntryPoint = "lstat", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static unsafe partial int lstat_arm64(string path, byte* buffer);
 
-    [LibraryImport("libc", EntryPoint = "stat$INODE64", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
-    private static unsafe partial int stat_inode64(string path, byte* buffer);
+    [LibraryImport("libc", EntryPoint = "lstat$INODE64", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static unsafe partial int lstat_inode64(string path, byte* buffer);
 }
 
 /// <summary>
@@ -218,13 +299,15 @@ public sealed partial class UnixOwnership : IUnixOwnership
 public static class FileBackup
 {
     /// <summary>
-    /// Copies <paramref name="file"/> to a new backup name, written by <paramref name="owner"/>
-    /// (null: <see cref="DirectoryOwnerMatcher.Default"/>): mode 0600, never through a symlink.
+    /// Copies <paramref name="file"/> to a new backup name, read and written by
+    /// <paramref name="owner"/> (null: <see cref="DirectoryOwnerMatcher.Default"/>): mode 0600, as
+    /// the folder's owner under sudo.
     /// </summary>
     public static string Copy(string file, DateTime utcNow, DirectoryOwnerMatcher? owner = null)
     {
-        var bytes = File.ReadAllBytes(file);
-        return Next(file, utcNow, backup => (owner ?? DirectoryOwnerMatcher.Default).WriteNew(backup, bytes));
+        owner ??= DirectoryOwnerMatcher.Default;
+        var bytes = owner.ReadAllBytes(file);
+        return Next(file, utcNow, backup => owner.WriteNew(backup, bytes));
     }
 
     /// <summary>Moves <paramref name="file"/> aside under a backup name (keeps its owner and mode).</summary>

@@ -77,7 +77,7 @@ public sealed record CommandContext(
         if (Storage is TswapCore.IFileVaultStore fileStore)
             fileStore.WriteFile(path, contents);
         else
-            File.WriteAllText(path, contents);
+            TswapCore.DirectoryOwnerMatcher.Default.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(contents));
     }
 
     public void RequireSudo(string commandName)

@@ -1,22 +1,26 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using Microsoft.Win32.SafeHandles;
 using TswapCore;
 using Xunit;
 
 namespace TswapTests;
 
 /// <summary>
-/// T5 hardware-test follow-up: files tswap writes while privileged (sudo) into a folder owned by
-/// another user get that folder's owner and group and mode 0600, so the vault's user can still
-/// read them. The owner-setting call goes through <see cref="IUnixOwnership"/>; these tests fake
-/// it, so no real root is needed.
+/// T5: run as root (sudo) on a folder owned by another user, tswap does its file work as that
+/// folder's owner (<see cref="DirectoryOwnerMatcher"/>), so files come out owned by the vault's
+/// user and nothing the user planted (a symlink to a root file) reaches root's rights. The
+/// identity switch goes through <see cref="IUnixOwnership"/>; these tests fake it, so no real root
+/// is needed. The fake can make a file readable only "as root" (outside an identity switch), which
+/// is how the read-side tests tell a read as the user from a read as root.
 /// </summary>
 public class FileOwnershipTests : IDisposable
 {
     private const uint UserUid = 1000;
     private const uint UserGid = 1001;
+    private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "tswap-owner-" + Guid.NewGuid().ToString("N")[..8]);
+    private readonly string _rootsFile = Path.Combine(Path.GetTempPath(), "tswap-roots-" + Guid.NewGuid().ToString("N")[..8]);
 
     public FileOwnershipTests() => Directory.CreateDirectory(_dir);
 
@@ -24,24 +28,44 @@ public class FileOwnershipTests : IDisposable
     {
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, true);
+        File.Delete(_rootsFile);
     }
 
-    /// <summary>Fake Unix ownership: who we are, who owns every folder, and every chown asked for.</summary>
+    /// <summary>
+    /// Fake Unix ownership: who we are, who owns every folder, and every identity switch asked
+    /// for. <see cref="RootOnly"/> files are unreadable (mode 0000) while a switch is active, as a
+    /// root-owned 0600 file is to the user.
+    /// </summary>
     internal sealed class FakeOwnership(bool privileged, uint euid, uint dirUid = UserUid, uint dirGid = UserGid) : IUnixOwnership
     {
-        public List<(string Path, uint Uid, uint Gid)> Chowns { get; } = [];
+        public List<(string Path, uint Uid, uint Gid)> Switches { get; } = [];
+        public List<string> RootOnly { get; } = [];
         public bool IsPrivileged => privileged;
         public uint EffectiveUid => euid;
         public bool OwnerUnreadable { get; set; }
-        public bool ChownFails { get; set; }
+        public bool SwitchFails { get; set; }
         public (uint Uid, uint Gid)? GetOwner(string path) => OwnerUnreadable ? null : (dirUid, dirGid);
 
-        public void Chown(SafeFileHandle file, string path, uint uid, uint gid)
+        public IDisposable ActAs(uint uid, uint gid, string path)
         {
-            Assert.False(file.IsInvalid);
-            if (ChownFails)
-                throw new TswapException($"could not give {path} to uid {uid}");
-            Chowns.Add((Path.GetFullPath(path), uid, gid));
+            if (OperatingSystem.IsWindows())
+                throw new PlatformNotSupportedException(); // never switched on Windows
+            if (SwitchFails)
+                throw new TswapException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
+            Switches.Add((Path.GetFullPath(path), uid, gid));
+            foreach (var file in RootOnly)
+                File.SetUnixFileMode(file, UnixFileMode.None);
+            return new Restore(RootOnly);
+        }
+
+        [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+        private sealed class Restore(List<string> rootOnly) : IDisposable
+        {
+            public void Dispose()
+            {
+                foreach (var file in rootOnly)
+                    File.SetUnixFileMode(file, OwnerOnly);
+            }
         }
     }
 
@@ -49,27 +73,40 @@ public class FileOwnershipTests : IDisposable
 
     private static Config SampleConfig() => new([], "", DateTime.UtcNow);
 
+    private static FakeOwnership AsRoot() => new(privileged: true, euid: 0);
+
+    /// <summary>A "root-owned" file the user must never read: readable only outside a switch.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private void PlantRootsFile(FakeOwnership fake)
+    {
+        File.WriteAllText(_rootsFile, "root's secret");
+        File.SetUnixFileMode(_rootsFile, OwnerOnly);
+        fake.RootOnly.Add(_rootsFile);
+    }
+
     [Fact]
-    public void Privileged_IntoAnotherUsersFolder_ConfigSecretsAndBackupGetTheFoldersOwner_Mode0600()
+    public void Privileged_IntoAnotherUsersFolder_ConfigSecretsAndBackupAreWrittenAsTheFoldersOwner_Mode0600()
     {
         if (OperatingSystem.IsWindows())
-            return; // no owner change on Windows
-        var fake = new FakeOwnership(privileged: true, euid: 0);
+            return; // no identity switch on Windows
+        var fake = AsRoot();
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         storage.SaveConfig(SampleConfig());
         storage.SaveSecrets(new SecretsDb([]), RandomNumberGenerator.GetBytes(32));
         var backup = storage.BackupConfig();
 
-        Assert.Equal(
-            [(P("config.json"), UserUid, UserGid), (P("secrets.json.enc"), UserUid, UserGid), (Path.GetFullPath(backup), UserUid, UserGid)],
-            fake.Chowns);
+        var paths = fake.Switches.Select(s => s.Path).ToList();
+        Assert.Contains(P("config.json"), paths);
+        Assert.Contains(P("secrets.json.enc"), paths);
+        Assert.Contains(Path.GetFullPath(backup), paths);
+        Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
         foreach (var file in new[] { P("config.json"), P("secrets.json.enc"), backup })
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+            Assert.Equal(OwnerOnly, File.GetUnixFileMode(file));
     }
 
     [Fact]
-    public void Unprivileged_NoChownIsRequested()
+    public void Unprivileged_NoSwitchIsRequested()
     {
         var fake = new FakeOwnership(privileged: false, euid: UserUid + 5);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
@@ -77,25 +114,25 @@ public class FileOwnershipTests : IDisposable
         storage.SaveConfig(SampleConfig());
         storage.BackupConfig();
 
-        Assert.Empty(fake.Chowns);
+        Assert.Empty(fake.Switches);
     }
 
     [Fact]
-    public void Privileged_IntoItsOwnFolder_NoChownIsRequested()
+    public void Privileged_IntoItsOwnFolder_NoSwitchIsRequested()
     {
         var fake = new FakeOwnership(privileged: true, euid: UserUid);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         storage.SaveConfig(SampleConfig());
 
-        Assert.Empty(fake.Chowns);
+        Assert.Empty(fake.Switches);
     }
 
     [Fact]
-    public void SudoCommands_SlotMergeAndApprove_HandBackConfigBackupAndTheirFiles()
+    public void SudoCommands_SlotMergeAndApprove_WriteConfigBackupAndTheirFilesAsTheFoldersOwner()
     {
         if (OperatingSystem.IsWindows())
-            return; // no owner change on Windows
+            return; // no identity switch on Windows
         // The hardware test's bug: 'sudo tswap slot merge' left config.json and its backup root-owned.
         var keys = SimulatedYubiKeyService.WithKeys(11111111);
         keys.PluggedIn = [];
@@ -105,60 +142,83 @@ public class FileOwnershipTests : IDisposable
         keys.PluggedIn = [11111111];
         desktop.Ok("", "slot", "request", desktop.PathOf("request.json"));
 
-        var fake = new FakeOwnership(privileged: true, euid: 0);
+        var fake = AsRoot();
         router.Ownership = new DirectoryOwnerMatcher(fake);
         router.Ok("", "slot", "approve", desktop.PathOf("request.json"), desktop.PathOf("approve.json"));
-        var approveChowns = fake.Chowns.Select(c => c.Path).ToList();
-        Assert.Contains(Path.GetFullPath(router.ConfigPath), approveChowns);            // ApprovedSlots
-        Assert.Contains(Path.GetFullPath(desktop.PathOf("approve.json")), approveChowns); // the approve file
+        var approvePaths = fake.Switches.Select(s => s.Path).ToList();
+        Assert.Contains(Path.GetFullPath(router.ConfigPath), approvePaths);            // ApprovedSlots
+        Assert.Contains(Path.GetFullPath(desktop.PathOf("approve.json")), approvePaths); // the approve file
 
         desktop.Ok("", "slot", "accept", desktop.PathOf("approve.json"));
-        fake.Chowns.Clear();
+        fake.Switches.Clear();
         router.Ok("", "slot", "merge", desktop.PathOf("approve.json.receipt.json"));
 
-        var mergeChowns = fake.Chowns.Select(c => c.Path).ToList();
-        Assert.Contains(Path.GetFullPath(router.ConfigPath), mergeChowns);
-        Assert.Contains(Path.GetFullPath(Assert.Single(router.Backups)), mergeChowns);
-        Assert.All(fake.Chowns, c => Assert.Equal((UserUid, UserGid), (c.Uid, c.Gid)));
+        var mergePaths = fake.Switches.Select(s => s.Path).ToList();
+        Assert.Contains(Path.GetFullPath(router.ConfigPath), mergePaths);
+        Assert.Contains(Path.GetFullPath(Assert.Single(router.Backups)), mergePaths);
+        Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
     }
 
     [Fact]
     public void Privileged_WriteToASymlink_ReplacesTheLink_AndNeverTouchesItsTarget()
     {
-        // MiMo review of the fix: 'sudo tswap export ~/x.json' with ~/x.json a link to /etc/shadow
-        // must not write through the link, nor hand the target to the folder's owner.
+        // MiMo review: 'sudo tswap export ~/x.json' with ~/x.json a link to /etc/shadow must not
+        // write through the link.
         if (OperatingSystem.IsWindows())
             return;
-        var victim = Path.Combine(Path.GetTempPath(), "tswap-victim-" + Guid.NewGuid().ToString("N")[..8]);
-        File.WriteAllText(victim, "root's file");
-        try
-        {
-            var link = P("export.json");
-            File.CreateSymbolicLink(link, victim);
-            var fake = new FakeOwnership(privileged: true, euid: 0);
-            var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
+        File.WriteAllText(_rootsFile, "root's file");
+        var link = P("export.json");
+        File.CreateSymbolicLink(link, _rootsFile);
+        var fake = AsRoot();
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
-            storage.WriteFile(link, "{\"export\":1}");
+        storage.WriteFile(link, "{\"export\":1}");
 
-            Assert.Equal("root's file", File.ReadAllText(victim));
-            Assert.Null(new FileInfo(link).LinkTarget);
-            Assert.Equal("{\"export\":1}", File.ReadAllText(link));
-            Assert.Equal([(link, UserUid, UserGid)], fake.Chowns);
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(link));
-        }
-        finally
-        {
-            File.Delete(victim);
-        }
+        Assert.Equal("root's file", File.ReadAllText(_rootsFile));
+        Assert.Null(new FileInfo(link).LinkTarget);
+        Assert.Equal("{\"export\":1}", File.ReadAllText(link));
+        Assert.Equal([(link, UserUid, UserGid)], fake.Switches);
+        Assert.Equal(OwnerOnly, File.GetUnixFileMode(link));
+    }
+
+    [Fact]
+    public void Privileged_BackupOfAConfigJsonLinkedToARootFile_IsReadAsTheUser_AndFails()
+    {
+        // GLM review: the backup read config.json through a planted symlink as root and handed the
+        // copy to the folder's owner.
+        if (OperatingSystem.IsWindows())
+            return;
+        var fake = AsRoot();
+        PlantRootsFile(fake);
+        File.CreateSymbolicLink(P("config.json"), _rootsFile);
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
+
+        Assert.Throws<UnauthorizedAccessException>(() => storage.BackupConfig());
+
+        Assert.Empty(Directory.GetFiles(_dir, "config.json.bak-*"));
+    }
+
+    [Fact]
+    public void Privileged_LoadingAConfigJsonLinkedToARootFile_IsReadAsTheUser_AndFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var fake = AsRoot();
+        PlantRootsFile(fake);
+        File.CreateSymbolicLink(P("config.json"), _rootsFile);
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
+
+        Assert.Throws<UnauthorizedAccessException>(() => storage.LoadConfig());
     }
 
     [Fact]
     public void Privileged_TheFoldersOwnerCannotBeRead_RefusesBeforeWriting()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no owner change on Windows
         // MiMo review: a failed statx used to fall back silently to a root-owned file.
-        var fake = new FakeOwnership(privileged: true, euid: 0) { OwnerUnreadable = true };
+        if (OperatingSystem.IsWindows())
+            return;
+        var fake = AsRoot();
+        fake.OwnerUnreadable = true;
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         var ex = Assert.Throws<TswapException>(() => storage.SaveConfig(SampleConfig()));
@@ -168,39 +228,55 @@ public class FileOwnershipTests : IDisposable
     }
 
     [Fact]
-    public void Privileged_ChownFails_TheOldFileIsKept_AndNoTempFileIsLeft()
-    {
-        if (OperatingSystem.IsWindows())
-            return; // no owner change on Windows
-        var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
-        storage.SaveConfig(SampleConfig());
-        var before = File.ReadAllText(P("config.json"));
-        var failing = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: true, euid: 0) { ChownFails = true }));
-
-        Assert.Throws<TswapException>(() => failing.SaveConfig(SampleConfig() with { YubiKeySerials = [1] }));
-
-        Assert.Equal(before, File.ReadAllText(P("config.json")));
-        Assert.Equal([P("config.json")], Directory.GetFiles(_dir).Select(Path.GetFullPath));
-    }
-
-    [Fact]
-    public void NewFiles_AreCreated0600_WhateverTheUmask()
+    public void Privileged_TheSwitchFails_TheOldFileIsKept_AndNothingIsWritten()
     {
         if (OperatingSystem.IsWindows())
             return;
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
-
         storage.SaveConfig(SampleConfig());
-        storage.SaveSecrets(new SecretsDb([]), RandomNumberGenerator.GetBytes(32));
-        var backup = storage.BackupConfig();
-        storage.WriteFile(P("receipt.json"), "{}");
+        var before = File.ReadAllText(P("config.json"));
+        var fake = AsRoot();
+        fake.SwitchFails = true;
+        var failing = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
-        foreach (var file in new[] { P("config.json"), P("secrets.json.enc"), backup, P("receipt.json") })
-            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+        var ex = Assert.Throws<TswapException>(() => failing.SaveConfig(SampleConfig() with { YubiKeySerials = [1] }));
+
+        Assert.Contains("nothing was done", ex.Message);
+        Assert.Equal(before, File.ReadAllText(P("config.json")));
+        Assert.Equal([P("config.json")], Directory.GetFiles(_dir).Select(Path.GetFullPath));
+    }
+
+    [DllImport("libc", EntryPoint = "umask")]
+    private static extern uint SetUmask(uint mask);
+
+    [Fact]
+    public void NewFilesAndFolders_AreOwnerOnly_EvenUnderUmask0()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var old = SetUmask(0);
+        try
+        {
+            var vault = Path.Combine(_dir, "new", "tswap");
+            var storage = new Storage(vault, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
+
+            storage.SaveConfig(SampleConfig());
+            storage.SaveSecrets(new SecretsDb([]), RandomNumberGenerator.GetBytes(32));
+            var backup = storage.BackupConfig();
+            storage.WriteFile(Path.Combine(vault, "receipt.json"), "{}");
+
+            Assert.Equal(OwnerOnly | UnixFileMode.UserExecute, File.GetUnixFileMode(vault));
+            foreach (var file in new[] { "config.json", "secrets.json.enc", Path.GetFileName(backup), "receipt.json" })
+                Assert.Equal(OwnerOnly, File.GetUnixFileMode(Path.Combine(vault, file)));
+        }
+        finally
+        {
+            SetUmask(old);
+        }
     }
 
     [Fact]
-    public void TheRealUnixCalls_ReadTheOwnerOfAFolder_AndChownToItselfWorks()
+    public void TheRealUnixCalls_ReadTheOwnerOfAFolderAndOfALinkItself()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -210,9 +286,8 @@ public class FileOwnershipTests : IDisposable
 
         Assert.NotNull(owner);
         Assert.Equal(real.EffectiveUid, owner!.Value.Uid); // this process created the folder
-        var file = P("probe");
-        using (var stream = File.Create(file))
-            real.Chown(stream.SafeFileHandle, file, owner.Value.Uid, owner.Value.Gid); // a no-op chown is allowed unprivileged
-        Assert.Equal(owner, real.GetOwner(file));
+        var link = P("link");
+        File.CreateSymbolicLink(link, "/"); // the target is root's; the link itself is ours
+        Assert.Equal(owner, real.GetOwner(link));
     }
 }

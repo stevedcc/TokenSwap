@@ -42,17 +42,17 @@ public class Storage : IFileVaultStore
 
     public Config LoadConfig()
     {
-        if (!File.Exists(ConfigFile))
+        if (!_owner.FileExists(ConfigFile))
             throw new TswapException("Not initialized. Run: tswap init");
 
-        var json = File.ReadAllText(ConfigFile);
+        var json = Encoding.UTF8.GetString(_owner.ReadAllBytes(ConfigFile));
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)
             ?? throw new TswapException("Invalid config");
     }
 
     public void SaveConfig(Config config)
     {
-        Directory.CreateDirectory(ConfigDir);
+        _owner.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(json));
     }
@@ -68,7 +68,7 @@ public class Storage : IFileVaultStore
         byte[] encrypted;
         try
         {
-            encrypted = File.ReadAllBytes(SecretsFile);
+            encrypted = _owner.ReadAllBytes(SecretsFile);
         }
         catch (FileNotFoundException)
         {
@@ -94,7 +94,7 @@ public class Storage : IFileVaultStore
 
     public void SaveSecrets(SecretsDb db, byte[] key)
     {
-        Directory.CreateDirectory(ConfigDir);
+        _owner.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(db, TswapJsonContext.Default.SecretsDb);
         var plaintext = Encoding.UTF8.GetBytes(json);
         var encrypted = Crypto.Encrypt(plaintext, key);
