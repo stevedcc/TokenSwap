@@ -380,7 +380,8 @@ public sealed class SlotCommand : ICliCommand
         // nothing. One entry per slot id (approving the same request again refreshes it).
         var approved = (config.ApprovedSlots ?? [])
             .Where(a => a.SlotId != request.SlotId)
-            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, DateTime.UtcNow))
+            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, DateTime.UtcNow,
+                Convert.ToHexString(SHA256.HashData(SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob")))))
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
 
@@ -668,7 +669,7 @@ public sealed class SlotCommand : ICliCommand
     /// <item><b>Checked:</b> the keyring format version, vault id and k must match this vault's;
     /// a version 2 keyring here is refused with the message <c>slot add</c> gives.</item>
     /// <item><b>The guard:</b> a slot is added without asking only if this machine approved it
-    /// (an <see cref="Config.ApprovedSlots"/> entry with the same slot id and public key; the entry
+    /// (an <see cref="Config.ApprovedSlots"/> entry with the same slot id, public key and hardware-blob hash; the entry
     /// is removed once merged). Every other new slot is shown by fingerprint and confirmed on a
     /// terminal, or needs <c>--yes</c>; without either the merge is refused and nothing is
     /// written. The other copy's own <c>ApprovedSlots</c> are never read.</item>
@@ -870,8 +871,13 @@ public sealed class SlotCommand : ICliCommand
     {
         try
         {
-            return Convert.FromBase64String(approved.SlotId).AsSpan().SequenceEqual(slot.SlotId)
-                && Convert.FromBase64String(approved.PublicKey).AsSpan().SequenceEqual(slot.PublicKey);
+            // Slot id, public key AND the hardware blob it was approved with (security review):
+            // a receipt with another device's blob is not this approval.
+            return approved.HwBlobSha256 != null && slot.HwBlob != null
+                && Convert.FromBase64String(approved.SlotId).AsSpan().SequenceEqual(slot.SlotId)
+                && Convert.FromBase64String(approved.PublicKey).AsSpan().SequenceEqual(slot.PublicKey)
+                && CryptographicOperations.FixedTimeEquals(
+                    Convert.FromHexString(approved.HwBlobSha256), SHA256.HashData(slot.HwBlob));
         }
         catch (FormatException)
         {

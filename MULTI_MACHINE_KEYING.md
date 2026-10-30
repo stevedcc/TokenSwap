@@ -406,7 +406,7 @@ and the vault's home never opened with the joiner's device. Decisions made in br
      new way to decrypt it), backs up `config.json` before writing, and is idempotent (a merge
      that adds nothing writes nothing).
    - **Merge's guard.** A slot is added silently only if this machine approved it: an
-     `ApprovedSlots` entry with the same slot id **and** public key, removed once merged. Every
+     `ApprovedSlots` entry with the same slot id, public key **and** SHA-256 of the hardware blob (approve records all three), removed once merged; a receipt with a swapped blob counts as unapproved. Every
      other new slot (from another copy, or a slot this machine never approved) is shown by
      fingerprint and confirmed on a terminal, or needs `--yes`; without either the merge is
      refused and nothing is written. The other copy's own `ApprovedSlots` are never read. This

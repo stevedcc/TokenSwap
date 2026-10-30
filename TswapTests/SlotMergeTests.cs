@@ -179,6 +179,59 @@ public class SlotMergeTests : IDisposable
     }
 
     [Fact]
+    public void AReceiptWithASwappedHwBlob_IsNotMergedSilently_AndTheGenuineOneStillMerges()
+    {
+        // Review IMPORTANT 1: the approval binds the slot's hardware blob, not just id and key.
+        RouterVault();
+        var receipt = Join(_desktop, _router, SerialA);
+        var genuine = File.ReadAllText(receipt);
+        var entry = Assert.Single(_router.Config.ApprovedSlots!);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(_desktop.Keyring.Slots[^1].HwBlob!)), entry.HwBlobSha256);
+        var node = JsonNode.Parse(genuine)!.AsObject();
+        node["HwBlob"] = Convert.ToBase64String(YubiKeySlotBlob.Create(SerialB, requiresTouch: true).Encode());
+        File.WriteAllText(receipt, node.ToJsonString());
+        var before = _router.ConfigText;
+
+        var (exit, _, stderr) = _router.Run("", "slot", "merge", receipt);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("did not approve", stderr);
+        Assert.Contains("--yes", stderr);
+        Assert.Equal(before, _router.ConfigText);
+        Assert.Single(_router.Config.ApprovedSlots!); // the approval is kept
+
+        File.WriteAllText(receipt, genuine);
+        _router.Ok("", "slot", "merge", receipt);
+        Assert.Equal(3, _router.Keyring.Slots.Count);
+        Assert.Null(_router.Config.ApprovedSlots);
+    }
+
+    [Fact]
+    public void TheOtherCopysApprovedSlots_AreNeverRead()
+    {
+        // Review minor: a copy whose own ApprovedSlots lists slot X must not get X merged silently.
+        RouterVault();
+        var copy = Another("copy", _router.Tpm);
+        _router.CopyVaultTo(copy);
+        Join(_desktop, copy, SerialA); // the copy approved the desktop, the router did not
+        copy.Ok("", "slot", "merge", _desktop.PathOf("approve.json.receipt.json"));
+        // Give the copy's config an approval entry for its new slot again, as if still pending.
+        var slot = copy.Keyring.Slots[^1];
+        File.WriteAllText(copy.ConfigPath, System.Text.Json.JsonSerializer.Serialize(copy.Config with
+        {
+            ApprovedSlots = [new(Convert.ToBase64String(slot.SlotId), Convert.ToBase64String(slot.PublicKey), DateTime.UtcNow,
+                Convert.ToHexString(SHA256.HashData(slot.HwBlob!)))],
+        }, TswapCore.TswapJsonContext.Default.Config));
+        var before = _router.ConfigText;
+
+        var (exit, _, stderr) = _router.Run("", "slot", "merge", copy.ConfigPath);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("did not approve", stderr);
+        Assert.Equal(before, _router.ConfigText);
+    }
+
+    [Fact]
     public void ReceiptFromAnotherVault_IsRefused()
     {
         RouterVault();

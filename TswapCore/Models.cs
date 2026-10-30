@@ -135,17 +135,20 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // guess. Omitted from config.json when null.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KeyringSlotId = null,
     // Brief T5 decision 1 (issue #190): the slots this machine approved with 'slot approve' and
-    // has not merged yet. 'slot merge' adds such a slot without asking (the slot id and public key
-    // must both match), then removes its entry; every other new slot needs a fingerprint
+    // has not merged yet. 'slot merge' adds such a slot without asking (the slot id, public key and
+    // hardware-blob hash must all match), then removes its entry; every other new slot needs a fingerprint
     // confirmation or --yes. Not secret (ids and public keys). Never taken from another copy's
     // config.json during a merge. Omitted when null (no approval pending).
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<ApprovedSlot>? ApprovedSlots = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's
-/// slot id and public key (base64, as in the request file) and when it was approved (UTC).
+/// slot id and public key (base64, as in the request file), when it was approved (UTC), and the
+/// SHA-256 (hex) of the request's hardware blob (security review: the approval binds the slot's
+/// device, so a receipt with a swapped blob is not merged silently). An entry without a hash
+/// approves nothing.
 /// </summary>
-public record ApprovedSlot(string SlotId, string PublicKey, DateTime Approved);
+public record ApprovedSlot(string SlotId, string PublicKey, DateTime Approved, string? HwBlobSha256 = null);
 
 public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
 public record SecretsDb(Dictionary<string, Secret> Secrets);
