@@ -205,7 +205,7 @@ public sealed class CliEnvironment
         string appDataDir;
         string? home;
         if (sudoUser != null && isPrivileged && !OperatingSystem.IsWindows()
-            && InvokingUserHome(sudoUser, getEnv("SUDO_UID"), lookupUser ?? UnixPasswd.Lookup) is { } userHome)
+            && InvokingUserHome(sudoUser, getEnv("SUDO_UID"), lookupUser ?? (name => UnixPasswd.Lookup(name))) is { } userHome)
         {
             // T7 fix round 1 (MiMo's review): the same per-platform folder as the user's own
             // resolution. Linux: <home>/.config (the user's XDG_CONFIG_HOME isn't known under sudo);

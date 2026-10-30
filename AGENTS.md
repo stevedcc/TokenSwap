@@ -79,9 +79,11 @@ This enforces that AI agents can use secrets (`run`) but cannot read or enumerat
 
 **Which vault sudo uses** (`CliEnvironment.ResolveConfigDir`): privileged on Unix with `SUDO_USER`
 set, the home folder comes from `getpwnam(SUDO_USER)` (`TswapCore/UnixPasswd.cs`) and is used only
-when `SUDO_UID` is set, numeric and equal to that entry's uid; anything else refuses with a
+when `SUDO_UID` is set, numeric and equal to that entry's uid (the lookup reads `struct passwd`
+on Linux and macOS only; elsewhere it finds no user); anything else refuses with a
 `TswapException`. `SUDO_USER=root` or `SUDO_UID=0` is root's own folder; privileged without
-`SUDO_USER` (a root service, `su`) is root's own folder; `sudo -i` keeps `SUDO_USER`, so it uses
+`SUDO_USER` (a root service, `su`) uses HOME's folder, which with plain `su` is still the caller's
+HOME; `sudo -i` keeps `SUDO_USER`, so it uses
 the invoking user's vault. `TSWAP_CONFIG_DIR` overrides all of it. The config folder is resolved
 lazily, at the first command that needs the vault (`ICliCommand.NeedsVault`, default true): help,
 `prompt`, `prompt-hash`, `completion` and `installscript` work without a home folder.

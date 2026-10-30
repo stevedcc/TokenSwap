@@ -15,10 +15,15 @@ public sealed record UnixPasswdEntry(uint Uid, string Home);
 /// </summary>
 public static partial class UnixPasswd
 {
-    /// <summary>The entry for <paramref name="userName"/>, or null when there is none (or on Windows).</summary>
-    public static UnixPasswdEntry? Lookup(string userName)
+    /// <summary>
+    /// The entry for <paramref name="userName"/>, or null when there is none. Only Linux and macOS
+    /// (64-bit), whose <c>struct passwd</c> layouts are the ones above; elsewhere (Windows, other
+    /// Unixes) null, so sudo refuses as "no such user" instead of misreading memory.
+    /// <paramref name="platformSupported"/> overrides the platform check (tests).
+    /// </summary>
+    public static UnixPasswdEntry? Lookup(string userName, bool? platformSupported = null)
     {
-        if (OperatingSystem.IsWindows() || IntPtr.Size != 8)
+        if (!(platformSupported ?? (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())) || IntPtr.Size != 8)
             return null;
         var entry = getpwnam(userName);
         if (entry == IntPtr.Zero)

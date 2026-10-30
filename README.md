@@ -46,8 +46,9 @@ prompt, prompt-hash, completion, installscript
 
 Under `sudo`, tswap uses the vault of the user who ran sudo: `SUDO_USER`'s home folder from the
 system's user database, used only when `SUDO_UID` matches that user's uid (otherwise tswap
-refuses). That includes `sudo -i`. `SUDO_USER=root` means root's own folder. `TSWAP_CONFIG_DIR`
-overrides all of this.
+refuses). That includes `sudo -i`. `SUDO_USER=root` means root's own folder. Without `SUDO_USER`
+(a root service, or `su`) tswap uses the folder under `HOME`, which with plain `su` is still the
+caller's. `TSWAP_CONFIG_DIR` overrides all of this.
 
 An AI agent (Claude Code, Copilot, etc.) can:
 - Generate strong random passwords with `create` — the value is never displayed

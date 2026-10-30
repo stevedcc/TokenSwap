@@ -248,6 +248,30 @@ public class CliEnvironmentTests
         Assert.Equal("/custom/dir", dir);
     }
 
+    // Fix round 1 (MiMo): struct passwd differs on other Unixes; the lookup only reads it on Linux and
+    // macOS and elsewhere finds no user (so sudo refuses as "no such user" rather than misread memory).
+    [Fact]
+    public void UnixPasswd_OnAnUnsupportedPlatform_FindsNoUser()
+    {
+        Assert.Null(UnixPasswd.Lookup(Environment.UserName, platformSupported: false));
+    }
+
+    // Fix round 1 (MiMo): privileged without SUDO_USER (a root service, `su`) uses HOME's folder, not
+    // a fixed root folder: with plain `su` the caller's HOME survives, and that folder is used.
+    [Theory]
+    [InlineData("/root", "/root/.config/tswap")]
+    [InlineData("/home/alice", "/home/alice/.config/tswap")]
+    public void Privileged_WithoutSudoUser_UsesHomesFolder(string home, string expected)
+    {
+        if (!OperatingSystem.IsLinux()) return; // the XDG rules (macOS and Windows take .NET's folder)
+        Func<string, string?> env = name => name == "HOME" ? home : null;
+
+        var dir = CliEnvironment.ResolveConfigDir(env, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: true,
+            getApplicationDataDir: () => CliEnvironment.ApplicationDataDir(env), lookupUser: _ => throw new InvalidOperationException("no lookup without SUDO_USER"));
+
+        Assert.Equal(expected, dir);
+    }
+
     // The real lookup (no seam): this test process's own user resolves to its uid and an absolute home.
     [Fact]
     public void UnixPasswd_LooksUpTheCurrentUser()
