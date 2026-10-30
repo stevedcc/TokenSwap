@@ -1,3 +1,4 @@
+using TswapCli;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using TswapCore;
@@ -106,6 +107,37 @@ public class FileOwnershipTests : IDisposable
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
         foreach (var file in new[] { P("config.json"), P("secrets.json.enc"), backup })
             Assert.Equal(OwnerOnly, File.GetUnixFileMode(file));
+    }
+
+    // T7 fix round 2 (MiMo F4): under sudo on macOS the vault folder is now
+    // <home>/Library/Application Support/tswap. The T5 mechanism (DirectoryOwnerMatcher acts as the
+    // owner of the nearest existing folder) is path-agnostic: a privileged init-style write there,
+    // with the tswap folder not created yet, runs entirely as the home's owner, files 0600.
+    [Fact]
+    public void Privileged_AtTheMacOSPath_WritesAsTheHomesOwner()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var home = Path.Combine(_dir, "Users", "alice");
+        Directory.CreateDirectory(Path.Combine(home, "Library", "Application Support"));
+        var configDir = CliEnvironment.ResolveConfigDir(
+            name => name switch { "SUDO_USER" => "alice", "SUDO_UID" => "501", _ => null },
+            _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: true, getApplicationDataDir: () => "/var/root/Library/Application Support",
+            lookupUser: name => name == "alice" ? new UnixPasswdEntry(501, home) : null, fileExists: _ => false, isMacOS: true);
+        Assert.Equal(Path.Combine(home, "Library", "Application Support", "tswap"), configDir);
+        var fake = AsRoot();
+        var storage = new Storage(configDir, new DirectoryOwnerMatcher(fake));
+
+        storage.SaveConfig(SampleConfig());
+        storage.SaveSecrets(new SecretsDb([]), RandomNumberGenerator.GetBytes(32));
+
+        Assert.NotEmpty(fake.Switches);
+        Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
+        Assert.Contains(fake.Switches, s => s.Path == Path.Combine(configDir, "config.json"));
+        Assert.Contains(fake.Switches, s => s.Path == Path.Combine(configDir, "secrets.json.enc"));
+        foreach (var file in new[] { "config.json", "secrets.json.enc" })
+            Assert.Equal(OwnerOnly, File.GetUnixFileMode(Path.Combine(configDir, file)));
+        Assert.Equal(OwnerOnly | UnixFileMode.UserExecute, File.GetUnixFileMode(configDir));
     }
 
     // Brief T7 item 6: under sudo, a wider config folder and file are narrowed as the folder's owner.
