@@ -40,6 +40,7 @@ public static class CommandRegistry
         new VaultCommand(),
         new RecoverCommand(),
         new CompletionCommand(),
+        new BrokerCommand(),
     ];
 
     /// <summary>All registered commands in help/display order. Read by

@@ -1,0 +1,87 @@
+; tswap broker: SELinux policy module (CIL). The whole setup, no compiler and no semanage
+; (Fedora CoreOS has neither checkmodule nor semanage):
+;   sudo semodule -i tswap-broker.cil
+;   sudo install -D -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+;   sudo restorecon -v /usr/local/libexec/tswap-broker
+;   sudo restorecon -Rv /var/srv/tswap-broker      # the socket_dir (/srv is /var/srv on CoreOS)
+; docs/BROKER.md, "SELinux".
+;
+; Why: a rootless container (container_t) may not connect to a Unix socket created by an
+; unconfined process (`container_t -> unconfined_t : unix_stream_socket connectto` is denied).
+; This module gives the broker its own domain, tswap_broker_t, so exactly that one connection
+; can be allowed, and nothing else of the vault user's.
+;
+; It does NOT confine the broker much: tswap_broker_t gets a deliberate subset of
+; unconfined_service_t's attributes (what serve needs: the TPM, the vault user's home, /proc,
+; cgroups, outbound HTTPS, creating sockets) and none of the ones that administer SELinux,
+; load kernel modules, read shadow passwords or relabel files (listed in docs/BROKER.md).
+;
+; Only a dedicated copy of the binary is labelled tswap_broker_exec_t (filecon below); the
+; tswap everyone runs stays unconfined_t.
+
+; ---- the broker's domain and its entry point
+(type tswap_broker_t)
+(roletype system_r tswap_broker_t)
+(roletype unconfined_r tswap_broker_t)
+; A process type.
+(typeattributeset domain (tswap_broker_t))
+; The base set of unconfined rules (alone it is not enough in Fedora's policy: the router test
+; denied /proc/meminfo, cgroup2 getattr and the vault user's home without the ones below).
+(typeattributeset unconfined_domain_type (tswap_broker_t))
+; Files of every type: the vault user's home and vault folder, broker.json, broker.log, the
+; socket_dir (container_file_t), the libexec binary, the .NET runtime's files.
+(typeattributeset files_unconfined_type (tswap_broker_t))
+; File systems: cgroup2 getattr (the .NET runtime reads its limits), proc, tmpfs, mounts.
+(typeattributeset filesystem_unconfined_type (tswap_broker_t))
+; Devices: the TPM (/dev/tpmrm0), /dev/urandom, /dev/null.
+(typeattributeset devices_unconfined_type (tswap_broker_t))
+; Network: outbound HTTPS to the upstreams, DNS, Unix sockets.
+(typeattributeset corenet_unconfined_type (tswap_broker_t))
+; Network packets without a label (hosts with no labelled networking, the usual case).
+(typeattributeset corenet_unlabeled_type (tswap_broker_t))
+; The kernel's interfaces: /proc (meminfo, self), /sys, sysctls the runtime reads.
+(typeattributeset kern_unconfined (tswap_broker_t))
+; Files created in the user's home get the home's usual labels (as for the vault user's shell).
+(typeattributeset userdom_filetrans_type (tswap_broker_t))
+; Named file transitions (the policy's per-name labels for files it creates), like other domains.
+(typeattributeset named_filetrans_domain (tswap_broker_t))
+; MCS: may use any category, like the vault user's own (unconfined) processes.
+(typeattributeset mcssetcats (tswap_broker_t))
+; Exempt from the process constraints unconfined processes are exempt from (signals, ptrace
+; checks between the user's own processes); serve itself is non-dumpable regardless.
+(typeattributeset process_uncond_exempt (tswap_broker_t))
+
+(type tswap_broker_exec_t)
+(roletype object_r tswap_broker_exec_t)
+(typeattributeset file_type (tswap_broker_exec_t))
+(typeattributeset exec_type (tswap_broker_exec_t))
+(typeattributeset non_security_file_type (tswap_broker_exec_t))
+(typeattributeset non_auth_file_type (tswap_broker_exec_t))
+(allow tswap_broker_t tswap_broker_exec_t (file (entrypoint execute read open getattr map)))
+
+; ---- file contexts, carried by the module (restorecon applies them; no semanage needed)
+; The dedicated copy of the binary that enters tswap_broker_t.
+(filecon "/usr/local/libexec/tswap-broker" file (system_u object_r tswap_broker_exec_t ((s0) (s0))))
+; The documented socket_dir (/srv is a link to /var/srv on Fedora CoreOS): containers can reach
+; sockets labelled container_file_t, and new sockets inherit the folder's label. A custom
+; socket_dir needs `chcon -R -t container_file_t <dir>` or a matching filecon.
+(filecon "/srv/tswap-broker(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))
+(filecon "/var/srv/tswap-broker(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))
+
+; ---- the transition: a login shell or the systemd user instance (unconfined_t), or systemd
+; itself (init_t), running the labelled copy starts it in tswap_broker_t
+(typetransition unconfined_t tswap_broker_exec_t process tswap_broker_t)
+(allow unconfined_t tswap_broker_exec_t (file (execute read open getattr map)))
+(allow unconfined_t tswap_broker_t (process (transition)))
+(allow tswap_broker_t unconfined_t (fd (use)))
+(allow tswap_broker_t unconfined_t (process (sigchld)))
+
+(typetransition init_t tswap_broker_exec_t process tswap_broker_t)
+(allow init_t tswap_broker_exec_t (file (execute read open getattr map)))
+(allow init_t tswap_broker_t (process (transition)))
+(allow tswap_broker_t init_t (fd (use)))
+(allow tswap_broker_t init_t (process (sigchld)))
+
+; ---- the one rule for containers: connect to the broker's sockets, nothing else. (The socket
+; file itself is container_file_t, from socket_dir's label, which containers may already write.)
+(allow container_t tswap_broker_t (unix_stream_socket (connectto)))

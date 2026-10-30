@@ -323,6 +323,10 @@ refused with one message and nothing is written; the recovery slot always stays.
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
 vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add your secrets.
 
+## Containers: credentials they never hold
+
+`tswap broker serve` / `tswap broker forward` is a credential-adding HTTP proxy. Containers use the host vault's credentials (git, registries, model APIs) without ever holding them; `sudo tswap broker route|socket add|remove` configures it. Each request unlocks the vault afresh and decrypts only the one secret it needs. It is tested on Fedora CoreOS with SELinux enforcing (a small policy module is included). See [docs/BROKER.md](docs/BROKER.md).
+
 ## Rotating a secret
 
 ```bash
