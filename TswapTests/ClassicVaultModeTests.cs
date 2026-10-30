@@ -21,6 +21,7 @@ public class ClassicVaultModeTests : IDisposable
     public void Dispose() => _m.Dispose();
 
     /// <summary>A classic XOR vault with one secret, then widened to 0755/0644 as main made them before T5.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     private void WideClassicVault()
     {
         _m.Ok("1\n2\n1\n", "init");

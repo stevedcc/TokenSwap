@@ -82,6 +82,8 @@ public class Storage : IFileVaultStore
     /// <summary>True for an existing folder wider than 0700 or regular file wider than 0600 (never a symlink).</summary>
     private static bool IsWider(string path)
     {
+        if (OperatingSystem.IsWindows())
+            return false;
         var info = new FileInfo(path);
         if (info.LinkTarget != null)
             return false;
