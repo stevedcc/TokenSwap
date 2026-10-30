@@ -106,11 +106,39 @@ logged (the broker asks every upstream for `Accept-Encoding: identity`).
 With the `tswap-broker` module (`contrib/selinux/tswap-broker.cil`), the broker runs in its own
 domain, `tswap_broker_t`, and **containers may connect to the broker's sockets and to nothing
 else of the vault user's**: the module's only rule for containers is `container_t` →
-`tswap_broker_t` `unix_stream_socket connectto`. The module does **not** confine the broker
-itself: `tswap_broker_t` is an unconfined domain and keeps the vault user's rights (the TPM, its
-home folder, outbound HTTPS, creating sockets). Only a dedicated copy of the binary
+`tswap_broker_t` `unix_stream_socket connectto`. Only a dedicated copy of the binary
 (`/usr/local/libexec/tswap-broker`) is labelled to enter it; the `tswap` everyone runs stays
 `unconfined_t`.
+
+The module does **not** try to confine the broker much. `tswap_broker_t` gets a deliberate
+subset of `unconfined_service_t`'s attributes, the ones `serve` needs (in Fedora's policy,
+`unconfined_domain_type` alone is not enough: the router test denied `/proc/meminfo`, `getattr` on
+cgroup2 and search on the vault user's home):
+
+| Included | Why |
+|---|---|
+| `domain`, `unconfined_domain_type` | a process type; the base unconfined rules |
+| `files_unconfined_type` | the vault user's home and vault folder, `broker.json`, `broker.log`, the socket folder, the runtime's files |
+| `filesystem_unconfined_type` | cgroup2 `getattr` (the .NET runtime reads its limits), proc, tmpfs |
+| `devices_unconfined_type` | the TPM (`/dev/tpmrm0`), `/dev/urandom` |
+| `corenet_unconfined_type`, `corenet_unlabeled_type` | outbound HTTPS and DNS; unlabelled packets |
+| `kern_unconfined` | `/proc` and `/sys` (meminfo, self) |
+| `userdom_filetrans_type`, `named_filetrans_domain` | files it creates get the usual labels |
+| `mcssetcats` | any MCS category, like the vault user's own processes |
+| `process_uncond_exempt` | the process constraints unconfined processes are exempt from |
+
+**Excluded on purpose** (the rest of `unconfined_service_t`'s attributes):
+
+| Excluded | Why the broker never needs it |
+|---|---|
+| `can_load_policy`, `can_setenforce`, `can_setbool`, `can_setsecparam`, `selinux_unconfined_type` | administering SELinux itself |
+| `can_relabelto_binary_policy`, `can_change_object_identity` | relabelling policy files, changing files' SELinux users |
+| `can_load_kernmodule` | loading kernel modules |
+| `can_read_shadow_passwords`, `can_write_shadow_passwords`, `can_relabelto_shadow_passwords` | the password database |
+| `storage_unconfined_type` | raw disks |
+| `rpm_transition_domain` | running the package manager's domains |
+| `x_domain`, `xserver_unconfined_type`, `dbusd_unconfined`, `sepgsql_unconfined_type` | X, D-Bus and PostgreSQL policy it has nothing to do with |
+| `mmap_low_domain_type`, `set_curr_context`, `ubacproc` | mapping low memory, changing its own context, user-based access control exemptions |
 
 ### The vault user is root-equivalent for its secrets
 
@@ -222,30 +250,35 @@ sudo install -d -m 0711 -o vault -g vault /srv/tswap-broker
 and the socket:
 
 1. The socket *file*: a container can't reach a socket labelled `var_t`, and Podman's `:z`/`:Z`
-   can't relabel a socket file the container's user doesn't own. Label the socket folder
-   `container_file_t` once, so every socket `serve` creates there inherits the label, and mount
-   the socket **without** `:z`.
+   can't relabel a socket file the container's user doesn't own. The socket folder is labelled
+   `container_file_t` once, so every socket `serve` creates there inherits the label; mount the
+   socket **without** `:z`.
 2. The *connection*: `container_t` may not `connectto` a socket of an unconfined process. The
-   `tswap-broker` module (CIL, so `semodule` installs it without a compiler; Fedora CoreOS has no
-   `checkmodule`) runs the broker in `tswap_broker_t` and allows exactly
+   `tswap-broker` module runs the broker in `tswap_broker_t` and allows exactly
    `container_t` → `tswap_broker_t` `unix_stream_socket connectto`. It enters that domain only
    from a dedicated, labelled copy of the binary, which the systemd unit runs.
 
+The module is CIL, so `semodule` installs it without a compiler (Fedora CoreOS has no
+`checkmodule`), and it carries its own file contexts, so no `semanage` is needed either (Fedora
+CoreOS doesn't ship it): the libexec copy is `tswap_broker_exec_t`, and `/srv/tswap-broker` (and
+`/var/srv/tswap-broker`, the real path on Fedora CoreOS, where `/srv` links to `/var/srv`) is
+`container_file_t`. The whole setup:
+
 ```bash
-# the module
 sudo semodule -i contrib/selinux/tswap-broker.cil
 # the labelled copy of the binary (copy it again after upgrading tswap)
 sudo install -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
-sudo semanage fcontext -a -t tswap_broker_exec_t '/usr/local/libexec/tswap-broker'
 sudo restorecon -v /usr/local/libexec/tswap-broker
-# the socket folder
-sudo semanage fcontext -a -t container_file_t '/srv/tswap-broker(/.*)?'
-sudo restorecon -R /srv/tswap-broker
+sudo restorecon -Rv /srv/tswap-broker
 ```
 
+A `socket_dir` other than `/srv/tswap-broker` isn't covered by the module's file contexts: label it
+with `sudo chcon -R -t container_file_t <socket_dir>` (a later `restorecon` on it would undo that),
+or add a matching `filecon` line to the module before installing it.
+
 Check, once `serve` runs: `ps -eZ | grep tswap-broker` shows `tswap_broker_t`, and a container
-started without `--security-opt label=disable` gets answers through its socket
-(`ausearch -m avc -ts recent` shows no denial).
+started with SELinux enforcing and without `--security-opt label=disable` gets answers through its
+socket (`ausearch -m avc -ts recent` shows no denial).
 
 ### 3. Routes and sockets (`broker.json`)
 

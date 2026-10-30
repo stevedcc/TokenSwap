@@ -69,8 +69,26 @@ public class BrokerContribTests(ITestOutputHelper output)
 
     private static readonly HashSet<string> CilKeywords = new(StringComparer.Ordinal)
     {
-        "type", "roletype", "typeattributeset", "allow", "typetransition",
+        "type", "roletype", "typeattributeset", "allow", "typetransition", "filecon",
     };
+
+    /// <summary>Fix round 3: the subset of unconfined_service_t's attributes the broker gets.</summary>
+    public static readonly string[] Included =
+    [
+        "domain", "unconfined_domain_type", "files_unconfined_type", "filesystem_unconfined_type",
+        "devices_unconfined_type", "corenet_unconfined_type", "corenet_unlabeled_type", "kern_unconfined",
+        "userdom_filetrans_type", "named_filetrans_domain", "mcssetcats", "process_uncond_exempt",
+    ];
+
+    /// <summary>unconfined_service_t's other attributes, which the broker must never get.</summary>
+    public static readonly string[] Excluded =
+    [
+        "can_change_object_identity", "can_load_kernmodule", "can_load_policy", "can_read_shadow_passwords",
+        "can_relabelto_binary_policy", "can_relabelto_shadow_passwords", "can_setbool", "can_setenforce",
+        "can_setsecparam", "can_write_shadow_passwords", "dbusd_unconfined", "mmap_low_domain_type",
+        "rpm_transition_domain", "selinux_unconfined_type", "sepgsql_unconfined_type", "set_curr_context",
+        "storage_unconfined_type", "ubacproc", "x_domain", "xserver_unconfined_type",
+    ];
 
     [Fact]
     public void SelinuxModule_Parses_AndDeclaresTheDomainTheTransitionsAndOneContainerRule()
@@ -83,7 +101,17 @@ public class BrokerContribTests(ITestOutputHelper output)
 
         Assert.Contains("(type tswap_broker_t)", rendered);
         Assert.Contains("(type tswap_broker_exec_t)", rendered);
-        Assert.Contains("(typeattributeset unconfined_domain_type (tswap_broker_t))", rendered);
+        foreach (var attribute in Included)
+            Assert.Contains($"(typeattributeset {attribute} (tswap_broker_t))", rendered);
+        foreach (var attribute in Excluded)
+            Assert.DoesNotContain(rendered, r => r.Contains(attribute));
+        // Together the two lists are exactly unconfined_service_t's attributes on the router's policy.
+        Assert.Equal(32, Included.Length + Excluded.Length);
+
+        // The file contexts travel with the module (Fedora CoreOS has no semanage).
+        Assert.Contains("(filecon /usr/local/libexec/tswap-broker file (system_u object_r tswap_broker_exec_t ((s0) (s0))))", rendered);
+        Assert.Contains("(filecon /srv/tswap-broker(/.*)? any (system_u object_r container_file_t ((s0) (s0))))", rendered);
+        Assert.Contains("(filecon /var/srv/tswap-broker(/.*)? any (system_u object_r container_file_t ((s0) (s0))))", rendered);
         Assert.Contains("(typetransition unconfined_t tswap_broker_exec_t process tswap_broker_t)", rendered);
         Assert.Contains("(typetransition init_t tswap_broker_exec_t process tswap_broker_t)", rendered);
         Assert.Contains("(allow tswap_broker_t tswap_broker_exec_t (file (entrypoint execute read open getattr map)))", rendered);
