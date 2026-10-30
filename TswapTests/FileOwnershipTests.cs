@@ -96,10 +96,10 @@ public class FileOwnershipTests : IDisposable
         storage.SaveSecrets(new SecretsDb([]), RandomNumberGenerator.GetBytes(32));
         var backup = storage.BackupConfig();
 
-        var paths = fake.Switches.Select(s => s.Path).ToList();
-        Assert.Contains(P("config.json"), paths);
-        Assert.Contains(P("secrets.json.enc"), paths);
-        Assert.Contains(Path.GetFullPath(backup), paths);
+        // Write config, write secrets, then the backup: read config, create the backup.
+        Assert.Equal(
+            [P("config.json"), P("secrets.json.enc"), P("config.json"), Path.GetFullPath(backup)],
+            fake.Switches.Select(s => s.Path));
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
         foreach (var file in new[] { P("config.json"), P("secrets.json.enc"), backup })
             Assert.Equal(OwnerOnly, File.GetUnixFileMode(file));
@@ -193,9 +193,10 @@ public class FileOwnershipTests : IDisposable
         File.CreateSymbolicLink(P("config.json"), _rootsFile);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
-        Assert.Throws<UnauthorizedAccessException>(() => storage.BackupConfig());
+        var ex = Assert.Throws<TswapException>(() => storage.BackupConfig());
 
         Assert.Empty(Directory.GetFiles(_dir, "config.json.bak-*"));
+        Assert.DoesNotContain("chown", ex.Message); // never advise chowning through a link
     }
 
     [Fact]
@@ -208,7 +209,50 @@ public class FileOwnershipTests : IDisposable
         File.CreateSymbolicLink(P("config.json"), _rootsFile);
         var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
-        Assert.Throws<UnauthorizedAccessException>(() => storage.LoadConfig());
+        var ex = Assert.Throws<TswapException>(() => storage.LoadConfig());
+
+        Assert.Contains(P("config.json"), ex.Message);
+        Assert.DoesNotContain("chown", ex.Message);
+    }
+
+    [Fact]
+    public void Privileged_AConfigJsonLeftRootOwnedByAnEarlierSudoRun_SaysHowToFixIt()
+    {
+        // GLM re-review: a vault file an earlier release wrote as root (0600) is unreadable as the
+        // folder's owner; the user must get the fix, not a bare "access denied".
+        if (OperatingSystem.IsWindows())
+            return;
+        var fake = AsRoot();
+        new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid))).SaveConfig(SampleConfig());
+        fake.RootOnly.Add(P("config.json"));
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(fake));
+
+        var ex = Assert.Throws<TswapException>(() => storage.LoadConfig());
+
+        Assert.Contains($"sudo chown {UserUid}:{UserGid} '{P("config.json")}'", ex.Message);
+    }
+
+    [Fact]
+    public void AConfigJsonWithAByteOrderMark_StillLoads()
+    {
+        // GLM re-review: File.ReadAllText skipped a BOM; reading bytes must too.
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
+        storage.SaveConfig(SampleConfig() with { YubiKeySerials = [42] });
+        File.WriteAllBytes(P("config.json"), [0xEF, 0xBB, 0xBF, .. File.ReadAllBytes(P("config.json"))]);
+
+        Assert.Equal([42], storage.LoadConfig().YubiKeySerials);
+    }
+
+    [Fact]
+    public void AWriteThatFailsAfterTheTempFileExists_LeavesNoTempFile()
+    {
+        // The target is a non-empty folder, so the final rename fails after the temp is written.
+        var storage = new Storage(_dir, new DirectoryOwnerMatcher(new FakeOwnership(privileged: false, euid: UserUid)));
+        Directory.CreateDirectory(Path.Combine(P("config.json"), "occupied"));
+
+        Assert.ThrowsAny<IOException>(() => storage.SaveConfig(SampleConfig()));
+
+        Assert.Empty(Directory.GetFiles(_dir));
     }
 
     [Fact]

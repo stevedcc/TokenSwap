@@ -45,7 +45,9 @@ public class Storage : IFileVaultStore
         if (!_owner.FileExists(ConfigFile))
             throw new TswapException("Not initialized. Run: tswap init");
 
-        var json = Encoding.UTF8.GetString(_owner.ReadAllBytes(ConfigFile));
+        // Like File.ReadAllText: honour a byte-order mark (an editor may have added one).
+        using var reader = new StreamReader(new MemoryStream(_owner.ReadAllBytes(ConfigFile)), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var json = reader.ReadToEnd();
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)
             ?? throw new TswapException("Invalid config");
     }

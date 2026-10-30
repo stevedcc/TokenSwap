@@ -48,6 +48,10 @@ public interface IUnixOwnership
 /// entries they own, so a planted link makes tswap act as that user, never as root. A folder that
 /// really is root's (or this uid's) is worked on unchanged. Windows and unprivileged runs: no switch.
 /// </para>
+/// <para>
+/// The switch is process-wide (see <see cref="UnixOwnership"/>), so calls must not overlap:
+/// tswap's CLI does all of this on one thread, one operation at a time.
+/// </para>
 /// </summary>
 public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
 {
@@ -116,12 +120,30 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         }
     }
 
-    /// <summary>Reads <paramref name="path"/> (as its folder's owner, see the type's comment).</summary>
+    /// <summary>
+    /// Reads <paramref name="path"/> (as its folder's owner, see the type's comment). A file that
+    /// owner can't read is a <see cref="TswapException"/>: for a regular file (typically left
+    /// root-owned by an earlier <c>sudo tswap</c>) with the <c>chown</c> that fixes it, never for a
+    /// symlink (chown would follow it to whatever it points at).
+    /// </summary>
     public byte[] ReadAllBytes(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        using var _ = AsOwnerOf(fullPath);
-        return File.ReadAllBytes(fullPath);
+        using var _ = AsOwnerOf(fullPath, out var owner);
+        try
+        {
+            return File.ReadAllBytes(fullPath);
+        }
+        catch (UnauthorizedAccessException) when (owner is { } o)
+        {
+            if (new FileInfo(fullPath).LinkTarget != null)
+                throw new TswapException(
+                    $"{fullPath} is a symlink its folder's owner (uid {o.Uid}) can't read through; " +
+                    "tswap won't read it as root. Replace it with the real file.");
+            throw new TswapException(
+                $"{fullPath} can't be read by its folder's owner (uid {o.Uid}); an earlier 'sudo tswap' " +
+                $"probably left it owned by root. Fix it with: sudo chown {o.Uid}:{o.Gid} '{fullPath}'");
+        }
     }
 
     /// <summary>True when <paramref name="path"/> is an existing file (as its folder's owner).</summary>
@@ -150,8 +172,12 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     /// disposed, when privileged and that owner is another uid (see the type's comment).
     /// Privileged and the owner unreadable: refuses, before anything is read or written.
     /// </summary>
-    private IDisposable? AsOwnerOf(string fullPath)
+    private IDisposable? AsOwnerOf(string fullPath) => AsOwnerOf(fullPath, out _);
+
+    /// <param name="owner">The identity switched to, or null when there was no switch.</param>
+    private IDisposable? AsOwnerOf(string fullPath, out (uint Uid, uint Gid)? owner)
     {
+        owner = null;
         if (OperatingSystem.IsWindows() || !_ownership.IsPrivileged)
             return null;
         var directory = Path.GetDirectoryName(fullPath);
@@ -159,11 +185,15 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             directory = Path.GetDirectoryName(directory);
         if (directory == null)
             return null;
-        if (_ownership.GetOwner(directory) is not { } owner)
+        if (_ownership.GetOwner(directory) is not { } folderOwner)
             throw new TswapException(
                 $"Running as root, but could not read the owner of {directory}; refusing to touch " +
                 $"{Path.GetFileName(fullPath)} there as root.");
-        return owner.Uid == _ownership.EffectiveUid ? null : _ownership.ActAs(owner.Uid, owner.Gid, fullPath);
+        if (folderOwner.Uid == _ownership.EffectiveUid)
+            return null;
+        var scope = _ownership.ActAs(folderOwner.Uid, folderOwner.Gid, fullPath);
+        owner = folderOwner;
+        return scope;
     }
 
     private static FileStream CreateNew(string path)
