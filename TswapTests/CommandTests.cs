@@ -929,6 +929,24 @@ public class CommandTests : IDisposable
         Assert.Equal(["names"], commandArgs);
     }
 
+    // Fix round 1 (MiMo): `tswap names -v` used to be silently not verbose; a global flag among the
+    // command's own options (before its first argument) gets a clear hint instead.
+    [Theory]
+    [InlineData("names", "-v")]
+    [InlineData("names", "--verbose")]
+    [InlineData("burned", "--json", "-v")]
+    public void GlobalFlagAfterTheCommand_AmongItsOptions_GetsAHint(params string[] args)
+    {
+        RunTswap("init");
+
+        var (exit, stdout, stderr) = RunTswap(args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("global flags go before the command", stderr);
+        Assert.Contains($"tswap -v {args[0]}", stderr);
+        Assert.Equal("", stdout);
+    }
+
     [Fact]
     public void SplitGlobalFlags_KeepsEveryFlagAfterTheCommandName()
     {
