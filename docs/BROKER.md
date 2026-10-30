@@ -226,8 +226,9 @@ sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 folder **as the folder's owner** (T5's identity switch, `DirectoryOwnerMatcher`: effective uid
 and gid of the owner, no supplementary groups), so the keyring, the records and `config.json`
 come out owned by `vault`, mode 0600, and a link `vault` planted in its own folder gets no further
-than `vault`'s own rights (tests: `BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_Writes
-EverythingAsThatUser`, `RecordStoreFileLayerTests`). `sudo VAR=value` needs a sudoers rule that
+than `vault`'s own rights. Tests:
+`BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_WritesEverythingAsThatUser` and
+`RecordStoreFileLayerTests`. `sudo VAR=value` needs a sudoers rule that
 allows setting variables (implied for an `ALL` command); otherwise use
 `sudo env TSWAP_CONFIG_DIR=… tswap migrate --to-records`.
 
@@ -266,11 +267,17 @@ CoreOS doesn't ship it): the libexec copy is `tswap_broker_exec_t`, and `/srv/ts
 
 ```bash
 sudo semodule -i contrib/selinux/tswap-broker.cil
-# the labelled copy of the binary (copy it again after upgrading tswap)
+# the labelled copy of the binary; after every tswap upgrade, copy it again AND run restorecon
+# again: a fresh copy is bin_t, serve then silently runs as unconfined_t, and containers can't connect
 sudo install -D -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
 sudo restorecon -v /usr/local/libexec/tswap-broker
 sudo restorecon -Rv /srv/tswap-broker
 ```
+
+**After every tswap upgrade** run both lines for the copy again (`install -D …` and
+`restorecon -v /usr/local/libexec/tswap-broker`). A new copy without `restorecon` is labelled
+`bin_t`: `serve` then starts as `unconfined_t` without any error, and containers can no longer
+connect (the AVC log shows `connectto` denied). `ps -eZ | grep tswap-broker` tells.
 
 A `socket_dir` other than `/srv/tswap-broker` isn't covered by the module's file contexts: label it
 with `sudo chcon -R -t container_file_t <socket_dir>` (a later `restorecon` on it would undo that),
@@ -435,6 +442,9 @@ Elsewhere:
 
 ## Limits (v1)
 
+- `tswap broker` is Unix only (Linux and macOS); on Windows every subcommand refuses with "not
+  supported on Windows". So Windows' sharing-violation errors are never mapped: the lock files'
+  "another serve/change is running" messages come from `flock`'s EWOULDBLOCK only.
 - **Registries that issue tokens from a separate realm URL** (GHCR, Docker Hub: `401` with
   `WWW-Authenticate: Bearer realm=https://ghcr.io/token`) are not covered: the client would fetch
   a token from the realm itself. Basic-auth registries are covered.

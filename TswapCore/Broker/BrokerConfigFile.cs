@@ -98,7 +98,15 @@ public static class BrokerConfigFile
                 ? new TswapException($"Another 'tswap broker' change is running on {configDir}; try again when it has finished.")
                 : new TswapException($"Can't lock the broker.json edit lock {path} (flock errno {errno}).");
         }
-        File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        try
+        {
+            File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch
+        {
+            stream.Dispose(); // and so the flock: a failed start never keeps the lock
+            throw;
+        }
         return stream;
     }
 

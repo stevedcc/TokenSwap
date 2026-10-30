@@ -312,8 +312,16 @@ public sealed class BrokerServer : IAsyncDisposable
                 : new TswapException($"Can't lock {path} (flock errno {errno}).");
         }
         // Like broker.log: owner-only, whatever an earlier file had.
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch
+        {
+            stream.Dispose(); // and so the flock: a failed start never keeps the lock
+            throw;
+        }
         return stream;
     }
 
