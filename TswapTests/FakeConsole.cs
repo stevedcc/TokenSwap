@@ -4,8 +4,8 @@ namespace TswapTests;
 
 /// <summary>
 /// Scripted <see cref="IConsole"/> for in-process command tests: input comes from a
-/// string, output and error are captured. <see cref="IsInputRedirected"/> is always
-/// true, mirroring how the subprocess harness behaved (the test host's stdin is
+/// string, output and error are captured. <see cref="IsInputRedirected"/> is true by default,
+/// mirroring how the subprocess harness behaved (the test host's stdin is
 /// redirected, so spawned tswap processes always saw redirected stdin too).
 /// </summary>
 public sealed class FakeConsole(string stdin = "") : IConsole
@@ -17,7 +17,9 @@ public sealed class FakeConsole(string stdin = "") : IConsole
     public TextWriter Out => _out;
     public TextWriter Error => _err;
     public TextReader In => _in;
-    public bool IsInputRedirected => true;
+    // True (piped stdin) unless a test plays an interactive terminal (brief T5: slot merge asks
+    // for a fingerprint confirmation only on a terminal).
+    public bool IsInputRedirected { get; init; } = true;
 
     public string? ReadLine() => _in.ReadLine();
 

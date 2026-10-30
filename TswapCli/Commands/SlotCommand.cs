@@ -39,8 +39,8 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files, or add a plugged-in YubiKey to this machine's keyring as its own slot";
+    public string HelpUsage => "slot request <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -71,12 +71,13 @@ public sealed class SlotCommand : ICliCommand
             "approve" => ExecuteApprove(ctx, rest),
             "accept" => ExecuteAccept(ctx, rest),
             "add" => ExecuteAdd(ctx, rest),
+            "merge" => ExecuteMerge(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot add --yubikey";
+        $"{ctx.Prefix} slot request <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
@@ -517,6 +518,251 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
         c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
         return 0;
+    }
+
+    // --- slot merge (runs on the approving machine, or any copy of the vault) ---
+
+    /// <summary>Largest file <c>slot merge</c> reads (a receipt or a config.json), in bytes.</summary>
+    internal const int MaxMergeFileSize = 1024 * 1024;
+
+    /// <summary>
+    /// Brief T5 decision 1 (issue #190): adds to this machine's keyring every slot of
+    /// <c>&lt;file&gt;</c> that it doesn't have yet. The file is a receipt from <c>slot accept</c>
+    /// or another copy's <c>config.json</c> of the same vault.
+    /// <list type="bullet">
+    /// <item><b>Union only:</b> nothing is removed or replaced. A slot whose id is here already
+    /// must be byte-identical (slots never change once written), else the merge is refused.</item>
+    /// <item><b>Checked:</b> the keyring format version, vault id and k must match this vault's;
+    /// a version 2 keyring here is refused with the message <c>slot add</c> gives.</item>
+    /// <item><b>The guard:</b> a slot is added without asking only if this machine approved it
+    /// (an <see cref="Config.ApprovedSlots"/> entry with the same slot id and public key; the entry
+    /// is removed once merged). Every other new slot is shown by fingerprint and confirmed on a
+    /// terminal, or needs <c>--yes</c>; without either the merge is refused and nothing is
+    /// written. The other copy's own <c>ApprovedSlots</c> are never read.</item>
+    /// <item>Sudo, and an unlock of this vault (a merged slot is a new way to decrypt it), as for
+    /// <c>slot add</c>. <c>config.json</c> is backed up before the write. Idempotent: a merge that
+    /// adds nothing writes nothing.</item>
+    /// </list>
+    /// </summary>
+    private static int ExecuteMerge(CommandContext ctx, string[] args)
+    {
+        var usage = $"{ctx.Prefix} slot merge <receipt-or-config.json> [--yes]";
+        var yes = args.Contains("--yes");
+        var positional = args.Where(a => a != "--yes").ToArray();
+        if (positional.Length != 1 || positional[0].StartsWith("--") || args.Count(a => a == "--yes") > 1)
+            throw new UsageException(usage);
+        var path = positional[0];
+        var c = ctx.Console;
+
+        // config.json is not secret: refuse what can never take a slot before sudo or any unlock.
+        var config = ctx.Storage.LoadConfig();
+        if (config.Keyring == null)
+            throw new TswapException(
+                "This vault has no keyring, so it has no slots to merge into. Only keyring vaults " +
+                "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+        var keyring = DecodeKeyringOrCorrupt(config);
+        RequireKeyringThatTakesYubiKeySlots(keyring);
+
+        ctx.RequireSudo("slot merge");
+
+        var (incoming, source) = ReadMergeFile(path);
+        if (incoming.FormatVersion != keyring.FormatVersion)
+            throw new TswapException(
+                $"The {source} is for a keyring format version {incoming.FormatVersion}; this vault's is version " +
+                $"{keyring.FormatVersion}. Only slots of the same vault and version can be merged.");
+        if (!incoming.VaultId.AsSpan().SequenceEqual(keyring.VaultId) || incoming.K != keyring.K)
+            throw new TswapException(
+                $"The {source} belongs to another vault (its vault id or k differs from this vault's). " +
+                "Nothing was merged; check that you picked the file for this vault.");
+
+        var newSlots = new List<Slot>();
+        foreach (var slot in incoming.Slots)
+        {
+            var here = keyring.Slots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId))
+                ?? newSlots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId));
+            if (here != null)
+            {
+                if (!SameSlot(here, slot))
+                    throw new TswapException(
+                        $"Slot {ShortId(slot.SlotId)} in the {source} differs from the slot with the same id here. Slots never " +
+                        "change once written, so one of the copies is damaged or was tampered with. Nothing was merged.");
+                continue;
+            }
+            if (slot.Kind == SlotKind.Machine)
+            {
+                if (slot.HwBlob == null)
+                    throw new TswapException(
+                        $"Slot {ShortId(slot.SlotId)} in the {source} has no hardware blob, so no device could open it from " +
+                        "this copy. Nothing was merged.");
+                SlotReceiptCodec.ValidateHwBlob(slot.HwBlob, source);
+            }
+            newSlots.Add(slot);
+        }
+
+        if (newSlots.Count == 0)
+        {
+            c.Out.WriteLine($"Nothing to merge: every slot in the {source} is already in this machine's keyring.");
+            return 0;
+        }
+
+        var approvedHere = config.ApprovedSlots ?? [];
+        bool IsApproved(Slot s) => s.Kind == SlotKind.Machine && approvedHere.Any(a => Matches(a, s));
+        var unapproved = newSlots.Where(s => !IsApproved(s)).ToList();
+
+        if (unapproved.Count > 0 && !yes && c.IsInputRedirected)
+            throw new TswapException(
+                $"The {source} has {unapproved.Count} slot(s) this machine did not approve:\n" +
+                string.Join("\n", unapproved.Select(s => "  " + DescribeSlot(s))) +
+                "\nAdding a slot gives whoever holds its device a way to open this vault. Compare each fingerprint with " +
+                "the one shown when that slot was created, then run this again on a terminal to confirm each one, or " +
+                "pass --yes. Nothing was merged.");
+
+        // A merged slot is a new way to decrypt K_v: prove this vault opens here first.
+        var vaultKey = ctx.Unlock(config);
+        CryptographicOperations.ZeroMemory(vaultKey);
+
+        var toAdd = new List<Slot>();
+        foreach (var slot in newSlots)
+        {
+            if (IsApproved(slot))
+            {
+                c.Out.WriteLine($"Adding approved slot: {DescribeSlot(slot)}");
+                toAdd.Add(slot);
+            }
+            else if (yes)
+            {
+                c.Out.WriteLine($"Adding slot (--yes): {DescribeSlot(slot)}");
+                toAdd.Add(slot);
+            }
+            else
+            {
+                c.Out.WriteLine($"\nThis machine did not approve: {DescribeSlot(slot)}");
+                c.Out.Write("Add it to this vault? Compare the fingerprint first. (yes/no): ");
+                if (c.ReadLine()?.Trim().ToLowerInvariant() == "yes")
+                    toAdd.Add(slot);
+                else
+                    c.Out.WriteLine("Skipped.");
+            }
+        }
+
+        if (toAdd.Count == 0)
+        {
+            c.Out.WriteLine("\nNo slots added; this machine's keyring is unchanged.");
+            return 0;
+        }
+
+        var merged = keyring with { Slots = [.. keyring.Slots, .. toAdd] };
+        var remaining = approvedHere.Where(a => !toAdd.Any(s => Matches(a, s))).ToList();
+        var newConfig = config with
+        {
+            Keyring = Convert.ToBase64String(KeyringCodec.Encode(merged)),
+            ApprovedSlots = remaining.Count == 0 ? null : remaining,
+        };
+
+        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        {
+            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+            File.Copy(fileStore.ConfigFile, backup);
+            c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
+        }
+        ctx.Storage.SaveConfig(newConfig);
+
+        c.Out.WriteLine($"\n✓ Merged {toAdd.Count} slot(s) into this machine's keyring ({merged.Slots.Count} slots now).");
+        c.Out.WriteLine("Copies of the vault taken from this machine from now on open with those devices too.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads a merge input: a receipt (it has <c>ReceiptFormatVersion</c>) or a config.json (it has
+    /// <c>Keyring</c>). Returns the incoming keyring (a receipt becomes a one-slot keyring) and a
+    /// name for messages.
+    /// </summary>
+    private static (TswapCore.Keyring.Keyring Keyring, string Source) ReadMergeFile(string path)
+    {
+        if (!File.Exists(path))
+            throw new TswapException($"File not found: {path}");
+        if (new FileInfo(path).Length > MaxMergeFileSize)
+            throw new TswapException($"{path} is too large to be a slot receipt or a config.json (over {MaxMergeFileSize} bytes).");
+        var json = File.ReadAllText(path);
+
+        System.Text.Json.Nodes.JsonObject? root;
+        try
+        {
+            root = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject;
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            throw new TswapException($"{path} is not valid JSON: {ex.Message}");
+        }
+
+        if (root != null && root.ContainsKey(nameof(SlotReceiptFile.ReceiptFormatVersion)))
+        {
+            var receipt = SlotReceiptCodec.Deserialize(json);
+            return (new TswapCore.Keyring.Keyring(receipt.KeyringFormatVersion, receipt.VaultId, receipt.K, [receipt.Slot]), "slot receipt");
+        }
+
+        if (root != null && root.ContainsKey(nameof(Config.Keyring)))
+        {
+            Config? other;
+            try
+            {
+                other = System.Text.Json.JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config);
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                throw new TswapException($"{path} is not a valid config.json: {ex.Message}");
+            }
+            if (other?.Keyring == null)
+                throw new TswapException($"{path} has no keyring to merge from.");
+            return (DecodeKeyringOrCorrupt(other, "the other copy's config.json"), "other copy's config.json");
+        }
+
+        throw new TswapException(
+            $"{path} is neither a slot receipt (from 'slot accept') nor a keyring vault's config.json.");
+    }
+
+    private static TswapCore.Keyring.Keyring DecodeKeyringOrCorrupt(Config config, string what = "config.json")
+    {
+        try
+        {
+            return KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+        }
+        catch (FormatException)
+        {
+            throw new TswapException($"Keyring in {what} is not valid base64. Restore it from backup.");
+        }
+    }
+
+    private static bool Matches(ApprovedSlot approved, Slot slot)
+    {
+        try
+        {
+            return Convert.FromBase64String(approved.SlotId).AsSpan().SequenceEqual(slot.SlotId)
+                && Convert.FromBase64String(approved.PublicKey).AsSpan().SequenceEqual(slot.PublicKey);
+        }
+        catch (FormatException)
+        {
+            return false; // a damaged entry approves nothing
+        }
+    }
+
+    private static bool SameSlot(Slot a, Slot b) =>
+        a.Kind == b.Kind
+        && a.PublicKey.AsSpan().SequenceEqual(b.PublicKey)
+        && a.Wrapped.AsSpan().SequenceEqual(b.Wrapped)
+        && (a.HwBlob ?? []).AsSpan().SequenceEqual(b.HwBlob ?? []);
+
+    private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
+
+    /// <summary>One line naming a slot for a merge: kind, device, fingerprint.</summary>
+    private static string DescribeSlot(Slot slot)
+    {
+        var device = slot.Kind == SlotKind.Recovery
+            ? "recovery slot"
+            : YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
+                ? $"YubiKey {YubiKeySlotBlob.Decode(slot.HwBlob!).Serial}"
+                : "TPM / Secure Enclave machine slot";
+        return $"slot {ShortId(slot.SlotId)} ({device}), fingerprint {SlotFingerprint.Compute(slot.PublicKey)}";
     }
 
     /// <summary>
