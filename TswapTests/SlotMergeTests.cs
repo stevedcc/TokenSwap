@@ -309,6 +309,23 @@ public class SlotMergeTests : IDisposable
     }
 
     [Fact]
+    public void TwoBackupsInTheSameMillisecond_BothKeepTheirContent()
+    {
+        // Found by the full suite: two config writes within one millisecond gave the same backup
+        // name, and File.Copy refused the second (the merge failed after unlocking).
+        var now = DateTime.UtcNow;
+        File.WriteAllText(_router.ConfigPath, "first");
+        var first = TswapCli.Commands.SlotCommand.BackupConfigFile(_router.ConfigPath, now);
+        File.WriteAllText(_router.ConfigPath, "second");
+        var second = TswapCli.Commands.SlotCommand.BackupConfigFile(_router.ConfigPath, now);
+
+        Assert.NotEqual(first, second);
+        Assert.Equal("first", File.ReadAllText(first));
+        Assert.Equal("second", File.ReadAllText(second));
+        Assert.StartsWith(_router.ConfigPath + ".bak-", second);
+    }
+
+    [Fact]
     public void WithoutSudo_IsRefusedBeforeReadingTheFileOrUnlocking()
     {
         if (Environment.IsPrivilegedProcess)

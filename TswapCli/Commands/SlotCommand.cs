@@ -795,8 +795,7 @@ public sealed class SlotCommand : ICliCommand
 
         if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
         {
-            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-            File.Copy(fileStore.ConfigFile, backup);
+            var backup = BackupConfigFile(fileStore.ConfigFile, DateTime.UtcNow);
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
         ctx.Storage.SaveConfig(newConfig);
@@ -864,6 +863,31 @@ public sealed class SlotCommand : ICliCommand
         catch (FormatException)
         {
             throw new TswapException($"Keyring in {what} is not valid base64. Restore it from backup.");
+        }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="configFile"/> to <c>config.json.bak-&lt;UTC timestamp&gt;</c> and returns
+    /// the backup's path. A backup of that name already existing (two writes within one
+    /// millisecond) gets a <c>-1</c>, <c>-2</c>, ... suffix; an existing backup is never overwritten.
+    /// </summary>
+    internal static string BackupConfigFile(string configFile, DateTime utcNow)
+    {
+        var stem = configFile + ".bak-" + utcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
+        for (var n = 0; ; n++)
+        {
+            var backup = n == 0 ? stem : $"{stem}-{n}";
+            if (File.Exists(backup))
+                continue;
+            try
+            {
+                File.Copy(configFile, backup, overwrite: false);
+                return backup;
+            }
+            catch (IOException) when (File.Exists(backup))
+            {
+                // Created in between by someone else: take the next name.
+            }
         }
     }
 

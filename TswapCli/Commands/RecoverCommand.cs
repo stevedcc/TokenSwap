@@ -116,8 +116,7 @@ public sealed class RecoverCommand : ICliCommand
 
         if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
         {
-            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-            File.Copy(fileStore.ConfigFile, backup);
+            var backup = SlotCommand.BackupConfigFile(fileStore.ConfigFile, DateTime.UtcNow);
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
         ctx.Storage.SaveConfig(newConfig);
