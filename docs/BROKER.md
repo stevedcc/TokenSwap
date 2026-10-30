@@ -101,6 +101,17 @@ logged (the broker asks every upstream for `Accept-Encoding: identity`).
   symlink, and every folder above its real path must be root's (or the vault user's) and not
   group- or world-writable; `serve` refuses to start otherwise.
 
+### SELinux
+
+With the `tswap-broker` module (`contrib/selinux/tswap-broker.cil`), the broker runs in its own
+domain, `tswap_broker_t`, and **containers may connect to the broker's sockets and to nothing
+else of the vault user's**: the module's only rule for containers is `container_t` →
+`tswap_broker_t` `unix_stream_socket connectto`. The module does **not** confine the broker
+itself: `tswap_broker_t` is an unconfined domain and keeps the vault user's rights (the TPM, its
+home folder, outbound HTTPS, creating sockets). Only a dedicated copy of the binary
+(`/usr/local/libexec/tswap-broker`) is labelled to enter it; the `tswap` everyone runs stays
+`unconfined_t`.
+
 ### The vault user is root-equivalent for its secrets
 
 The vault user can unlock the vault (it is in group `tss` for the TPM) and can edit
@@ -206,15 +217,35 @@ containers (so `/run/user/<uid>`, which is `0700`, won't do).
 sudo install -d -m 0711 -o vault -g vault /srv/tswap-broker
 ```
 
-**SELinux (Fedora, Fedora CoreOS).** A rootless container can't reach a socket labelled
-`var_t`, and Podman's `:z`/`:Z` can't relabel a socket file the container's user doesn't own.
-Label the socket folder `container_file_t` once, so every socket `serve` creates there inherits
-the label, and mount the socket **without** `:z`:
+**SELinux (Fedora, Fedora CoreOS)**, with SELinux enforcing and no
+`--security-opt label=disable` on the containers. Two things stand between a rootless container
+and the socket:
+
+1. The socket *file*: a container can't reach a socket labelled `var_t`, and Podman's `:z`/`:Z`
+   can't relabel a socket file the container's user doesn't own. Label the socket folder
+   `container_file_t` once, so every socket `serve` creates there inherits the label, and mount
+   the socket **without** `:z`.
+2. The *connection*: `container_t` may not `connectto` a socket of an unconfined process. The
+   `tswap-broker` module (CIL, so `semodule` installs it without a compiler; Fedora CoreOS has no
+   `checkmodule`) runs the broker in `tswap_broker_t` and allows exactly
+   `container_t` → `tswap_broker_t` `unix_stream_socket connectto`. It enters that domain only
+   from a dedicated, labelled copy of the binary, which the systemd unit runs.
 
 ```bash
+# the module
+sudo semodule -i contrib/selinux/tswap-broker.cil
+# the labelled copy of the binary (copy it again after upgrading tswap)
+sudo install -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+sudo semanage fcontext -a -t tswap_broker_exec_t '/usr/local/libexec/tswap-broker'
+sudo restorecon -v /usr/local/libexec/tswap-broker
+# the socket folder
 sudo semanage fcontext -a -t container_file_t '/srv/tswap-broker(/.*)?'
 sudo restorecon -R /srv/tswap-broker
 ```
+
+Check, once `serve` runs: `ps -eZ | grep tswap-broker` shows `tswap_broker_t`, and a container
+started without `--security-opt label=disable` gets answers through its socket
+(`ausearch -m avc -ts recent` shows no denial).
 
 ### 3. Routes and sockets (`broker.json`)
 
@@ -261,7 +292,9 @@ a reload keeps the config it has.
 
 ### 4. The systemd unit
 
-`contrib/systemd/tswap-broker.service` is a user unit for the vault user:
+`contrib/systemd/tswap-broker.service` is a user unit for the vault user. It runs the labelled
+copy, `/usr/local/libexec/tswap-broker broker serve` (see the SELinux note in step 2; on a host
+without SELinux, install the copy anyway, or point `ExecStart` at `tswap`):
 
 ```bash
 sudo -iu vault install -D -m 0644 tswap-broker.service ~vault/.config/systemd/user/tswap-broker.service

@@ -1,0 +1,49 @@
+; tswap broker: SELinux policy module (CIL; install with `sudo semodule -i tswap-broker.cil`,
+; no compiler needed). docs/BROKER.md, "SELinux".
+;
+; Why: a rootless container (container_t) may not connect to a Unix socket created by an
+; unconfined process (`container_t -> unconfined_t : unix_stream_socket connectto` is denied).
+; This module gives the broker its own domain, tswap_broker_t, so exactly that one connection
+; can be allowed, and nothing else of the vault user's.
+;
+; It does NOT confine the broker: tswap_broker_t is an unconfined domain and keeps the vault
+; user's rights (the TPM, its home folder, outbound HTTPS, creating sockets).
+;
+; Only a dedicated copy of the binary is labelled tswap_broker_exec_t:
+;   sudo install -m 0755 /usr/local/bin/tswap /usr/local/libexec/tswap-broker
+;   sudo semanage fcontext -a -t tswap_broker_exec_t '/usr/local/libexec/tswap-broker'
+;   sudo restorecon -v /usr/local/libexec/tswap-broker
+; The tswap everyone runs stays unconfined_t.
+
+; ---- the broker's domain and its entry point
+(type tswap_broker_t)
+(roletype system_r tswap_broker_t)
+(roletype unconfined_r tswap_broker_t)
+(typeattributeset domain (tswap_broker_t))
+(typeattributeset unconfined_domain_type (tswap_broker_t))
+
+(type tswap_broker_exec_t)
+(roletype object_r tswap_broker_exec_t)
+(typeattributeset file_type (tswap_broker_exec_t))
+(typeattributeset exec_type (tswap_broker_exec_t))
+(typeattributeset non_security_file_type (tswap_broker_exec_t))
+(typeattributeset non_auth_file_type (tswap_broker_exec_t))
+(allow tswap_broker_t tswap_broker_exec_t (file (entrypoint execute read open getattr map)))
+
+; ---- the transition: a login shell or the systemd user instance (unconfined_t), or systemd
+; itself (init_t), running the labelled copy starts it in tswap_broker_t
+(typetransition unconfined_t tswap_broker_exec_t process tswap_broker_t)
+(allow unconfined_t tswap_broker_exec_t (file (execute read open getattr map)))
+(allow unconfined_t tswap_broker_t (process (transition)))
+(allow tswap_broker_t unconfined_t (fd (use)))
+(allow tswap_broker_t unconfined_t (process (sigchld)))
+
+(typetransition init_t tswap_broker_exec_t process tswap_broker_t)
+(allow init_t tswap_broker_exec_t (file (execute read open getattr map)))
+(allow init_t tswap_broker_t (process (transition)))
+(allow tswap_broker_t init_t (fd (use)))
+(allow tswap_broker_t init_t (process (sigchld)))
+
+; ---- the one rule for containers: connect to the broker's sockets, nothing else. (The socket
+; file itself is container_file_t, from socket_dir's label, which containers may already write.)
+(allow container_t tswap_broker_t (unix_stream_socket (connectto)))
