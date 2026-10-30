@@ -485,6 +485,15 @@ public sealed class RecordVaultStore : IFileVaultStore
     public void SaveSecrets(SecretsDb db, byte[] key)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
+        // Fix round 2: a secret missing from the database passed in becomes a tombstone. One per save
+        // is a 'delete'; more looks like an empty or partial database being saved by mistake, which
+        // would delete the shared vault, so it is refused before anything is written.
+        var missing = loaded.Values.Count(r => r.State is { Type: not RecordType.Tombstone } s && !db.Secrets.ContainsKey(s.Name));
+        if (missing > 1)
+            throw new TswapException(
+                $"Refusing to save: this would delete {missing} secrets at once, which looks like an empty or partial database " +
+                "being saved, not a deliberate delete. Nothing was written. Delete secrets one at a time with 'sudo tswap delete <name>'.");
+
         var origin = OriginId();
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         var writes = new List<(string FileName, SecretRecord State)>();

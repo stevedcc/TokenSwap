@@ -486,6 +486,7 @@ public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
         _home.Ok("", "init", "--keyring");
         _home.Ok("shared-value", "ingest", "s");
+        _home.Ok("second-value", "ingest", "t"); // two secrets: an empty save would hit the store's guard
         _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
     }
 
@@ -506,7 +507,11 @@ public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
         Assert.Equal("records", _router.Config.Store);
         Assert.Equal(_shared, _router.Config.VaultDir);
         _home.Ok("", "slot", "approve", request, approve);
+        var recordsDir = Path.Combine(_shared, "records");
+        var recordsBefore = Directory.GetFiles(recordsDir).ToDictionary(f => f, File.ReadAllBytes);
         _router.Ok("", "slot", "accept", approve);
+        // Fix round 2: accept writes no record (an empty save here once tombstoned every secret).
+        Assert.All(recordsBefore, kv => Assert.Equal(kv.Value, File.ReadAllBytes(kv.Key)));
         _home.Ok("", "slot", "merge", approve + ".receipt.json");
 
         var config = _router.Config;
