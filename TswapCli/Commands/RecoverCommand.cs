@@ -121,6 +121,8 @@ public sealed class RecoverCommand : ICliCommand
                 KeyringSlotId = Convert.ToBase64String(slotId),
                 RequiresTouch = hardware == HardwareBackend.SecureEnclave,
             };
+        if (yubiKey != null) // brief T7 item 5: its posture is explained below
+            newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
 
         if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {

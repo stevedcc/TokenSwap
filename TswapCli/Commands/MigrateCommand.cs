@@ -53,6 +53,15 @@ public sealed class MigrateCommand : ICliCommand
             : "  Touch:            not enabled ⚠");
         c.ResetColor();
 
+        // Brief T7 item 5: migrate is where a classic vault's touch posture is reviewed, so it is
+        // explained here (once, stderr) and acknowledged; everyday commands then stay quiet.
+        if (SecurityWarnings.Changed(config).Count > 0)
+        {
+            SecurityWarnings.WarnIfNoTouch(c, config);
+            config = SecurityWarnings.Acknowledge(config);
+            ctx.Storage.SaveConfig(config);
+        }
+
         c.SetForeground(needsRngPrompt ? ConsoleColor.Yellow : ConsoleColor.Green);
         c.Out.WriteLine(needsRngPrompt
             ? "  Entropy mode:     not configured (defaults to system RNG) ⚠"

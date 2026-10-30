@@ -159,6 +159,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
         config = KeepRecordStoreFields(ctx, config);
+        config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
         if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
@@ -236,6 +237,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
         config = KeepRecordStoreFields(ctx, config);
+        config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
         if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             fileStore.BackupConfig();
@@ -708,6 +710,9 @@ public sealed class SlotCommand : ICliCommand
 
         var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
+        // Brief T7 item 5: the new slot's posture is explained below, so it is acknowledged; the
+        // other slots keep what was acknowledged before.
+        newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
 
         // Back up config.json before writing, the way init backs up a vault it replaces.
         if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))

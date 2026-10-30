@@ -1,56 +1,215 @@
 using TswapCore;
+using TswapCore.Keyring;
 
 namespace TswapCli;
 
 /// <summary>
-/// Renders security warning banners. The *decision* (does this config warrant a
-/// warning?) is a one-line check on <see cref="Config.RequiresTouch"/>; the console
-/// rendering lives here so TswapCore stays free of console I/O.
+/// The YubiKey touch posture, told without harassing (brief T7 item 5, #185: "Users should make an
+/// informed decision and not be harassed"):
+/// <list type="bullet">
+/// <item>explained once where it is chosen (init, slot add, slot request, migrate):
+/// <see cref="ExplainTouch"/>, and acknowledged in config (<see cref="Acknowledge"/>);</item>
+/// <item>shown per slot by <c>tswap slots</c>;</item>
+/// <item>on everyday commands, at most one line, only for a posture that differs from what was last
+/// acknowledged (<see cref="NoticeIfChanged"/>).</item>
+/// </list>
+/// Everything goes to stderr. Only YubiKey slots have a touch posture; TPM and Secure Enclave slots
+/// have their own presence models and their own init-time caveats.
 /// </summary>
 public static class SecurityWarnings
 {
+    public const string Touch = "touch";
+    public const string NoTouch = "no-touch";
+    public const string Unknown = "unknown";
+
+    /// <summary>The <see cref="Config.AcknowledgedTouch"/> key of a classic XOR vault (one posture for both keys).</summary>
+    public const string ClassicVault = "vault";
+
+    /// <summary>The stored name of a posture.</summary>
+    public static string PostureName(bool? requiresTouch) => requiresTouch switch
+    {
+        true => Touch,
+        false => NoTouch,
+        null => Unknown,
+    };
+
+    private static string Words(string posture) => posture switch
+    {
+        Touch => "touch required",
+        NoTouch => "no touch",
+        _ => "touch unknown",
+    };
+
+    /// <summary>One YubiKey posture of a vault: its <see cref="Config.AcknowledgedTouch"/> key, posture and display label.</summary>
+    public sealed record SlotPosture(string Key, string Posture, string Label);
+
     /// <summary>
-    /// Print a warning to stderr if YubiKey slots don't require touch or status is unknown.
-    /// YubiKey-only: the wording below ("your YubiKeys", "tswap migrate") doesn't apply to
-    /// other backends, which have their own presence models and their own init-time caveats
-    /// (see SecureEnclaveHardwareService/LinuxTpmHardwareService/WindowsTpmHardwareService's
-    /// init flows) rather than a shared touch-requirement warning.
+    /// The touch posture of every YubiKey slot of <paramref name="config"/>: each one-key slot (its
+    /// recorded posture), a legacy pair slot or classic XOR vault (<see cref="Config.RequiresTouch"/>,
+    /// one posture for both keys), and a pending one-key slot request. Empty when there is none, or
+    /// when the keyring can't be read (the unlock reports that).
+    /// </summary>
+    public static List<SlotPosture> Current(Config config)
+    {
+        var result = new List<SlotPosture>();
+        var yubiKeyVault = config.Backend is null or HardwareBackend.YubiKey;
+        var pair = config.YubiKeySerials is { Count: 2 } ? $"YubiKeys {string.Join(", ", config.YubiKeySerials)}" : null;
+        if (config.Keyring == null)
+        {
+            if (config.PendingSlotId != null && config.PendingSlotHwBlob != null
+                && TryDecodeBlob(TryBase64(config.PendingSlotHwBlob), out var pending))
+                result.Add(new(config.PendingSlotId, PostureName(pending.RequiresTouch), $"YubiKey {pending.Serial} (pending slot)"));
+            else if (yubiKeyVault && pair != null)
+                result.Add(new(ClassicVault, PostureName(config.RequiresTouch), pair));
+            return result;
+        }
+
+        Keyring keyring;
+        try
+        {
+            keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+        }
+        catch (Exception ex) when (ex is FormatException or TswapException)
+        {
+            return result;
+        }
+        var ownSlotId = config.KeyringSlotId == null ? null : TryBase64(config.KeyringSlotId);
+        var firstMachine = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
+        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
+        {
+            var key = Convert.ToBase64String(slot.SlotId);
+            var shortId = Convert.ToHexStringLower(slot.SlotId)[..8];
+            if (YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
+            {
+                if (TryDecodeBlob(slot.HwBlob, out var blob))
+                    result.Add(new(key, PostureName(blob.RequiresTouch), $"YubiKey {blob.Serial} (slot {shortId})"));
+            }
+            else if (yubiKeyVault && pair != null
+                     && (ownSlotId == null ? slot == firstMachine : slot.SlotId.AsSpan().SequenceEqual(ownSlotId)))
+            {
+                result.Add(new(key, PostureName(config.RequiresTouch), $"{pair} (slot {shortId})"));
+            }
+        }
+        return result;
+    }
+
+    private static byte[]? TryBase64(string value)
+    {
+        try
+        {
+            return Convert.FromBase64String(value);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryDecodeBlob(byte[]? hwBlob, out YubiKeySlotBlob blob)
+    {
+        blob = null!;
+        if (!YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
+            return false;
+        try
+        {
+            blob = YubiKeySlotBlob.Decode(hwBlob!);
+            return true;
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="config"/> with the current posture of its YubiKey slots recorded as
+    /// acknowledged: all of them, or only those whose key is in <paramref name="onlyKeys"/> (a slot
+    /// just explained). Entries for other slots are kept.
+    /// </summary>
+    public static Config Acknowledge(Config config, IReadOnlyCollection<string>? onlyKeys = null)
+    {
+        var acknowledged = config.AcknowledgedTouch == null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(config.AcknowledgedTouch);
+        foreach (var slot in Current(config).Where(s => onlyKeys == null || onlyKeys.Contains(s.Key)))
+            acknowledged[slot.Key] = slot.Posture;
+        return config with { AcknowledgedTouch = acknowledged };
+    }
+
+    /// <summary>
+    /// The slots whose posture differs from what was acknowledged. A slot never acknowledged counts
+    /// only when it needs no touch or its posture is unknown: a touch-required key leaves nothing to
+    /// decide.
+    /// </summary>
+    public static List<(SlotPosture Slot, string? Was)> Changed(Config config)
+    {
+        var changed = new List<(SlotPosture, string?)>();
+        foreach (var slot in Current(config))
+        {
+            var was = config.AcknowledgedTouch?.GetValueOrDefault(slot.Key);
+            if (was == slot.Posture || (was == null && slot.Posture == Touch))
+                continue;
+            changed.Add((slot, was));
+        }
+        return changed;
+    }
+
+    /// <summary>
+    /// The everyday-command notice: one line on stderr, only for postures that changed since they
+    /// were last acknowledged (see <see cref="Changed"/>); nothing otherwise.
+    /// </summary>
+    public static void NoticeIfChanged(IConsole console, Config config)
+    {
+        var changed = Changed(config);
+        if (changed.Count == 0)
+            return;
+        var parts = changed.Select(c =>
+            $"{c.Slot.Label}: {Words(c.Slot.Posture)} ({(c.Was == null ? "not acknowledged yet" : "was " + Words(c.Was))})");
+        console.Error.WriteLine(
+            $"tswap: YubiKey touch setting changed since last acknowledged: {string.Join("; ", parts)}. " +
+            "See 'tswap slots', then run 'tswap slots --ack'.");
+    }
+
+    /// <summary>
+    /// Explains a key's touch posture once, on stderr, where it is chosen (enrolment, migrate):
+    /// what it means and how to change it. "Couldn't check" is said as such, with the fix.
+    /// </summary>
+    public static void ExplainTouch(IConsole console, string keyLabel, bool? requiresTouch)
+    {
+        var e = console.Error;
+        switch (requiresTouch)
+        {
+            case true:
+                console.SetForeground(ConsoleColor.Green);
+                e.WriteLine($"✓ {keyLabel}: touch required (recommended). Every unlock needs a press of the key.");
+                console.ResetColor();
+                break;
+            case false:
+                console.SetForeground(ConsoleColor.Yellow);
+                e.WriteLine($"⚠ {keyLabel}: no touch required, so any process running as you can unlock the vault while the key is plugged in.");
+                e.WriteLine("  That can be deliberate (an always-on machine). To require a touch instead, reprogram the key");
+                e.WriteLine("  (ykman otp chalresp --generate --touch 2) and enroll it again. 'tswap slots' shows each key's setting.");
+                console.ResetColor();
+                break;
+            default:
+                e.WriteLine($"{keyLabel}: Couldn't check the touch setting (ykman didn't report whether the key asked for a touch).");
+                e.WriteLine("  Fix: install yubikey-manager 5 or later (ykman on PATH) and enroll the key again; until then");
+                e.WriteLine("  'tswap slots' shows it as unknown, and if it needs no touch, any process running as you can use it.");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Explains a classic vault's touch posture (both keys) once, on stderr; nothing for a
+    /// touch-required vault or a non-YubiKey backend. Used where the posture is reviewed (migrate).
     /// </summary>
     public static void WarnIfNoTouch(IConsole console, Config config)
     {
         if (config.Backend is not (null or HardwareBackend.YubiKey))
             return;
-
         if (config.RequiresTouch == true)
             return;
-
-        var e = console.Error;
-        console.SetForeground(ConsoleColor.Yellow);
-        e.WriteLine("\n╔═══════════════════════════════════════════════════════════════════╗");
-
-        if (config.RequiresTouch == false)
-        {
-            e.WriteLine("║  [!]  SECURITY WARNING: YubiKey slots configured without touch    ║");
-            e.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-            e.WriteLine("║  Your YubiKeys are configured without requiring button press.     ║");
-            e.WriteLine("║  This means any process can unlock the vault if the key is        ║");
-            e.WriteLine("║  inserted, weakening the security model.                          ║");
-        }
-        else // config.RequiresTouch == null
-        {
-            e.WriteLine("║  [!]  SECURITY WARNING: YubiKey touch requirement unknown         ║");
-            e.WriteLine("╠═══════════════════════════════════════════════════════════════════╣");
-            e.WriteLine("║  Unable to detect if your YubiKeys require button press.          ║");
-            e.WriteLine("║  This may indicate ykman is not installed or detection failed.    ║");
-            e.WriteLine("║  If touch is not required, any process can unlock the vault.      ║");
-        }
-
-        e.WriteLine("║                                                                   ║");
-        e.WriteLine("║  Recommended: Run 'tswap migrate' to upgrade to touch-required    ║");
-        e.WriteLine("║  slots for better security.                                       ║");
-        e.WriteLine("╚═══════════════════════════════════════════════════════════════════╝");
-        console.ResetColor();
-        e.WriteLine();
+        var label = config.YubiKeySerials is { Count: > 0 } ? $"YubiKeys {string.Join(", ", config.YubiKeySerials)}" : "This vault's YubiKeys";
+        ExplainTouch(console, label, config.RequiresTouch);
     }
 }
-

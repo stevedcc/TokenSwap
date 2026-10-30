@@ -49,14 +49,16 @@ public sealed record CommandContext(
 
     /// <summary>
     /// Unlocks the vault; with several YubiKeys plugged in, <see cref="UnlockSelection"/> decides.
-    /// <paramref name="warnIfNoTouch"/> is suppressed for commands that never expose
+    /// <paramref name="warnIfNoTouch"/> (the changed-posture notice) is suppressed for commands that never expose
     /// secret values on stdout/stderr (names, burned, burn, check), and in test mode
     /// (matching the historical test-key bypass, which skipped the warning).
     /// </summary>
     public byte[] Unlock(Config config, bool warnIfNoTouch = true)
     {
+        // Brief T7 item 5: no banner; one line only for a touch posture that changed since it was
+        // last acknowledged.
         if (warnIfNoTouch && TestKey == null)
-            SecurityWarnings.WarnIfNoTouch(Console, config);
+            SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection());
     }
 

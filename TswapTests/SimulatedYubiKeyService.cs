@@ -68,5 +68,18 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
         return HMACSHA1.HashData(secret, padded);
     }
 
-    public bool? DetectTouchRequirement(int serial) => _touch.GetValueOrDefault(serial);
+    /// <summary>
+    /// Brief T7 item 5: false makes <see cref="DetectTouchRequirement"/> return null, like real
+    /// <c>ykman otp info</c>, which can't read a slot's touch setting.
+    /// </summary>
+    public bool DetectionWorks { get; set; } = true;
+
+    public bool? DetectTouchRequirement(int serial) => DetectionWorks ? _touch.GetValueOrDefault(serial) : null;
+
+    /// <summary>
+    /// Brief T7 item 5: the "asked for touch" flag is the key's touch setting (<see cref="SetTouch"/>),
+    /// as ykman prints "Touch your YubiKey..." exactly when the key waits for one.
+    /// </summary>
+    public YubiKeyResponse ChallengeReportingTouch(int serial, string challenge)
+        => new(Challenge(serial, challenge), _touch.GetValueOrDefault(serial));
 }

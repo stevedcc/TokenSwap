@@ -28,4 +28,14 @@ public interface IYubiKeyService
     /// Returns null if detection fails.
     /// </summary>
     bool? DetectTouchRequirement(int serial);
+
+    /// <summary>
+    /// <see cref="Challenge"/>, also reporting whether the key asked for a touch before it answered
+    /// (brief T7 item 5): how the touch posture is detected at enrolment. Null when this service
+    /// can't tell.
+    /// </summary>
+    YubiKeyResponse ChallengeReportingTouch(int serial, string challenge) => new(Challenge(serial, challenge), null);
 }
+
+/// <summary>A challenge's response, and whether the key asked for a touch first (null: unknown).</summary>
+public sealed record YubiKeyResponse(byte[] Response, bool? AskedForTouch);

@@ -37,13 +37,26 @@ namespace TswapCli.Commands;
 public sealed class SlotsCommand : ICliCommand
 {
     public string Name => "slots";
-    public string HelpUsage => "slots";
-    public string Description => "List a keyring vault's enrolled slots and what protects each one";
+    public string HelpUsage => "slots [--ack]";
+    public string Description => "List the vault's slots and what protects each one (--ack: acknowledge the YubiKeys' touch settings)";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
+        if (args is not ([] or ["--ack"]))
+            throw new UsageException($"{ctx.Prefix} slots [--ack]");
         var config = ctx.Storage.LoadConfig();
+        if (args is ["--ack"])
+        {
+            // Brief T7 item 5: record every YubiKey slot's current touch posture as acknowledged, so
+            // everyday commands stop the changed-posture notice. Machine-local (config.json).
+            var postures = SecurityWarnings.Current(config);
+            ctx.Storage.SaveConfig(SecurityWarnings.Acknowledge(config));
+            ctx.Console.Out.WriteLine(postures.Count == 0
+                ? "This vault has no YubiKey slot: nothing to acknowledge."
+                : "Acknowledged the touch setting of: " + string.Join("; ", postures.Select(p => $"{p.Label} ({p.Posture})")));
+            return 0;
+        }
         ctx.Console.Out.WriteLine(Format(config));
         return 0;
     }
@@ -59,7 +72,7 @@ public sealed class SlotsCommand : ICliCommand
         {
             return "This vault has no keyring — it's a single derived-key or hardware-wrapped\n" +
                    "vault with no multi-slot concept (see 'tswap init --keyring' to create a\n" +
-                   "keyring vault instead).";
+                   "keyring vault instead)." + DescribeClassicPosture(config);
         }
 
         byte[] keyringBytes;
@@ -99,6 +112,11 @@ public sealed class SlotsCommand : ICliCommand
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
         }
 
+        var changed = SecurityWarnings.Changed(config);
+        if (changed.Count > 0)
+            sb.Append("\nTouch setting not acknowledged on this machine: " +
+                string.Join("; ", changed.Select(c => c.Slot.Label)) + ". Run 'tswap slots --ack' once you've decided.\n");
+
         if (machineSlotCount > 1)
         {
             sb.Append(
@@ -108,6 +126,18 @@ public sealed class SlotsCommand : ICliCommand
         }
 
         return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>Brief T7 item 5: a classic YubiKey vault's touch posture (both keys share it).</summary>
+    private static string DescribeClassicPosture(Config config)
+    {
+        var posture = SecurityWarnings.Current(config).FirstOrDefault();
+        if (posture == null)
+            return "";
+        var line = $"\n{posture.Label}: {DescribeYubiKeyProtection(config.RequiresTouch)}.";
+        return SecurityWarnings.Changed(config).Count > 0
+            ? line + "\nTouch setting not acknowledged on this machine. Run 'tswap slots --ack' once you've decided."
+            : line;
     }
 
     /// <summary>
