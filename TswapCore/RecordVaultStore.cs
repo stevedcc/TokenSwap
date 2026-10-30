@@ -413,8 +413,6 @@ public sealed class RecordVaultStore : IFileVaultStore
             try
             {
                 bytes = _owner.ReadAllBytes(path);
-                if (SecretRecordCodec.PeekHeader(bytes) is { } header)
-                    Observe(header.Write.Hlc);
                 copyState = SecretRecordCodec.Decode(bytes, key);
                 if (FilenameHasher.ToFilename(copyState.RecordId) != fileName)
                     throw new TswapException("its record id belongs to another record");
@@ -452,8 +450,8 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             return new LoadedRecord(fileName, null, null, ex.Message);
         }
-        if (SecretRecordCodec.PeekHeader(bytes) is { } header)
-            Observe(header.Write.Hlc);
+        // Fix round 1 (A1): stamps move this machine's clock only once the record authenticates
+        // (ObserveAll below); a planted header could otherwise push LastHlc anywhere.
         try
         {
             var state = SecretRecordCodec.Decode(bytes, key);

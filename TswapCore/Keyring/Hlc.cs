@@ -29,7 +29,14 @@ public readonly record struct Hlc(long PhysicalMs, uint Logical) : IComparable<H
         if (nowMs > highestSeen.PhysicalMs)
             return new Hlc(nowMs, 0);
         if (highestSeen.Logical == uint.MaxValue)
-            return new Hlc(checked(highestSeen.PhysicalMs + 1), 0);
+        {
+            if (highestSeen.PhysicalMs == long.MaxValue)
+                throw new TswapException(
+                    "The vault's clock has reached the end of its range (a record carries an impossible time stamp), so no " +
+                    "newer write can be ordered after it. Find the record with the bad stamp (tswap warns about stamps more " +
+                    "than a year ahead) and restore it from a backup.");
+            return new Hlc(highestSeen.PhysicalMs + 1, 0);
+        }
         return new Hlc(highestSeen.PhysicalMs, highestSeen.Logical + 1);
     }
 
