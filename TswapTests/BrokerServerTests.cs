@@ -74,31 +74,29 @@ public class BrokerServerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UidRemovedOnReload_KeptAliveConnectionIsClosed()
+    public async Task OneRequestPerConnection_SoAReloadThatDropsTheUid_RefusesTheNextRequest()
     {
         if (OperatingSystem.IsWindows())
             return;
         var server = await _h.StartAsync();
         using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await client.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath("lane1")));
-        await client.SendAsync("GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"u8.ToArray());
+        // A keep-alive request (and a pipelined second one): answered once, with Connection: close.
+        await client.SendAsync("GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\nGET /echo/b HTTP/1.1\r\nHost: b\r\n\r\n"u8.ToArray());
+        var received = new MemoryStream();
         var buffer = new byte[4096];
-        var first = await client.ReceiveAsync(buffer);
-        Assert.StartsWith("HTTP/1.1 200", System.Text.Encoding.ASCII.GetString(buffer, 0, first));
+        int n;
+        while ((n = await client.ReceiveAsync(buffer)) > 0)
+            received.Write(buffer, 0, n);
+        var text = System.Text.Encoding.ASCII.GetString(received.ToArray());
+        Assert.StartsWith("HTTP/1.1 200", text);
+        Assert.Contains("\r\nConnection: close\r\n", text);
+        Assert.Equal(1, text.Split("HTTP/1.1 ").Length - 1);
+        Assert.Equal(1, _h.Secrets.Unlocks);
 
         Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(lane1Uids: $"\"{BrokerHarness.MyUid + 1}\""))));
-        await client.SendAsync("GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"u8.ToArray());
-        int second;
-        try
-        {
-            second = await client.ReceiveAsync(buffer);
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
-        {
-            second = 0; // closed by reset: also nothing returned
-        }
 
-        Assert.Equal(0, second);
+        Assert.Empty(await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"));
         Assert.Equal(1, _h.Secrets.Unlocks);
     }
 

@@ -159,7 +159,8 @@ public sealed class BrokerHarness : IAsyncDisposable
     {
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(SocketDir);
-        File.SetUnixFileMode(SocketDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(SocketDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     /// <summary>A config with sockets <c>lane1</c> (this uid) and <c>other</c> (this uid) and the given routes.</summary>
@@ -231,6 +232,29 @@ public sealed class BrokerHarness : IAsyncDisposable
     /// <summary>A GET with Connection: close; the whole response as text.</summary>
     public async Task<string> GetAsync(string socketName, string target, string extraHeaders = "", string method = "GET") =>
         Encoding.Latin1.GetString(await SendRawAsync(socketName, $"{method} {target} HTTP/1.1\r\nHost: broker\r\n{extraHeaders}Connection: close\r\n\r\n"));
+
+    /// <summary>The body of an HTTP/1.1 response (de-chunked when chunked).</summary>
+    public static string BodyOf(string response)
+    {
+        var split = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        if (split < 0)
+            return "";
+        var head = response[..split];
+        var body = response[(split + 4)..];
+        if (!head.Contains("Transfer-Encoding: chunked", StringComparison.OrdinalIgnoreCase))
+            return body;
+        var sb = new StringBuilder();
+        var pos = 0;
+        while (true)
+        {
+            var eol = body.IndexOf("\r\n", pos, StringComparison.Ordinal);
+            var size = Convert.ToInt32(body[pos..eol].Split(';')[0], 16);
+            if (size == 0)
+                return sb.ToString();
+            sb.Append(body, eol + 2, size);
+            pos = eol + 2 + size + 2;
+        }
+    }
 
     public static int StatusOf(string response) =>
         response.StartsWith("HTTP/1.1 ", StringComparison.Ordinal) ? int.Parse(response.AsSpan(9, 3)) : -1;

@@ -44,6 +44,7 @@ public sealed class BrokerServer : IAsyncDisposable
 {
     public const string LockFileName = ".tswap-broker.lock";
     internal const string PeerItemKey = "tswap.broker.peer";
+    internal const string SnifferItemKey = "tswap.broker.sniffer";
 
     private readonly BrokerServerOptions _options;
     private readonly FileStream _lock;
@@ -176,6 +177,10 @@ public sealed class BrokerServer : IAsyncDisposable
             return Task.CompletedTask;
         }
         connection.Items[PeerItemKey] = new BrokerPeer(socketName, creds.Uid, creds.Pid);
+        // Kestrel hides the raw Connection header's tokens; read them from the bytes (decision 6).
+        var sniffer = new BrokerHeaderSniffer(connection.Transport.Input);
+        connection.Transport = new SniffedDuplexPipe(connection.Transport, sniffer);
+        connection.Items[SnifferItemKey] = sniffer;
         return next(connection);
     }
 
@@ -216,13 +221,15 @@ public sealed class BrokerServer : IAsyncDisposable
         FileStream stream;
         try
         {
-            stream = new FileStream(path, new FileStreamOptions
+            var options = new FileStreamOptions
             {
                 Mode = FileMode.OpenOrCreate,
                 Access = FileAccess.ReadWrite,
                 Share = FileShare.ReadWrite,
-                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
-            });
+            };
+            if (!OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            stream = new FileStream(path, options);
         }
         catch (IOException)
         {

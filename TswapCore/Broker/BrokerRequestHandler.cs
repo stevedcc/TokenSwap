@@ -6,8 +6,11 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace TswapCore.Broker;
 
-/// <summary>An allowed request, ready to go upstream: the route, the outbound URI the broker built, and the route's secret.</summary>
-public sealed record BrokerForwardRequest(BrokerRoutePolicy Route, Uri Outbound, BrokerSecret Secret);
+/// <summary>
+/// An allowed request, ready to go upstream: the route, the outbound URI the broker built, the
+/// route's secret, and the header names the client's raw <c>Connection</c> header listed (dropped).
+/// </summary>
+public sealed record BrokerForwardRequest(BrokerRoutePolicy Route, Uri Outbound, BrokerSecret Secret, IReadOnlySet<string> ConnectionNamed);
 
 /// <summary>What forwarding did, for the log line.</summary>
 public readonly record struct BrokerForwardOutcome(int Status, long BytesIn, long BytesOut, string? Reason = null);
@@ -37,14 +40,20 @@ public sealed class BrokerRequestHandler(
 
     public async Task HandleAsync(HttpContext http)
     {
-        var peer = http.Features.Get<IConnectionItemsFeature>()?.Items.TryGetValue(BrokerServer.PeerItemKey, out var p) == true
-            ? p as BrokerPeer
-            : null;
-        if (peer is null)
+        var items = http.Features.Get<IConnectionItemsFeature>()?.Items;
+        var peer = items?.TryGetValue(BrokerServer.PeerItemKey, out var p) == true ? p as BrokerPeer : null;
+        var sniffer = items?.TryGetValue(BrokerServer.SnifferItemKey, out var s) == true ? s as BrokerHeaderSniffer : null;
+        if (peer is null || sniffer is null || !sniffer.HeadersSeen)
         {
             http.Abort(); // never reached through the gate; fail closed
             return;
         }
+        // One request per connection: the header sniffer reads only the first request's Connection lines.
+        http.Response.OnStarting(() =>
+        {
+            http.Response.Headers.Connection = "close";
+            return Task.CompletedTask;
+        });
         var policy = policyHolder.Current; // this request keeps this config
         var method = http.Request.Method;
         var rawTarget = http.Features.Get<IHttpRequestFeature>()?.RawTarget ?? "";
@@ -150,7 +159,7 @@ public sealed class BrokerRequestHandler(
         {
             try
             {
-                outcome = await forwarder.ForwardAsync(http, new BrokerForwardRequest(route, built.Outbound!, secret), http.RequestAborted).ConfigureAwait(false);
+                outcome = await forwarder.ForwardAsync(http, new BrokerForwardRequest(route, built.Outbound!, secret, sniffer.ConnectionNamedHeaders), http.RequestAborted).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
             {
