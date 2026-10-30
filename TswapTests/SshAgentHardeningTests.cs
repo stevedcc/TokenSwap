@@ -13,9 +13,10 @@ namespace TswapTests;
 /// agent sockets, agent sockets removed by a reload, load-time caps and duplicates, and the
 /// openssh-key-v1 / RSA parameter hardening.
 /// </summary>
-public class SshAgentHardeningTests : IAsyncLifetime
+public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
     private readonly SshAgentHarness _h = new();
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private static readonly TestHostKey X = TestHostKey.NewEd25519();
     private static readonly byte[] KeyA = SshTestKeyMaker.Ed25519Pem(RandomNumberGenerator.GetBytes(32));
     private static readonly byte[] BlobA = SshTestKeyMaker.PublicBlob(KeyA);
@@ -61,7 +62,7 @@ public class SshAgentHardeningTests : IAsyncLifetime
     [Fact]
     public async Task UnlockFailuresOnTheHttpSocket_LockOutTheAgentSocketOfTheSameClient()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var source = await StartSharedAsync();
         var loads = source.Reads;
@@ -81,7 +82,7 @@ public class SshAgentHardeningTests : IAsyncLifetime
     [Fact]
     public async Task UnlockFailuresOnTheAgentSocket_LockOutTheHttpSocketOfTheSameClient()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var source = await StartSharedAsync();
         var loads = source.Reads;
@@ -116,7 +117,7 @@ public class SshAgentHardeningTests : IAsyncLifetime
     [Fact]
     public async Task AReloadThatRemovesTheClientSocket_RemovesItsAgentSocket()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var server = await _h.StartAsync(_h.Config(), Agent);
         var without = _h.Config().Replace(
@@ -133,7 +134,7 @@ public class SshAgentHardeningTests : IAsyncLifetime
     [Fact]
     public async Task AReloadThatRemovesASocketsLastKey_RemovesItsAgentSocket()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var server = await _h.StartAsync(_h.Config(), Agent);
 
@@ -147,6 +148,70 @@ public class SshAgentHardeningTests : IAsyncLifetime
         Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config())));
         Assert.False(File.Exists(_h.AgentSocket("lane1")));
         Assert.Contains("restart serve", _h.Broker.LogText.ToString());
+    }
+
+    [Fact]
+    public async Task AReloadAfterTheAgentSocketFileWentMissing_SaysSo_InsteadOfRemoved()
+    {
+        if (SshTestSkip.OnWindows(_output))
+            return;
+        var server = await _h.StartAsync(_h.Config(), Agent);
+        File.Delete(_h.AgentSocket("lane1"));
+
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(lane1Keys: []))));
+
+        Assert.Contains("agent socket 'lane1.ssh' was already gone", _h.Broker.LogText.ToString());
+        Assert.DoesNotContain("agent socket 'lane1.ssh' removed", _h.Broker.LogText.ToString());
+    }
+
+    [Fact]
+    public async Task TheRestartNeededNotice_IsLoggedOnce_NotOnEveryReload()
+    {
+        if (SshTestSkip.OnWindows(_output))
+            return;
+        var server = await _h.StartAsync(_h.Config(), Agent);
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(lane1Keys: []))));
+
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config())));
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config())));
+
+        var notices = _h.Broker.LogText.ToString().Split('\n').Count(l => l.Contains("agent socket 'lane1.ssh' has ssh keys again"));
+        Assert.Equal(1, notices);
+    }
+
+    [Fact]
+    public async Task AReloadListingMoreThan64Keys_IsWarnedOnce_AndOffersTheFirst64ByName()
+    {
+        if (SshTestSkip.OnWindows(_output))
+            return;
+        var names = Enumerable.Range(0, 65).Select(i => $"k{i:D2}").ToList();
+        var keys = names.Select((n, i) => (n, $"s{i}", new[] { SshAgentHarness.SomeHostFingerprint })).ToList();
+        var loaded = names.Select((n, i) => new SshAgentKey(n, $"s{i}", SshAgentMessages.Ed25519Blob((byte)i))).ToDictionary(k => k.Name);
+        var options = (BrokerPolicy _) => new SshAgentOptions { Keys = loaded, KeySource = new FakeSshKeySource(_ => null) };
+        var server = await _h.StartAsync(_h.Config(keys: keys, lane1Keys: ["k00"], otherKeys: ["k01"]), options);
+
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(keys: keys, lane1Keys: [.. names], otherKeys: ["k01"]))));
+        Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(keys: keys, lane1Keys: [.. names], otherKeys: ["k01"]))));
+
+        using var client = await _h.ConnectAsync("lane1");
+        var ids = SshAgentMessages.ParseIdentities((await client.RequestAsync(SshAgentMessages.RequestIdentities))!);
+        Assert.Equal(names.Take(64), ids.Select(i => i.Comment));
+        Assert.Equal(1, _h.Broker.LogText.ToString().Split('\n').Count(l => l.Contains("socket 'lane1' lists 65 ssh keys after the reload")));
+    }
+
+    [Fact]
+    public async Task AKeyNamedTwiceOnOneSocket_IsOneIdentity()
+    {
+        if (SshTestSkip.OnWindows(_output))
+            return;
+        // T9's config model keeps a socket's ssh_keys as a set, so a name listed twice can't be listed
+        // or matched twice (MiMo N3): nothing for the agent to refuse.
+        await _h.StartAsync(_h.Config(lane1Keys: ["k1", "k1"]), Agent);
+        using var client = await _h.ConnectAsync("lane1");
+
+        var ids = SshAgentMessages.ParseIdentities((await client.RequestAsync(SshAgentMessages.RequestIdentities))!);
+
+        Assert.Equal("k1", Assert.Single(ids).Comment);
     }
 
     // ------------------------------------------------------------------ MiMo M2 / GLM 2, M3: load-time caps and duplicates

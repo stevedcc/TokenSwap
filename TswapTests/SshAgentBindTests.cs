@@ -127,8 +127,9 @@ public static class SshBindMessages
 /// <c>a</c> (Ed25519, X only), <c>b</c> (ECDSA, Y only), <c>r</c> (RSA 3072, X only); key <c>c</c>
 /// (Ed25519, X) only on socket <c>other</c>. Every refusal is checked to cost no unlock.
 /// </summary>
-public class SshAgentBindTests : IAsyncLifetime
+public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private readonly SshAgentHarness _h = new();
     private static readonly TestHostKey X = TestHostKey.NewEd25519();
     private static readonly TestHostKey Y = TestHostKey.NewEcdsa();
@@ -197,7 +198,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [InlineData("r", "publickey")]
     public async Task BoundToAnAllowedHost_ASignedUserauthRequest_Verifies(string keyName, string method)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (blob, host, algorithm) = keyName switch
@@ -223,7 +224,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task RsaSha256_IsSignedWithSha256()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -243,7 +244,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [InlineData(SshAgentProtocol.RsaSha2_512)]
     public async Task RsaHostKey_BindsWithASha2Signature(uint hostFlags)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(Z, hostFlags: hostFlags);
@@ -265,7 +266,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task ForgedBindSignature_IsRefused_AndClosesTheConnection()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -277,7 +278,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task BindSignedByAnotherKey_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -290,7 +291,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task SecondBind_IsRefused_EvenAValidOne()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, _) = await BoundAsync(X);
@@ -303,7 +304,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task ForwardingBind_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -315,7 +316,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task BindToAHostNoKeyOfThisSocketAllows_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -328,7 +329,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task Sha1RsaHostSignature_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -349,7 +350,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [InlineData("sk-ssh-ed25519@openssh.com")]
     public async Task UnsupportedHostKeyType_IsRefused(string type)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -364,7 +365,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [InlineData(129)]
     public async Task BindWithAnEmptyOrOversizeSessionId_IsRefused(int length)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -376,7 +377,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task BindWithTrailingBytes_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -400,7 +401,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task SignWithoutABind_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -411,7 +412,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task ABindIsPerConnection_NotSharedWithAnother()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (bound, sid) = await BoundAsync(X);
@@ -424,7 +425,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task SignForAnotherSession_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, _) = await BoundAsync(X);
@@ -436,7 +437,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task CrossProduct_ABindAllowedForKeyA_NeverLetsKeyBSign()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X); // X is allowed for a (and r), not for b (Y only)
@@ -448,7 +449,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task AKeyOnAnotherSocketsList_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X); // c allows X, but c is on socket other's list only
@@ -460,7 +461,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task AnUnknownKey_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -476,7 +477,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [InlineData(1u, "rsa-sha2-256")]
     public async Task RsaWithoutExactlyOneSha2Flag_IsRefused(uint flags, string algorithm)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -488,7 +489,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task Ed25519WithAFlag_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -503,7 +504,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [MemberData(nameof(NotUserauth))]
     public async Task NotAnOracle_AnythingButThisSessionsUserauthRequest_IsRefused(string shape)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -535,7 +536,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task MalformedSignRequest_IsRefused_WithNoUnlock()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
@@ -549,7 +550,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task SignRateLimit_RefusesBeyondIt_WithNoUnlock_UntilAMinutePasses()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync(signsPerMinute: 2);
         var (client, sid) = await BoundAsync(X);
@@ -570,7 +571,7 @@ public class SshAgentBindTests : IAsyncLifetime
     [Fact]
     public async Task UnlockFailures_AreAnsweredWithFailure_AndLockTheSocketOut()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);

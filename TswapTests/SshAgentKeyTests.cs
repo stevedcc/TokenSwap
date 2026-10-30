@@ -122,8 +122,9 @@ public sealed class FakeSshKeySource(Func<string, byte[]?> keys) : ISshKeySource
 /// matched against ssh-keygen's, signatures in OpenSSH's blob format checked independently (BCL for
 /// ECDSA and RSA, BouncyCastle for Ed25519), and the load-time refusals.
 /// </summary>
-public class SshAgentKeyTests : IDisposable
+public class SshAgentKeyTests(Xunit.Abstractions.ITestOutputHelper output) : IDisposable
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private readonly SshTestKeys _keys = new();
 
     public void Dispose() => _keys.Dispose();
@@ -141,7 +142,7 @@ public class SshAgentKeyTests : IDisposable
     [MemberData(nameof(KeyTypes))]
     public void OpensshKey_PublicBlobAndFingerprint_MatchSshKeygen(string type, int? bits)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", type, bits);
 
@@ -158,7 +159,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData("rsa", 3072)]
     public void Pkcs8Key_PublicBlob_MatchesTheOriginal(string type, int? bits)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", type, bits);
         SshTestKeys.ToPkcs8(path);
@@ -172,7 +173,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void Pkcs8Ed25519Key_PublicBlob_MatchesSshKeygensDerivation()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.OpensslEd25519("k");
 
@@ -184,7 +185,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void TheVaultSecret_MayLackTheTrailingNewline()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519");
         var trimmed = Encoding.ASCII.GetBytes(File.ReadAllText(path).TrimEnd()); // 'tswap ingest' trims trailing whitespace
@@ -199,7 +200,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void Ed25519Signature_IsTheBlobOpenSshExpects_AndVerifiesWithBouncyCastle()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519");
         var data = RandomNumberGenerator.GetBytes(100);
@@ -226,7 +227,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData(521, "nistp521")]
     public void EcdsaSignature_IsMpintRAndS_HashedPerCurve_AndVerifiesWithTheBcl(int bits, string curve)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ecdsa", bits);
         var data = RandomNumberGenerator.GetBytes(100);
@@ -267,7 +268,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData(SshAgentProtocol.RsaSha2_512, "rsa-sha2-512")]
     public void RsaSignature_FollowsTheFlag_AndVerifiesWithTheBcl(uint flag, string algorithm)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "rsa", 3072);
         var data = RandomNumberGenerator.GetBytes(100);
@@ -313,7 +314,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void Sha1RsaRequest_IsRefusedBeforeAnyUnlock()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "rsa", 3072);
         var source = new FakeSshKeySource(_ => File.ReadAllBytes(path));
@@ -340,7 +341,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void Load_UnlocksOncePerKey_ReadingOnlyThatKeysSecret_AndKeepsOnlyThePublicKey()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var a = _keys.Generate("a", "ed25519");
         var b = _keys.Generate("b", "ecdsa", 256);
@@ -358,7 +359,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void EverySignature_UnlocksAfresh()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519");
         var source = new FakeSshKeySource(_ => File.ReadAllBytes(path));
@@ -374,7 +375,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void AKeyReplacedInTheVaultSinceLoad_IsNotUsed()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var first = _keys.Generate("first", "ed25519");
         var second = _keys.Generate("second", "ed25519");
@@ -391,7 +392,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void EncryptedPkcs8Key_StopsTheLoad_NamingTheKey()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var plain = _keys.Generate("k", "ecdsa", 256);
         SshTestKeys.ToPkcs8(plain);
@@ -409,7 +410,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void EncryptedOpensshKey_StopsTheLoad_NamingTheKey()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519", passphrase: "pw");
         var source = new FakeSshKeySource(_ => File.ReadAllBytes(path));
@@ -426,7 +427,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData("rsa", 3072)]
     public void OpensshKeyWhoseEmbeddedPublicKeyDiffers_StopsTheLoad_NamingTheKey(string type, int? bits)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", type, bits);
         var other = _keys.Generate("other", type, bits);
@@ -444,7 +445,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData(1024)]
     public void RsaUnder3072Bits_IsRefused_NamingTheKey(int bits)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "rsa", bits);
         var source = new FakeSshKeySource(_ => File.ReadAllBytes(path));
@@ -458,7 +459,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void Rsa2048InPkcs8_IsRefusedToo()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "rsa", 2048);
         SshTestKeys.ToPkcs8(path);
@@ -476,7 +477,7 @@ public class SshAgentKeyTests : IDisposable
     [InlineData("unlock")]
     public void AKeyThatCantBeLoaded_StopsTheLoad_NamingIt(string problem)
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var rsa = _keys.Generate("pem", "rsa", 3072);
         SshTestKeys.Ok("ssh-keygen", "-q", "-p", "-m", "PEM", "-N", "", "-P", "", "-f", rsa); // BEGIN RSA PRIVATE KEY
@@ -497,7 +498,7 @@ public class SshAgentKeyTests : IDisposable
     [Fact]
     public void TruncatedOrTrailingOpensshKeys_AreRefused_NeverACrash()
     {
-        if (!SshTestKeys.HaveTools)
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ecdsa", 256);
         var der = PemBody(File.ReadAllText(path));
@@ -539,8 +540,9 @@ public class SshAgentKeyTests : IDisposable
 /// possible"): the key source reads only that key's record of a record-store vault, with a fresh
 /// unlock per read, both at load and per signature.
 /// </summary>
-public class SshAgentVaultKeyTests : IDisposable
+public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) : IDisposable
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private readonly FleetMachine _m = new("sshkeyrec") { Tpm = RandomNumberGenerator.GetBytes(32) };
     private readonly SshTestKeys _keys = new();
 
@@ -553,7 +555,7 @@ public class SshAgentVaultKeyTests : IDisposable
     [Fact]
     public void LoadAndEachSignature_DecryptOnlyTheKeysRecord()
     {
-        if (OperatingSystem.IsWindows() || !SshTestKeys.HaveTools)
+        if (SshTestSkip.OnWindows(_output) || SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519");
         _m.Ok("", "init", "--tpm", "--no-recovery");

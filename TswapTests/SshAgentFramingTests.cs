@@ -9,8 +9,9 @@ namespace TswapTests;
 /// Brief T10 item 1: the agent protocol's framing and identities, on a real Unix socket
 /// (<c>&lt;name&gt;.ssh.sock</c>), with messages built by the test.
 /// </summary>
-public class SshAgentFramingTests : IAsyncLifetime
+public class SshAgentFramingTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private readonly SshAgentHarness _h = new();
 
     private static readonly byte[] K1 = SshAgentMessages.Ed25519Blob(1);
@@ -38,7 +39,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task Identities_ListOnlyTheKeysOnThisSocketsAllowList()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync(_h.Config(lane1Keys: ["k1"], otherKeys: ["k2", "k3"]));
 
@@ -57,7 +58,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task OnlySocketsWithKeys_GetAnAgentSocket_ConnectableByAnyone()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
 
@@ -82,7 +83,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [InlineData(99)]  // unknown
     public async Task RefusedRequestType_GetsFailure_AndTheConnectionStaysOpen(byte type)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -100,7 +101,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [InlineData("session-bind@openssh.comX")]
     public async Task UnknownExtension_GetsFailure_AndTheConnectionStaysOpen(string name)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -114,7 +115,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task IdentitiesRequestWithTrailingBytes_GetsFailure()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -128,7 +129,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [InlineData(0)]
     public async Task OversizeOrEmptyFrame_ClosesTheConnection_Unanswered(uint length)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -146,7 +147,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task MaximumSizeFrame_IsReadAndAnswered()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -159,7 +160,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task TruncatedFrame_ClosesTheConnection_Unanswered()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
@@ -174,7 +175,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task UidNotOnTheList_IsClosedBeforeAnythingIsParsed_AndLogged()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var otherUid = BrokerHarness.MyUid == 0 ? 1u : BrokerHarness.MyUid - 1;
         await StartAsync(_h.Config(lane1Uids: $"\"{otherUid}\""));
@@ -190,7 +191,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task ThePeerWithTheBrokersOwnUid_IsClosed()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync(allowOwnUid: false);
         using var client = await _h.ConnectAsync("lane1");
@@ -205,7 +206,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task AReloadThatDropsTheUid_ClosesAnOpenConnection_AtItsNextRequest()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var server = await _h.StartAsync(_h.Config(), p => Agent(p));
         using var client = await _h.ConnectAsync("lane1");
@@ -220,7 +221,7 @@ public class SshAgentFramingTests : IAsyncLifetime
     [Fact]
     public async Task StopRemovesTheAgentSockets()
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         await StartAsync();
 

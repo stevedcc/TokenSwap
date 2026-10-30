@@ -249,8 +249,8 @@ will then record the binding for the life of the connection".
 **This agent** accepts at most **one** bind per connection (OpenSSH's client binds each agent
 connection once, after the first key exchange). It does **not** refuse a session identifier
 already bound on another connection (OpenSSH's agent does): replaying a recorded bind on a new
-connection gains nothing, since the replayer is the same client on the same socket, the host set
-is unchanged, and every signature it can then get is over that old session's identifier, useless
+connection gains nothing, since the replayer is a uid allowed on that same socket (with the same
+keys and hosts), the host set is unchanged, and every signature it can then get is over that old session's identifier, useless
 once that SSH session has ended. It refuses, with `SSH_AGENT_EXTENSION_FAILURE`
 (RFC 9987 §5.8: "Extension failure SHOULD be signaled using an SSH_AGENT_EXTENSION_FAILURE
 message") **and then closes the connection** (brief T10 decision 4; stricter than OpenSSH's own
@@ -368,8 +368,11 @@ the key. PKCS#1 (`BEGIN RSA PRIVATE KEY`) and SEC1 (`BEGIN EC PRIVATE KEY`) are 
 ### 9.3 Key rules
 
 - RSA: modulus of at least 3072 bits; never signs SHA-1. The modulus must be odd and the public
-  exponent odd, at least 3 and shorter than the modulus; the same holds for an RSA host key in a
-  bind (otherwise `rsa-parameters`).
+  exponent odd, at least 3 and **shorter than the modulus in bytes**; the same holds for an RSA host
+  key in a bind (otherwise `rsa-parameters`). The byte-length rule is a chosen strictness, not
+  PKCS#1's exact `e < n`: it also refuses a valid key whose public exponent is as long as its
+  modulus. No SSH implementation generates such keys (OpenSSH, PuTTY, OpenSSL and the BCL use
+  65537; old keys 3 or 17).
 - The comment is ignored; an identity's comment is the configured key name.
 - Caps: a key secret over 16 KiB is refused before parsing; mpints over 2048 bytes are refused.
 

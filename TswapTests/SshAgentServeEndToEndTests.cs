@@ -21,8 +21,11 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
     private readonly List<Process> _processes = [];
     private readonly SshTestKeys _keys = new();
 
-    public SshAgentServeEndToEndTests(TswapBinaryFixture binary)
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+    public SshAgentServeEndToEndTests(TswapBinaryFixture binary, Xunit.Abstractions.ITestOutputHelper output)
     {
+        _output = output;
         _binary = binary.BinaryPath;
         Directory.CreateDirectory(ConfigDir);
         Directory.CreateDirectory(SocketDir);
@@ -103,8 +106,13 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
     [Fact]
     public async Task Serve_ListsTheKeyOnItsAgentSocket_AsSshAddPrintsIt()
     {
-        if (!OperatingSystem.IsLinux() || !SshTestKeys.HaveTools || SshTestKeys.Which("ssh-add") is null)
+        if (SshTestSkip.OffLinux(_output) || SshTestSkip.WithoutKeyTools(_output))
             return;
+        if (SshTestKeys.Which("ssh-add") is null)
+        {
+            _output.WriteLine("SKIPPED: ssh-add is not installed.");
+            return;
+        }
         var key = _keys.Generate("id", "ed25519");
         Setup(key);
 
@@ -141,7 +149,7 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
     [InlineData("rsa-2048")]
     public void Serve_WithAKeyItCantUse_RefusesToStart_NamingTheKey(string problem)
     {
-        if (!OperatingSystem.IsLinux() || !SshTestKeys.HaveTools)
+        if (SshTestSkip.OffLinux(_output) || SshTestSkip.WithoutKeyTools(_output))
             return;
         var key = problem == "encrypted"
             ? _keys.Generate("id", "ed25519", passphrase: "pw")

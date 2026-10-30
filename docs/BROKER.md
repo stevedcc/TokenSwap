@@ -287,7 +287,8 @@ stays on the host. The wire formats are pinned in [ssh-agent-wire.md](ssh-agent-
    secret name; `allowed_host_keys` must not be empty, and an entry that isn't a `SHA256:`
    fingerprint stops `serve`. A socket lists at most 64 keys, and two keys may not use the same
    secret or hold the same private key (list one key with every host it may sign in to);
-   `serve` refuses to start otherwise.
+   `serve` refuses to start otherwise. (A reload can't be refused for that: if one lists more than
+   64 keys on a socket, it is logged once and only the first 64 by name are offered.)
 
 4. **Restart `serve`** (`systemctl --user restart tswap-broker`). At start, `serve` unlocks the
    vault **once per key**, reading only that key's record, to derive its public key; it keeps only
@@ -297,8 +298,9 @@ stays on the host. The wire formats are pinned in [ssh-agent-wire.md](ssh-agent-
    reload (SIGHUP) never unlocks, so a new key, or a socket that gains its first key, needs a
    restart; a reload that removes a key from a socket's list, or a host from a key's list, applies
    to the next request. A reload that removes a client socket, or its last key, removes its
-   `<name>.ssh.sock` too (open connections are closed at their next request); it comes back with
-   a restart.
+   `<name>.ssh.sock` too (open connections are closed at their next request; the process keeps the
+   listener on the removed file, unreachable, until restart, since Kestrel can't close one
+   endpoint of a running server); it comes back with a restart.
 
 5. **Register the public key** with the server (`deploy.pub`), preferably narrowly (see "What
    the restriction does and doesn't do").

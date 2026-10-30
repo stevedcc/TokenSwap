@@ -13,8 +13,9 @@ public sealed record RecordedSshSession(string Name, string ClientKeyPem, string
 /// the protocol checks where <c>sshd</c> can't run (CI without it, macOS): items 1 and 2's parsers
 /// read real frames, and the bind and sign succeed exactly as in the live run.
 /// </summary>
-public class SshAgentRecordedFramesTests : IAsyncLifetime
+public class SshAgentRecordedFramesTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
     private readonly SshAgentHarness _h = new();
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -82,7 +83,7 @@ public class SshAgentRecordedFramesTests : IAsyncLifetime
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSession_BindsAndSigns_AsInTheLiveRun(string name)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var session = Session(name);
         var hostBlob = Convert.FromBase64String(session.HostKeyBlob);
@@ -111,7 +112,7 @@ public class SshAgentRecordedFramesTests : IAsyncLifetime
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSession_WithTheHostNotAllowed_IsRefusedAtTheBind(string name)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var session = Session(name);
         var source = await StartAsync(session, SshAgentHarness.SomeHostFingerprint);
@@ -127,7 +128,7 @@ public class SshAgentRecordedFramesTests : IAsyncLifetime
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSignRequest_WithoutTheBind_IsRefused(string name)
     {
-        if (OperatingSystem.IsWindows())
+        if (SshTestSkip.OnWindows(_output))
             return;
         var session = Session(name);
         var source = await StartAsync(session, SshFingerprint.Of(Convert.FromBase64String(session.HostKeyBlob)));

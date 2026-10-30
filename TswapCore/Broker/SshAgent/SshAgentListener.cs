@@ -54,6 +54,8 @@ public sealed class SshAgentListener
     public IEnumerable<string> SocketPaths => _sockets.Select(s => s.Path);
 
     private readonly HashSet<string> _removed = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _announcedBack = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _announcedOverCap = new(StringComparer.Ordinal);
 
     /// <summary>
     /// After a reload (fix round 1, MiMo M1, GLM 3): an agent socket whose client socket is gone from
@@ -70,22 +72,40 @@ public sealed class SshAgentListener
                 var wanted = policy.Sockets.TryGetValue(socket, out var s) && s.SshKeys.Count > 0;
                 if (!wanted && _removed.Add(socket))
                 {
-                    try
-                    {
-                        if (BrokerNative.LStat(path) is { Type: BrokerNative.EntryType.Socket })
-                            File.Delete(path);
-                    }
-                    catch (IOException)
-                    {
-                        // Removed under the lock at the next start.
-                    }
-                    _server.Log.Event($"agent socket '{LogName(socket)}' removed: its client socket or last ssh key is no longer in broker.json (restart serve to listen on it again)");
+                    _announcedBack.Remove(socket);
+                    _server.Log.Event($"agent socket '{LogName(socket)}' {RemoveSocketFile(path)}: its client socket or last ssh key is no longer in broker.json (restart serve to listen on it again)");
                 }
-                else if (wanted && _removed.Contains(socket))
+                else if (wanted && _removed.Contains(socket) && _announcedBack.Add(socket))
                 {
                     _server.Log.Event($"agent socket '{LogName(socket)}' has ssh keys again: restart serve to listen on it");
                 }
+                // Round 2 (MiMo N3, GLM 2): a reload can't be refused for this, so it is said once:
+                // only the first 64 keys by name are listed and may sign.
+                if (wanted && s!.SshKeys.Count > SshAgentProtocol.MaxIdentities && _announcedOverCap.Add(socket))
+                    _server.Log.Event($"socket '{socket}' lists {s.SshKeys.Count} ssh keys after the reload; only the first {SshAgentProtocol.MaxIdentities} by name are offered (serve refuses more at start)");
+                else if (wanted && s!.SshKeys.Count <= SshAgentProtocol.MaxIdentities)
+                    _announcedOverCap.Remove(socket);
             }
+        }
+    }
+
+    /// <summary>
+    /// Removes an agent socket file, saying what happened for the log line (round 2, GLM 1/3, MiMo
+    /// N1): <c>removed</c>, <c>was already gone</c>, or why it couldn't be removed (it is then removed
+    /// under the lock at the next start; its connections are refused meanwhile).
+    /// </summary>
+    private static string RemoveSocketFile(string path)
+    {
+        if (BrokerNative.LStat(path) is not { Type: BrokerNative.EntryType.Socket })
+            return "was already gone";
+        try
+        {
+            File.Delete(path);
+            return "removed";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"could not be removed ({ex.GetType().Name}; it goes at the next start)";
         }
     }
 
