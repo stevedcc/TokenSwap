@@ -70,6 +70,16 @@ public static class SshAgentKeyLoader
 {
     public static Dictionary<string, SshAgentKey> Load(BrokerPolicy policy, ISshKeySource source)
     {
+        // Checked before any unlock (fix round 1): a socket lists at most as many keys as an identities
+        // answer carries, and no two keys share a secret (the first name would silently win at sign time).
+        foreach (var socket in policy.Sockets.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
+            if (socket.SshKeys.Count > SshAgentProtocol.MaxIdentities)
+                throw new TswapException($"Socket '{socket.Name}' lists {socket.SshKeys.Count} ssh keys; at most {SshAgentProtocol.MaxIdentities} are allowed.");
+        var bySecret = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
+            if (!bySecret.TryAdd(config.SecretName, config.Name))
+                throw new TswapException($"Ssh keys '{bySecret[config.SecretName]}' and '{config.Name}' use the same secret '{config.SecretName}'; each key needs its own.");
+
         var keys = new Dictionary<string, SshAgentKey>(StringComparer.Ordinal);
         foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
         {
@@ -90,6 +100,8 @@ public static class SshAgentKeyLoader
             try
             {
                 using var key = SshPrivateKey.Parse(secret);
+                if (keys.Values.FirstOrDefault(k => k.PublicBlob.AsSpan().SequenceEqual(key.PublicBlob)) is { } twin)
+                    throw new TswapException($"Ssh keys '{twin.Name}' and '{config.Name}' hold the same private key; list it once (with every host it may sign in to).");
                 keys[config.Name] = new SshAgentKey(config.Name, config.SecretName, key.PublicBlob);
             }
             catch (SshKeyException ex)

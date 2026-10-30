@@ -138,11 +138,4 @@ public sealed class SshWriter
     public int Length => _buffer.WrittenCount;
 
     public byte[] ToArray() => _buffer.WrittenSpan.ToArray();
-
-    /// <summary>Zeroes what was written (for buffers that held private key material).</summary>
-    public void Clear()
-    {
-        // ArrayBufferWriter.Clear zeroes the written part of its buffer (unlike ResetWrittenCount).
-        _buffer.Clear();
-    }
 }

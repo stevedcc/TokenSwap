@@ -148,6 +148,8 @@ public sealed class SshPublicKey
                     else
                         return algorithm.SequenceEqual("ssh-rsa"u8) ? "sha1" : "algorithm";
                     var n = Modulus!;
+                    if (RsaParametersRefusal(Exponent, n) is { } degenerate)
+                        return degenerate;
                     var bits = (n.Length - 1) * 8 + (32 - System.Numerics.BitOperations.LeadingZeroCount(n[0]));
                     if (bits < MinRsaHostBits)
                         return "rsa-too-small";
@@ -179,6 +181,20 @@ public sealed class SshPublicKey
         {
             return "invalid";
         }
+    }
+
+    /// <summary>
+    /// <c>rsa-parameters</c> for degenerate RSA public values (fix round 1, MiMo M5), else null: the
+    /// modulus must be odd, the exponent odd, at least 3 and shorter than the modulus. With e = 1, for
+    /// example, anyone could "sign" for that key.
+    /// </summary>
+    public static string? RsaParametersRefusal(ReadOnlySpan<byte> e, ReadOnlySpan<byte> n)
+    {
+        if (n.Length == 0 || (n[^1] & 1) == 0)
+            return "rsa-parameters";
+        if (e.Length == 0 || (e[^1] & 1) == 0 || (e.Length == 1 && e[0] < 3) || e.Length >= n.Length)
+            return "rsa-parameters";
+        return null;
     }
 
     /// <summary>The blob of an Ed25519 key.</summary>

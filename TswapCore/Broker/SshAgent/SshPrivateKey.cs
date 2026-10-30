@@ -165,9 +165,9 @@ public sealed class SshPrivateKey : IDisposable
         try
         {
             p.ReadString(); // the comment: ignored (an identity's comment is the key's name)
-            var expected = (byte)1;
+            var expected = 1; // an int: a byte counter would wrap after 255 and pass an overlong run
             while (!p.AtEnd)
-                if (p.ReadByte() != expected++)
+                if (p.ReadByte() != (byte)expected++)
                     throw new SshWireException("bad padding");
             if (expected > 8)
                 throw new SshWireException("padding longer than a block");
@@ -253,18 +253,26 @@ public sealed class SshPrivateKey : IDisposable
     /// <summary>RFC 9987 §5.2.4 fields: <c>mpint n, e, d, iqmp, p, q</c>; n = p·q and the CRT values are checked.</summary>
     private static SshPrivateKey ReadOpenSshRsa(ref SshReader r)
     {
-        var n = r.ReadPositiveMpint().ToArray();
-        var e = r.ReadPositiveMpint().ToArray();
-        var d = r.ReadPositiveMpint().ToArray();
-        var iqmp = r.ReadPositiveMpint().ToArray();
-        var p = r.ReadPositiveMpint().ToArray();
-        var q = r.ReadPositiveMpint().ToArray();
-        var parts = new List<byte[]> { d, iqmp, p, q };
+        // Every array that holds a private value goes into parts as soon as it exists, so each is
+        // zeroed whatever fails later (fix round 1, MiMo M6).
+        var parts = new List<byte[]>();
+        byte[] Keep(byte[] value)
+        {
+            parts.Add(value);
+            return value;
+        }
         try
         {
+            var n = r.ReadPositiveMpint().ToArray();
+            var e = r.ReadPositiveMpint().ToArray();
+            var d = Keep(r.ReadPositiveMpint().ToArray());
+            var iqmp = Keep(r.ReadPositiveMpint().ToArray());
+            var p = Keep(r.ReadPositiveMpint().ToArray());
+            var q = Keep(r.ReadPositiveMpint().ToArray());
             if (n.Length == 0 || e.Length == 0)
                 throw new SshWireException("RSA key with a zero modulus or exponent");
             CheckRsaSize(BitLength(n));
+            CheckRsaPublic(e, n);
             // BigInteger can't be zeroed; it holds the private values only for this check and the
             // CRT exponents (documented in BROKER.md, like .NET strings).
             var bn = new BigInteger(n, isUnsigned: true, isBigEndian: true);
@@ -277,18 +285,19 @@ public sealed class SshPrivateKey : IDisposable
                 || (be * bd) % (bp - 1) != 1 || (be * bd) % (bq - 1) != 1)
                 throw new SshKeyException("its RSA private values are inconsistent (n ≠ p·q, or d or iqmp don't match).");
             var half = (n.Length + 1) / 2;
+            var dp = Keep((bd % (bp - 1)).ToByteArray(isUnsigned: true, isBigEndian: true));
+            var dq = Keep((bd % (bq - 1)).ToByteArray(isUnsigned: true, isBigEndian: true));
             var parameters = new RSAParameters
             {
                 Modulus = n,
                 Exponent = e,
-                D = Pad(d, n.Length),
-                P = Pad(p, half),
-                Q = Pad(q, half),
-                DP = Pad((bd % (bp - 1)).ToByteArray(isUnsigned: true, isBigEndian: true), half),
-                DQ = Pad((bd % (bq - 1)).ToByteArray(isUnsigned: true, isBigEndian: true), half),
-                InverseQ = Pad(iqmp, half),
+                D = Keep(Pad(d, n.Length)),
+                P = Keep(Pad(p, half)),
+                Q = Keep(Pad(q, half)),
+                DP = Keep(Pad(dp, half)),
+                DQ = Keep(Pad(dq, half)),
+                InverseQ = Keep(Pad(iqmp, half)),
             };
-            parts.AddRange([parameters.D, parameters.P, parameters.Q, parameters.DP, parameters.DQ, parameters.InverseQ]);
             var rsa = RSA.Create();
             try
             {
@@ -306,6 +315,13 @@ public sealed class SshPrivateKey : IDisposable
             foreach (var part in parts)
                 CryptographicOperations.ZeroMemory(part);
         }
+    }
+
+    /// <summary>Refuses degenerate RSA public values (fix round 1, MiMo M5): an even modulus, an even exponent or one below 3.</summary>
+    private static void CheckRsaPublic(ReadOnlySpan<byte> e, ReadOnlySpan<byte> n)
+    {
+        if (SshPublicKey.RsaParametersRefusal(e, n) != null)
+            throw new SshKeyException("its RSA public exponent must be odd and at least 3, and its modulus odd.");
     }
 
     private static byte[] Pad(byte[] value, int length)
@@ -363,6 +379,7 @@ public sealed class SshPrivateKey : IDisposable
                             throw new SshWireException("trailing bytes after the PKCS#8 structure");
                         CheckRsaSize(rsa.KeySize);
                         var pub = rsa.ExportParameters(includePrivateParameters: false);
+                        CheckRsaPublic(pub.Exponent, pub.Modulus);
                         return new SshPrivateKey(SshKeyType.Rsa, SshPublicKey.RsaBlob(pub.Exponent!, pub.Modulus!)) { _rsa = rsa };
                     }
                     catch

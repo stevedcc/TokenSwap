@@ -29,14 +29,18 @@ internal sealed class SshAgentSession(SshAgentListener agent, BrokerPeer peer)
     {
         if (message.Length != 1)
             return SshAgentReply.Failure;
-        var keys = AllowedKeys().Take(SshAgentProtocol.MaxIdentities).ToList();
+        var keys = AllowedKeys().ToList();
         var writer = new SshWriter().Byte(SshAgentProtocol.IdentitiesAnswer).UInt32((uint)keys.Count);
         foreach (var key in keys)
             writer.String(key.PublicBlob).String(key.Name);
         return new SshAgentReply(writer.ToArray());
     }
 
-    /// <summary>The loaded keys on this socket's allow-list in the current config, by name (ordinal).</summary>
+    /// <summary>
+    /// The loaded keys on this socket's allow-list in the current config, by name (ordinal), at most
+    /// <see cref="SshAgentProtocol.MaxIdentities"/>: the same set is listed and may sign (serve refuses
+    /// more at start; a reload can't make a listed and a signing set differ).
+    /// </summary>
     private IEnumerable<SshAgentKey> AllowedKeys()
     {
         if (!agent.Policy.Sockets.TryGetValue(peer.Socket, out var socket))
@@ -44,7 +48,8 @@ internal sealed class SshAgentSession(SshAgentListener agent, BrokerPeer peer)
         return socket.SshKeys
             .Order(StringComparer.Ordinal)
             .Select(name => agent.Keys.GetValueOrDefault(name))
-            .OfType<SshAgentKey>();
+            .OfType<SshAgentKey>()
+            .Take(SshAgentProtocol.MaxIdentities);
     }
 
     // ------------------------------------------------------------------ extensions

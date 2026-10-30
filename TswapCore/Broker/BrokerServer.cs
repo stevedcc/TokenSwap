@@ -84,6 +84,9 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>Open connections per socket (tests watch it).</summary>
     internal BrokerConnectionCounter Connections { get; private init; } = null!;
 
+    /// <summary>The ssh-agent endpoint (brief T10), when broker.json had ssh keys at start.</summary>
+    internal SshAgent.SshAgentListener? SshAgentListener { get; private init; }
+
     /// <summary>The socket files this server listens on.</summary>
     public IReadOnlyList<string> SocketPaths => _socketPaths;
 
@@ -159,7 +162,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
-            return new BrokerServer(options, lockFile, app, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task };
+            return new BrokerServer(options, lockFile, app, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task, SshAgentListener = sshAgent };
         }
         catch
         {
@@ -340,7 +343,7 @@ public sealed class BrokerServer : IAsyncDisposable
         if (ok)
         {
             var current = _options.Policy.Current;
-            foreach (var path in _socketPaths.Where(p => !SshAgent.SshAgentListener.IsAgentSocketPath(p))) // brief T10: agent sockets follow their client socket
+            foreach (var path in _socketPaths.Where(p => !SshAgent.SshAgentListener.IsAgentSocketPath(p))) // brief T10: agent sockets (<name>.ssh.sock) are SshAgentListener.Reloaded's
             {
                 var name = Path.GetFileNameWithoutExtension(path);
                 if (!current.Sockets.ContainsKey(name))
@@ -348,6 +351,7 @@ public sealed class BrokerServer : IAsyncDisposable
             }
             foreach (var name in current.Sockets.Keys.Where(n => _socketPaths.All(p => Path.GetFileNameWithoutExtension(p) != n)))
                 _options.Log.Event($"socket '{name}' is new in broker.json: restart serve to listen on it");
+            SshAgentListener?.Reloaded(current); // brief T10: agent sockets of removed clients or keys go
         }
         return ok;
     }

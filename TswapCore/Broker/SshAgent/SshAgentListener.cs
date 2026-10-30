@@ -53,6 +53,42 @@ public sealed class SshAgentListener
     /// <summary>The agent socket files this listener creates (serve removes stale ones, sets their mode and removes them at stop).</summary>
     public IEnumerable<string> SocketPaths => _sockets.Select(s => s.Path);
 
+    private readonly HashSet<string> _removed = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// After a reload (fix round 1, MiMo M1, GLM 3): an agent socket whose client socket is gone from
+    /// broker.json, or which lists no ssh key any more, has its file removed (its connections were
+    /// already refused at their next message), so nothing is left listening for a removed client.
+    /// Listening again needs a restart, which a later reload that lists a key again says.
+    /// </summary>
+    internal void Reloaded(BrokerPolicy policy)
+    {
+        lock (_removed)
+        {
+            foreach (var (socket, path) in _sockets)
+            {
+                var wanted = policy.Sockets.TryGetValue(socket, out var s) && s.SshKeys.Count > 0;
+                if (!wanted && _removed.Add(socket))
+                {
+                    try
+                    {
+                        if (BrokerNative.LStat(path) is { Type: BrokerNative.EntryType.Socket })
+                            File.Delete(path);
+                    }
+                    catch (IOException)
+                    {
+                        // Removed under the lock at the next start.
+                    }
+                    _server.Log.Event($"agent socket '{LogName(socket)}' removed: its client socket or last ssh key is no longer in broker.json (restart serve to listen on it again)");
+                }
+                else if (wanted && _removed.Contains(socket))
+                {
+                    _server.Log.Event($"agent socket '{LogName(socket)}' has ssh keys again: restart serve to listen on it");
+                }
+            }
+        }
+    }
+
     /// <summary>Adds the agent sockets to Kestrel: raw connections, never parsed as HTTP.</summary>
     internal void Listen(KestrelServerOptions kestrel)
     {
