@@ -39,7 +39,7 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => "slot request [--tpm|--secure-enclave] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey";
+    public string HelpUsage => "slot request [--tpm|--secure-enclave] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
     public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot";
 
     /// <summary>
@@ -286,10 +286,11 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
-        if (args.Length != 2)
-            throw new UsageException($"{ctx.Prefix} slot approve <request-file> <approve-file>");
-        var requestPath = args[0];
-        var approvePath = args[1];
+        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        if (positional.Length != 2 || positional.Any(a => a.StartsWith("--")))
+            throw new UsageException($"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]");
+        var requestPath = positional[0];
+        var approvePath = positional[1];
         var c = ctx.Console;
 
         // Security-critical: this unlocks the *existing* vault and produces an artifact that
@@ -339,12 +340,20 @@ public sealed class SlotCommand : ICliCommand
                 "This machine has no keyring vault to approve from. Run 'tswap init --keyring' here first " +
                 "(a classic, non-keyring vault has no K_v to share — see MULTI_MACHINE_KEYING.md).");
 
-        var vaultKey = ctx.Unlock(config);
-        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+        var keyring = DecodeKeyringOrCorrupt(config);
         RequireKeyringThatTakesYubiKeySlots(keyring);
 
-        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(
-            vaultKey, requesterPublicKey, keyring.FormatVersion, keyring.VaultId, keyring.K, newSlotId);
+        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
+        byte[] ephemeralPublicKey, wrapped;
+        try
+        {
+            (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(
+                vaultKey, requesterPublicKey, keyring.FormatVersion, keyring.VaultId, keyring.K, newSlotId);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(vaultKey);
+        }
 
         var approveFile = new SlotApproveFile(
             SlotApproveFile.CurrentFormatVersion,
@@ -572,8 +581,9 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteAdd(CommandContext ctx, string[] args)
     {
-        if (args is not ["--yubikey"])
-            throw new UsageException($"{ctx.Prefix} slot add --yubikey");
+        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        if (positional is not ["--yubikey"])
+            throw new UsageException($"{ctx.Prefix} slot add --yubikey [{RecoveryKeyFlag}]");
         var c = ctx.Console;
 
         // The keyring's version is readable from config.json without K_v (config is not secret):
@@ -598,8 +608,8 @@ public sealed class SlotCommand : ICliCommand
         // Same threat model as approve: a new slot is a new way to decrypt K_v. Before any unlock.
         ctx.RequireSudo("slot add");
 
-        var vaultKey = ctx.Unlock(config);
         var keyring = KeyringCodec.Decode(keyringBytes);
+        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
 
         var enrolled = keyring.Slots
             .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
@@ -620,6 +630,7 @@ public sealed class SlotCommand : ICliCommand
         finally
         {
             CryptographicOperations.ZeroMemory(kekSlot);
+            CryptographicOperations.ZeroMemory(vaultKey);
         }
 
         var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
@@ -668,10 +679,11 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteMerge(CommandContext ctx, string[] args)
     {
-        var usage = $"{ctx.Prefix} slot merge <receipt-or-config.json> [--yes]";
-        var yes = args.Contains("--yes");
-        var positional = args.Where(a => a != "--yes").ToArray();
-        if (positional.Length != 1 || positional[0].StartsWith("--") || args.Count(a => a == "--yes") > 1)
+        var usage = $"{ctx.Prefix} slot merge <receipt-or-config.json> [--yes] [{RecoveryKeyFlag}]";
+        var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        var yes = rest.Contains("--yes");
+        var positional = rest.Where(a => a != "--yes").ToArray();
+        if (positional.Length != 1 || positional[0].StartsWith("--") || rest.Count(a => a == "--yes") > 1)
             throw new UsageException(usage);
         var path = positional[0];
         var c = ctx.Console;
@@ -740,7 +752,7 @@ public sealed class SlotCommand : ICliCommand
                 "pass --yes. Nothing was merged.");
 
         // A merged slot is a new way to decrypt K_v: prove this vault opens here first.
-        var vaultKey = ctx.Unlock(config);
+        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         CryptographicOperations.ZeroMemory(vaultKey);
 
         var toAdd = new List<Slot>();
@@ -843,7 +855,7 @@ public sealed class SlotCommand : ICliCommand
             $"{path} is neither a slot receipt (from 'slot accept') nor a keyring vault's config.json.");
     }
 
-    private static TswapCore.Keyring.Keyring DecodeKeyringOrCorrupt(Config config, string what = "config.json")
+    internal static TswapCore.Keyring.Keyring DecodeKeyringOrCorrupt(Config config, string what = "config.json")
     {
         try
         {
@@ -887,12 +899,63 @@ public sealed class SlotCommand : ICliCommand
         return $"slot {ShortId(slot.SlotId)} ({device}), fingerprint {SlotFingerprint.Compute(slot.PublicKey)}";
     }
 
+    // --- the recovery key (brief T5 decision 3, issue #187) ---
+
+    /// <summary>The only way to hand tswap the recovery private key: this flag, and the key on stdin.</summary>
+    internal const string RecoveryKeyFlag = "--recovery-key-stdin";
+
+    /// <summary>
+    /// Removes <see cref="RecoveryKeyFlag"/> (at most once) from <paramref name="args"/>. Anything
+    /// else that mentions a recovery key (<c>--recovery-key &lt;value&gt;</c>,
+    /// <c>--recovery-key-stdin=&lt;value&gt;</c>) is left in place, so the caller's usage check refuses
+    /// it: the key is never taken from argv.
+    /// </summary>
+    internal static (string[] Remaining, bool WithRecoveryKey) SplitRecoveryKeyFlag(string[] args)
+    {
+        var count = args.Count(a => a == RecoveryKeyFlag);
+        var rest = args.Where(a => a != RecoveryKeyFlag).ToArray();
+        // A repeated flag stays in the rest once, which the caller's usage check rejects.
+        return count > 1 ? ([.. rest, RecoveryKeyFlag], true) : (rest, count == 1);
+    }
+
+    /// <summary>
+    /// Unlocks for a keyring change: this machine's hardware (<see cref="CommandContext.Unlock"/>),
+    /// or, with <paramref name="withRecoveryKey"/>, the recovery key from stdin
+    /// (<see cref="UnlockWithRecoveryKey"/>). The caller zeroes the returned <c>K_v</c>.
+    /// </summary>
+    internal static byte[] UnlockForKeyringChange(CommandContext ctx, Config config, TswapCore.Keyring.Keyring keyring, bool withRecoveryKey) =>
+        withRecoveryKey ? UnlockWithRecoveryKey(ctx, keyring) : ctx.Unlock(config);
+
+    /// <summary>
+    /// Reads the recovery private key from stdin (refused when stdin is a terminal: typing it would
+    /// show it) and recovers <c>K_v</c> from the keyring's recovery slot. Every bad key ends in
+    /// <see cref="RecoveryKeyUnlock.FailureMessage"/>. The key bytes are zeroed here.
+    /// </summary>
+    internal static byte[] UnlockWithRecoveryKey(CommandContext ctx, TswapCore.Keyring.Keyring keyring)
+    {
+        if (!keyring.Slots.Any(s => s.Kind == SlotKind.Recovery))
+            throw new TswapException(RecoveryKeyUnlock.NoRecoverySlotMessage);
+        if (!ctx.Console.IsInputRedirected)
+            throw new TswapException(
+                "The recovery key is read from stdin only, and stdin is a terminal here (typing the key would show it). " +
+                $"Instead, pipe it in, for example: {ctx.Prefix} apply recovery.tmpl | sudo {ctx.Prefix} recover --yubikey");
+        var recoveryKey = RecoveryKeyUnlock.ReadKey(ctx.Console.In);
+        try
+        {
+            return RecoveryKeyUnlock.Unlock(keyring, recoveryKey);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(recoveryKey);
+        }
+    }
+
     /// <summary>
     /// A version 2 keyring's slots carry no hardware blob, and their AEAD binds version 2, so it can
     /// never hold a one-key YubiKey slot without re-wrapping every slot (which needs every device).
     /// Refused with what to do instead; the vault keeps working with its existing slots.
     /// </summary>
-    private static void RequireKeyringThatTakesYubiKeySlots(TswapCore.Keyring.Keyring keyring)
+    internal static void RequireKeyringThatTakesYubiKeySlots(TswapCore.Keyring.Keyring keyring)
     {
         if (keyring.FormatVersion < KeyringFormat.KeyringFormatVersion)
             throw new TswapException(
@@ -907,7 +970,7 @@ public sealed class SlotCommand : ICliCommand
     /// during enrollment. Not load-bearing in v0 — see that type's doc comment — so this is
     /// purely informational, not a gated confirmation prompt.
     /// </summary>
-    private static void PrintFingerprint(IConsole c, string label, byte[] publicKey)
+    internal static void PrintFingerprint(IConsole c, string label, byte[] publicKey)
     {
         c.Out.WriteLine($"{label} fingerprint: {SlotFingerprint.Compute(publicKey)}");
         c.Out.WriteLine("(Not load-bearing in v0 — hand-carrying this file yourself is the trust");

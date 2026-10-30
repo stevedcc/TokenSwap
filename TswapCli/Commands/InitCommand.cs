@@ -304,7 +304,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
             c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
-            PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
+            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
             if (fileStore != null)
                 c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
             else
@@ -325,7 +325,7 @@ public sealed class InitCommand : ICliCommand
     /// <c>--no-recovery</c> was passed, in which case this prints a short "no recovery slot"
     /// notice instead so the absence of a break-glass option isn't a silent surprise later.
     /// </summary>
-    private static void PrintRecoveryKeyBackupWarning(IConsole c, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
+    private static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
     {
         if (recoveryPrivateKey == null)
         {
@@ -339,6 +339,9 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
         c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
         c.Out.WriteLine("option is gone for good; your normal hardware unlock is unaffected either way.");
+        c.Out.WriteLine("\nTo use it, pipe it in on stdin, never on the command line: to enroll new hardware, run");
+        c.Out.WriteLine($"  <command printing the key> | sudo {prefix} recover --yubikey   (or --tpm / --secure-enclave)");
+        c.Out.WriteLine("or give it to 'slot add --yubikey', 'slot approve' or 'slot merge' with --recovery-key-stdin.");
         c.Out.WriteLine("\nRecovery Private Key (base64):");
         c.Out.WriteLine(Convert.ToBase64String(recoveryPrivateKey));
         c.Out.WriteLine("\nBackup locations required:");
@@ -547,7 +550,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
-        PrintRecoveryKeyBackupWarning(c, recoveryPrivateKey, $"this machine's {hardware}");
+        PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
     }
 }
