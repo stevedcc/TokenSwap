@@ -317,6 +317,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         return new SecretsDb(secrets)
         {
+            UnreadableFiles = unreadable.Count == 0 ? null : unreadable.Order(StringComparer.Ordinal).ToList(),
             UnreadableRecord = unreadable.Count == 0
                 ? null
                 : name =>

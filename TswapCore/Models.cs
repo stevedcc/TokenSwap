@@ -190,6 +190,25 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public Func<string, string?>? UnreadableRecord { get; init; }
 
     /// <summary>
+    /// Fix round 1 (A3, record store only): the hashed file names of records that can't be read.
+    /// Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? UnreadableFiles { get; init; }
+
+    /// <summary>
+    /// Throws when any record can't be read (fix round 1, A3): for commands that cover the whole
+    /// vault (<c>export</c>, <c>list</c>), which must never silently leave a secret out.
+    /// </summary>
+    public void ThrowIfAnyUnreadable(string command)
+    {
+        if (UnreadableFiles is { Count: > 0 } files)
+            throw new TswapException(
+                $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
+                "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.");
+    }
+
+    /// <summary>
     /// Throws when <paramref name="name"/> is in a record that can't be read, naming the file (fail
     /// closed; decision 4). Commands call this where they would otherwise report "not found".
     /// </summary>

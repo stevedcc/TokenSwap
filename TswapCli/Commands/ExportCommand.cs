@@ -39,6 +39,7 @@ public sealed class ExportCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
+        db.ThrowIfAnyUnreadable("export");
 
         var salt = RandomNumberGenerator.GetBytes(32);
         var kdf = ExportCrypto.DefaultArgon2idParams;
