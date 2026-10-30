@@ -906,7 +906,11 @@ public sealed class SlotCommand : ICliCommand
         }
     }
 
-    private static bool Matches(ApprovedSlot approved, Slot slot)
+    /// <summary>True when <paramref name="slot"/> is a machine slot this machine approved (T5's merge guard).</summary>
+    internal static bool IsApproved(IEnumerable<ApprovedSlot> approved, Slot slot) =>
+        slot.Kind == SlotKind.Machine && approved.Any(a => Matches(a, slot));
+
+    internal static bool Matches(ApprovedSlot approved, Slot slot)
     {
         try
         {
@@ -929,7 +933,7 @@ public sealed class SlotCommand : ICliCommand
     private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
     /// <summary>One line naming a slot for a merge: kind, device, fingerprint.</summary>
-    private static string DescribeSlot(Slot slot)
+    internal static string DescribeSlot(Slot slot)
     {
         var device = slot.Kind == SlotKind.Recovery
             ? "recovery slot"

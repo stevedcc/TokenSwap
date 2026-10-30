@@ -565,6 +565,49 @@ public sealed class RecordVaultStore : IFileVaultStore
         new DateTimeOffset(time.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(time, DateTimeKind.Utc) : time.ToUniversalTime())
             .ToUnixTimeMilliseconds();
 
+    /// <summary>
+    /// Brief T6 decision 5 (<c>vault merge</c>): every readable record of this vault folder as its
+    /// merged state (conflicted copies folded in), by hashed file name, plus the file names of
+    /// records that can't be read. Reads only.
+    /// </summary>
+    public (IReadOnlyDictionary<string, SecretRecord> States, IReadOnlyList<string> Unreadable) LoadRecordStates(byte[] key, TextWriter? warnings = null)
+    {
+        var loaded = LoadRecords(key, warnings);
+        return (
+            loaded.Values.Where(r => r.State != null).ToDictionary(r => r.FileName, r => r.State!, StringComparer.Ordinal),
+            loaded.Values.Where(r => r.UnreadableReason != null).Select(r => r.FileName).Order(StringComparer.Ordinal).ToList());
+    }
+
+    /// <summary>
+    /// Brief T6 decision 5 (<c>vault merge</c>): merges <paramref name="incoming"/> states (another
+    /// copy of this vault) into this folder by <see cref="RecordMerge"/>, writing only records whose
+    /// state changes (a new write stamp; version and burn stamps are kept, so merging in either
+    /// direction gives the same states). A record that can't be read here is never overwritten
+    /// (a warning). Call after <see cref="LoadSecrets"/> or <see cref="LoadRecordStates"/>; the
+    /// stale-write guard applies. Returns how many records were written.
+    /// </summary>
+    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key)
+    {
+        var loaded = _loaded ?? LoadRecords(key, _warnings);
+        var writes = new List<(string FileName, SecretRecord State)>();
+        foreach (var (fileName, state) in incoming.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            ObserveAll(state);
+            loaded.TryGetValue(fileName, out var current);
+            if (current?.UnreadableReason != null)
+            {
+                _warnings?.WriteLine($"Warning: record {fileName} can't be read here, so the other copy's version was not merged into it.");
+                continue;
+            }
+            var merged = current?.State == null ? RecordMerge.Normalize(state) : RecordMerge.Merge(current.State, state);
+            if (current?.State != null && merged.SameState(current.State) && current.FoldedCopies is not { Count: > 0 })
+                continue;
+            writes.Add((fileName, merged));
+        }
+        WriteRecords(writes, key, loaded);
+        return writes.Count;
+    }
+
     private static TswapException Unreadable(string name, string fileName) => new(
         $"The record holding '{name}' ({fileName}) can't be read: it is damaged, truncated, or still being synced. " +
         "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
