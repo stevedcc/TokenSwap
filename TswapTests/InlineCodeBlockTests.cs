@@ -116,6 +116,18 @@ public class InlineCodeBlockTests
     [InlineData("nice", "-n", "5", "perl")]
     [InlineData("su", "--session-command=echo {{x}}", "root")]
     [InlineData("expect", "-f", "script.exp", "-c", "puts {{x}}")]
+    // Review round 4 (GLM on Z.ai): awk -v clusters, unknown wrapper option values, shells.
+    [InlineData("awk", "-voffset=2", "{ print }", "{{x}}")]
+    [InlineData("awk", "-vf={{x}}", "BEGIN { print f }")]
+    [InlineData("npx", "-p", "pkg", "node", "-e", "console.log('{{x}}')")]
+    [InlineData("npx", "-c", "echo {{x}}")]
+    [InlineData("systemd-run", "-p", "Prop=v", "python3", "-c", "print('{{x}}')")]
+    [InlineData("bwrap", "--ro-bind", "/", "/", "bash", "-c", "echo {{x}}")]
+    [InlineData("docker", "run", "-e", "S={{x}}", "--entrypoint", "python", "img", "-c", "code")]
+    [InlineData("sudo", "-s", "echo", "{{x}}")]
+    [InlineData("sudo", "-i", "S={{x}}")]
+    [InlineData("runuser", "-u", "root", "bash")]
+    [InlineData("nsenter", "-t", "1", "-m")]
     // The existing blocklist, now also by path.
     [InlineData("/usr/bin/echo", "{{x}}")]
     [InlineData("./printf", "%s", "{{x}}")]
@@ -175,6 +187,13 @@ public class InlineCodeBlockTests
     [InlineData("awk", "-bf", "prog.awk", "{{x}}")]
     [InlineData("sudo", "-u", "root", "apt", "install", "python3", "--token", "{{x}}")]
     [InlineData("timeout", "30", "curl", "-H", "{{x}}", "https://example.com")]
+    // Review round 4: an awk -v value or -F separator is not a program file; a program file
+    // after -v still counts; runuser/nsenter with a command run that command.
+    [InlineData("awk", "-v", "x=1", "-f", "prog.awk", "{{x}}")]
+    [InlineData("awk", "-F:", "-f", "prog.awk", "{{x}}")]
+    [InlineData("runuser", "-u", "app", "./deploy.sh", "{{x}}")]
+    [InlineData("nsenter", "-t", "1", "-m", "./tool", "{{x}}")]
+    [InlineData("npx", "-p", "pkg", "tool", "--token", "{{x}}")]
     // Ordinary programs that use a secret.
     [InlineData("curl", "-H", "Authorization: Bearer {{x}}", "https://example.com")]
     [InlineData("find", ".", "-name", "{{x}}")]
