@@ -52,7 +52,10 @@ public static class HardwareBackendExtensions
     };
 }
 
-public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
+public record Config(List<int> YubiKeySerials,
+    // Fix round 1 (C): null (omitted) for a vault with no XOR share, e.g. after migrate --to-records
+    // converted a plain XOR vault; every other writer keeps "" as before.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
     // Null means YubiKey (every vault created before hardware backends existed). Omitted
     // from config.json when null so existing YubiKey vaults serialize byte-for-byte as before.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null,

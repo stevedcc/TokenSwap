@@ -117,7 +117,7 @@ public sealed class SlotCommand : ICliCommand
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -160,7 +160,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotHwBlob: hwBlob);
         config = KeepRecordStoreFields(ctx, config);
 
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
@@ -201,7 +201,7 @@ public sealed class SlotCommand : ICliCommand
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -237,7 +237,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotHwBlob: hwBlob);
         config = KeepRecordStoreFields(ctx, config);
 
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             fileStore.BackupConfig();
         ctx.Storage.SaveConfig(config);
 
@@ -594,7 +594,7 @@ public sealed class SlotCommand : ICliCommand
             ctx.Storage.SaveConfig(finalConfig);
             // A record-store machine (joined with init --vault-dir) already shares the vault's
             // secrets: saving an empty database there would write a tombstone for every one.
-            if (ctx.Storage is not RecordVaultStore && (fileStore == null || !File.Exists(fileStore.SecretsFile)))
+            if (ctx.Storage is not RecordVaultStore && (fileStore == null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
                 ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
         }
 
@@ -709,7 +709,7 @@ public sealed class SlotCommand : ICliCommand
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
 
         // Back up config.json before writing, the way init backs up a vault it replaces.
-        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
@@ -864,7 +864,7 @@ public sealed class SlotCommand : ICliCommand
             ApprovedSlots = remaining.Count == 0 ? null : remaining,
         };
 
-        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");

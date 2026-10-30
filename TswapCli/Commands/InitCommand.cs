@@ -61,7 +61,7 @@ public sealed class InitCommand : ICliCommand
         // a future non-file backend needs its own equivalent, not this one.
         var fileStore = ctx.Storage as IFileVaultStore;
 
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -93,7 +93,7 @@ public sealed class InitCommand : ICliCommand
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
             );
             ctx.Storage.SaveConfig(testConfig);
-            if (fileStore == null || !File.Exists(fileStore.SecretsFile))
+            if (fileStore == null || !fileStore.Owner.FileExists(fileStore.SecretsFile))
                 ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), ctx.TestKey);
             c.Out.WriteLine("Initialized (test mode)");
             return 0;
@@ -173,12 +173,12 @@ public sealed class InitCommand : ICliCommand
         var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
         // Backing up the previous config/vault before writing over it is a file-store
         // safety net; a non-file backend would need its own equivalent, not this one.
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
-        if (fileStore != null && File.Exists(fileStore.SecretsFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
             var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
@@ -286,12 +286,12 @@ public sealed class InitCommand : ICliCommand
             // anything fails mid-init the old config still matches the old vault backup), then
             // move the old vault aside rather than overwrite it outright.
             var fileStore = ctx.Storage as IFileVaultStore;
-            if (fileStore != null && File.Exists(fileStore.ConfigFile))
+            if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             {
                 fileStore.BackupConfig();
             }
             ctx.Storage.SaveConfig(config);
-            if (fileStore != null && File.Exists(fileStore.SecretsFile))
+            if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
             {
                 var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
                 c.SetForeground(ConsoleColor.Yellow);
@@ -575,12 +575,12 @@ public sealed class InitCommand : ICliCommand
         // fails mid-init the old config still matches the old vault backup), then move the old
         // vault aside rather than overwrite it.
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
-        if (fileStore != null && File.Exists(fileStore.SecretsFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
             var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);

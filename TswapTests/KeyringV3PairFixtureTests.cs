@@ -96,7 +96,7 @@ public class KeyringV3PairFixtureTests : IDisposable
         Assert.All(keyring.Slots, s => Assert.Null(s.HwBlob));
         Assert.Null(config.Backend);
         Assert.Equal([SerialA, SerialB], config.YubiKeySerials);
-        Assert.Equal(40, config.RedundancyXor.Length);
+        Assert.Equal(40, config.RedundancyXor!.Length);
     }
 
     [Theory]

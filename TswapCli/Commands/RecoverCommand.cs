@@ -122,7 +122,7 @@ public sealed class RecoverCommand : ICliCommand
                 RequiresTouch = hardware == HardwareBackend.SecureEnclave,
             };
 
-        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");

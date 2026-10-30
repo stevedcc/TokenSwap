@@ -117,7 +117,7 @@ internal static class RecordMigration
             newConfig = config with
             {
                 YubiKeySerials = [],
-                RedundancyXor = "",
+                RedundancyXor = null,
                 UnlockChallenge = null,
                 MasterKeySalt = null,
                 KeyringSlotId = null,
@@ -274,6 +274,10 @@ internal static class RecordMigration
         return (new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, k, slots), recovery.PrivateKey);
     }
 
+    /// <summary>Unix ms of a stored time (records keep millisecond precision).</summary>
+    private static long Ms(DateTime time) =>
+        new DateTimeOffset(time.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(time, DateTimeKind.Utc) : time.ToUniversalTime()).ToUnixTimeMilliseconds();
+
     /// <summary>Step 2: what differs between the temp folder and the classic vault (empty: nothing).</summary>
     private static List<string> Verify(
         CommandContext ctx, string tempDir, Config newConfig, DirectoryOwnerMatcher owner, Keyring keyring,
@@ -301,8 +305,11 @@ internal static class RecordMigration
                 continue;
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(secret.Value)), SHA256.HashData(Encoding.UTF8.GetBytes(got.Value))))
                 problems.Add($"'{name}' has a different value");
-            if ((secret.BurnedAt != null) != (got.BurnedAt != null) || secret.BurnReason != got.BurnReason)
+            if ((secret.BurnedAt != null) != (got.BurnedAt != null) || secret.BurnReason != got.BurnReason
+                || (secret.BurnedAt is { } burned && got.BurnedAt is { } gotBurned && Ms(burned) != Ms(gotBurned)))
                 problems.Add($"'{name}' has a different burned state");
+            if (Ms(secret.Created) != Ms(got.Created))
+                problems.Add($"'{name}' has a different creation time");
         }
 
         if (checkSlots)

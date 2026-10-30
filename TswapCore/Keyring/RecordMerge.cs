@@ -35,6 +35,7 @@ public static class RecordMerge
         var kept = earliestPerVersion
             .Where(b => !ReferenceEquals(b, outstanding))
             .OrderByDescending(b => b.Burn)
+            .ThenByDescending(b => b.Version) // fix round 1 (C): equal burn stamps happen (restore)
             .Take(outstanding == null ? MaxBurns : MaxBurns - 1)
             .ToList();
         if (outstanding != null)

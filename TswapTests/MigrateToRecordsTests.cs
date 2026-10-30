@@ -115,7 +115,8 @@ public sealed class MigrateToRecordsTests : IDisposable
 
         var config = _m.Config;
         Assert.Empty(config.YubiKeySerials);
-        Assert.Equal("", config.RedundancyXor);
+        Assert.Null(config.RedundancyXor); // fix round 1 (C, MiMo M8): omitted, not ""
+        Assert.DoesNotContain("RedundancyXor", _m.ConfigText);
         Assert.Null(config.UnlockChallenge);
         Assert.Null(config.MasterKeySalt);
         Assert.DoesNotContain("RedundancyXor\": \"0", _m.ConfigText);
@@ -308,6 +309,30 @@ public sealed class MigrateToRecordsTests : IDisposable
 
         Assert.DoesNotContain("Recovery Private Key", rerun);
         Assert.DoesNotContain("recovery key", rerun.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void TheVerification_ComparesCreatedAndBurnedAtToo()
+    {
+        // Fix round 1 (C, GLM M-4).
+        PlainVaultWithFiftySecrets();
+        var before = ConfigDirSnapshot();
+        _m.MigrationSeams = new RecordMigrationSeams
+        {
+            TamperReadBack = db =>
+            {
+                db.Secrets["secret-04"] = db.Secrets["secret-04"] with { Created = db.Secrets["secret-04"].Created.AddDays(-1) };
+                db.Secrets["secret-05"] = db.Secrets["secret-05"] with { BurnedAt = db.Secrets["secret-05"].BurnedAt!.Value.AddHours(1) };
+                return db;
+            },
+        };
+
+        var (exit, _, err) = _m.Run("1\n", "migrate", "--to-records");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'secret-04' has a different creation time", err);
+        Assert.Contains("'secret-05' has a different burned state", err);
+        AssertUnchanged(before);
     }
 
     [Fact]

@@ -42,7 +42,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
         var k_current = yubiKeys.Challenge(serial, config.UnlockChallenge ?? LegacyChallenge);
 
         // Reconstruct other key via XOR
-        var xorShare = Convert.FromHexString(config.RedundancyXor);
+        var xorShare = Convert.FromHexString(config.RedundancyXor ?? "");
         var k_other = Crypto.XorBytes(k_current, xorShare);
 
         // Determine order (use serials to ensure consistent ordering)

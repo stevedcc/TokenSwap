@@ -42,7 +42,9 @@ public sealed class VaultCommand : ICliCommand
         var config = store.LoadConfig();
         var keyring = SlotCommand.DecodeKeyringOrCorrupt(config);
         var otherDir = Path.GetFullPath(otherArg);
-        if (string.Equals(otherDir.TrimEnd(Path.DirectorySeparatorChar), store.VaultDir.TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal))
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(otherDir)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(store.VaultDir)), comparison))
             throw new TswapException("That is this vault's own folder; give the folder of the other copy.");
         if (!store.Owner.AsOwner(otherDir, () => Directory.Exists(otherDir)))
             throw new TswapException($"Folder not found: {otherDir}");
@@ -96,8 +98,12 @@ public sealed class VaultCommand : ICliCommand
             foreach (var file in otherUnreadable)
                 c.Error.WriteLine($"Warning: record {file} in the other copy can't be read; it was not merged.");
 
-            if (toAdd.Count > 0)
+            // Every record's stale-write guard is checked before the keyring or config is written
+            // (fix round 1, C), so a refusal really writes nothing.
+            var written = store.MergeRecords(incoming, key, beforeWrite: () =>
             {
+                if (toAdd.Count == 0)
+                    return;
                 var remaining = approvedHere.Where(a => !toAdd.Any(s => SlotCommand.Matches(a, s))).ToList();
                 c.Out.WriteLine($"Previous config backed up to: {store.BackupConfig()}");
                 store.SaveConfig(config with
@@ -105,8 +111,7 @@ public sealed class VaultCommand : ICliCommand
                     Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring with { Slots = [.. keyring.Slots, .. toAdd] })),
                     ApprovedSlots = remaining.Count == 0 ? null : remaining,
                 });
-            }
-            var written = store.MergeRecords(incoming, key);
+            });
 
             if (toAdd.Count == 0 && written == 0)
             {

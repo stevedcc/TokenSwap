@@ -129,6 +129,34 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             throw;
         }
         Keyring.UnixDirectoryFsync.TryFsync(Path.GetDirectoryName(fullPath)!);
+        SweepOrphanTempFiles(Path.GetDirectoryName(fullPath)!);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex OrphanTempFile =
+        new(@"\.[0-9A-F]{12}\.tmp$", System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Fix round 1 (C, GLM M-7): temp files of this writer (<c>&lt;name&gt;.&lt;12 hex&gt;.tmp</c>)
+    /// left by a crash, untouched for over an hour, are removed on the next durable write of that
+    /// folder (as its owner). Younger ones may belong to a write in flight. Best effort.
+    /// </summary>
+    private void SweepOrphanTempFiles(string folder)
+    {
+        try
+        {
+            using var _ = AsOwnerOf(Path.Combine(folder, "x"));
+            var cutoff = DateTime.UtcNow.AddHours(-1);
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                var info = new FileInfo(file);
+                if (OrphanTempFile.IsMatch(info.Name) && info.LinkTarget == null && info.LastWriteTimeUtc < cutoff)
+                    info.Delete();
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            // Best effort: an orphan left in place is harmless (never read as a record).
+        }
     }
 
     /// <summary>Deletes <paramref name="path"/> (as its folder's owner); a missing file is not an error.</summary>

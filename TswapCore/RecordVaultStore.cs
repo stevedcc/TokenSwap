@@ -119,8 +119,11 @@ public sealed class RecordVaultStore : IFileVaultStore
                 $"This machine's {ConfigFile} belongs to a shared record-store vault ({MachineConfig.VaultDir}), so it can't be " +
                 "replaced by another kind of vault here. To set up a different vault, use another config folder " +
                 "(TSWAP_CONFIG_DIR) or move config.json aside first.");
-        _machineConfig ??= TryReadMachineConfig();
-        var lastHlc = Hlc.Max(Hlc.TryParse(config.LastHlc) ?? Hlc.Zero, Hlc.TryParse(_machineConfig?.LastHlc) ?? Hlc.Zero);
+        // Fix round 1 (C): the max with what is on disk now, which another process may have moved on.
+        var onDisk = TryReadMachineConfig();
+        _machineConfig ??= onDisk;
+        var lastHlc = Hlc.Max(Hlc.Max(Hlc.TryParse(config.LastHlc) ?? Hlc.Zero, Hlc.TryParse(_machineConfig?.LastHlc) ?? Hlc.Zero),
+            Hlc.TryParse(onDisk?.LastHlc) ?? Hlc.Zero);
         var machine = config with { Keyring = null, LastHlc = lastHlc == Hlc.Zero ? config.LastHlc : lastHlc.ToString() };
         _machineConfig = machine;
         if (config.Keyring != null)
@@ -516,8 +519,9 @@ public sealed class RecordVaultStore : IFileVaultStore
                 if (secret.Restored && live && state!.Previous is { } restoredFrom)
                     foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
                         burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
-                if (secret.BurnedAt != null)
-                    burns.Add(new BurnEntry(version, NextStamp(), secret.BurnReason));
+                // An imported burned secret keeps its original burn time (fix round 1, C).
+                if (secret.BurnedAt is { } burnedAt)
+                    burns.Add(new BurnEntry(version, new Stamp(new Hlc(UnixMs(burnedAt), 0), origin), secret.BurnReason));
                 var createdMs = state is { Type: not RecordType.Tombstone }
                     ? state.CreatedMs
                     : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
@@ -601,7 +605,11 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// (a warning). Call after <see cref="LoadSecrets"/> or <see cref="LoadRecordStates"/>; the
     /// stale-write guard applies. Returns how many records were written.
     /// </summary>
-    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key)
+    /// <param name="beforeWrite">
+    /// Fix round 1 (C): runs after every record's stale-write guard passed and before any record is
+    /// written (vault merge saves the keyring there), so a refusal really writes nothing.
+    /// </param>
+    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
         var writes = new List<(string FileName, SecretRecord State)>();
@@ -619,6 +627,8 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue;
             writes.Add((fileName, merged));
         }
+        CheckUnchanged(writes, loaded);
+        beforeWrite?.Invoke();
         WriteRecords(writes, key, loaded);
         return writes.Count;
     }
@@ -637,13 +647,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         if (writes.Count == 0)
             return;
         var recordsDir = RecordsDir;
-        foreach (var (fileName, _) in writes)
-        {
-            var path = Path.Combine(recordsDir, fileName);
-            var onDisk = _owner.FileExists(path) ? TryRead(path) : null;
-            loaded.TryGetValue(fileName, out var current);
-            GenerationGuard.CheckUnchanged(fileName, current?.MainBytes, onDisk);
-        }
+        CheckUnchanged(writes, loaded);
 
         TightenModes();
         _owner.CreateDirectory(VaultDir);
@@ -704,6 +708,18 @@ public sealed class RecordVaultStore : IFileVaultStore
         if (changed.Count > 0)
             _warnings?.WriteLine(
                 $"Notice: tightened permissions (folders 0700, files 0600; they were readable by others) on: {string.Join(", ", changed)}");
+    }
+
+    /// <summary>Decision 6: every record about to be written is unchanged since this command loaded it.</summary>
+    private void CheckUnchanged(List<(string FileName, SecretRecord State)> writes, Dictionary<string, LoadedRecord> loaded)
+    {
+        foreach (var (fileName, _) in writes)
+        {
+            var path = Path.Combine(RecordsDir, fileName);
+            var onDisk = _owner.FileExists(path) ? TryRead(path) : null;
+            loaded.TryGetValue(fileName, out var current);
+            GenerationGuard.CheckUnchanged(fileName, current?.MainBytes, onDisk);
+        }
     }
 
     private byte[]? TryRead(string path)
