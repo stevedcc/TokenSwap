@@ -139,8 +139,14 @@ public sealed class BrokerRequestTarget
         var sb = new StringBuilder(upstream.Scheme).Append("://").Append(upstream.Authority).Append(route.BasePath);
         foreach (var segment in decodedSegments)
             sb.Append('/').Append(EncodeSegment(segment));
+        // A '#' would end the query and start a fragment: the query would not reach the upstream
+        // unchanged, so it is refused (fix round 1).
+        if (query.Contains('#'))
+            return null;
         sb.Append(query);
         if (!Uri.TryCreate(sb.ToString(), new UriCreationOptions { DangerousDisablePathAndQueryCanonicalization = true }, out var outbound))
+            return null;
+        if ((query.Length > 1 && outbound.Query != query) || outbound.Fragment.Length != 0)
             return null;
         return IsWithinUpstream(route, outbound) ? outbound : null;
     }

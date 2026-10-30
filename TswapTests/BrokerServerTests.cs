@@ -793,4 +793,50 @@ public class BrokerServerTests : IAsyncLifetime
             return; // not the usual /tmp
         Assert.Equal(_h.SocketDir, BrokerServer.CheckSocketDir(_h.SocketDir, new UnixOwnership()));
     }
+
+    [Fact]
+    public async Task LockFile_IsTightenedTo0600()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var lockPath = Path.Combine(_h.SocketDir, BrokerServer.LockFileName);
+        File.WriteAllText(lockPath, "");
+        File.SetUnixFileMode(lockPath, (UnixFileMode)0b110_110_110);
+
+        await _h.StartAsync();
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(lockPath));
+    }
+
+    [Fact]
+    public void BrokerLog_WriteFailure_DegradesToStderrOnce_AndKeepsGoing()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/dev/full"))
+            return;
+        var stderr = new StringWriter();
+        using var log = new BrokerLog(stderr, "/dev/full", _h.Clock); // every write fails (ENOSPC)
+
+        log.Event("one");
+        log.Event("two");
+
+        var lines = stderr.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(lines, l => l.Contains("broker.log") && l.Contains("stderr only"));
+        Assert.Contains(lines, l => l.EndsWith("event one"));
+        Assert.Contains(lines, l => l.EndsWith("event two"));
+    }
+
+    [Fact]
+    public async Task ALogFileThatFailsWrites_DoesNotBreakRequests()
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/dev/full"))
+            return;
+        await _h.StartAsync();
+        await _h.Server!.StopAsync();
+        var options = _h.Options() with { Log = new BrokerLog(_h.LogText, "/dev/full", _h.Clock) };
+        await using var server = await BrokerServer.StartAsync(options);
+
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
+        Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/b")));
+        Assert.Contains("route=echo", _h.LogText.ToString());
+    }
 }

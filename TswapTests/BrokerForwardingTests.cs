@@ -141,11 +141,13 @@ public class BrokerForwardingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BareChunkedRequest_IsReframed_TheUpstreamGetsTheBodyOnce()
+    public async Task BareChunkedRequest_IsReframed_NeitherFramingHeaderOfTheClientLeaks()
     {
         if (OperatingSystem.IsWindows())
             return;
-        var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nTransfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n" +
+        // "Chunked" with a capital C: HttpClient's own framing header is lower-case "chunked", so the
+        // upstream seeing exactly "chunked" shows the client's header did not pass.
+        var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nTransfer-Encoding: Chunked\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n" +
                   "5;ext=client\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: t\r\n\r\n";
         Assert.Equal(200, BrokerHarness.StatusOf(Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", raw))));
 
@@ -153,7 +155,8 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("hello world", Encoding.ASCII.GetString(hit.Body));
         Assert.Equal("application/octet-stream", hit.Header("Content-Type"));
         Assert.False(hit.HasHeader("X-Trailer"));
-        Assert.False(hit.HasHeader("Content-Length") && hit.HasHeader("Transfer-Encoding"));
+        Assert.False(hit.HasHeader("Content-Length"));
+        Assert.Equal(["chunked"], hit.Headers.Where(h => h.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)).Select(h => h.Value));
     }
 
     [Fact]
@@ -163,18 +166,39 @@ public class BrokerForwardingTests : IAsyncLifetime
             return;
         // A smuggling attempt: CL says 4 (so "0\r\n\r" would be the body), TE says chunked and a
         // second request hides after the terminating chunk.
-        var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+        var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nContent-Length: 4\r\nTransfer-Encoding: Chunked\r\nConnection: close\r\n\r\n" +
                   "5\r\nhello\r\n0\r\n\r\nGET /bearer/smuggled HTTP/1.1\r\nHost: b\r\n\r\n";
         var response = Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", raw));
 
-        Assert.DoesNotContain(_up.Hits, h => h.RawTarget.Contains("smuggled"));
-        Assert.True(_up.Hits.Count <= 1);
-        foreach (var hit in _up.Hits)
-        {
-            Assert.Equal("hello", Encoding.ASCII.GetString(hit.Body));
-            Assert.NotEqual("4", hit.Header("Content-Length"));
-        }
-        Assert.True(BrokerHarness.StatusOf(response) is 200 or 400, response);
+        Assert.Equal(200, BrokerHarness.StatusOf(response));
+        Assert.Single(response.Split("HTTP/1.1 ")[1..]); // one answer: the hidden request is never served
+        var hit = SingleHit();
+        Assert.Equal("/base/upload", hit.RawTarget);
+        Assert.Equal("hello", Encoding.ASCII.GetString(hit.Body));
+        Assert.False(hit.HasHeader("Content-Length"));
+        Assert.Equal(["chunked"], hit.Headers.Where(h => h.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)).Select(h => h.Value));
+    }
+
+    [Fact]
+    public async Task AQueryWithAFragmentMark_IsTheUniform404_AnEncodedOneIsForwardedUnchanged()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var raw = await _h.GetAsync("lane1", "/bearer/x?a=1#frag");
+        var encoded = await _h.GetAsync("lane1", "/bearer/x?a=1%23frag");
+
+        Assert.True(BrokerHarness.StatusOf(raw) is 404 or 400, raw); // 400 when Kestrel refuses it first
+        Assert.Equal(200, BrokerHarness.StatusOf(encoded));
+        Assert.Equal("/base/x?a=1%23frag", SingleHit().RawTarget);
+    }
+
+    [Fact]
+    public void BuildOutbound_RefusesAQueryWithAFragmentMark_TheQueryIsNeverAltered()
+    {
+        var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example"), lane1Routes: "\"bearer\"")).Routes["bearer"];
+
+        Assert.Null(BrokerRequestTarget.BuildOutbound(route, ["x"], "?a=1#b"));
+        Assert.Equal("?a=1%23b", BrokerRequestTarget.BuildOutbound(route, ["x"], "?a=1%23b")!.Query);
     }
 
     [Fact]

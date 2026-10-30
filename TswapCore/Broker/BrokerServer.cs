@@ -289,6 +289,9 @@ public sealed class BrokerServer : IAsyncDisposable
             stream.Dispose();
             throw new TswapException($"Another 'tswap broker serve' is running on {socketDir}.");
         }
+        // Like broker.log: owner-only, whatever an earlier file had.
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         return stream;
     }
 

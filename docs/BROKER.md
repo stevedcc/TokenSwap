@@ -224,13 +224,15 @@ Rules (checked on every load, not only on `add`):
 - route and socket names are `[a-z0-9-]{1,32}`; names starting with `_` are reserved;
 - `upstream` is an `https://` URL (an `http://` one is refused), optionally with a base path;
 - `auth` is `bearer`, `basic` (with a fixed user, no `:`) or `header` (an RFC 7230 token, not a
-  framing or hop-by-hop header); the secret is named as `{{name}}` in the file. A stored value
+  framing, hop-by-hop, `Host`, `Cookie`, `Content-*`, `Accept*`, `Range` or `If-Range`
+  header); the secret is named as `{{name}}` in the file. A stored value
   containing CR, LF or NUL is a hard error, never a header;
 - `methods` default to `GET`, `HEAD`, `POST`; `CONNECT` and `TRACE` are never allowed;
 - `path` is a regex the decoded path after `/<route>/` must match **as a prefix**: the broker
   compiles it as `\A(?:<pattern>)`, case-sensitive, culture-invariant, never multiline, with a
   match timeout. Inline option groups (`(?i)`, `(?m)`, `(?s)`, `(?x)`, …) are refused. Anchor the
-  end yourself (`$`) when a prefix is too wide. The regex never sees the query;
+  end yourself (`$`) when a prefix is too wide. The regex never sees the query. The query is
+  forwarded unchanged; one containing a raw `#` is refused (the uniform `404`);
 - `idle_timeout_sec` (default 120) ends a stream with no bytes moving;
 - unknown fields are refused, and `version` must be 1.
 
@@ -255,7 +257,8 @@ swapped in; a request keeps the config it started with). A new or removed socket
 Logs: one line per request in the journal and in `broker.log` (mode `0600`) next to
 `broker.json`: time, socket, peer uid and pid, route, method, decoded path (escaped,
 length-capped), status, bytes both ways, unlock count and duration, and a reason for refusals.
-Never a credential, a header value or a body.
+Never a credential, a header value or a body. If `broker.log` can't be written (disk full, an
+I/O error), serving goes on: the failure is reported once and lines go to the journal only.
 
 ### 5. Finding a container's uid
 

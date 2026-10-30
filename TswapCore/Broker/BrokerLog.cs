@@ -36,7 +36,7 @@ public sealed class BrokerLog : IDisposable
     public const int MaxPathLength = 256;
 
     private readonly TextWriter? _stderr;
-    private readonly StreamWriter? _file;
+    private StreamWriter? _file;
     private readonly TimeProvider _time;
     // A short synchronous write per line; a plain lock keeps lines whole.
     private readonly Lock _gate = new();
@@ -57,9 +57,10 @@ public sealed class BrokerLog : IDisposable
             };
             if (!OperatingSystem.IsWindows())
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            _file = new StreamWriter(new FileStream(logFile, options), new UTF8Encoding(false)) { AutoFlush = true };
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(logFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            var stream = new FileStream(logFile, options);
+            if (!OperatingSystem.IsWindows() && BrokerNative.LStat(logFile) is { Type: BrokerNative.EntryType.Regular })
+                File.SetUnixFileMode(stream.SafeFileHandle, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            _file = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
         }
     }
 
@@ -104,7 +105,25 @@ public sealed class BrokerLog : IDisposable
             {
                 // stderr gone (journald restarted): the file still gets the line.
             }
-            _file?.WriteLine(line);
+            try
+            {
+                _file?.WriteLine(line);
+            }
+            catch (IOException ex)
+            {
+                // Disk full, EIO: requests go on; the journal (stderr) keeps the log. Said once.
+                var failed = _file;
+                _file = null;
+                try { failed?.Dispose(); } catch (IOException) { /* already failing */ }
+                try
+                {
+                    _stderr?.WriteLine($"{line[..24]} tswap-broker event broker.log can't be written ({Escape(ex.Message, 200)}); logging to stderr only");
+                }
+                catch (IOException)
+                {
+                    // nowhere left to say it
+                }
+            }
         }
     }
 
@@ -144,6 +163,9 @@ public sealed class BrokerLog : IDisposable
     public void Dispose()
     {
         lock (_gate)
-            _file?.Dispose();
+        {
+            try { _file?.Dispose(); } catch (IOException) { /* a failing log file */ }
+            _file = null;
+        }
     }
 }

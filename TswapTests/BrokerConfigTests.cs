@@ -212,6 +212,10 @@ public class BrokerConfigTests : IDisposable
     [InlineData("Accept-Encoding")]
     [InlineData("Range")]
     [InlineData("if-range")]
+    [InlineData("Content-Type")]
+    [InlineData("content-disposition")]
+    [InlineData("Accept")]
+    [InlineData("Accept-Language")]
     public void HeaderName_Invalid_Refused(string header)
     {
         var auth = $$$"""{ "type": "header", "header": {{{System.Text.Json.JsonSerializer.Serialize(header)}}}, "secret": "{{k}}" }""";

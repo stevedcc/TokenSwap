@@ -21,7 +21,10 @@ public sealed class BrokerHeaderSniffer : PipeReader
     private readonly MemoryStream _capture = new();
     private ReadOnlySequence<byte> _last;
     private long _consumed;   // absolute offset of _last's start
-    private bool _complete;   // header block captured (or limit reached)
+    private volatile bool _complete;   // header block captured (or limit reached)
+    // Observe runs on Kestrel's reading task, TakeConnectionNamedHeaders on the request's: the capture
+    // is handed over under this lock.
+    private readonly Lock _handoff = new();
 
     public BrokerHeaderSniffer(PipeReader inner) => _inner = inner;
 
@@ -34,6 +37,12 @@ public sealed class BrokerHeaderSniffer : PipeReader
     /// is zeroed afterwards; later calls return an empty set.
     /// </summary>
     public IReadOnlySet<string> TakeConnectionNamedHeaders()
+    {
+        lock (_handoff)
+            return TakeLocked();
+    }
+
+    private IReadOnlySet<string> TakeLocked()
     {
         var block = _capture.ToArray();
         try
@@ -87,6 +96,12 @@ public sealed class BrokerHeaderSniffer : PipeReader
     private void Observe(ReadOnlySequence<byte> buffer)
     {
         _last = buffer;
+        lock (_handoff)
+            ObserveLocked(buffer);
+    }
+
+    private void ObserveLocked(ReadOnlySequence<byte> buffer)
+    {
         if (_complete)
             return;
         // Copy the bytes of this buffer that lie beyond what has been captured already.

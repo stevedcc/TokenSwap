@@ -195,8 +195,10 @@ public sealed class BrokerPolicy
                 header = auth.Header;
                 if (string.IsNullOrEmpty(header) || !TokenRegex.IsMatch(header))
                     throw new BrokerConfigException($"Route '{name}': header name '{Printable(header ?? "")}' is not a valid HTTP header name (an RFC 7230 token).");
-                if (ForbiddenAuthHeaders.Contains(header))
-                    throw new BrokerConfigException($"Route '{name}': the broker can't put the credential in '{header}' (a framing, hop-by-hop or Host header).");
+                if (ForbiddenAuthHeaders.Contains(header)
+                    || header.StartsWith("Content-", StringComparison.OrdinalIgnoreCase)
+                    || header.StartsWith("Accept", StringComparison.OrdinalIgnoreCase))
+                    throw new BrokerConfigException($"Route '{name}': the broker can't put the credential in '{header}' (a framing, hop-by-hop, Host, Content-* or Accept* header).");
                 if (auth.User != null)
                     throw new BrokerConfigException($"Route '{name}': a header route takes no 'user'.");
                 break;
