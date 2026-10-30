@@ -365,12 +365,21 @@ PEM `-----BEGIN PRIVATE KEY-----`. The algorithm OID picks the type: `rsaEncrypt
 `-----BEGIN ENCRYPTED PRIVATE KEY-----` (PKCS#8 `EncryptedPrivateKeyInfo`) is refused, naming
 the key.
 
-Accepted shapes (round 3): version 0 (`PrivateKeyInfo`) or 1 (RFC 5958 `OneAsymmetricKey`);
-optional `[0]` attributes (ignored); in version 1 only, an optional `[1] publicKey` BIT STRING.
+Accepted shapes (rounds 3 and 4), nothing after the outer SEQUENCE: version 0 (`PrivateKeyInfo`)
+or 1 (RFC 5958 `OneAsymmetricKey`); optional `[0]` attributes (IMPLICIT, a constructed SET OF;
+ignored); in version 1 only, an optional `[1] publicKey` (IMPLICIT, a primitive BIT STRING with no
+unused bits). A `[1]` in a version-0 key, or a constructed one, is refused. For RSA, a version-1
+key is rebuilt as version 0 for the platform's import and its `[1]` RSAPublicKey must equal the
+derived (n, e).
 For ECDSA the parameters are a named-curve OID, or explicit `SpecifiedECDomain` parameters (SEC 1
 §C.2; macOS's LibreSSL-linked ssh-keygen writes these) that must equal P-256, P-384 or P-521
 exactly (prime field, a, b, uncompressed generator, order, cofactor 1; the seed is ignored); the
-`ECPrivateKey` (RFC 5915) may carry `[0]` parameters naming the same curve and a `[1]` public key.
+`ECPrivateKey` (RFC 5915) may carry `[0]` parameters naming the same curve and a `[1]` public key,
+both EXPLICIT-tagged as SEC 1's module defines them and OpenSSL writes them (a constructed `[0]`
+around the ECParameters, a constructed `[1]` around the BIT STRING); a primitive `[0]` or `[1]` is
+refused. The private key d may be shorter than the curve size (it is left-padded) and must satisfy
+1 ≤ d < n (SEC 1 §3.2.1), checked before any platform import. Explicit parameters' integers must
+be positive; versions 1 to 3 are accepted; the optional `hash` field is not (refused).
 Q is derived from d, and every public key the file carries (`ECPrivateKey [1]`,
 `OneAsymmetricKey [1]`, uncompressed or compressed) must equal it; for Ed25519 the `[1]` public
 key must equal A derived from the seed. PKCS#1 (`BEGIN RSA PRIVATE KEY`) and SEC1 (`BEGIN EC PRIVATE KEY`) are not accepted.

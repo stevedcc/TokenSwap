@@ -30,6 +30,9 @@ public sealed class SshPrivateKey : IDisposable
 
     public SshKeyType Type { get; }
 
+    /// <summary>Test hook: the Ed25519 seed this key holds (its owner zeroes it on <see cref="Dispose"/>).</summary>
+    internal byte[]? Ed25519SeedForTests => _seed;
+
     /// <summary>The public key blob derived from the private key (wire doc section 7).</summary>
     public byte[] PublicBlob { get; }
 
@@ -202,9 +205,19 @@ public sealed class SshPrivateKey : IDisposable
     /// <summary>Takes ownership of <paramref name="seed"/> (zeroed on dispose) and derives A.</summary>
     private static SshPrivateKey FromEd25519Seed(byte[] seed)
     {
-        var a = new byte[Ed25519.PublicKeySize];
-        Ed25519.GeneratePublicKey(seed, 0, a, 0);
-        return new SshPrivateKey(SshKeyType.Ed25519, SshPublicKey.Ed25519Blob(a)) { _seed = seed };
+        // The seed is owned from here on: held by the key (zeroed on Dispose, which every caller and
+        // every refusal path runs), or zeroed here if deriving fails (round 4, GLM 4, MiMo 1).
+        try
+        {
+            var a = new byte[Ed25519.PublicKeySize];
+            Ed25519.GeneratePublicKey(seed, 0, a, 0);
+            return new SshPrivateKey(SshKeyType.Ed25519, SshPublicKey.Ed25519Blob(a)) { _seed = seed };
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(seed);
+            throw;
+        }
     }
 
     /// <summary>RFC 9987 §5.2.2 fields: <c>string curve</c>, <c>string Q</c>, <c>mpint d</c>; Q is derived from d and compared.</summary>
@@ -227,9 +240,30 @@ public sealed class SshPrivateKey : IDisposable
         return key;
     }
 
+    /// <summary>
+    /// Why <paramref name="d"/> (big-endian, any leading zeros) can't be a private key of the curve, or
+    /// null: it must satisfy 1 &lt;= d &lt; n (SEC 1 §3.2.1).
+    /// </summary>
+    internal static string? EcScalarRefusal(SshKeyType type, ReadOnlySpan<byte> d)
+    {
+        var magnitude = d;
+        while (magnitude.Length > 0 && magnitude[0] == 0)
+            magnitude = magnitude[1..];
+        if (magnitude.Length == 0)
+            return "its ECDSA private key is zero.";
+        var n = KnownCurves.Single(c => c.Type == type).N;
+        if (magnitude.Length > n.Length || (magnitude.Length == n.Length && magnitude.SequenceCompareTo(n) >= 0))
+            return "its ECDSA private key is not below the curve's order.";
+        return null;
+    }
+
     /// <summary>Imports d alone; the platform derives Q = d·G, which becomes the public key.</summary>
     private static SshPrivateKey FromEcdsaD(SshKeyType type, ECCurve curve, int size, ReadOnlySpan<byte> d)
     {
+        // Round 4 (GLM 3, MiMo 2): 1 <= d < n here, not left to the platform's import (which differs
+        // by OS); a short d (a leading zero byte, about 1 key in 256) is left-padded below.
+        if (EcScalarRefusal(type, d) is { } refused)
+            throw new SshKeyException(refused);
         var padded = new byte[size];
         d.CopyTo(padded.AsSpan(size - d.Length));
         var ecdsa = ECDsa.Create();
@@ -379,15 +413,16 @@ public sealed class SshPrivateKey : IDisposable
             var version = info.ReadInteger();
             if (version != 0 && version != 1)
                 throw new SshKeyException("its PKCS#8 version is not supported.");
-            var algorithm = info.ReadSequence();
+            var algorithmEncoded = info.ReadEncodedValue().ToArray();
+            var algorithmOuter = new AsnReader(algorithmEncoded, AsnEncodingRules.DER);
+            var algorithm = algorithmOuter.ReadSequence();
+            algorithmOuter.ThrowIfNotEmpty();
             var oid = algorithm.ReadObjectIdentifier();
-            if (oid == RsaOid)
-                return ParsePkcs8Rsa(der);
             stage = "private key";
             privateKey = info.ReadOctetString();
             stage = "attributes";
             if (info.HasData && info.PeekTag().HasSameClassAndValue(Context0))
-                info.ReadEncodedValue(); // attributes: metadata, ignored
+                info.ReadSetOf(skipSortOrderValidation: true, Context0); // attributes: metadata, ignored (a SET OF under IMPLICIT [0])
             stage = "public key";
             byte[]? outerPublic = null;
             if (info.HasData && info.PeekTag().HasSameClassAndValue(Context1Primitive))
@@ -399,6 +434,19 @@ public sealed class SshPrivateKey : IDisposable
             info.ThrowIfNotEmpty();
             switch (oid)
             {
+                case RsaOid:
+                    stage = "RSA private key";
+                    if (version == 0)
+                        return ParsePkcs8Rsa(der, outerPublic);
+                    var v0 = Pkcs8V0(algorithmEncoded, privateKey);
+                    try
+                    {
+                        return ParsePkcs8Rsa(v0, outerPublic);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(v0);
+                    }
                 case EcPublicKeyOid:
                     stage = "EC parameters";
                     var type = ReadEcParameters(algorithm);
@@ -438,7 +486,11 @@ public sealed class SshPrivateKey : IDisposable
         }
     }
 
-    private static SshPrivateKey ParsePkcs8Rsa(byte[] der)
+    /// <summary>
+    /// RSA through the platform's PKCS#8 import (version 0 only there, so a v2 key arrives rebuilt as
+    /// v0); a v2 key's <c>[1]</c> RSAPublicKey must equal the derived (n, e) (round 4, GLM 5).
+    /// </summary>
+    private static SshPrivateKey ParsePkcs8Rsa(byte[] der, byte[]? outerPublic)
     {
         var rsa = RSA.Create();
         try
@@ -449,6 +501,17 @@ public sealed class SshPrivateKey : IDisposable
             CheckRsaSize(rsa.KeySize);
             var pub = rsa.ExportParameters(includePrivateParameters: false);
             CheckRsaPublic(pub.Exponent, pub.Modulus);
+            if (outerPublic != null)
+            {
+                var reader = new AsnReader(outerPublic, AsnEncodingRules.DER);
+                var sequence = reader.ReadSequence();
+                reader.ThrowIfNotEmpty();
+                var n = sequence.ReadIntegerBytes().Span;
+                var e = sequence.ReadIntegerBytes().Span;
+                sequence.ThrowIfNotEmpty();
+                if (!Trim(n).AsSpan().SequenceEqual(Trim(pub.Modulus)) || !Trim(e).AsSpan().SequenceEqual(Trim(pub.Exponent)))
+                    throw new SshKeyException("its embedded public key differs from the public key derived from its private key.");
+            }
             return new SshPrivateKey(SshKeyType.Rsa, SshPublicKey.RsaBlob(pub.Exponent!, pub.Modulus!)) { _rsa = rsa };
         }
         catch
@@ -456,6 +519,19 @@ public sealed class SshPrivateKey : IDisposable
             rsa.Dispose();
             throw;
         }
+    }
+
+    /// <summary>A version-0 PrivateKeyInfo of the same algorithm and private key (for the platform's import); the caller zeroes it.</summary>
+    private static byte[] Pkcs8V0(byte[] algorithmEncoded, byte[] privateKey)
+    {
+        var writer = new AsnWriter(AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteInteger(0);
+            writer.WriteEncodedValue(algorithmEncoded);
+            writer.WriteOctetString(privateKey);
+        }
+        return writer.Encode();
     }
 
     /// <summary>A BIT STRING with no unused bits.</summary>
@@ -494,7 +570,7 @@ public sealed class SshPrivateKey : IDisposable
         var field = domain.ReadSequence();
         if (field.ReadObjectIdentifier() != PrimeFieldOid)
             throw new SshKeyException("its explicit ECDSA curve is not over a prime field, so not a supported curve.");
-        var p = Trim(field.ReadIntegerBytes().Span);
+        var p = Positive(field.ReadIntegerBytes().Span);
         field.ThrowIfNotEmpty();
         var curve = domain.ReadSequence();
         var a = Trim(curve.ReadOctetString());
@@ -503,8 +579,8 @@ public sealed class SshPrivateKey : IDisposable
             curve.ReadBitString(out _); // the seed: ignored
         curve.ThrowIfNotEmpty();
         var generator = domain.ReadOctetString();
-        var order = Trim(domain.ReadIntegerBytes().Span);
-        var cofactor = domain.HasData ? Trim(domain.ReadIntegerBytes().Span) : [1];
+        var order = Positive(domain.ReadIntegerBytes().Span);
+        var cofactor = domain.HasData ? Positive(domain.ReadIntegerBytes().Span) : [1];
         domain.ThrowIfNotEmpty();
         foreach (var known in KnownCurves)
         {
@@ -513,6 +589,14 @@ public sealed class SshPrivateKey : IDisposable
                 return known.Type;
         }
         throw new SshKeyException("its explicit ECDSA curve parameters are not exactly P-256, P-384 or P-521.");
+    }
+
+    /// <summary>An INTEGER's magnitude, refused when negative (round 4, MiMo 6: "exactly P-256" includes the sign).</summary>
+    private static byte[] Positive(ReadOnlySpan<byte> integer)
+    {
+        if (integer.Length > 0 && (integer[0] & 0x80) != 0)
+            throw new SshKeyException("its explicit ECDSA curve parameters contain a negative integer, so not a supported curve.");
+        return Trim(integer);
     }
 
     private static byte[] Trim(ReadOnlySpan<byte> value)
