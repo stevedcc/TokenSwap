@@ -60,12 +60,12 @@ public class TpmInitCliTests : IDisposable
 
     [Theory]
     [InlineData("--tpm", HardwareBackend.Tpm)]
-    [InlineData("--secure-enclave", HardwareBackend.SecureEnclave)]
+    [InlineData("--secure-enclave --with-touch", HardwareBackend.SecureEnclave)]
     public void Init_WithSimulatedHardware_AddThenGetRoundTrips(string flag, HardwareBackend backend)
     {
         var dir = NewTempDir();
 
-        var (initExit, _, initErr) = Run(dir, KeyA, "", "init", flag);
+        var (initExit, _, initErr) = Run(dir, KeyA, "", ["init", .. flag.Split(' ')]);
         Assert.True(initExit == 0, initErr);
         Assert.Equal(backend, LoadConfig(dir).Backend);
 
@@ -82,7 +82,7 @@ public class TpmInitCliTests : IDisposable
     [Fact]
     public void Init_SecureEnclave_DisclosesTheUnreviewedConstruction()
     {
-        var (seExit, seOut, seErr) = Run(NewTempDir(), KeyA, "", "init", "--secure-enclave");
+        var (seExit, seOut, seErr) = Run(NewTempDir(), KeyA, "", "init", "--secure-enclave", "--with-touch");
         var (tpmExit, tpmOut, _) = Run(NewTempDir(), KeyA, "", "init", "--tpm");
 
         Assert.True(seExit == 0, seErr);
@@ -198,7 +198,7 @@ public class TpmInitCliTests : IDisposable
     {
         var dir = NewTempDir();
 
-        var (exit, _, stderr) = Run(dir, KeyA, "", "init", "--secure-enclave");
+        var (exit, _, stderr) = Run(dir, KeyA, "", "init", "--secure-enclave", "--with-touch");
 
         Assert.True(exit == 0, stderr);
         var config = LoadConfig(dir);
@@ -361,11 +361,11 @@ public class TpmInitCliTests : IDisposable
 
     [Theory]
     [InlineData("--tpm", HardwareBackend.Tpm)]
-    [InlineData("--secure-enclave", HardwareBackend.SecureEnclave)]
+    [InlineData("--secure-enclave --with-touch", HardwareBackend.SecureEnclave)]
     public void Init_StoresTheHardwareBlobInTheVersion3MachineSlot_NotInTheLegacyField(string flag, HardwareBackend backend)
     {
         var dir = NewTempDir();
-        Assert.Equal(0, Run(dir, KeyA, "", "init", flag).ExitCode);
+        Assert.Equal(0, Run(dir, KeyA, "", ["init", .. flag.Split(' ')]).ExitCode);
 
         var config = LoadConfig(dir);
         var keyring = DecodeKeyring(config);

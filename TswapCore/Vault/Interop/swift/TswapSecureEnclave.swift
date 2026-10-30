@@ -80,9 +80,65 @@ public func tswap_se_wrap(
   }
 }
 
+/// Enrollment, brief T11: as `tswap_se_wrap`, plus the key's presence policy. `requirePresence`
+/// 1 creates the key with `[.privateKeyUsage, .userPresence]` (every unwrap prompts for Touch ID
+/// or the login password), 0 with `[.privateKeyUsage]` (no prompt); any other value returns -4
+/// without creating a key, so a caller passing garbage never gets a key without presence. A new
+/// entry point rather than a new parameter on `tswap_se_wrap`, so an older tswap can never call
+/// this with an undefined last argument, and a newer tswap beside an older dylib fails to find it.
+/// Returns 0 on success; -1 buffer too small; -2 a CryptoKit/Enclave error; -4 an invalid
+/// `requirePresence`; -5 `SecAccessControlCreateWithFlags` failed.
+@_cdecl("tswap_se_wrap_v2")
+public func tswap_se_wrap_v2(
+  _ plaintext: UnsafePointer<UInt8>, _ plaintextLen: Int32,
+  _ outBlob: UnsafeMutablePointer<UInt8>, _ outBlobLen: UnsafeMutablePointer<Int32>,
+  _ outCiphertext: UnsafeMutablePointer<UInt8>, _ outCiphertextLen: UnsafeMutablePointer<Int32>,
+  _ requirePresence: Int32
+) -> Int32 {
+  let flags: SecAccessControlCreateFlags
+  switch requirePresence {
+  case 1: flags = [.privateKeyUsage, .userPresence]
+  case 0: flags = [.privateKeyUsage]
+  default: return -4
+  }
+  guard let access = SecAccessControlCreateWithFlags(
+    nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, nil)
+  else { return -5 }
+
+  do {
+    let seKey = try SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: access)
+
+    let blob = seKey.dataRepresentation
+    guard blob.count <= Int(outBlobLen.pointee) else { return -1 }
+
+    let ephemeral = P256.KeyAgreement.PrivateKey()
+    let shared = try ephemeral.sharedSecretFromKeyAgreement(with: seKey.publicKey)
+    let symmetricKey = shared.hkdfDerivedSymmetricKey(
+      using: SHA256.self, salt: Data(), sharedInfo: hkdfInfo, outputByteCount: 32)
+
+    let plaintextData = Data(bytes: plaintext, count: Int(plaintextLen))
+    let sealed = try AES.GCM.seal(plaintextData, using: symmetricKey)
+
+    var package = Data()
+    package.append(ephemeral.publicKey.x963Representation)
+    package.append(sealed.nonce.withUnsafeBytes { Data($0) })
+    package.append(sealed.ciphertext)
+    package.append(sealed.tag)
+    guard package.count <= Int(outCiphertextLen.pointee) else { return -1 }
+
+    blob.copyBytes(to: outBlob, count: blob.count)
+    outBlobLen.pointee = Int32(blob.count)
+    package.copyBytes(to: outCiphertext, count: package.count)
+    outCiphertextLen.pointee = Int32(package.count)
+    return 0
+  } catch {
+    return -2
+  }
+}
+
 /// Unlock: reconstitutes the Secure Enclave key from `blob` and decrypts `ciphertext` (as
-/// produced by `tswap_se_wrap`). The key-agreement step below is what triggers the Touch ID /
-/// presence prompt. Returns 0 on success, negative on failure (buffer too small, malformed
+/// produced by `tswap_se_wrap` or `tswap_se_wrap_v2`). For a key created with presence required,
+/// the key-agreement step below is what triggers the Touch ID / password prompt. Returns 0 on success, negative on failure (buffer too small, malformed
 /// ciphertext, wrong machine, or the user cancelled/failed presence verification).
 @_cdecl("tswap_se_unwrap")
 public func tswap_se_unwrap(

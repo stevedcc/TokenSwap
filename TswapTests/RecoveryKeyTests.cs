@@ -143,7 +143,7 @@ public class RecoveryKeyTests : IDisposable
         var mac = Machine("mac", secureEnclave: RandomNumberGenerator.GetBytes(32));
         _router.CopyVaultTo(mac);
 
-        mac.Ok(Stdin, "recover", "--secure-enclave", "--recovery-key-stdin");
+        mac.Ok(Stdin, "recover", "--secure-enclave", "--with-touch", "--recovery-key-stdin");
 
         Assert.Equal(HardwareBackend.SecureEnclave, mac.Config.Backend);
         Assert.Equal("router-pw", mac.Get("router"));

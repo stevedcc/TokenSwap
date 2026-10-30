@@ -33,7 +33,7 @@ This matters because the backends do **not** share a primitive:
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
 | TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, simulator-verified only. Windows: CNG Platform Crypto Provider, VM-verified only |
-| Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence/biometric via access control |
+| Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence via the key's access control, chosen at enrolment (`--with-touch` / `--no-touch`, brief T11) and fixed in the key |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
 `ListSerials()` — operations the Secure Enclave literally cannot implement. So the low-level
@@ -176,7 +176,7 @@ the vault's backend.
 
 `slot request --tpm` and `slot request --secure-enclave` enroll the joining machine's own hardware
 through the enrollment seam, exactly as `init --tpm` / `--secure-enclave` do:
-`HardwareServices.Enrollment(backend, testKey).Enroll()` returns a random `KEK_slot` and the
+`HardwareServices.Enrollment(backend, testKey, requirePresence).Enroll()` returns a random `KEK_slot` and the
 backend's blob. `KEK_slot` is zeroed at once; the blob is kept as the pending slot's blob
 (`Config.PendingSlotHwBlob`) with `Config.Backend` set, and travels in the request file next to
 an optional `Backend` field (`"tpm"` / `"secure-enclave"`; omitted for a YubiKey request, which is
@@ -201,6 +201,15 @@ the two flags are mutually exclusive.
   Secure Enclave slot fails, the error adds `VaultUnlocker.ForeignHardwareSlotHint`: the slot
   belongs to another machine or its hardware is unavailable; use this machine's own config and
   `slot merge`, or a YubiKey slot or the recovery key. YubiKey slots stay portable (T4).
+- **Known gap (brief T11): the posture of a requesting Secure Enclave slot is invisible to the
+  approver.** `slot request --secure-enclave --no-touch` records `RequiresTouch = false` in the
+  requesting Mac's own config, but the request file is unchanged (no posture field), so
+  `slot approve` can neither verify nor show it; `slot request --no-touch` says so in its output.
+  A tswap older than T11 hard-codes "presence required" for every Secure Enclave slot, so on such a
+  binary `tswap slots` shows a no-touch slot as presence-gated (display only; the key enforces the
+  truth and unlock is unaffected).
+  (A posture field would only be the requester's claim anyway: the key's policy can't be read back
+  from its blob.)
 - **Recovery.** `recover --tpm` / `--secure-enclave` enroll the same way after the recovery key
   opened the vault, and make the new slot this machine's own (`Backend`, `KeyringSlotId`).
 
@@ -225,8 +234,8 @@ HardwareBackend? Backend   // null == YubiKey; omitted from config.json when nul
 shim (`TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift`, compiled to `libtswapse.dylib` by
 an MSBuild target in `TswapCore.csproj`, macOS-only). `Wrap` creates a new Secure Enclave key pair
 and ECIES-wraps the vault key to it (ephemeral P-256 key agreement + HKDF-SHA256 + AES-GCM, all
-via CryptoKit); `Unwrap` reconstitutes the key and decrypts — this is the call that triggers Touch
-ID / presence. The blob is self-contained: the Secure Enclave key's own `dataRepresentation`
+via CryptoKit); `Unwrap` reconstitutes the key and decrypts — for a key made with `--with-touch`
+this is the call that triggers Touch ID / the password prompt. The blob is self-contained: the Secure Enclave key's own `dataRepresentation`
 plus the ciphertext package. In a keyring vault (what `tswap init --secure-enclave` makes) it is
 the machine slot's `hwBlob` and wraps that slot's `KEK_slot`; in a single-slot vault made before
 keyring vaults it is `Config.SecureEnclaveWrappedKey` and wraps the vault key. Registered in
@@ -255,6 +264,117 @@ but three things are still open before this should be trusted as a primary vault
   migrated (re-create with `tswap init --secure-enclave` and re-add your secrets).
 - `tswap init --secure-enclave` makes a keyring vault (machine slot + recovery slot), the same
   enrollment shape as the other backends; see "TPM and Secure Enclave vaults are keyring vaults".
+
+### Touch or no touch: an explicit choice (brief T11)
+
+Every command that creates a Secure Enclave key (`init`, `slot request`, `recover`) needs exactly
+one of `--with-touch` or `--no-touch` next to `--secure-enclave`, in any order; neither, both,
+either twice, or either without `--secure-enclave` is a usage error raised before anything is read,
+prompted for or written. No config setting, environment variable or prompt chooses it. Below the
+CLI every parameter defaults to presence required
+(`HardwareServices.Enrollment(..., requirePresence = true)`, `SecureEnclaveHardwareService(bool
+requirePresence = true)`), and any other backend with `requirePresence: false` throws.
+
+- `--with-touch`: the key is created with `[.privateKeyUsage, .userPresence]`; every unwrap
+  prompts for Touch ID or the login password (as every Secure Enclave key did before T11).
+- `--no-touch`: `[.privateKeyUsage]` only. The key still never leaves the Secure Enclave and is
+  still bound to this Mac. What it gives up, as the warning on stderr says: (a) this Mac's slot
+  unlocks the vault without Touch ID or a password; (b) anything that can run code on this Mac and
+  read this vault's config, from any account, including root, can unlock the vault without the
+  owner noticing: the key carries no user binding, and the config file's permissions are what keep
+  other accounts out; (c) the slot can't be changed or removed later: tswap has no slot removal and
+  all slots wrap the same vault key, so the only way to drop it is a new vault and moving the
+  secrets over. Prior art: `age-plugin-se --access-control none`.
+- **The policy lives in the key.** A CryptoKit key's access control is fixed when it is created and
+  can't be read back, so `Config.RequiresTouch` (`false` for a `--no-touch` slot, `true` otherwise)
+  is the only record of it. It only changes what tswap says (the completion summary, `tswap
+  slots`, whether a prompt is promised), never what the Secure Enclave enforces. Existing configs
+  (`true`) are unchanged.
+- **Lock behaviour.** What `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` means for a no-touch key
+  with the screen locked, over ssh, after a reboot before login, or with "require password after
+  sleep": see the recorded check below. Nothing here asserts it.
+- **No recurring banner** for a no-touch Secure Enclave slot (`SecurityWarnings.Current` lists
+  YubiKey slots only: their posture is set outside tswap; this one is chosen with the flag).
+- **`tswap` and `libtswapse.dylib` ship together.** Enrolment calls `tswap_se_wrap_v2(...,
+  requirePresence: Int32)` (1 presence, 0 none, anything else `-4` and no key); `tswap_se_wrap` is
+  kept unchanged for an older binary. A newer `tswap` beside an older dylib gets
+  `EntryPointNotFoundException`, reported as "update libtswapse.dylib together with tswap", never
+  a silent key. Only the file beside the binary is loaded; the embedded copy is what `tswap
+  installscript` writes out. Each native return code has its own message
+  (`SecureEnclaveReturnCodes`).
+- **Tests.** The simulated Secure Enclave writes the choice into its (test-only) blob as one flag
+  byte, so CLI tests read what reached the backend (`SecureEnclaveTouchChoiceTests`).
+  `SecureEnclaveShimSourceTests` pins the Swift C ABI on every OS. `SecureEnclaveNoTouchRoundTripTests`
+  (not in the manual-only category) enrols with `requirePresence: false` and unwraps on macOS when
+  `tswap_se_available()` is true, with a timeout; elsewhere it writes why and returns, or fails
+  with `CI_REQUIRE_SE=1`. CI's "Secure Enclave probe (macOS)" step prints whether the runner has a
+  Secure Enclave: on `macos-latest` it printed `true` (PR #203, run 41114279617), so the macOS
+  unit-test step sets `CI_REQUIRE_SE=1` (that step only) and a round trip that can't run fails CI.
+
+### Checking a no-touch Secure Enclave slot on a Mac
+
+Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
+**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded. If a
+recorded step contradicts a warning claim (a)-(c), the warning text and its test assertions are
+corrected before release, not only the docs.
+
+Setup (an unsigned local build and a throwaway config folder; never your real vault):
+
+```bash
+dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
+BIN="$PWD/TswapCli/bin/Release/net10.0/osx-arm64/publish"   # tswap + libtswapse.dylib
+T="$BIN/tswap"
+export TSWAP_CONFIG_DIR="$(mktemp -d)"                      # the no-touch vault (steps 1-7)
+sw_vers -productVersion                                     # record: macOS version
+sysctl -n machdep.cpu.brand_string                          # record: the chip
+sysadminctl -screenLock status 2>&1                         # record: "require password after screen saver/sleep"
+                                                            # (or read it in System Settings > Lock Screen)
+```
+
+1. `"$T" init --secure-enclave --no-touch --no-recovery` — does the warning show (all three
+   claims)? Is there any prompt?
+2. `"$T" create t11-check`, then `"$T" names` — any prompt? Is `t11-check` listed?
+3. A fresh folder with the touch posture:
+   `TOUCH_DIR="$(mktemp -d)"; TSWAP_CONFIG_DIR="$TOUCH_DIR" "$T" init --secure-enclave --with-touch --no-recovery`,
+   then `TSWAP_CONFIG_DIR="$TOUCH_DIR" "$T" names` — does it prompt? (The only real-hardware run of
+   `tswap_se_wrap_v2` with `1`.)
+4. Screen unlocked, same user over ssh:
+   `ssh localhost "TSWAP_CONFIG_DIR='$TSWAP_CONFIG_DIR' '$T' names"` — does step 2's vault unlock?
+5. Claim (b). Another local account (`other` below), with a copy of the config folder and binary it
+   can read: `sudo mkdir -p /Users/Shared/t11 && sudo cp -R "$TSWAP_CONFIG_DIR" /Users/Shared/t11/vault && sudo cp "$BIN/tswap" "$BIN/libtswapse.dylib" /Users/Shared/t11/ && sudo chown -R other /Users/Shared/t11`,
+   then `sudo -u other env TSWAP_CONFIG_DIR=/Users/Shared/t11/vault /Users/Shared/t11/tswap names`
+   — does it unlock? Then as root, with a root-owned copy:
+   `sudo cp -R "$TSWAP_CONFIG_DIR" /var/root/t11-vault && sudo env TSWAP_CONFIG_DIR=/var/root/t11-vault "$T" names`
+   — does it unlock? (If tswap refuses because of file ownership rather than the Secure Enclave,
+   record the message: that is the ownership check, not an answer to (b).)
+6. Screen locked, from another machine: `ssh <this-mac> "TSWAP_CONFIG_DIR='$TSWAP_CONFIG_DIR' '$T' names"`
+   — does it unlock?
+7. After a reboot, before anyone logs in, from another machine over ssh (if Remote Login is on):
+   the same command — does it unlock?
+8. Skew: a copy of the publish folder with a dylib built from the pre-T11 Swift source:
+   `OLD="$(mktemp -d)"; cp "$BIN/tswap" "$OLD/"; git show 4f321a0:TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift > "$OLD/old.swift"; swiftc -emit-library -O -o "$OLD/libtswapse.dylib" "$OLD/old.swift"`
+   (`4f321a0` is the last commit on `main` that changed the Swift source before T11; `main` is
+   never rewritten, so it stays valid after this brief is merged. The release tags `v0.0.1` and
+   `v0.0.2` predate the shim and can't be used),
+   then `TSWAP_CONFIG_DIR="$(mktemp -d)" "$OLD/tswap" init --secure-enclave --with-touch --no-recovery`
+   — does it fail with "update libtswapse.dylib together with tswap", and is no config written?
+9. Steps 4, 6 and 7 again against step 3's touch vault (`TSWAP_CONFIG_DIR="$TOUCH_DIR"`).
+
+Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -rf /Users/Shared/t11 /var/root/t11-vault`.
+
+| Step | What | Recorded |
+|---|---|---|
+| — | macOS version, chip, "require password after screen saver/sleep" setting | |
+| 1 | `init --no-touch`: warning shown? any prompt? | |
+| 2 | `create` + `names`: any prompt? name listed? | |
+| 3 | `init --with-touch` + `names`: prompt? | |
+| 4 | no-touch vault, ssh, screen unlocked: unlocks? | |
+| 5 | no-touch vault, another account with a copy: unlocks? | |
+| 5 | no-touch vault, root with a copy: unlocks? | |
+| 6 | no-touch vault, ssh, screen locked: unlocks? | |
+| 7 | no-touch vault, ssh, after reboot before login: unlocks? | |
+| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | |
+| 9 | touch vault: step 4 / step 6 / step 7 | |
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 

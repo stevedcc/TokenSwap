@@ -44,12 +44,12 @@ public class SlotRequestHardwareTests : IDisposable
         _router.Ok("router-pw\nrouter-pw\n", "add", "router");
     }
 
-    /// <summary>request (joiner, with <paramref name="flag"/>) → approve (router) → accept (joiner) → merge (router).</summary>
-    private void Join(FleetMachine joiner, string? flag)
+    /// <summary>request (joiner, with <paramref name="flags"/>) → approve (router) → accept (joiner) → merge (router).</summary>
+    private void Join(FleetMachine joiner, params string[] flags)
     {
         var request = joiner.PathOf("request.json");
         var approve = joiner.PathOf("approve.json");
-        joiner.Ok("", flag == null ? ["slot", "request", request] : ["slot", "request", flag, request]);
+        joiner.Ok("", ["slot", "request", .. flags, request]);
         _router.Ok("", "slot", "approve", request, approve);
         joiner.Ok("", "slot", "accept", approve);
         _router.Ok("", "slot", "merge", approve + ".receipt.json");
@@ -137,7 +137,7 @@ public class SlotRequestHardwareTests : IDisposable
         RouterVault();
         var mac = Machine("mac", secureEnclave: RandomNumberGenerator.GetBytes(32));
 
-        Join(mac, "--secure-enclave");
+        Join(mac, "--secure-enclave", "--with-touch");
 
         Assert.Equal(HardwareBackend.SecureEnclave, mac.Config.Backend);
         Assert.True(mac.Config.RequiresTouch);
@@ -156,9 +156,9 @@ public class SlotRequestHardwareTests : IDisposable
         var mac = Machine("mac", secureEnclave: RandomNumberGenerator.GetBytes(32));
         var desktop = Machine("desktop");
         Join(server, "--tpm");
-        Join(mac, "--secure-enclave");
+        Join(mac, "--secure-enclave", "--with-touch");
         _keys.PluggedIn = [SerialA];
-        Join(desktop, null);
+        Join(desktop);
         _keys.PluggedIn = [];
 
         Assert.Equal(5, _router.Keyring.Slots.Count); // router, recovery, server, mac, desktop
