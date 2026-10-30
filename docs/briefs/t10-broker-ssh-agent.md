@@ -127,7 +127,10 @@ The reviewers diff this file against the sources. Everything after it implements
    - **Why:** a stolen or misused socket can sign only into the hosts the operator listed, not into
      any server.
 5. **One unlock per signature:**
-   - Load the key secret, sign, then zero the byte arrays and dispose the key objects.
+   - Load **only that key's record** with T8's single-record read (`RecordVaultStore.ReadSecret`;
+     owner, 2026-10-30: "keep as little data unlocked for as short a time as possible"), sign, then
+     zero the byte arrays and dispose the key objects. The same applies to the one-off public-key
+     derivation at load: one record per key. Test with a decryption counter.
    - Docs: key material is "not kept beyond the request, buffers cleared", not "never in memory".
    - `PR_SET_DUMPABLE 0` comes from T8; check it is in place.
    - **Limits:** T8's connection, idle and unlock-failure rules, plus a **rate limit on successful
