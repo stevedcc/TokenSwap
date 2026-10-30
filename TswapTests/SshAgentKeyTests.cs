@@ -65,25 +65,8 @@ public sealed class SshTestKeys : IDisposable
     /// <summary>Rewrites a key file in place as unencrypted PKCS#8 (<c>ssh-keygen -p -m PKCS8</c>; RSA and ECDSA).</summary>
     public static void ToPkcs8(string path) => Ok("ssh-keygen", "-q", "-p", "-m", "PKCS8", "-N", "", "-P", "", "-f", path);
 
-    /// <summary>An Ed25519 PKCS#8 key from openssl (ssh-keygen can't write that form).</summary>
-    public string OpensslEd25519(string name)
-    {
-        var path = Path.Combine(Dir, name);
-        Ok("openssl", "genpkey", "-algorithm", "ed25519", "-out", path);
-        return path;
-    }
-
     /// <summary>The <c>SHA256:</c> fingerprint <c>ssh-keygen -lf</c> prints for a public key file.</summary>
     public static string Fingerprint(string publicKeyFile) => Ok("ssh-keygen", "-l", "-E", "sha256", "-f", publicKeyFile).Split(' ')[1];
-
-    /// <summary>The public key blob <c>ssh-keygen -y</c> derives from a private key file.</summary>
-    public string DerivedPublicFile(string privateKeyFile)
-    {
-        var pub = Ok("ssh-keygen", "-y", "-f", privateKeyFile);
-        var path = privateKeyFile + ".derived.pub";
-        File.WriteAllText(path, pub);
-        return path;
-    }
 
     public static byte[] BlobOf(string publicKeyFile) => Convert.FromBase64String(File.ReadAllText(publicKeyFile).Split(' ')[1]);
 
@@ -170,16 +153,56 @@ public class SshAgentKeyTests(Xunit.Abstractions.ITestOutputHelper output) : IDi
         Assert.Equal(SshTestKeys.BlobOf(path + ".pub"), key.PublicBlob);
     }
 
+    /// <summary>
+    /// An Ed25519 PKCS#8 key from openssl, with the expected public key also from openssl
+    /// (<c>openssl pkey -pubout</c>), so the check doesn't depend on ssh-keygen reading PKCS#8 Ed25519
+    /// (Ubuntu 24.04's OpenSSH 9.6 can't: round 3). Without an openssl that knows Ed25519 (macOS's
+    /// LibreSSL), it says so and returns; the RFC 8032 and RFC 8410 fixed-DER tests run everywhere.
+    /// </summary>
     [Fact]
-    public void Pkcs8Ed25519Key_PublicBlob_MatchesSshKeygensDerivation()
+    public void Pkcs8Ed25519Key_PublicBlob_MatchesOpensslsDerivation()
     {
         if (SshTestSkip.WithoutKeyTools(_output))
             return;
-        var path = _keys.OpensslEd25519("k");
+        var path = Path.Combine(_keys.Dir, "k");
+        var (exit, _, err) = SshTestKeys.Run("openssl", "genpkey", "-algorithm", "ed25519", "-out", path);
+        if (exit != 0)
+        {
+            _output.WriteLine($"SKIPPED: this openssl can't make an Ed25519 key ({err.Trim()}); the fixed-DER Ed25519 tests cover the parser.");
+            return;
+        }
+        var spki = Path.Combine(_keys.Dir, "k.spki");
+        SshTestKeys.Ok("openssl", "pkey", "-in", path, "-pubout", "-outform", "DER", "-out", spki);
+        var expected = File.ReadAllBytes(spki)[^32..]; // SubjectPublicKeyInfo ends with the 32-byte key (RFC 8410 §4)
 
         using var key = SshPrivateKey.Parse(File.ReadAllBytes(path));
 
-        Assert.Equal(SshTestKeys.BlobOf(_keys.DerivedPublicFile(path)), key.PublicBlob);
+        Assert.Equal(SshPublicKey.Ed25519Blob(expected), key.PublicBlob);
+    }
+
+    /// <summary>The same key as openssl writes it with explicit curve parameters (macOS's LibreSSL does so by default) loads as the named curve.</summary>
+    [Theory]
+    [InlineData("prime256v1")]
+    [InlineData("secp384r1")]
+    [InlineData("secp521r1")]
+    public void ExplicitParameterEcKeyFromOpenssl_LoadsAsTheNamedCurve(string curve)
+    {
+        if (SshTestSkip.WithoutKeyTools(_output))
+            return;
+        var named = Path.Combine(_keys.Dir, "named.pem");
+        var sec1 = Path.Combine(_keys.Dir, "sec1.pem");
+        var sec1Explicit = Path.Combine(_keys.Dir, "sec1x.pem");
+        var explicitKey = Path.Combine(_keys.Dir, "explicit.pem");
+        SshTestKeys.Ok("openssl", "ecparam", "-name", curve, "-genkey", "-noout", "-out", sec1);
+        SshTestKeys.Ok("openssl", "pkcs8", "-topk8", "-nocrypt", "-in", sec1, "-out", named);
+        SshTestKeys.Ok("openssl", "ec", "-in", sec1, "-param_enc", "explicit", "-out", sec1Explicit);
+        SshTestKeys.Ok("openssl", "pkcs8", "-topk8", "-nocrypt", "-in", sec1Explicit, "-out", explicitKey);
+
+        using var fromNamed = SshPrivateKey.Parse(File.ReadAllBytes(named));
+        using var fromExplicit = SshPrivateKey.Parse(File.ReadAllBytes(explicitKey));
+
+        Assert.Equal(fromNamed.PublicBlob, fromExplicit.PublicBlob);
+        Assert.Equal(fromNamed.Type, fromExplicit.Type);
     }
 
     [Fact]
@@ -331,7 +354,7 @@ public class SshAgentKeyTests(Xunit.Abstractions.ITestOutputHelper output) : IDi
     private static BrokerPolicy Policy(params (string Name, string Secret)[] keys) => BrokerPolicy.Parse($$"""
         {
           "version": 1,
-          "socket_dir": "/tmp",
+          "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(Path.GetTempPath())}},
           "sockets": [],
           "routes": [],
           "ssh_keys": [ {{string.Join(",", keys.Select(k => $$"""{ "name": "{{k.Name}}", "secret": "{{k.Secret}}", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] }"""))}} ]
@@ -570,7 +593,7 @@ public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) 
             additionalBackends: [new TswapCore.Vault.SimulatedHardwareService(TswapCore.HardwareBackend.Tpm, _m.Tpm!)]);
         var source = new VaultSshKeySource(store, unlocker);
         var policy = BrokerPolicy.Parse($$"""
-            { "version": 1, "socket_dir": "/tmp", "sockets": [], "routes": [],
+            { "version": 1, "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(Path.GetTempPath())}}, "sockets": [], "routes": [],
               "ssh_keys": [ { "name": "k", "secret": "deploy-key", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] } ] }
             """);
 
@@ -583,5 +606,152 @@ public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) 
 
         Assert.Equal(3, decrypted.Count);
         Assert.Single(decrypted.Distinct());
+    }
+}
+
+/// <summary>
+/// T10 round 3 (macOS CI): PKCS#8 shapes other tools emit, from fixed DERs so they run on every OS.
+/// macOS's LibreSSL-linked ssh-keygen writes EC keys with explicit curve parameters; RFC 5958 v2
+/// keys carry a public key (and maybe attributes). Each is accepted only when it is exactly a
+/// supported curve and every embedded public key equals the one derived from the private key.
+/// </summary>
+public class SshAgentPkcs8ShapeTests
+{
+    // A test-only P-256 key (generated for this test; it opens nothing), as OpenSSL writes it with
+    // named-curve parameters, and the same key with explicit parameters (openssl ec -param_enc explicit).
+    private const string NamedP256 = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgiZOVRVUqgEOkluwMlF+pbVoir7yLOcA2hdisIzqSPyWhRANCAAT0LwuFgO4ManRkcOau9FjzyHB/bs34gUyEKdATDv/ZHd/intSBSaCrLY6agPF8aZmJ6sm/faPmD4/CMmJyXyAN";
+    private const string ExplicitP256 = "MIIBeQIBADCCAQMGByqGSM49AgEwgfcCAQEwLAYHKoZIzj0BAQIhAP////8AAAABAAAAAAAAAAAAAAAA////////////////MFsEIP////8AAAABAAAAAAAAAAAAAAAA///////////////8BCBaxjXYqjqT57PrvVV2mIa8ZR0GsMxTsPY7zjw+J9JgSwMVAMSdNgiG5wSTamZ44ROdJreBn36QBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8AAAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBBG0wawIBAQQgiZOVRVUqgEOkluwMlF+pbVoir7yLOcA2hdisIzqSPyWhRANCAAT0LwuFgO4ManRkcOau9FjzyHB/bs34gUyEKdATDv/ZHd/intSBSaCrLY6agPF8aZmJ6sm/faPmD4/CMmJyXyAN";
+    // Its public point, from `openssl ec -pubout` (independent of the parser).
+    private const string P256Q = "04f42f0b8580ee0c6a746470e6aef458f3c8707f6ecdf8814c8429d0130effd91ddfe29ed48149a0ab2d8e9a80f17c699989eac9bf7da3e60f8fc23262725f200d";
+
+    // RFC 8410 §10.3: an Ed25519 OneAsymmetricKey v2 with an attribute and the public key.
+    private const string Rfc8410V2 =
+        "MHICAQEwBQYDK2VwBCIEINTuctv5E1hK1bbY8fdp+K06/nwoy/HU++CXqI9EdVhCoB8wHQYKKoZIhvcNAQkJFDEPDA1DdXJkbGUgQ2hhaXJzgSEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=";
+    private const string Rfc8410Public = "19bf44096984cdfe8541bac167dc3b96c85086aa30b6b6cb0c5c38ad703166e1";
+
+    private static byte[] Pem(byte[] der) => Encoding.ASCII.GetBytes(PemEncoding.Write("PRIVATE KEY", der));
+
+    private static byte[] P256Blob()
+    {
+        var q = Convert.FromHexString(P256Q);
+        return SshPublicKey.EcdsaBlob(SshKeyType.EcdsaP256, q.AsSpan(1, 32), q.AsSpan(33, 32));
+    }
+
+    [Fact]
+    public void Ed25519Pkcs8_DerivesTheRfc8032TestVectorsPublicKey()
+    {
+        // RFC 8032 §7.1, TEST 1: secret key and public key.
+        var seed = Convert.FromHexString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+
+        using var key = SshPrivateKey.Parse(SshTestKeyMaker.Ed25519Pem(seed));
+
+        Assert.Equal(SshPublicKey.Ed25519Blob(Convert.FromHexString("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")), key.PublicBlob);
+    }
+
+    [Fact]
+    public void Rfc8410V2Key_WithAnAttributeAndItsPublicKey_Loads()
+    {
+        using var key = SshPrivateKey.Parse(Pem(Convert.FromBase64String(Rfc8410V2)));
+
+        Assert.Equal(SshPublicKey.Ed25519Blob(Convert.FromHexString(Rfc8410Public)), key.PublicBlob);
+    }
+
+    [Fact]
+    public void Rfc8410V2Key_WhosePublicKeyDiffers_IsRefused()
+    {
+        var der = Convert.FromBase64String(Rfc8410V2);
+        der[^1] ^= 1; // the last byte of the embedded public key
+
+        var ex = Assert.Throws<SshKeyException>(() => SshPrivateKey.Parse(Pem(der)));
+
+        Assert.Contains("public key", ex.Message);
+    }
+
+    [Fact]
+    public void NamedCurveEcKey_Loads()
+    {
+        using var key = SshPrivateKey.Parse(Pem(Convert.FromBase64String(NamedP256)));
+
+        Assert.Equal(P256Blob(), key.PublicBlob);
+    }
+
+    [Fact]
+    public void ExplicitParameterEcKey_ThatIsExactlyP256_Loads()
+    {
+        using var key = SshPrivateKey.Parse(Pem(Convert.FromBase64String(ExplicitP256)));
+
+        Assert.Equal(SshKeyType.EcdsaP256, key.Type);
+        Assert.Equal(P256Blob(), key.PublicBlob);
+    }
+
+    [Theory]
+    [InlineData("b")]
+    [InlineData("order")]
+    [InlineData("generator")]
+    public void ExplicitParameterEcKey_ThatIsNotExactlyACurveWeSupport_IsRefused(string tamper)
+    {
+        var der = Convert.FromBase64String(ExplicitP256);
+        var hex = Convert.ToHexString(der);
+        var target = tamper switch
+        {
+            "b" => "5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B",
+            "order" => "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+            _ => "6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296",
+        };
+        var at = hex.IndexOf(target, StringComparison.Ordinal);
+        Assert.True(at >= 0);
+        der[at / 2 + 4] ^= 0x01; // one bit inside that parameter
+
+        var ex = Assert.Throws<SshKeyException>(() => SshPrivateKey.Parse(Pem(der)));
+
+        Assert.Contains("curve", ex.Message);
+    }
+
+    [Fact]
+    public void EcKeyWhoseInnerPublicKeyDiffers_IsRefused()
+    {
+        var der = Convert.FromBase64String(NamedP256);
+        der[^1] ^= 1; // the last byte of ECPrivateKey's [1] public key
+
+        var ex = Assert.Throws<SshKeyException>(() => SshPrivateKey.Parse(Pem(der)));
+
+        Assert.Contains("public key", ex.Message);
+    }
+
+    /// <summary>The named P-256 key rewritten as an RFC 5958 v2 OneAsymmetricKey with the outer [1] publicKey.</summary>
+    private static byte[] V2WithOuterPublicKey(byte[] publicPoint)
+    {
+        var reader = new System.Formats.Asn1.AsnReader(Convert.FromBase64String(NamedP256), System.Formats.Asn1.AsnEncodingRules.DER).ReadSequence();
+        reader.ReadInteger();
+        var algorithm = reader.ReadEncodedValue().ToArray();
+        var privateKey = reader.ReadOctetString();
+        var writer = new System.Formats.Asn1.AsnWriter(System.Formats.Asn1.AsnEncodingRules.DER);
+        using (writer.PushSequence())
+        {
+            writer.WriteInteger(1);
+            writer.WriteEncodedValue(algorithm);
+            writer.WriteOctetString(privateKey);
+            writer.WriteBitString(publicPoint, 0, new System.Formats.Asn1.Asn1Tag(System.Formats.Asn1.TagClass.ContextSpecific, 1));
+        }
+        return writer.Encode();
+    }
+
+    [Fact]
+    public void V2EcKey_WithItsPublicKey_Loads()
+    {
+        using var key = SshPrivateKey.Parse(Pem(V2WithOuterPublicKey(Convert.FromHexString(P256Q))));
+
+        Assert.Equal(P256Blob(), key.PublicBlob);
+    }
+
+    [Fact]
+    public void V2EcKey_WhoseOuterPublicKeyDiffers_IsRefused()
+    {
+        var q = Convert.FromHexString(P256Q);
+        q[^1] ^= 1;
+
+        var ex = Assert.Throws<SshKeyException>(() => SshPrivateKey.Parse(Pem(V2WithOuterPublicKey(q))));
+
+        Assert.Contains("public key", ex.Message);
     }
 }

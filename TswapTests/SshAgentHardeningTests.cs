@@ -219,7 +219,7 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
     private static BrokerPolicy Policy(IEnumerable<(string Name, string Secret)> keys, IEnumerable<string>? socketKeys = null) => BrokerPolicy.Parse($$"""
         {
           "version": 1,
-          "socket_dir": "/tmp",
+          "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(Path.GetTempPath())}},
           "sockets": [ { "name": "lane1", "uids": ["1"], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(socketKeys ?? [])}} } ],
           "routes": [],
           "ssh_keys": [ {{string.Join(",", keys.Select(k => $$"""{ "name": "{{k.Name}}", "secret": "{{k.Secret}}", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] }"""))}} ]

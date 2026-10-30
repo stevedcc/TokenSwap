@@ -363,7 +363,17 @@ PEM `-----BEGIN PRIVATE KEY-----`. The algorithm OID picks the type: `rsaEncrypt
 (1.2.840.10045.3.1.7), P-384 (1.3.132.0.34) or P-521 (1.3.132.0.35), or `id-Ed25519`
 (1.3.101.112, RFC 8410 §7: the private key is an OCTET STRING holding the 32-byte seed).
 `-----BEGIN ENCRYPTED PRIVATE KEY-----` (PKCS#8 `EncryptedPrivateKeyInfo`) is refused, naming
-the key. PKCS#1 (`BEGIN RSA PRIVATE KEY`) and SEC1 (`BEGIN EC PRIVATE KEY`) are not accepted.
+the key.
+
+Accepted shapes (round 3): version 0 (`PrivateKeyInfo`) or 1 (RFC 5958 `OneAsymmetricKey`);
+optional `[0]` attributes (ignored); in version 1 only, an optional `[1] publicKey` BIT STRING.
+For ECDSA the parameters are a named-curve OID, or explicit `SpecifiedECDomain` parameters (SEC 1
+§C.2; macOS's LibreSSL-linked ssh-keygen writes these) that must equal P-256, P-384 or P-521
+exactly (prime field, a, b, uncompressed generator, order, cofactor 1; the seed is ignored); the
+`ECPrivateKey` (RFC 5915) may carry `[0]` parameters naming the same curve and a `[1]` public key.
+Q is derived from d, and every public key the file carries (`ECPrivateKey [1]`,
+`OneAsymmetricKey [1]`, uncompressed or compressed) must equal it; for Ed25519 the `[1]` public
+key must equal A derived from the seed. PKCS#1 (`BEGIN RSA PRIVATE KEY`) and SEC1 (`BEGIN EC PRIVATE KEY`) are not accepted.
 
 ### 9.3 Key rules
 
