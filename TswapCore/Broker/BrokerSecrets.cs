@@ -42,16 +42,17 @@ public interface IBrokerSecretSource
 }
 
 /// <summary>
-/// The real source: every call loads the config, unlocks the vault with the hardware (no prompt;
-/// the router's TPM unseals unattended), decrypts the database, takes only the route's secret, and
-/// zeroes the vault key. The rest of the database is dropped at once.
+/// The real source (owner decision, fix round 1: as little unlocked for as short a time as
+/// possible): every call loads the config, unlocks the vault with the hardware (no prompt; the
+/// router's TPM unseals unattended), decrypts only the route's record
+/// (<see cref="RecordVaultStore.ReadSecretValue"/>) and zeroes the vault key. It needs a
+/// record-store vault; <c>serve</c> refuses a classic one.
 /// </summary>
-public sealed class VaultBrokerSecretSource(IVaultStore store, VaultUnlocker unlocker) : IBrokerSecretSource
+public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocker unlocker) : IBrokerSecretSource
 {
     public BrokerSecret Read(string secretName)
     {
         byte[] key;
-        SecretsDb db;
         try
         {
             var config = store.LoadConfig();
@@ -62,22 +63,26 @@ public sealed class VaultBrokerSecretSource(IVaultStore store, VaultUnlocker unl
         {
             throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
         }
+        byte[]? value;
         try
         {
-            db = store.LoadSecrets(key);
+            value = store.ReadSecretValue(secretName, key);
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (TswapException ex)
         {
-            throw new BrokerUnlockException($"vault could not be decrypted: {ex.Message}", ex);
+            throw new BrokerSecretException($"secret '{secretName}': {ex.Message}");
         }
         finally
         {
             CryptographicOperations.ZeroMemory(key);
         }
-        if (!db.Secrets.TryGetValue(secretName, out var secret))
+        if (value is null)
             throw new BrokerSecretException($"secret '{secretName}' is not in the vault");
-        if (secret.Value.AsSpan().IndexOfAny('\r', '\n', '\0') >= 0)
+        if (value.AsSpan().IndexOfAny((byte)'\r', (byte)'\n', (byte)0) >= 0)
+        {
+            CryptographicOperations.ZeroMemory(value);
             throw new BrokerSecretException($"secret '{secretName}' contains CR, LF or NUL and can't be sent in a header");
-        return new BrokerSecret(Encoding.UTF8.GetBytes(secret.Value));
+        }
+        return new BrokerSecret(value);
     }
 }

@@ -225,8 +225,10 @@ public class BrokerClientTests : IAsyncLifetime
         m.Ok("", "init", "--tpm", "--no-recovery");
         m.Ok("vault-token-value\nvault-token-value\n", "add", "tok");
         m.Ok("other-value\nother-value\n", "add", "tok2");
+        m.Ok("", "migrate", "--to-records"); // serve's source reads one record of a record store
+        var store = (RecordVaultStore)VaultStores.Open(m.Dir);
         var unlocker = new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, m.Tpm)]);
-        var source = new VaultBrokerSecretSource(VaultStores.Open(m.Dir), unlocker);
+        var source = new VaultBrokerSecretSource(store, unlocker);
 
         using (var secret = source.Read("tok"))
             Assert.Equal("vault-token-value", Encoding.UTF8.GetString(secret.Value));
@@ -244,7 +246,7 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.DoesNotContain(_up.Hits[0].Headers, x => x.Value.Contains("other-value"));
 
         // A TPM that no longer unseals: an unlock failure (502), counted.
-        var broken = new VaultBrokerSecretSource(VaultStores.Open(m.Dir),
+        var broken = new VaultBrokerSecretSource(store,
             new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, new byte[32])]));
         Assert.Throws<BrokerUnlockException>(() => broken.Read("tok"));
     }

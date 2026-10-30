@@ -146,6 +146,7 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
             return; // prctl and /proc are Linux; serve on macOS is covered by the in-process tests
         Ok("", "init", "--tpm", "--no-recovery");
         Ok("tok-value\ntok-value\n", "add", "tok");
+        Ok("", "migrate", "--to-records"); // serve needs a record-store vault
         // An upstream nothing listens on: the request unlocks, then fails upstream (502).
         Ok("", "broker", "route", "add", "api", "--upstream", "https://127.0.0.1:1/v1", "--auth", "bearer", "--secret", "tok", "--path", "");
         Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir);

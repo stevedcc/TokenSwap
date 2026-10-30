@@ -57,6 +57,12 @@ public sealed class BrokerCommand : ICliCommand
     /// </summary>
     private static int Serve(CommandContext ctx)
     {
+        // Owner decision (fix round 1): one record is decrypted per request, never the whole vault.
+        if (ctx.Storage is not RecordVaultStore records)
+            throw new TswapException(
+                "'tswap broker serve' needs a record-store vault, so each request decrypts only its route's secret " +
+                "(a classic vault would be decrypted whole for every request). Convert it first: sudo tswap migrate --to-records");
+
         // Decision 1: no same-uid ptrace, no core dumps holding secrets.
         if (!BrokerNative.MakeNonDumpable())
             throw new TswapException($"Could not make this process non-dumpable (prctl PR_SET_DUMPABLE, errno {Marshal.GetLastPInvokeError()}); not serving.");
@@ -69,7 +75,7 @@ public sealed class BrokerCommand : ICliCommand
         var options = new BrokerServerOptions
         {
             Policy = holder,
-            Secrets = new VaultBrokerSecretSource(ctx.Storage, ctx.Unlocker),
+            Secrets = new VaultBrokerSecretSource(records, ctx.Unlocker),
             Forwarder = forwarder,
             Log = log,
         };

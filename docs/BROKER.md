@@ -136,12 +136,25 @@ other sockets still get the remaining slots; a request waits at most 30 s for on
 
 ### Memory
 
-The unsealed key and the secret's bytes are zeroed as soon as they are no longer needed (the key
-right after decrypting, the secret once the outbound headers are written), and the redaction
-forms when the response ends. **.NET strings can't be zeroed:** the header value built from the
-secret (`Bearer …`, `Basic …`) is a string and stays in memory until the garbage collector
-reuses it. The vault's secrets database is decrypted as a whole for each unlock and only the
-route's secret is kept; the rest is dropped at once.
+As little is unlocked, for as short a time, as the request needs. Per request, in this order:
+
+- the vault key (K_v) is unsealed;
+- the names key derived from it gives the route's record file name, `records/HMAC(K_names, name)`,
+  and is zeroed at once;
+- **only that one record** (and its sync-conflict copies, folded by the merge rules) is
+  decrypted; no other record is read. A record that can't be read or authenticated fails closed
+  (the uniform `502`);
+- the record key is zeroed inside the decoder, K_v right after the record is read, the record's
+  other bytes (a previous value) at once;
+- the secret's bytes are zeroed once the outbound headers are written, and the redaction forms
+  when the response ends.
+
+**.NET strings can't be zeroed:** the header value built from the secret (`Bearer …`,
+`Basic …`) is a string and stays in memory until the garbage collector reuses it.
+
+This needs a **record-store vault** (one file per secret). `serve` refuses a classic single-file
+vault, since that would be decrypted whole for every request; convert it with
+`sudo tswap migrate --to-records`.
 
 ## Costs
 
@@ -156,7 +169,8 @@ route's secret is kept; the rest is dropped at once.
 ### 1. The vault user
 
 A dedicated user (here `vault`) holds the vault and is the only member of `tss` that does. Its
-vault is a TPM keyring vault (`tswap init --tpm`), so it unlocks unattended.
+vault is a TPM keyring vault (`tswap init --tpm`), so it unlocks unattended, converted to a
+record store (`sudo tswap migrate --to-records`), so a request decrypts only its own record.
 
 ```bash
 sudo useradd -m vault
@@ -164,6 +178,7 @@ sudo usermod -aG tss vault
 sudo loginctl enable-linger vault      # its user units run without a login session
 sudo -iu vault tswap init --tpm
 sudo -iu vault tswap ingest github-token < token-file    # or create / sudo tswap add
+sudo tswap migrate --to-records      # as root with SUDO_USER=vault, or TSWAP_CONFIG_DIR=~vault/.config/tswap
 ```
 
 ### 2. The socket folder
