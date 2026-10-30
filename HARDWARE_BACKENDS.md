@@ -135,8 +135,9 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    blob; `slot approve` copies it into the approve file (format version 2), and `slot accept`
    checks it against its own pending copy (`Config.PendingSlotHwBlob`), re-derives `KEK_slot`
    from the key and writes the blob into the new slot. A version 1 request (an older tswap's
-   pair request) is refused with an actionable message. `slot approve` still does not change the
-   approver's own keyring (v0, no sync) and says so.
+   pair request) is refused with an actionable message. `slot approve` does not change the
+   approver's own keyring; since brief T5 the approver adds the finished slot with `slot merge`
+   (below).
 7. **Existing vaults keep working, byte for byte.** A YubiKey machine slot **without** a YubiKey
    blob is a **legacy pair slot**: its `KEK_slot` still comes from the two-key XOR share and the
    per-machine fields (`YubiKeySerials`, `RedundancyXor`, `UnlockChallenge`, `MasterKeySalt`)
@@ -148,6 +149,39 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
 
 `slots` describes a one-key slot by its own key ("YubiKey 12345678, touch required"), whatever
 the vault's backend.
+
+### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
+
+`slot request --tpm` and `slot request --secure-enclave` enroll the joining machine's own hardware
+through the enrollment seam, exactly as `init --tpm` / `--secure-enclave` do:
+`HardwareServices.Enrollment(backend, testKey).Enroll()` returns a random `KEK_slot` and the
+backend's blob. `KEK_slot` is zeroed at once; the blob is kept as the pending slot's blob
+(`Config.PendingSlotHwBlob`) with `Config.Backend` set, and travels in the request file next to
+an optional `Backend` field (`"tpm"` / `"secure-enclave"`; omitted for a YubiKey request, which is
+byte for byte the version 2 format). With no flag the request is the one-YubiKey request above;
+the two flags are mutually exclusive.
+
+- **Validation.** A request or approve file that names TPM or Secure Enclave must carry a blob of
+  1 to `MaxHwBlobSize` bytes that is not a `YubiKeySlotBlob`; one that names none (YubiKey) must
+  carry a strictly decoded `YubiKeySlotBlob`. `slot approve` names the requester's backend and
+  passes blob and backend on (`NewSlotBackend`).
+- **Accept.** `slot accept` checks the approve file's backend and blob against its pending copy,
+  then recovers `KEK_slot` through `VaultUnlocker.UnlockHardware`: `HardwareBlobLocator` reads
+  `PendingSlotHwBlob` for a pending config (no keyring yet), so each backend's unchanged `Unlock`
+  unseals or unwraps it. `VaultUnlocker.Unlock` still refuses a pending config before that, so
+  the pending blob never opens a vault. Accept writes the receipt that `slot merge` takes back to
+  the approver (see `MULTI_MACHINE_KEYING.md` §Fleet enrollment).
+- **Every copy opens with every device.** A copy of the vault carries the `KeyringSlotId` of the
+  machine it came from, so on another machine its own backend fails. `VaultUnlocker` then offers
+  every other machine slot's TPM / Secure Enclave blob to each registered TPM / Secure Enclave
+  backend (the vault's own backend first), before the YubiKey slots for a TPM / Secure Enclave
+  vault and after them for a YubiKey vault. A foreign blob fails to unseal with a
+  `TswapException`; a wrong `KEK_slot` fails the slot's AEAD. With no other hardware slots the
+  paths and errors are exactly as before. **To check on real hardware:** a TPM offered another
+  TPM's blob must fail without side effects (no dictionary-attack lockout), and a Secure Enclave
+  offered a TPM blob should fail before any presence prompt.
+- **Recovery.** `recover --tpm` / `--secure-enclave` enroll the same way after the recovery key
+  opened the vault, and make the new slot this machine's own (`Backend`, `KeyringSlotId`).
 
 ## Config discriminator
 

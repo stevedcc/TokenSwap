@@ -190,11 +190,66 @@ To let your YubiKeys open this vault too, plug each one into **this** machine an
 `sudo tswap slot add --yubikey`: each key becomes its own slot, which opens the vault on its own
 (for example on a laptop with a copy of the vault files, or if the TPM is replaced).
 
-Another machine, for example a desktop with a YubiKey, can join the same vault with
-`tswap slot request` (on the new machine, with one YubiKey plugged in), `sudo tswap slot approve`
-(on this one) and `tswap slot accept` (back on the new one, with the same key plugged in). Move
-the two files yourself (scp, USB); `slot approve` does not change this machine's own keyring.
-`tswap slots` lists the slots.
+Another machine can join the same vault in four steps: `tswap slot request` (on the new machine:
+with one YubiKey plugged in, or `--tpm` / `--secure-enclave` for its own TPM or Secure Enclave),
+`sudo tswap slot approve` (on this one), `tswap slot accept` (back on the new one; it writes a
+receipt) and `sudo tswap slot merge <receipt>` (on this one again, so this machine's copy opens
+with the new device too). Move the files yourself (scp, USB). `tswap slots` lists the slots.
+
+### Remote enrolment of a YubiKey into a TPM vault, step by step
+
+The vault lives on a machine with a TPM (say a router VM), and the YubiKey stays at your desk:
+no USB passthrough. Nothing secret crosses between the machines; you carry three small files.
+
+```bash
+# 1. Desk machine, YubiKey plugged in (use a separate config folder if this machine has a vault):
+TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot request request.json
+#    It prints the new slot's fingerprint. Copy request.json to the router.
+
+# 2. Router: unlock with its TPM and approve (compare the fingerprint it prints):
+sudo tswap slot approve request.json approve.json
+#    Copy approve.json back to the desk machine.
+
+# 3. Desk machine, same YubiKey plugged in:
+TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot accept approve.json
+#    It writes approve.json.receipt.json (or the path given with --receipt <file>).
+#    Copy the receipt to the router.
+
+# 4. Router: add the finished slot to the router's own keyring:
+sudo tswap slot merge approve.json.receipt.json
+```
+
+After step 4 the router's vault opens with its TPM **or** that YubiKey, and every copy taken from
+the router from now on does too. Repeat for each key (the one at the desk, the one in the
+wallet): each becomes its own slot. `slot merge` adds a slot silently only because the router
+approved it in step 2; any other new slot (for example from another copy's `config.json`, which
+`slot merge` also takes) is shown by fingerprint and must be confirmed on a terminal, or passed
+with `--yes`. It never removes or replaces a slot, refuses another vault's files, backs up
+`config.json` first, and merging the same file twice changes nothing.
+
+**Without the exchange**, the recovery key does it in one place: copy the router's `config.json`
+and `secrets.json.enc` into a separate config folder on the desk machine, run
+`sudo tswap get recovery-key | sudo TSWAP_CONFIG_DIR=<that folder> tswap slot add --yubikey --recovery-key-stdin`
+there, and merge that folder's `config.json` into the router with
+`sudo tswap slot merge <copied config.json> --yes`.
+
+### The recovery key
+
+`init --keyring`, `--tpm` and `--secure-enclave` print a **recovery private key** once. It opens
+the vault without any enrolled hardware, and tswap reads it **only from stdin** (never from an
+argument, the environment or a file path), so pipe it from wherever you keep it, for example a
+secret in your main vault (stdin must be the base64 key alone; surrounding whitespace is fine):
+
+```bash
+# Total hardware loss (TPM cleared, keys lost): enroll new hardware as a new slot
+sudo tswap get recovery-key | sudo tswap recover --yubikey     # or --tpm / --secure-enclave
+
+# Or unlock with it for a keyring change
+sudo tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
+```
+
+`slot approve` and `slot merge` take `--recovery-key-stdin` too. A wrong or malformed key is
+refused with one message and nothing is written; the recovery slot always stays.
 
 **Vaults made by `tswap init --tpm` or `--secure-enclave` before keyring vaults** (one sealed key,
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
@@ -501,6 +556,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `list` | Yes | List secrets with creation/modification dates |
 | `delete <name>` | Yes | Remove a secret |
 | `slot add --yubikey` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
+| `slot merge <receipt-or-config.json> [--yes]` | Yes | Add a receipt's slot, or another copy's slots, to this machine's keyring (see [Remote enrolment](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)) |
+| `recover --yubikey\|--tpm\|--secure-enclave` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
 
 Add `-v` or `--verbose` to any command for detailed YubiKey output.
 

@@ -328,7 +328,9 @@ The per-backend table below reflects this: the recovery slot wraps to a bare key
 key, generated however the user sees fit (this is a tool for technical users; custody is their
 call, same as the YubiKey XOR share already is today), or — better, where practical — generated
 non-extractably inside a TPM/Secure Enclave/YubiKey so a leaked public key alone grants nothing.
-**Custody is the only real control** (see "Extension implies decryption", above); the deferred
+Since brief T5 the key is used through `tswap recover` or `--recovery-key-stdin`, read only from
+stdin (see "Fleet enrollment" below). **Custody is the only real control** (see "Extension
+implies decryption", above); the deferred
 v1 items (recovery-forces-rotation, evidence via generation bumps) are what stand in for the
 revocation this credential structurally cannot offer.
 
@@ -352,18 +354,23 @@ ceremony, and that cost exists **only because the request travels over the sync 
 where a MITM could substitute their own public key and the approving machine would obligingly
 wrap `K_v` to it.
 
-If the user moves the two files themselves — scp, USB, paste into a terminal — the channel is as
-trusted as their own hands, and there is no MITM to defend against. Three commands, no protocol
+If the user moves the files themselves — scp, USB, paste into a terminal — the channel is as
+trusted as their own hands, and there is no MITM to defend against. Four commands, no protocol
 work, reusing the per-slot X25519 keypair above:
 
-- `slot request` on the new machine — enrolls one YubiKey and emits its X25519 public key and
-  the slot's `YubiKeySlotBlob` (request file format version 2; a version 1 pair request from an
-  older tswap is refused with a message to request again).
+- `slot request` on the new machine — enrolls one YubiKey, or with `--tpm` / `--secure-enclave`
+  this machine's own TPM or Secure Enclave (brief T5), and emits its X25519 public key and the
+  slot's hardware blob (request file format version 2; a version 1 pair request from an older
+  tswap is refused with a message to request again).
 - `slot approve` on an already-enrolled machine — unlocks, wraps `K_v`, emits the slot with the
-  blob. It does not change its own keyring (v0, no sync).
+  blob, and records the approval (`ApprovedSlots`). It does not change its own keyring yet.
 - `slot accept` on the new machine — imports the slot, re-wraps under its own hardware `KEK_slot`
-  (re-derived from the enrolled key and the blob, after checking the approve file's blob against
-  its own pending copy).
+  (re-derived from the enrolled key and the blob, or unsealed from the TPM / Secure Enclave blob,
+  after checking the approve file's blob against its own pending copy), and writes a **receipt**
+  holding the finished slot.
+- `slot merge <receipt>` back on the approving machine — adds the finished slot to the
+  approver's keyring, so its copy, and every copy taken from it afterwards, opens with the new
+  device too.
 
 A key for **this** machine needs no exchange at all: `slot add --yubikey` (see "YubiKey slots").
 
@@ -374,6 +381,75 @@ enrollment reinstates the fingerprint as the primary control** — see "Deferred
 
 **Document plainly, once implemented: move these two files yourself; do not drop them in the
 sync folder.** Automating the exchange over the transport is v1 work, not a v0 shortcut.
+
+### Fleet enrollment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
+
+Before T5 only the joining machine's keyring got the new slot: the approver *can't* build it (the
+slot is wrapped under a `KEK_slot` only the joiner's hardware produces), so the copies diverged
+and the vault's home never opened with the joiner's device. Decisions made in brief T5:
+
+1. **The finished slot goes back to the approver.**
+   - `slot accept` writes a **receipt** next to the approve file (`<approve-file>.receipt.json`,
+     or `--receipt <file>`): versioned JSON (`"ReceiptFormatVersion": 1`) with the slot (id,
+     public key, kind, wrapped bytes, hardware blob) and the keyring's format version, vault id
+     and `k`. It holds no secret: `wrapped` is AEAD ciphertext under the joiner's `KEK_slot`.
+     Decoding is strict, with the approve file's hardening: unknown members and trailing data
+     refused, a 16 KiB file cap, machine slots only, keyring version 3 only, a hardware blob
+     required and at most `MaxHwBlobSize`, a YubiKey blob decoded strictly.
+   - `slot approve` records `ApprovedSlots` (slot id, public key, time) in its `config.json`,
+     after the approve file is written; a failed approve records nothing.
+   - **`slot merge <file>`** (sudo) adds to this machine's keyring every slot of the file that it
+     doesn't have yet. The file is a receipt or **another copy's `config.json`** of the same
+     vault. Union only: nothing is removed or replaced, and a slot whose id is here already must
+     be byte-identical (slots never change once written) or the merge is refused. The keyring
+     format version, vault id and `k` must match. It unlocks the vault first (a merged slot is a
+     new way to decrypt it), backs up `config.json` before writing, and is idempotent (a merge
+     that adds nothing writes nothing).
+   - **Merge's guard.** A slot is added silently only if this machine approved it: an
+     `ApprovedSlots` entry with the same slot id **and** public key, removed once merged. Every
+     other new slot (from another copy, or a slot this machine never approved) is shown by
+     fingerprint and confirmed on a terminal, or needs `--yes`; without either the merge is
+     refused and nothing is written. The other copy's own `ApprovedSlots` are never read. This
+     is the defense against a slot smuggled into a copy: AEAD binding stops slots of *another*
+     vault, but a slot of *this* vault is a new unlock path for whoever holds its device, so only
+     the user can vouch for it.
+2. **`slot request --tpm` / `--secure-enclave`** (#152): the machine enrolls its own hardware
+   through `IHardwareEnrollmentService`, keeps the sealed blob as its pending slot's blob and
+   sends it in the request (an optional `Backend` field names the backend; a YubiKey request is
+   unchanged). `slot accept` unseals it through the backend and builds the slot with it. A
+   keyring therefore holds YubiKey, TPM and Secure Enclave machine slots side by side.
+   **Unlock** (`VaultUnlocker`) now also offers every other machine slot's TPM / Secure Enclave
+   blob to this machine's TPM / Secure Enclave backends when the vault's own path fails, so a copy
+   taken from another machine opens with this machine's hardware (the keyring records no backend
+   per slot; a foreign blob fails to unseal, and a wrong `KEK_slot` fails the slot's AEAD).
+3. **The recovery key unlocks** (#187).
+   - It is read **only from stdin**: `--recovery-key-stdin` for `slot add --yubikey`,
+     `slot approve` and `slot merge`; `recover` always reads it from stdin. Never from an
+     argument, the environment or a file path; a terminal stdin is refused (typing would show
+     the key). The intended use is `sudo tswap get recovery-key | sudo tswap recover --yubikey`,
+     with the key stored as a secret in the user's main vault, so it is never displayed. (Issue
+     #187 suggested `tswap apply recovery.tmpl`, but `apply` prints the whole template line, key
+     name, quotes and marker included, which the strict reader refuses: stdin must be the base64
+     key alone, surrounding whitespace allowed.)
+   - **`recover --yubikey|--tpm|--secure-enclave`** (sudo): unlocks with the recovery key and
+     enrolls this machine's hardware as a new slot. The recovery slot stays. With `--tpm` /
+     `--secure-enclave` the new slot becomes this machine's own (`Backend`, `KeyringSlotId`).
+   - A wrong, truncated, empty or malformed key gets one actionable `TswapException`, whatever
+     was wrong: no oracle, nothing written, nothing enrolled. The recovery slot's AEAD decides.
+   - The recovery key bytes and the unwrapped `K_v` are zeroed after use. `init`'s recovery
+     warning names `recover` and `--recovery-key-stdin`.
+4. **Version 2 keyrings stay unlock-only** (#186): merge and recover refuse them with the
+   existing message.
+
+**The four-step flow** (the owner's router TPM vault and a YubiKey at the desk, no USB
+passthrough): request (desk machine, key plugged in) → approve (router) → accept (desk machine,
+writes the receipt) → merge (router). Further TPM or Secure Enclave machines join the same way
+with `slot request --tpm` / `--secure-enclave`. **Without an exchange** the recovery key gives a
+third route: copy the router's `config.json` and `secrets.json.enc` into a separate config folder
+on the desk machine, run `slot add --yubikey --recovery-key-stdin` there, and merge that
+`config.json` back into the router with `slot merge <file> --yes`.
+
+Out of scope (v1): automatic sync of keyrings or secrets, revocation and `K_v` rotation.
 
 **Rejected alternative: sharing the recovery keypair across machines.** Copying the config
 directory plus the recovery keypair to a second machine would work and needs no new commands at

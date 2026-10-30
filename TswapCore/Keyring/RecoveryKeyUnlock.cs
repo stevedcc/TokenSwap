@@ -22,7 +22,7 @@ public static class RecoveryKeyUnlock
 
     public const string FailureMessage =
         "The recovery key did not open this vault. Pipe in the recovery private key (base64) that 'tswap init' " +
-        "printed for this vault, for example: tswap apply recovery.tmpl | sudo tswap recover --yubikey " +
+        "printed for this vault, for example: sudo tswap get recovery-key | sudo tswap recover --yubikey " +
         "(or another command with --recovery-key-stdin). Nothing was written.";
 
     /// <summary>

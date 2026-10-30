@@ -48,7 +48,7 @@ There is no linter configured.
 Commands are split by whether they require sudo:
 
 - **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `migrate` — safe for AI agents
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey` — exposes secret values
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave` — exposes secret values
 
 `slot approve` specifically: it unlocks an *existing* vault and writes out an artifact that
 decrypts that vault's master key for whoever holds the matching private key — the same
@@ -58,8 +58,11 @@ vault yet (mirroring `init`) and never touch an existing vault's secrets. Becaus
 `ICliCommand.RequiresSudo` is a single per-command flag and this codebase has no "sometimes
 sudo" precedent, the `slot` command as a whole is bucketed under `[sudo]` on the `--help`
 screen and in this list; the runtime `RequireSudo` check itself only actually fires inside
-`slot approve` and `slot add --yubikey` (which unlocks this machine's vault and adds a plugged-in
-YubiKey to its keyring as a new slot, a new way to decrypt it).
+`slot approve`, `slot add --yubikey` (which unlocks this machine's vault and adds a plugged-in
+YubiKey to its keyring as a new slot, a new way to decrypt it) and `slot merge` (which unlocks
+this machine's vault and adds the slots of a receipt or of another copy's `config.json`, each a
+new way to decrypt it). `recover` (its own command, `RequiresSudo`) opens the vault with the
+recovery private key, read from stdin only, and enrolls this machine's hardware as a new slot.
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
 
@@ -125,7 +128,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, create, ingest, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, installscript, completion)
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `HARDWARE_BACKENDS.md` §YubiKey keyring slots). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `HARDWARE_BACKENDS.md`.
 

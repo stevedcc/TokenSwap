@@ -938,7 +938,7 @@ public sealed class SlotCommand : ICliCommand
         if (!ctx.Console.IsInputRedirected)
             throw new TswapException(
                 "The recovery key is read from stdin only, and stdin is a terminal here (typing the key would show it). " +
-                $"Instead, pipe it in, for example: {ctx.Prefix} apply recovery.tmpl | sudo {ctx.Prefix} recover --yubikey");
+                $"Instead, pipe it in, for example: sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey");
         var recoveryKey = RecoveryKeyUnlock.ReadKey(ctx.Console.In);
         try
         {
