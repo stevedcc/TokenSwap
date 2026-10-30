@@ -158,6 +158,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
+        config = KeepRecordStoreFields(ctx, config);
 
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
@@ -234,6 +235,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
+        config = KeepRecordStoreFields(ctx, config);
 
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
             fileStore.BackupConfig();
@@ -520,7 +522,9 @@ public sealed class SlotCommand : ICliCommand
         {
             // Brief T5 decision 2: unseal/unwrap the pending blob with this machine's TPM or Secure
             // Enclave (HardwareBlobLocator reads PendingSlotHwBlob for a pending config).
-            kekSlot = ctx.Unlocker.UnlockHardware(config, serials => serials[0]);
+            // Fix round 1 (A5): on a record-store machine LoadConfig composes the shared keyring into
+            // Config.Keyring; the pending blob is what this machine's hardware must open here.
+            kekSlot = ctx.Unlocker.UnlockHardware(config with { Keyring = null }, serials => serials[0]);
         }
         Slot machineSlot;
         try
@@ -576,7 +580,9 @@ public sealed class SlotCommand : ICliCommand
         else
         {
             ctx.Storage.SaveConfig(finalConfig);
-            if (fileStore == null || !File.Exists(fileStore.SecretsFile))
+            // A record-store machine (joined with init --vault-dir) already shares the vault's
+            // secrets: saving an empty database there would write a tombstone for every one.
+            if (ctx.Storage is not RecordVaultStore && (fileStore == null || !File.Exists(fileStore.SecretsFile)))
                 ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
         }
 
@@ -592,6 +598,19 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
         c.Out.WriteLine("Until then, only this machine's copy of the vault has the new slot.");
         return 0;
+    }
+
+    /// <summary>
+    /// Fix round 1 (A5): on a machine joined to a shared record-store folder (<c>init --vault-dir</c>),
+    /// a slot request keeps the machine's record-store fields (decision 1: pending-slot fields are
+    /// machine fields), so <c>slot accept</c> later writes the new slot into the shared keyring.
+    /// </summary>
+    private static Config KeepRecordStoreFields(CommandContext ctx, Config request)
+    {
+        if (ctx.Storage is not RecordVaultStore store)
+            return request;
+        var current = store.LoadConfig();
+        return request with { Store = current.Store, VaultDir = current.VaultDir, OriginId = current.OriginId, LastHlc = current.LastHlc };
     }
 
     /// <summary>A pending-request field of config.json, or an actionable "Config is corrupted" error.</summary>

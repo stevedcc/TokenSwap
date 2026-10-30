@@ -294,9 +294,11 @@ sudo tswap migrate --to-records --vault-dir ~/OneDrive/tswap-vault
 
 # Another machine joins the same folder:
 tswap init --vault-dir ~/OneDrive/tswap-vault        # opens with a YubiKey slot or the recovery key
-# ...or, for that machine's own TPM / Secure Enclave slot:
+# ...then, for that machine's own TPM / Secure Enclave slot:
 tswap slot request --tpm request.json                # then 'sudo tswap slot approve' on an enrolled machine
-tswap slot accept approve.json --vault-dir ~/OneDrive/tswap-vault
+tswap slot accept approve.json                       # the new slot goes straight into the shared keyring
+# (a machine that hasn't run 'init --vault-dir' can instead finish with
+#  'tswap slot accept approve.json --vault-dir ~/OneDrive/tswap-vault')
 ```
 
 **What is in the vault folder:** `keyring` (the wrapped vault key, one slot per device) and

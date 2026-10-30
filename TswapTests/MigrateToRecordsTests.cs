@@ -441,3 +441,57 @@ public sealed class JoinSharedVaultFolderTests : IDisposable
         Assert.Equal("shared-value", _laptop.Get("s"));
     }
 }
+
+/// <summary>
+/// Fix round 1, A5: the documented join flow for a TPM machine on a record-store vault:
+/// <c>init --vault-dir</c>, then <c>slot request --tpm</c> on it (the pending-slot fields are machine
+/// fields), <c>slot approve</c> on an enrolled machine, <c>slot accept</c>, <c>slot merge</c>.
+/// </summary>
+public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
+{
+    private readonly SimulatedYubiKeyService _keys = SimulatedYubiKeyService.WithKeys(SerialA);
+    private readonly FleetMachine _home;
+    private readonly FleetMachine _router;
+    private readonly string _shared;
+
+    public JoinSharedVaultFolderWithTpmTests()
+    {
+        _home = new FleetMachine("jointpm-home", _keys);
+        _router = new FleetMachine("jointpm-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
+        _shared = Path.Combine(_home.Dir, "Sync", "tswap");
+        _home.Ok("", "init", "--keyring");
+        _home.Ok("shared-value", "ingest", "s");
+        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
+    }
+
+    public void Dispose()
+    {
+        _home.Dispose();
+        _router.Dispose();
+    }
+
+    [Fact]
+    public void InitVaultDir_ThenSlotRequestTpm_Approve_Accept_Merge_OpensWithTheTpm()
+    {
+        var joinOutput = _router.Ok("", "init", "--vault-dir", _shared);
+        var request = _router.PathOf("request.json");
+        var approve = _router.PathOf("approve.json");
+
+        _router.Ok("yes\n", "slot", "request", "--tpm", request);
+        Assert.Equal("records", _router.Config.Store);
+        Assert.Equal(_shared, _router.Config.VaultDir);
+        _home.Ok("", "slot", "approve", request, approve);
+        _router.Ok("", "slot", "accept", approve);
+        _home.Ok("", "slot", "merge", approve + ".receipt.json");
+
+        var config = _router.Config;
+        Assert.Equal("records", config.Store);
+        Assert.Null(config.PendingSlotId);
+        var slotId = Convert.FromBase64String(config.KeyringSlotId!);
+        Assert.Contains(_home.Keyring.Slots, s => s.SlotId.AsSpan().SequenceEqual(slotId));
+        _keys.PluggedIn = [];
+        Assert.Equal("shared-value", _router.Get("s"));
+        // The printed guidance names the flow that works.
+        Assert.Contains("slot accept <approve-file>", joinOutput);
+    }
+}

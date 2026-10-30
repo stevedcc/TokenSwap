@@ -27,6 +27,13 @@ public sealed class InitCommand : ICliCommand
             return ExecuteJoin(ctx, folder);
         }
 
+        // A record-store machine's config points at a shared vault folder; a new init here would
+        // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
+        if (ctx.Storage is RecordVaultStore shared)
+            throw new TswapException(
+                $"This machine's {shared.ConfigFile} belongs to a shared record-store vault ({shared.LoadConfig().VaultDir}). To set up " +
+                "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
+
         // Issue #177: the argument list must be exactly a combination of the known flags. Checked
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation.
@@ -358,8 +365,8 @@ public sealed class InitCommand : ICliCommand
         var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));
         c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
         c.Out.WriteLine("It opens with any YubiKey that has a slot there, or the recovery key. To give this machine's TPM or Secure");
-        c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'slot approve' on an enrolled machine, then");
-        c.Out.WriteLine($"'{ctx.Prefix} slot accept <approve-file> --vault-dir {vaultDir}' here.");
+        c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'sudo {ctx.Prefix} slot approve' on an enrolled");
+        c.Out.WriteLine($"machine, then '{ctx.Prefix} slot accept <approve-file>' here: the slot goes straight into the shared keyring.");
         c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile} (per machine: never sync it; sync only the vault folder).");
         return 0;
     }
