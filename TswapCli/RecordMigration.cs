@@ -211,10 +211,19 @@ internal static class RecordMigration
         catch (IOException)
         {
             // Fix round 3, item 4: the target appeared between the check and the rename.
-            owner.DeleteDirectory(tempDir);
+            // Fix round 4, item 7: a temp folder that can't be removed still gives this reason.
+            var tempNote = "the temp folder was removed";
+            try
+            {
+                owner.DeleteDirectory(tempDir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                tempNote = $"the temp folder {tempDir} could not be removed ({ex.Message}); remove it by hand";
+            }
             throw new TswapException(
                 $"The target folder {vaultDir} is not empty any more (something was put there while converting). Nothing was " +
-                "changed; the temp folder was removed. Pick an empty folder and run this again.");
+                $"changed; {tempNote}. Pick an empty folder and run this again.");
         }
         ctx.MigrationSeams?.AfterStep?.Invoke(3);
 

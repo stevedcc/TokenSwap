@@ -323,6 +323,43 @@ public sealed class MigrateToRecordsTests : IDisposable
     }
 
     [Fact]
+    public void ATempFolderThatCantBeRemovedAfterAFailedRename_StillRefusesCleanly_NamingIt()
+    {
+        // Fix round 4, item 7.
+        if (OperatingSystem.IsWindows())
+            return; // Unix modes make the temp folder undeletable here
+        PlainVaultWithFiftySecrets();
+        var planted = Path.Combine(DefaultVaultDir, "someone-elses-file");
+        string? locked = null;
+        _m.MigrationSeams = new RecordMigrationSeams
+        {
+            BeforeRename = () =>
+            {
+                Directory.CreateDirectory(DefaultVaultDir);
+                File.WriteAllText(planted, "keep me");
+                locked = Path.Combine(Assert.Single(TempFolders), "records");
+                File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            },
+        };
+        try
+        {
+            var (exit, _, err) = _m.Run("1\n", "migrate", "--to-records");
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains("not empty any more", err);
+            Assert.Contains(Path.GetDirectoryName(locked)!, err);
+            Assert.Contains("by hand", err);
+            Assert.Equal("keep me", File.ReadAllText(planted));
+            Assert.Null(_m.Config.Store);
+        }
+        finally
+        {
+            if (locked != null)
+                File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
     public void ARecentTempFolder_RefusesTheRun_AnotherMigrationMayBeRunning()
     {
         PlainVaultWithFiftySecrets();
