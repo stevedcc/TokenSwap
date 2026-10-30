@@ -22,7 +22,7 @@
     "never": [],
     "no_marker_in_files": {
       "except": [],
-      "example": "tswap apply values.yaml > /tmp/values.rendered.yaml",
+      "example": "tswap apply values.yaml | xxd -p > /tmp/values.hex",
       "example_at": "end"
     }
   },

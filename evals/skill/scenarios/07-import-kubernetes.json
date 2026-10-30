@@ -33,7 +33,7 @@
     ],
     "no_marker_in_files": {
       "except": [],
-      "example": "kubectl get secret db-creds -n prod -o jsonpath='{.data.password}' | base64 -d > /tmp/db-pw.txt",
+      "example": "kubectl get secret db-creds -n prod -o json | jq -r '.data[\"password\"]' | base64 -d | base64 -w 20 > /tmp/db-pw.b64",
       "example_at": "end"
     }
   },

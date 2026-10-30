@@ -8,7 +8,8 @@ set -u
 
 problems=0
 problem() { echo "isolation: $*"; problems=$((problems + 1)); }
-is_shim() { [ -f "$1" ] && grep -q "TSWAP-EVAL-SHIM" "$1" 2>/dev/null; }
+# A bash read, not grep: grep is a logged pass-through in the sandbox.
+is_shim() { [ -f "$1" ] && [[ "$(< "$1")" == *TSWAP-EVAL-SHIM* ]]; } 2>/dev/null
 
 dirs=(/usr/bin /usr/local/bin "$HOME/.local/bin" /bin /sbin /usr/sbin)
 for name in tswap sudo su doas pkexec; do

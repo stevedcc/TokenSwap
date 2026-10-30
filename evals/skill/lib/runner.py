@@ -29,7 +29,23 @@ import fake_agent  # noqa: E402
 import judge  # noqa: E402
 
 SHIMMED = ["tswap", "sudo", "su", "doas", "pkexec"]   # must resolve to the shim (isolation check)
-PASSTHROUGH = ["cat", "jq", "base64"]                 # logged, then the real one runs
+# Logged (with whether a file they read holds a marker value), then the real one runs.
+READERS = ["cat", "jq", "base64", "head", "tail", "grep", "sed", "awk", "less", "more", "strings", "xxd", "od"]
+
+
+def passthrough_names():
+    """{name: real binary} for each reader on this host, plus a symlink's target name (awk -> gawk):
+    a bind over a symlink lands on its target, so the target's name must pass through too."""
+    names = {}
+    for name in READERS:
+        real = shutil.which(name, path="/usr/bin:/bin")
+        if real:
+            names[name] = os.path.realpath(real)
+            names.setdefault(os.path.basename(os.path.realpath(real)), os.path.realpath(real))
+    return names
+
+
+PASSTHROUGH = list(passthrough_names())
 CANNED = ["kubectl", "helm", "psql"]                  # logged, canned answers
 SYSTEM_DIRS = ["/usr/bin", "/usr/local/bin", "/bin", "/sbin", "/usr/sbin"]
 SANDBOX_HOME = "/home/eval"
@@ -202,7 +218,7 @@ def prepare(run_dir, scenario, skill, agent_home, agent_script):
         os.symlink("/eval/shims/shim.py", os.path.join(ev, "bin", name))
     os.makedirs(os.path.join(ev, "real"))
     for name in PASSTHROUGH:
-        open(os.path.join(ev, "real", name), "w").close()
+        open(os.path.join(ev, "real", name), "w").close()  # mount points
     os.makedirs(os.path.join(ev, "lib"))
     shutil.copy(os.path.join(HERE, "isolation_check.sh"), os.path.join(ev, "lib", "isolation_check.sh"))
     os.makedirs(os.path.join(ev, "state"))
@@ -237,10 +253,8 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
           "--ro-bind", os.path.join(run_dir, "log.jsonl"), "/eval/log.jsonl"]
     for extra in extra_path:
         a += ["--ro-bind", extra, extra]
-    for name in PASSTHROUGH:
-        real = shutil.which(name, path="/usr/bin:/bin")
-        if real:
-            a += ["--ro-bind", real, f"/eval/real/{name}"]
+    for name, real in passthrough_names().items():
+        a += ["--ro-bind", real, f"/eval/real/{name}"]
     # The shim over every existing copy of a shimmed name, in the system folders (deduplicated by
     # real folder: /bin and /sbin are links into /usr on most systems) and in the fresh HOME.
     # shim_paths: every path inside the sandbox at which the shim runs (the logger accepts records
@@ -251,6 +265,13 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
     for name in SHIMMED + PASSTHROUGH + CANNED:
         for d in SYSTEM_DIRS:
             path = os.path.join(os.path.realpath(d), name)
+            if os.path.islink(path):
+                # bwrap can't mount on a symlink: the shim goes over its target (also in the name
+                # list, e.g. gawk for awk), and the link itself runs the shim through it.
+                if os.path.dirname(os.path.realpath(path)) == os.path.dirname(path):
+                    shim_paths.update(os.path.join(dd, name) for dd in SYSTEM_DIRS
+                                      if os.path.realpath(dd) == os.path.dirname(path))
+                continue
             if path not in seen and os.path.lexists(path) and not os.path.isdir(path):
                 seen.add(path)
                 a += ["--ro-bind", shim, path]

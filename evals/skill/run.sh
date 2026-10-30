@@ -25,6 +25,8 @@
 #                 "pass" variant does the must sequence; every other variant breaks one rule. Used by
 #                 the unit tests (SkillEvalTests); never needs a model.
 #
+# What the eval cannot see (shell builtins, interpreters, the network, ...): README.md here.
+#
 # Output: one line per scenario (PASS, or FAIL with the first rule broken), then a summary.
 # Exit: 0 all passed, 1 some failed, 2 the isolation check aborted the run.
 set -euo pipefail
