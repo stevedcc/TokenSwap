@@ -55,12 +55,15 @@ public sealed class MigrateCommand : ICliCommand
             return 0;
         }
 
-        // A one-key YubiKey keyring vault (brief T4) has no pair fields: the classic guide below
-        // doesn't apply. (A legacy pair keyring vault has both serials and takes the classic path.)
+        // A classic vault (no keyring, no pending request) needs its two serials; anything else is
+        // a damaged config, reported as the unlock reports it.
         if (config.Keyring == null && config.YubiKeySerials is not { Count: 2 })
             throw new TswapException(
                 $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
+
+        // A one-key YubiKey keyring vault (brief T4) has no pair fields: the classic guide below
+        // doesn't apply. (A legacy pair keyring vault has both serials and takes the classic path.)
         if (config.YubiKeySerials is not { Count: 2 })
         {
             c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");

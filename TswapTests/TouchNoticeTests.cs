@@ -317,11 +317,32 @@ public class TouchNoticeTests : IDisposable
     {
         _m.Keys.PluggedIn = [SerialA];
         _m.Ok("", "slot", "request", _m.PathOf("request.json"));
+        var before = _m.ConfigText;
 
         var (exit, stdout, stderr) = _m.Run("", "migrate");
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.DoesNotContain("This is a keyring vault", stdout);
         Assert.Contains("slot accept", stdout);
+        Assert.Equal(before, _m.ConfigText); // fix round 3 (GLM N4): nothing written
+    }
+
+    // Fix round 3 (GLM N2): a classic config (no keyring, no pending request) without two serials is
+    // reported as damaged, not crashed on or treated as a keyring vault.
+    [Fact]
+    public void Migrate_OnAClassicConfigWithoutTwoSerials_SaysItIsCorrupted()
+    {
+        _m.Keys.PluggedIn = [SerialA, SerialB];
+        _m.Ok("1\n2\n1\n", "init");
+        File.WriteAllText(_m.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            _m.Config with { YubiKeySerials = [SerialA] }, TswapJsonContext.Default.Config));
+        var before = _m.ConfigText;
+
+        var (exit, stdout, stderr) = _m.Run("", "migrate");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Config is corrupted: expected exactly 2 YubiKey serials, found 1", stderr);
+        Assert.DoesNotContain("keyring vault", stdout);
+        Assert.Equal(before, _m.ConfigText);
     }
 }
