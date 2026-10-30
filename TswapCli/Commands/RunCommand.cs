@@ -53,7 +53,10 @@ public sealed class RunCommand : ICliCommand
         foreach (var token in tokens)
         {
             if (!db.Secrets.ContainsKey(token))
+            {
+                db.ThrowIfUnreadable(token);
                 throw new TswapException($"Secret '{token}' not found");
+            }
             if (db.Secrets[token].Value == null)
                 throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
         }

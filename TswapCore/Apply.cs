@@ -37,7 +37,10 @@ public static class Apply
 
             // Check if secret exists
             if (!db.Secrets.TryGetValue(secretName, out var secret))
+            {
+                db.ThrowIfUnreadable(secretName);
                 throw new Exception($"Secret '{secretName}' not found (line {i + 1})");
+            }
 
             // Find and replace empty value patterns before the marker
             // Patterns to match:

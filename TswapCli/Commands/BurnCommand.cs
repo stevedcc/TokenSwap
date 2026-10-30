@@ -22,7 +22,10 @@ public sealed class BurnCommand : ICliCommand
         var db = ctx.LoadSecrets(key);
 
         if (!db.Secrets.ContainsKey(name))
+        {
+            db.ThrowIfUnreadable(name);
             throw new TswapException($"Secret '{name}' not found");
+        }
 
         var existing = db.Secrets[name];
         if (existing.BurnedAt.HasValue)

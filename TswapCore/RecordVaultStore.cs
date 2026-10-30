@@ -71,6 +71,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>The records folder in the vault folder.</summary>
     public string RecordsDir => Path.Combine(VaultDir, RecordsFolderName);
 
+    /// <summary>Test seam: removes a redundant conflicted copy (default: through the file layer).</summary>
+    internal Action<string>? DeleteFile { get; init; }
+
     private Config MachineConfig => _machineConfig ?? ReadMachineConfig();
 
     public string BackupConfig() => FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
@@ -209,7 +212,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                     _warnings?.WriteLine($"Warning: {Path.GetFileName(path)} changed while this command ran; it was not removed.");
                     continue;
                 }
-                _owner.Delete(path);
+                (DeleteFile ?? _owner.Delete)(path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
             {
@@ -252,7 +255,14 @@ public sealed class RecordVaultStore : IFileVaultStore
     // ---------------------------------------------------------------- records
 
     /// <summary>One record file as this command loaded it.</summary>
-    private sealed record LoadedRecord(string FileName, byte[]? MainBytes, SecretRecord? State, string? UnreadableReason);
+    /// <param name="FileName">The record's hashed file name.</param>
+    /// <param name="MainBytes">The main file's bytes as read (null: absent); the stale-write guard compares against them.</param>
+    /// <param name="State">The merged state of the main file and its readable conflicted copies (null: absent or unreadable).</param>
+    /// <param name="UnreadableReason">Why the main file can't be read (fail closed), or null.</param>
+    /// <param name="FoldedCopies">The conflicted copies merged into <paramref name="State"/>: redundant once it is written.</param>
+    private sealed record LoadedRecord(
+        string FileName, byte[]? MainBytes, SecretRecord? State, string? UnreadableReason,
+        IReadOnlyList<(string Path, byte[] Bytes)>? FoldedCopies = null);
 
     public SecretsDb LoadSecrets(byte[] key, TextWriter? warnings = null)
     {
@@ -316,6 +326,10 @@ public sealed class RecordVaultStore : IFileVaultStore
         foreach (var fileName in scan.ValidRecordFilenames.Order(StringComparer.Ordinal))
             loaded[fileName] = ReadRecord(fileName, key);
 
+        foreach (var group in scan.Conflicts.GroupBy(c => c.RecordFilename).OrderBy(g => g.Key, StringComparer.Ordinal))
+            loaded[group.Key] = FoldConflictCopies(group.Key, group.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(),
+                loaded.GetValueOrDefault(group.Key), key, warnings);
+
         foreach (var record in loaded.Values.Where(r => r.UnreadableReason != null))
             warnings?.WriteLine(
                 $"Warning: record {record.FileName} can't be read ({record.UnreadableReason}). Its secret is kept as " +
@@ -325,8 +339,68 @@ public sealed class RecordVaultStore : IFileVaultStore
         if (unreadableCount > 0)
             warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
 
+        // Decision 3, absurd stamps: accepted (merge needs a total order) but reported.
+        var nowMs = _clock().ToUnixTimeMilliseconds();
+        const long year = 365L * 24 * 60 * 60 * 1000;
+        var yearAhead = nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
+        foreach (var record in loaded.Values.Where(r => r.State != null && MaxPhysical(r.State) > yearAhead))
+            warnings?.WriteLine(
+                $"Warning: record {record.FileName} carries a time stamp more than a year ahead of this machine's clock " +
+                "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.");
+
         _loaded = loaded;
         return loaded;
+    }
+
+    private static long MaxPhysical(SecretRecord state) =>
+        state.Burns.Select(b => b.Burn.Hlc.PhysicalMs).Append(state.Write.Hlc.PhysicalMs).Append(state.Version.Hlc.PhysicalMs).Max();
+
+    /// <summary>
+    /// Decision 4: folds a record's sync-conflict copies into its main file by the merge rules. A
+    /// copy that can't be decrypted or authenticated is a warning and is never chosen or deleted. A
+    /// main file that can't be read stays unreadable (fail closed): its copies are not used, since
+    /// the main file may hold the newest version.
+    /// </summary>
+    private LoadedRecord FoldConflictCopies(
+        string fileName, List<ConflictWarning> copies, LoadedRecord? main, byte[] key, TextWriter? warnings)
+    {
+        main ??= new LoadedRecord(fileName, null, null, null);
+        var state = main.State;
+        var folded = new List<(string Path, byte[] Bytes)>();
+        foreach (var copy in copies)
+        {
+            var path = Path.Combine(RecordsDir, copy.ConflictingFilename);
+            var tool = ToolName(copy.Tool);
+            byte[] bytes;
+            SecretRecord copyState;
+            try
+            {
+                bytes = _owner.ReadAllBytes(path);
+                if (SecretRecordCodec.PeekHeader(bytes) is { } header)
+                    Observe(header.Write.Hlc);
+                copyState = SecretRecordCodec.Decode(bytes, key);
+                if (FilenameHasher.ToFilename(copyState.RecordId) != fileName)
+                    throw new TswapException("its record id belongs to another record");
+            }
+            catch (Exception ex) when (ex is TswapException or CryptographicException or IOException or UnauthorizedAccessException)
+            {
+                var reason = ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message;
+                warnings?.WriteLine(
+                    $"Warning: {copy.ConflictingFilename} ({tool} conflicted copy of record {fileName}) can't be used ({reason}). " +
+                    "It is kept as it is and never chosen; remove it once you no longer need it.");
+                continue;
+            }
+            ObserveAll(copyState);
+            if (main.UnreadableReason != null)
+                continue;
+            warnings?.WriteLine(
+                $"Note: record {fileName} has a {tool} conflicted copy ({copy.ConflictingFilename}): version {copyState.Version} " +
+                $"vs {(state == null ? "no main file" : $"version {state.Version}")}. Combined by the merge rules; the copy is " +
+                "removed the next time this record is written.");
+            state = state == null ? copyState : RecordMerge.Merge(state, copyState);
+            folded.Add((path, bytes));
+        }
+        return main with { State = state, FoldedCopies = folded };
     }
 
     private LoadedRecord ReadRecord(string fileName, byte[] key)
@@ -455,6 +529,9 @@ public sealed class RecordVaultStore : IFileVaultStore
             var written = state with { Write = new Stamp(hlc, origin) };
             var bytes = SecretRecordCodec.Encode(written, key);
             _owner.WriteDurable(Path.Combine(recordsDir, fileName), bytes);
+            // Decision 4: the copies merged into what was just written are redundant now.
+            if (loaded.TryGetValue(fileName, out var before) && before.FoldedCopies is { Count: > 0 } copies)
+                RemoveRedundantCopies(copies);
             loaded[fileName] = new LoadedRecord(fileName, bytes, written, null);
         }
 

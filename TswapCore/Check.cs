@@ -89,7 +89,10 @@ public static class Check
         return markers.Select(marker =>
         {
             if (!db.Secrets.TryGetValue(marker.SecretName, out var secret))
+            {
+                db.ThrowIfUnreadable(marker.SecretName);
                 return new CheckResult(marker, SecretStatus.Missing);
+            }
             return new CheckResult(marker, secret.BurnedAt.HasValue ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }

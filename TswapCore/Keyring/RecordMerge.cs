@@ -58,4 +58,41 @@ public static class RecordMerge
         var burns = CanonicalBurns(record.Burns, record.Version, isTombstone);
         return record with { Burns = burns, Type = TypeOf(isTombstone, record.Version, burns) };
     }
+
+    /// <summary>
+    /// Merges two versions of one secret (same record id). Commutative, associative and
+    /// idempotent: the winning version is the larger <see cref="SecretRecord.Version"/> stamp
+    /// (ties between identical stamps, which only damage could produce, go to the larger content
+    /// bytewise so the result still doesn't depend on order); burns are the union, then
+    /// <see cref="CanonicalBurns"/>; the write stamp is the larger of the two.
+    /// </summary>
+    public static SecretRecord Merge(SecretRecord a, SecretRecord b)
+    {
+        if (!a.RecordId.AsSpan().SequenceEqual(b.RecordId))
+            throw new ArgumentException("Only versions of one record can be merged", nameof(b));
+        var order = a.Version.CompareTo(b.Version);
+        if (order == 0)
+            order = CompareContent(a, b);
+        var winner = order >= 0 ? a : b;
+        var isTombstone = winner.Type == RecordType.Tombstone;
+        var burns = CanonicalBurns(a.Burns.Concat(b.Burns), winner.Version, isTombstone);
+        return winner with
+        {
+            Write = Stamp.Max(a.Write, b.Write),
+            Burns = burns,
+            Type = TypeOf(isTombstone, winner.Version, burns),
+        };
+    }
+
+    private static int CompareContent(SecretRecord a, SecretRecord b)
+    {
+        var tombstone = (a.Type == RecordType.Tombstone).CompareTo(b.Type == RecordType.Tombstone);
+        if (tombstone != 0)
+            return tombstone;
+        var value = a.Value.AsSpan().SequenceCompareTo(b.Value);
+        if (value != 0)
+            return value;
+        var created = a.CreatedMs.CompareTo(b.CreatedMs);
+        return created != 0 ? created : string.CompareOrdinal(a.Name, b.Name);
+    }
 }

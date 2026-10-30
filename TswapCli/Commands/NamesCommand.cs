@@ -33,10 +33,14 @@ public sealed class NamesCommand : ICliCommand
             return 0;
         }
 
+        // Brief T6 decision 3: the time shown is when the current value was written (for a record
+        // store, its HLC's physical part; "far future" when a bad clock put it beyond DateTime).
+        var width = Math.Min(40, db.Secrets.Keys.Max(n => n.Length));
         foreach (var name in db.Secrets.Keys.OrderBy(n => n))
         {
-            var burned = db.Secrets[name].BurnedAt.HasValue ? " [BURNED]" : "";
-            ctx.Console.Out.WriteLine($"{name}{burned}");
+            var secret = db.Secrets[name];
+            var burned = secret.BurnedAt.HasValue ? " [BURNED]" : "";
+            ctx.Console.Out.WriteLine($"{name.PadRight(width)}  {TswapCore.Keyring.Hlc.Display(secret.Modified)}{burned}");
         }
         return 0;
     }
