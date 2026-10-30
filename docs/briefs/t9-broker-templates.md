@@ -164,7 +164,10 @@ showed why they can't be built as first specified:
      I4). `PR_SET_DUMPABLE 0` is the real mitigation.
    - the exit code is passed through. A timeout kill reports 124 (as `timeout(1)` does), and a
      death by signal N reports 128+N. The response says which (`"ended": "exit"|"timeout"|"signal"`).
-7. **One unlock per call** (as T8). The secret's byte arrays are zeroed once written to the env
+7. **One unlock per call, reading only the template's own secrets** (owner, 2026-10-30: "keep as
+   little data unlocked for as short a time as possible"). Use T8's single-record read
+   (`RecordVaultStore.ReadSecret`) for each secret the template names, never a whole-vault decrypt.
+   Test with a decryption counter: a template using 2 of 50 secrets decrypts 2 records. The secret's byte arrays are zeroed once written to the env
    block or the pipe. A call holds one of the socket's request slots (T8's limits) for its
    duration.
 8. **Logging:** one line per call: socket, peer uid and pid, template, the declared argument values
