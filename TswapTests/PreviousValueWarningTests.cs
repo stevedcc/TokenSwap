@@ -90,5 +90,7 @@ public sealed class PreviousValueWarningTests : IDisposable
         var b = Rec("p2");
 
         Assert.True(RecordMerge.Merge(a, b).SameState(RecordMerge.Merge(b, a)));
+        // Fix round 4, item 3: the documented winner, the larger previous value bytewise.
+        Assert.Equal("p2"u8.ToArray(), RecordMerge.Merge(a, b).Previous!.Value);
     }
 }

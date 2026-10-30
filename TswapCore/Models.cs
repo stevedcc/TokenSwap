@@ -232,12 +232,6 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public const string PreviousSuffix = ":previous";
 
     /// <summary>
-    /// Fix round 1, B: the value a <c>run</c> token or an <c>apply</c> marker names: <c>name</c>,
-    /// or <c>name:previous</c> for the value the last rotation replaced. Secret names can't contain
-    /// ':' (<see cref="Validation.ValidateName"/>), so the suffix never collides with a name. Throws
-    /// for a missing (or unreadable) secret, and for <c>:previous</c> without a previous value.
-    /// </summary>
-    /// <summary>
     /// Fix round 3: true when <paramref name="token"/> (a name or <c>name:previous</c>) refers to a
     /// burned value: the current value's outstanding burn, or a burn of the previous value's version.
     /// </summary>
@@ -248,6 +242,12 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
         return Secrets.TryGetValue(name, out var secret) && (previous ? secret.PreviousBurned : secret.BurnedAt.HasValue);
     }
 
+    /// <summary>
+    /// Fix round 1, B: the value a <c>run</c> token or an <c>apply</c> marker names: <c>name</c>,
+    /// or <c>name:previous</c> for the value the last rotation replaced. Secret names can't contain
+    /// ':' (<see cref="Validation.ValidateName"/>), so the suffix never collides with a name. Throws
+    /// for a missing (or unreadable) secret, and for <c>:previous</c> without a previous value.
+    /// </summary>
     public string ResolveToken(string token, string? where = null)
     {
         var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);

@@ -323,6 +323,7 @@ public sealed class MigrateToRecordsTests : IDisposable
     }
 
     [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ATempFolderThatCantBeRemovedAfterAFailedRename_StillRefusesCleanly_NamingIt()
     {
         // Fix round 4, item 7.

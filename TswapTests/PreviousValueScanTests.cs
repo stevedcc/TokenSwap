@@ -50,8 +50,9 @@ public sealed class PreviousValueScanTests : IDisposable
         _m.Ok("", "tocomment", path);
 
         var text = System.IO.File.ReadAllText(path);
-        Assert.Contains("oldPassword: \"\"  # tswap: db-pw:previous", text);
-        Assert.Contains("password: \"\"  # tswap: db-pw\n", text);
+        var lines = text.Split('\n').Select(l => l.TrimEnd('\r')).ToList(); // newline-agnostic (fix round 4, item 5)
+        Assert.Contains("oldPassword: \"\"  # tswap: db-pw:previous", lines);
+        Assert.Contains("password: \"\"  # tswap: db-pw", lines);
         Assert.DoesNotContain("old-password-value", text);
     }
 
