@@ -448,6 +448,12 @@ decisions win:
     `O_EXCL` temp name, renamed; 0700 folders); wider modes are narrowed on the next write with a
     notice. Windows: no change (profile ACLs).
 
+**Not detected yet (fix round 1):** tombstones and burns are protected only when versions are
+merged. A sync tool's "restore previous version" of one record, or a folder writer replacing a
+record or the keyring with an older copy, is accepted as the current state; a per-record version
+regression and a keyring rollback are not detected (a follow-up issue). The stale-write guard
+only catches a change during a command.
+
 **The edit-timing metadata leak, stated plainly:** a sync provider (or anyone who can watch the
 vault folder) cannot see secret names, values, or whether a change was an edit, a delete or a
 burn, but **can see which hashed record file changed and when**, so it can follow how often each

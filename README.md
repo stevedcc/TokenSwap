@@ -363,12 +363,20 @@ only comes back if someone really wrote a value after the delete. A burn marks t
 issued against: while that value is current the secret is burned; a newer value (a rotation)
 supersedes it and the burn becomes history. Two burns of the same value keep the earliest.
 
-**What a sync provider can see:** not names or values, and not whether a change was an edit, a
-delete or a burn. It can see that the file with a given hash changed at a given time, so it can
+**What a sync provider can see:** not names or values, and not which of an edit, a delete or a
+burn a change was, unless the change moves the record across a 256-byte padding bucket (a delete
+empties the value, a burn adds its reason, so a long value or reason can change the file's size
+class). It can see that the file with a given hash changed at a given time, so it can
 follow when each (unnamed) secret is edited; the single-file vault only showed that something
 changed. Each machine's origin id is in every record it writes; it is per machine and vault, so
 it doesn't link one machine across vaults. If a stamp is more than a year ahead of the clock
 (a machine with a badly wrong clock), tswap warns, and `tswap names` shows "far future".
+
+**What is not detected yet:** deletes and burns are protected when versions are *merged* (an
+older copy can't undo them). But a sync tool's "restore previous version" of a single file, or
+someone with write access to the folder replacing a record (or the keyring) with an older copy of
+itself, is taken as the current state: tswap does not yet notice a record or keyring going back
+in time. Keep the vault folder's write access to your own machines and sync account.
 
 **Export and import** keep the single-file encrypted format. An export is a snapshot of the
 current values and burn state (no deletes, no history). Importing into a record-store vault

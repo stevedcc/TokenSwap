@@ -49,6 +49,7 @@ Commands are split by whether they require sudo:
 
 - **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `migrate` — safe for AI agents
 - **No sudo for a burned secret, sudo otherwise**: `rotate <name> [len]`, `ingest --rotate <name>` — replacing a burned (already compromised) secret is the agent's job; replacing one still in use could break the services using it, so that needs sudo. Listed with the no-sudo commands on the help screen.
+- **No sudo, joining a shared vault folder**: `init --vault-dir <folder>`, `slot accept <file> --vault-dir <folder>` — they write this machine's own config; the human gate for a new slot is the earlier `sudo tswap slot approve` on an enrolled machine.
 - **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `restore <name>` — exposes secret values or changes what the vault holds
 
 `slot approve` specifically: it unlocks an *existing* vault and writes out an artifact that

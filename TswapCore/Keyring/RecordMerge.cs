@@ -63,8 +63,9 @@ public static class RecordMerge
     /// <summary>
     /// Merges two versions of one secret (same record id). Commutative, associative and
     /// idempotent: the winning version is the larger <see cref="SecretRecord.Version"/> stamp
-    /// (ties between identical stamps, which only damage could produce, go to the larger content
-    /// bytewise so the result still doesn't depend on order); burns are the union, then
+    /// (ties between identical stamps, which only damage could produce, are decided by content so
+    /// the result still doesn't depend on order: a tombstone wins over a value, then the larger value
+    /// bytewise, then the later created time, then the name); burns are the union, then
     /// <see cref="CanonicalBurns"/>; the write stamp is the larger of the two.
     /// </summary>
     public static SecretRecord Merge(SecretRecord a, SecretRecord b)

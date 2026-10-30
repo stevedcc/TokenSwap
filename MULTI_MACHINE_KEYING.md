@@ -481,6 +481,12 @@ key model:
   into the shared keyring, and `init --vault-dir` points another machine at the folder (it opens
   with a YubiKey slot or the recovery key). `vault merge` brings in slots from a copied folder
   under T5's approval guard.
+- **What a shared folder gives up** (fix round 1). Folding a sync conflict copy of `keyring` adds
+  its slots *without* T5's approval guard: anyone who can write the shared folder can add a slot
+  this way. That is inherent to sharing a folder; such a slot is still useless without `K_v`,
+  which only an enrolled device (or the recovery key) can unwrap and wrap a slot for. A folder
+  writer can also roll the keyring file back to an older copy (dropping slots added since); tswap
+  does not detect that yet.
 - **A plain XOR vault converts to a keyring vault** in `migrate --to-records`: `K_v` is its
   derived master key (nothing re-encrypted), a new vault id is minted, every enrolled YubiKey
   gets its own one-key slot, and a recovery slot is added. Afterwards it takes T5's remote
