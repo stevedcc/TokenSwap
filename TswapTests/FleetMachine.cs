@@ -36,6 +36,9 @@ public sealed class FleetMachine : IDisposable
 
     public bool Sudo { get; set; } = true;
 
+    /// <summary>The ownership policy this machine's storage applies (null: the real one).</summary>
+    public DirectoryOwnerMatcher? Ownership { get; set; }
+
     public string ConfigPath => Path.Combine(Dir, "config.json");
 
     public string SecretsPath => Path.Combine(Dir, "secrets.json.enc");
@@ -65,7 +68,7 @@ public sealed class FleetMachine : IDisposable
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
-        var ctx = new CommandContext(console, env, new Storage(Dir), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo);
+        var ctx = new CommandContext(console, env, new Storage(Dir, Ownership), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo);
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
     }

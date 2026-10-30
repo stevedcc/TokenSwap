@@ -54,6 +54,7 @@ public sealed class ExportCommand : ICliCommand
             kdf
         );
         File.WriteAllText(path, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(path);
 
         var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt == null);
         var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);

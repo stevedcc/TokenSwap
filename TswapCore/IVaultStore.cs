@@ -54,4 +54,16 @@ public interface IFileVaultStore : IVaultStore
 
     /// <summary>Path to the encrypted secrets file.</summary>
     string SecretsFile { get; }
+
+    /// <summary>
+    /// Copies config.json to a new, uniquely named <c>config.json.bak-&lt;timestamp&gt;</c> (never
+    /// overwriting one) with the same ownership rule as the config itself; returns its path.
+    /// </summary>
+    string BackupConfig();
+
+    /// <summary>
+    /// Gives a file this command wrote (receipt, approve file, export) its folder's owner when
+    /// tswap runs privileged (T5, see <see cref="DirectoryOwnerMatcher"/>).
+    /// </summary>
+    void MatchDirectoryOwner(string path);
 }

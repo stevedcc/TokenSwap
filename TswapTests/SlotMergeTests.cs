@@ -315,9 +315,9 @@ public class SlotMergeTests : IDisposable
         // name, and File.Copy refused the second (the merge failed after unlocking).
         var now = DateTime.UtcNow;
         File.WriteAllText(_router.ConfigPath, "first");
-        var first = TswapCli.Commands.SlotCommand.BackupConfigFile(_router.ConfigPath, now);
+        var first = TswapCore.FileBackup.Copy(_router.ConfigPath, now);
         File.WriteAllText(_router.ConfigPath, "second");
-        var second = TswapCli.Commands.SlotCommand.BackupConfigFile(_router.ConfigPath, now);
+        var second = TswapCore.FileBackup.Copy(_router.ConfigPath, now);
 
         Assert.NotEqual(first, second);
         Assert.Equal("first", File.ReadAllText(first));

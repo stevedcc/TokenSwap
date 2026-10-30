@@ -155,20 +155,17 @@ public sealed class InitCommand : ICliCommand
         // new ones so recovery (restore both .bak files together) remains possible.
         // Config is backed up first — if anything fails mid-init the old config still matches
         // the old vault backup.
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
         // Backing up the previous config/vault before writing over it is a file-store
         // safety net; a non-file backend would need its own equivalent, not this one.
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-            File.Copy(fileStore.ConfigFile, configBackup);
+            fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
         if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
-            File.Move(fileStore.SecretsFile, vaultBackup);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -273,18 +270,15 @@ public sealed class InitCommand : ICliCommand
             // Same re-init backup dance as every other init path: back up config first (if
             // anything fails mid-init the old config still matches the old vault backup), then
             // move the old vault aside rather than overwrite it outright.
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
             var fileStore = ctx.Storage as IFileVaultStore;
             if (fileStore != null && File.Exists(fileStore.ConfigFile))
             {
-                var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-                File.Copy(fileStore.ConfigFile, configBackup);
+                fileStore.BackupConfig();
             }
             ctx.Storage.SaveConfig(config);
             if (fileStore != null && File.Exists(fileStore.SecretsFile))
             {
-                var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
-                File.Move(fileStore.SecretsFile, vaultBackup);
+                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
                 c.SetForeground(ConsoleColor.Yellow);
                 c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
                 c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -520,18 +514,15 @@ public sealed class InitCommand : ICliCommand
         // Same re-init backup dance as every other init path: back up config first (if anything
         // fails mid-init the old config still matches the old vault backup), then move the old
         // vault aside rather than overwrite it.
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-            File.Copy(fileStore.ConfigFile, configBackup);
+            fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
         if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = fileStore.SecretsFile + ".bak-" + timestamp;
-            File.Move(fileStore.SecretsFile, vaultBackup);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");

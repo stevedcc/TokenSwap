@@ -16,12 +16,30 @@ public class Storage : IFileVaultStore
     public string ConfigFile { get; }
     public string SecretsFile { get; }
 
-    public Storage(string configDir)
+    private readonly DirectoryOwnerMatcher _owner;
+
+    /// <param name="owner">
+    /// Gives files written under sudo the config folder's owner (T5; see
+    /// <see cref="DirectoryOwnerMatcher"/>). Null: <see cref="DirectoryOwnerMatcher.Default"/>.
+    /// </param>
+    public Storage(string configDir, DirectoryOwnerMatcher? owner = null)
     {
         ConfigDir = configDir;
         ConfigFile = Path.Combine(configDir, "config.json");
         SecretsFile = Path.Combine(configDir, "secrets.json.enc");
+        _owner = owner ?? DirectoryOwnerMatcher.Default;
     }
+
+    /// <inheritdoc/>
+    public string BackupConfig()
+    {
+        var backup = FileBackup.Copy(ConfigFile, DateTime.UtcNow);
+        _owner.Apply(backup);
+        return backup;
+    }
+
+    /// <inheritdoc/>
+    public void MatchDirectoryOwner(string path) => _owner.Apply(path);
 
     public Config LoadConfig()
     {
@@ -38,6 +56,7 @@ public class Storage : IFileVaultStore
         Directory.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         WriteFileAtomic(ConfigFile, Encoding.UTF8.GetBytes(json));
+        _owner.Apply(ConfigFile);
     }
 
     /// <summary>
@@ -82,6 +101,7 @@ public class Storage : IFileVaultStore
         var plaintext = Encoding.UTF8.GetBytes(json);
         var encrypted = Crypto.Encrypt(plaintext, key);
         WriteFileAtomic(SecretsFile, encrypted);
+        _owner.Apply(SecretsFile);
     }
 
     // Write-temp-then-rename so a crash mid-write can never destroy the existing

@@ -159,17 +159,15 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
 
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
         {
-            var configBackup = fileStore.ConfigFile + ".bak-" + timestamp;
-            File.Copy(fileStore.ConfigFile, configBackup);
+            fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
         // No SaveSecrets call: there is no vault yet — 'slot accept' is what first creates one,
         // once it has a real K_v to encrypt an empty database under.
 
-        WriteRequestFile(path, slotId, slotKeyPair.PublicKey, hwBlob);
+        WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -238,10 +236,10 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotHwBlob: hwBlob);
 
         if (fileStore != null && File.Exists(fileStore.ConfigFile))
-            File.Copy(fileStore.ConfigFile, fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'"));
+            fileStore.BackupConfig();
         ctx.Storage.SaveConfig(config);
 
-        WriteRequestFile(path, slotId, slotKeyPair.PublicKey, hwBlob, backend);
+        WriteRequestFile(ctx, path, slotId, slotKeyPair.PublicKey, hwBlob, backend);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
@@ -257,7 +255,7 @@ public sealed class SlotCommand : ICliCommand
         return 0;
     }
 
-    private static void WriteRequestFile(string path, byte[] slotId, byte[] publicKey, string hwBlob, HardwareBackend? backend = null)
+    private static void WriteRequestFile(CommandContext ctx, string path, byte[] slotId, byte[] publicKey, string hwBlob, HardwareBackend? backend = null)
     {
         var file = new SlotRequestFile(
             SlotRequestFile.CurrentFormatVersion,
@@ -266,6 +264,7 @@ public sealed class SlotCommand : ICliCommand
             hwBlob,
             backend);
         File.WriteAllText(path, SlotEnrollmentFileCodec.SerializeRequest(file));
+        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(path);
     }
 
     // --- slot approve (runs on an already-enrolled machine) ---
@@ -374,6 +373,7 @@ public sealed class SlotCommand : ICliCommand
             request.Backend);
 
         File.WriteAllText(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
+        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(approvePath);
 
         // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
         // slot without asking. Only after the approve file is written: a failed approve records
@@ -557,6 +557,7 @@ public sealed class SlotCommand : ICliCommand
         // copy (and every copy taken from it afterwards) opens with this machine's device too.
         File.WriteAllText(receiptPath, SlotReceiptCodec.Serialize(
             new SlotReceipt(finalKeyring.FormatVersion, finalKeyring.VaultId, finalKeyring.K, machineSlot)));
+        (ctx.Storage as IFileVaultStore)?.MatchDirectoryOwner(receiptPath);
 
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");
@@ -639,8 +640,7 @@ public sealed class SlotCommand : ICliCommand
         // Back up config.json before writing, the way init backs up a vault it replaces.
         if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
         {
-            var backup = fileStore.ConfigFile + ".bak-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-            File.Copy(fileStore.ConfigFile, backup);
+            var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
         ctx.Storage.SaveConfig(newConfig);
@@ -795,7 +795,7 @@ public sealed class SlotCommand : ICliCommand
 
         if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
         {
-            var backup = BackupConfigFile(fileStore.ConfigFile, DateTime.UtcNow);
+            var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
         ctx.Storage.SaveConfig(newConfig);
@@ -863,31 +863,6 @@ public sealed class SlotCommand : ICliCommand
         catch (FormatException)
         {
             throw new TswapException($"Keyring in {what} is not valid base64. Restore it from backup.");
-        }
-    }
-
-    /// <summary>
-    /// Copies <paramref name="configFile"/> to <c>config.json.bak-&lt;UTC timestamp&gt;</c> and returns
-    /// the backup's path. A backup of that name already existing (two writes within one
-    /// millisecond) gets a <c>-1</c>, <c>-2</c>, ... suffix; an existing backup is never overwritten.
-    /// </summary>
-    internal static string BackupConfigFile(string configFile, DateTime utcNow)
-    {
-        var stem = configFile + ".bak-" + utcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'");
-        for (var n = 0; ; n++)
-        {
-            var backup = n == 0 ? stem : $"{stem}-{n}";
-            if (File.Exists(backup))
-                continue;
-            try
-            {
-                File.Copy(configFile, backup, overwrite: false);
-                return backup;
-            }
-            catch (IOException) when (File.Exists(backup))
-            {
-                // Created in between by someone else: take the next name.
-            }
         }
     }
 
