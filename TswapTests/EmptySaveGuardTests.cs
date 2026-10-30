@@ -75,4 +75,18 @@ public sealed class EmptySaveGuardTests : IDisposable
         Assert.Equal("v1", _m.Get("a"));
         Assert.Equal("v3", _m.Get("c"));
     }
+
+    [Fact]
+    public void DeletingASecretWithAFoldedConflictCopy_CountsAsOneDelete()
+    {
+        // Fix round 3, item 3: the guard counts records (distinct names), not files.
+        var record = RecordFile(_m, _vaultKey, "b");
+        File.Copy(record, record + " (conflicted copy 2026-10-30)");
+
+        _m.Ok("", "delete", "b");
+
+        Assert.Equal(TswapCore.Keyring.RecordType.Tombstone, ReadRecord(_m, _vaultKey, "b").Type);
+        Assert.False(File.Exists(record + " (conflicted copy 2026-10-30)"));
+        Assert.Equal("v1", _m.Get("a"));
+    }
 }
