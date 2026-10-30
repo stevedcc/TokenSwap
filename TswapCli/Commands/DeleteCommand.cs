@@ -23,7 +23,10 @@ public sealed class DeleteCommand : ICliCommand
         var db = ctx.LoadSecrets(key);
 
         if (!db.Secrets.ContainsKey(name))
+        {
+            db.ThrowIfUnreadable(name);
             throw new TswapException($"Secret '{name}' not found");
+        }
 
         db.Secrets.Remove(name);
         ctx.Storage.SaveSecrets(db, key);

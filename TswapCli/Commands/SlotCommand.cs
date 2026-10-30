@@ -117,7 +117,7 @@ public sealed class SlotCommand : ICliCommand
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -158,8 +158,9 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
+        config = KeepRecordStoreFields(ctx, config);
 
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
@@ -200,7 +201,7 @@ public sealed class SlotCommand : ICliCommand
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -234,8 +235,9 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
             PendingSlotHwBlob: hwBlob);
+        config = KeepRecordStoreFields(ctx, config);
 
-        if (fileStore != null && File.Exists(fileStore.ConfigFile))
+        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             fileStore.BackupConfig();
         ctx.Storage.SaveConfig(config);
 
@@ -407,7 +409,17 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteAccept(CommandContext ctx, string[] args)
     {
-        var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>]";
+        var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>] [--vault-dir <shared folder>]";
+        // Brief T6 decision 8: --vault-dir joins a shared vault folder (record store).
+        string? vaultDir = null;
+        var vaultDirIndex = Array.IndexOf(args, "--vault-dir");
+        if (vaultDirIndex >= 0)
+        {
+            if (vaultDirIndex + 1 >= args.Length || args[vaultDirIndex + 1].StartsWith("--"))
+                throw new UsageException(acceptUsage);
+            vaultDir = Path.GetFullPath(args[vaultDirIndex + 1]);
+            args = [.. args[..vaultDirIndex], .. args[(vaultDirIndex + 2)..]];
+        }
         string path;
         string? receiptPath = null;
         switch (args)
@@ -433,6 +445,13 @@ public sealed class SlotCommand : ICliCommand
 
         if (!File.Exists(path))
             throw new TswapException($"Slot approve file not found: {path}");
+
+        // Fix round 1 (A6): --vault-dir joins an existing shared folder only.
+        if (vaultDir != null && ctx.Storage is IFileVaultStore joinStore
+            && !joinStore.Owner.FileExists(Path.Combine(vaultDir, RecordVaultStore.KeyringFileName)))
+            throw new TswapException(
+                $"{vaultDir} has no keyring, so it is not a shared vault folder. Nothing was changed. Point --vault-dir at the " +
+                "folder the enrolled machines share (its 'keyring' file must be there).");
 
         var config = ctx.Storage.LoadConfig();
         if (config.PendingSlotId == null || config.PendingSlotPublicKey == null || config.PendingSlotPrivateKey == null)
@@ -510,7 +529,9 @@ public sealed class SlotCommand : ICliCommand
         {
             // Brief T5 decision 2: unseal/unwrap the pending blob with this machine's TPM or Secure
             // Enclave (HardwareBlobLocator reads PendingSlotHwBlob for a pending config).
-            kekSlot = ctx.Unlocker.UnlockHardware(config, serials => serials[0]);
+            // Fix round 1 (A5): on a record-store machine LoadConfig composes the shared keyring into
+            // Config.Keyring; the pending blob is what this machine's hardware must open here.
+            kekSlot = ctx.Unlocker.UnlockHardware(config with { Keyring = null }, serials => serials[0]);
         }
         Slot machineSlot;
         try
@@ -548,11 +569,35 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotHwBlob = null,
         };
 
-        ctx.Storage.SaveConfig(finalConfig);
-
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore == null || !File.Exists(fileStore.SecretsFile))
-            ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+        if (vaultDir != null)
+        {
+            // The new slot goes straight into the shared folder's keyring (a union with what is
+            // there; another vault's keyring there is refused), and config.json becomes this
+            // machine's record-store config.
+            if (fileStore == null)
+                throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
+            // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
+            // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
+            if (fileStore.Owner.FileExists(fileStore.ConfigFile))
+                c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
+            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
+            {
+                Store = RecordVaultStore.StoreName,
+                VaultDir = vaultDir,
+                OriginId = RecordVaultStore.NewOriginId(),
+            });
+            if (fileStore.Owner.FileExists(fileStore.SecretsFile))
+                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
+        }
+        else
+        {
+            ctx.Storage.SaveConfig(finalConfig);
+            // A record-store machine (joined with init --vault-dir) already shares the vault's
+            // secrets: saving an empty database there would write a tombstone for every one.
+            if (ctx.Storage is not RecordVaultStore && (fileStore == null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
+                ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+        }
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
         // copy (and every copy taken from it afterwards) opens with this machine's device too.
@@ -566,6 +611,19 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
         c.Out.WriteLine("Until then, only this machine's copy of the vault has the new slot.");
         return 0;
+    }
+
+    /// <summary>
+    /// Fix round 1 (A5): on a machine joined to a shared record-store folder (<c>init --vault-dir</c>),
+    /// a slot request keeps the machine's record-store fields (decision 1: pending-slot fields are
+    /// machine fields), so <c>slot accept</c> later writes the new slot into the shared keyring.
+    /// </summary>
+    private static Config KeepRecordStoreFields(CommandContext ctx, Config request)
+    {
+        if (ctx.Storage is not RecordVaultStore store)
+            return request;
+        var current = store.LoadConfig();
+        return request with { Store = current.Store, VaultDir = current.VaultDir, OriginId = current.OriginId, LastHlc = current.LastHlc };
     }
 
     /// <summary>A pending-request field of config.json, or an actionable "Config is corrupted" error.</summary>
@@ -652,7 +710,7 @@ public sealed class SlotCommand : ICliCommand
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
 
         // Back up config.json before writing, the way init backs up a vault it replaces.
-        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
@@ -807,7 +865,7 @@ public sealed class SlotCommand : ICliCommand
             ApprovedSlots = remaining.Count == 0 ? null : remaining,
         };
 
-        if (ctx.Storage is IFileVaultStore fileStore && File.Exists(fileStore.ConfigFile))
+        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
@@ -880,7 +938,11 @@ public sealed class SlotCommand : ICliCommand
         }
     }
 
-    private static bool Matches(ApprovedSlot approved, Slot slot)
+    /// <summary>True when <paramref name="slot"/> is a machine slot this machine approved (T5's merge guard).</summary>
+    internal static bool IsApproved(IEnumerable<ApprovedSlot> approved, Slot slot) =>
+        slot.Kind == SlotKind.Machine && approved.Any(a => Matches(a, slot));
+
+    internal static bool Matches(ApprovedSlot approved, Slot slot)
     {
         try
         {
@@ -898,16 +960,12 @@ public sealed class SlotCommand : ICliCommand
         }
     }
 
-    private static bool SameSlot(Slot a, Slot b) =>
-        a.Kind == b.Kind
-        && a.PublicKey.AsSpan().SequenceEqual(b.PublicKey)
-        && a.Wrapped.AsSpan().SequenceEqual(b.Wrapped)
-        && (a.HwBlob ?? []).AsSpan().SequenceEqual(b.HwBlob ?? []);
+    private static bool SameSlot(Slot a, Slot b) => KeyringUnion.SameSlot(a, b);
 
     private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
     /// <summary>One line naming a slot for a merge: kind, device, fingerprint.</summary>
-    private static string DescribeSlot(Slot slot)
+    internal static string DescribeSlot(Slot slot)
     {
         var device = slot.Kind == SlotKind.Recovery
             ? "recovery slot"

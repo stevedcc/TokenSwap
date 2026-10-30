@@ -23,6 +23,14 @@ automated/silent unlocking by malicious processes.
 ## Commands you SHOULD use (no sudo required):
 - `%CMD% create <name> [length]` — Generate a new random secret (value is never displayed)
 - `%CMD% ingest <name>` — Pipe a secret from an external source: `<source> | %CMD% ingest <name>`
+- `%CMD% rotate <name> [length]` — Replace a BURNED secret with a new random value (never displayed); for a
+  value from an external source use `<source> | %CMD% ingest --rotate <name>`. No sudo for a burned secret;
+  rotating one that is not burned needs sudo (ask the user), because services may still use it.
+  A rotation keeps the value it replaced: use `{{name:previous}}` in `run` (or `# tswap: name:previous` in
+  `apply`) to authenticate the change at the service with the old value, e.g.
+  `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`
+  (that works for a burned db-pw; if it isn't burned, the user runs the rotate with sudo, then you run the `run`).
+  A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
 - `%CMD% names` — List all secret names (no values shown)
 - `%CMD% migrate` — Guide to upgrade YubiKey slots for touch requirement
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
@@ -45,6 +53,9 @@ automated/silent unlocking by malicious processes.
 - `sudo %CMD% slot add --yubikey` — Adds a YubiKey as a new way to open the vault (human use only)
 - `sudo %CMD% slot merge <file>` — Adds other machines' slots, each a new way to open the vault (human use only)
 - `sudo %CMD% recover --yubikey|--tpm|--secure-enclave` — Opens the vault with the recovery key (human use only)
+- `sudo %CMD% migrate --to-records [--vault-dir <dir>]` — Converts the vault to one file per secret (human use only)
+- `sudo %CMD% vault merge <folder>` — Merges another copy of the vault folder into this one (human use only)
+- `sudo %CMD% restore <name>` — Puts back the value the last rotation replaced (human use only; ask the user)
 
 ## Key rules:
 1. NEVER use sudo commands — they expose secret values
@@ -63,7 +74,9 @@ automated/silent unlocking by malicious processes.
    echo. For Kubernetes, use jq (not jsonpath, which has shell quoting issues with dots/underscores):
    `kubectl get secret <secret> -n <ns> -o json | jq -r '.data[""<key>""] // empty' | base64 -d | %CMD% ingest <name>`
 6. Check `%CMD% names` to see available secrets before constructing commands
-7. Burned secrets should be rotated — check with `%CMD% burned`
+7. Burned secrets should be rotated — check with `%CMD% burned`, then replace each one with
+   `%CMD% rotate <name> [length]` (or `<source> | %CMD% ingest --rotate <name>`) and update the system that
+   uses it with `%CMD% run`. Never delete and re-create a secret to rotate it
 8. When you create or ingest a secret, always inform the user of the secret name you used
 9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
 

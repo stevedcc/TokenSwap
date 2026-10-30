@@ -22,7 +22,10 @@ public sealed class GetCommand : ICliCommand
         var db = ctx.LoadSecrets(key);
 
         if (!db.Secrets.ContainsKey(name))
+        {
+            db.ThrowIfUnreadable(name);
             throw new TswapException($"Secret '{name}' not found");
+        }
 
         ctx.Console.Out.WriteLine(db.Secrets[name].Value);
         return 0;

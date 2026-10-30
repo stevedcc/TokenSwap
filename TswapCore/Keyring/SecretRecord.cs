@@ -1,47 +1,91 @@
 namespace TswapCore.Keyring;
 
 /// <summary>
-/// One decoded per-secret record (issue #111/#112). This is the in-memory shape;
+/// One burn of one value version (brief T6 decision 4): the version it was issued against (that
+/// value's <see cref="SecretRecord.Version"/> stamp), its own burn stamp (the burn time is the
+/// stamp's physical part) and the reason. A burn of the version that is still the winner is the
+/// secret's outstanding burn; any other burn is history.
+/// </summary>
+public sealed record BurnEntry(Stamp Version, Stamp Burn, string? Reason)
+{
+    public bool Equals(BurnEntry? other) =>
+        other is not null && Version.Equals(other.Version) && Burn.Equals(other.Burn) && Reason == other.Reason;
+
+    public override int GetHashCode() => HashCode.Combine(Version, Burn, Reason);
+}
+
+/// <summary>
+/// Fix round 1, B (owner decision 2026-10-30): the value a rotation replaced, one level, with that
+/// value's version stamp (so a restore can find its burn). Inside the encrypted payload.
+/// </summary>
+public sealed record PreviousValue(Stamp Version, byte[] Value)
+{
+    public bool Equals(PreviousValue? other) =>
+        other is not null && Version.Equals(other.Version) && Value.AsSpan().SequenceEqual(other.Value);
+
+    public override int GetHashCode() => HashCode.Combine(Version, Value.Length);
+}
+
+/// <summary>
+/// One decoded per-secret record (issues #111-#113, brief T6 decisions 3 and 4): the whole merged
+/// state of one secret, so one file is enough to merge against any other copy of it.
 /// <see cref="SecretRecordCodec"/> owns the exact on-disk byte layout.
 /// </summary>
 /// <param name="RecordId">
-/// Raw (non-hex) 32-byte identifier, shared with the filename hash (issue #114): both are
-/// <c>HMAC(K_names, secretName)</c>. Reusing the same bytes avoids inventing a second
-/// per-secret identifier, and lets the per-record key derivation (issue #113b) key off exactly
-/// the value that already ties two synced copies of the same secret together.
+/// Raw 32-byte <c>HMAC(K_names, name)</c>, shared with the filename (issue #114); also the HKDF
+/// salt prefix of the per-record key (issue #113b).
 /// </param>
-/// <param name="WriteCounter">
-/// The ordering authority (issue #112) — a per-item write counter, <b>not</b> a wall-clock
-/// timestamp. Combined with <paramref name="OriginId"/> as a tiebreak, this is a Lamport clock:
-/// UTC timestamps are unsafe across machines (clock skew, VM suspend/resume, manual clock
-/// changes), but a counter+id pair is not, and it makes v2's HLC work an additive refinement
-/// rather than a format break. Also feeds the per-record key derivation (issue #113b), which is
-/// why it must be readable <i>before</i> decryption — see <see cref="SecretRecordCodec"/>.
+/// <param name="Write">
+/// The stamp of this file write (any action: value, delete, burn, or a merge). In the cleartext
+/// header and authenticated as associated data, because the per-record key is derived from it.
+/// Never consulted to decide which value wins: that is <paramref name="Version"/>.
 /// </param>
-/// <param name="OriginId">
-/// Opaque 16-byte id of the machine/slot that produced this write — the tiebreak half of the
-/// ordering authority, and the "last-writer id" a future generation-counter feature (issue
-/// #118, not implemented here) can reuse rather than inventing its own field.
+/// <param name="Type">
+/// <see cref="RecordType.Tombstone"/> when the winning version is a delete;
+/// <see cref="RecordType.Burned"/> when it is a value with an outstanding burn; otherwise
+/// <see cref="RecordType.Value"/>. Inside the encrypted payload, never visible to the transport.
 /// </param>
-/// <param name="Timestamp">
-/// Wall-clock time for <b>human display only</b> (e.g. <c>names</c> output) — never consulted
-/// for ordering. See <see cref="WriteCounter"/> for why.
+/// <param name="Version">
+/// The stamp of the value or delete that decides existence (decision 4: the last action wins by
+/// (HLC, origin), for values and tombstones alike).
 /// </param>
-/// <param name="Type">Which of the three record kinds this is (issue #112).</param>
-/// <param name="Value">
-/// Type-dependent payload: the secret bytes for <see cref="RecordType.Value"/>, empty for
-/// <see cref="RecordType.Tombstone"/>, the burn reason for <see cref="RecordType.Burned"/>.
+/// <param name="Name">The plaintext secret name (inside the encrypted payload only).</param>
+/// <param name="CreatedMs">When the secret was first created (display only, Unix ms).</param>
+/// <param name="Value">The secret bytes (UTF-8); empty for a tombstone.</param>
+/// <param name="Burns">
+/// The outstanding burn (if any) and the bounded burn history (at most
+/// <see cref="RecordMerge.MaxBurns"/> entries), in canonical order (see <see cref="RecordMerge"/>).
 /// </param>
-/// <param name="GenerationCounter">
-/// Reserved, always 0 in this format version. Placeholder field for the vault generation
-/// counter (issue #118, a later wave) so that feature lands as an additive use of an
-/// already-present field rather than a header layout change.
+/// <param name="Previous">
+/// The value this version replaced (fix round 1, B), or null (a first value, or a tombstone).
+/// It travels with its version in a merge: no merge rule of its own.
 /// </param>
 public sealed record SecretRecord(
     byte[] RecordId,
-    ulong WriteCounter,
-    byte[] OriginId,
-    DateTimeOffset Timestamp,
+    Stamp Write,
     RecordType Type,
+    Stamp Version,
+    string Name,
+    long CreatedMs,
     byte[] Value,
-    uint GenerationCounter = 0);
+    IReadOnlyList<BurnEntry> Burns,
+    PreviousValue? Previous = null)
+{
+    /// <summary>The outstanding burn: a burn of the winning version, when that version is a value.</summary>
+    public BurnEntry? OutstandingBurn =>
+        Type == RecordType.Tombstone ? null : Burns.FirstOrDefault(b => b.Version.Equals(Version));
+
+    /// <summary>
+    /// True when <paramref name="other"/> holds the same secret state (everything but the write
+    /// stamp): what <c>vault merge</c> and the store compare to decide whether to write.
+    /// </summary>
+    public bool SameState(SecretRecord other) =>
+        RecordId.AsSpan().SequenceEqual(other.RecordId)
+        && Type == other.Type
+        && Version.Equals(other.Version)
+        && Name == other.Name
+        && CreatedMs == other.CreatedMs
+        && Value.AsSpan().SequenceEqual(other.Value)
+        && Burns.SequenceEqual(other.Burns)
+        && Equals(Previous, other.Previous);
+}

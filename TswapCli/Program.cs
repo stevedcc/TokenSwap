@@ -17,7 +17,7 @@ try
 {
     var env = CliEnvironment.FromSystem(args);
     var console = new SystemConsole();
-    var storage = new Storage(env.ConfigDir);
+    var storage = VaultStores.Open(env.ConfigDir, warnings: console.Error);
 
     // Both test bypass variables are Debug-only: the Release binary has no code path
     // to stub YubiKey operations or skip sudo checks, regardless of env vars set.

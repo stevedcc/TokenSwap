@@ -52,7 +52,10 @@ public static class HardwareBackendExtensions
     };
 }
 
-public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
+public record Config(List<int> YubiKeySerials,
+    // Fix round 1 (C): null (omitted) for a vault with no XOR share, e.g. after migrate --to-records
+    // converted a plain XOR vault; every other writer keeps "" as before.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RedundancyXor, DateTime Created, bool? RequiresTouch = null, RngMode? RngMode = null, string? UnlockChallenge = null,
     // Null means YubiKey (every vault created before hardware backends existed). Omitted
     // from config.json when null so existing YubiKey vaults serialize byte-for-byte as before.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? Backend = null,
@@ -139,7 +142,22 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
     // hardware-blob hash must all match), then removes its entry; every other new slot needs a fingerprint
     // confirmation or --yes. Not secret (ids and public keys). Never taken from another copy's
     // config.json during a merge. Omitted when null (no approval pending).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<ApprovedSlot>? ApprovedSlots = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] List<ApprovedSlot>? ApprovedSlots = null,
+    // Brief T6 decision 1: which store holds this vault's secrets. Null (omitted) is the classic
+    // single file (secrets.json.enc next to config.json); "records" (RecordVaultStore.StoreName)
+    // is the per-secret record store in VaultDir. Decided by this field only, never by files present.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Store = null,
+    // Brief T6 decision 1: the record store's vault folder (absolute): the shareable part, holding
+    // 'keyring' and 'records/'. This config.json stays per machine and is never synced. A record
+    // store's config.json holds no Keyring of its own: LoadConfig composes it from VaultDir/keyring.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? VaultDir = null,
+    // Brief T6 decision 3: this machine's random 16-byte origin id (base64), created once per
+    // machine config (so per vault): the tiebreak of the record store's (HLC, origin) order.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OriginId = null,
+    // Brief T6 decision 3: the highest HLC this machine has written or seen ("<ms>.<logical>", see
+    // Hlc.ToString), saved with every record write, so a clock set back between two commands still
+    // orders the second write after the first.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LastHlc = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's
@@ -150,8 +168,129 @@ public record Config(List<int> YubiKeySerials, string RedundancyXor, DateTime Cr
 /// </summary>
 public record ApprovedSlot(string SlotId, string PublicKey, DateTime Approved, string? HwBlobSha256 = null);
 
-public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null);
-public record SecretsDb(Dictionary<string, Secret> Secrets);
+public record Secret(string Value, DateTime Created, DateTime Modified, DateTime? BurnedAt = null, string? BurnReason = null)
+{
+    /// <summary>
+    /// Brief T6 decision 4 (record store only): past burns of this secret, i.e. burns of a value
+    /// version a newer value superseded (a rotation). Never serialized: the classic file and the
+    /// export format carry the current value and burn state only (decision 9).
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<PastBurn>? History { get; init; }
+
+    /// <summary>
+    /// Fix round 1 (A7): set by <c>rotate</c> / <c>ingest --rotate</c>, so the record store writes a
+    /// new version even when the new value equals the old one. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool Rotated { get; init; }
+
+    /// <summary>
+    /// Fix round 1, B (record store only): the value the last rotation replaced, or null. Used by
+    /// <c>{{name:previous}}</c>; never displayed, never serialized (an export carries no history).
+    /// </summary>
+    [JsonIgnore]
+    public string? PreviousValue { get; init; }
+
+    /// <summary>Fix round 3: true when the previous value's version was burned. Never serialized.</summary>
+    [JsonIgnore]
+    public bool PreviousBurned { get; init; }
+
+    /// <summary>
+    /// Fix round 1, B: set by <c>restore</c>: this write puts the previous value back, so the record
+    /// store makes its burn (if it had one) outstanding again. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool Restored { get; init; }
+}
+
+/// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>
+public sealed record PastBurn(DateTime BurnedAt, string? Reason);
+
+public record SecretsDb(Dictionary<string, Secret> Secrets)
+{
+    /// <summary>
+    /// Brief T6 decision 4 (record store only): for a name whose record file can't be read
+    /// (truncated mid-sync, fails authentication), that file's hashed name; else null. Such a
+    /// secret is present-but-unknown: never treated as absent. Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public Func<string, string?>? UnreadableRecord { get; init; }
+
+    /// <summary>
+    /// Fix round 1 (A3, record store only): the hashed file names of records that can't be read.
+    /// Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? UnreadableFiles { get; init; }
+
+    /// <summary>Fix round 1, B: true for a store that keeps previous values (the record store).</summary>
+    [JsonIgnore]
+    public bool KeepsPreviousValues { get; init; }
+
+    /// <summary>The suffix of a token or marker that names a secret's previous value.</summary>
+    public const string PreviousSuffix = ":previous";
+
+    /// <summary>
+    /// Fix round 3: true when <paramref name="token"/> (a name or <c>name:previous</c>) refers to a
+    /// burned value: the current value's outstanding burn, or a burn of the previous value's version.
+    /// </summary>
+    public bool IsBurnedToken(string token)
+    {
+        var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);
+        var name = previous ? token[..^PreviousSuffix.Length] : token;
+        return Secrets.TryGetValue(name, out var secret) && (previous ? secret.PreviousBurned : secret.BurnedAt.HasValue);
+    }
+
+    /// <summary>
+    /// Fix round 1, B: the value a <c>run</c> token or an <c>apply</c> marker names: <c>name</c>,
+    /// or <c>name:previous</c> for the value the last rotation replaced. Secret names can't contain
+    /// ':' (<see cref="Validation.ValidateName"/>), so the suffix never collides with a name. Throws
+    /// for a missing (or unreadable) secret, and for <c>:previous</c> without a previous value.
+    /// </summary>
+    public string ResolveToken(string token, string? where = null)
+    {
+        var previous = token.EndsWith(PreviousSuffix, StringComparison.Ordinal);
+        var name = previous ? token[..^PreviousSuffix.Length] : token;
+        if (!Secrets.TryGetValue(name, out var secret))
+        {
+            ThrowIfUnreadable(name);
+            throw new TswapException($"Secret '{name}' not found{where}");
+        }
+        if (!previous)
+            return secret.Value;
+        if (!KeepsPreviousValues)
+            throw new TswapException(
+                $"'{token}': this vault uses the classic single-file store, which keeps no previous values. Convert it with " +
+                "'sudo tswap migrate --to-records'; rotations after that keep the value they replace.");
+        return secret.PreviousValue ?? throw new TswapException(
+            $"'{token}': secret '{name}' has no previous value (it has not been rotated since it was created).");
+    }
+
+    /// <summary>
+    /// Throws when any record can't be read (fix round 1, A3): for commands that cover the whole
+    /// vault (<c>export</c>, <c>list</c>), which must never silently leave a secret out.
+    /// </summary>
+    public void ThrowIfAnyUnreadable(string command)
+    {
+        if (UnreadableFiles is { Count: > 0 } files)
+            throw new TswapException(
+                $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
+                "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.");
+    }
+
+    /// <summary>
+    /// Throws when <paramref name="name"/> is in a record that can't be read, naming the file (fail
+    /// closed; decision 4). Commands call this where they would otherwise report "not found".
+    /// </summary>
+    public void ThrowIfUnreadable(string name)
+    {
+        if (UnreadableRecord?.Invoke(name) is { } file)
+            throw new TswapException(
+                $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
+                "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
+    }
+}
 
 /// <summary>
 /// KDF algorithm identifiers for an export file's passphrase-derived key (#30). Serialized as

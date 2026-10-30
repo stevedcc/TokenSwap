@@ -49,9 +49,27 @@ public sealed class CreateCommand : ICliCommand
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
 
+        db.ThrowIfUnreadable(name);
         if (db.Secrets.ContainsKey(name))
-            throw new TswapException($"Secret '{name}' already exists. Use 'delete' first to rotate.");
+            throw new TswapException(
+                $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
 
+        var value = GenerateValue(ctx, config, length);
+        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        ctx.Storage.SaveSecrets(db, key);
+
+        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
+        ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+        return 0;
+    }
+
+    /// <summary>
+    /// A new random value of <paramref name="length"/> characters from <see cref="Charset"/>, from
+    /// the entropy source <see cref="Config.RngMode"/> names (shared by <c>create</c> and
+    /// <c>rotate</c>).
+    /// </summary>
+    internal static string GenerateValue(CommandContext ctx, Config config, int length)
+    {
         char[] password;
         if (config.RngMode == RngMode.YubiKey && ctx.TestKey == null)
         {
@@ -72,13 +90,7 @@ public sealed class CreateCommand : ICliCommand
             password = RandomNumberGenerator.GetItems<char>(Charset, length);
         }
 
-        var value = new string(password);
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
-        ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
-        return 0;
+        return new string(password);
     }
 
     /// <summary>

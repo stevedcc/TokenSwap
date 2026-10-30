@@ -26,7 +26,7 @@ public sealed class ToCommentProcessor : SecretProcessor
         // like: key: "actual-secret"  # tswap: secret-name
         // Without this, the marker would survive as a YAML comment and tocomment would
         // append a second one, producing: key: ""  # tswap: secret-name  # tswap: secret-name
-        var existingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+)?";
+        var existingMarker = @"(?:\s*#\s*tswap\s*:\s*[a-zA-Z0-9_-]+(?::previous)?)?";
         return $"(?:(?<![-\\w])\"{escaped}\"{existingMarker}(?![-\\w])|(?<![-\\w])'{escaped}'{existingMarker}(?![-\\w])|(?<![-\\w]){escaped}{existingMarker}(?![-\\w]))";
     }
 

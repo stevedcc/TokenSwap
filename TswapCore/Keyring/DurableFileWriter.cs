@@ -44,6 +44,13 @@ public static class DurableFileWriter
     /// Writes <paramref name="bytes"/> to <paramref name="targetFileName"/> inside
     /// <paramref name="directory"/>, atomically: temp file in the same directory, flushed to
     /// durable storage, then renamed over any existing file of that name.
+    /// <para>
+    /// Brief T6 decision 10: built on <see cref="DirectoryOwnerMatcher.WriteDurable"/>, which keeps
+    /// every guarantee described above (same-folder temp, <c>WriteThrough</c> plus
+    /// <c>Flush(flushToDisk: true)</c>, a plain rename, the folder fsync) and adds T5's rules: the
+    /// temp file is created 0600 with <c>O_EXCL</c>, a symlink at the target is replaced rather
+    /// than written through, and under sudo the write is done as the folder's owner.
+    /// </para>
     /// </summary>
     /// <param name="directory">
     /// The directory the record lives in. Must already exist — this method does not create it
@@ -54,7 +61,8 @@ public static class DurableFileWriter
     /// <see cref="FilenameHasher.ToFilename"/>.
     /// </param>
     /// <param name="bytes">The exact bytes to write.</param>
-    public static void WriteAtomic(DirectoryInfo directory, string targetFileName, byte[] bytes)
+    /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>).</param>
+    public static void WriteAtomic(DirectoryInfo directory, string targetFileName, byte[] bytes, DirectoryOwnerMatcher? owner = null)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentException.ThrowIfNullOrEmpty(targetFileName);
@@ -63,54 +71,10 @@ public static class DurableFileWriter
         if (!directory.Exists)
             throw new DirectoryNotFoundException($"Directory does not exist: {directory.FullName}");
 
-        // Path.GetRandomFileName() produces the same short "8chars.3chars" shape
-        // RecordDirectoryScanner recognises as tswap's own in-flight temp file (see that
-        // class's TswapTempFile pattern) -- keep the two in sync if this ever changes.
-        var tmpPath = Path.Combine(directory.FullName, Path.GetRandomFileName());
-        var targetPath = Path.Combine(directory.FullName, targetFileName);
-
-        try
-        {
-            using (var fs = new FileStream(tmpPath, new FileStreamOptions
-                   {
-                       Mode = FileMode.CreateNew,
-                       Access = FileAccess.Write,
-                       Options = FileOptions.WriteThrough,
-                   }))
-            {
-                fs.Write(bytes);
-                fs.Flush(flushToDisk: true); // FlushFileBuffers (Windows) / fsync (Unix)
-            }
-
-            File.Move(tmpPath, targetPath, overwrite: true);
-        }
-        catch
-        {
-            TryDeleteBestEffort(tmpPath);
-            throw;
-        }
-
-        // Flushing the file does not flush the directory entry the rename above created.
-        // Best-effort only -- see UnixDirectoryFsync's doc comment for why this can't be more
-        // than that, and why there is no Windows equivalent.
-        UnixDirectoryFsync.TryFsync(directory.FullName);
+        (owner ?? DirectoryOwnerMatcher.Default).WriteDurable(Path.Combine(directory.FullName, targetFileName), bytes);
     }
 
     /// <summary>Convenience overload taking a directory path instead of a <see cref="DirectoryInfo"/>.</summary>
-    public static void WriteAtomic(string directoryPath, string targetFileName, byte[] bytes)
-        => WriteAtomic(new DirectoryInfo(directoryPath), targetFileName, bytes);
-
-    private static void TryDeleteBestEffort(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-                File.Delete(path);
-        }
-        catch
-        {
-            // Best effort cleanup of a stray temp file after a failed write; the original
-            // exception from the write/move above is what the caller needs to see, not this.
-        }
-    }
+    public static void WriteAtomic(string directoryPath, string targetFileName, byte[] bytes, DirectoryOwnerMatcher? owner = null)
+        => WriteAtomic(new DirectoryInfo(directoryPath), targetFileName, bytes, owner);
 }

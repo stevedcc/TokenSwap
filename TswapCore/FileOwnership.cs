@@ -100,6 +100,120 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         }
     }
 
+    /// <summary>
+    /// Brief T6 decision 10 / issue #137 work item 1: <see cref="WriteAtomic"/> for files that may
+    /// live in a synced or network folder (records, the keyring). The temp file is opened with
+    /// <see cref="FileOptions.WriteThrough"/> and flushed to disk, then renamed with a plain
+    /// <see cref="File.Move(string, string, bool)"/> (never <see cref="File.Replace(string, string, string?)"/>,
+    /// which some SMB servers implement badly), then the folder entry is fsynced (Unix, best
+    /// effort). A symlink at the path is replaced, never written through. New files are 0600; an
+    /// existing regular file's mode is not carried over (the vault folder's files are 0600).
+    /// </summary>
+    public void WriteDurable(string path, ReadOnlySpan<byte> bytes)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        var tmp = $"{fullPath}.{Convert.ToHexString(RandomNumberGenerator.GetBytes(6))}.tmp";
+        try
+        {
+            using (var stream = CreateNew(tmp, FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, fullPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort cleanup */ }
+            throw;
+        }
+        Keyring.UnixDirectoryFsync.TryFsync(Path.GetDirectoryName(fullPath)!);
+        SweepOrphanTempFiles(Path.GetDirectoryName(fullPath)!);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex OrphanTempFile =
+        new(@"\.[0-9A-F]{12}\.tmp$", System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Fix round 1 (C, GLM M-7): temp files of this writer (<c>&lt;name&gt;.&lt;12 hex&gt;.tmp</c>)
+    /// left by a crash, untouched for over an hour, are removed on the next durable write of that
+    /// folder (as its owner). Younger ones may belong to a write in flight. Best effort.
+    /// </summary>
+    private void SweepOrphanTempFiles(string folder)
+    {
+        try
+        {
+            using var _ = AsOwnerOf(Path.Combine(folder, "x"));
+            var cutoff = DateTime.UtcNow.AddHours(-1);
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                var info = new FileInfo(file);
+                if (OrphanTempFile.IsMatch(info.Name) && info.LinkTarget == null && info.LastWriteTimeUtc < cutoff)
+                    info.Delete();
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            // Best effort: an orphan left in place is harmless (never read as a record).
+        }
+    }
+
+    /// <summary>Deletes <paramref name="path"/> (as its folder's owner); a missing file is not an error.</summary>
+    public void Delete(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        File.Delete(fullPath);
+    }
+
+    /// <summary>
+    /// Renames <paramref name="source"/> to <paramref name="destination"/> in the same folder (as
+    /// the folder's owner), never overwriting; works for files and folders.
+    /// </summary>
+    public void Move(string source, string destination)
+    {
+        var fullSource = Path.GetFullPath(source);
+        var fullDestination = Path.GetFullPath(destination);
+        using var _ = AsOwnerOf(fullDestination);
+        if (Directory.Exists(fullSource) && new DirectoryInfo(fullSource).LinkTarget == null)
+            Directory.Move(fullSource, fullDestination);
+        else
+            File.Move(fullSource, fullDestination, overwrite: false);
+    }
+
+    /// <summary>Deletes the folder <paramref name="path"/> and everything in it (as its parent's owner); never follows links.</summary>
+    public void DeleteDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        if (new DirectoryInfo(fullPath).LinkTarget != null)
+            File.Delete(fullPath); // a link to a folder: remove the link only
+        else if (Directory.Exists(fullPath))
+            Directory.Delete(fullPath, recursive: true);
+    }
+
+    /// <summary>
+    /// Deletes the folder <paramref name="path"/> only if it is empty (non-recursive; an
+    /// <see cref="IOException"/> otherwise), as its parent's owner.
+    /// </summary>
+    public void DeleteEmptyDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        Directory.Delete(fullPath, recursive: false);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> as the owner of <paramref name="path"/>'s nearest existing
+    /// folder (see the type's comment): for folder listings and mode changes in a vault folder.
+    /// </summary>
+    public T AsOwner<T>(string path, Func<T> action)
+    {
+        using var _ = AsOwnerOf(Path.GetFullPath(path));
+        return action();
+    }
+
     /// <summary>Creates <paramref name="path"/>, which must not exist (<see cref="IOException"/> if it does).</summary>
     public void WriteNew(string path, ReadOnlySpan<byte> bytes)
     {
@@ -156,7 +270,10 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         return File.Exists(fullPath);
     }
 
-    /// <summary>Creates <paramref name="path"/> and missing parents, mode 0700 on Unix.</summary>
+    /// <summary>
+    /// Creates <paramref name="path"/> and missing parents, each mode 0700 on Unix whatever the
+    /// umask (brief T6: .NET applies the mode to the last folder only, so each level is made here).
+    /// </summary>
     public void CreateDirectory(string path)
     {
         var fullPath = Path.GetFullPath(path);
@@ -164,9 +281,46 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             return;
         using var _ = AsOwnerOf(fullPath);
         if (OperatingSystem.IsWindows())
+        {
             Directory.CreateDirectory(fullPath);
+            return;
+        }
+        var missing = new Stack<string>();
+        for (var dir = fullPath; dir != null && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir))
+            missing.Push(dir);
+        foreach (var dir in missing)
+        {
+            Directory.CreateDirectory(dir, FolderOwnerOnly);
+            File.SetUnixFileMode(dir, FolderOwnerOnly); // mkdir applies the umask
+        }
+    }
+
+    /// <summary>
+    /// Brief T6 decision 10 (#194): narrows <paramref name="path"/> to 0700 (a folder) or 0600 (a
+    /// regular file) when its mode is wider, as the folder's owner. A symlink is never changed (nor
+    /// followed). Returns true when it changed something. Windows: no change (profile ACLs).
+    /// </summary>
+    public bool Tighten(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return false;
+        var fullPath = Path.GetFullPath(path);
+        using var _ = AsOwnerOf(fullPath);
+        var info = new FileInfo(fullPath);
+        if (info.LinkTarget != null)
+            return false;
+        UnixFileMode limit;
+        if (Directory.Exists(fullPath))
+            limit = FolderOwnerOnly;
+        else if (info.Exists)
+            limit = OwnerOnly;
         else
-            Directory.CreateDirectory(fullPath, FolderOwnerOnly);
+            return false;
+        var mode = File.GetUnixFileMode(fullPath);
+        if ((mode & ~limit) == 0)
+            return false;
+        File.SetUnixFileMode(fullPath, mode & limit);
+        return true;
     }
 
     /// <summary>
@@ -201,9 +355,9 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     /// <summary>Single-quotes <paramref name="value"/> for a POSIX shell.</summary>
     private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
-    private static FileStream CreateNew(string path)
+    private static FileStream CreateNew(string path, FileOptions fileOptions = FileOptions.None)
     {
-        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = fileOptions };
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = OwnerOnly;
         return new FileStream(path, options);
@@ -345,8 +499,16 @@ public static class FileBackup
         return Next(file, utcNow, backup => owner.WriteNew(backup, bytes));
     }
 
-    /// <summary>Moves <paramref name="file"/> aside under a backup name (keeps its owner and mode).</summary>
-    public static string Move(string file, DateTime utcNow) => Next(file, utcNow, backup => File.Move(file, backup, overwrite: false));
+    /// <summary>
+    /// Moves <paramref name="file"/> aside under a backup name (keeps its owner and mode), renamed
+    /// by <paramref name="owner"/> (null: <see cref="DirectoryOwnerMatcher.Default"/>): as the
+    /// folder's owner under sudo.
+    /// </summary>
+    public static string Move(string file, DateTime utcNow, DirectoryOwnerMatcher? owner = null)
+    {
+        owner ??= DirectoryOwnerMatcher.Default;
+        return Next(file, utcNow, backup => owner.Move(file, backup));
+    }
 
     private static string Next(string file, DateTime utcNow, Action<string> create)
     {

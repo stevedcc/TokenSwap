@@ -464,6 +464,37 @@ is precisely what "Extension implies decryption" above says not to do, and it me
 key can never be hardware-wrapped, since it would need to stay portable. Per-machine slots keep
 the recovery key in a drawer where it belongs.
 
+### Shared vault folders: the record store (brief T6)
+
+Since brief T6 a keyring vault can keep its secrets in a **vault folder** shared by a sync tool,
+a network share or plain copies (`migrate --to-records`; full decisions in
+`REFACTORING_PLAN.md` §Phase 6, "Brief T6: the record store as built"). What it changes for the
+key model:
+
+- **The keyring moves into the vault folder** (`keyring`, the `KeyringCodec` bytes); each
+  machine's `config.json` keeps only its own fields (its slot id, backend fields,
+  `ApprovedSlots`, origin id, last HLC) and is never shared. `LoadConfig` composes
+  `Config.Keyring` from the folder, so unlock is unchanged.
+- **Keyring saves are unions** (by slot id), sync conflict copies of `keyring` are folded in, and
+  the same slot id with different bytes is refused, as in `slot merge`. With a shared folder a
+  new slot reaches every machine with the next sync: `slot accept --vault-dir` writes it straight
+  into the shared keyring, and `init --vault-dir` points another machine at the folder (it opens
+  with a YubiKey slot or the recovery key). `vault merge` brings in slots from a copied folder
+  under T5's approval guard.
+- **What a shared folder gives up** (fix round 1). Folding a sync conflict copy of `keyring` adds
+  its slots *without* T5's approval guard: anyone who can write the shared folder can add a slot
+  this way. That is inherent to sharing a folder; such a slot is still useless without `K_v`,
+  which only an enrolled device (or the recovery key) can unwrap and wrap a slot for. A folder
+  writer can also roll the keyring file back to an older copy (dropping slots added since); tswap
+  does not detect that yet.
+- **A plain XOR vault converts to a keyring vault** in `migrate --to-records`: `K_v` is its
+  derived master key (nothing re-encrypted), a new vault id is minted, every enrolled YubiKey
+  gets its own one-key slot, and a recovery slot is added. Afterwards it takes T5's remote
+  enrolment (for example the router's TPM).
+- **Metadata:** records carry the writer's origin id and an HLC in the clear (authenticated);
+  per-secret edit timing is visible to whoever can watch the folder (see the plan's plain
+  statement of that leak).
+
 ## The landmine: threshold downgrade
 
 If `k` (or `formatVersion`) lived in a plaintext field, a thief with the synced files **and one
@@ -536,10 +567,10 @@ slot wrap" above — needs **no interface change**:
 
 ## Open questions
 
-- **`K_names` provenance.** Deriving the filename-HMAC key from `K_v` means a rotation (v1)
-  renames every record; deriving it from a separate, non-rotated fleet constant avoids mass
-  renames but must never be reconstructible without fleet membership. Does not gate v0 — there's
-  no rotation yet — but should be settled before v1 implements rotation.
+- **`K_names` provenance.** Settled for v0 by brief T6: `K_names = HKDF(K_v, info =
+  "tswap-record-names-v1")`. A v1 rotation of `K_v` would therefore rename every record; #126
+  decides, before rotation exists, whether to move to a separate non-rotated fleet constant
+  (which must never be reconstructible without fleet membership).
 - **Backends that can't do presence uniformly.** TPM PIN vs. YubiKey touch vs. SE biometric.
   Surface each slot's presence guarantee honestly in a future `slots`/`fleet machines` listing —
   it must not misreport a no-touch YubiKey as simply "unprotected" (see "Why not k ≥ 2" above:

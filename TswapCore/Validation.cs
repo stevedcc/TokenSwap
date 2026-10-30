@@ -4,7 +4,21 @@ namespace TswapCore;
 
 public static class Validation
 {
-    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+)\}\}");
+    // Fix round 1, B: '{{name:previous}}' names the value the last rotation replaced. ':' is not a
+    // name character (ValidNameRegex), so the suffix can't collide with a secret name.
+    public static readonly Regex TokenRegex = new(@"\{\{([a-zA-Z0-9_-]+(?::previous)?)\}\}");
+
+    // Fix round 3: any other '{{name:suffix}}' is a typo, never passed through as literal text.
+    private static readonly Regex SuffixedTokenRegex = new(@"\{\{([a-zA-Z0-9_-]+:[^{}]*)\}\}");
+
+    /// <summary>Throws for a <c>{{name:suffix}}</c> token whose suffix is not <c>previous</c>, naming it.</summary>
+    public static void ThrowIfUnknownTokenSuffix(string command)
+    {
+        foreach (Match m in SuffixedTokenRegex.Matches(command))
+            if (!m.Groups[1].Value.EndsWith(":previous", StringComparison.Ordinal) || m.Groups[1].Value.Count(ch => ch == ':') != 1)
+                throw new TswapException(
+                    $"Unknown token '{{{{{m.Groups[1].Value}}}}}': the only suffix is ':previous' (the value the last rotation replaced).");
+    }
 
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
     private const int MaxNameLength = 64;

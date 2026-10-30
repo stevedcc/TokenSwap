@@ -17,6 +17,7 @@ public static class CommandRegistry
         new MigrateCommand(),
         new CreateCommand(),
         new IngestCommand(),
+        new RotateCommand(),
         new NamesCommand(),
         new SlotsCommand(),
         new RunCommand(),
@@ -33,8 +34,10 @@ public static class CommandRegistry
         new GetCommand(),
         new ListCommand(),
         new DeleteCommand(),
+        new RestoreCommand(),
         new ExportCommand(),
         new ImportCommand(),
+        new VaultCommand(),
         new RecoverCommand(),
         new CompletionCommand(),
     ];

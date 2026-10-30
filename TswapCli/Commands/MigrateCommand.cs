@@ -5,12 +5,16 @@ namespace TswapCli.Commands;
 public sealed class MigrateCommand : ICliCommand
 {
     public string Name => "migrate";
-    public string HelpUsage => "migrate";
-    public string Description => "Guide to upgrade slots for touch requirement";
+    public string HelpUsage => "migrate [--to-records [--vault-dir <dir>]]";
+    public string Description => "Guide to upgrade slots for touch requirement; --to-records (sudo) converts the vault to one file per secret, shareable by sync tools";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
     {
+        // Brief T6 decision 8: the record store conversion.
+        if (args.Contains("--to-records") || args.Contains("--vault-dir"))
+            return RecordMigration.Run(ctx, args);
+
         var c = ctx.Console;
 
         c.Out.WriteLine("\n╔════════════════════════════════════════════════════════════════╗");

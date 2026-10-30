@@ -1,152 +1,329 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 
 namespace TswapCore.Keyring;
 
 /// <summary>
-/// Encodes/decodes one <see cref="SecretRecord"/> to/from the Phase 6 per-secret record wire
-/// format (issues #111-#113). Fixed-binary, explicitly ordered — see
-/// <see cref="KeyringFormat"/> for why this is not JSON.
+/// Encodes/decodes one <see cref="SecretRecord"/> to/from the per-secret record wire format
+/// (issues #111-#113, brief T6 decision 3). Fixed-binary, explicitly ordered — see
+/// <see cref="KeyringFormat"/> for why this is not JSON. Record format version 1 never shipped
+/// before brief T6, which replaced the plain write counter with a hybrid logical clock.
 ///
 /// <para><b>On-disk layout</b> (all multi-byte integers little-endian):</para>
 /// <code>
-/// Cleartext envelope:
+/// Cleartext header (all of it is the AES-GCM associated data):
 ///   magic            4 bytes   "TSR1" (KeyringFormat.RecordMagic)
 ///   formatVersion    1 byte    KeyringFormat.RecordFormatVersion
 ///   recordId         32 bytes  HMAC(K_names, secretName) — see FilenameHasher
-///   writeCounter     8 bytes   ordering authority; MUST be cleartext, see below
-///   payloadLength    4 bytes   length in bytes of the section that follows
-///   payload          payloadLength bytes  AES-256-GCM: nonce(12) | tag(16) | ciphertext
+///   writeHlcMs       8 bytes   this write's HLC, physical part (signed)
+///   writeHlcLogical  4 bytes   this write's HLC, logical counter
+///   writeOrigin      16 bytes  origin id of the machine that wrote the file
+///   payloadLength    4 bytes   length of the section that follows
+///   payload          AES-256-GCM under HKDF(K_v, recordId || write stamp): nonce(12) | tag(16) | ciphertext
 ///
-/// Encrypted payload (ciphertext, once decrypted), padded to the next multiple of
-/// KeyringFormat.PaddingBucketSize before encryption (issue #113a):
+/// Encrypted payload, padded with zero bytes to the next multiple of
+/// KeyringFormat.PaddingBucketSize (256) before encryption (issue #113a):
 ///   recordType         1 byte    RecordType
-///   originId           16 bytes  ordering tiebreak / last-writer id
-///   timestampUnixMs    8 bytes   display-only, see SecretRecord.Timestamp
-///   generationCounter  4 bytes   reserved (issue #118), always 0 today
-///   valueLength        4 bytes   real length of the value that follows (pre-padding)
-///   value              valueLength bytes
+///   versionHlcMs       8 bytes   } the stamp of the value or delete that decides
+///   versionHlcLogical  4 bytes   } existence (decision 4)
+///   versionOrigin      16 bytes  }
+///   createdMs          8 bytes   display only
+///   nameLength         2 bytes   then the UTF-8 name
+///   valueLength        4 bytes   then the value bytes (empty for a tombstone)
+///   hasPrevious        1 byte    0, or 1 then (fix round 1, B: the value a rotation replaced):
+///     versionHlcMs 8, versionHlcLogical 4, versionOrigin 16, valueLength 4, value bytes
+///   burnCount          1 byte    at most RecordMerge.MaxBurns, then per burn:
+///     versionHlcMs 8, versionHlcLogical 4, versionOrigin 16   the version it marks
+///     burnHlcMs 8, burnHlcLogical 4, burnOrigin 16            the burn's own stamp
+///     reasonLength 2 (0xFFFF = no reason), then the UTF-8 reason
 ///   [zero padding to the bucket boundary]
 /// </code>
 ///
-/// <para><b>Why <c>recordType</c> lives inside the encrypted payload, not the cleartext
-/// envelope:</b> per <c>REFACTORING_PLAN.md</c> §Phase 6, "record type is part of the payload" —
-/// keeping it encrypted means a transport observer sees the same shape (magic, version,
-/// recordId, writeCounter, a ciphertext of some bucketed length) for a value write, a delete,
-/// and a burn. Only the padding bucket is visible, per issue #113a; the record kind is not.</para>
+/// <para><b>Why the write stamp is cleartext:</b> the per-record key is derived from it (decision
+/// 3), so a reader needs it before decrypting. It is authenticated as associated data together with
+/// the rest of the header, so it can't be altered without the record failing to open. The origin
+/// id is per machine config, i.e. per vault, so it does not link a machine across vaults; per-record
+/// edit timing is visible to the transport (the documented metadata leak of deterministic
+/// filenames).</para>
 ///
-/// <para><b>Why <c>writeCounter</c> must be cleartext despite that:</b> the per-record key is
-/// <c>HKDF(K_v, salt = recordId || writeCounter)</c> (issue #113b), so a reader needs
-/// <c>writeCounter</c> to derive the key before it can decrypt anything — it cannot itself be
-/// inside the thing it helps decrypt. This is a deliberate, spec-driven exception, not an
-/// oversight: it also means an on-path attacker cannot tamper with the cleartext
-/// <c>writeCounter</c> without the derived key changing and authentication failing, which is a
-/// free integrity property of this construction, not something bolted on separately (formal AAD
-/// binding is out of scope here — see issue #117, which is about the keyring's slot AEAD, not
-/// per-record envelopes).</para>
+/// <para><b>Why the record type is inside the payload:</b> a transport observer sees the same
+/// shape for a value write, a delete and a burn; only the padding bucket is visible.</para>
+///
+/// <para>Decoding is strict: the record id must be <c>HMAC(K_names, name)</c> of the name inside
+/// (so a record can't be moved under another secret's file name), lengths must fit, burns must be
+/// at most <see cref="RecordMerge.MaxBurns"/>, and the padding must be all zero.</para>
 /// </summary>
 public static class SecretRecordCodec
 {
-    // magic(4) + formatVersion(1) + recordId(32) + writeCounter(8) + payloadLength(4)
-    private const int EnvelopeHeaderSize = 4 + 1 + KeyringFormat.RecordIdSize + 8 + 4;
+    /// <summary>magic(4) + formatVersion(1) + recordId(32) + hlc(8+4) + origin(16) + payloadLength(4).</summary>
+    public const int HeaderSize = 4 + 1 + KeyringFormat.RecordIdSize + 12 + KeyringFormat.OriginIdSize + 4;
 
-    // recordType(1) + originId(16) + timestamp(8) + generationCounter(4) + valueLength(4)
-    private const int InnerHeaderSize = 1 + KeyringFormat.OriginIdSize + 8 + 4 + 4;
+    private const int StampSize = 12 + KeyringFormat.OriginIdSize;
 
-    /// <summary>
-    /// Encrypts and encodes <paramref name="record"/> under the per-record key derived from
-    /// <paramref name="vaultKey"/> (<c>K_v</c>) via <see cref="RecordKeyDerivation"/>.
-    /// </summary>
+    // recordType(1) + version stamp + createdMs(8) + nameLength(2)
+    private const int InnerFixedSize = 1 + StampSize + 8 + 2;
+
+    private const ushort NoReason = 0xFFFF;
+
+    /// <summary>Encrypts and encodes <paramref name="record"/> under a per-record key from <paramref name="vaultKey"/> (<c>K_v</c>).</summary>
     public static byte[] Encode(SecretRecord record, byte[] vaultKey)
     {
         if (record.RecordId.Length != KeyringFormat.RecordIdSize)
             throw new ArgumentException($"RecordId must be {KeyringFormat.RecordIdSize} bytes", nameof(record));
-        if (record.OriginId.Length != KeyringFormat.OriginIdSize)
-            throw new ArgumentException($"OriginId must be {KeyringFormat.OriginIdSize} bytes", nameof(record));
+        if (record.Burns.Count > RecordMerge.MaxBurns)
+            throw new ArgumentException($"A record holds at most {RecordMerge.MaxBurns} burns", nameof(record));
 
-        var rawInner = InnerHeaderSize + record.Value.Length;
-        var bucketed = BucketSize(rawInner);
-        var inner = new byte[bucketed]; // zero-initialized: the padding tail is all zero bytes
+        var name = Encoding.UTF8.GetBytes(record.Name);
+        if (name.Length > ushort.MaxValue)
+            throw new ArgumentException("Name too long for a record", nameof(record));
+        var reasons = record.Burns.Select(b => b.Reason == null ? null : Encoding.UTF8.GetBytes(b.Reason)).ToList();
+        if (reasons.Any(r => r != null && r.Length >= NoReason))
+            throw new TswapException("A burn reason is too long to store (64 KiB at most).");
 
-        inner[0] = (byte)record.Type;
-        record.OriginId.CopyTo(inner, 1);
-        BinaryPrimitives.WriteInt64LittleEndian(inner.AsSpan(17, 8), record.Timestamp.ToUnixTimeMilliseconds());
-        BinaryPrimitives.WriteUInt32LittleEndian(inner.AsSpan(25, 4), record.GenerationCounter);
-        BinaryPrimitives.WriteUInt32LittleEndian(inner.AsSpan(29, 4), (uint)record.Value.Length);
-        record.Value.CopyTo(inner, InnerHeaderSize);
+        if (record.Previous != null && record.Type == RecordType.Tombstone)
+            throw new ArgumentException("A tombstone carries no previous value", nameof(record));
+        var raw = InnerFixedSize + name.Length + 4 + record.Value.Length
+            + 1 + (record.Previous == null ? 0 : StampSize + 4 + record.Previous.Value.Length) + 1
+            + record.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
+        var inner = new byte[BucketSize(raw)]; // zero-initialized: the padding tail is all zero bytes
+        var span = inner.AsSpan();
+        var offset = 0;
+        span[offset++] = (byte)record.Type;
+        offset = WriteStamp(span, offset, record.Version);
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(offset, 8), record.CreatedMs);
+        offset += 8;
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), (ushort)name.Length);
+        offset += 2;
+        name.CopyTo(span.Slice(offset));
+        offset += name.Length;
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset, 4), (uint)record.Value.Length);
+        offset += 4;
+        record.Value.CopyTo(span.Slice(offset));
+        offset += record.Value.Length;
+        if (record.Previous is { } previous)
+        {
+            span[offset++] = 1;
+            offset = WriteStamp(span, offset, previous.Version);
+            BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset, 4), (uint)previous.Value.Length);
+            offset += 4;
+            previous.Value.CopyTo(span.Slice(offset));
+            offset += previous.Value.Length;
+        }
+        else
+        {
+            span[offset++] = 0;
+        }
+        span[offset++] = (byte)record.Burns.Count;
+        for (var i = 0; i < record.Burns.Count; i++)
+        {
+            offset = WriteStamp(span, offset, record.Burns[i].Version);
+            offset = WriteStamp(span, offset, record.Burns[i].Burn);
+            var reason = reasons[i];
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), reason == null ? NoReason : (ushort)reason.Length);
+            offset += 2;
+            if (reason != null)
+            {
+                reason.CopyTo(span.Slice(offset));
+                offset += reason.Length;
+            }
+        }
 
-        var perRecordKey = RecordKeyDerivation.Derive(vaultKey, record.RecordId, record.WriteCounter);
-        var encryptedPayload = Crypto.Encrypt(inner, perRecordKey);
+        var header = new byte[HeaderSize];
+        var h = header.AsSpan();
+        KeyringFormat.RecordMagic.CopyTo(h);
+        h[4] = KeyringFormat.RecordFormatVersion;
+        record.RecordId.CopyTo(h.Slice(5, KeyringFormat.RecordIdSize));
+        WriteStamp(h, 5 + KeyringFormat.RecordIdSize, record.Write);
+        var payloadLength = AesGcm.NonceByteSizes.MaxSize + AesGcm.TagByteSizes.MaxSize + inner.Length;
+        BinaryPrimitives.WriteUInt32LittleEndian(h.Slice(HeaderSize - 4, 4), (uint)payloadLength);
 
-        var result = new byte[EnvelopeHeaderSize + encryptedPayload.Length];
-        var span = result.AsSpan();
-        KeyringFormat.RecordMagic.CopyTo(span);
-        span[4] = KeyringFormat.RecordFormatVersion;
-        record.RecordId.CopyTo(span.Slice(5, KeyringFormat.RecordIdSize));
-        BinaryPrimitives.WriteUInt64LittleEndian(span.Slice(5 + KeyringFormat.RecordIdSize, 8), record.WriteCounter);
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(13 + KeyringFormat.RecordIdSize, 4), (uint)encryptedPayload.Length);
-        encryptedPayload.CopyTo(span.Slice(EnvelopeHeaderSize));
-        return result;
+        var perRecordKey = RecordKeyDerivation.Derive(vaultKey, record.RecordId, record.Write);
+        try
+        {
+            var encrypted = Crypto.Encrypt(inner, perRecordKey, header);
+            return [.. header, .. encrypted];
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(perRecordKey);
+            CryptographicOperations.ZeroMemory(inner);
+        }
     }
 
     /// <summary>
-    /// Decodes and decrypts a record previously produced by <see cref="Encode"/>. Throws
-    /// <see cref="TswapException"/> with a distinct message for each of: too-short input, bad
-    /// magic, unsupported format version, a corrupt/overflowing length prefix, a payload too
-    /// short to hold AES-GCM's fixed nonce+tag overhead, and truncated payload — deliberately
-    /// separate from whatever <see cref="Crypto.Decrypt"/> throws for a wrong key or tampered
-    /// ciphertext, so the two classes of failure aren't conflated.
+    /// Reads the cleartext write stamp and record id without the key (for messages and for the
+    /// highest-HLC-seen bookkeeping of records that can't be decrypted). Null when the header is
+    /// malformed.
+    /// </summary>
+    public static (byte[] RecordId, Stamp Write)? PeekHeader(byte[] bytes)
+    {
+        if (bytes.Length < HeaderSize || !bytes.AsSpan(0, 4).SequenceEqual(KeyringFormat.RecordMagic)
+            || bytes[4] != KeyringFormat.RecordFormatVersion)
+            return null;
+        return (bytes.AsSpan(5, KeyringFormat.RecordIdSize).ToArray(), ReadStamp(bytes, 5 + KeyringFormat.RecordIdSize));
+    }
+
+    /// <summary>
+    /// Decodes and decrypts a record produced by <see cref="Encode"/>. Every malformed input is a
+    /// <see cref="TswapException"/> with its own message; a wrong key or tampered bytes are a
+    /// <see cref="CryptographicException"/> from the AEAD (deliberately separate classes).
     /// </summary>
     public static SecretRecord Decode(byte[] bytes, byte[] vaultKey)
     {
-        if (bytes.Length < EnvelopeHeaderSize)
+        if (bytes.Length < HeaderSize)
             throw new TswapException("Malformed record: shorter than the envelope header");
-
         if (!bytes.AsSpan(0, 4).SequenceEqual(KeyringFormat.RecordMagic))
             throw new TswapException("Malformed record: bad magic bytes");
-
         var formatVersion = bytes[4];
         if (formatVersion != KeyringFormat.RecordFormatVersion)
-            throw new TswapException($"Unsupported record format version: {formatVersion}");
+            throw new TswapException(formatVersion < KeyringFormat.RecordFormatVersion
+                ? $"Unsupported record format version {formatVersion}: written by a pre-release tswap build, which this " +
+                  $"build (record format version {KeyringFormat.RecordFormatVersion}) does not read. Re-create the vault " +
+                  "folder from a classic vault or an export."
+                : $"Unsupported record format version {formatVersion}: written by a newer tswap (this build reads version " +
+                  $"{KeyringFormat.RecordFormatVersion}); upgrade tswap to open it.");
 
         var recordId = bytes.AsSpan(5, KeyringFormat.RecordIdSize).ToArray();
-        var writeCounter = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(5 + KeyringFormat.RecordIdSize, 8));
-        var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(13 + KeyringFormat.RecordIdSize, 4));
+        var write = ReadStamp(bytes, 5 + KeyringFormat.RecordIdSize);
+        var payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(HeaderSize - 4, 4));
 
-        // Subtraction-based bounds check (not "EnvelopeHeaderSize + payloadLength > bytes.Length"):
-        // a payloadLength near uint.MaxValue would overflow an addition-based check and pass when
-        // it shouldn't, reaching an allocation sized by attacker-controlled length.
-        if (payloadLength > bytes.Length - EnvelopeHeaderSize)
+        // Subtraction-based: a length near uint.MaxValue can't overflow an addition into passing.
+        if (payloadLength > bytes.Length - HeaderSize)
             throw new TswapException("Malformed record: payload length prefix exceeds available data");
-
-        // A payloadLength can be internally consistent with the file's remaining bytes (passing
-        // the check above) yet still be too small to hold AES-GCM's fixed nonce+tag overhead —
-        // without this check, Crypto.Decrypt would throw a raw ArgumentOutOfRangeException while
-        // slicing out the nonce instead of a catchable TswapException.
+        if (payloadLength != bytes.Length - HeaderSize)
+            throw new TswapException("Malformed record: trailing bytes after the payload");
         var minPayloadSize = AesGcm.NonceByteSizes.MaxSize + AesGcm.TagByteSizes.MaxSize;
         if (payloadLength < minPayloadSize)
             throw new TswapException("Malformed record: payload too short to contain a valid encrypted payload");
 
-        var encryptedPayload = bytes.AsSpan(EnvelopeHeaderSize, (int)payloadLength).ToArray();
-        var perRecordKey = RecordKeyDerivation.Derive(vaultKey, recordId, writeCounter);
-        var inner = Crypto.Decrypt(encryptedPayload, perRecordKey);
+        var perRecordKey = RecordKeyDerivation.Derive(vaultKey, recordId, write);
+        byte[] inner;
+        try
+        {
+            inner = Crypto.Decrypt(bytes[HeaderSize..], perRecordKey, bytes.AsSpan(0, HeaderSize));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(perRecordKey);
+        }
 
-        if (inner.Length < InnerHeaderSize)
-            throw new TswapException("Malformed record: decrypted payload shorter than the inner header");
-
-        var type = (RecordType)inner[0];
-        var originId = inner.AsSpan(1, KeyringFormat.OriginIdSize).ToArray();
-        var timestampMs = BinaryPrimitives.ReadInt64LittleEndian(inner.AsSpan(17, 8));
-        var generationCounter = BinaryPrimitives.ReadUInt32LittleEndian(inner.AsSpan(25, 4));
-        var valueLength = BinaryPrimitives.ReadUInt32LittleEndian(inner.AsSpan(29, 4));
-
-        if (valueLength > inner.Length - InnerHeaderSize)
-            throw new TswapException("Malformed record: value length prefix exceeds decrypted payload");
-
-        var value = inner.AsSpan(InnerHeaderSize, (int)valueLength).ToArray();
-
-        return new SecretRecord(recordId, writeCounter, originId, DateTimeOffset.FromUnixTimeMilliseconds(timestampMs), type, value, generationCounter);
+        try
+        {
+            return DecodeInner(inner, recordId, write, vaultKey);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(inner);
+        }
     }
+
+    private static SecretRecord DecodeInner(byte[] inner, byte[] recordId, Stamp write, byte[] vaultKey)
+    {
+        if (inner.Length < InnerFixedSize)
+            throw new TswapException("Malformed record: decrypted payload shorter than the inner header");
+        var offset = 0;
+        var typeByte = inner[offset++];
+        if (typeByte > (byte)RecordType.Burned)
+            throw new TswapException($"Malformed record: unknown record type {typeByte}");
+        var version = ReadStamp(inner, offset);
+        offset += StampSize;
+        var createdMs = BinaryPrimitives.ReadInt64LittleEndian(inner.AsSpan(offset, 8));
+        offset += 8;
+        var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(inner.AsSpan(offset, 2));
+        offset += 2;
+        Need(inner, offset, nameLength + 4, "name");
+        var name = DecodeUtf8(inner.AsSpan(offset, nameLength), "name");
+        offset += nameLength;
+        var valueLength = BinaryPrimitives.ReadUInt32LittleEndian(inner.AsSpan(offset, 4));
+        offset += 4;
+        if (valueLength > inner.Length - offset - 1)
+            throw new TswapException("Malformed record: value length prefix exceeds decrypted payload");
+        var value = inner.AsSpan(offset, (int)valueLength).ToArray();
+        offset += (int)valueLength;
+        Need(inner, offset, 2, "previous value");
+        PreviousValue? previous = null;
+        var hasPrevious = inner[offset++];
+        if (hasPrevious > 1)
+            throw new TswapException("Malformed record: bad previous-value flag");
+        if (hasPrevious == 1)
+        {
+            if (typeByte == (byte)RecordType.Tombstone)
+                throw new TswapException("Malformed record: a tombstone carries a previous value");
+            Need(inner, offset, StampSize + 4, "previous value");
+            var previousVersion = ReadStamp(inner, offset);
+            offset += StampSize;
+            var previousLength = BinaryPrimitives.ReadUInt32LittleEndian(inner.AsSpan(offset, 4));
+            offset += 4;
+            if (previousLength > inner.Length - offset - 1)
+                throw new TswapException("Malformed record: previous value length prefix exceeds decrypted payload");
+            previous = new PreviousValue(previousVersion, inner.AsSpan(offset, (int)previousLength).ToArray());
+            offset += (int)previousLength;
+        }
+        var burnCount = inner[offset++];
+        if (burnCount > RecordMerge.MaxBurns)
+            throw new TswapException($"Malformed record: {burnCount} burns (at most {RecordMerge.MaxBurns})");
+        var burns = new List<BurnEntry>(burnCount);
+        for (var i = 0; i < burnCount; i++)
+        {
+            Need(inner, offset, 2 * StampSize + 2, "burn");
+            var burnVersion = ReadStamp(inner, offset);
+            offset += StampSize;
+            var burnStamp = ReadStamp(inner, offset);
+            offset += StampSize;
+            var reasonLength = BinaryPrimitives.ReadUInt16LittleEndian(inner.AsSpan(offset, 2));
+            offset += 2;
+            string? reason = null;
+            if (reasonLength != NoReason)
+            {
+                Need(inner, offset, reasonLength, "burn reason");
+                reason = DecodeUtf8(inner.AsSpan(offset, reasonLength), "burn reason");
+                offset += reasonLength;
+            }
+            burns.Add(new BurnEntry(burnVersion, burnStamp, reason));
+        }
+        if (inner.AsSpan(offset).ContainsAnyExcept((byte)0))
+            throw new TswapException("Malformed record: non-zero bytes in the padding");
+
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(vaultKey);
+        var expectedId = FilenameHasher.ComputeRecordId(namesKey, name);
+        CryptographicOperations.ZeroMemory(namesKey);
+        if (!CryptographicOperations.FixedTimeEquals(expectedId, recordId))
+            throw new TswapException("Malformed record: its record id does not belong to the name inside it");
+
+        return new SecretRecord(recordId, write, (RecordType)typeByte, version, name, createdMs, value, burns, previous);
+    }
+
+    private static void Need(byte[] inner, int offset, int count, string what)
+    {
+        if (count > inner.Length - offset)
+            throw new TswapException($"Malformed record: truncated {what}");
+    }
+
+    private static string DecodeUtf8(ReadOnlySpan<byte> bytes, string what)
+    {
+        try
+        {
+            return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new TswapException($"Malformed record: the {what} is not valid UTF-8");
+        }
+    }
+
+    private static int WriteStamp(Span<byte> span, int offset, Stamp stamp)
+    {
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(offset, 8), stamp.Hlc.PhysicalMs);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offset + 8, 4), stamp.Hlc.Logical);
+        stamp.Origin.CopyTo(span.Slice(offset + 12, KeyringFormat.OriginIdSize));
+        return offset + StampSize;
+    }
+
+    private static Stamp ReadStamp(byte[] bytes, int offset) => new(
+        new Hlc(BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset, 8)),
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 8, 4))),
+        bytes.AsSpan(offset + 12, KeyringFormat.OriginIdSize).ToArray());
 
     /// <summary>
     /// Rounds <paramref name="rawLength"/> up to the next multiple of

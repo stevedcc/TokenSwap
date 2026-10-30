@@ -21,8 +21,10 @@ public static class KeyringFormat
     /// Format version of the per-secret record envelope (see <see cref="SecretRecordCodec"/>).
     /// Present from day one (issue #111) so a v2 layout change is an additive new version
     /// value, not a breaking rewrite of this constant's meaning.
+    /// <para><b>2 since T6 fix round 1:</b> the payload gained the previous value. Version 1 was
+    /// written only by pre-release builds of brief T6 and is refused (<see cref="SecretRecordCodec.Decode"/>).</para>
     /// </summary>
-    public const byte RecordFormatVersion = 1;
+    public const byte RecordFormatVersion = 2;
 
     /// <summary>
     /// 4-byte sanity marker at the start of every record file/blob. Distinguishes a

@@ -21,7 +21,8 @@ public sealed class RunCommand : ICliCommand
         // parsed correctly (issue #75).
         var commandJoined = string.Join(" ", commandArgs);
 
-        // Find {{tokens}}
+        // Find {{tokens}} (an unknown '{{name:suffix}}' is an error, never literal text).
+        Validation.ThrowIfUnknownTokenSuffix(commandJoined);
         var tokens = Validation.ExtractTokens(commandJoined);
 
         if (tokens.Count == 0)
@@ -50,16 +51,18 @@ public sealed class RunCommand : ICliCommand
 
         // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
         // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
+        // Fix round 1, B: a token is a name or 'name:previous' (SecretsDb.ResolveToken).
+        var secretValues = new Dictionary<string, string>();
         foreach (var token in tokens)
         {
-            if (!db.Secrets.ContainsKey(token))
-                throw new TswapException($"Secret '{token}' not found");
-            if (db.Secrets[token].Value == null)
-                throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
+            secretValues[token] = db.ResolveToken(token)
+                ?? throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
+            // Fix round 3: warn about a burned value (current or previous), as apply does.
+            if (db.IsBurnedToken(token))
+                ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
         }
 
         // Substitute tokens — raw values, no shell quoting (we exec directly, no shell wrapper).
-        var secretValues = tokens.ToDictionary(t => t, t => db.Secrets[t].Value);
         var argv = Validation.SubstituteTokensInArgs(commandArgs, secretValues);
 
         // Re-check after substitution: a token in the program or option position (e.g.

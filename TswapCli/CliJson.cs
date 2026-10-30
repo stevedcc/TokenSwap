@@ -11,7 +11,8 @@ namespace TswapCli;
 /// </summary>
 public sealed record NameEntry(string Name, bool Burned, DateTime? BurnedAt);
 
-public sealed record BurnedEntry(string Name, DateTime? BurnedAt, string? Reason);
+/// <param name="Status">Brief T6: "outstanding", or "rotated" for a burn a newer value superseded.</param>
+public sealed record BurnedEntry(string Name, DateTime? BurnedAt, string? Reason, string? Status = null);
 
 public sealed record CheckEntry(string File, int Line, string Name, string Status);
 

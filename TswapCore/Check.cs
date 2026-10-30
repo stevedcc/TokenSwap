@@ -4,7 +4,8 @@ namespace TswapCore;
 
 public static class Check
 {
-    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)");
+    // Fix round 3: '# tswap: name:previous' markers are checked against the previous value.
+    private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
 
     public record MarkerRef(string FilePath, int LineNumber, string SecretName);
 
@@ -88,8 +89,15 @@ public static class Check
     {
         return markers.Select(marker =>
         {
-            if (!db.Secrets.TryGetValue(marker.SecretName, out var secret))
+            var previous = marker.SecretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal);
+            var name = previous ? marker.SecretName[..^SecretsDb.PreviousSuffix.Length] : marker.SecretName;
+            if (!db.Secrets.TryGetValue(name, out var secret))
+            {
+                db.ThrowIfUnreadable(name);
                 return new CheckResult(marker, SecretStatus.Missing);
+            }
+            if (previous)
+                return new CheckResult(marker, secret.PreviousValue == null ? SecretStatus.Missing : SecretStatus.Ok);
             return new CheckResult(marker, secret.BurnedAt.HasValue ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }

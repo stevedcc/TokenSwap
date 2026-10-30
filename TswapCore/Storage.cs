@@ -19,6 +19,9 @@ public class Storage : IFileVaultStore
 
     private readonly DirectoryOwnerMatcher _owner;
 
+    /// <inheritdoc/>
+    public DirectoryOwnerMatcher Owner => _owner;
+
     /// <param name="owner">
     /// Writes every file, and gives files written under sudo the config folder's owner (T5; see
     /// <see cref="DirectoryOwnerMatcher"/>). Null: <see cref="DirectoryOwnerMatcher.Default"/>.

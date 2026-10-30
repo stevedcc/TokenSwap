@@ -13,6 +13,7 @@ public sealed class ListCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
+        db.ThrowIfAnyUnreadable("list");
 
         if (db.Secrets.Count == 0)
         {

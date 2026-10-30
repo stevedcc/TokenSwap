@@ -65,6 +65,10 @@ public static class RecordDirectoryScanner
     // any of the conflict patterns below, not to validate GetRandomFileName precisely.
     private static readonly Regex TswapTempFile = new(@"^[a-z0-9]{8}\.[a-z0-9]{3}$", RegexOptions.None, TimeSpan.FromSeconds(1));
 
+    // Since brief T6 every write goes through DirectoryOwnerMatcher, whose in-flight temp file is
+    // "<target>.<12 hex>.tmp" (DurableFileWriter is built on it too). Not a record, not a conflict.
+    private static readonly Regex MatcherTempFile = new(@"^.+\.[0-9A-F]{12}\.tmp$", RegexOptions.None, TimeSpan.FromSeconds(1));
+
     // Dropbox / Google Drive: "<name> (conflicted copy 2026-07-27)" or a bare duplicate suffix
     // "<name> (1)". Both insert a space before the parenthesised suffix.
     private static readonly Regex DropboxGoogleDriveConflictedCopy =
@@ -170,7 +174,41 @@ public static class RecordDirectoryScanner
                 return true;
         }
 
-        return TswapTempFile.IsMatch(filename);
+        return TswapTempFile.IsMatch(filename) || MatcherTempFile.IsMatch(filename);
+    }
+
+    /// <summary>
+    /// Brief T6 decision 2: the sync tools' conflicted copies of one fixed-name file (the vault
+    /// folder's <c>keyring</c>) in <paramref name="directory"/>, by the same naming conventions as
+    /// <see cref="Scan"/> uses for records. Never reads file contents; never uses mtime.
+    /// </summary>
+    public static IReadOnlyList<ConflictWarning> FindConflictCopies(DirectoryInfo directory, string baseName)
+    {
+        ArgumentNullException.ThrowIfNull(directory);
+        ArgumentException.ThrowIfNullOrEmpty(baseName);
+        var escaped = Regex.Escape(baseName);
+        var patterns = new (Regex Pattern, SyncConflictTool Tool)[]
+        {
+            (new Regex($@"^{escaped} \(conflicted copy[^)]*\)$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.DropboxOrGoogleDrive),
+            (new Regex($@"^{escaped} \(\d+\)$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.DropboxOrGoogleDrive),
+            (new Regex($@"^{escaped}\.sync-conflict-\d{{8}}-\d{{6}}-[A-Za-z0-9]+$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.Syncthing),
+            (new Regex($@"^{escaped}-[A-Za-z0-9][A-Za-z0-9-]*$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.OneDrive),
+        };
+        var found = new List<ConflictWarning>();
+        if (!directory.Exists)
+            return found;
+        foreach (var entry in directory.EnumerateFiles())
+        {
+            foreach (var (pattern, tool) in patterns)
+            {
+                if (pattern.IsMatch(entry.Name))
+                {
+                    found.Add(new ConflictWarning(baseName, entry.Name, tool));
+                    break;
+                }
+            }
+        }
+        return found.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList();
     }
 
     private static ConflictWarning? TryMatchConflict(string name)

@@ -65,4 +65,35 @@ public class PromptTests
         Assert.Contains("- `sudo tswap slot merge <file>`", never);
         Assert.Contains("- `sudo tswap recover --yubikey|--tpm|--secure-enclave`", never);
     }
+
+    [Fact]
+    public void Template_TellsTheAgentToReplaceABurnedSecretWithRotate()
+    {
+        // Brief T6 decision 7: replacing a burned secret is the agent's job, and needs no sudo.
+        var text = Prompt.GetText("tswap");
+        var should = text[text.IndexOf("## Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)];
+        Assert.Contains("- `tswap rotate <name> [length]`", should);
+        Assert.Contains("tswap ingest --rotate <name>", should);
+        Assert.Contains("tswap rotate", text[text.IndexOf("## Key rules", StringComparison.Ordinal)..]);
+        Assert.DoesNotContain("delete", should);
+    }
+
+    [Fact]
+    public void Template_ListsTheRecordStoreSudoCommandsUnderNever()
+    {
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        Assert.Contains("- `sudo tswap migrate --to-records", never);
+        Assert.Contains("- `sudo tswap vault merge <folder>`", never);
+    }
+
+    [Fact]
+    public void Template_ExplainsPreviousAndRestore()
+    {
+        // Fix round 1, B: the old value authenticates the change; a rotation is visible and reversible.
+        var text = Prompt.GetText("tswap");
+        Assert.Contains("{{db-pw:previous}}", text);
+        Assert.Contains("- `sudo tswap restore <name>`", text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..]);
+        Assert.Contains("reversible", text);
+    }
 }

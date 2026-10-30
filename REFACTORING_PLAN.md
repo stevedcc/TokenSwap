@@ -388,6 +388,80 @@ key-management model and a mergeable on-disk format.
 Everything below is written against that split; steps and open questions are labeled v0/v1/v2
 so it's clear what's gating and what can be revised later under a format-version bump.
 
+#### Brief T6: the record store as built (settled decisions, 2026-10-30)
+
+Brief T6 implemented the mergeable on-disk format (issues #111-#114, #137) and pulled the HLC
+and the merge rules forward from v2 (owner decisions on #132 and #8). Where this section's older
+text below says otherwise (a plain write counter, delete-wins, no merge engine in v0), these
+decisions win:
+
+1. **Layout.** A shareable **vault folder** holds `keyring` (the `KeyringCodec` bytes) and
+   `records/<HMAC(K_names, name) hex>`. The machine's `config.json` stays in the config dir with
+   machine fields only (`Backend` and its fields, `KeyringSlotId`, pending-slot fields,
+   `ApprovedSlots`, touch posture, a random 16-byte `OriginId` per machine config, `VaultDir`,
+   `LastHlc`) and is never synced. `Store` absent = the classic single file; `"records"` = this
+   store. `LoadConfig` composes `Config.Keyring` from the folder, so every command keeps working.
+2. **The keyring file** is saved as the union of what is on disk and what is saved (by slot id;
+   vault id, version and k must match), so a save never drops a slot it didn't know about; sync
+   conflict copies of it are folded in on load; one slot id with different bytes is refused
+   loudly, never resolved by picking one.
+3. **Records.** One per secret: types value / tombstone / burned, padded to 256-byte buckets,
+   per-record key `HKDF(K_v, recordId || write stamp)`. **`K_names` is derived from `K_v`**
+   (settled for v0; #126 revisits it before `K_v` rotation exists). **The ordering authority is
+   a hybrid logical clock** (physical ms, logical counter) with the origin id as the tiebreak: a
+   write takes `max(now, LastHlc, every HLC read in this command)` and steps the logical counter
+   when the physical part doesn't advance, so it never runs backwards. The write stamp (HLC +
+   origin) is in the cleartext header and authenticated as AES-GCM associated data; the version
+   stamp that decides existence, the name, the value and the burn list are inside. A stamp more
+   than a year ahead is accepted but warned about; display clamps to "far future".
+4. **Merge rules.** The last action wins by (HLC, origin) for values and tombstones alike. A burn
+   marks the value version it was issued against: outstanding while that version wins, history
+   once a newer value supersedes it; a burn never resurrects a deleted secret. Two burns of one
+   version keep the earliest (#35). History is bounded to 16 entries (the outstanding burn
+   always kept). An unreadable conflict copy is a warning and never chosen or deleted; an
+   unreadable main record fails closed (commands that need it stop naming the hashed file,
+   `names` warns and counts, nothing overwrites, deletes or merges over it). Copies made
+   redundant by a decided conflict are removed on the next write of that record, never by a
+   read.
+5. **`tswap vault merge <other-vault-dir>`** (sudo) folds another copy in: keyring union (new
+   slots under T5's approval guard), records by the rules; the other copy is only read.
+6. **Stale-write guard:** each record is re-read before it is written; any change since this
+   command loaded it refuses the save before anything is written.
+7. **Rotation (#8):** `rotate` / `ingest --rotate` always write a newer version (even with the
+   same value); no delete. Sudo unless the winning version is burned. The classic store rotates
+   unburned secrets only. **The previous value is kept** (owner decision 2026-10-30, fix round
+   1): a value record carries the value it replaced (one level) with that value's version stamp,
+   inside the encrypted payload and covered by the padding; it travels with its version in a
+   merge (no new rule). `run` / `apply` take `{{name:previous}}` / `# tswap: name:previous` (never
+   displayed; ':' is not a name character), and `sudo tswap restore <name>` writes it back as a new
+   version, with its burn outstanding again if it had one. A burn-then-rotate by an agent is thus
+   visible and reversible. The classic store has no previous value and refuses both.
+8. **`migrate --to-records`** (sudo): temp folder, read back and compare, rename, switch
+   `config.json`, then move `secrets.json.enc` aside; a plain XOR vault becomes a keyring vault
+   in the same run (`K_v` = its derived master key, one slot per enrolled YubiKey, a recovery
+   slot). `init` / `slot accept --vault-dir` join an existing shared folder.
+9. **Export / import** keep the single-file format; an export is a snapshot (no tombstones, no
+   history); importing into a record store writes new versions (so it can bring back a deleted
+   secret, by the user's explicit choice).
+10. **File layer:** every vault-folder and config-dir file goes through T5's
+    `DirectoryOwnerMatcher` (under sudo as the folder's owner; 0600 files under a random
+    `O_EXCL` temp name, renamed; 0700 folders); wider modes are narrowed on the next write with a
+    notice. Windows: no change (profile ACLs).
+
+**Not detected yet (fix round 1):** tombstones and burns are protected only when versions are
+merged. A sync tool's "restore previous version" of one record, or a folder writer replacing a
+record or the keyring with an older copy, is accepted as the current state; a per-record version
+regression and a keyring rollback are not detected (a follow-up issue). The stale-write guard
+only catches a change during a command.
+
+**The edit-timing metadata leak, stated plainly:** a sync provider (or anyone who can watch the
+vault folder) cannot see secret names, values, or whether a change was an edit, a delete or a
+burn, but **can see which hashed record file changed and when**, so it can follow how often each
+(unnamed) secret is edited and correlate that with your activity. The single-file vault only
+showed "something changed". Each record also carries its writer's origin id in the clear; it is
+per machine config (so per vault) and does not link one machine across vaults. This is the
+accepted price of mergeability (item 2 of the per-file security considerations below).
+
 #### How today's crypto actually works (and why it points at the design)
 
 A prerequisite is being precise about the existing scheme, because it is easy to
@@ -604,11 +678,10 @@ an acceptable v0 answer for a tool with no deployed fleets yet.
 
 **v2** — the merge engine and threshold enrollment.
 
-6. **HLC + merge engine:** upgrade the write-counter ordering authority to a hybrid logical
-   clock for human-readable `names` timestamps, add the LWW/earliest-burn/tombstone merge
-   rules in full, and fuzz/property-test the merge for commutativity and idempotence (merge
-   order must not matter). This is additive on top of step 2's write counter, not a format
-   break — see the ordering-authority note above.
+6. **HLC + merge engine:** ✅ **pulled into v0 by brief T6** (owner decision on #132): the HLC
+   replaced the write counter before the record format shipped, and the merge rules (last action
+   wins, a burn marks a version, bounded burn history) are tested for commutativity and
+   idempotence pairwise. Property/fuzz testing beyond the pairwise table remains for later.
 7. **k-of-n threshold enrollment:** Shamir-split enrollment key; extending the fleet requires
    k approvals. Distinct from `k`-of-`n` *unlock*, which `MULTI_MACHINE_KEYING.md` demotes to a
    rationale note rather than a roadmap item — this is enrollment governance, a different
@@ -625,16 +698,14 @@ or the merge engine (v2) to be fully designed before shipping v0.
 
 #### Open questions to resolve before coding
 
-- **`K_names` provenance:** deriving the filename-HMAC key from `K_v` means a rotation
-  (v1, step 4) renames every record; deriving it from a separate, non-rotated fleet constant
-  avoids mass renames but must never be reconstructible without fleet membership. Does not
-  gate v0 (no rotation yet) — see `MULTI_MACHINE_KEYING.md` §Open questions.
-- **Delete-wins vs. last-writer-wins for tombstones:** see the mergeable-format section above.
-  Leaning delete-wins for v0 — order-independent, no clock needed, cannot silently resurrect a
-  deleted secret.
-- **Interaction with export/import:** the existing encrypted single-file export stays as
-  the backup/transfer format; `IVaultStore` makes "export = serialize whatever store is
-  active" fall out naturally.
+Settled by brief T6 (see "Brief T6: the record store as built" above) and no longer open:
+`K_names` is derived from `K_v` for v0 (a v1 rotation renames every record; #126 decides
+whether to move to a separate non-rotated constant before rotation exists); tombstones are
+last-writer-wins by (HLC, origin), not delete-wins; export/import keep the single-file format
+and serialize whatever store is active (an export is a snapshot without merge metadata).
+
+Still open:
+
 - **Rotation atomicity (v1, not v0) — the largest open design question in the whole phase.**
   A partially rotated record directory syncing against another, not-yet-rotated copy needs a
   rotation generation per record, a merge rule tolerating mixed generations mid-rotation, and
@@ -667,7 +738,7 @@ items above.
 | 3 Core purification | M | low-medium (JSON compat needs golden-file tests; atomic save is isolated) | 2 | ✅ shipped (#98) |
 | 4 Test restructuring | M | low (pure test work) | 2, 3 | ✅ shipped (#99, #100) |
 | 5 Backlog | S–M | low | 4 | ✅ shipped (`--json`, `IVaultStore`, shell completion, `IHardwareKeyService` reshape + Secure Enclave backend, `ConsoleIntercept` repo extraction to `RedactingPty`) |
-| 6 Multi-machine sharing | L | high (new key model + mergeable format + rotation; needs its own design doc + threat model) | 5 (`IVaultStore`) | design only |
+| 6 Multi-machine sharing | L | high (new key model + mergeable format + rotation; needs its own design doc + threat model) | 5 (`IVaultStore`) | v0 in progress: keyring vaults, fleet enrolment (T5) and the record store (T6) implemented; revocation and `K_v` rotation (v1) open |
 
 Phases 1 and 2 are independent of each other (1 touches the PTY files + `CmdRun`
 call site only) — 1 can ship immediately, which matters since it is the explicit
