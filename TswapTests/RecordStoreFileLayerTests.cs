@@ -11,8 +11,9 @@ namespace TswapTests;
 /// config dir goes through <see cref="DirectoryOwnerMatcher"/>: under sudo as the folder's owner
 /// (T5's fake identity switch and "root-only" file stand in for root), files created 0600 and
 /// folders 0700 whatever the umask, and an existing vault with wider modes is tightened on the next
-/// write with one notice, while a read changes nothing.
+/// write with one notice, while a read changes nothing. Unix only (every test returns on Windows).
 /// </summary>
+[System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
 public sealed class RecordStoreFileLayerTests : IDisposable
 {
     private const uint UserUid = 1000;
@@ -33,12 +34,12 @@ public sealed class RecordStoreFileLayerTests : IDisposable
     public void Dispose()
     {
         _m.Dispose();
-        if (Directory.Exists(_outside))
-        {
+        if (!Directory.Exists(_outside))
+            return;
+        if (!OperatingSystem.IsWindows())
             foreach (var file in Directory.GetFiles(_outside))
                 File.SetUnixFileMode(file, OwnerOnly);
-            Directory.Delete(_outside, true);
-        }
+        Directory.Delete(_outside, true);
     }
 
     private static FileOwnershipTests.FakeOwnership AsRoot() => new(privileged: true, euid: 0);

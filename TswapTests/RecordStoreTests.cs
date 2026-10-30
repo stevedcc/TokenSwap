@@ -140,3 +140,25 @@ public sealed class RecordStoreTests : IDisposable
         Assert.Equal(Convert.FromBase64String(_m.Config.OriginId!), first.Write.Origin);
     }
 }
+
+/// <summary>Brief T6: a record-store machine's config is never silently replaced by another kind of vault.</summary>
+public sealed class RecordStoreConfigGuardTests : IDisposable
+{
+    private readonly FleetMachine _m = new("records-guard", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA));
+
+    public void Dispose() => _m.Dispose();
+
+    [Fact]
+    public void InitOnARecordStoreMachine_IsRefused_AndTheConfigKeepsTheStore()
+    {
+        RecordVaultTestSupport.InitRecordVault(_m);
+        _m.Ok("v", "ingest", "s");
+
+        var (exit, _, err) = _m.Run("yes\n", "init", "--keyring");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("TSWAP_CONFIG_DIR", err);
+        Assert.Equal("records", _m.Config.Store);
+        Assert.Equal("v", _m.Get("s"));
+    }
+}

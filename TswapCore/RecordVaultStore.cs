@@ -115,7 +115,10 @@ public sealed class RecordVaultStore : IFileVaultStore
     public void SaveConfig(Config config)
     {
         if (config.Store != StoreName)
-            throw new InvalidOperationException("A record store's config must keep Store = \"records\".");
+            throw new TswapException(
+                $"This machine's {ConfigFile} belongs to a shared record-store vault ({MachineConfig.VaultDir}), so it can't be " +
+                "replaced by another kind of vault here. To set up a different vault, use another config folder " +
+                "(TSWAP_CONFIG_DIR) or move config.json aside first.");
         _machineConfig ??= TryReadMachineConfig();
         var lastHlc = Hlc.Max(Hlc.TryParse(config.LastHlc) ?? Hlc.Zero, Hlc.TryParse(_machineConfig?.LastHlc) ?? Hlc.Zero);
         var machine = config with { Keyring = null, LastHlc = lastHlc == Hlc.Zero ? config.LastHlc : lastHlc.ToString() };
