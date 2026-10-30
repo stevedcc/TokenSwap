@@ -577,17 +577,18 @@ public sealed class SlotCommand : ICliCommand
             // machine's record-store config.
             if (fileStore == null)
                 throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
-            // As init --vault-dir (fix round 1, A6): keep the previous config and secrets file.
+            // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
+            // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))
                 c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
-            if (fileStore.Owner.FileExists(fileStore.SecretsFile))
-                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
             new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
             {
                 Store = RecordVaultStore.StoreName,
                 VaultDir = vaultDir,
                 OriginId = RecordVaultStore.NewOriginId(),
             });
+            if (fileStore.Owner.FileExists(fileStore.SecretsFile))
+                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
         }
         else
         {

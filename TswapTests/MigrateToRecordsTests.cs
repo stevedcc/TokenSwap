@@ -612,6 +612,25 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
     }
 
     [Fact]
+    public void AFailedJoin_LeavesTheOldSecretsFileInPlace()
+    {
+        // Fix round 3, item 5: as init --vault-dir, the secrets file moves only after the config
+        // switch succeeded. Here the folder holds another vault's keyring, so the switch fails.
+        using var stranger = new FleetMachine("acceptdir-stranger", _keys);
+        stranger.Ok("", "init", "--keyring");
+        var foreign = Path.Combine(stranger.Dir, "shared");
+        stranger.Ok("", "migrate", "--to-records", "--vault-dir", foreign);
+        var secretsBefore = File.ReadAllBytes(_laptop.SecretsPath);
+
+        var (exit, _, err) = _laptop.Run("", "slot", "accept", _approve, "--vault-dir", foreign);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("another vault", err);
+        Assert.Equal(secretsBefore, File.ReadAllBytes(_laptop.SecretsPath));
+        Assert.Empty(Directory.GetFiles(_laptop.Dir, "secrets.json.enc.bak-*"));
+    }
+
+    [Fact]
     public void AFolderWithoutAKeyring_IsRefused_AndNothingChanges()
     {
         var empty = _laptop.PathOf("not-a-vault");
