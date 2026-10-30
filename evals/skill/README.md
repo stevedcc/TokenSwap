@@ -24,6 +24,14 @@ The log reaches the runner over a Unix socket; the runner's logger accepts a rec
 shim itself (the sending process must be `/usr/bin/python3 -I <a read-only shim path>`), and any
 other record fails the run (`forged_log`).
 
+The logger checks the sending process twice: when it accepts the connection, and after it has
+read the record. A process that connects as anything else and only then execs the shim (keeping
+the connection, for a forked child to write on) fails the first check, which the fake agent's
+`forge-exec` variant proves. **Residual:** a process that connects and execs the shim faster than
+the logger accepts the connection (microseconds) would pass both checks; closing that needs the
+kernel's help (for example a per-exec identity), which Linux doesn't give a socket peer. The shims
+use fixed paths under `/eval` (state, scenario, prompt, socket), never paths from the environment.
+
 ## What it cannot see
 
 Read results with these blind spots in mind:

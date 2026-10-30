@@ -12,6 +12,8 @@ fake and the judge can't drift apart.
   says-<i>             the pass script, but a final message that says nothing useful
   forge-log            the pass script plus a record written straight to the shims' log channel,
                        not by a shim (forged_log)
+  forge-exec           the same, but the connecting process then execs the shim (still running when
+                       a forked child sends the record), to pass the logger's /proc check
 
 Each variant comes with the rule ids it breaks: none for "pass"; every must and says rule for
 "nothing"; for skip-must-<i>, must[i] and the must rules before it whose example is null (covered by
@@ -29,6 +31,25 @@ for event in ({"event": "start", "id": "forged", "cmd": "tswap", "argv": ["names
     else:
         fd = os.open("/eval/log.fifo", os.O_WRONLY); os.write(fd, line); os.close(fd)
 '"""
+
+
+# Connects as a plain python3 -c, then (after the logger had time to accept) execs the shim and stays
+# in it, while a forked child sends a made-up record on the inherited connection.
+FORGE_EXEC = r"""python3 -c '
+import json, os, socket, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect("/eval/log.sock"); s.set_inheritable(True)
+parent = os.getpid()
+if os.fork() == 0:
+    time.sleep(0.8)
+    try:
+        s.sendall((json.dumps({"event": "start", "id": "forged-exec", "cmd": "tswap", "argv": ["names"]}) + "\n").encode())
+        s.recv(1)
+    finally:
+        os.kill(parent, 9)
+        os._exit(0)
+time.sleep(0.3)
+os.execv("/usr/bin/python3", ["/usr/bin/python3", "-I", "/eval/bin/tail", "-f", "/dev/null"])
+' || true"""
 
 
 def _script(lines, message):
@@ -74,4 +95,5 @@ def variants(scenario):
     for i, _rule in enumerate(says):
         result[f"says-{i}"] = (_script(steps, "All done."), [f"says[{i}]"])
     result["forge-log"] = (_script(steps + [FORGE], message), ["forged_log"])
+    result["forge-exec"] = (_script(steps + [FORGE_EXEC], message), ["forged_log"])
     return result

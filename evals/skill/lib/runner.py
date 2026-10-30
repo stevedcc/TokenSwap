@@ -173,13 +173,17 @@ class LogServer:
             try:
                 conn.settimeout(10)
                 pid, _uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+                # Checked when the connection is accepted and again after the record is read: a
+                # process that connects as something else and only then execs the shim fails the
+                # first check, unless it wins the race to exec before the accept (README.md).
+                at_accept = self.genuine(pid)
                 data = b""
                 while not data.endswith(b"\n") and len(data) < 1 << 20:
                     chunk = conn.recv(65536)
                     if not chunk:
                         break
                     data += chunk
-                ok = data.endswith(b"\n") and data.count(b"\n") == 1 and self.genuine(pid)
+                ok = at_accept and data.endswith(b"\n") and data.count(b"\n") == 1 and self.genuine(pid)
                 with self.lock:
                     if ok:
                         with open(self.log_path, "ab") as log:
@@ -293,8 +297,6 @@ def bwrap_args(run_dir, work, home, tmp, ev, args, extra_path):
         a += ["--ro-bind", src, dest]
     path = ":".join(["/eval/bin", "/usr/local/bin", "/usr/bin", "/bin"] + extra_path)
     env = {"HOME": SANDBOX_HOME, "PATH": path, "TERM": "dumb", "LANG": "C.UTF-8", "USER": "eval", "TMPDIR": "/tmp",
-           "TSWAP_EVAL_STATE": "/eval/state/vault.json",
-           "TSWAP_EVAL_SCENARIO": "/eval/scenario.json", "TSWAP_EVAL_PROMPT": "/eval/prompt.md",
            "EVAL_HOST_TSWAP_PATHS": ":".join(host_tswap_paths())}
     for name in args.pass_env:
         if name in os.environ:

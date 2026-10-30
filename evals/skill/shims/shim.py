@@ -25,9 +25,10 @@ PRIVILEGED = {"sudo", "su", "doas", "pkexec"}
 MAX_LOGGED_ARG = 2000
 
 LOG_SOCKET = "/eval/log.sock"
-STATE = os.environ.get("TSWAP_EVAL_STATE", "/eval/state/vault.json")
-SCENARIO = os.environ.get("TSWAP_EVAL_SCENARIO", "/eval/scenario.json")
-PROMPT = os.environ.get("TSWAP_EVAL_PROMPT", "/eval/prompt.md")
+# Fixed paths, never from the environment (an agent could point a shim elsewhere).
+STATE = "/eval/state/vault.json"
+SCENARIO = "/eval/scenario.json"
+PROMPT = "/eval/prompt.md"
 
 
 def log(event):
