@@ -1,4 +1,4 @@
-# Brief T11: a Secure Enclave slot that unlocks without Touch ID, by explicit opt-in
+# Brief T11: Secure Enclave slots choose touch explicitly (`--with-touch` / `--no-touch`)
 
 Read AGENTS.md first. One commit per item, test first (watch it fail for the right reason), a
 break-it-once check per key test named in its commit message, `./runtests.sh --unit` after each
@@ -38,7 +38,7 @@ be read back from the key, so `Config.RequiresTouch` is the only record of it. P
 
 **There is no way to remove a slot today** (`slot` has request, approve, accept, add and merge;
 merge is a union; slots never change once written; all slots wrap the same vault key). A
-no-presence slot therefore stays a silent unlock path for as long as the vault exists. The only way
+no-touch slot therefore stays a silent unlock path for as long as the vault exists. The only way
 to drop one is a new vault and moving the secrets over. The warning must say exactly that.
 
 What `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` means on macOS in practice (screen lock, ssh
@@ -48,22 +48,29 @@ the recording.
 
 ## Decisions (settled here)
 
-1. **Opt-in flag `--no-presence`**, accepted only together with `--secure-enclave`, in either order,
-   on the three commands that create a Secure Enclave key:
-   - `init --secure-enclave [--no-presence] [--no-recovery]`
-   - `slot request --secure-enclave [--no-presence] <file>`
-   - `recover --secure-enclave [--no-presence] [--recovery-key-stdin]`
-   Without the flag nothing changes: presence stays required. With any other backend, without a
-   device flag, or given twice, `--no-presence` is a usage error naming `--secure-enclave`, raised
-   before anything is read, prompted for, or written, and before the sudo check. `recover`'s parser
-   (today `rest is not [var device]`) is reworked for this.
-2. **The default never changes.** No config setting, environment variable or prompt answer turns
-   the gate off; only the flag on the enrolment command does. Every new parameter defaults to
-   presence required.
+1. **An explicit, required choice (owner decision, 2026-10-30): `--with-touch` or `--no-touch`.**
+   Every command that creates a Secure Enclave key needs exactly one of them next to
+   `--secure-enclave`, in any order:
+   - `init --secure-enclave --with-touch|--no-touch [--no-recovery]`
+   - `slot request --secure-enclave --with-touch|--no-touch <file>`
+   - `recover --secure-enclave --with-touch|--no-touch [--recovery-key-stdin]`
+   ("touch" is tswap's word for presence everywhere else; on a Mac it means Touch ID or the login
+   password.) `--secure-enclave` with neither is a usage error that names both and says what each
+   does in one line; both together, either one twice, or either one without `--secure-enclave`
+   (alone, with `--tpm`, `--keyring`, `--yubikey`, or `slot request` without a device flag) is a usage
+   error too. All of these are raised before anything is read, prompted for or written, and before
+   the sudo check. `recover`'s parser (today `rest is not [var device]`) is reworked for this.
+   This changes the command line of `init --secure-enclave`, `slot request --secure-enclave` and
+   `recover --secure-enclave`: existing tests that call them without a choice get `--with-touch`
+   added (a test input changed because the brief changed the rules; say so in the commit), and the
+   README's examples change with them. tswap is pre-1.0; no deprecation path.
+2. **No default anywhere.** No config setting, environment variable or prompt answer chooses the
+   posture; only the flag on the enrolment command does. Below the CLI, every internal parameter
+   still defaults to presence required, so a code path that forgets it gets the safe key.
 3. **A new native entry point, so a mismatched binary and dylib fail closed.** The dylib ships
    beside the binary (and as an embedded resource) and can be replaced on its own. Adding a parameter
    to `tswap_se_wrap` would let an old binary call a new dylib with garbage in the new argument
-   (possibly 0: a no-presence key the config calls presence-gated). So:
+   (possibly 0: a no-touch key the config calls presence-gated). So:
    - keep `tswap_se_wrap` exactly as it is (always presence);
    - add `tswap_se_wrap_v2(..., requirePresence: Int32)`: `1` → `[.privateKeyUsage, .userPresence]`,
      `0` → `[.privateKeyUsage]`, **any other value → return a new negative code without creating a
@@ -86,7 +93,7 @@ the recording.
    append one flag byte, `1` or `0`; `Unlock` accepts both the old length, read as presence, and the
    new one). Tests read the flag from the slot blob in the saved config. No static state: test
    classes run in parallel.
-6. **Posture in config:** the machine's own `Config.RequiresTouch` is `false` for a `--no-presence`
+6. **Posture in config:** the machine's own `Config.RequiresTouch` is `false` for a `--no-touch`
    slot and `true` otherwise (today `InitCommand.cs:555`, `RecoverCommand.cs:122` and
    `SlotCommand.ExecuteHardwareRequest` hard-code `true` for the Secure Enclave). `slot accept`
    already carries the pending config's value through (`config with`); a test pins it. Existing
@@ -101,7 +108,7 @@ the recording.
      user-facing text (a YubiKey can be unplugged; this key is always present).
    - Each command's completion summary echoes the posture ("Secure Enclave slot: no presence
      required" / "Touch ID or password required").
-   - `slot request --secure-enclave --no-presence` says in its output that the approving machine
+   - `slot request --secure-enclave --no-touch` says in its output that the approving machine
      can't see this posture. **Known gap, recorded in `HARDWARE_BACKENDS.md`:** `slot approve` can't
      verify (or show) a requesting slot's posture; the request file is unchanged in this brief.
    - Every message that promises or assumes a presence prompt (init's "unlocking later will prompt
@@ -110,7 +117,7 @@ the recording.
      for both.
    - The help text, `HelpUsage`/`Description` and usage-error strings of `init`, `slot request` and
      `recover` name the flag.
-   - No recurring per-command banner for a no-presence Secure Enclave slot (the YubiKey no-touch
+   - No recurring per-command banner for a no-touch Secure Enclave slot (the YubiKey no-touch
      banner exists because that posture is set outside tswap; here the owner chose it with the flag).
      Say this in README.
 8. **No change** to unlock order, YubiKey touch detection, `SecurityWarnings.Current` (it lists
@@ -125,19 +132,21 @@ declaration, so `SecureEnclaveHardwareService` passes the flag on from the first
 parameter). Item 2 is the Swift side.
 
 Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enclave command tests do):
-- For **each** of `init`, `recover` and `slot request` → `slot approve` → `slot accept`, with and
-  without `--no-presence`:
+- For **each** of `init`, `recover` and `slot request` → `slot approve` → `slot accept`, with `--with-touch`
+  and with `--no-touch`:
   - the slot blob's flag byte is `0` / `1`;
   - the final config's `RequiresTouch` is `false` / `true`;
   - the vault unlocks: create a secret, then `names` lists it;
-  - with the flag: stderr holds all three warning claims (a), (b), (c) (assert each, not one
+  - with `--no-touch`: stderr holds all three warning claims (a), (b), (c) (assert each, not one
     keyword) and the completion summary names the posture; stdout promises no prompt;
-  - without the flag: no warning; the existing prompt line is still there.
-- Both flag orders (`--no-presence --secure-enclave` and reversed) for each command.
+  - with `--with-touch`: no warning; the existing prompt line is still there, and the summary
+    names the posture.
+- Flag orders (`--no-touch --secure-enclave` and reversed) for each command.
 - Usage errors, one test per row, each asserting the message names `--secure-enclave` **and** that
   the config dir is unchanged byte for byte (or still empty), and that no stdin was read on
-  `recover`: `--no-presence` alone; with `--tpm`; with `--keyring` (init); with `--yubikey`
-  (recover); `slot request --no-presence <file>` without a device flag; `--no-presence` twice.
+  `recover`: `--secure-enclave` with neither choice (the message names both); both choices;
+  `--no-touch` twice; `--no-touch` and `--with-touch` alone; each with `--tpm`; with `--keyring`
+  (init); with `--yubikey` (recover); `slot request --no-touch <file>` without a device flag.
 - `HardwareServices.Enrollment(HardwareBackend.Tpm, key, requirePresence: false)` throws, and so
   does `new SimulatedHardwareService(HardwareBackend.Tpm, key, requirePresence: false)`.
 - `HardwareServices.Enrollment(HardwareBackend.SecureEnclave, key)` with the parameter omitted
@@ -147,7 +156,7 @@ Tests (simulated Secure Enclave via `TSWAP_TEST_KEY`, as the existing Secure Enc
   type by name or suppress CA1416 around it; the build stays warning-free. (This is the guard against
   the C#/Swift signature drift that decision 3 is about.)
 Break-it-once, each named in the commit:
-- hard-code `requirePresence: true` in `HardwareServices.Enrollment` → the `--no-presence` blob-flag
+- hard-code `requirePresence: true` in `HardwareServices.Enrollment` → the `--no-touch` blob-flag
   tests fail;
 - write `RequiresTouch = true` again in **each** of `InitCommand`, `RecoverCommand` and
   `SlotCommand.ExecuteHardwareRequest`, one at a time → that command's posture test fails;
@@ -163,7 +172,7 @@ Break-it-once, each named in the commit:
   `tswap_se_wrap_v2` with `requirePresence: Int32` as its last parameter and still declares the
   six-parameter `tswap_se_wrap` (catches drift from the Swift side; the reflection test in item 1
   covers the C# side).
-- **A no-presence round trip that CI can run** (the prompt was the only reason the Secure Enclave
+- **A no-touch round trip that CI can run** (the prompt was the only reason the Secure Enclave
   tests are manual): a new test class, not in the manual-only category, that enrols with
   `requirePresence: false`, unwraps in the same process and compares the key, then unwraps a
   tampered package and expects the existing error. It runs on macOS when `tswap_se_available()` is
@@ -180,25 +189,25 @@ Break-it-once: none possible on Linux for the Swift flags; say so in the commit.
 
 ### Item 3: the manual Mac check, and the docs
 
-Add a section "Checking a no-presence Secure Enclave slot on a Mac" to `HARDWARE_BACKENDS.md` with
+Add a section "Checking a no-touch Secure Enclave slot on a Mac" to `HARDWARE_BACKENDS.md` with
 exact commands the owner runs (unsigned local build, a temp `TSWAP_CONFIG_DIR`), and a results
 table with a "recorded" column left empty for the owner. **Every step is recorded, none is
 predicted.** Record the Mac's "require password after screen saver/sleep" setting and macOS version
 with the results.
-1. `tswap init --secure-enclave --no-presence --no-recovery`: the warning shows; is there a prompt?
+1. `tswap init --secure-enclave --no-touch --no-recovery`: the warning shows; is there a prompt?
 2. `tswap create t11-check`, then `tswap names`: is there a prompt; is the name listed?
-3. A fresh temp dir with `init --secure-enclave` (no flag), then `tswap names`: does it prompt?
+3. A fresh temp dir with `init --secure-enclave --with-touch`, then `tswap names`: does it prompt?
 4. Same user over `ssh localhost` while the screen is unlocked: does step 2's vault unlock?
 5. Another local account, after copying the config dir there (readable by that account): does it
    unlock? (This is claim (b); without the copy a refusal would only show file permissions.)
 6. Screen locked, from ssh: does it unlock?
 7. After a reboot, before anyone logs in, from ssh (if remote login is on): does it unlock?
 8. A new `tswap` binary with the previous release's `libtswapse.dylib` beside it: does `init
-   --secure-enclave` fail with the "update together" error?
+   --secure-enclave --with-touch` fail with the "update together" error?
 
 Update README (the Secure Enclave setup paragraphs, the "no recurring banner" note, and the `init`,
 `slot request`, `recover` rows of the command table) and the `HARDWARE_BACKENDS.md` Secure Enclave
-row: the presence gate is the default, not a given; what `--no-presence` trades away (claims (a)–(c));
+row: the choice is now explicit; what `--no-touch` trades away (claims (a)–(c));
 the approve-side known gap; that both files ship together. Where the docs would describe the lock
 behaviour of steps 4–7, write "see the recorded check" instead of a claim. The orchestrator finishes
 those sentences from the owner's results before release.
@@ -209,5 +218,5 @@ those sentences from the owner's results before release.
 - Showing a requesting slot's posture at `slot approve` (request file format change).
 - Changing an existing slot's policy (impossible in CryptoKit; a new vault).
 - Biometry-only, passcode-only or other access-control variants.
-- Any recurring warning for no-presence slots; `SecurityWarnings.Current` for Secure Enclave slots.
+- Any recurring warning for no-touch slots; `SecurityWarnings.Current` for Secure Enclave slots.
 - The broker on macOS.
