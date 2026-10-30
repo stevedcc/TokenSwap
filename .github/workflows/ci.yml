@@ -31,9 +31,10 @@ jobs:
         run: dotnet build TokenSwap.slnx
 
       # The skill eval (evals/skill, SkillEvalTests in the unit tests) runs agents in a bubblewrap
-      # sandbox. GitHub's Ubuntu runners have no bwrap, and Ubuntu 24.04 restricts unprivileged
-      # user namespaces through AppArmor; without both the eval tests would only skip.
-      - name: Enable the skill eval sandbox (Linux)
+      # sandbox, and the broker's command templates (BrokerSandboxTests, BrokerTemplateCallTests)
+      # run every template under bwrap. GitHub's Ubuntu runners have no bwrap, and Ubuntu 24.04
+      # restricts unprivileged user namespaces through AppArmor; without both those tests would only skip.
+      - name: Enable the bubblewrap sandbox (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -44,7 +45,7 @@ jobs:
           bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
       - name: Unit tests (in-process)
-        # CI_REQUIRE_BWRAP=1 on Linux: the eval tests fail instead of skipping when bwrap is unusable.
+        # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
         env:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
         run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
