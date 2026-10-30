@@ -55,6 +55,30 @@ public sealed class PreviousValueWarningTests : IDisposable
     }
 
     [Fact]
+    public void Apply_ChecksEveryMarkerOnALine()
+    {
+        // Fix round 4, item 2: every '# tswap:' marker's tail is 'name' or 'name:previous'.
+        _m.Ok("x-value", "ingest", "x");
+        var ok = _m.PathOf("ok.yaml");
+        File.WriteAllText(ok, "a: \"\" # tswap: x # tswap: db-pw:previous\n");
+        var bad = _m.PathOf("bad.yaml");
+        File.WriteAllText(bad, "a: \"\" # tswap: db-pw:previous # tswap: x:foo\n");
+        var doubled = _m.PathOf("doubled.yaml");
+        File.WriteAllText(doubled, "a: \"\" # tswap: a:b:previous\n");
+
+        var accepted = _m.Run("", "apply", ok);
+        var refused = _m.Run("", "apply", bad);
+        var refusedDoubled = _m.Run("", "apply", doubled);
+
+        Assert.True(accepted.Exit == 0, accepted.Err);
+        Assert.Contains("a: \"x-value\"", accepted.Out);
+        Assert.NotEqual(0, refused.Exit);
+        Assert.Contains("x:foo", refused.Err);
+        Assert.NotEqual(0, refusedDoubled.Exit);
+        Assert.Contains("a:b:previous", refusedDoubled.Err);
+    }
+
+    [Fact]
     public void TheMergeTieBreak_CoversThePreviousValue()
     {
         var origin = Enumerable.Repeat((byte)1, 16).ToArray();
