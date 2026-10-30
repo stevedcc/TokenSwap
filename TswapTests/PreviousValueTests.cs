@@ -93,11 +93,13 @@ public sealed class PreviousValueTests : IDisposable
     [Fact]
     public void Restore_NeedsSudo()
     {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
         _m.Ok("old", "ingest", "s");
         _m.Ok("new", "ingest", "--rotate", "s");
         _m.Sudo = false;
 
-        Assert.Contains("sudo", _m.Run("", "restore", "s").Err);
+        Assert.Contains("requires", _m.Run("", "restore", "s").Err);
         _m.Sudo = true;
         Assert.Equal("new", _m.Get("s"));
     }

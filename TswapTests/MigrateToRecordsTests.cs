@@ -475,10 +475,12 @@ public sealed class MigrateToRecordsTests : IDisposable
     [Fact]
     public void WithoutSudo_IsRefused()
     {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
         PlainVaultWithFiftySecrets();
         _m.Sudo = false;
 
-        Assert.Contains("sudo", _m.Run("1\n", "migrate", "--to-records").Err);
+        Assert.Contains("requires", _m.Run("1\n", "migrate", "--to-records").Err);
         Assert.Null(_m.Config.Store);
     }
 }

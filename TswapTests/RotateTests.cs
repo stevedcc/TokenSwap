@@ -93,6 +93,8 @@ public sealed class RotateTests : IDisposable
     [Fact]
     public void WithoutSudo_RotatingABurnedSecretWorks_AnUnburnedOneRefuses_NothingWritten()
     {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
         _m.Ok("v1", "ingest", "burned-one");
         _m.Ok("v2", "ingest", "clean-one");
         _m.Ok("", "burn", "burned-one", "seen");
@@ -104,9 +106,9 @@ public sealed class RotateTests : IDisposable
         var refusedIngest = _m.Run("v3", "ingest", "--rotate", "clean-one");
 
         Assert.NotEqual(0, refused.Exit);
-        Assert.Contains("sudo", refused.Err);
+        Assert.Contains("requires", refused.Err);
         Assert.NotEqual(0, refusedIngest.Exit);
-        Assert.Contains("sudo", refusedIngest.Err);
+        Assert.Contains("requires", refusedIngest.Err);
         Assert.Equal(before, RecordBytesSnapshot());
         Assert.Equal(lastHlc, _m.Config.LastHlc);
 
@@ -225,10 +227,12 @@ public sealed class RotateClassicStoreTests : IDisposable
     [Fact]
     public void Rotate_AnUnburnedSecret_WithoutSudo_Refuses()
     {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
         _m.Ok("old", "ingest", "s");
         _m.Sudo = false;
 
-        Assert.Contains("sudo", _m.Run("", "rotate", "s").Err);
+        Assert.Contains("requires", _m.Run("", "rotate", "s").Err);
         _m.Sudo = true;
         Assert.Equal("old", _m.Get("s"));
     }

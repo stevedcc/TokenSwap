@@ -208,10 +208,12 @@ public sealed class VaultMergeTests : IDisposable
     [Fact]
     public void WithoutSudo_IsRefused()
     {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
         LaptopCopiesTheFolder();
         _home.Sudo = false;
 
-        Assert.Contains("sudo", _home.Run("", "vault", "merge", _laptop.VaultDir!).Err);
+        Assert.Contains("requires", _home.Run("", "vault", "merge", _laptop.VaultDir!).Err);
     }
 
     [Fact]
