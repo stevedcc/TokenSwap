@@ -63,11 +63,13 @@ public class CliEnvironmentTests
     }
 
     // T7 fix round 1 (MiMo, critical): sudo and the user's own resolution give the same folder, per
-    // platform (macOS simulated through the isMacOS seam, so this runs on Linux too).
+    // platform (macOS simulated through the isMacOS seam, so this runs on Linux too), for the default
+    // config base: on Linux that is <home>/.config, i.e. XDG_CONFIG_HOME unset (fix round 2, MiMo F3:
+    // the claim is only that; see the next test for a custom XDG_CONFIG_HOME).
     [Theory]
     [InlineData(false, "/home/alice", "/home/alice/.config")]
     [InlineData(true, "/Users/alice", "/Users/alice/Library/Application Support")]
-    public void PrivilegedAndUnprivileged_ResolveTheSameFolder(bool macOS, string home, string appData)
+    public void PrivilegedAndUnprivileged_ResolveTheSameFolder_ForTheDefaultConfigBase(bool macOS, string home, string appData)
     {
         if (OperatingSystem.IsWindows()) return;
         var files = new HashSet<string>();
@@ -81,6 +83,24 @@ public class CliEnvironmentTests
 
         Assert.Equal(Path.Combine(appData, "tswap"), own);
         Assert.Equal(own, underSudo);
+    }
+
+    // Fix round 2 (MiMo F3), a documented limit: sudo can't know the invoking user's XDG_CONFIG_HOME,
+    // so with a custom one the two differ (README: set TSWAP_CONFIG_DIR for both).
+    [Fact]
+    public void Linux_ACustomXdgConfigHome_IsNotSeenUnderSudo()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Func<string, string?> own = name => name switch { "HOME" => "/home/alice", "XDG_CONFIG_HOME" => "/data/alice-cfg", _ => null };
+        Func<string, string?> sudo = name => name switch { "SUDO_USER" => "alice", "SUDO_UID" => "1000", "HOME" => "/root", _ => null };
+
+        var ownDir = CliEnvironment.ResolveConfigDir(own, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: false,
+            getApplicationDataDir: () => CliEnvironment.ApplicationDataDir(own), isMacOS: false);
+        var sudoDir = CliEnvironment.ResolveConfigDir(sudo, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: true,
+            getApplicationDataDir: () => CliEnvironment.ApplicationDataDir(sudo), lookupUser: Passwd(("alice", 1000, "/home/alice")), isMacOS: false);
+
+        Assert.Equal("/data/alice-cfg/tswap", ownDir);
+        Assert.Equal("/home/alice/.config/tswap", sudoDir);
     }
 
     // Coordinator addition: a macOS vault may still be in the folder sudo used to pick

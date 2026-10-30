@@ -48,7 +48,10 @@ Under `sudo`, tswap uses the vault of the user who ran sudo: `SUDO_USER`'s home 
 system's user database, used only when `SUDO_UID` matches that user's uid (otherwise tswap
 refuses). That includes `sudo -i`. `SUDO_USER=root` means root's own folder. Without `SUDO_USER`
 (a root service, or `su`) tswap uses the folder under `HOME`, which with plain `su` is still the
-caller's. `TSWAP_CONFIG_DIR` overrides all of this.
+caller's. `TSWAP_CONFIG_DIR` overrides all of this. **Linux:** under sudo tswap can't know your
+`XDG_CONFIG_HOME`, so it uses `<home>/.config/tswap`; if you set `XDG_CONFIG_HOME` to something
+else, set `TSWAP_CONFIG_DIR` to your vault folder (e.g. `export TSWAP_CONFIG_DIR=$XDG_CONFIG_HOME/tswap`)
+and keep it for sudo commands: `sudo --preserve-env=TSWAP_CONFIG_DIR tswap get ...`.
 
 An AI agent (Claude Code, Copilot, etc.) can:
 - Generate strong random passwords with `create` — the value is never displayed
