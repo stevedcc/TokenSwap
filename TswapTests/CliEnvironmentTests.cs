@@ -1,4 +1,5 @@
 using TswapCli;
+using TswapCore;
 using Xunit;
 
 namespace TswapTests;
@@ -20,14 +21,20 @@ public class CliEnvironmentTests
         Func<string, bool>? directoryExists = null,
         Action<string, string>? moveDirectory = null,
         TextWriter? log = null,
-        bool isPrivileged = false)
+        bool isPrivileged = false,
+        Func<string, UnixPasswdEntry?>? lookupUser = null)
         => CliEnvironment.ResolveConfigDir(
             name => env.GetValueOrDefault(name),
             directoryExists ?? (_ => false),
             moveDirectory ?? ((_, _) => { }),
             log ?? TextWriter.Null,
             isPrivileged,
-            getApplicationDataDir: () => FakeAppData);
+            getApplicationDataDir: () => FakeAppData,
+            lookupUser: lookupUser ?? (_ => null));
+
+    // Brief T7 item 1: the passwd seam. alice is uid 1000 with a home outside /home.
+    private static Func<string, UnixPasswdEntry?> Passwd(params (string Name, uint Uid, string Home)[] users)
+        => name => users.Where(u => u.Name == name).Select(u => new UnixPasswdEntry(u.Uid, u.Home)).FirstOrDefault();
 
     [Fact]
     public void ConfigDirOverride_WinsOverEverything()
@@ -42,10 +49,126 @@ public class CliEnvironmentTests
         if (OperatingSystem.IsWindows()) return; // SUDO_USER handling is Unix-only
 
         // isPrivileged: true is the input #176 adds (sudo to root, as `sudo tswap get` runs).
-        var dir = Resolve(new() { ["SUDO_USER"] = "alice" }, isPrivileged: true);
-
+        // Brief T7 item 1 (rule change): the home now comes from the passwd entry, checked against
+        // SUDO_UID, so the input gains SUDO_UID and a passwd entry with the conventional home.
         var expectedHome = OperatingSystem.IsMacOS() ? "/Users/alice" : "/home/alice";
+        var dir = Resolve(new() { ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1000" }, isPrivileged: true,
+            lookupUser: Passwd(("alice", 1000, expectedHome)));
         Assert.Equal(Path.Combine(expectedHome, ".config", "tswap"), dir);
+    }
+
+    // Brief T7 item 1 (#178): the home is the passwd entry's, not /home/<name>.
+    [Fact]
+    public void SudoUser_HomeOutsideHome_IsTakenFromPasswd()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = Resolve(new() { ["SUDO_USER"] = "svc", ["SUDO_UID"] = "990" }, isPrivileged: true,
+            lookupUser: Passwd(("svc", 990, "/var/lib/svc")));
+
+        Assert.Equal("/var/lib/svc/.config/tswap", dir);
+    }
+
+    // Brief T7 item 1 (#107): SUDO_USER is only trusted when SUDO_UID matches its passwd uid.
+    [Fact]
+    public void SudoUser_UidMismatch_Refuses_NamingBothValues()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
+            new() { ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1001" }, isPrivileged: true,
+            lookupUser: Passwd(("alice", 1000, "/home/alice"))));
+
+        Assert.Contains("1001", ex.Message);
+        Assert.Contains("1000", ex.Message);
+        Assert.Contains("alice", ex.Message);
+    }
+
+    [Fact]
+    public void SudoUser_UidMissing_Refuses()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
+            new() { ["SUDO_USER"] = "alice" }, isPrivileged: true,
+            lookupUser: Passwd(("alice", 1000, "/home/alice"))));
+
+        Assert.Contains("SUDO_UID", ex.Message);
+        Assert.Contains("not set", ex.Message);
+    }
+
+    [Fact]
+    public void SudoUser_UidNotNumeric_Refuses()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
+            new() { ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1000x" }, isPrivileged: true,
+            lookupUser: Passwd(("alice", 1000, "/home/alice"))));
+
+        Assert.Contains("SUDO_UID", ex.Message);
+        Assert.Contains("1000x", ex.Message);
+        Assert.Contains("not a number", ex.Message);
+    }
+
+    [Fact]
+    public void SudoUser_UnknownUser_Refuses()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
+            new() { ["SUDO_USER"] = "mallory", ["SUDO_UID"] = "1000" }, isPrivileged: true,
+            lookupUser: Passwd(("alice", 1000, "/home/alice"))));
+
+        Assert.Contains("mallory", ex.Message);
+        Assert.Contains("no such user", ex.Message);
+    }
+
+    // #178: root running `sudo tswap ...` has SUDO_USER=root: root's own folder, not /home/root.
+    [Fact]
+    public void SudoUser_Root_UsesRootsOwnFolder()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var looked = false;
+        var dir = Resolve(new() { ["SUDO_USER"] = "root", ["SUDO_UID"] = "0" }, isPrivileged: true,
+            lookupUser: _ => { looked = true; return new UnixPasswdEntry(0, "/root"); });
+
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
+        Assert.False(looked);
+    }
+
+    [Fact]
+    public void SudoUid_Zero_UsesRootsOwnFolder()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = Resolve(new() { ["SUDO_USER"] = "toor", ["SUDO_UID"] = "0" }, isPrivileged: true,
+            lookupUser: Passwd(("toor", 0, "/home/toor")));
+
+        Assert.Equal(Path.Combine(FakeAppData, "tswap"), dir);
+    }
+
+    [Fact]
+    public void ConfigDirOverride_WinsOverAMismatchedSudoUid()
+    {
+        var dir = Resolve(new() { ["TSWAP_CONFIG_DIR"] = "/custom/dir", ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1" },
+            isPrivileged: true, lookupUser: Passwd(("alice", 1000, "/home/alice")));
+        Assert.Equal("/custom/dir", dir);
+    }
+
+    // The real lookup (no seam): this test process's own user resolves to its uid and an absolute home.
+    [Fact]
+    public void UnixPasswd_LooksUpTheCurrentUser()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var entry = UnixPasswd.Lookup(Environment.UserName);
+
+        Assert.NotNull(entry);
+        Assert.Equal(new UnixOwnership().EffectiveUid, entry.Uid);
+        Assert.True(Path.IsPathRooted(entry.Home), entry.Home);
+        Assert.Null(UnixPasswd.Lookup("no-such-user-" + Guid.NewGuid().ToString("N")[..8]));
     }
 
     // Issue #176: `sudo -u <non-root>` keeps SUDO_USER = the caller; the target user's own

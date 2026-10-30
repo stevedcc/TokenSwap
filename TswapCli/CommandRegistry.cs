@@ -106,7 +106,11 @@ public static class CommandRegistry
         foreach (var c in Commands.Where(c => c.RequiresSudo))
             o.WriteLine($"  [sudo] {p} {c.HelpUsage,-13}    {c.Description}");
         o.WriteLine("\nCommands marked [sudo] require elevated privileges.");
-        o.WriteLine("Add -v or --verbose for detailed YubiKey output.");
+        o.WriteLine("Add -v or --verbose (before the command) for detailed YubiKey output.");
+        o.WriteLine("\nEnvironment:");
+        o.WriteLine("  TSWAP_CONFIG_DIR    the config folder to use (overrides everything below)");
+        o.WriteLine("  Under sudo (sudo -i included), tswap uses the vault of the user who ran sudo:");
+        o.WriteLine("  SUDO_USER's home from the system's user database, checked against SUDO_UID.");
         o.WriteLine("\nExamples:");
         o.WriteLine($"  {p} create storj-pass");
         o.WriteLine($"  kubectl get secret db-pass -o jsonpath='{{{{.data.password}}}}' | base64 -d | {p} ingest db-pass");

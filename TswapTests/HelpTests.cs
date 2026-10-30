@@ -74,6 +74,16 @@ public class HelpTests : IDisposable
         Assert.Contains("get <name>", stdout);
     }
 
+    // Brief T7 item 1 (#178): `sudo -i` keeps using the invoking user's vault; the help says so.
+    [Fact]
+    public void TopLevelHelp_ExplainsWhichVaultSudoUses()
+    {
+        var (_, stdout, _) = Run(sudoBypass: true, "--help");
+
+        Assert.Contains("sudo -i", stdout);
+        Assert.Contains("TSWAP_CONFIG_DIR", stdout);
+    }
+
     [Fact]
     public void GetHelp_NeedsNeitherSudoNorAVault()
     {
