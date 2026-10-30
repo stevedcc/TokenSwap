@@ -103,9 +103,18 @@ Break-it-once: hard-code `requirePresence: true` in `HardwareServices.Enrollment
 - `AppleSecureEnclaveInterop.Wrap(byte[] plaintextKey, bool requirePresence)` passes `1`/`0`.
 - A Linux-runnable test that the `LibraryImport` signature has the extra `int` (reflection over the
   P/Invoke method's parameters is fine here, or a source-level check; say which in the commit).
-- The existing macOS-only Secure Enclave tests (`SecureEnclaveHardwareServiceTests`, run on purpose
-  on a Mac) get one new case: enrol with `requirePresence: false`, unwrap in the same process with no
-  prompt. Mark it like its siblings (it is run by hand, not in CI).
+- **A no-presence round trip that CI can run** (the presence prompt was the only reason the
+  Secure Enclave tests are manual): a new test class, not in the manual-only category, that enrols
+  with `requirePresence: false`, unwraps in the same process and compares the key, then unwraps a
+  tampered package and expects the existing error. It runs on macOS when `tswap_se_available()` is
+  true. GitHub's macOS runners are virtual machines and may have no Secure Enclave; nobody has
+  checked. So:
+  - add a CI step on `macos-latest` that prints the probe's result (`Secure Enclave available:
+    true|false`), so the first run answers the question;
+  - when the probe is false the test returns early **and writes the reason to the test output**; it
+    fails instead when `CI_REQUIRE_SE=1` is set (same pattern as `CI_REQUIRE_BWRAP`). Don't set
+    `CI_REQUIRE_SE` in the workflow yet: the orchestrator sets it after the first run if the probe
+    says true, or records in `HARDWARE_BACKENDS.md` that the runners have no Secure Enclave.
 - CI must still build the shim on `macos-latest` (the existing job does; check it in your report
   from the build output description, you can't run it here).
 Break-it-once: none possible on Linux for the Swift flags; say so in the commit. Item 3 is the check.
