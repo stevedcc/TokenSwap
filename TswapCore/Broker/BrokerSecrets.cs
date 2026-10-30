@@ -39,6 +39,15 @@ public interface IBrokerSecretSource
     /// when the secret is missing or unusable.
     /// </summary>
     BrokerSecret Read(string secretName);
+
+    /// <summary>
+    /// Brief T9 decision 7: ONE unlock, then each of <paramref name="secretNames"/> read from its own
+    /// record (never a whole-vault decrypt). The caller disposes every value. Same exceptions as
+    /// <see cref="Read"/>; on a failure nothing read so far is returned (it is zeroed). A source
+    /// that can't do this in one unlock must not pretend to: the default refuses.
+    /// </summary>
+    IReadOnlyDictionary<string, BrokerSecret> ReadMany(IReadOnlyCollection<string> secretNames) =>
+        throw new NotSupportedException("this secret source can't read several secrets in one unlock");
 }
 
 /// <summary>
@@ -84,5 +93,51 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
             throw new BrokerSecretException($"secret '{secretName}' contains CR, LF or NUL and can't be sent in a header");
         }
         return new BrokerSecret(value);
+    }
+
+    /// <summary>One unlock; each named record decrypted on its own (<see cref="RecordVaultStore.ReadSecretValue"/>); the vault key zeroed at once.</summary>
+    public IReadOnlyDictionary<string, BrokerSecret> ReadMany(IReadOnlyCollection<string> secretNames)
+    {
+        byte[] key;
+        try
+        {
+            var config = store.LoadConfig();
+            key = unlocker.Unlock(config, _ => throw new TswapException(
+                "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
+        }
+        var result = new Dictionary<string, BrokerSecret>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var name in secretNames)
+            {
+                byte[]? value;
+                try
+                {
+                    value = store.ReadSecretValue(name, key);
+                }
+                catch (TswapException ex)
+                {
+                    throw new BrokerSecretException($"secret '{name}': {ex.Message}");
+                }
+                if (value is null)
+                    throw new BrokerSecretException($"secret '{name}' is not in the vault");
+                result[name] = new BrokerSecret(value);
+            }
+            return result;
+        }
+        catch
+        {
+            foreach (var secret in result.Values)
+                secret.Dispose();
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
     }
 }

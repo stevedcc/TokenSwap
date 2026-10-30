@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using TswapCore;
 using TswapCore.Broker;
+using TswapCore.Broker.Templates;
 
 namespace TswapCli.Commands;
 
@@ -13,7 +14,7 @@ namespace TswapCli.Commands;
 public sealed class BrokerCommand : ICliCommand
 {
     public string Name => "broker";
-    public string HelpUsage => "broker <serve|forward|route|socket> ...";
+    public string HelpUsage => "broker <serve|forward|call|route|socket|template> ...";
     public string Description =>
         "Credential-adding HTTP proxy for containers (serve as the vault user; forward in the container; sudo for route|socket add|remove)";
 
@@ -24,11 +25,14 @@ public sealed class BrokerCommand : ICliCommand
         "Usage:\n" +
         "  tswap broker serve\n" +
         "  tswap broker forward --listen 127.0.0.1:<port> [--socket /run/tswap.sock]\n" +
+        "  tswap broker call <template> [name=value ...] [--socket /run/tswap.sock]   (exit 125: the broker refused or failed)\n" +
         "  sudo tswap broker route add <name> --upstream https://host[/base] --auth bearer|basic|header --secret <secret-name>\n" +
         "        [--user <basic-user>] [--header <header-name>] --path <regex> [--methods GET,HEAD,POST] [--idle-timeout <sec>]\n" +
         "  sudo tswap broker route remove <name>\n" +
-        "  sudo tswap broker socket add <name> --uids <uid|N-M>[,...] --routes <route>[,...] [--socket-dir <dir>]\n" +
-        "  sudo tswap broker socket remove <name>";
+        "  sudo tswap broker socket add <name> --uids <uid|N-M>[,...] [--routes <route>[,...]] [--templates <template>[,...]] [--socket-dir <dir>]\n" +
+        "  sudo tswap broker socket remove <name>\n" +
+        "  sudo tswap broker template add <file.json|->\n" +
+        "  sudo tswap broker template remove <name>";
 
     public int Execute(CommandContext ctx, string[] args)
     {
@@ -41,10 +45,13 @@ public sealed class BrokerCommand : ICliCommand
         {
             "serve" when args.Length == 1 => Serve(ctx),
             "forward" => Forward(ctx, args[1..]),
+            "call" => Call(ctx, args[1..]),
             "route" when args.Length >= 2 && args[1] == "add" => RouteAdd(ctx, args[2..]),
             "route" when args.Length >= 2 && args[1] == "remove" => RouteRemove(ctx, args[2..]),
             "socket" when args.Length >= 2 && args[1] == "add" => SocketAdd(ctx, args[2..]),
             "socket" when args.Length >= 2 && args[1] == "remove" => SocketRemove(ctx, args[2..]),
+            "template" when args.Length >= 2 && args[1] == "add" => TemplateAdd(ctx, args[2..]),
+            "template" when args.Length >= 2 && args[1] == "remove" => TemplateRemove(ctx, args[2..]),
             _ => throw new TswapException(Usage),
         };
     }
@@ -69,7 +76,8 @@ public sealed class BrokerCommand : ICliCommand
 
         var owner = Owner(ctx);
         var configDir = ctx.Env.ConfigDir;
-        var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(owner, configDir));
+        var host = Host(ctx);
+        var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(owner, configDir, host: host));
         using var log = new BrokerLog(ctx.Console.Error, Path.Combine(configDir, BrokerLog.FileName));
         using var forwarder = new HttpBrokerForwarder(TimeProvider.System);
         var options = new BrokerServerOptions
@@ -79,6 +87,11 @@ public sealed class BrokerCommand : ICliCommand
             Forwarder = forwarder,
             Log = log,
         };
+#if DEBUG
+        // The end-to-end tests connect as their own uid, which serve otherwise refuses. Compiled
+        // into Debug builds only (fix round 1); there, only with TSWAP_TEST_KEY set (a test key).
+        options = options with { AllowOwnUidForTests = ctx.TestKey != null };
+#endif
 
         var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         BrokerServer? server = null;
@@ -92,7 +105,7 @@ public sealed class BrokerCommand : ICliCommand
         using var hangup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, signal =>
         {
             signal.Cancel = true;
-            server?.Reload(() => BrokerConfigFile.Load(owner, configDir));
+            server?.Reload(() => BrokerConfigFile.Load(owner, configDir, host: host));
         });
 
         server = BrokerServer.StartAsync(options).GetAwaiter().GetResult();
@@ -144,6 +157,71 @@ public sealed class BrokerCommand : ICliCommand
         return 0;
     }
 
+    // ------------------------------------------------------------------ call
+
+    /// <summary>
+    /// Calls a template on the broker socket (brief T9 decision 5): prints its stdout and stderr and
+    /// exits with its exit code; a broker-side error (refused, unreachable, sandbox unavailable)
+    /// exits 125. Needs no vault.
+    /// </summary>
+    private static int Call(CommandContext ctx, string[] args)
+    {
+        string? socket = null;
+        string? template = null;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--socket" && i + 1 < args.Length && socket is null)
+            {
+                socket = args[++i];
+                continue;
+            }
+            if (template is null)
+            {
+                template = args[i];
+                continue;
+            }
+            var eq = args[i].IndexOf('=');
+            if (eq <= 0 || !values.TryAdd(args[i][..eq], args[i][(eq + 1)..]))
+            {
+                ctx.Console.Error.WriteLine($"tswap broker call: '{BrokerPolicy.Printable(args[i])}' is not name=value (or is given twice).\n{Usage}");
+                return BrokerTemplateClient.BrokerError;
+            }
+        }
+        if (template is null)
+        {
+            ctx.Console.Error.WriteLine(Usage);
+            return BrokerTemplateClient.BrokerError;
+        }
+        var real = ctx.Console is SystemConsole;
+        using var stdout = real ? Console.OpenStandardOutput() : new TextWriterStream(ctx.Console.Out);
+        using var stderr = real ? Console.OpenStandardError() : new TextWriterStream(ctx.Console.Error);
+        return BrokerTemplateClient.CallAsync(socket ?? "/run/tswap.sock", template, values, stdout, stderr, ctx.Console.Error)
+            .GetAwaiter().GetResult();
+    }
+
+    /// <summary>Bytes to a <see cref="TextWriter"/> as UTF-8 text (an in-process console; the real one gets raw bytes).</summary>
+    private sealed class TextWriterStream(TextWriter writer) : Stream
+    {
+        private readonly System.Text.Decoder _decoder = new System.Text.UTF8Encoding(false).GetDecoder();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => writer.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var chars = new char[_decoder.GetCharCount(buffer, offset, count)];
+            _decoder.GetChars(buffer, offset, count, chars, 0);
+            writer.Write(chars);
+        }
+    }
+
     // ------------------------------------------------------------------ config edits (sudo)
 
     private static DirectoryOwnerMatcher Owner(CommandContext ctx) =>
@@ -154,7 +232,28 @@ public sealed class BrokerCommand : ICliCommand
         ?? new BrokerConfig { Version = BrokerConfig.CurrentVersion };
 
     private static void Save(CommandContext ctx, BrokerConfig config) =>
-        BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config);
+        BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config, Host(ctx));
+
+    /// <summary>
+    /// The host context templates are checked against (brief T9 decision 2): the vault user is the
+    /// config folder's owner, and the config folder, the record store's vault folder and that user's
+    /// home are protected. Null off Linux (no templates there).
+    /// </summary>
+    private static BrokerHostContext? Host(CommandContext ctx)
+    {
+        if (!OperatingSystem.IsLinux())
+            return null;
+        string? vaultDir = null;
+        try
+        {
+            vaultDir = (ctx.Storage as RecordVaultStore)?.VaultDir;
+        }
+        catch (TswapException)
+        {
+            // No usable record-store config: only the config folder is known.
+        }
+        return BrokerHostContext.ForVault(ctx.Env.ConfigDir, vaultDir);
+    }
 
     private static int RouteAdd(CommandContext ctx, string[] args)
     {
@@ -219,7 +318,7 @@ public sealed class BrokerCommand : ICliCommand
     private static int SocketAdd(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker socket add", "Changing broker.json needs sudo: it decides which credentials containers can use.");
-        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--socket-dir"]);
+        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--templates", "--socket-dir"]);
         if (positional.Count != 1)
             throw new TswapException(Usage);
         var name = positional[0];
@@ -228,6 +327,7 @@ public sealed class BrokerCommand : ICliCommand
             Name = name,
             Uids = SplitList(Required(options, "--uids")),
             Routes = options.TryGetValue("--routes", out var r) ? SplitList(r) : [],
+            Templates = options.TryGetValue("--templates", out var t) ? SplitList(t) : null,
         };
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
@@ -253,6 +353,64 @@ public sealed class BrokerCommand : ICliCommand
             throw new TswapException($"No socket named '{BrokerPolicy.Printable(name)}'.");
         Save(ctx, config with { Sockets = [.. config.Sockets.Where(s => s.Name != name)] });
         ctx.Console.Out.WriteLine($"Removed socket '{name}'. A running 'tswap broker serve' refuses it after SIGHUP.");
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>sudo tswap broker template add &lt;file.json|-&gt;</c> (brief T9 decision 9): one template as a
+    /// JSON object, validated with the whole file (binds checked on this host) before anything is
+    /// written.
+    /// </summary>
+    private static int TemplateAdd(CommandContext ctx, string[] args)
+    {
+        ctx.RequireSudo("broker template add", "Changing broker.json needs sudo: a template runs host-side commands with vault secrets.");
+        if (args.Length != 1)
+            throw new TswapException(Usage);
+        string json;
+        try
+        {
+            json = args[0] == "-" ? ctx.Console.In.ReadToEnd() : File.ReadAllText(args[0]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TswapException($"Can't read the template file {args[0]}: {ex.Message}");
+        }
+        BrokerTemplateConfig template;
+        try
+        {
+            template = System.Text.Json.JsonSerializer.Deserialize(json, BrokerJsonContext.Default.BrokerTemplateConfig)
+                ?? throw new TswapException("The template file holds null; it must be one JSON object.");
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            throw new TswapException($"The template can't be read: {ex.Message}");
+        }
+        BrokerPolicy.ValidateName(template.Name, "template");
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
+        var config = ReadOrNew(ctx);
+        if (config.Templates?.Any(x => x.Name == template.Name) == true)
+            throw new TswapException($"Template '{template.Name}' already exists. Remove it first: sudo {ctx.Prefix} broker template remove {template.Name}");
+        Save(ctx, config with { Templates = [.. config.Templates ?? [], template] });
+        ctx.Console.Out.WriteLine($"Added template '{template.Name}'. Allow it on a socket ('socket add ... --templates {template.Name}'); a running 'tswap broker serve' picks it up on SIGHUP.");
+        return 0;
+    }
+
+    private static int TemplateRemove(CommandContext ctx, string[] args)
+    {
+        ctx.RequireSudo("broker template remove", "Changing broker.json needs sudo: a template runs host-side commands with vault secrets.");
+        if (args.Length != 1)
+            throw new TswapException(Usage);
+        var name = args[0];
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
+        var config = ReadOrNew(ctx);
+        if (config.Templates?.Any(t => t.Name == name) != true)
+            throw new TswapException($"No template named '{BrokerPolicy.Printable(name)}'.");
+        var users = config.Sockets.Where(s => s.Templates?.Contains(name) == true).Select(s => s.Name).ToList();
+        if (users.Count > 0)
+            throw new TswapException($"Template '{name}' is allowed on socket(s) {string.Join(", ", users)}; remove those sockets (or re-add them without it) first.");
+        var rest = config.Templates.Where(t => t.Name != name).ToList();
+        Save(ctx, config with { Templates = rest.Count == 0 ? null : rest });
+        ctx.Console.Out.WriteLine($"Removed template '{name}'.");
         return 0;
     }
 
