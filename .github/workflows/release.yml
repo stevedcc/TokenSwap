@@ -18,8 +18,20 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # The same unit tests as ci.yml's Linux leg (E2E needs a published binary and the hardware
+      # categories need real devices, so they are left out here as there).
+      - name: Install bubblewrap (sandbox tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - name: Test
-        run: TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj
+        env:
+          CI_REQUIRE_BWRAP: '1'
+        run: TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
 
   verify-version:
     name: Verify Version
@@ -32,11 +44,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           TAG_VERSION="${TAG#v}"
-          CSPROJ_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' tswap.csproj)
+          CSPROJ_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' TswapCli/TswapCli.csproj)
           echo "Tag version:    $TAG_VERSION"
           echo "Csproj version: $CSPROJ_VERSION"
           if [ "$TAG_VERSION" != "$CSPROJ_VERSION" ]; then
-            echo "ERROR: Tag $TAG does not match <Version>$CSPROJ_VERSION</Version> in tswap.csproj"
+            echo "ERROR: Tag $TAG does not match <Version>$CSPROJ_VERSION</Version> in TswapCli/TswapCli.csproj"
             exit 1
           fi
 
@@ -73,7 +85,7 @@ jobs:
 
       - name: Publish
         run: >
-          dotnet publish tswap.csproj
+          dotnet publish TswapCli/TswapCli.csproj
           --configuration Release
           --runtime ${{ matrix.rid }}
           --output ./publish/${{ matrix.rid }}
