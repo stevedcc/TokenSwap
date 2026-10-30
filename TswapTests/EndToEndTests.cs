@@ -223,9 +223,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("hello-world", "ingest", "test-val");
 
         // A command that ignores its arguments and exits 0 — proving substitution worked.
-        // 'true' is POSIX-only; 'cmd /c rem' is the Windows no-op equivalent.
+        // 'true' is POSIX-only; on Windows a PowerShell script file that exits 0 (#105 refuses
+        // inline 'cmd /c' / 'pwsh -Command' code, so the Windows child is a script file).
+        var noop = Path.Combine(_tempDir, "noop.ps1");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(noop, "exit 0\n");
         var (exit, _, _) = OperatingSystem.IsWindows()
-            ? RunTswap("run", "cmd", "/c", "rem", "{{test-val}}")
+            ? RunTswap("run", "pwsh", "-NoProfile", "-File", noop, "{{test-val}}")
             : RunTswap("run", "true", "{{test-val}}");
 
         Assert.Equal(0, exit);
@@ -479,11 +483,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswapWithStdin("test-password-123", "ingest", "my-pass");
 
         // Verify the substituted value is non-empty (can't use redirect/pipe due to
-        // exfiltration protection). POSIX: test -n; Windows: pwsh length check — the
-        // whole -Command script is one argv element, so substitution happens inside it.
+        // exfiltration protection). POSIX: test -n; Windows: a PowerShell script file that
+        // checks its argument's length (#105 refuses inline 'pwsh -Command' code).
+        var check = Path.Combine(_tempDir, "check.ps1");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(check, "param($v)\nif ($v.Length -gt 0) { exit 0 } else { exit 1 }\n");
         var (exit, _, _) = OperatingSystem.IsWindows()
-            ? RunTswap("run", "pwsh", "-NoProfile", "-Command",
-                "if ('{{my-pass}}'.Length -gt 0) { exit 0 } else { exit 1 }")
+            ? RunTswap("run", "pwsh", "-NoProfile", "-File", check, "{{my-pass}}")
             : RunTswap("run", "test", "-n", "{{my-pass}}");
 
         Assert.Equal(0, exit);
@@ -745,9 +751,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         // use only strings unique to each pipeline stage: the verbose token line
         // (pre-PTY) and the redaction marker (only ever emitted from redacted child
         // output). The raw secret never appears in verbose output (it is masked).
+        // #105 refuses inline 'pwsh -Command' code, so the child is a script file taking the
+        // secret as its argument; the printed sequence and the assertions are unchanged.
+        var printScript = Path.Combine(_tempDir, "print3.ps1");
+        File.WriteAllText(printScript,
+            "param($v)\nWrite-Output before\nWrite-Output $v\nWrite-Output after\nStart-Sleep -Milliseconds 1500\n");
         var (exitCode, output) = RunTswapInConPty(waitForOutput: "[REDACTED: my-secret]",
-            "run", "-v", "pwsh", "-NoProfile", "-Command",
-            "Write-Output before; Write-Output {{my-secret}}; Write-Output after; Start-Sleep -Milliseconds 1500");
+            "run", "-v", "pwsh", "-NoProfile", "-File", printScript, "{{my-secret}}");
 
         // Assert via Assert.True with the full escaped capture: xunit truncates the
         // haystack in Contains failures, which hides the VT stream needed to diagnose
