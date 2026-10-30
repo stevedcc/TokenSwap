@@ -39,6 +39,9 @@ public sealed class FleetMachine : IDisposable
     /// <summary>The ownership policy this machine's storage applies (null: the real one).</summary>
     public DirectoryOwnerMatcher? Ownership { get; set; }
 
+    /// <summary>Brief T6: the test seams of <c>migrate --to-records</c> (null: none).</summary>
+    public RecordMigrationSeams? MigrationSeams { get; set; }
+
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
     public Func<DateTimeOffset>? Clock { get; set; }
 
@@ -84,7 +87,10 @@ public sealed class FleetMachine : IDisposable
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
-        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, Clock, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo);
+        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, Clock, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        {
+            MigrationSeams = MigrationSeams,
+        };
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
     }

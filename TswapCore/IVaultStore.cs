@@ -55,6 +55,9 @@ public interface IFileVaultStore : IVaultStore
     /// <summary>Path to the encrypted secrets file.</summary>
     string SecretsFile { get; }
 
+    /// <summary>The file layer this store reads and writes through (brief T6 decision 10).</summary>
+    DirectoryOwnerMatcher Owner { get; }
+
     /// <summary>
     /// Copies config.json to a new, uniquely named <c>config.json.bak-&lt;timestamp&gt;</c> (never
     /// overwriting one) with the same ownership rule as the config itself; returns its path.

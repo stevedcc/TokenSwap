@@ -420,8 +420,16 @@ public static class FileBackup
         return Next(file, utcNow, backup => owner.WriteNew(backup, bytes));
     }
 
-    /// <summary>Moves <paramref name="file"/> aside under a backup name (keeps its owner and mode).</summary>
-    public static string Move(string file, DateTime utcNow) => Next(file, utcNow, backup => File.Move(file, backup, overwrite: false));
+    /// <summary>
+    /// Moves <paramref name="file"/> aside under a backup name (keeps its owner and mode), renamed
+    /// by <paramref name="owner"/> (null: <see cref="DirectoryOwnerMatcher.Default"/>): as the
+    /// folder's owner under sudo.
+    /// </summary>
+    public static string Move(string file, DateTime utcNow, DirectoryOwnerMatcher? owner = null)
+    {
+        owner ??= DirectoryOwnerMatcher.Default;
+        return Next(file, utcNow, backup => owner.Move(file, backup));
+    }
 
     private static string Next(string file, DateTime utcNow, Action<string> create)
     {

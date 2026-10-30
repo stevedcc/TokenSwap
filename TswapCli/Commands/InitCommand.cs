@@ -8,7 +8,7 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => "init [--keyring] [--tpm|--secure-enclave] [--no-recovery]";
+    public string HelpUsage => "init [--keyring] [--tpm|--secure-enclave] [--no-recovery] | init --vault-dir <shared folder>";
     public string Description => "Initialize with 2 YubiKeys; --keyring for a keyring vault with one YubiKey slot (add keys with 'slot add --yubikey'); --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware. Keyring vaults get a recovery slot; --no-recovery opts out";
     public bool RequiresSudo => false;
 
@@ -18,6 +18,14 @@ public sealed class InitCommand : ICliCommand
     public int Execute(CommandContext ctx, string[] args)
     {
         var c = ctx.Console;
+
+        // Brief T6 decision 8: join a vault folder another machine already shares.
+        if (args.Contains("--vault-dir"))
+        {
+            if (args is not ["--vault-dir", var folder] || folder.StartsWith("--"))
+                throw new UsageException($"{ctx.Prefix} init --vault-dir <existing shared vault folder> (no other flags)");
+            return ExecuteJoin(ctx, folder);
+        }
 
         // Issue #177: the argument list must be exactly a combination of the known flags. Checked
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
@@ -165,7 +173,7 @@ public sealed class InitCommand : ICliCommand
         ctx.Storage.SaveConfig(config);
         if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -278,7 +286,7 @@ public sealed class InitCommand : ICliCommand
             ctx.Storage.SaveConfig(config);
             if (fileStore != null && File.Exists(fileStore.SecretsFile))
             {
-                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
+                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
                 c.SetForeground(ConsoleColor.Yellow);
                 c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
                 c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -312,6 +320,51 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
+    /// Brief T6 decision 8: points this machine's config at a vault folder another machine
+    /// already shares (a sync folder or a share): a record-store config with this machine's own
+    /// new origin id and no slot of its own. It opens with any YubiKey that has a slot in that
+    /// folder's keyring, or the recovery key; a TPM / Secure Enclave machine joins with
+    /// <c>slot request</c> / <c>approve</c> / <c>accept --vault-dir</c> instead. Nothing in the
+    /// folder is written. A previous config.json is backed up; a classic secrets file is moved aside.
+    /// </summary>
+    private static int ExecuteJoin(CommandContext ctx, string folder)
+    {
+        var c = ctx.Console;
+        if (ctx.Storage is not IFileVaultStore fileStore)
+            throw new TswapException("'init --vault-dir' needs a file-based config.");
+        var vaultDir = Path.GetFullPath(folder);
+        var probe = new Config([], "", DateTime.UtcNow, Store: RecordVaultStore.StoreName, VaultDir: vaultDir, OriginId: RecordVaultStore.NewOriginId());
+        var folderStore = RecordVaultStore.ForFolder(vaultDir, probe, fileStore.Owner);
+        if (!fileStore.Owner.FileExists(folderStore.KeyringFile))
+            throw new TswapException(
+                $"{vaultDir} has no keyring, so it is not a shared vault folder (yet). To make a new shareable vault, run " +
+                $"'{ctx.Prefix} init' (or --keyring / --tpm / --secure-enclave), then 'sudo {ctx.Prefix} migrate --to-records --vault-dir {vaultDir}'.");
+        var keyring = folderStore.ReadKeyring();
+
+        if (File.Exists(fileStore.ConfigFile))
+        {
+            c.Out.Write("Already initialized. Point this machine at the shared folder instead? (yes/no): ");
+            if (c.ReadLine()?.ToLower() != "yes")
+                return 0;
+            c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
+        }
+        var config = probe with { RngMode = RngMode.System };
+        fileStore.Owner.CreateDirectory(fileStore.ConfigDir);
+        fileStore.Owner.WriteAtomic(fileStore.ConfigFile, System.Text.Encoding.UTF8.GetBytes(
+            System.Text.Json.JsonSerializer.Serialize(config, TswapJsonContext.Default.Config)));
+        if (File.Exists(fileStore.SecretsFile))
+            c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
+
+        var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));
+        c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
+        c.Out.WriteLine("It opens with any YubiKey that has a slot there, or the recovery key. To give this machine's TPM or Secure");
+        c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'slot approve' on an enrolled machine, then");
+        c.Out.WriteLine($"'{ctx.Prefix} slot accept <approve-file> --vault-dir {vaultDir}' here.");
+        c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile} (per machine: never sync it; sync only the vault folder).");
+        return 0;
+    }
+
+    /// <summary>
     /// Displays the recovery slot's private key exactly once (issue #120) — same custody model
     /// as the XOR share block above: tswap never persists this value anywhere (that is the one
     /// hard security invariant of the whole feature), so this call site is the only place it is
@@ -319,7 +372,7 @@ public sealed class InitCommand : ICliCommand
     /// <c>--no-recovery</c> was passed, in which case this prints a short "no recovery slot"
     /// notice instead so the absence of a break-glass option isn't a silent surprise later.
     /// </summary>
-    private static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
+    internal static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
     {
         if (recoveryPrivateKey == null)
         {
@@ -522,7 +575,7 @@ public sealed class InitCommand : ICliCommand
         ctx.Storage.SaveConfig(config);
         if (fileStore != null && File.Exists(fileStore.SecretsFile))
         {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");

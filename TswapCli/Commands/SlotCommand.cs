@@ -407,7 +407,17 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteAccept(CommandContext ctx, string[] args)
     {
-        var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>]";
+        var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>] [--vault-dir <shared folder>]";
+        // Brief T6 decision 8: --vault-dir joins a shared vault folder (record store).
+        string? vaultDir = null;
+        var vaultDirIndex = Array.IndexOf(args, "--vault-dir");
+        if (vaultDirIndex >= 0)
+        {
+            if (vaultDirIndex + 1 >= args.Length || args[vaultDirIndex + 1].StartsWith("--"))
+                throw new UsageException(acceptUsage);
+            vaultDir = Path.GetFullPath(args[vaultDirIndex + 1]);
+            args = [.. args[..vaultDirIndex], .. args[(vaultDirIndex + 2)..]];
+        }
         string path;
         string? receiptPath = null;
         switch (args)
@@ -548,11 +558,27 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotHwBlob = null,
         };
 
-        ctx.Storage.SaveConfig(finalConfig);
-
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore == null || !File.Exists(fileStore.SecretsFile))
-            ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+        if (vaultDir != null)
+        {
+            // The new slot goes straight into the shared folder's keyring (a union with what is
+            // there; another vault's keyring there is refused), and config.json becomes this
+            // machine's record-store config.
+            if (fileStore == null)
+                throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
+            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
+            {
+                Store = RecordVaultStore.StoreName,
+                VaultDir = vaultDir,
+                OriginId = RecordVaultStore.NewOriginId(),
+            });
+        }
+        else
+        {
+            ctx.Storage.SaveConfig(finalConfig);
+            if (fileStore == null || !File.Exists(fileStore.SecretsFile))
+                ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+        }
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
         // copy (and every copy taken from it afterwards) opens with this machine's device too.

@@ -36,6 +36,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     private readonly Func<DateTimeOffset> _clock;
 
     private Config? _machineConfig;
+    private readonly bool _detached;
     private Hlc _highestSeen = Hlc.Zero;
     private Dictionary<string, LoadedRecord>? _loaded;
     private TextWriter? _warnings;
@@ -54,7 +55,28 @@ public sealed class RecordVaultStore : IFileVaultStore
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Brief T6 decision 8: a store over a bare vault folder with an in-memory machine config (no
+    /// <c>config.json</c> is read or written): <c>migrate --to-records</c> fills its temp folder
+    /// and reads it back through one.
+    /// </summary>
+    public static RecordVaultStore ForFolder(string vaultDir, Config machineConfig, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null)
+    {
+        var store = new RecordVaultStore(Path.GetFullPath(vaultDir), owner, clock, detached: true);
+        store._machineConfig = machineConfig with { Keyring = null, Store = StoreName, VaultDir = Path.GetFullPath(vaultDir) };
+        return store;
+    }
+
+    private RecordVaultStore(string vaultDir, DirectoryOwnerMatcher? owner, Func<DateTimeOffset>? clock, bool detached)
+        : this(vaultDir, owner, clock)
+    {
+        _detached = detached;
+    }
+
     public string ConfigDir { get; }
+
+    /// <inheritdoc/>
+    public DirectoryOwnerMatcher Owner => _owner;
 
     public string ConfigFile { get; }
 
@@ -62,7 +84,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     public string SecretsFile { get; }
 
     /// <summary>The vault folder, from the loaded config.</summary>
-    public string VaultDir => Path.GetFullPath(MachineConfig.VaultDir
+    public string VaultDir => _detached ? ConfigDir : Path.GetFullPath(MachineConfig.VaultDir
         ?? throw new TswapException("Config is corrupted: a record store needs VaultDir. Restore config.json from backup."));
 
     /// <summary>The keyring file in the vault folder.</summary>
@@ -104,6 +126,8 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private Config ReadMachineConfig()
     {
+        if (_detached)
+            return _machineConfig!;
         var config = TryReadMachineConfig() ?? throw new TswapException("Not initialized. Run: tswap init");
         if (config.Store != StoreName)
             throw new TswapException($"{ConfigFile} is not a record store's config (Store is not \"{StoreName}\").");
@@ -117,6 +141,8 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private Config? TryReadMachineConfig()
     {
+        if (_detached)
+            return _machineConfig;
         if (!_owner.FileExists(ConfigFile))
             return null;
         using var reader = new StreamReader(new MemoryStream(_owner.ReadAllBytes(ConfigFile)), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
@@ -126,6 +152,11 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private void WriteMachineConfig(Config machine)
     {
+        if (_detached)
+        {
+            _machineConfig = machine;
+            return;
+        }
         _owner.CreateDirectory(ConfigDir);
         _owner.WriteAtomic(ConfigFile, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(machine, TswapJsonContext.Default.Config)));
     }
@@ -496,6 +527,43 @@ public sealed class RecordVaultStore : IFileVaultStore
 
         WriteRecords(writes, key, loaded);
     }
+
+    /// <summary>
+    /// Brief T6 decision 8: writes every secret of <paramref name="db"/> as a record into an empty
+    /// records folder, keeping its times: the version stamp's physical part is the secret's
+    /// <see cref="Secret.Modified"/>, a burn's is its <see cref="Secret.BurnedAt"/>, with this
+    /// machine's origin id. Returns the highest HLC written (the new config's <c>LastHlc</c>).
+    /// </summary>
+    public Hlc WriteSnapshot(SecretsDb db, byte[] key)
+    {
+        var loaded = LoadRecords(key, _warnings);
+        if (loaded.Count > 0)
+            throw new InvalidOperationException("WriteSnapshot needs an empty records folder.");
+        var origin = OriginId();
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
+        var writes = new List<(string FileName, SecretRecord State)>();
+        foreach (var (name, secret) in db.Secrets.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            var version = new Stamp(new Hlc(UnixMs(secret.Modified), 0), origin);
+            Observe(version.Hlc);
+            var burns = new List<BurnEntry>();
+            if (secret.BurnedAt is { } burnedAt)
+            {
+                var burn = new Stamp(new Hlc(UnixMs(burnedAt), 0), origin);
+                Observe(burn.Hlc);
+                burns.Add(new BurnEntry(version, burn, secret.BurnReason));
+            }
+            var recordId = FilenameHasher.ComputeRecordId(namesKey, name);
+            writes.Add((FilenameHasher.ToFilename(recordId), RecordMerge.Normalize(new SecretRecord(
+                recordId, Stamp.Zero, RecordType.Value, version, name, UnixMs(secret.Created), Encoding.UTF8.GetBytes(secret.Value), burns))));
+        }
+        WriteRecords(writes, key, loaded);
+        return _highestSeen;
+    }
+
+    private static long UnixMs(DateTime time) =>
+        new DateTimeOffset(time.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(time, DateTimeKind.Utc) : time.ToUniversalTime())
+            .ToUnixTimeMilliseconds();
 
     private static TswapException Unreadable(string name, string fileName) => new(
         $"The record holding '{name}' ({fileName}) can't be read: it is damaged, truncated, or still being synced. " +

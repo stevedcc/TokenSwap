@@ -17,6 +17,9 @@ public sealed record CommandContext(
     byte[]? TestKey,
     bool SudoBypass)
 {
+    /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
+    public RecordMigrationSeams? MigrationSeams { get; init; }
+
     public string Prefix => Env.Prefix;
     public bool Verbose => Env.Verbose;
 

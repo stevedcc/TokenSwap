@@ -1,0 +1,309 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using TswapCli.Commands;
+using TswapCore;
+using TswapCore.Keyring;
+
+namespace TswapCli;
+
+/// <summary>Brief T6 item 6 test seams for <see cref="RecordMigration"/>.</summary>
+public sealed class RecordMigrationSeams
+{
+    /// <summary>Changes the read-back secrets before the comparison (forces a mismatch).</summary>
+    public Func<SecretsDb, SecretsDb>? TamperReadBack { get; init; }
+
+    /// <summary>Called after steps 1, 3 and 4 with the step number; throwing simulates a crash there.</summary>
+    public Action<int>? AfterStep { get; init; }
+}
+
+/// <summary>
+/// Brief T6 decision 8: <c>migrate --to-records [--vault-dir &lt;dir&gt;]</c> (sudo) converts a
+/// classic vault into the per-secret record store, in an order that leaves a working vault after a
+/// crash at any point:
+/// <list type="number">
+/// <item>unlock; write the keyring and every secret as a record into a new
+/// <c>&lt;vault-dir&gt;.tmp-&lt;random&gt;</c> folder next to the target;</item>
+/// <item>re-read everything from it and compare (names, values by hash, burned state; for a
+/// converted XOR vault also unwrap <c>K_v</c> from every new slot); on a mismatch delete the temp
+/// folder, change nothing, and say what differed;</item>
+/// <item>rename the temp folder to the vault folder;</item>
+/// <item>switch <c>config.json</c> to <c>"Store": "records"</c> (backed up first);</item>
+/// <item>only then move <c>secrets.json.enc</c> aside to a timestamped <c>.bak</c>.</item>
+/// </list>
+/// A plain XOR vault becomes a keyring vault in the same run (owner decision 2026-10-30): <c>K_v</c>
+/// stays its derived master key (no secret is re-encrypted for it), a new vault id is minted, every
+/// enrolled YubiKey must be plugged in and gets its own one-key slot, and a recovery slot is added
+/// and its key shown once. "Already a record store" is decided by <c>config.json</c>'s
+/// <c>Store</c> only.
+/// </summary>
+internal static class RecordMigration
+{
+    public static int Run(CommandContext ctx, string[] args)
+    {
+        var usage = $"sudo {ctx.Prefix} migrate --to-records [--vault-dir <dir>]";
+        string? vaultDirArg = null;
+        switch (args)
+        {
+            case ["--to-records"]:
+                break;
+            case ["--to-records", "--vault-dir", var dir] when !dir.StartsWith("--"):
+                vaultDirArg = dir;
+                break;
+            case ["--vault-dir", var dir, "--to-records"] when !dir.StartsWith("--"):
+                vaultDirArg = dir;
+                break;
+            default:
+                throw new UsageException(usage);
+        }
+        var c = ctx.Console;
+
+        // Decrypts every secret: export's sensitivity class.
+        ctx.RequireSudo("migrate --to-records");
+
+        if (ctx.Storage is not IFileVaultStore fileStore)
+            throw new TswapException("'migrate --to-records' needs a vault stored in files.");
+        var owner = fileStore.Owner;
+        var config = ctx.Storage.LoadConfig();
+
+        if (ctx.Storage is RecordVaultStore records)
+            return FinishOrRefuse(ctx, records, config);
+
+        var vaultDir = Path.GetFullPath(vaultDirArg ?? Path.Combine(fileStore.ConfigDir, "vault"));
+        var parent = Path.GetDirectoryName(vaultDir)
+            ?? throw new TswapException($"{vaultDir} can't be a vault folder (it has no parent folder).");
+
+        // Everything that can refuse does so before anything is written, touched or unlocked.
+        var plainXor = config.Keyring == null;
+        if (config.Keyring == null && config.PendingSlotId != null)
+            throw new TswapException("This machine has a pending 'slot request'; finish it with 'slot accept' before converting.");
+        if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey != null || config.SecureEnclaveWrappedKey != null))
+            throw new TswapException(
+                "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Create a keyring " +
+                $"vault ('{ctx.Prefix} init --tpm' or '--secure-enclave'), move the secrets over with export / import, then convert that.");
+        if (plainXor)
+        {
+            var pluggedIn = ctx.YubiKeys.ListSerials();
+            var missing = config.YubiKeySerials.Where(s => !pluggedIn.Contains(s)).ToList();
+            if (missing.Count > 0)
+                throw new TswapException(
+                    $"Plug in every YubiKey enrolled in this vault: missing {string.Join(", ", missing)}. Each one gets its own " +
+                    "slot in the converted vault, so all of them must be present. Nothing was changed.");
+            if (config.YubiKeySerials.Count == 0)
+                throw new TswapException("This vault's config.json names no YubiKeys; it can't be converted.");
+        }
+        if (Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any())
+            throw new TswapException(
+                $"The target folder {vaultDir} is not empty. Pick an empty or new folder with --vault-dir. (To use a vault folder " +
+                $"another machine already shares, run '{ctx.Prefix} init --vault-dir <folder>' or 'slot accept ... --vault-dir <folder>' " +
+                "instead. If the folder is left over from an interrupted conversion and this vault still opens classically, " +
+                "remove the folder and run this again.)");
+
+        RemoveStaleTempFolders(c, owner, vaultDir, parent);
+
+        var key = ctx.Unlock(config);
+        var db = ctx.LoadSecrets(key);
+
+        Keyring keyring;
+        byte[]? recoveryPrivateKey = null;
+        Config newConfig;
+        var origin = RecordVaultStore.NewOriginId();
+        if (plainXor)
+        {
+            (keyring, recoveryPrivateKey) = BuildKeyringForXorVault(ctx, config, key);
+            newConfig = config with
+            {
+                YubiKeySerials = [],
+                RedundancyXor = "",
+                UnlockChallenge = null,
+                MasterKeySalt = null,
+                KeyringSlotId = null,
+            };
+        }
+        else
+        {
+            keyring = SlotCommand.DecodeKeyringOrCorrupt(config);
+            newConfig = config;
+        }
+        newConfig = newConfig with { Keyring = null, Store = RecordVaultStore.StoreName, VaultDir = vaultDir, OriginId = origin, LastHlc = null };
+
+        // Step 1: everything into a temp folder next to the target.
+        owner.CreateDirectory(parent);
+        var tempDir = $"{vaultDir}.tmp-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4))}";
+        owner.CreateDirectory(tempDir);
+        // A failure from here to step 3 leaves the temp folder behind, as a crash would; the classic
+        // vault is untouched, and the next run removes the folder (with a notice).
+        var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        temp.SaveConfig(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
+        var lastHlc = temp.WriteSnapshot(db, key);
+        ctx.MigrationSeams?.AfterStep?.Invoke(1);
+
+        // Step 2: read it all back and compare.
+        var problems = Verify(ctx, tempDir, newConfig, owner, keyring, db, key, recoveryPrivateKey, plainXor);
+        if (problems.Count > 0)
+        {
+            owner.DeleteDirectory(tempDir);
+            throw new TswapException(
+                "The converted copy did not read back the same, so nothing was changed (the temp folder was removed):\n" +
+                string.Join("\n", problems.Select(p => "  " + p)));
+        }
+
+        // Step 3: the temp folder becomes the vault folder.
+        if (Directory.Exists(vaultDir))
+            owner.DeleteDirectory(vaultDir); // empty, checked above
+        owner.Move(tempDir, vaultDir);
+        ctx.MigrationSeams?.AfterStep?.Invoke(3);
+
+        // Step 4: config.json names the record store (its keyring now lives in the vault folder).
+        var configBackup = fileStore.BackupConfig();
+        newConfig = newConfig with { LastHlc = lastHlc.ToString() };
+        owner.WriteAtomic(fileStore.ConfigFile, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(newConfig, TswapJsonContext.Default.Config)));
+        ctx.MigrationSeams?.AfterStep?.Invoke(4);
+
+        // Step 5: only now the classic file goes aside.
+        var secretsBackup = File.Exists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, owner) : null;
+
+        c.Out.WriteLine($"\n✓ Converted to the record store: {db.Secrets.Count} secret(s), one file each.");
+        c.Out.WriteLine($"Vault folder (share this one, never config.json): {vaultDir}");
+        c.Out.WriteLine($"Previous config backed up to: {configBackup}");
+        if (secretsBackup != null)
+            c.Out.WriteLine($"Previous secrets file moved to: {secretsBackup}");
+        if (plainXor)
+        {
+            c.Out.WriteLine("\nThis vault is now a keyring vault: each YubiKey has its own slot and opens it alone; the XOR share is");
+            c.Out.WriteLine("no longer used (it stays in the config backup above).");
+            InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, "every enrolled YubiKey");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>config.json</c> already names the record store: finish an interrupted step 5 (the classic
+    /// file still beside it) or refuse.
+    /// </summary>
+    private static int FinishOrRefuse(CommandContext ctx, RecordVaultStore records, Config config)
+    {
+        if (File.Exists(records.SecretsFile))
+        {
+            var backup = FileBackup.Move(records.SecretsFile, DateTime.UtcNow, records.Owner);
+            ctx.Console.Out.WriteLine(
+                $"This vault was already converted, but an interrupted run left the classic secrets file behind; it was moved to: {backup}");
+            return 0;
+        }
+        throw new TswapException($"This vault is already a record store (vault folder: {config.VaultDir}). Nothing to convert.");
+    }
+
+    private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent)
+    {
+        if (!Directory.Exists(parent))
+            return;
+        foreach (var stale in Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*"))
+        {
+            owner.DeleteDirectory(stale);
+            c.Out.WriteLine($"Removed a temp folder left by an interrupted conversion: {stale}");
+        }
+    }
+
+    /// <summary>
+    /// The keyring a plain XOR vault becomes: a new vault id, one one-key slot per enrolled YubiKey
+    /// (T4's construction, touch as each key is configured) and a recovery slot, all wrapping
+    /// <paramref name="masterKey"/> as <c>K_v</c>.
+    /// </summary>
+    private static (Keyring Keyring, byte[] RecoveryPrivateKey) BuildKeyringForXorVault(CommandContext ctx, Config config, byte[] masterKey)
+    {
+        const byte k = 1;
+        var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
+        var slots = new List<Slot>();
+        foreach (var serial in config.YubiKeySerials.Distinct())
+        {
+            var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+            var (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial);
+            try
+            {
+                var keyPair = SlotKeyPair.Generate();
+                slots.Add(MachineSlotWrap.Wrap(masterKey, keyPair.PrivateKey, keyPair.PublicKey, slotId, kekSlot,
+                    KeyringFormat.KeyringFormatVersion, vaultId, k) with { HwBlob = blob.Encode() });
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(kekSlot);
+            }
+        }
+        var recovery = SlotKeyPair.Generate();
+        var recoverySlotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(
+            masterKey, recovery.PublicKey, KeyringFormat.KeyringFormatVersion, vaultId, k, recoverySlotId);
+        slots.Add(new Slot(recoverySlotId, ephemeralPublicKey, wrapped, SlotKind.Recovery));
+        return (new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, k, slots), recovery.PrivateKey);
+    }
+
+    /// <summary>Step 2: what differs between the temp folder and the classic vault (empty: nothing).</summary>
+    private static List<string> Verify(
+        CommandContext ctx, string tempDir, Config newConfig, DirectoryOwnerMatcher owner, Keyring keyring,
+        SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots)
+    {
+        var problems = new List<string>();
+        var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        var warnings = new StringWriter();
+        var readKeyring = reader.ReadKeyring();
+        if (!KeyringCodec.Encode(readKeyring).AsSpan().SequenceEqual(KeyringCodec.Encode(keyring)))
+            problems.Add("the keyring file differs from the keyring written");
+        var actual = reader.LoadSecrets(key, warnings);
+        if (ctx.MigrationSeams?.TamperReadBack is { } tamper)
+            actual = tamper(actual);
+        if (warnings.ToString().Length > 0)
+            problems.Add("reading the records back gave warnings: " + warnings.ToString().Trim());
+
+        foreach (var name in expected.Secrets.Keys.Except(actual.Secrets.Keys).Order(StringComparer.Ordinal))
+            problems.Add($"'{name}' is missing");
+        foreach (var name in actual.Secrets.Keys.Except(expected.Secrets.Keys).Order(StringComparer.Ordinal))
+            problems.Add($"'{name}' appeared from nowhere");
+        foreach (var (name, secret) in expected.Secrets.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (!actual.Secrets.TryGetValue(name, out var got))
+                continue;
+            if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(secret.Value)), SHA256.HashData(Encoding.UTF8.GetBytes(got.Value))))
+                problems.Add($"'{name}' has a different value");
+            if ((secret.BurnedAt != null) != (got.BurnedAt != null) || secret.BurnReason != got.BurnReason)
+                problems.Add($"'{name}' has a different burned state");
+        }
+
+        if (checkSlots)
+        {
+            foreach (var slot in readKeyring.Slots)
+            {
+                byte[] unwrapped;
+                try
+                {
+                    if (slot.Kind == SlotKind.Recovery)
+                    {
+                        unwrapped = RecoveryKeyUnlock.Unlock(readKeyring with { Slots = [slot] }, recoveryPrivateKey!);
+                    }
+                    else
+                    {
+                        var blob = YubiKeySlotBlob.Decode(slot.HwBlob!);
+                        var kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, slot.SlotId);
+                        try
+                        {
+                            var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, readKeyring.FormatVersion, readKeyring.VaultId, readKeyring.K, slot.SlotId);
+                            unwrapped = SlotSecretPayload.Decode(payload).VaultKey;
+                        }
+                        finally
+                        {
+                            CryptographicOperations.ZeroMemory(kekSlot);
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is TswapException or CryptographicException)
+                {
+                    problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} does not open: {ex.Message}");
+                    continue;
+                }
+                if (!CryptographicOperations.FixedTimeEquals(unwrapped, key))
+                    problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} opens to a different key");
+                CryptographicOperations.ZeroMemory(unwrapped);
+            }
+        }
+        return problems;
+    }
+}

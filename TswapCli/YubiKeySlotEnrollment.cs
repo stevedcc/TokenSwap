@@ -36,8 +36,17 @@ internal static class YubiKeySlotEnrollment
                 $"Every plugged-in YubiKey ({string.Join(", ", pluggedIn)}) already has a slot in this vault. " +
                 "Plug in a YubiKey that has no slot yet; each key needs only one slot.");
 
-        var serial = ctx.ChooseSerialAmong(eligible);
+        return EnrollSerial(ctx, slotId, ctx.ChooseSerialAmong(eligible));
+    }
 
+    /// <summary>
+    /// Enrolls the plugged-in key <paramref name="serial"/> for the slot <paramref name="slotId"/>
+    /// (brief T6: <c>migrate --to-records</c> gives each key of a plain XOR vault its own slot),
+    /// with the same double challenge as <see cref="Enroll"/>.
+    /// </summary>
+    public static (YubiKeySlotBlob Blob, byte[] KekSlot) EnrollSerial(CommandContext ctx, byte[] slotId, int serial)
+    {
+        var c = ctx.Console;
         c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
         var requiresTouch = ctx.YubiKeys.DetectTouchRequirement(serial);
         var blob = YubiKeySlotBlob.Create(serial, requiresTouch);
