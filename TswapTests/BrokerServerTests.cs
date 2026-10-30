@@ -440,4 +440,98 @@ public class BrokerServerTests : IAsyncLifetime
         _h.Clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
     }
+
+    // ------------------------------------------------------------------ connection caps
+
+    private async Task<List<Socket>> OpenIdleAsync(string socket, int count)
+    {
+        var sockets = new List<Socket>();
+        for (var i = 0; i < count; i++)
+        {
+            var c = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await c.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath(socket)));
+            sockets.Add(c);
+        }
+        return sockets;
+    }
+
+    private async Task WaitForConnectionsAsync(string socket, int count)
+    {
+        var connections = _h.Server!.Connections;
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Check() { if (connections.Count(socket) >= count) reached.TrySetResult(); }
+        connections.Changed += Check;
+        try
+        {
+            Check();
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            connections.Changed -= Check;
+        }
+    }
+
+    [Fact]
+    public async Task ConnectionCaps_Defaults()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var limits = new BrokerLimits();
+        Assert.Equal(16, limits.MaxConnectionsPerSocket);
+        Assert.Equal(64, limits.MaxConnections);
+        await _h.StartAsync();
+        Assert.Equal(64, _h.Server!.KestrelOptions.Limits.MaxConcurrentConnections);
+    }
+
+    [Fact]
+    public async Task MoreIdleConnectionsThanTheSocketCap_AreRefused_AnotherSocketStillAnswers()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync();
+        var idle = await OpenIdleAsync("lane1", 16);
+        try
+        {
+            await WaitForConnectionsAsync("lane1", 16);
+
+            var refused = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n");
+            var other = await _h.GetAsync("other", "/second/a");
+
+            Assert.Empty(refused);
+            Assert.Contains("refused-connection socket=lane1", _h.LogText.ToString());
+            Assert.Contains("reason=too-many-connections", _h.LogText.ToString());
+            Assert.Equal(200, BrokerHarness.StatusOf(other));
+            Assert.Equal(1, _h.Secrets.Unlocks);
+        }
+        finally
+        {
+            idle.ForEach(c => c.Dispose());
+        }
+    }
+
+    [Fact]
+    public async Task MoreConnectionsThanTheTotalCap_AreRefused()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync(limits: new BrokerLimits { MaxConnectionsPerSocket = 4, MaxConnections = 6 });
+        var idle = await OpenIdleAsync("lane1", 4);
+        try
+        {
+            await WaitForConnectionsAsync("lane1", 4);
+            idle.AddRange(await OpenIdleAsync("other", 2));
+            await WaitForConnectionsAsync("other", 2);
+
+            var refused = await _h.SendRawAsync("other", "GET /second/a HTTP/1.1\r\nHost: b\r\n\r\n");
+
+            Assert.Empty(refused);
+            Assert.Contains("refused-connection socket=other uid=? pid=? reason=too-many-connections", _h.LogText.ToString());
+            Assert.Equal(0, _h.Secrets.Unlocks);
+        }
+        finally
+        {
+            idle.ForEach(c => c.Dispose());
+        }
+    }
 }

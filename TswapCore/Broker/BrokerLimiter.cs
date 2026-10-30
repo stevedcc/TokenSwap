@@ -10,6 +10,12 @@ public sealed record BrokerLimits
     public int FailuresBeforeLockout { get; init; } = 3;
     public TimeSpan Lockout { get; init; } = TimeSpan.FromMinutes(5);
     public int MaxUnlocksPerMinute { get; init; } = 30;
+
+    /// <summary>Open connections one socket may hold (so one client can't use up the file descriptors).</summary>
+    public int MaxConnectionsPerSocket { get; init; } = 16;
+
+    /// <summary>Open connections in total (Kestrel's MaxConcurrentConnections).</summary>
+    public int MaxConnections { get; init; } = 64;
 }
 
 /// <summary>
@@ -160,5 +166,52 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
     {
         while (_recentAttempts.Count > 0 && _recentAttempts.Peek() <= now - TimeSpan.FromMinutes(1))
             _recentAttempts.Dequeue();
+    }
+}
+
+/// <summary>
+/// Open connections (fix round 1): a connection beyond <see cref="BrokerLimits.MaxConnectionsPerSocket"/>
+/// on one socket, or beyond <see cref="BrokerLimits.MaxConnections"/> in total, is closed before
+/// anything is parsed. (Kestrel's <c>MaxConcurrentConnections</c>, also set, counts per listening
+/// socket, not across them, so the total is counted here.)
+/// </summary>
+public sealed class BrokerConnectionCounter(BrokerLimits limits)
+{
+    private readonly Dictionary<string, int> _open = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+    private int _total;
+
+    /// <summary>Raised whenever a count changes (tests wait on it instead of sleeping).</summary>
+    public event Action? Changed;
+
+    public int Count(string socket)
+    {
+        lock (_gate)
+            return _open.GetValueOrDefault(socket);
+    }
+
+    /// <summary>Takes a place for a new connection on <paramref name="socket"/>; false when the socket is full.</summary>
+    public bool TryOpen(string socket)
+    {
+        lock (_gate)
+        {
+            var n = _open.GetValueOrDefault(socket);
+            if (n >= limits.MaxConnectionsPerSocket || _total >= limits.MaxConnections)
+                return false;
+            _open[socket] = n + 1;
+            _total++;
+        }
+        Changed?.Invoke();
+        return true;
+    }
+
+    public void Close(string socket)
+    {
+        lock (_gate)
+        {
+            _open[socket] = _open.GetValueOrDefault(socket) - 1;
+            _total--;
+        }
+        Changed?.Invoke();
     }
 }

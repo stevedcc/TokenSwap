@@ -71,6 +71,9 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>The request slots (tests watch its queue).</summary>
     internal BrokerLimiter Limiter { get; private init; } = null!;
 
+    /// <summary>Open connections per socket (tests watch it).</summary>
+    internal BrokerConnectionCounter Connections { get; private init; } = null!;
+
     /// <summary>The socket files this server listens on.</summary>
     public IReadOnlyList<string> SocketPaths => _socketPaths;
 
@@ -106,6 +109,7 @@ public sealed class BrokerServer : IAsyncDisposable
 
             forwarder = options.Forwarder;
             var limiter = new BrokerLimiter(options.Limits, options.Time);
+            var connections = new BrokerConnectionCounter(options.Limits);
             var handler = new BrokerRequestHandler(options.Policy, options.Secrets, forwarder,
                 limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time);
 
@@ -114,13 +118,14 @@ public sealed class BrokerServer : IAsyncDisposable
             builder.WebHost.ConfigureKestrel(kestrel =>
             {
                 ConfigureLimits(kestrel);
+                kestrel.Limits.MaxConcurrentConnections = options.Limits.MaxConnections;
                 foreach (var name in policy.Sockets.Keys)
                 {
                     var socketName = name;
                     kestrel.ListenUnixSocket(SocketPath(socketDir, socketName), listen =>
                     {
                         listen.Protocols = HttpProtocols.Http1;
-                        listen.Use(next => connection => GateAsync(connection, socketName, next, options));
+                        listen.Use(next => connection => GateAsync(connection, socketName, next, options, connections));
                     });
                 }
             });
@@ -134,7 +139,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
-            return new BrokerServer(options, lockFile, app, forwarder, ownsForwarder, paths) { Limiter = limiter };
+            return new BrokerServer(options, lockFile, app, forwarder, ownsForwarder, paths) { Limiter = limiter, Connections = connections };
         }
         catch
         {
@@ -161,27 +166,41 @@ public sealed class BrokerServer : IAsyncDisposable
     /// Connection middleware, before any HTTP parsing: reads the peer credentials of the accepted
     /// socket and closes the connection (unanswered, logged) unless that uid may use this socket.
     /// </summary>
-    private static Task GateAsync(ConnectionContext connection, string socketName, ConnectionDelegate next, BrokerServerOptions options)
+    private static async Task GateAsync(ConnectionContext connection, string socketName, ConnectionDelegate next,
+        BrokerServerOptions options, BrokerConnectionCounter connections)
     {
-        var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
-        var peer = socket is null ? null : BrokerNative.TryGetPeerCredentials(socket);
-        if (peer is not { } creds)
+        // Fix round 1: one client can't hold every connection (file descriptor) for all sockets.
+        if (!connections.TryOpen(socketName))
         {
-            options.Log.Connection(socketName, null, null, "no-peer-credentials");
-            return Task.CompletedTask; // returning without next closes the connection
+            options.Log.Connection(socketName, null, null, "too-many-connections");
+            return; // closed, unanswered
         }
-        var policy = options.Policy.Current;
-        if (!policy.Sockets.TryGetValue(socketName, out var allowed) || !allowed.AllowsUid(creds.Uid))
+        try
         {
-            options.Log.Connection(socketName, creds.Uid, creds.Pid, "uid-not-allowed");
-            return Task.CompletedTask;
+            var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
+            var peer = socket is null ? null : BrokerNative.TryGetPeerCredentials(socket);
+            if (peer is not { } creds)
+            {
+                options.Log.Connection(socketName, null, null, "no-peer-credentials");
+                return; // returning without next closes the connection
+            }
+            var policy = options.Policy.Current;
+            if (!policy.Sockets.TryGetValue(socketName, out var allowed) || !allowed.AllowsUid(creds.Uid))
+            {
+                options.Log.Connection(socketName, creds.Uid, creds.Pid, "uid-not-allowed");
+                return;
+            }
+            connection.Items[PeerItemKey] = new BrokerPeer(socketName, creds.Uid, creds.Pid);
+            // Kestrel hides the raw Connection header's tokens; read them from the bytes (decision 6).
+            var sniffer = new BrokerHeaderSniffer(connection.Transport.Input);
+            connection.Transport = new SniffedDuplexPipe(connection.Transport, sniffer);
+            connection.Items[SnifferItemKey] = sniffer;
+            await next(connection).ConfigureAwait(false);
         }
-        connection.Items[PeerItemKey] = new BrokerPeer(socketName, creds.Uid, creds.Pid);
-        // Kestrel hides the raw Connection header's tokens; read them from the bytes (decision 6).
-        var sniffer = new BrokerHeaderSniffer(connection.Transport.Input);
-        connection.Transport = new SniffedDuplexPipe(connection.Transport, sniffer);
-        connection.Items[SnifferItemKey] = sniffer;
-        return next(connection);
+        finally
+        {
+            connections.Close(socketName);
+        }
     }
 
     /// <summary>
