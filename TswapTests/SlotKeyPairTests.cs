@@ -22,9 +22,9 @@ public class SlotKeyPairTests
     private const string RfcSharedSecretHex = "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742";
 
     // RFC 7748's test private keys are the raw scalar input to X25519(), which clamps
-    // internally (§5); Rebex.Elliptic.Curve25519's GetPublicKey/GetSharedSecret require an
-    // already-clamped key (its own random-generation path clamps for you, but FromPrivateKey
-    // does not), so the known-answer test below clamps by hand per the RFC 7748 §5 recipe.
+    // internally (§5). The known-answer test clamps by hand per the RFC 7748 §5 recipe, as it
+    // did when SlotKeyPair used Rebex.Elliptic.Curve25519 (which needed a pre-clamped key);
+    // clamping is idempotent, so the expected values are the same either way.
     private static byte[] Clamp(byte[] key)
     {
         key[0] &= 0xF8;
@@ -93,5 +93,44 @@ public class SlotKeyPairTests
         var sharedFromBob = SlotKeyPair.ComputeSharedSecret(bob.PrivateKey, alice.PublicKey);
 
         Assert.Equal(sharedFromAlice, sharedFromBob);
+    }
+
+    // A keypair and peer public key produced by Rebex.Elliptic.Curve25519 1.2.2 (the library
+    // v0.1.0 generated every slot keypair with), with the shared secret Rebex computed. Throwaway
+    // test material, not from any vault. Pins that slot keys already written to keyrings still
+    // unwrap after the switch to the BCL's X25519DiffieHellman.
+    private const string RebexPrivateHex = "08ea29b189e54de4d7cb00f26d169051af633b4f5651bfd4b9cc1ffb64fcdc7c";
+    private const string RebexPublicHex = "01456d6abeb3113794f1d64e622445e456c13a0f991e10870aa494feeed3a84a";
+    private const string RebexPeerPublicHex = "ee49cc94bedf133c6d25ec77d53f8ae041cca2fbee6376638691b5e22586ce68";
+    private const string RebexSharedSecretHex = "8052e101c712742913e8e8f5e915714d14679e14cf41074ce50e295c29dd8075";
+
+    [Fact]
+    public void ComputeSharedSecret_MatchesKeysWrittenByRebex()
+    {
+        var privateKey = Convert.FromHexString(RebexPrivateHex);
+
+        Assert.Equal(RebexPublicHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, PublicBasePoint())));
+        Assert.Equal(RebexSharedSecretHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, Convert.FromHexString(RebexPeerPublicHex))));
+    }
+
+    [Fact]
+    public void ComputeSharedSecret_RejectsLowOrderPeerKey()
+    {
+        // u = 0 is a low-order point: X25519 with it yields an all-zero shared secret whatever
+        // the private key (RFC 7748 §6.1 says implementations may check for this). A peer key
+        // like that, e.g. a tampered recovery or ephemeral public key, must fail loudly instead
+        // of feeding a known all-zero IKM into the slot KEK derivation.
+        var slot = SlotKeyPair.Generate();
+
+        Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(
+            () => SlotKeyPair.ComputeSharedSecret(slot.PrivateKey, new byte[SlotKeyPair.KeySize]));
+    }
+
+    [Fact]
+    public void BclX25519_IsSupportedOnThisPlatform()
+    {
+        // tswap ships for linux-x64, linux-arm64, osx-arm64 and win-x64; CI runs this on Linux,
+        // macOS and Windows. Without platform support every slot operation would throw.
+        Assert.True(System.Security.Cryptography.X25519DiffieHellman.IsSupported);
     }
 }
