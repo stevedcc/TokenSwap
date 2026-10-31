@@ -22,7 +22,9 @@ namespace TswapCore.Vault;
 /// is the legacy, unversioned <see cref="Config.SecureEnclaveWrappedKey"/> and protects the vault key itself.
 /// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
-/// <para>Registered at the composition root only on macOS — see <c>TswapCli/Program.cs</c>.
+/// <para>Built only by <c>TswapCli.HardwareServices</c> (brief T12), on macOS, which always wraps it
+/// so that under sudo its calls run as the vault folder's owner (macOS then asks that user, not
+/// root, for Touch ID); <c>SecureEnclaveFactoryScanTests</c> fails if it is built anywhere else.
 /// On other builds <see cref="VaultUnlocker"/> returns a clear "backend not supported" error
 /// for a secure-enclave vault.</para>
 /// </summary>

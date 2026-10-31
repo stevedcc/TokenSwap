@@ -11,6 +11,21 @@ namespace TswapCli;
 internal static class CliHost
 {
     public static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath)
+        => Run(args, console, getEnv, isPrivileged, processPath, owner: null);
+
+#if DEBUG
+    /// <summary>
+    /// Brief T12 test seam: <see cref="Run(string[], IConsole, Func{string, string?}, bool, string?)"/>
+    /// with the vault's file layer and the Secure Enclave's owner scope switching identity through
+    /// <paramref name="ownershipForTests"/> (a fake). Compiled into Debug builds only, so a Release
+    /// binary always uses the real <see cref="UnixOwnership"/>.
+    /// </summary>
+    public static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, IUnixOwnership ownershipForTests)
+        => Run(args, console, getEnv, isPrivileged, processPath, new DirectoryOwnerMatcher(ownershipForTests));
+#endif
+
+    /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>); Debug test seam only.</param>
+    private static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, DirectoryOwnerMatcher? owner)
     {
         try
         {
@@ -36,12 +51,14 @@ internal static class CliHost
             // their simulated stand-ins in test mode) register via the additionalBackends argument;
             // the YubiKey backend is always present and VaultUnlocker picks the right one from
             // config.Backend.
-            var extraBackends = HardwareServices.UnlockBackends(testKey);
+            //
+            // Opened (and the config folder resolved) only when a command first needs the vault. The
+            // Secure Enclave's owner scope (brief T12) reads the same store, at call time.
+            var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, warnings: console.Error));
+            var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
-            // Opened (and the config folder resolved) only when a command first needs the vault.
-            var ctx = new CommandContext(console, env, () => VaultStores.Open(env.ConfigDir, warnings: console.Error),
-                yubiKeys, unlocker, testKey, sudoBypass);
+            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass);
             return CliRunner.Run(ctx, env.CommandArgs);
         }
         // CliRunner maps command errors; these catches cover composition failures only

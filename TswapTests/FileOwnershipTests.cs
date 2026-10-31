@@ -36,34 +36,67 @@ public class FileOwnershipTests : IDisposable
     /// Fake Unix ownership: who we are, who owns every folder, and every identity switch asked
     /// for. <see cref="RootOnly"/> files are unreadable (mode 0000) while a switch is active, as a
     /// root-owned 0600 file is to the user.
+    /// <para>Brief T12 extensions: <see cref="Owners"/> gives single folders another owner,
+    /// <see cref="Current"/> is the identity switched to right now (what a call made inside a
+    /// switch runs as), and <see cref="FailSwitchAt"/> fails one switch attempt by its number.</para>
     /// </summary>
     internal sealed class FakeOwnership(bool privileged, uint euid, uint dirUid = UserUid, uint dirGid = UserGid) : IUnixOwnership
     {
+        private readonly Stack<(uint Uid, uint Gid, string Path)> _active = new();
+
         public List<(string Path, uint Uid, uint Gid)> Switches { get; } = [];
         public List<string> RootOnly { get; } = [];
         public bool IsPrivileged => privileged;
         public uint EffectiveUid => euid;
         public bool OwnerUnreadable { get; set; }
         public bool SwitchFails { get; set; }
-        public (uint Uid, uint Gid)? GetOwner(string path) => OwnerUnreadable ? null : (dirUid, dirGid);
+
+        /// <summary>T12: owners of single folders (by full path), overriding the default owner.</summary>
+        public Dictionary<string, (uint Uid, uint Gid)> Owners { get; } = [];
+
+        /// <summary>T12: the identity of the switch active now, or null outside any switch.</summary>
+        public (uint Uid, uint Gid)? Current => _active.TryPeek(out var top) ? (top.Uid, top.Gid) : null;
+
+        /// <summary>T12: the path the active switch was asked for, or null outside any switch.</summary>
+        public string? CurrentPath => _active.TryPeek(out var top) ? top.Path : null;
+
+        /// <summary>T12: the number of switches asked for so far (failed ones included).</summary>
+        public int SwitchAttempts { get; private set; }
+
+        /// <summary>T12: the 0-based attempt number that fails, as <see cref="SwitchFails"/> does.</summary>
+        public int? FailSwitchAt { get; set; }
+
+        /// <summary>T12: how often an owner was read.</summary>
+        public int OwnerReads { get; private set; }
+
+        public (uint Uid, uint Gid)? GetOwner(string path)
+        {
+            OwnerReads++;
+            if (OwnerUnreadable)
+                return null;
+            return Owners.TryGetValue(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)), out var owner) ? owner : (dirUid, dirGid);
+        }
 
         public IDisposable ActAs(uint uid, uint gid, string path)
         {
             if (OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException(); // never switched on Windows
-            if (SwitchFails)
+            var attempt = SwitchAttempts++;
+            if (SwitchFails || FailSwitchAt == attempt)
                 throw new TswapException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
             Switches.Add((Path.GetFullPath(path), uid, gid));
             foreach (var file in RootOnly)
                 File.SetUnixFileMode(file, UnixFileMode.None);
-            return new Restore(RootOnly);
+            _active.Push((uid, gid, Path.GetFullPath(path)));
+            return new Restore(RootOnly, _active);
         }
 
         [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
-        private sealed class Restore(List<string> rootOnly) : IDisposable
+        private sealed class Restore(List<string> rootOnly, Stack<(uint Uid, uint Gid, string Path)> active) : IDisposable
         {
             public void Dispose()
             {
+                active.Pop();
                 foreach (var file in rootOnly)
                     File.SetUnixFileMode(file, OwnerOnly);
             }

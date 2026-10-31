@@ -38,7 +38,8 @@ public interface IUnixOwnership
 /// T5: run as root (sudo) on a folder owned by another user (the vault's user, via
 /// <c>SUDO_USER</c> or <c>TSWAP_CONFIG_DIR</c>), tswap does that file work <b>as the folder's
 /// owner</b> (effective uid and gid, no supplementary groups; the <c>sudoedit</c> approach), and
-/// keeps root only for the hardware. So files come out owned by that user, and anything the user
+/// keeps root only for the hardware (except the Secure Enclave: brief T12 runs it as the same
+/// owner, <c>TswapCli.OwnerScopedHardwareService</c>). So files come out owned by that user, and anything the user
 /// planted in their own folder (a symlink to <c>/etc/shadow</c>, a folder swapped for a link
 /// halfway through) gets no further than the user's own rights. Chowning as root instead (the
 /// first fix) followed such links, on the read side too (reviews by MiMo and GLM).

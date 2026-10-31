@@ -68,7 +68,7 @@ public sealed class RecoverCommand : ICliCommand
         ctx.RequireSudo("recover");
 
         // Throws a clear TswapException on an OS without this hardware, before the key is read.
-        var enrollment = hardware == null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, requirePresence ?? true);
+        var enrollment = hardware == null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
 
         var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring);
         Slot newSlot;

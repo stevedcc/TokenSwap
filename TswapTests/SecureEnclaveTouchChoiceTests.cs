@@ -385,14 +385,14 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
 
-        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, key, requirePresence: false));
-        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.YubiKey, key, requirePresence: false));
+        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
+        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.YubiKey, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
         Assert.Throws<ArgumentException>(() => new SimulatedHardwareService(HardwareBackend.Tpm, key, requirePresence: false));
     }
 
     [Fact]
     public void Enrollment_WithoutTheParameter_RequiresPresence() =>
-        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32)).Enroll().HwBlob));
+        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll().HwBlob));
 
     [Theory]
     [InlineData(true)]

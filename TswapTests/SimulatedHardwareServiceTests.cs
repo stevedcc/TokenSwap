@@ -109,7 +109,7 @@ public class SimulatedHardwareServiceTests
     [Fact]
     public void UnlockBackends_WithoutTestKey_ContainsNoSimulatedBackend()
     {
-        var backends = HardwareServices.UnlockBackends(testKey: null);
+        var backends = HardwareServices.UnlockBackends(testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope());
 
         Assert.DoesNotContain(backends, b => b.IsSimulated);
     }
@@ -117,7 +117,7 @@ public class SimulatedHardwareServiceTests
     [Fact]
     public void UnlockBackends_WithTestKey_RegistersSimulatedTpmAndSecureEnclave()
     {
-        var backends = HardwareServices.UnlockBackends(MachineA);
+        var backends = HardwareServices.UnlockBackends(MachineA, SecureEnclaveOwnerScopeTests.NoSwitchScope());
 
         Assert.All(backends, b => Assert.True(b.IsSimulated));
         Assert.Equal([HardwareBackend.Tpm, HardwareBackend.SecureEnclave], backends.Select(b => b.Backend).Order().ToList());
@@ -126,7 +126,7 @@ public class SimulatedHardwareServiceTests
     [Fact]
     public void Enrollment_WithTestKey_IsSimulatedAndKeyedByTheTestKey()
     {
-        var enrollment = HardwareServices.Enrollment(HardwareBackend.Tpm, MachineA);
+        var enrollment = HardwareServices.Enrollment(HardwareBackend.Tpm, MachineA, SecureEnclaveOwnerScopeTests.NoSwitchScope());
         var (kekSlot, hwBlob) = enrollment.Enroll();
 
         Assert.True(enrollment.IsSimulated);
@@ -143,13 +143,13 @@ public class SimulatedHardwareServiceTests
         // Constructing a real service touches no hardware (only Enroll/Unlock do).
         if (OperatingSystem.IsMacOS())
         {
-            Assert.False(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null).IsSimulated);
-            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null));
+            Assert.False(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
+            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
         }
         else
         {
-            Assert.False(HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null).IsSimulated);
-            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null));
+            Assert.False(HardwareServices.Enrollment(HardwareBackend.Tpm, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()).IsSimulated);
+            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.SecureEnclave, testKey: null, SecureEnclaveOwnerScopeTests.NoSwitchScope()));
         }
     }
 

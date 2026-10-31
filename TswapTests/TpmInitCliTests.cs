@@ -43,9 +43,10 @@ public class TpmInitCliTests : IDisposable
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
         var yubiKeys = new TestKeyYubiKeyService(testKey);
+        var storage = new Storage(dir);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey,
-            additionalBackends: HardwareServices.UnlockBackends(testKey));
-        return new CommandContext(console, env, new Storage(dir), yubiKeys, unlocker, testKey, SudoBypass: true);
+            additionalBackends: HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => storage)));
+        return new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, SudoBypass: true);
     }
 
     private static (int ExitCode, string Stdout, string Stderr) Run(string dir, byte[] testKey, string stdin, params string[] args)
