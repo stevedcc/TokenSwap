@@ -289,7 +289,7 @@ public sealed class SshPrivateKey : IDisposable
     {
         // Every array that holds a private value goes into parts as soon as it exists, so each is
         // zeroed whatever fails later (fix round 1, MiMo M6).
-        var parts = new List<byte[]>();
+        List<byte[]> parts = [];
         byte[] Keep(byte[] value)
         {
             parts.Add(value);

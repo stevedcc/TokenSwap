@@ -117,7 +117,7 @@ public sealed class BrokerServer : IAsyncDisposable
         WebApplication? app = null;
         try
         {
-            var paths = new List<string>();
+            List<string> paths = [];
             foreach (var name in policy.Sockets.Keys.Order(StringComparer.Ordinal))
             {
                 var path = SocketPath(socketDir, name);

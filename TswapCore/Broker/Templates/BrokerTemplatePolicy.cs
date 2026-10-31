@@ -268,7 +268,7 @@ public static class BrokerTemplateValidator
         for (var i = 1; i < t.Argv.Count; i++)
         {
             var entry = t.Argv[i];
-            var segments = new List<(string, bool)>();
+            List<(string, bool)> segments = [];
             var at = 0;
             foreach (Match m in PlaceholderRegex.Matches(entry))
             {
@@ -302,7 +302,7 @@ public static class BrokerTemplateValidator
             throw Ex($"argv can reach {total} bytes with its arguments at their max_length; at most {MaxArgvTotalBytes}.");
 
         // Environment: literals or exactly {{secret}}; the baseline is fixed.
-        var env = new List<BrokerTemplateEnv>();
+        List<BrokerTemplateEnv> env = [];
         foreach (var (envName, value) in t.Env ?? [])
         {
             if (!EnvNameRegex.IsMatch(envName))
@@ -329,7 +329,7 @@ public static class BrokerTemplateValidator
         }
 
         // Secret files under /run/secrets/.
-        var files = new List<BrokerTemplateFile>();
+        List<BrokerTemplateFile> files = [];
         foreach (var file in t.Files ?? [])
         {
             if (file?.Path is null || !file.Path.StartsWith(SecretsDir, StringComparison.Ordinal)
@@ -345,7 +345,7 @@ public static class BrokerTemplateValidator
             throw Ex("too many entries (at most 16 files, 64 env variables, 32 arguments).");
 
         // Binds (decision 2), then cwd inside one of them.
-        var binds = new List<BrokerTemplateBind>();
+        List<BrokerTemplateBind> binds = [];
         foreach (var bind in t.Binds ?? [])
         {
             if (bind?.Path is null)

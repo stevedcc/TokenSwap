@@ -29,7 +29,7 @@ public sealed class BrokerTemplateOutput
     /// <param name="secrets">Copies of the secrets; this zeroes them once their forms are built.</param>
     public BrokerTemplateOutput(IEnumerable<byte[]> secrets, long maxBytes, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> emit)
     {
-        var forms = new List<byte[]>();
+        List<byte[]> forms = [];
         foreach (var secret in secrets)
         {
             if (secret.Length == 0)

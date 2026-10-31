@@ -160,7 +160,7 @@ public sealed class BrokerSandbox(string bwrapPath)
     private async Task<BrokerSandboxResult> RunAsync(BrokerSandboxLaunch launch, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> output,
         CancellationToken cancellationToken, bool probing)
     {
-        var opened = new List<int>();
+        List<int> opened = [];
         try
         {
             if (!OperatingSystem.IsLinux())
@@ -191,7 +191,7 @@ public sealed class BrokerSandbox(string bwrapPath)
             var (blockRead, blockWrite) = BrokerSandboxNative.Pipe();
             Track(blockRead);
             Track(blockWrite);
-            var dataReads = new List<int>();
+            List<int> dataReads = [];
             foreach (var file in launch.Files)
             {
                 if (file.Data.Length > MaxFileBytes)

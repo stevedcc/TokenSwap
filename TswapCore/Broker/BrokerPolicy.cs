@@ -388,7 +388,7 @@ public sealed class BrokerPolicy
         var name = socket.Name;
         if (socket.Uids is null || socket.Uids.Count == 0)
             throw new BrokerConfigException($"Socket '{name}' allows no uids.");
-        var ranges = new List<(uint From, uint To)>();
+        List<(uint From, uint To)> ranges = [];
         foreach (var entry in socket.Uids)
             ranges.Add(ParseUidRange(name, entry));
         var allowed = new HashSet<string>(StringComparer.Ordinal);
@@ -429,7 +429,7 @@ public sealed class BrokerPolicy
             throw new BrokerConfigException($"Ssh key '{name}': 'secret' must be a secret name (letters, digits, '_' and '-'), not '{{{{...}}}}'.");
         if (key.AllowedHostKeys is not { Count: > 0 })
             throw new BrokerConfigException($"Ssh key '{name}': allowed_host_keys must list at least one SHA256: host-key fingerprint.");
-        var fingerprints = new List<string>();
+        List<string> fingerprints = [];
         foreach (var fingerprint in key.AllowedHostKeys)
         {
             if (!IsSha256Fingerprint(fingerprint))
