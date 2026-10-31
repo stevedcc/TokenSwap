@@ -60,7 +60,7 @@ public readonly record struct Hlc(long PhysicalMs, uint Logical) : IComparable<H
     /// <summary>Parses <see cref="ToString"/>'s form; null or malformed gives null.</summary>
     public static Hlc? TryParse(string? text)
     {
-        if (text == null)
+        if (text is null)
             return null;
         var dot = text.IndexOf('.');
         if (dot <= 0

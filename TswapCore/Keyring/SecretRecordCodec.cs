@@ -77,14 +77,14 @@ public static class SecretRecordCodec
         var name = Encoding.UTF8.GetBytes(record.Name);
         if (name.Length > ushort.MaxValue)
             throw new ArgumentException("Name too long for a record", nameof(record));
-        var reasons = record.Burns.Select(b => b.Reason == null ? null : Encoding.UTF8.GetBytes(b.Reason)).ToList();
-        if (reasons.Any(r => r != null && r.Length >= NoReason))
+        var reasons = record.Burns.Select(b => b.Reason is null ? null : Encoding.UTF8.GetBytes(b.Reason)).ToList();
+        if (reasons.Any(r => r is not null && r.Length >= NoReason))
             throw new TswapException("A burn reason is too long to store (64 KiB at most).");
 
-        if (record.Previous != null && record.Type == RecordType.Tombstone)
+        if (record.Previous is not null && record.Type == RecordType.Tombstone)
             throw new ArgumentException("A tombstone carries no previous value", nameof(record));
         var raw = InnerFixedSize + name.Length + 4 + record.Value.Length
-            + 1 + (record.Previous == null ? 0 : StampSize + 4 + record.Previous.Value.Length) + 1
+            + 1 + (record.Previous is null ? 0 : StampSize + 4 + record.Previous.Value.Length) + 1
             + record.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
         var inner = new byte[BucketSize(raw)]; // zero-initialized: the padding tail is all zero bytes
         var span = inner.AsSpan();
@@ -120,9 +120,9 @@ public static class SecretRecordCodec
             offset = WriteStamp(span, offset, record.Burns[i].Version);
             offset = WriteStamp(span, offset, record.Burns[i].Burn);
             var reason = reasons[i];
-            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), reason == null ? NoReason : (ushort)reason.Length);
+            BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), reason is null ? NoReason : (ushort)reason.Length);
             offset += 2;
-            if (reason != null)
+            if (reason is not null)
             {
                 reason.CopyTo(span.Slice(offset));
                 offset += reason.Length;
