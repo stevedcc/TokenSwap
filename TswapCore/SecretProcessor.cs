@@ -26,7 +26,7 @@ public abstract class SecretProcessor
     protected static IReadOnlyList<(string Name, MatchType Type, string SearchText)>
         BuildMatchList(SecretsDb db)
     {
-        var list = new List<(string Name, MatchType Type, string SearchText)>();
+        List<(string Name, MatchType Type, string SearchText)> list = [];
 
         // Fix round 3: a rotated-away value is a live credential until the service is switched, so
         // it is matched too, as 'name:previous' (never as 'name').
@@ -91,8 +91,8 @@ public abstract class SecretProcessor
         content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
 
-        var diffs = new List<LineDiff>();
-        var linesToRemove = new HashSet<int>();  // Track continuation lines to remove
+        List<LineDiff> diffs = [];
+        HashSet<int> linesToRemove = [];  // Track continuation lines to remove
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -147,7 +147,7 @@ public abstract class SecretProcessor
         }
 
         // Filter out lines marked for removal
-        var result = new List<string>();
+        List<string> result = [];
         for (int i = 0; i < lines.Length; i++)
         {
             if (!linesToRemove.Contains(i))

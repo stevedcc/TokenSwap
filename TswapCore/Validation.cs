@@ -241,7 +241,7 @@ public static class Validation
             // Parse awk's options letter by letter: v, F, W take a value (attached or next),
             // f names a program file (attached or next), e is inline program text (gawk).
             var inlineSource = false;
-            var programFiles = new List<string>();
+            List<string> programFiles = [];
             for (var i = 0; i < args.Count; i++)
             {
                 var a = args[i];
@@ -508,7 +508,7 @@ public static class Validation
     private static List<string> OwnOptions(string program, List<string> args)
     {
         WrapperValued.TryGetValue(program, out var valued);
-        var own = new List<string>();
+        List<string> own = [];
         for (var i = 0; i < args.Count; i++)
         {
             if (args[i] == "--" || !args[i].StartsWith('-'))

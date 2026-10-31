@@ -18,7 +18,7 @@ public static class Check
     /// </summary>
     public static List<MarkerRef> ScanFile(string filePath)
     {
-        var results = new List<MarkerRef>();
+        List<MarkerRef> results = [];
         string[] lines;
         try
         {
@@ -55,7 +55,7 @@ public static class Check
 
         if (Directory.Exists(path))
         {
-            var results = new List<MarkerRef>();
+            List<MarkerRef> results = [];
             foreach (var file in EnumerateFiles(path))
                 results.AddRange(ScanFile(file));
             return results;

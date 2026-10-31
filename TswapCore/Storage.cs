@@ -50,7 +50,7 @@ public class Storage : IFileVaultStore
         if (_modesChecked || OperatingSystem.IsWindows())
             return;
         _modesChecked = true;
-        var changed = new List<string>();
+        List<string> changed = [];
         foreach (var path in new[] { ConfigDir, ConfigFile, SecretsFile })
         {
             try
@@ -131,7 +131,7 @@ public class Storage : IFileVaultStore
                 $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
                 "To recover: restore secrets.json.enc alongside its original config.json from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
-            return new SecretsDb(new Dictionary<string, Secret>());
+            return new SecretsDb([]);
         }
         catch (DirectoryNotFoundException)
         {
@@ -139,12 +139,12 @@ public class Storage : IFileVaultStore
                 $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
                 "To recover: restore the config directory from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
-            return new SecretsDb(new Dictionary<string, Secret>());
+            return new SecretsDb([]);
         }
         var decrypted = Crypto.Decrypt(encrypted, key);
         var json = Encoding.UTF8.GetString(decrypted);
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.SecretsDb)
-            ?? new SecretsDb(new Dictionary<string, Secret>());
+            ?? new SecretsDb([]);
     }
 
     public void SaveSecrets(SecretsDb db, byte[] key)

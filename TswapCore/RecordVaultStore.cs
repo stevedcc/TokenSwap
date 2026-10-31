@@ -188,7 +188,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 $"The vault folder {VaultDir} has no keyring file. If it is synced, wait for the sync to finish; " +
                 "otherwise restore the folder from a backup.");
         var keyring = DecodeKeyringBytes(_owner.ReadAllBytes(path), path);
-        var folded = new List<(string, byte[])>();
+        List<(string, byte[])> folded = [];
         var vaultDir = VaultDir;
         var copies = _owner.AsOwner(vaultDir, () => RecordDirectoryScanner.FindConflictCopies(new DirectoryInfo(vaultDir), KeyringFileName));
         foreach (var copy in copies)
@@ -222,7 +222,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </summary>
     private void WriteKeyring(Keyring.Keyring keyring)
     {
-        var folded = new List<(string Path, byte[] Bytes)>();
+        List<(string Path, byte[] Bytes)> folded = [];
         if (_owner.FileExists(KeyringFile))
         {
             var (onDisk, copies) = ReadKeyringWithCopies();
@@ -312,7 +312,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         warnings ??= _warnings;
         _warnings = warnings;
         var loaded = LoadRecords(key, warnings);
-        var secrets = new Dictionary<string, Secret>();
+        Dictionary<string, Secret> secrets = [];
         foreach (var record in loaded.Values)
         {
             if (record.State is not { Type: not RecordType.Tombstone } state)
@@ -463,7 +463,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     {
         main ??= new LoadedRecord(fileName, null, null, null);
         var state = main.State;
-        var folded = new List<(string Path, byte[] Bytes)>();
+        List<(string Path, byte[] Bytes)> folded = [];
         foreach (var copy in copies)
         {
             var path = Path.Combine(RecordsDir, copy.ConflictingFilename);
@@ -552,7 +552,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
         var origin = OriginId();
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
-        var writes = new List<(string FileName, SecretRecord State)>();
+        List<(string FileName, SecretRecord State)> writes = [];
 
         Stamp NextStamp()
         {
@@ -625,12 +625,12 @@ public sealed class RecordVaultStore : IFileVaultStore
             throw new InvalidOperationException("WriteSnapshot needs an empty records folder.");
         var origin = OriginId();
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
-        var writes = new List<(string FileName, SecretRecord State)>();
+        List<(string FileName, SecretRecord State)> writes = [];
         foreach (var (name, secret) in db.Secrets.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             var version = new Stamp(new Hlc(UnixMs(secret.Modified), 0), origin);
             Observe(version.Hlc);
-            var burns = new List<BurnEntry>();
+            List<BurnEntry> burns = [];
             if (secret.BurnedAt is { } burnedAt)
             {
                 var burn = new Stamp(new Hlc(UnixMs(burnedAt), 0), origin);
@@ -677,7 +677,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
-        var writes = new List<(string FileName, SecretRecord State)>();
+        List<(string FileName, SecretRecord State)> writes = [];
         foreach (var (fileName, state) in incoming.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             ObserveAll(state);
@@ -757,7 +757,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             candidates.Add(recordsDir);
             candidates.AddRange(_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir) ? Directory.GetFiles(recordsDir) : []));
         }
-        var changed = new List<string>();
+        List<string> changed = [];
         foreach (var path in candidates)
         {
             try
