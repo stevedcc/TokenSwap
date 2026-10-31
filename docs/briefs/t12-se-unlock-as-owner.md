@@ -72,7 +72,7 @@ Secure Enclave key as root (and `init`/`slot request` do too when run with sudo)
    (and `serve` is never privileged, so no switch happens there).
 4. **No change** to file I/O, the TPM, YubiKeys, the broker, or the no-sudo commands' behaviour.
 5. **Docs:** one paragraph in `HARDWARE_BACKENDS.md` (Secure Enclave section) and one line in the
-   README's sudo/Secure Enclave text: under sudo, the Secure Enclave is used as the vault folder's
+   README's sudo/Secure Enclave text: under sudo, the Secure Enclave is used as the vault
    **folder's owner** (normally the logged-in user), not root: the macOS dialog *"Enter the password
    for the user System Administrator"* under sudo was this bug. Also say: a vault folder owned by root
    (`sudo tswap init` with the vault under `/var/root`) still evaluates presence for root, so a
