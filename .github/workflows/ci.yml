@@ -55,6 +55,20 @@ jobs:
           printf '%s\n' 'import CryptoKit' 'print("Secure Enclave available: \(SecureEnclave.isAvailable)")' > "$probe"
           swift "$probe"
 
+      # PROBE (draft PR, not for merge): does the Windows runner have a TPM the Microsoft Platform
+      # Crypto Provider can use? Never fails the job; the answer is in this step's log.
+      - name: Windows TPM probe (temporary)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host '== tpmtool getdeviceinformation'; tpmtool getdeviceinformation
+          Write-Host '== Get-Tpm'; try { Get-Tpm | Format-List } catch { Write-Host "Get-Tpm failed: $_" }
+          Write-Host '== Win32_Tpm'; try { Get-CimInstance -Namespace root/cimv2/security/microsofttpm -ClassName Win32_Tpm | Format-List } catch { Write-Host "Win32_Tpm failed: $_" }
+          Write-Host '== PCP keys'; certutil -csp "Microsoft Platform Crypto Provider" -key
+          Write-Host '== TpmWindows tests'
+          dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=TpmWindows" 2>&1 | Select-String -Pattern 'Passed!|Failed!|\[FAIL\]|Error Message|TswapException|not available|Skipped' | Select-Object -First 40
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
         # CI_REQUIRE_SE=1 on macOS only (it means "this machine must have a Secure Enclave", so never
