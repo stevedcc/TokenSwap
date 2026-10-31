@@ -85,7 +85,7 @@ public class Storage : IFileVaultStore
         if (OperatingSystem.IsWindows())
             return false;
         var info = new FileInfo(path);
-        if (info.LinkTarget != null)
+        if (info.LinkTarget is not null)
             return false;
         if (Directory.Exists(path))
             return (File.GetUnixFileMode(path) & ~(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)) != 0;

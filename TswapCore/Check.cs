@@ -97,7 +97,7 @@ public static class Check
                 return new CheckResult(marker, SecretStatus.Missing);
             }
             if (previous)
-                return new CheckResult(marker, secret.PreviousValue == null ? SecretStatus.Missing : SecretStatus.Ok);
+                return new CheckResult(marker, secret.PreviousValue is null ? SecretStatus.Missing : SecretStatus.Ok);
             return new CheckResult(marker, secret.BurnedAt.HasValue ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }

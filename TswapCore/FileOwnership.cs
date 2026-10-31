@@ -99,7 +99,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             }
             // Keep a mode the user chose for this file (e.g. a tightened one); never copied from
             // a symlink's target.
-            if (!OperatingSystem.IsWindows() && existing.Exists && existing.LinkTarget == null)
+            if (!OperatingSystem.IsWindows() && existing.Exists && existing.LinkTarget is null)
                 File.SetUnixFileMode(tmp, existing.UnixFileMode);
             File.Move(tmp, fullPath, overwrite: true);
         }
@@ -159,7 +159,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             foreach (var file in Directory.EnumerateFiles(folder))
             {
                 var info = new FileInfo(file);
-                if (OrphanTempFile.IsMatch(info.Name) && info.LinkTarget == null && info.LastWriteTimeUtc < cutoff)
+                if (OrphanTempFile.IsMatch(info.Name) && info.LinkTarget is null && info.LastWriteTimeUtc < cutoff)
                     info.Delete();
             }
         }
@@ -186,7 +186,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         var fullSource = Path.GetFullPath(source);
         var fullDestination = Path.GetFullPath(destination);
         using var _ = AsOwnerOf(fullDestination);
-        if (Directory.Exists(fullSource) && new DirectoryInfo(fullSource).LinkTarget == null)
+        if (Directory.Exists(fullSource) && new DirectoryInfo(fullSource).LinkTarget is null)
             Directory.Move(fullSource, fullDestination);
         else
             File.Move(fullSource, fullDestination, overwrite: false);
@@ -197,7 +197,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
     {
         var fullPath = Path.GetFullPath(path);
         using var _ = AsOwnerOf(fullPath);
-        if (new DirectoryInfo(fullPath).LinkTarget != null)
+        if (new DirectoryInfo(fullPath).LinkTarget is not null)
             File.Delete(fullPath); // a link to a folder: remove the link only
         else if (Directory.Exists(fullPath))
             Directory.Delete(fullPath, recursive: true);
@@ -260,7 +260,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         }
         catch (UnauthorizedAccessException) when (owner is { } o)
         {
-            if (new FileInfo(fullPath).LinkTarget != null)
+            if (new FileInfo(fullPath).LinkTarget is not null)
                 throw new TswapException(
                     $"{fullPath} is a symlink its folder's owner (uid {o.Uid}) can't read through; " +
                     "tswap won't read it as root. Replace it with the real file.");
@@ -296,7 +296,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
             return;
         }
         var missing = new Stack<string>();
-        for (var dir = fullPath; dir != null && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir))
+        for (var dir = fullPath; dir is not null && !Directory.Exists(dir); dir = Path.GetDirectoryName(dir))
             missing.Push(dir);
         foreach (var dir in missing)
         {
@@ -317,7 +317,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         var fullPath = Path.GetFullPath(path);
         using var _ = AsOwnerOf(fullPath);
         var info = new FileInfo(fullPath);
-        if (info.LinkTarget != null)
+        if (info.LinkTarget is not null)
             return false;
         UnixFileMode limit;
         if (Directory.Exists(fullPath))
@@ -347,9 +347,9 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         if (OperatingSystem.IsWindows() || !_ownership.IsPrivileged)
             return null;
         var directory = Path.GetDirectoryName(fullPath);
-        while (directory != null && !Directory.Exists(directory) && !File.Exists(directory))
+        while (directory is not null && !Directory.Exists(directory) && !File.Exists(directory))
             directory = Path.GetDirectoryName(directory);
-        if (directory == null)
+        if (directory is null)
             return null;
         if (_ownership.GetOwner(directory) is not { } folderOwner)
             throw new TswapException(

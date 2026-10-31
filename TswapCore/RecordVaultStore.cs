@@ -129,7 +129,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             Hlc.TryParse(onDisk?.LastHlc) ?? Hlc.Zero);
         var machine = config with { Keyring = null, LastHlc = lastHlc == Hlc.Zero ? config.LastHlc : lastHlc.ToString() };
         _machineConfig = machine;
-        if (config.Keyring != null)
+        if (config.Keyring is not null)
             WriteKeyring(DecodeKeyring(config.Keyring, "the config to save"));
         WriteMachineConfig(machine);
     }
@@ -141,7 +141,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         var config = TryReadMachineConfig() ?? throw new TswapException("Not initialized. Run: tswap init");
         if (config.Store != StoreName)
             throw new TswapException($"{ConfigFile} is not a record store's config (Store is not \"{StoreName}\").");
-        if (config.Keyring != null)
+        if (config.Keyring is not null)
             throw new TswapException(
                 $"{ConfigFile} is a record store's config but carries its own Keyring; the keyring lives in the vault folder " +
                 "only. Restore config.json from backup.");
@@ -248,7 +248,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             try
             {
                 var now = _owner.FileExists(path) ? _owner.ReadAllBytes(path) : null;
-                if (now == null)
+                if (now is null)
                     continue;
                 if (!now.AsSpan().SequenceEqual(bytes))
                 {
@@ -319,7 +319,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue;
             secrets[state.Name] = ToSecret(state);
         }
-        var unreadable = loaded.Values.Where(r => r.UnreadableReason != null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         return new SecretsDb(secrets)
         {
@@ -365,7 +365,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             .OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal)
             .ToList();
         LoadedRecord? main = _owner.FileExists(mainPath) ? ReadRecord(fileName, vaultKey) : null;
-        if (main == null && copies.Count == 0)
+        if (main is null && copies.Count == 0)
             return null;
         if (copies.Count > 0)
             main = FoldConflictCopies(fileName, copies, main, vaultKey, _warnings);
@@ -397,12 +397,12 @@ public sealed class RecordVaultStore : IFileVaultStore
             Encoding.UTF8.GetString(state.Value),
             Hlc.ToDisplayDate(state.CreatedMs),
             Hlc.ToDisplayDate(state.Version.Hlc.PhysicalMs),
-            outstanding == null ? null : Hlc.ToDisplayDate(outstanding.Burn.Hlc.PhysicalMs),
+            outstanding is null ? null : Hlc.ToDisplayDate(outstanding.Burn.Hlc.PhysicalMs),
             outstanding?.Reason)
         {
             History = history.Count == 0 ? null : history,
-            PreviousValue = state.Previous == null ? null : Encoding.UTF8.GetString(state.Previous.Value),
-            PreviousBurned = state.Previous != null && state.Burns.Any(b => b.Version.Equals(state.Previous.Version)),
+            PreviousValue = state.Previous is null ? null : Encoding.UTF8.GetString(state.Previous.Value),
+            PreviousBurned = state.Previous is not null && state.Burns.Any(b => b.Version.Equals(state.Previous.Version)),
         };
     }
 
@@ -427,12 +427,12 @@ public sealed class RecordVaultStore : IFileVaultStore
             loaded[group.Key] = FoldConflictCopies(group.Key, group.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(),
                 loaded.GetValueOrDefault(group.Key), key, warnings);
 
-        foreach (var record in loaded.Values.Where(r => r.UnreadableReason != null))
+        foreach (var record in loaded.Values.Where(r => r.UnreadableReason is not null))
             warnings?.WriteLine(
                 $"Warning: record {record.FileName} can't be read ({record.UnreadableReason}). Its secret is kept as " +
                 "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
                 "from a backup or another copy, or wait for the sync to finish.");
-        var unreadableCount = loaded.Values.Count(r => r.UnreadableReason != null);
+        var unreadableCount = loaded.Values.Count(r => r.UnreadableReason is not null);
         if (unreadableCount > 0)
             warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
 
@@ -440,7 +440,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         var nowMs = _clock().ToUnixTimeMilliseconds();
         const long year = 365L * 24 * 60 * 60 * 1000;
         var yearAhead = nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
-        foreach (var record in loaded.Values.Where(r => r.State != null && MaxPhysical(r.State) > yearAhead))
+        foreach (var record in loaded.Values.Where(r => r.State is not null && MaxPhysical(r.State) > yearAhead))
             warnings?.WriteLine(
                 $"Warning: record {record.FileName} carries a time stamp more than a year ahead of this machine's clock " +
                 "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.");
@@ -487,13 +487,13 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue;
             }
             ObserveAll(copyState);
-            if (main.UnreadableReason != null)
+            if (main.UnreadableReason is not null)
                 continue;
             warnings?.WriteLine(
                 $"Note: record {fileName} has a {tool} conflicted copy ({copy.ConflictingFilename}): version {copyState.Version} " +
-                $"vs {(state == null ? "no main file" : $"version {state.Version}")}. Combined by the merge rules; the copy is " +
+                $"vs {(state is null ? "no main file" : $"version {state.Version}")}. Combined by the merge rules; the copy is " +
                 "removed the next time this record is written.");
-            state = state == null ? copyState : RecordMerge.Merge(state, copyState);
+            state = state is null ? copyState : RecordMerge.Merge(state, copyState);
             folded.Add((path, bytes));
         }
         return main with { State = state, FoldedCopies = folded };
@@ -565,12 +565,12 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             var fileName = FilenameHasher.ComputeFilename(namesKey, name);
             loaded.TryGetValue(fileName, out var current);
-            if (current?.UnreadableReason != null)
+            if (current?.UnreadableReason is not null)
                 throw Unreadable(name, fileName);
             var state = current?.State;
             var value = Encoding.UTF8.GetBytes(secret.Value);
             SecretRecord? next = null;
-            if (state == null || state.Type == RecordType.Tombstone || secret.Rotated || !state.Value.AsSpan().SequenceEqual(value))
+            if (state is null || state.Type == RecordType.Tombstone || secret.Rotated || !state.Value.AsSpan().SequenceEqual(value))
             {
                 // A new value version (create, add, rotate, import): it supersedes the old version,
                 // so an outstanding burn of that version becomes history.
@@ -593,11 +593,11 @@ public sealed class RecordVaultStore : IFileVaultStore
                 next = new SecretRecord(
                     FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous);
             }
-            else if (secret.BurnedAt != null && state.OutstandingBurn == null)
+            else if (secret.BurnedAt is not null && state.OutstandingBurn is null)
             {
                 next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, NextStamp(), secret.BurnReason)] };
             }
-            if (next != null)
+            if (next is not null)
                 writes.Add((fileName, RecordMerge.Normalize(next)));
         }
 
@@ -658,8 +658,8 @@ public sealed class RecordVaultStore : IFileVaultStore
     {
         var loaded = LoadRecords(key, warnings);
         return (
-            loaded.Values.Where(r => r.State != null).ToDictionary(r => r.FileName, r => r.State!, StringComparer.Ordinal),
-            loaded.Values.Where(r => r.UnreadableReason != null).Select(r => r.FileName).Order(StringComparer.Ordinal).ToList());
+            loaded.Values.Where(r => r.State is not null).ToDictionary(r => r.FileName, r => r.State!, StringComparer.Ordinal),
+            loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).Order(StringComparer.Ordinal).ToList());
     }
 
     /// <summary>
@@ -682,13 +682,13 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             ObserveAll(state);
             loaded.TryGetValue(fileName, out var current);
-            if (current?.UnreadableReason != null)
+            if (current?.UnreadableReason is not null)
             {
                 _warnings?.WriteLine($"Warning: record {fileName} can't be read here, so the other copy's version was not merged into it.");
                 continue;
             }
-            var merged = current?.State == null ? RecordMerge.Normalize(state) : RecordMerge.Merge(current.State, state);
-            if (current?.State != null && merged.SameState(current.State) && current.FoldedCopies is not { Count: > 0 })
+            var merged = current?.State is null ? RecordMerge.Normalize(state) : RecordMerge.Merge(current.State, state);
+            if (current?.State is not null && merged.SameState(current.State) && current.FoldedCopies is not { Count: > 0 })
                 continue;
             writes.Add((fileName, merged));
         }
@@ -748,7 +748,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             return;
         _modesChecked = true;
         var candidates = new List<string> { ConfigDir, ConfigFile };
-        if (_machineConfig?.VaultDir != null)
+        if (_machineConfig?.VaultDir is not null)
         {
             var vaultDir = VaultDir;
             var recordsDir = RecordsDir;
