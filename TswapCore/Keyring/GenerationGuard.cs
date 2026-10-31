@@ -51,7 +51,7 @@ public static class GenerationGuard
     /// </summary>
     public static void CheckUnchanged(string recordFileName, byte[]? loaded, byte[]? onDisk)
     {
-        var same = loaded == null ? onDisk == null : onDisk != null && loaded.AsSpan().SequenceEqual(onDisk);
+        var same = loaded is null ? onDisk is null : onDisk is not null && loaded.AsSpan().SequenceEqual(onDisk);
         if (same)
             return;
         throw new TswapException(

@@ -41,15 +41,14 @@ public sealed class BrokerTcpRelay : IAsyncDisposable
         var portText = listen[(colon + 1)..];
         if (host.StartsWith('[') && host.EndsWith(']'))
             host = host[1..^1];
-        IPAddress address;
-        if (host == "127.0.0.1")
-            address = IPAddress.Loopback;
-        else if (host == "::1")
-            address = IPAddress.IPv6Loopback;
-        else
-            throw new TswapException(
+        var address = host switch
+        {
+            "127.0.0.1" => IPAddress.Loopback,
+            "::1" => IPAddress.IPv6Loopback,
+            _ => throw new TswapException(
                 $"--listen must be a literal loopback address, 127.0.0.1 or ::1 (got '{BrokerPolicy.Printable(host)}'): " +
-                "the forwarded port lets anything that reaches it use this container's routes.");
+                "the forwarded port lets anything that reaches it use this container's routes."),
+        };
         if (!int.TryParse(portText, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var port) || port > 65535)
             throw new TswapException($"--listen has an invalid port '{BrokerPolicy.Printable(portText)}'.");
         return new IPEndPoint(address, port);

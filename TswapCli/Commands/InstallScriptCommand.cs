@@ -22,7 +22,7 @@ public sealed class InstallScriptCommand : ICliCommand
         if (OperatingSystem.IsMacOS())
         {
             using var stream = typeof(InstallScript).Assembly.GetManifestResourceStream("libtswapse.dylib");
-            if (stream != null)
+            if (stream is not null)
             {
                 using var ms = new MemoryStream();
                 stream.CopyTo(ms);

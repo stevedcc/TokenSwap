@@ -17,9 +17,8 @@ public sealed class RestoreCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length != 1 || args[0].StartsWith("--"))
+        if (args is not [var name] || name.StartsWith("--"))
             throw new UsageException($"sudo {ctx.Prefix} restore <name>");
-        var name = args[0];
         Validation.ValidateName(name);
         ctx.RequireSudo("restore");
 
@@ -32,7 +31,7 @@ public sealed class RestoreCommand : ICliCommand
         db.Secrets[name] = existing with
         {
             Value = previous,
-            Modified = DateTime.UtcNow,
+            Modified = ctx.Time.GetUtcNow().UtcDateTime,
             BurnedAt = null,
             BurnReason = null,
             Rotated = true,
@@ -42,7 +41,7 @@ public sealed class RestoreCommand : ICliCommand
 
         var restored = ctx.LoadSecrets(key).Secrets[name];
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' restored to its previous value (a new version; the value it replaced is now the previous one).");
-        if (restored.BurnedAt != null)
+        if (restored.BurnedAt is not null)
             ctx.Console.Out.WriteLine($"  ⚠ That value was burned ({restored.BurnReason ?? "no reason given"}); the burn is outstanding again. Rotate it once the service uses it.");
         ctx.Console.Out.WriteLine("  Remember to update the external system that uses it.");
         return 0;

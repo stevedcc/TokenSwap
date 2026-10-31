@@ -55,6 +55,12 @@ public sealed record CommandContext(
     /// </summary>
     internal VaultOwnerScope OwnerScope => new(() => Storage);
 
+    /// <summary>
+    /// The clock every command reads the time from (created, modified, burned, export and backup
+    /// times). The composition root (<see cref="CliHost"/>) hands the store chain the same instance.
+    /// </summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 
@@ -71,7 +77,7 @@ public sealed record CommandContext(
     {
         // Brief T7 item 5: no banner; one line only for a touch posture that changed since it was
         // last acknowledged.
-        if (warnIfNoTouch && TestKey == null)
+        if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection());
     }
@@ -193,7 +199,7 @@ public sealed record CommandContext(
             var msg = OperatingSystem.IsWindows()
                 ? $"The '{commandName}' command requires an administrator prompt.\nRun tswap from an elevated command prompt."
                 : $"The '{commandName}' command requires sudo.\nRun: sudo {Prefix} {commandName} ...";
-            if (reason != null)
+            if (reason is not null)
                 msg += "\n" + reason;
             throw new TswapException(msg);
         }

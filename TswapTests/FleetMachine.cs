@@ -51,6 +51,13 @@ public sealed class FleetMachine : IDisposable
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
     public Func<DateTimeOffset>? Clock { get; set; }
 
+    /// <summary>
+    /// Brief T14 item 4: one clock for this machine's commands (<see cref="CommandContext.Time"/>)
+    /// and its store, as the composition root wires it (null: <see cref="Clock"/> for the store, the
+    /// system clock for the commands).
+    /// </summary>
+    public TimeProvider? Time { get; set; }
+
     /// <summary>Brief T6: the record store's vault folder (from config.json), or null for a classic vault.</summary>
     public string? VaultDir => File.Exists(ConfigPath) ? Config.VaultDir : null;
 
@@ -101,9 +108,11 @@ public sealed class FleetMachine : IDisposable
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
-        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, Clock, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
+        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
+            Time = Time ?? TimeProvider.System,
         };
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);

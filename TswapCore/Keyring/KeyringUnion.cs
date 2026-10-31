@@ -20,7 +20,7 @@ public static class KeyringUnion
         foreach (var slot in second.Slots)
         {
             var here = slots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId));
-            if (here == null)
+            if (here is null)
                 slots.Add(slot);
             else if (!SameSlot(here, slot))
                 throw new TswapException(

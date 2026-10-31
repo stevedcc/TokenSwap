@@ -45,7 +45,7 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
             }
         }
         var protectedPaths = new List<string> { full };
-        if (vaultDir != null)
+        if (vaultDir is not null)
             protectedPaths.Add(Path.GetFullPath(vaultDir));
         return new BrokerHostContext(uid, protectedPaths, HomeList(uid));
     }
@@ -106,7 +106,7 @@ public sealed class BrokerTemplatePolicy
         MaxOutputBytes = maxOutputBytes;
         Rate = rate;
         SecretNames = new SortedSet<string>(
-            env.Where(e => e.SecretName != null).Select(e => e.SecretName!).Concat(files.Select(f => f.SecretName)),
+            env.Where(e => e.SecretName is not null).Select(e => e.SecretName!).Concat(files.Select(f => f.SecretName)),
             StringComparer.Ordinal);
     }
 
@@ -204,7 +204,7 @@ public static class BrokerTemplateValidator
     private static readonly Regex PlaceholderRegex = new(@"\{([a-z0-9_-]{1,32})\}", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     /// <summary>Checks a secret name as tswap names them (plain, not <c>{{...}}</c>).</summary>
-    public static bool IsSecretName(string? name) => name != null && SecretNameRegex.IsMatch(name);
+    public static bool IsSecretName(string? name) => name is not null && SecretNameRegex.IsMatch(name);
 
     /// <summary>True when <paramref name="s"/> has a NUL or another control character (C0, DEL or C1).</summary>
     public static bool HasControl(string s) => s.Any(c => c < 0x20 || c is >= '\x7f' and <= '\x9f');
@@ -268,7 +268,7 @@ public static class BrokerTemplateValidator
         for (var i = 1; i < t.Argv.Count; i++)
         {
             var entry = t.Argv[i];
-            var segments = new List<(string, bool)>();
+            List<(string, bool)> segments = [];
             var at = 0;
             foreach (Match m in PlaceholderRegex.Matches(entry))
             {
@@ -302,7 +302,7 @@ public static class BrokerTemplateValidator
             throw Ex($"argv can reach {total} bytes with its arguments at their max_length; at most {MaxArgvTotalBytes}.");
 
         // Environment: literals or exactly {{secret}}; the baseline is fixed.
-        var env = new List<BrokerTemplateEnv>();
+        List<BrokerTemplateEnv> env = [];
         foreach (var (envName, value) in t.Env ?? [])
         {
             if (!EnvNameRegex.IsMatch(envName))
@@ -329,7 +329,7 @@ public static class BrokerTemplateValidator
         }
 
         // Secret files under /run/secrets/.
-        var files = new List<BrokerTemplateFile>();
+        List<BrokerTemplateFile> files = [];
         foreach (var file in t.Files ?? [])
         {
             if (file?.Path is null || !file.Path.StartsWith(SecretsDir, StringComparison.Ordinal)
@@ -345,7 +345,7 @@ public static class BrokerTemplateValidator
             throw Ex("too many entries (at most 16 files, 64 env variables, 32 arguments).");
 
         // Binds (decision 2), then cwd inside one of them.
-        var binds = new List<BrokerTemplateBind>();
+        List<BrokerTemplateBind> binds = [];
         foreach (var bind in t.Binds ?? [])
         {
             if (bind?.Path is null)
@@ -474,7 +474,7 @@ public static class BrokerTemplateValidator
         if ((self.Mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
             throw Ex("is writable by group or others; a bind must not be.");
         var ancestors = new List<BrokerNative.FileIdentity> { self };
-        for (var parent = Path.GetDirectoryName(resolved); parent != null; parent = Path.GetDirectoryName(parent))
+        for (var parent = Path.GetDirectoryName(resolved); parent is not null; parent = Path.GetDirectoryName(parent))
         {
             var p = BrokerNative.Identify(parent, follow: false) ?? throw Ex($"has a folder above it ({parent}) that can't be read.");
             if (p.Uid != host.VaultUid && p.Uid != 0)
@@ -511,7 +511,7 @@ public static class BrokerTemplateValidator
     /// <summary>True when <paramref name="candidate"/> is <paramref name="resolvedPath"/> or one of the folders above it.</summary>
     private static bool ContainsIdentity(string resolvedPath, BrokerNative.FileIdentity candidate)
     {
-        for (var p = resolvedPath; p != null; p = Path.GetDirectoryName(p))
+        for (var p = resolvedPath; p is not null; p = Path.GetDirectoryName(p))
             if (BrokerNative.Identify(p, follow: false) is { } id && id.Dev == candidate.Dev && id.Ino == candidate.Ino)
                 return true;
         return false;

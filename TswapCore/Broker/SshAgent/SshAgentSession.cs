@@ -75,10 +75,10 @@ internal sealed class SshAgentSession(SshAgentListener agent, BrokerPeer peer)
     {
         var (binding, fingerprint, reason, detail) = CheckBind(message);
         var line = $"ssh-bind {PeerFields()} host={fingerprint ?? "-"} result={(reason is null ? "ok" : "refused")}";
-        if (reason != null)
+        if (reason is not null)
             line += $" reason={reason}" + (detail is null ? "" : $" detail={detail}");
         agent.Log.Event(line);
-        if (reason != null)
+        if (reason is not null)
             return new SshAgentReply(SshAgentProtocol.ExtensionFailureReply, Close: true);
         _binding = binding;
         return new SshAgentReply([SshAgentProtocol.Success]);

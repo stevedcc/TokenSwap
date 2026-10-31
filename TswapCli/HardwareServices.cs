@@ -23,7 +23,7 @@ internal static class HardwareServices
     {
 #if DEBUG
         var testKeyHex = getEnvironmentVariable(TestKeyVariable);
-        if (testKeyHex == null)
+        if (testKeyHex is null)
             return null;
         var testKey = Convert.FromHexString(testKeyHex);
         if (testKey.Length != 32)
@@ -44,14 +44,14 @@ internal static class HardwareServices
     /// </summary>
     public static IReadOnlyList<IHardwareKeyService> UnlockBackends(byte[]? testKey, VaultOwnerScope ownerScope)
     {
-        if (testKey != null)
+        if (testKey is not null)
             return
             [
                 new SimulatedHardwareService(HardwareBackend.Tpm, testKey),
                 SecureEnclave(testKey, ownerScope),
             ];
 
-        var backends = new List<IHardwareKeyService>();
+        List<IHardwareKeyService> backends = [];
         if (OperatingSystem.IsMacOS()) backends.Add(SecureEnclave(testKey, ownerScope));
         if (OperatingSystem.IsLinux()) backends.Add(new LinuxTpmHardwareService());
         if (OperatingSystem.IsWindows()) backends.Add(new WindowsTpmHardwareService());
@@ -72,13 +72,13 @@ internal static class HardwareServices
     {
         if (!requirePresence && backend != HardwareBackend.SecureEnclave)
             throw new ArgumentException(
-                $"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName()}'", nameof(requirePresence));
+                $"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName}'", nameof(requirePresence));
 
         switch (backend)
         {
             case HardwareBackend.SecureEnclave:
                 return SecureEnclave(testKey, ownerScope, requirePresence);
-            case HardwareBackend.Tpm when testKey != null:
+            case HardwareBackend.Tpm when testKey is not null:
                 return new SimulatedHardwareService(backend, testKey);
             case HardwareBackend.Tpm:
                 if (OperatingSystem.IsLinux()) return new LinuxTpmHardwareService();
@@ -99,7 +99,7 @@ internal static class HardwareServices
     /// </summary>
     private static OwnerScopedHardwareService SecureEnclave(byte[]? testKey, VaultOwnerScope ownerScope, bool requirePresence = true)
     {
-        if (testKey != null)
+        if (testKey is not null)
             return OwnerScopedHardwareService.Wrap(new SimulatedHardwareService(HardwareBackend.SecureEnclave, testKey, requirePresence), ownerScope);
         if (!OperatingSystem.IsMacOS())
             throw new TswapException("--secure-enclave is only supported on macOS.");

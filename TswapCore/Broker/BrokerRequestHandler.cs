@@ -125,7 +125,7 @@ public sealed partial class BrokerRequestHandler(
         var built = target.Build(route);
         if (built.Failure is { } failure)
         {
-            if (built.DecodedPath != null)
+            if (built.DecodedPath is not null)
                 record = record with { Path = built.DecodedPath };
             await NotFoundAsync(http, record, failure).ConfigureAwait(false);
             return;

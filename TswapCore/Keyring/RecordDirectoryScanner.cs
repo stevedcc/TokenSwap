@@ -101,9 +101,9 @@ public static class RecordDirectoryScanner
     {
         ArgumentNullException.ThrowIfNull(directory);
 
-        var validRecords = new List<string>();
-        var conflicts = new List<ConflictWarning>();
-        var ignored = new List<string>();
+        List<string> validRecords = [];
+        List<ConflictWarning> conflicts = [];
+        List<string> ignored = [];
 
         // Do NOT use FileInfo.LastWriteTimeUtc (or any other filesystem mtime) anywhere in or
         // after this enumeration to decide which copy of a record is newer. Sync tools rewrite
@@ -194,7 +194,7 @@ public static class RecordDirectoryScanner
             (new Regex($@"^{escaped}\.sync-conflict-\d{{8}}-\d{{6}}-[A-Za-z0-9]+$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.Syncthing),
             (new Regex($@"^{escaped}-[A-Za-z0-9][A-Za-z0-9-]*$", RegexOptions.None, TimeSpan.FromSeconds(1)), SyncConflictTool.OneDrive),
         };
-        var found = new List<ConflictWarning>();
+        List<ConflictWarning> found = [];
         if (!directory.Exists)
             return found;
         foreach (var entry in directory.EnumerateFiles())

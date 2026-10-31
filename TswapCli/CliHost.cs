@@ -11,7 +11,7 @@ namespace TswapCli;
 internal static class CliHost
 {
     public static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath)
-        => Run(args, console, getEnv, isPrivileged, processPath, owner: null);
+        => Run(args, console, getEnv, isPrivileged, processPath, owner: null, TimeProvider.System);
 
 #if DEBUG
     /// <summary>
@@ -21,11 +21,21 @@ internal static class CliHost
     /// binary always uses the real <see cref="UnixOwnership"/>.
     /// </summary>
     public static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, IUnixOwnership ownershipForTests)
-        => Run(args, console, getEnv, isPrivileged, processPath, new DirectoryOwnerMatcher(ownershipForTests));
+        => Run(args, console, getEnv, isPrivileged, processPath, new DirectoryOwnerMatcher(ownershipForTests), TimeProvider.System);
+
+    /// <summary>
+    /// Test seam: <see cref="Run(string[], IConsole, Func{string, string?}, bool, string?)"/> with
+    /// <paramref name="timeForTests"/> (a fake clock) as the one time source: the commands'
+    /// <see cref="CommandContext.Time"/>, the store and its file layer. Compiled into Debug builds
+    /// only, so a Release binary always reads the system clock.
+    /// </summary>
+    public static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, TimeProvider timeForTests)
+        => Run(args, console, getEnv, isPrivileged, processPath, new DirectoryOwnerMatcher(time: timeForTests), timeForTests);
 #endif
 
     /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>); Debug test seam only.</param>
-    private static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, DirectoryOwnerMatcher? owner)
+    /// <param name="time">The one clock of this run (<see cref="TimeProvider.System"/> outside the Debug test seam).</param>
+    private static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, DirectoryOwnerMatcher? owner, TimeProvider time)
     {
         try
         {
@@ -37,14 +47,14 @@ internal static class CliHost
             //   TSWAP_TEST_SUDO_BYPASS=1 — skips RequireSudo so tests exercise export/import as non-root
             //   (TSWAP_TEST_KEY also selects the simulated TPM/Secure Enclave backend; see HardwareServices.)
             var testKey = HardwareServices.ReadTestKey(getEnv);
-            if (testKey != null && env.Verbose)
+            if (testKey is not null && env.Verbose)
                 console.Out.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey, TPM and Secure Enclave operations simulated");
             bool sudoBypass = false;
 #if DEBUG
             sudoBypass = getEnv("TSWAP_TEST_SUDO_BYPASS") == "1";
 #endif
 
-            IYubiKeyService yubiKeys = testKey != null
+            IYubiKeyService yubiKeys = testKey is not null
                 ? new TestKeyYubiKeyService(testKey)
                 : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
             // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or
@@ -54,11 +64,11 @@ internal static class CliHost
             //
             // Opened (and the config folder resolved) only when a command first needs the vault. The
             // Secure Enclave's owner scope (brief T12) reads the same store, at call time.
-            var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, warnings: console.Error));
+            var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
-            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass);
+            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass) { Time = time };
             return CliRunner.Run(ctx, env.CommandArgs);
         }
         // CliRunner maps command errors; these catches cover composition failures only

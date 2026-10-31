@@ -19,9 +19,11 @@ public enum RngMode
 
 public static class RngModeExtensions
 {
-    /// <summary>The lowercase name used in config files and CLI output.</summary>
-    public static string DisplayName(this RngMode mode)
-        => mode == RngMode.YubiKey ? "yubikey" : "system";
+    extension(RngMode mode)
+    {
+        /// <summary>The lowercase name used in config files and CLI output.</summary>
+        public string DisplayName => mode == RngMode.YubiKey ? "yubikey" : "system";
+    }
 }
 
 /// <summary>
@@ -43,13 +45,16 @@ public enum HardwareBackend
 
 public static class HardwareBackendExtensions
 {
-    /// <summary>The lowercase name used in config files and error messages.</summary>
-    public static string DisplayName(this HardwareBackend backend) => backend switch
+    extension(HardwareBackend backend)
     {
-        HardwareBackend.Tpm => "tpm",
-        HardwareBackend.SecureEnclave => "secure-enclave",
-        _ => "yubikey",
-    };
+        /// <summary>The lowercase name used in config files and error messages.</summary>
+        public string DisplayName => backend switch
+        {
+            HardwareBackend.Tpm => "tpm",
+            HardwareBackend.SecureEnclave => "secure-enclave",
+            _ => "yubikey",
+        };
+    }
 }
 
 public record Config(List<int> YubiKeySerials,

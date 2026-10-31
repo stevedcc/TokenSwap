@@ -48,20 +48,13 @@ internal static class RecordMigration
     public static int Run(CommandContext ctx, string[] args)
     {
         var usage = $"sudo {ctx.Prefix} migrate --to-records [--vault-dir <dir>]";
-        string? vaultDirArg = null;
-        switch (args)
+        var vaultDirArg = args switch
         {
-            case ["--to-records"]:
-                break;
-            case ["--to-records", "--vault-dir", var dir] when !dir.StartsWith("--"):
-                vaultDirArg = dir;
-                break;
-            case ["--vault-dir", var dir, "--to-records"] when !dir.StartsWith("--"):
-                vaultDirArg = dir;
-                break;
-            default:
-                throw new UsageException(usage);
-        }
+            ["--to-records"] => null,
+            ["--to-records", "--vault-dir", var dir] when !dir.StartsWith("--") => dir,
+            ["--vault-dir", var dir, "--to-records"] when !dir.StartsWith("--") => dir,
+            _ => throw new UsageException(usage),
+        };
         var c = ctx.Console;
 
         // Decrypts every secret: export's sensitivity class.
@@ -80,10 +73,10 @@ internal static class RecordMigration
             ?? throw new TswapException($"{vaultDir} can't be a vault folder (it has no parent folder).");
 
         // Everything that can refuse does so before anything is written, touched or unlocked.
-        var plainXor = config.Keyring == null;
-        if (config.Keyring == null && config.PendingSlotId != null)
+        var plainXor = config.Keyring is null;
+        if (config.Keyring is null && config.PendingSlotId is not null)
             throw new TswapException("This machine has a pending 'slot request'; finish it with 'slot accept' before converting.");
-        if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey != null || config.SecureEnclaveWrappedKey != null))
+        if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null))
             throw new TswapException(
                 "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Create a keyring " +
                 $"vault ('{ctx.Prefix} init --tpm' or '--secure-enclave'), move the secrets over with export / import, then convert that.");
@@ -125,7 +118,7 @@ internal static class RecordMigration
                 "remove the folder and run this again.)");
         }
 
-        RemoveStaleTempFolders(c, owner, vaultDir, parent);
+        RemoveStaleTempFolders(c, owner, vaultDir, parent, ctx.Time);
 
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
@@ -161,7 +154,7 @@ internal static class RecordMigration
         owner.CreateDirectory(tempDir);
         // A failure from here to step 3 leaves the temp folder behind, as a crash would; the classic
         // vault is untouched, and the next run removes the folder (with a notice).
-        var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         temp.SaveConfig(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
         var lastHlc = temp.WriteSnapshot(db, key);
         ctx.MigrationSeams?.AfterStep?.Invoke(1);
@@ -189,7 +182,7 @@ internal static class RecordMigration
         // empty folder -> a non-recursive delete, then rename; anything else -> refuse.
         ctx.MigrationSeams?.BeforeStep?.Invoke(3);
         var target = owner.AsOwner(vaultDir, () => !Directory.Exists(vaultDir) && !File.Exists(vaultDir) ? "absent"
-            : Directory.Exists(vaultDir) && new DirectoryInfo(vaultDir).LinkTarget == null && !Directory.EnumerateFileSystemEntries(vaultDir).Any() ? "empty"
+            : Directory.Exists(vaultDir) && new DirectoryInfo(vaultDir).LinkTarget is null && !Directory.EnumerateFileSystemEntries(vaultDir).Any() ? "empty"
             : "occupied");
         try
         {
@@ -236,12 +229,12 @@ internal static class RecordMigration
         ctx.MigrationSeams?.AfterStep?.Invoke(4);
 
         // Step 5: only now the classic file goes aside.
-        var secretsBackup = owner.FileExists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, owner) : null;
+        var secretsBackup = owner.FileExists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, owner) : null;
 
         c.Out.WriteLine($"\n✓ Converted to the record store: {db.Secrets.Count} secret(s), one file each.");
         c.Out.WriteLine($"Vault folder (share this one, never config.json): {vaultDir}");
         c.Out.WriteLine($"Previous config backed up to: {configBackup}");
-        if (secretsBackup != null)
+        if (secretsBackup is not null)
             c.Out.WriteLine($"Previous secrets file moved to: {secretsBackup}");
         if (plainXor)
         {
@@ -259,7 +252,7 @@ internal static class RecordMigration
     {
         if (records.Owner.FileExists(records.SecretsFile))
         {
-            var backup = FileBackup.Move(records.SecretsFile, DateTime.UtcNow, records.Owner);
+            var backup = FileBackup.Move(records.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, records.Owner);
             ctx.Console.Out.WriteLine(
                 $"This vault was already converted, but an interrupted run left the classic secrets file behind; it was moved to: {backup}");
             return 0;
@@ -295,7 +288,7 @@ internal static class RecordMigration
             if (!owner.FileExists(keyringPath))
                 return ConvertedCopy.None;
             var there = KeyringCodec.Decode(owner.ReadAllBytes(keyringPath));
-            if (config.Keyring != null)
+            if (config.Keyring is not null)
                 return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId)
                     ? ConvertedCopy.ThisVault
                     : ConvertedCopy.None;
@@ -312,14 +305,14 @@ internal static class RecordMigration
         }
     }
 
-    private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent)
+    private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent, TimeProvider time)
     {
         var stales = owner.AsOwner(parent, () => Directory.Exists(parent)
             ? Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*")
             : []);
         // Fix round 1 (A2): only a folder untouched for an hour is taken as a crash's leftover; a
         // younger one may belong to a conversion that is still running.
-        var cutoff = DateTime.UtcNow.AddHours(-1);
+        var cutoff = time.GetUtcNow().UtcDateTime.AddHours(-1);
         var young = stales.Where(s => owner.AsOwner(s, () => Directory.GetLastWriteTimeUtc(s)) > cutoff).ToList();
         if (young.Count > 0)
             throw new TswapException(
@@ -341,7 +334,7 @@ internal static class RecordMigration
     {
         const byte k = 1;
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
-        var slots = new List<Slot>();
+        List<Slot> slots = [];
         foreach (var serial in config.YubiKeySerials.Distinct())
         {
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
@@ -375,8 +368,8 @@ internal static class RecordMigration
         CommandContext ctx, string tempDir, Config newConfig, DirectoryOwnerMatcher owner, Keyring keyring,
         SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots)
     {
-        var problems = new List<string>();
-        var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        List<string> problems = [];
+        var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         var warnings = new StringWriter();
         var readKeyring = reader.ReadKeyring();
         if (!KeyringCodec.Encode(readKeyring).AsSpan().SequenceEqual(KeyringCodec.Encode(keyring)))
@@ -397,7 +390,7 @@ internal static class RecordMigration
                 continue;
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(secret.Value)), SHA256.HashData(Encoding.UTF8.GetBytes(got.Value))))
                 problems.Add($"'{name}' has a different value");
-            if ((secret.BurnedAt != null) != (got.BurnedAt != null) || secret.BurnReason != got.BurnReason
+            if ((secret.BurnedAt is not null) != (got.BurnedAt is not null) || secret.BurnReason != got.BurnReason
                 || (secret.BurnedAt is { } burned && got.BurnedAt is { } gotBurned && Ms(burned) != Ms(gotBurned)))
                 problems.Add($"'{name}' has a different burned state");
             if (Ms(secret.Created) != Ms(got.Created))

@@ -47,7 +47,7 @@ public sealed class BrokerLog : IDisposable
     {
         _stderr = stderr;
         _time = time ?? TimeProvider.System;
-        if (logFile != null)
+        if (logFile is not null)
         {
             var options = new FileStreamOptions
             {
@@ -79,7 +79,7 @@ public sealed class BrokerLog : IDisposable
             .Append(" bytes_out=").Append(r.BytesOut.ToString(CultureInfo.InvariantCulture))
             .Append(" unlocks=").Append(r.Unlocks.ToString(CultureInfo.InvariantCulture))
             .Append(" unlock_ms=").Append(((long)r.UnlockDuration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
-        if (r.Reason != null)
+        if (r.Reason is not null)
             line.Append(" reason=").Append(Escape(r.Reason, 64));
         Write(line.ToString());
     }
@@ -114,7 +114,7 @@ public sealed class BrokerLog : IDisposable
             .Append(" truncated=").Append(r.Truncated ? "true" : "false")
             .Append(" unlocks=").Append(r.Unlocks.ToString(CultureInfo.InvariantCulture))
             .Append(" ms=").Append(((long)r.Duration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
-        if (r.Reason != null)
+        if (r.Reason is not null)
             line.Append(" reason=").Append(Escape(r.Reason, 64));
         Write(line.ToString());
     }

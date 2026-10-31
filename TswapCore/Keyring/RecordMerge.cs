@@ -36,9 +36,9 @@ public static class RecordMerge
             .Where(b => !ReferenceEquals(b, outstanding))
             .OrderByDescending(b => b.Burn)
             .ThenByDescending(b => b.Version) // fix round 1 (C): equal burn stamps happen (restore)
-            .Take(outstanding == null ? MaxBurns : MaxBurns - 1)
+            .Take(outstanding is null ? MaxBurns : MaxBurns - 1)
             .ToList();
-        if (outstanding != null)
+        if (outstanding is not null)
             kept.Add(outstanding);
         return kept.OrderBy(b => b.Version).ThenBy(b => b.Burn).ToList();
     }
@@ -102,8 +102,8 @@ public static class RecordMerge
         if (name != 0)
             return name;
         // Fix round 3: the previous value last (absent < present, then its version, then its bytes).
-        var hasPrevious = (a.Previous != null).CompareTo(b.Previous != null);
-        if (hasPrevious != 0 || a.Previous == null)
+        var hasPrevious = (a.Previous is not null).CompareTo(b.Previous is not null);
+        if (hasPrevious != 0 || a.Previous is null)
             return hasPrevious;
         var previousVersion = a.Previous.Version.CompareTo(b.Previous!.Version);
         return previousVersion != 0 ? previousVersion : a.Previous.Value.AsSpan().SequenceCompareTo(b.Previous.Value);

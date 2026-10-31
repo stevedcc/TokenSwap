@@ -65,7 +65,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         if (machineKey.Length != KeySize)
             throw new ArgumentException($"The simulated machine key must be {KeySize} bytes", nameof(machineKey));
         if (!requirePresence && backend != HardwareBackend.SecureEnclave)
-            throw new ArgumentException($"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName()}'", nameof(requirePresence));
+            throw new ArgumentException($"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName}'", nameof(requirePresence));
         Backend = backend;
         _machineKey = (byte[])machineKey.Clone();
         _requirePresence = requirePresence;
@@ -105,7 +105,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         var sealedLength = NonceSize + TagSize + KeySize;
         if (!(blob.Length == sealedLength || (blob.Length == sealedLength + 1 && blob[^1] is 0 or 1)))
             throw new TswapException(
-                $"Config is corrupted: the simulated '{Backend.DisplayName()}' blob has the wrong length. " +
+                $"Config is corrupted: the simulated '{Backend.DisplayName}' blob has the wrong length. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
         var kekSlot = new byte[KeySize];
@@ -117,7 +117,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         catch (CryptographicException)
         {
             throw new TswapException(
-                $"Simulated '{Backend.DisplayName()}' operation failed while unwrapping the key: the blob was made " +
+                $"Simulated '{Backend.DisplayName}' operation failed while unwrapping the key: the blob was made " +
                 "on a different machine or is corrupted.");
         }
 

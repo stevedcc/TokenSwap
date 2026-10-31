@@ -235,7 +235,7 @@ public static class KeyringCodec
         var k = bytes[1 + KeyringFormat.VaultIdSize];
         var slotCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(2 + KeyringFormat.VaultIdSize, 4));
 
-        var slots = new List<Slot>();
+        List<Slot> slots = [];
         var offset = HeaderSize;
         for (uint i = 0; i < slotCount; i++)
         {

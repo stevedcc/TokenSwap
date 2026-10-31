@@ -31,7 +31,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
     /// </summary>
     public byte[] Unlock(Config config, YubiKeySelection selection)
     {
-        if (overrideKey != null)
+        if (overrideKey is not null)
             return overrideKey; // Test mode: bypass YubiKey entirely — the test key is the master key
 
         // The XOR-redundancy scheme requires exactly two enrolled keys; a corrupted or
@@ -46,13 +46,13 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
             throw new TswapException("No YubiKey detected. Please insert YubiKey.");
 
         var enrolled = connected.Where(config.YubiKeySerials.Contains).Distinct().ToList();
-        if (enrolled.Count == 0 && selection.Serial == null)
+        if (enrolled.Count == 0 && selection.Serial is null)
             throw new TswapException(connected.Count == 1
                 ? $"YubiKey {connected[0]} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}"
                 : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
 
         var order = selection.Order(enrolled, enrolled.Select(_ => config.RequiresTouch).ToList(), connected);
-        var failures = new List<string>();
+        List<string> failures = [];
         foreach (var serial in order)
         {
             byte[] k_current;
@@ -94,7 +94,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
 
         // Null means this config predates per-vault salts (or never opted in) and must keep
         // deriving via the legacy hardcoded Crypto.MasterKeySalt constant — see Config.MasterKeySalt.
-        var salt = config.MasterKeySalt != null ? Convert.FromBase64String(config.MasterKeySalt) : null;
+        var salt = config.MasterKeySalt is not null ? Convert.FromBase64String(config.MasterKeySalt) : null;
         return Crypto.DeriveKey(k1, k2, salt);
     }
 
@@ -106,7 +106,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
     /// </summary>
     public int SelectConnectedSerial(Func<IReadOnlyList<int>, int> chooseSerial, int? requiredSerial = null)
     {
-        if (overrideKey != null)
+        if (overrideKey is not null)
             return requiredSerial ?? TestKeyYubiKeyService.Serial1;
 
         var serials = yubiKeys.ListSerials();

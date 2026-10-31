@@ -60,7 +60,7 @@ public sealed class BrokerRedactor
     /// </summary>
     public static BrokerRedactor ForSecret(ReadOnlySpan<byte> secret, string? basicUser)
     {
-        var forms = new List<byte[]>();
+        List<byte[]> forms = [];
         void Add(byte[] form)
         {
             if (form.Length > 0 && !forms.Any(f => f.AsSpan().SequenceEqual(form)))
@@ -109,7 +109,7 @@ public sealed class BrokerRedactor
             }
         }
 
-        if (basicUser != null)
+        if (basicUser is not null)
         {
             var composite = Encoding.ASCII.GetBytes(basicUser + ":").Concat(raw).ToArray();
             Add(composite);

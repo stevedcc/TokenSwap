@@ -51,7 +51,7 @@ public static class Redact
     /// </summary>
     public static IReadOnlyList<(int Line, string Snippet)> FindUnknownSecrets(string content)
     {
-        var results = new List<(int, string)>();
+        List<(int, string)> results = [];
         var lines = content.Split('\n');
 
         for (int i = 0; i < lines.Length; i++)

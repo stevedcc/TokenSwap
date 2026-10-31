@@ -26,7 +26,7 @@ internal static class SecretRotation
                 $"Secret '{name}' not found. 'rotate' replaces an existing secret; for a new one use '{ctx.Prefix} create {name}' " +
                 $"or '<source> | {ctx.Prefix} ingest {name}'.");
         }
-        var burned = existing.BurnedAt != null;
+        var burned = existing.BurnedAt is not null;
         if (burned && ctx.Storage is not RecordVaultStore)
             throw new TswapException(
                 $"Secret '{name}' is burned, and this vault uses the classic single-file store, which keeps one burn per secret " +
@@ -42,7 +42,7 @@ internal static class SecretRotation
     /// <summary>Writes <paramref name="value"/> as the new version of <paramref name="name"/>.</summary>
     public static void Write(CommandContext ctx, SecretsDb db, byte[] key, string name, Secret existing, string value)
     {
-        db.Secrets[name] = existing with { Value = value, Modified = DateTime.UtcNow, BurnedAt = null, BurnReason = null, Rotated = true };
+        db.Secrets[name] = existing with { Value = value, Modified = ctx.Time.GetUtcNow().UtcDateTime, BurnedAt = null, BurnReason = null, Rotated = true };
         ctx.Storage.SaveSecrets(db, key);
     }
 
@@ -50,7 +50,7 @@ internal static class SecretRotation
     public static void Report(CommandContext ctx, string name, Secret existing, string detail)
     {
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' rotated ({detail})");
-        ctx.Console.Out.WriteLine(existing.BurnedAt != null
+        ctx.Console.Out.WriteLine(existing.BurnedAt is not null
             ? "  Value was NOT displayed. The old value is superseded; its burn is kept as history ('burned' lists it as rotated)."
             : "  Value was NOT displayed. The old value is superseded.");
         ctx.Console.Out.WriteLine("  Remember to update the external system that uses it (e.g. with 'run').");

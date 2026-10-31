@@ -19,6 +19,7 @@ public class Storage : IFileVaultStore
 
     private readonly DirectoryOwnerMatcher _owner;
     private readonly TextWriter? _warnings;
+    private readonly TimeProvider _time;
     private bool _modesChecked;
 
     /// <inheritdoc/>
@@ -29,13 +30,15 @@ public class Storage : IFileVaultStore
     /// <see cref="DirectoryOwnerMatcher"/>). Null: <see cref="DirectoryOwnerMatcher.Default"/>.
     /// </param>
     /// <param name="warnings">Where the one notice about tightened permissions goes (stderr); null: none.</param>
-    public Storage(string configDir, DirectoryOwnerMatcher? owner = null, TextWriter? warnings = null)
+    /// <param name="time">The clock of backup names (null: the system clock).</param>
+    public Storage(string configDir, DirectoryOwnerMatcher? owner = null, TextWriter? warnings = null, TimeProvider? time = null)
     {
         ConfigDir = configDir;
         ConfigFile = Path.Combine(configDir, "config.json");
         SecretsFile = Path.Combine(configDir, "secrets.json.enc");
         _owner = owner ?? DirectoryOwnerMatcher.Default;
         _warnings = warnings;
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -50,7 +53,7 @@ public class Storage : IFileVaultStore
         if (_modesChecked || OperatingSystem.IsWindows())
             return;
         _modesChecked = true;
-        var changed = new List<string>();
+        List<string> changed = [];
         foreach (var path in new[] { ConfigDir, ConfigFile, SecretsFile })
         {
             try
@@ -73,7 +76,7 @@ public class Storage : IFileVaultStore
     /// <inheritdoc/>
     public string BackupConfig()
     {
-        return FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
+        return FileBackup.Copy(ConfigFile, _time.GetUtcNow().UtcDateTime, _owner);
     }
 
     /// <inheritdoc/>
@@ -85,7 +88,7 @@ public class Storage : IFileVaultStore
         if (OperatingSystem.IsWindows())
             return false;
         var info = new FileInfo(path);
-        if (info.LinkTarget != null)
+        if (info.LinkTarget is not null)
             return false;
         if (Directory.Exists(path))
             return (File.GetUnixFileMode(path) & ~(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)) != 0;
@@ -131,7 +134,7 @@ public class Storage : IFileVaultStore
                 $"Warning: vault file not found ({SecretsFile}). Starting with empty vault. " +
                 "To recover: restore secrets.json.enc alongside its original config.json from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
-            return new SecretsDb(new Dictionary<string, Secret>());
+            return new SecretsDb([]);
         }
         catch (DirectoryNotFoundException)
         {
@@ -139,12 +142,12 @@ public class Storage : IFileVaultStore
                 $"Warning: config directory not found ({ConfigDir}). Starting with empty vault. " +
                 "To recover: restore the config directory from backup. " +
                 "To start fresh: run 'tswap init' (this will overwrite config.json).");
-            return new SecretsDb(new Dictionary<string, Secret>());
+            return new SecretsDb([]);
         }
         var decrypted = Crypto.Decrypt(encrypted, key);
         var json = Encoding.UTF8.GetString(decrypted);
         return JsonSerializer.Deserialize(json, TswapJsonContext.Default.SecretsDb)
-            ?? new SecretsDb(new Dictionary<string, Secret>());
+            ?? new SecretsDb([]);
     }
 
     public void SaveSecrets(SecretsDb db, byte[] key)

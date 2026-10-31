@@ -14,9 +14,8 @@ public sealed class IngestCommand : ICliCommand
         // Brief T6 decision 7: --rotate writes a newer version of an existing secret.
         var rotate = args.Contains("--rotate");
         args = args.Where(a => a != "--rotate").ToArray();
-        if (args.Length != 1 || args[0].StartsWith("--"))
+        if (args is not [var name] || name.StartsWith("--"))
             throw new UsageException($"<source> | {ctx.Prefix} ingest [--rotate] <name>");
-        var name = args[0];
 
         Validation.ValidateName(name);
 
@@ -44,7 +43,7 @@ public sealed class IngestCommand : ICliCommand
             throw new TswapException(
                 $"Secret '{name}' already exists. To replace its value, use: <source> | {ctx.Prefix} ingest --rotate {name}");
 
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' ingested from stdin");

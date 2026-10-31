@@ -63,7 +63,7 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
             RequestHeaderEncodingSelector = (_, _) => Encoding.Latin1,
             ResponseHeaderEncodingSelector = (_, _) => Encoding.Latin1,
         };
-        if (trustedTestCertificate != null)
+        if (trustedTestCertificate is not null)
         {
             var trusted = X509CertificateLoader.LoadCertificate(trustedTestCertificate.RawData);
             Handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>

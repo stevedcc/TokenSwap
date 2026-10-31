@@ -145,7 +145,7 @@ namespace TswapCore.Broker
                 return;
             }
             var (sandbox, problem) = Templates.Sandbox(policy.BwrapPath);
-            if (problem != null)
+            if (problem is not null)
             {
                 log.Event($"template '{name}' refused: the sandbox can't run: {problem}");
                 await Refuse(503, "sandbox-unavailable").ConfigureAwait(false);

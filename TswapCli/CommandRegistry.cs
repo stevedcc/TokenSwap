@@ -49,7 +49,7 @@ public static class CommandRegistry
 
     public static int Dispatch(CommandContext ctx, string[] args)
     {
-        if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
+        if (args is [] or ["--help" or "-h" or "help", ..])
         {
             PrintHelp(ctx);
             return 0;

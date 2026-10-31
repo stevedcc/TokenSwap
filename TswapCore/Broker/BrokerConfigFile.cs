@@ -139,7 +139,7 @@ public static class BrokerConfigFile
         if (OperatingSystem.IsWindows())
             return;
         var info = new FileInfo(path);
-        if (info.LinkTarget != null)
+        if (info.LinkTarget is not null)
             throw new BrokerConfigException($"{path} is a symlink; broker.json must be a regular file.");
         if ((info.UnixFileMode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
             throw new BrokerConfigException($"{path} is writable by group or others; make it 0600 (chmod 600 {path}).");

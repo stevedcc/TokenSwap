@@ -28,7 +28,7 @@ public sealed class CreateCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is [])
             throw new UsageException($"{ctx.Prefix} create <name> [length]");
         int length;
         if (args.Length >= 2)
@@ -55,7 +55,7 @@ public sealed class CreateCommand : ICliCommand
                 $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
 
         var value = GenerateValue(ctx, config, length);
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
@@ -71,7 +71,7 @@ public sealed class CreateCommand : ICliCommand
     internal static string GenerateValue(CommandContext ctx, Config config, int length)
     {
         char[] password;
-        if (config.RngMode == RngMode.YubiKey && ctx.TestKey == null)
+        if (config.RngMode == RngMode.YubiKey && ctx.TestKey is null)
         {
             ctx.Console.Out.WriteLine("Touch YubiKey for entropy generation...");
             var entropySerial = ctx.SelectEntropySerial();

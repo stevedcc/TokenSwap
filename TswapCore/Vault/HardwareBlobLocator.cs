@@ -34,7 +34,7 @@ public static class HardwareBlobLocator
             _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, "Only wrap/seal backends store a blob"),
         };
 
-        if (config.Keyring != null)
+        if (config.Keyring is not null)
             return ReadFromOwnMachineSlot(config, backend);
 
         // Brief T5 decision 2: a machine between 'slot request --tpm|--secure-enclave' and 'slot
@@ -43,11 +43,11 @@ public static class HardwareBlobLocator
         // before it gets here, so this never opens a vault.) Only together with PendingSlotId,
         // which is what that guard keys on: a half-cleared config must not make the pending
         // KEK_slot a classic vault's master key.
-        if (config.PendingSlotId != null && config.PendingSlotHwBlob == null)
+        if (config.PendingSlotId is not null && config.PendingSlotHwBlob is null)
             throw new TswapException(
-                $"Config is corrupted: this machine's pending '{backend.DisplayName()}' slot request has no hardware blob. " +
+                $"Config is corrupted: this machine's pending '{backend.DisplayName}' slot request has no hardware blob. " +
                 "Run 'tswap slot request' again on this machine.");
-        if (config.PendingSlotHwBlob != null && config.PendingSlotId != null)
+        if (config.PendingSlotHwBlob is not null && config.PendingSlotId is not null)
         {
             try
             {
@@ -80,7 +80,7 @@ public static class HardwareBlobLocator
         try
         {
             keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
-            if (config.KeyringSlotId != null)
+            if (config.KeyringSlotId is not null)
                 ownSlotId = Convert.FromBase64String(config.KeyringSlotId);
         }
         catch (FormatException)
@@ -89,17 +89,17 @@ public static class HardwareBlobLocator
                 "Config is corrupted: Keyring or KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init'.");
         }
 
-        var slot = ownSlotId != null
+        var slot = ownSlotId is not null
             ? keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownSlotId))
             : keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
 
-        if (slot == null)
+        if (slot is null)
             throw new TswapException(
                 "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init'.");
 
         if (slot.HwBlob is not { Length: > 0 } hwBlob)
             throw new TswapException(
-                $"Config is corrupted: this machine's keyring slot has no '{backend.DisplayName()}' hardware blob. " +
+                $"Config is corrupted: this machine's keyring slot has no '{backend.DisplayName}' hardware blob. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
         return hwBlob;
