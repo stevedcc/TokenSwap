@@ -155,7 +155,7 @@ public sealed class SlotCommand : ICliCommand
         var config = new Config(
             YubiKeySerials: [],
             RedundancyXor: "",
-            Created: DateTime.UtcNow,
+            Created: ctx.Time.GetUtcNow().UtcDateTime,
             RequiresTouch: blob.RequiresTouch,
             RngMode: rngMode,
             PendingSlotId: Convert.ToBase64String(slotId),
@@ -230,7 +230,7 @@ public sealed class SlotCommand : ICliCommand
         var config = new Config(
             YubiKeySerials: [],
             RedundancyXor: "",
-            Created: DateTime.UtcNow,
+            Created: ctx.Time.GetUtcNow().UtcDateTime,
             // As init --tpm/--secure-enclave (brief T11 decision 6): the Secure Enclave key requires
             // presence unless --no-touch; a TPM key here has no PIN/PCR policy (#133). 'slot accept'
             // carries this through to the final config.
@@ -394,7 +394,7 @@ public sealed class SlotCommand : ICliCommand
         // nothing. One entry per slot id (approving the same request again refreshes it).
         var approved = (config.ApprovedSlots ?? [])
             .Where(a => a.SlotId != request.SlotId)
-            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, DateTime.UtcNow,
+            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, ctx.Time.GetUtcNow().UtcDateTime,
                 Convert.ToHexString(SHA256.HashData(SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob")))))
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
@@ -595,14 +595,14 @@ public sealed class SlotCommand : ICliCommand
             // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))
                 c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
-            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
+            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, ctx.Time, c.Error).SaveConfig(finalConfig with
             {
                 Store = RecordVaultStore.StoreName,
                 VaultDir = vaultDir,
                 OriginId = RecordVaultStore.NewOriginId(),
             });
             if (fileStore.Owner.FileExists(fileStore.SecretsFile))
-                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
+                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
         }
         else
         {

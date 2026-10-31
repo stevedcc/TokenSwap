@@ -44,7 +44,7 @@ public sealed class IngestCommand : ICliCommand
             throw new TswapException(
                 $"Secret '{name}' already exists. To replace its value, use: <source> | {ctx.Prefix} ingest --rotate {name}");
 
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' ingested from stdin");

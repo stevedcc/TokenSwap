@@ -55,6 +55,12 @@ public sealed record CommandContext(
     /// </summary>
     internal VaultOwnerScope OwnerScope => new(() => Storage);
 
+    /// <summary>
+    /// The clock every command reads the time from (created, modified, burned, export and backup
+    /// times). The composition root (<see cref="CliHost"/>) hands the store chain the same instance.
+    /// </summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

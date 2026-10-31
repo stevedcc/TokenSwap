@@ -10,6 +10,16 @@ namespace TswapTests;
 /// knows), and a record-store vault made on a <see cref="FleetMachine"/> without going through
 /// <c>migrate --to-records</c> (so the store's own tests don't depend on the migration).
 /// </summary>
+/// <summary>
+/// The record store's earlier <c>Func&lt;DateTimeOffset&gt;</c> time seam as a
+/// <see cref="TimeProvider"/> (brief T14 item 4 changed the store's parameter), so the tests that
+/// move a captured <c>_now</c> keep doing so.
+/// </summary>
+internal sealed class FuncTimeProvider(Func<DateTimeOffset> now) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => now();
+}
+
 internal static class RecordVaultTestSupport
 {
     public const int SerialA = 31111111;

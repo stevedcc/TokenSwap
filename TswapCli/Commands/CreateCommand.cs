@@ -55,7 +55,7 @@ public sealed class CreateCommand : ICliCommand
                 $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
 
         var value = GenerateValue(ctx, config, length);
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");

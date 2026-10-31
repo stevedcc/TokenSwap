@@ -33,7 +33,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     public const string RecordsFolderName = "records";
 
     private readonly DirectoryOwnerMatcher _owner;
-    private readonly Func<DateTimeOffset> _clock;
+    private readonly TimeProvider _time;
 
     private Config? _machineConfig;
     private readonly bool _detached;
@@ -44,16 +44,16 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     /// <param name="configDir">The machine's config dir (holds <c>config.json</c>).</param>
     /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>).</param>
-    /// <param name="clock">The time seam for HLC stamps (null: the system clock).</param>
+    /// <param name="time">The clock of HLC stamps and backup names (null: the system clock).</param>
     /// <param name="warnings">Where load-time findings go (conflicted copies, unreadable records); stderr in the CLI.</param>
-    public RecordVaultStore(string configDir, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null, TextWriter? warnings = null)
+    public RecordVaultStore(string configDir, DirectoryOwnerMatcher? owner = null, TimeProvider? time = null, TextWriter? warnings = null)
     {
         _warnings = warnings;
         ConfigDir = configDir;
         ConfigFile = Path.Combine(configDir, "config.json");
         SecretsFile = Path.Combine(configDir, "secrets.json.enc");
         _owner = owner ?? DirectoryOwnerMatcher.Default;
-        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -61,15 +61,15 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <c>config.json</c> is read or written): <c>migrate --to-records</c> fills its temp folder
     /// and reads it back through one.
     /// </summary>
-    public static RecordVaultStore ForFolder(string vaultDir, Config machineConfig, DirectoryOwnerMatcher? owner = null, Func<DateTimeOffset>? clock = null)
+    public static RecordVaultStore ForFolder(string vaultDir, Config machineConfig, DirectoryOwnerMatcher? owner = null, TimeProvider? time = null)
     {
-        var store = new RecordVaultStore(Path.GetFullPath(vaultDir), owner, clock, detached: true);
+        var store = new RecordVaultStore(Path.GetFullPath(vaultDir), owner, time, detached: true);
         store._machineConfig = machineConfig with { Keyring = null, Store = StoreName, VaultDir = Path.GetFullPath(vaultDir) };
         return store;
     }
 
-    private RecordVaultStore(string vaultDir, DirectoryOwnerMatcher? owner, Func<DateTimeOffset>? clock, bool detached)
-        : this(vaultDir, owner, clock)
+    private RecordVaultStore(string vaultDir, DirectoryOwnerMatcher? owner, TimeProvider? time, bool detached)
+        : this(vaultDir, owner, time)
     {
         _detached = detached;
     }
@@ -102,7 +102,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private Config MachineConfig => _machineConfig ?? ReadMachineConfig();
 
-    public string BackupConfig() => FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
+    public string BackupConfig() => FileBackup.Copy(ConfigFile, _time.GetUtcNow().UtcDateTime, _owner);
 
     public void WriteFile(string path, string contents) => _owner.WriteAtomic(path, Encoding.UTF8.GetBytes(contents));
 
@@ -437,7 +437,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
 
         // Decision 3, absurd stamps: accepted (merge needs a total order) but reported.
-        var nowMs = _clock().ToUnixTimeMilliseconds();
+        var nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
         const long year = 365L * 24 * 60 * 60 * 1000;
         var yearAhead = nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
         foreach (var record in loaded.Values.Where(r => r.State is not null && MaxPhysical(r.State) > yearAhead))
@@ -556,7 +556,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
         Stamp NextStamp()
         {
-            var hlc = Hlc.Next(_highestSeen, _clock().ToUnixTimeMilliseconds());
+            var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
             _highestSeen = hlc;
             return new Stamp(hlc, origin);
         }
@@ -720,7 +720,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         var origin = OriginId();
         foreach (var (fileName, state) in writes)
         {
-            var hlc = Hlc.Next(_highestSeen, _clock().ToUnixTimeMilliseconds());
+            var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
             _highestSeen = hlc;
             var written = state with { Write = new Stamp(hlc, origin) };
             var bytes = SecretRecordCodec.Encode(written, key);

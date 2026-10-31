@@ -63,12 +63,14 @@ public sealed class OwnerSwitchException(string message, int exitCode = 1) : Tsw
 /// tswap's CLI does all of this on one thread, one operation at a time.
 /// </para>
 /// </summary>
-public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
+/// <param name="time">The clock of the orphan temp file sweep's one-hour cutoff (null: the system clock).</param>
+public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, TimeProvider? time = null)
 {
     private const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private const UnixFileMode FolderOwnerOnly = OwnerOnly | UnixFileMode.UserExecute;
 
     private readonly IUnixOwnership _ownership = ownership ?? new UnixOwnership();
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     /// <summary>The matcher every real <see cref="Storage"/> uses.</summary>
     public static DirectoryOwnerMatcher Default { get; } = new();
@@ -155,7 +157,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null)
         try
         {
             using var _ = AsOwnerOf(Path.Combine(folder, "x"));
-            var cutoff = DateTime.UtcNow.AddHours(-1);
+            var cutoff = _time.GetUtcNow().UtcDateTime.AddHours(-1);
             foreach (var file in Directory.EnumerateFiles(folder))
             {
                 var info = new FileInfo(file);

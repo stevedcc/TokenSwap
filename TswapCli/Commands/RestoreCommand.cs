@@ -32,7 +32,7 @@ public sealed class RestoreCommand : ICliCommand
         db.Secrets[name] = existing with
         {
             Value = previous,
-            Modified = DateTime.UtcNow,
+            Modified = ctx.Time.GetUtcNow().UtcDateTime,
             BurnedAt = null,
             BurnReason = null,
             Rotated = true,

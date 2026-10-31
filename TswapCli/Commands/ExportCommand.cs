@@ -49,7 +49,7 @@ public sealed class ExportCommand : ICliCommand
 
         var exportFile = new ExportFile(
             ExportFile.CurrentVersion,
-            DateTime.UtcNow,
+            ctx.Time.GetUtcNow().UtcDateTime,
             Convert.ToBase64String(salt),
             Convert.ToBase64String(ciphertext),
             kdf

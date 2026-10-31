@@ -42,7 +42,7 @@ internal static class SecretRotation
     /// <summary>Writes <paramref name="value"/> as the new version of <paramref name="name"/>.</summary>
     public static void Write(CommandContext ctx, SecretsDb db, byte[] key, string name, Secret existing, string value)
     {
-        db.Secrets[name] = existing with { Value = value, Modified = DateTime.UtcNow, BurnedAt = null, BurnReason = null, Rotated = true };
+        db.Secrets[name] = existing with { Value = value, Modified = ctx.Time.GetUtcNow().UtcDateTime, BurnedAt = null, BurnReason = null, Rotated = true };
         ctx.Storage.SaveSecrets(db, key);
     }
 

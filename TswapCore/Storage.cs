@@ -19,6 +19,7 @@ public class Storage : IFileVaultStore
 
     private readonly DirectoryOwnerMatcher _owner;
     private readonly TextWriter? _warnings;
+    private readonly TimeProvider _time;
     private bool _modesChecked;
 
     /// <inheritdoc/>
@@ -29,13 +30,15 @@ public class Storage : IFileVaultStore
     /// <see cref="DirectoryOwnerMatcher"/>). Null: <see cref="DirectoryOwnerMatcher.Default"/>.
     /// </param>
     /// <param name="warnings">Where the one notice about tightened permissions goes (stderr); null: none.</param>
-    public Storage(string configDir, DirectoryOwnerMatcher? owner = null, TextWriter? warnings = null)
+    /// <param name="time">The clock of backup names (null: the system clock).</param>
+    public Storage(string configDir, DirectoryOwnerMatcher? owner = null, TextWriter? warnings = null, TimeProvider? time = null)
     {
         ConfigDir = configDir;
         ConfigFile = Path.Combine(configDir, "config.json");
         SecretsFile = Path.Combine(configDir, "secrets.json.enc");
         _owner = owner ?? DirectoryOwnerMatcher.Default;
         _warnings = warnings;
+        _time = time ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -73,7 +76,7 @@ public class Storage : IFileVaultStore
     /// <inheritdoc/>
     public string BackupConfig()
     {
-        return FileBackup.Copy(ConfigFile, DateTime.UtcNow, _owner);
+        return FileBackup.Copy(ConfigFile, _time.GetUtcNow().UtcDateTime, _owner);
     }
 
     /// <inheritdoc/>

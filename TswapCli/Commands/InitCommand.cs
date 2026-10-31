@@ -93,7 +93,7 @@ public sealed class InitCommand : ICliCommand
             var testConfig = new Config(
                 new List<int> { TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2 },
                 new string('0', 40), // 20-byte zero XOR share (hex)
-                DateTime.UtcNow,
+                ctx.Time.GetUtcNow().UtcDateTime,
                 null,
                 RngMode.System,
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
@@ -166,7 +166,7 @@ public sealed class InitCommand : ICliCommand
         var config = new Config(
             new List<int> { serial1, serial2 },
             Convert.ToHexString(xorShare),
-            DateTime.UtcNow,
+            ctx.Time.GetUtcNow().UtcDateTime,
             requiresTouch,
             rngMode,
             unlockChallenge,
@@ -189,7 +189,7 @@ public sealed class InitCommand : ICliCommand
         ctx.Storage.SaveConfig(config);
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -267,7 +267,7 @@ public sealed class InitCommand : ICliCommand
             var backendConfig = new Config(
                 YubiKeySerials: [],
                 RedundancyXor: "",
-                Created: DateTime.UtcNow,
+                Created: ctx.Time.GetUtcNow().UtcDateTime,
                 RequiresTouch: blob.RequiresTouch,
                 RngMode: rngMode);
 
@@ -286,7 +286,7 @@ public sealed class InitCommand : ICliCommand
             ctx.Storage.SaveConfig(config);
             if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
             {
-                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
+                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
                 c.SetForeground(ConsoleColor.Yellow);
                 c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
                 c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
@@ -333,8 +333,8 @@ public sealed class InitCommand : ICliCommand
         if (ctx.Storage is not IFileVaultStore fileStore)
             throw new TswapException("'init --vault-dir' needs a file-based config.");
         var vaultDir = Path.GetFullPath(folder);
-        var probe = new Config([], "", DateTime.UtcNow, Store: RecordVaultStore.StoreName, VaultDir: vaultDir, OriginId: RecordVaultStore.NewOriginId());
-        var folderStore = RecordVaultStore.ForFolder(vaultDir, probe, fileStore.Owner);
+        var probe = new Config([], "", ctx.Time.GetUtcNow().UtcDateTime, Store: RecordVaultStore.StoreName, VaultDir: vaultDir, OriginId: RecordVaultStore.NewOriginId());
+        var folderStore = RecordVaultStore.ForFolder(vaultDir, probe, fileStore.Owner, ctx.Time);
         if (!fileStore.Owner.FileExists(folderStore.KeyringFile))
             throw new TswapException(
                 $"{vaultDir} has no keyring, so it is not a shared vault folder (yet). To make a new shareable vault, run " +
@@ -353,7 +353,7 @@ public sealed class InitCommand : ICliCommand
         fileStore.Owner.WriteAtomic(fileStore.ConfigFile, System.Text.Encoding.UTF8.GetBytes(
             System.Text.Json.JsonSerializer.Serialize(config, TswapJsonContext.Default.Config)));
         if (fileStore.Owner.FileExists(fileStore.SecretsFile))
-            c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
+            c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
 
         var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));
         c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
@@ -557,7 +557,7 @@ public sealed class InitCommand : ICliCommand
         var backendConfig = new Config(
             YubiKeySerials: [],
             RedundancyXor: "",
-            Created: DateTime.UtcNow,
+            Created: ctx.Time.GetUtcNow().UtcDateTime,
             // Brief T11 decision 6: the Secure Enclave key requires presence unless --no-touch (the
             // only record of the key's policy); a TPM key here has no PIN/PCR policy (#133).
             RequiresTouch: backend == HardwareBackend.SecureEnclave && requirePresence,
@@ -577,7 +577,7 @@ public sealed class InitCommand : ICliCommand
         ctx.Storage.SaveConfig(config);
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
+            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
             c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
             c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");

@@ -201,7 +201,7 @@ public sealed class RecordConflictTests : IDisposable
         var copy = Rec("s") + " (1)";
         File.Copy(OtherRec("s"), copy);
 
-        var store = new RecordVaultStore(_m.Dir, clock: () => _now)
+        var store = new RecordVaultStore(_m.Dir, time: new FuncTimeProvider(() => _now))
         {
             DeleteFile = path => throw new IOException($"The process cannot access the file '{path}' because it is being used by another process."),
         };

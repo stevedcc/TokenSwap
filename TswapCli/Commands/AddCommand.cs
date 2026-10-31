@@ -30,7 +30,7 @@ public sealed class AddCommand : ICliCommand
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
 
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");

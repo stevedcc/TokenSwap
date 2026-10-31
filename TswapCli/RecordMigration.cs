@@ -125,7 +125,7 @@ internal static class RecordMigration
                 "remove the folder and run this again.)");
         }
 
-        RemoveStaleTempFolders(c, owner, vaultDir, parent);
+        RemoveStaleTempFolders(c, owner, vaultDir, parent, ctx.Time);
 
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
@@ -161,7 +161,7 @@ internal static class RecordMigration
         owner.CreateDirectory(tempDir);
         // A failure from here to step 3 leaves the temp folder behind, as a crash would; the classic
         // vault is untouched, and the next run removes the folder (with a notice).
-        var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         temp.SaveConfig(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
         var lastHlc = temp.WriteSnapshot(db, key);
         ctx.MigrationSeams?.AfterStep?.Invoke(1);
@@ -236,7 +236,7 @@ internal static class RecordMigration
         ctx.MigrationSeams?.AfterStep?.Invoke(4);
 
         // Step 5: only now the classic file goes aside.
-        var secretsBackup = owner.FileExists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, owner) : null;
+        var secretsBackup = owner.FileExists(fileStore.SecretsFile) ? FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, owner) : null;
 
         c.Out.WriteLine($"\n✓ Converted to the record store: {db.Secrets.Count} secret(s), one file each.");
         c.Out.WriteLine($"Vault folder (share this one, never config.json): {vaultDir}");
@@ -259,7 +259,7 @@ internal static class RecordMigration
     {
         if (records.Owner.FileExists(records.SecretsFile))
         {
-            var backup = FileBackup.Move(records.SecretsFile, DateTime.UtcNow, records.Owner);
+            var backup = FileBackup.Move(records.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, records.Owner);
             ctx.Console.Out.WriteLine(
                 $"This vault was already converted, but an interrupted run left the classic secrets file behind; it was moved to: {backup}");
             return 0;
@@ -312,14 +312,14 @@ internal static class RecordMigration
         }
     }
 
-    private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent)
+    private static void RemoveStaleTempFolders(IConsole c, DirectoryOwnerMatcher owner, string vaultDir, string parent, TimeProvider time)
     {
         var stales = owner.AsOwner(parent, () => Directory.Exists(parent)
             ? Directory.GetDirectories(parent, Path.GetFileName(vaultDir) + ".tmp-*")
             : []);
         // Fix round 1 (A2): only a folder untouched for an hour is taken as a crash's leftover; a
         // younger one may belong to a conversion that is still running.
-        var cutoff = DateTime.UtcNow.AddHours(-1);
+        var cutoff = time.GetUtcNow().UtcDateTime.AddHours(-1);
         var young = stales.Where(s => owner.AsOwner(s, () => Directory.GetLastWriteTimeUtc(s)) > cutoff).ToList();
         if (young.Count > 0)
             throw new TswapException(
@@ -376,7 +376,7 @@ internal static class RecordMigration
         SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots)
     {
         List<string> problems = [];
-        var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
+        var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         var warnings = new StringWriter();
         var readKeyring = reader.ReadKeyring();
         if (!KeyringCodec.Encode(readKeyring).AsSpan().SequenceEqual(KeyringCodec.Encode(keyring)))

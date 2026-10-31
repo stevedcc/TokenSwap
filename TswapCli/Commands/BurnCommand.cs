@@ -34,7 +34,7 @@ public sealed class BurnCommand : ICliCommand
             throw new TswapException($"Secret '{name}' is already burned (since {existing.BurnedAt:yyyy-MM-dd HH:mm}: {originalReason})");
         }
 
-        db.Secrets[name] = existing with { BurnedAt = DateTime.UtcNow, BurnReason = reason };
+        db.Secrets[name] = existing with { BurnedAt = ctx.Time.GetUtcNow().UtcDateTime, BurnReason = reason };
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n⚠ Secret '{name}' marked as BURNED");

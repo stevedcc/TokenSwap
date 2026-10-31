@@ -50,7 +50,7 @@ public sealed class VaultCommand : ICliCommand
             throw new TswapException($"Folder not found: {otherDir}");
 
         // The other copy, read only, through a store over the bare folder.
-        var other = RecordVaultStore.ForFolder(otherDir, config, store.Owner);
+        var other = RecordVaultStore.ForFolder(otherDir, config, store.Owner, ctx.Time);
         var otherKeyring = other.ReadKeyring();
         KeyringUnion.RequireSameVault(keyring, otherKeyring, "The other vault folder");
         var union = KeyringUnion.Union(keyring, otherKeyring, "the other vault folder's keyring");
