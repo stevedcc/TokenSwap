@@ -52,7 +52,7 @@ public sealed class RunCommand : ICliCommand
         // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
         // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
         // Fix round 1, B: a token is a name or 'name:previous' (SecretsDb.ResolveToken).
-        var secretValues = new Dictionary<string, string>();
+        Dictionary<string, string> secretValues = [];
         foreach (var token in tokens)
         {
             secretValues[token] = db.ResolveToken(token)

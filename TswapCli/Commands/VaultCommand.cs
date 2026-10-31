@@ -75,7 +75,7 @@ public sealed class VaultCommand : ICliCommand
         var key = SlotCommand.UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         try
         {
-            var toAdd = new List<Slot>();
+            List<Slot> toAdd = [];
             foreach (var slot in newSlots)
             {
                 if (SlotCommand.IsApproved(approvedHere, slot) || yes)

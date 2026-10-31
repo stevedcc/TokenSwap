@@ -610,7 +610,7 @@ public sealed class SlotCommand : ICliCommand
             // A record-store machine (joined with init --vault-dir) already shares the vault's
             // secrets: saving an empty database there would write a tombstone for every one.
             if (ctx.Storage is not RecordVaultStore && (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
-                ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+                ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
         }
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
@@ -803,7 +803,7 @@ public sealed class SlotCommand : ICliCommand
                 $"The {source} belongs to another vault (its vault id or k differs from this vault's). " +
                 "Nothing was merged; check that you picked the file for this vault.");
 
-        var newSlots = new List<Slot>();
+        List<Slot> newSlots = [];
         foreach (var slot in incoming.Slots)
         {
             var here = keyring.Slots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId))
@@ -849,7 +849,7 @@ public sealed class SlotCommand : ICliCommand
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         CryptographicOperations.ZeroMemory(vaultKey);
 
-        var toAdd = new List<Slot>();
+        List<Slot> toAdd = [];
         foreach (var slot in newSlots)
         {
             if (IsApproved(slot))

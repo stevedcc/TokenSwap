@@ -439,7 +439,7 @@ public sealed class BrokerCommand : ICliCommand
 
     private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known)
     {
-        var positional = new List<string>();
+        List<string> positional = [];
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
         {

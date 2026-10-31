@@ -100,7 +100,7 @@ public sealed class InitCommand : ICliCommand
             );
             ctx.Storage.SaveConfig(testConfig);
             if (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile))
-                ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), ctx.TestKey);
+                ctx.Storage.SaveSecrets(new SecretsDb([]), ctx.TestKey);
             c.Out.WriteLine("Initialized (test mode)");
             return 0;
         }
@@ -196,7 +196,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("  restore both .bak files under their original names.");
             c.ResetColor();
         }
-        ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), newVaultKey);
+        ctx.Storage.SaveSecrets(new SecretsDb([]), newVaultKey);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -293,7 +293,7 @@ public sealed class InitCommand : ICliCommand
                 c.Out.WriteLine("  restore both .bak files under their original names.");
                 c.ResetColor();
             }
-            ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+            ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
 
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
             c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -584,7 +584,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("  restore both .bak files under their original names.");
             c.ResetColor();
         }
-        ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+        ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
