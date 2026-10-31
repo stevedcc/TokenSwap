@@ -116,7 +116,7 @@ public sealed class BrokerLimiter(BrokerLimits limits, TimeProvider time)
 }
 
 /// <summary>
-/// Unlock limits (decision 7, brief T13): after <see cref="BrokerLimits.FailuresBeforeLockout"/> failed
+/// Unlock limits (T8 decision 7; the per-socket budget is brief T13 decision 6): after <see cref="BrokerLimits.FailuresBeforeLockout"/> failed
 /// unlocks in a row on one socket, that socket is refused for <see cref="BrokerLimits.Lockout"/>;
 /// no socket may make more than <see cref="BrokerLimits.MaxUnlocksPerSocketPerMinute"/> unlock
 /// attempts a minute; and no more than <see cref="BrokerLimits.MaxUnlocksPerMinute"/> unlock
