@@ -265,7 +265,7 @@ public sealed class SshAgentListener
 
     /// <summary>
     /// One signature with a fresh unlock (brief T10 decision 5), after every request check passed:
-    /// the sign-rate limit, then T8's unlock-failure limits and global unlock limit
+    /// the sign-rate limit, then T8's unlock-failure limits, the per-socket unlock budget (T13) and the global unlock limit
     /// (<see cref="BrokerUnlockGuard"/>, shared with the HTTP sockets and keyed by the client socket),
     /// then the broker's single unlock at a time (waiting at most <see cref="BrokerLimits.MaxQueueWait"/>),
     /// abandoning an unlock that hangs past <see cref="BrokerLimits.UnlockTimeout"/>. Returns the
@@ -296,7 +296,7 @@ public sealed class SshAgentListener
                 return (null, "sign-rate", false);
             if (guard.Refusal(socket) is { } refusedNow)
                 return (null, refusedNow, false);
-            guard.RecordAttempt();
+            guard.RecordAttempt(socket);
             var sign = Task.Run(() => SshKeySigner.Sign(_agent.KeySource, key, data, flags));
             byte[] signature;
             try

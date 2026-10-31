@@ -49,7 +49,7 @@ public sealed partial class BrokerRequestHandler(
     /// <summary>The one-unlock-at-a-time lock, shared with the ssh-agent endpoint (brief T10).</summary>
     internal SemaphoreSlim UnlockGate => _unlock;
 
-    /// <summary>The unlock-failure and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
+    /// <summary>The unlock-failure, per-socket (T13) and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
     internal BrokerUnlockGuard UnlockGuard => unlockGuard;
 
     /// <summary>
@@ -213,7 +213,7 @@ public sealed partial class BrokerRequestHandler(
         {
             if (unlockGuard.Refusal(socket) is { } refusedNow)
                 return new UnlockOutcome<T>(null, 503, refusedNow, TimeSpan.Zero, 0);
-            unlockGuard.RecordAttempt();
+            unlockGuard.RecordAttempt(socket);
             var task = Task.Run(read);
             try
             {
