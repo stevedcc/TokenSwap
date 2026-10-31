@@ -165,7 +165,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         var recover = RunTswapWithStdin(recoveryKey + "\n\n\n", "recover", "--yubikey");
         Assert.True(recover.exitCode == 0, $"recover failed: {recover.stdout}{recover.stderr}");
-        Assert.Contains("✓ Recovered", recover.stdout);
+        // ASCII part of "✓ Recovered: ... now opens this vault as its own slot": redirected stdout
+        // on Windows is not UTF-8, so the check mark itself does not survive there (CI, #216).
+        Assert.True(recover.stdout.Contains("now opens this vault as its own slot", StringComparison.Ordinal),
+            $"recover did not report the new slot: {recover.stdout}{recover.stderr}");
 
         var get = RunTswap("get", "e2e-secret");
         Assert.True(get.exitCode == 0, $"get failed: {get.stdout}{get.stderr}");
