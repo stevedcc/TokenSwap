@@ -16,9 +16,9 @@ C# application with a single entry point:
 ```bash
 # Build
 dotnet publish TswapCli/TswapCli.csproj -c Release
-# Linux:   cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
-# Windows: copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
+# Linux:   cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/tswap /usr/local/bin/
+# Windows: copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
 # Linux/macOS:

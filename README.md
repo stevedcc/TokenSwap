@@ -98,14 +98,14 @@ The compiled binary is a native executable with ~20ms startup. No .NET runtime n
 **Linux (x64)**
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-x64
-cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
 sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 ```
 
 **macOS (Apple Silicon)**
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
-sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
+sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/tswap /usr/local/bin/
 ```
 
 **macOS (Intel, build from source)**
@@ -114,14 +114,14 @@ sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-x64
-sudo cp TswapCli/bin/Release/net10.0/osx-x64/publish/tswap /usr/local/bin/
+sudo cp TswapCli/bin/Release/net11.0/osx-x64/publish/tswap /usr/local/bin/
 ```
 
 **Windows (x64)**
 ```powershell
 dotnet publish TswapCli/TswapCli.csproj -c Release -r win-x64
 # Copy tswap.exe to a directory on your PATH, e.g.:
-copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
+copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
 ```
 
 ### Reinstall using installscript
