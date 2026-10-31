@@ -68,7 +68,7 @@ public sealed class SlotsCommand : ICliCommand
     /// </summary>
     internal static string Format(Config config)
     {
-        if (config.Keyring == null)
+        if (config.Keyring is null)
         {
             return "This vault has no keyring — it's a single derived-key or hardware-wrapped\n" +
                    "vault with no multi-slot concept (see 'tswap init --keyring' to create a\n" +
@@ -132,7 +132,7 @@ public sealed class SlotsCommand : ICliCommand
     private static string DescribeClassicPosture(Config config)
     {
         var posture = SecurityWarnings.Current(config).FirstOrDefault();
-        if (posture == null)
+        if (posture is null)
             return "";
         var line = $"\n{posture.Label}: {DescribeYubiKeyProtection(config.RequiresTouch)}.";
         return SecurityWarnings.Changed(config).Count > 0

@@ -11,9 +11,8 @@ public sealed class ToCommentCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var filePath, ..])
             throw new UsageException($"{ctx.Prefix} tocomment <file> [--dry-run]");
-        var filePath = args[0];
         var dryRun = args.Contains("--dry-run");
 
         if (!File.Exists(filePath))

@@ -11,9 +11,8 @@ public sealed class AddCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var name, ..])
             throw new UsageException($"{ctx.Prefix} add <name>");
-        var name = args[0];
 
         Validation.ValidateName(name);
         ctx.RequireSudo("add");
@@ -30,7 +29,7 @@ public sealed class AddCommand : ICliCommand
         var key = ctx.Unlock(config);
         var db = ctx.LoadSecrets(key);
 
-        db.Secrets[name] = new Secret(value, DateTime.UtcNow, DateTime.UtcNow);
+        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
         ctx.Storage.SaveSecrets(db, key);
 
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");

@@ -138,7 +138,7 @@ public sealed class BrokerPolicy
         }
 
         string? bwrap = config.BwrapPath;
-        if (bwrap != null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl) || bwrap.Split('/').Any(s => s is "." or "..")))
+        if (bwrap is not null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl) || bwrap.Split('/').Any(s => s is "." or "..")))
             throw new BrokerConfigException($"bwrap_path must be an absolute path (got '{Printable(bwrap)}'); bwrap is never looked up on PATH.");
 
         // Brief T9: templates (Linux only; checked against the host on every load).
@@ -235,7 +235,7 @@ public sealed class BrokerPolicy
         {
             case "bearer":
                 type = BrokerAuthType.Bearer;
-                if (auth.User != null || auth.Header != null)
+                if (auth.User is not null || auth.Header is not null)
                     throw new BrokerConfigException($"Route '{name}': a bearer route takes no 'user' or 'header'.");
                 break;
             case "basic":
@@ -247,7 +247,7 @@ public sealed class BrokerPolicy
                     throw new BrokerConfigException($"Route '{name}': the basic user may not contain ':'.");
                 if (user.Any(c => c < 0x21 || c > 0x7E))
                     throw new BrokerConfigException($"Route '{name}': the basic user must be printable ASCII with no spaces or control characters.");
-                if (auth.Header != null)
+                if (auth.Header is not null)
                     throw new BrokerConfigException($"Route '{name}': a basic route takes no 'header'.");
                 break;
             case "header":
@@ -259,7 +259,7 @@ public sealed class BrokerPolicy
                     || header.StartsWith("Content-", StringComparison.OrdinalIgnoreCase)
                     || header.StartsWith("Accept", StringComparison.OrdinalIgnoreCase))
                     throw new BrokerConfigException($"Route '{name}': the broker can't put the credential in '{header}' (a framing, hop-by-hop, Host, Content-* or Accept* header).");
-                if (auth.User != null)
+                if (auth.User is not null)
                     throw new BrokerConfigException($"Route '{name}': a header route takes no 'user'.");
                 break;
             default:
@@ -386,9 +386,9 @@ public sealed class BrokerPolicy
     {
         ValidateName(socket.Name, "socket");
         var name = socket.Name;
-        if (socket.Uids is null || socket.Uids.Count == 0)
+        if (socket.Uids is null or [])
             throw new BrokerConfigException($"Socket '{name}' allows no uids.");
-        var ranges = new List<(uint From, uint To)>();
+        List<(uint From, uint To)> ranges = [];
         foreach (var entry in socket.Uids)
             ranges.Add(ParseUidRange(name, entry));
         var allowed = new HashSet<string>(StringComparer.Ordinal);
@@ -429,7 +429,7 @@ public sealed class BrokerPolicy
             throw new BrokerConfigException($"Ssh key '{name}': 'secret' must be a secret name (letters, digits, '_' and '-'), not '{{{{...}}}}'.");
         if (key.AllowedHostKeys is not { Count: > 0 })
             throw new BrokerConfigException($"Ssh key '{name}': allowed_host_keys must list at least one SHA256: host-key fingerprint.");
-        var fingerprints = new List<string>();
+        List<string> fingerprints = [];
         foreach (var fingerprint in key.AllowedHostKeys)
         {
             if (!IsSha256Fingerprint(fingerprint))

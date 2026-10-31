@@ -18,7 +18,7 @@ namespace TswapCore.Vault.Interop;
 /// key by.
 /// </summary>
 [SupportedOSPlatform("macos")]
-internal static class AppleSecureEnclaveInterop
+internal static partial class AppleSecureEnclaveInterop
 {
     private const string Lib = "libtswapse";
 
@@ -41,12 +41,12 @@ internal static class AppleSecureEnclaveInterop
         });
     }
 
-    [DllImport(Lib)]
+    [LibraryImport(Lib)]
     [return: MarshalAs(UnmanagedType.I1)]
-    private static extern bool tswap_se_available();
+    private static partial bool tswap_se_available();
 
-    [DllImport(Lib)]
-    private static extern int tswap_se_wrap(
+    [LibraryImport(Lib)]
+    private static partial int tswap_se_wrap(
         byte[] plaintext, int plaintextLen,
         byte[] outBlob, ref int outBlobLen,
         byte[] outCiphertext, ref int outCiphertextLen);
@@ -59,15 +59,15 @@ internal static class AppleSecureEnclaveInterop
     /// reading garbage as the choice. Every enrolment calls this one; the old one stays declared
     /// (and in the dylib, unchanged) so its signature stays pinned by the tests.
     /// </summary>
-    [DllImport(Lib)]
-    private static extern int tswap_se_wrap_v2(
+    [LibraryImport(Lib)]
+    private static partial int tswap_se_wrap_v2(
         byte[] plaintext, int plaintextLen,
         byte[] outBlob, ref int outBlobLen,
         byte[] outCiphertext, ref int outCiphertextLen,
         int requirePresence);
 
-    [DllImport(Lib)]
-    private static extern int tswap_se_unwrap(
+    [LibraryImport(Lib)]
+    private static partial int tswap_se_unwrap(
         byte[] blob, int blobLen,
         byte[] ciphertext, int ciphertextLen,
         byte[] outPlaintext, ref int outPlaintextLen);

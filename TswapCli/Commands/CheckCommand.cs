@@ -14,9 +14,8 @@ public sealed class CheckCommand : ICliCommand
     {
         var json = JsonFlag.Consume(ref args);
 
-        if (args.Length < 1)
+        if (args is not [var path, ..])
             throw new UsageException($"{ctx.Prefix} check <path> [--json]");
-        var path = args[0];
 
         var markers = Check.ScanPath(path);
 

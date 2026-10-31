@@ -117,7 +117,7 @@ public sealed class BrokerServer : IAsyncDisposable
         WebApplication? app = null;
         try
         {
-            var paths = new List<string>();
+            List<string> paths = [];
             foreach (var name in policy.Sockets.Keys.Order(StringComparer.Ordinal))
             {
                 var path = SocketPath(socketDir, name);
@@ -134,6 +134,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 options.Limits, reason => fatal.TrySetResult(reason))
             {
                 Templates = new Templates.BrokerTemplateRuntime(options.Time),
+                ShortSecretWarnings = new BrokerShortSecretWarnings(), // one per serve process; a reload keeps it
             };
             // Brief T9: bwrap is checked at start; a sandbox that can't run refuses template calls (logged), never runs them bare.
             if (policy.Templates.Count > 0 && handler.Templates.Sandbox(policy.BwrapPath).Problem is { } sandboxProblem)
@@ -179,7 +180,7 @@ public sealed class BrokerServer : IAsyncDisposable
         }
         catch
         {
-            if (app != null)
+            if (app is not null)
                 await app.DisposeAsync().ConfigureAwait(false);
             lockFile.Dispose();
             throw;
@@ -277,7 +278,7 @@ public sealed class BrokerServer : IAsyncDisposable
         // else can swap a parent (and so the folder) for one of their own.
         var real = BrokerNative.RealPath(dir)
             ?? throw new TswapException($"Can't resolve socket_dir {dir}.");
-        for (var parent = Path.GetDirectoryName(real); parent != null; parent = Path.GetDirectoryName(parent))
+        for (var parent = Path.GetDirectoryName(real); parent is not null; parent = Path.GetDirectoryName(parent))
             CheckParent(parent, ownership);
         return real;
     }

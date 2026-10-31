@@ -360,6 +360,41 @@ public sealed class MigrateToRecordsTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Brief T14 item 4: the one-hour cutoff for a leftover temp folder reads the command's
+    /// <see cref="TimeProvider"/>: 59 minutes before the fake clock's time, the folder is young
+    /// (refused, kept); 61 minutes before it, the folder is a crash's leftover (removed, with a notice).
+    /// </summary>
+    [Theory]
+    [InlineData(59)]
+    [InlineData(61)]
+    public void TheTempFolderCutoff_IsAnHourBeforeTheTimeProvidersTime(int minutesOld)
+    {
+        var clock = new BrokerManualClock();
+        _m.Time = clock;
+        PlainVaultWithFiftySecrets();
+        var temp = DefaultVaultDir + ".tmp-0badc0de";
+        Directory.CreateDirectory(temp);
+        Directory.SetLastWriteTimeUtc(temp, clock.GetUtcNow().UtcDateTime.AddMinutes(-minutesOld));
+
+        var (exit, stdout, err) = _m.Run("1\n", "migrate", "--to-records");
+
+        if (minutesOld == 59)
+        {
+            Assert.NotEqual(0, exit);
+            Assert.Contains("another migration may be running", err);
+            Assert.True(Directory.Exists(temp));
+            Assert.Null(_m.Config.Store);
+        }
+        else
+        {
+            Assert.True(exit == 0, err);
+            Assert.Contains($"Removed a temp folder left by an interrupted conversion: {temp}", stdout);
+            Assert.False(Directory.Exists(temp));
+            Assert.Equal("records", _m.Config.Store);
+        }
+    }
+
     [Fact]
     public void ARecentTempFolder_RefusesTheRun_AnotherMigrationMayBeRunning()
     {

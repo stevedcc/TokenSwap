@@ -50,14 +50,14 @@ public sealed class VaultCommand : ICliCommand
             throw new TswapException($"Folder not found: {otherDir}");
 
         // The other copy, read only, through a store over the bare folder.
-        var other = RecordVaultStore.ForFolder(otherDir, config, store.Owner);
+        var other = RecordVaultStore.ForFolder(otherDir, config, store.Owner, ctx.Time);
         var otherKeyring = other.ReadKeyring();
         KeyringUnion.RequireSameVault(keyring, otherKeyring, "The other vault folder");
         var union = KeyringUnion.Union(keyring, otherKeyring, "the other vault folder's keyring");
         var newSlots = union.Slots.Skip(keyring.Slots.Count).ToList();
         foreach (var slot in newSlots.Where(s => s.Kind == SlotKind.Machine))
         {
-            if (slot.HwBlob == null)
+            if (slot.HwBlob is null)
                 throw new TswapException($"A new slot in the other copy has no hardware blob, so no device could open it. Nothing was merged.");
             SlotReceiptCodec.ValidateHwBlob(slot.HwBlob, "other vault folder");
         }
@@ -75,7 +75,7 @@ public sealed class VaultCommand : ICliCommand
         var key = SlotCommand.UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         try
         {
-            var toAdd = new List<Slot>();
+            List<Slot> toAdd = [];
             foreach (var slot in newSlots)
             {
                 if (SlotCommand.IsApproved(approvedHere, slot) || yes)

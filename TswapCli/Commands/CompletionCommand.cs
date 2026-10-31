@@ -19,7 +19,7 @@ public sealed class CompletionCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is [])
             throw new UsageException($"{ctx.Prefix} completion <bash|zsh|fish|powershell>");
 
         var shell = args[0].ToLowerInvariant();

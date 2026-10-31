@@ -112,20 +112,14 @@ public static class Apply
         return string.Join('\n', lines);
     }
 
-    private static string EscapeForQuote(string value, string quoteChar)
+    private static string EscapeForQuote(string value, string quoteChar) => quoteChar switch
     {
-        if (quoteChar == "\"")
-        {
-            // Escape backslashes first, then double quotes
-            // This prevents double-escaping: \ -> \\ and " -> \"
-            return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
-        else if (quoteChar == "'")
-        {
-            // Escape single quotes for YAML: ' becomes ''
-            // Backslashes don't need escaping in YAML single quotes
-            return value.Replace("'", "''");
-        }
-        return value;
-    }
+        // Escape backslashes first, then double quotes
+        // This prevents double-escaping: \ -> \\ and " -> \"
+        "\"" => value.Replace("\\", "\\\\").Replace("\"", "\\\""),
+        // Escape single quotes for YAML: ' becomes ''
+        // Backslashes don't need escaping in YAML single quotes
+        "'" => value.Replace("'", "''"),
+        _ => value,
+    };
 }

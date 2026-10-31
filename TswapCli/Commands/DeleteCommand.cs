@@ -11,9 +11,8 @@ public sealed class DeleteCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var name, ..])
             throw new UsageException($"{ctx.Prefix} delete <name>");
-        var name = args[0];
 
         Validation.ValidateName(name);
         ctx.RequireSudo("delete");

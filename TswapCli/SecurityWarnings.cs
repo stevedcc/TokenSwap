@@ -51,15 +51,15 @@ public static class SecurityWarnings
     /// </summary>
     public static List<SlotPosture> Current(Config config)
     {
-        var result = new List<SlotPosture>();
+        List<SlotPosture> result = [];
         var yubiKeyVault = config.Backend is null or HardwareBackend.YubiKey;
         var pair = config.YubiKeySerials is { Count: 2 } ? $"YubiKeys {string.Join(", ", config.YubiKeySerials)}" : null;
-        if (config.Keyring == null)
+        if (config.Keyring is null)
         {
-            if (config.PendingSlotId != null && config.PendingSlotHwBlob != null
+            if (config.PendingSlotId is not null && config.PendingSlotHwBlob is not null
                 && TryDecodeBlob(TryBase64(config.PendingSlotHwBlob), out var pending))
                 result.Add(new(config.PendingSlotId, PostureName(pending.RequiresTouch), $"YubiKey {pending.Serial} (pending slot)"));
-            else if (yubiKeyVault && pair != null)
+            else if (yubiKeyVault && pair is not null)
                 result.Add(new(ClassicVault, PostureName(config.RequiresTouch), pair));
             return result;
         }
@@ -73,7 +73,7 @@ public static class SecurityWarnings
         {
             return result;
         }
-        var ownSlotId = config.KeyringSlotId == null ? null : TryBase64(config.KeyringSlotId);
+        var ownSlotId = config.KeyringSlotId is null ? null : TryBase64(config.KeyringSlotId);
         var firstMachine = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
         foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
@@ -84,8 +84,8 @@ public static class SecurityWarnings
                 if (TryDecodeBlob(slot.HwBlob, out var blob))
                     result.Add(new(key, PostureName(blob.RequiresTouch), $"YubiKey {blob.Serial} (slot {shortId})"));
             }
-            else if (yubiKeyVault && pair != null
-                     && (ownSlotId == null ? slot == firstMachine : slot.SlotId.AsSpan().SequenceEqual(ownSlotId)))
+            else if (yubiKeyVault && pair is not null
+                     && (ownSlotId is null ? slot == firstMachine : slot.SlotId.AsSpan().SequenceEqual(ownSlotId)))
             {
                 result.Add(new(key, PostureName(config.RequiresTouch), $"{pair} (slot {shortId})"));
             }
@@ -128,10 +128,10 @@ public static class SecurityWarnings
     /// </summary>
     public static Config Acknowledge(Config config, IReadOnlyCollection<string>? onlyKeys = null)
     {
-        var acknowledged = config.AcknowledgedTouch == null
+        var acknowledged = config.AcknowledgedTouch is null
             ? new Dictionary<string, string>()
             : new Dictionary<string, string>(config.AcknowledgedTouch);
-        foreach (var slot in Current(config).Where(s => onlyKeys == null || onlyKeys.Contains(s.Key)))
+        foreach (var slot in Current(config).Where(s => onlyKeys is null || onlyKeys.Contains(s.Key)))
             acknowledged[slot.Key] = slot.Posture;
         return config with { AcknowledgedTouch = acknowledged };
     }
@@ -143,11 +143,11 @@ public static class SecurityWarnings
     /// </summary>
     public static List<(SlotPosture Slot, string? Was)> Changed(Config config)
     {
-        var changed = new List<(SlotPosture, string?)>();
+        List<(SlotPosture, string?)> changed = [];
         foreach (var slot in Current(config))
         {
             var was = config.AcknowledgedTouch?.GetValueOrDefault(slot.Key);
-            if (was == slot.Posture || (was == null && slot.Posture == Touch))
+            if (was == slot.Posture || (was is null && slot.Posture == Touch))
                 continue;
             changed.Add((slot, was));
         }
@@ -164,11 +164,11 @@ public static class SecurityWarnings
         if (changed.Count == 0)
             return;
         // Fix round 1 (MiMo): a slot never acknowledged here hasn't "changed"; say which case it is.
-        var parts = changed.Select(c => c.Was == null
+        var parts = changed.Select(c => c.Was is null
             ? $"{c.Slot.Label}: {Words(c.Slot.Posture)}"
             : $"{c.Slot.Label}: {Words(c.Slot.Posture)} (was {Words(c.Was)})");
-        var what = changed.All(c => c.Was == null) ? "not acknowledged on this machine"
-            : changed.All(c => c.Was != null) ? "changed since last acknowledged"
+        var what = changed.All(c => c.Was is null) ? "not acknowledged on this machine"
+            : changed.All(c => c.Was is not null) ? "changed since last acknowledged"
             : "changed or not acknowledged on this machine";
         console.Error.WriteLine(
             $"tswap: YubiKey touch setting {what}: {string.Join("; ", parts)}. " +

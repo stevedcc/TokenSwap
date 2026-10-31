@@ -152,7 +152,7 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException($"Slot request file is not valid JSON: {ex.Message}");
         }
 
-        if (file == null)
+        if (file is null)
             throw new TswapException("Slot request file is empty or invalid.");
         if (file.FormatVersion == SlotRequestFile.PairFormatVersion)
             throw new TswapException(
@@ -163,7 +163,7 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException(
                 $"Unsupported slot request file format version {file.FormatVersion} " +
                 $"(this build supports {SlotRequestFile.CurrentFormatVersion}). Use a matching tswap version on both machines.");
-        if (file.HwBlob != null)
+        if (file.HwBlob is not null)
             ValidateNewSlotBlob(file.Backend, DecodeVariable(file.HwBlob, "slot request file's hardware blob"), "slot request file");
 
         return file;
@@ -193,7 +193,7 @@ public static class SlotEnrollmentFileCodec
             throw new TswapException($"Slot approve file is not valid JSON: {ex.Message}");
         }
 
-        if (file == null)
+        if (file is null)
             throw new TswapException("Slot approve file is empty or invalid.");
         if (file.FormatVersion != SlotApproveFile.CurrentFormatVersion)
             throw new TswapException(
@@ -208,7 +208,7 @@ public static class SlotEnrollmentFileCodec
 
         // The new slot's YubiKey blob (brief T4): strictly decoded, and only in a keyring that has
         // the hwBlob column. Its absence is refused by 'slot accept', which needs it.
-        if (file.NewSlotHwBlob != null)
+        if (file.NewSlotHwBlob is not null)
         {
             if (file.KeyringFormatVersion < KeyringFormat.KeyringFormatVersion)
                 throw new TswapException(
@@ -220,7 +220,7 @@ public static class SlotEnrollmentFileCodec
         // reject it here with a clear error instead of a raw ArgumentException at slot accept.
         foreach (var slot in file.ExistingSlots ?? [])
         {
-            if (slot.HwBlob == null)
+            if (slot.HwBlob is null)
                 continue;
             if (file.KeyringFormatVersion < KeyringFormat.KeyringFormatVersion)
                 throw new TswapException(
@@ -258,7 +258,7 @@ public static class SlotEnrollmentFileCodec
         }
         if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
             throw new TswapException(
-                $"Malformed {what}: it names the '{backend!.Value.DisplayName()}' backend but carries a YubiKey slot blob.");
+                $"Malformed {what}: it names the '{backend!.Value.DisplayName}' backend but carries a YubiKey slot blob.");
         SlotReceiptCodec.ValidateHwBlob(hwBlob, what);
     }
 

@@ -32,7 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
-| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, simulator-verified only. Windows: CNG Platform Crypto Provider, VM-verified only |
+| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, verified on a physical Intel PTT (#155). Windows: CNG Platform Crypto Provider, verified on a Parallels virtual TPM; also run on a physical TPM (Dell XPS 17 9710) during development, not recorded; a v0.1.0 re-check is open (#156) |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence via the key's access control, chosen at enrolment (`--with-touch` / `--no-touch`, brief T11) and fixed in the key |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
@@ -276,7 +276,7 @@ Functionally verified end-to-end (`tswap init --secure-enclave` → `add`/`get`/
 plus the presence-cancellation failure path — see `TswapSecureEnclave.swift`'s header comment),
 but three things are still open before this should be trusted as a primary vault backend:
 
-- **Only tested on Apple Silicon** (M4 Pro/macOS 26). The Intel-Mac T2 Secure Enclave path is
+- **Only tested on Apple Silicon** (M4 Pro, macOS 26 and 27.2). The Intel-Mac T2 Secure Enclave path is
   untested — CryptoKit's `SecureEnclave` API availability/behavior there is unverified.
 - **No independent cryptographic review.** The ephemeral-ECDH + HKDF-SHA256 + AES-GCM
   construction in `TswapSecureEnclave.swift` is a hand-rolled ECIES equivalent; it's been
@@ -341,7 +341,7 @@ requirePresence = true)`), and any other backend with `requirePresence: false` t
 ### Checking a no-touch Secure Enclave slot on a Mac
 
 Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
-**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded. If a
+**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim; the root half of step 5 ran on the vault itself, not on a root-owned copy). If a
 recorded step contradicts a warning claim (a)-(c), the warning text and its test assertions are
 corrected before release, not only the docs.
 
@@ -391,17 +391,19 @@ Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -r
 
 | Step | What | Recorded |
 |---|---|---|
-| — | macOS version, chip, "require password after screen saver/sleep" setting | |
-| 1 | `init --no-touch`: warning shown? any prompt? | |
-| 2 | `create` + `names`: any prompt? name listed? | |
-| 3 | `init --with-touch` + `names`: prompt? | |
-| 4 | no-touch vault, ssh, screen unlocked: unlocks? | |
-| 5 | no-touch vault, another account with a copy: unlocks? | |
-| 5 | no-touch vault, root with a copy: unlocks? | |
-| 6 | no-touch vault, ssh, screen locked: unlocks? | |
-| 7 | no-touch vault, ssh, after reboot before login: unlocks? | |
-| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | |
-| 9 | touch vault: step 4 / step 6 / step 7 | |
+| — | macOS version, chip, "require password after screen saver/sleep" setting | macOS 27.2 (26B123), Apple M4 Pro, Swift 6.4, .NET SDK 10.0.403; lock setting not recorded (2026-10-31, #157) |
+| 1 | `init --no-touch`: warning shown? any prompt? | warning shown, no prompt |
+| 2 | `create` + `names`: any prompt? name listed? | no prompt; listed (also `add`/`get`/`list` with zero Touch ID prompts) |
+| 3 | `init --with-touch` + `names`: prompt? | Touch ID on every unlock |
+| 4 | no-touch vault, ssh, screen unlocked: unlocks? | not run |
+| 5 | no-touch vault, another account with a copy: unlocks? | yes, with no prompt: a copy in `/Users/Shared/t11`, `chown -R nobody`, then `sudo -u nobody … tswap names` listed the secret, exit 0 (claim (b) confirmed) |
+| 5 | no-touch vault, root with a copy: unlocks? | under `sudo` (root) the user's no-touch vault unlocked with no dialog (the vault itself, not a root-owned copy) |
+| 6 | no-touch vault, ssh, screen locked: unlocks? | not run |
+| 7 | no-touch vault, ssh, after reboot before login: unlocks? | not run |
+| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | yes: with `libtswapse.dylib` built from the pre-T11 Swift source (`4f321a0`), `init --secure-enclave --with-touch` failed with "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_wrap_v2). No key was created: update libtswapse.dylib together with tswap…", exit 1, no files written |
+| 9 | touch vault: step 4 / step 6 / step 7 | not run |
+
+**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so decision 6's remedy (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication on the tested paths; the forked-`setuid` fallback is not needed for them (a second admin account was not available to test).
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 
@@ -494,7 +496,7 @@ Codesigning (Developer ID, notarization) still matters for eventually **distribu
 smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
 backend functions. It does not block building, testing, or using this backend locally today.
 
-## Linux TPM: implemented, verified only against a software simulator
+## Linux TPM: implemented, verified on a software simulator and on a physical Intel PTT
 
 `TswapCore/Vault/LinuxTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
 `TswapCore/Vault/Interop/Tpm2ToolsInterop.cs`, which shells out to the `tpm2-tools` CLI
@@ -523,7 +525,28 @@ with a TPM-reported `tpm:parameter(1):integrity check failed` error. That is exa
 "machine-bound, invalidated on factory reset" property this backend needs, with zero extra
 bookkeeping.
 
-### Status: PoC-grade, simulator-verified only — not yet run against real TPM hardware
+### Status: verified on one physical TPM (Intel PTT), single vendor
+
+**Physical hardware (2026-10-29, #155):** the router's Proxmox host, a CWWK CW-MBX-AD12 with an
+Intel i3-1215U (firmware TPM: Intel PTT, Alder Lake, manufacturer `INTC`; model from #155's first
+comment), the host TPM passed through to a Fedora CoreOS 44 VM on Proxmox
+(`-tpmdev passthrough,…,cancel-path=/dev/null`; a CRB TPM has no cancel file). Results: two
+`tpm2_createprimary -C o` calls give byte-identical public areas (about **1.8 s each** on PTT,
+milliseconds on swtpm); `init --tpm` → `create` → read works, and the value survives a guest
+reboot; an unlock takes **2.5 to 2.9 s**, almost all of it regenerating the primary key. With empty
+owner auth and an unauthorised sealed object tswap makes no auth attempts, so the lockout counter
+stays 0 (a wrong *lockout* auth on this PTT blocks lockout-auth use for 24 hours). Two bugs found
+on that run (a relative config folder, `sudo -u` picking the wrong vault) were fixed in PR #179
+(brief T1). Since then the same machine has run every hardware check of briefs T5–T12, all on
+keyring vaults (`init --tpm` makes one since #151), with the lockout counter at 0 throughout;
+the checks are listed in the project's retros (remote enrolment, record store, the broker, sudo
+unlock as root and as a `tss` member).
+
+**Still open:** a full host power cycle (a VM reboot doesn't power-cycle the PTT), `tpm2_clear`
+(the TPM holds the router's vault), and a second TPM vendor. The paragraphs below are
+from the simulator phase; their "no real hardware" points are superseded by this one.
+
+#### Simulator phase (before 2026-10-29)
 
 Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`, plus the full test suite),
 **but every verification so far is against a software TPM simulator (swtpm), never a physical
@@ -602,7 +625,7 @@ structs and the ESAPI's own transient-object/session lifecycle (which, per the f
 finding above, has sharp edges worth keeping behind a CLI's higher-level error handling rather than
 reimplementing directly).
 
-## Windows TPM: implemented, verified only against this machine's (virtual) TPM
+## Windows TPM: implemented, verified on a virtual TPM, also run on a physical one during development
 
 `TswapCore/Vault/WindowsTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
 `TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, which reaches Windows' TPM-backed CNG
@@ -646,13 +669,24 @@ an isolated key with nothing to configure. The tradeoff is that re-running `init
 leaves the old named key orphaned in the PCP key store rather than cleanly overwriting it —
 harmless key-store clutter, not a correctness issue: each vault uses only its own machine slot's key.
 
-### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
+### Status: virtual TPM verified; physical TPM tested during development, v0.1.0 re-check open
+
+**Physical hardware:** during development (July 2026) the owner also ran the backend on a Dell XPS
+17 9710 (Windows 11, x64, very likely Intel PTT). That run wasn't written down at the time, so its
+commands and results are not recorded here (#156). In July the code supported only a single-slot
+`init --tpm` vault; the keyring v3 machine slot, the recovery slot and remote enrolment came later. A
+check list for the released v0.1.0 on two physical machines (a Windows 10 desktop and the XPS) is
+in #156.
+
+The rest of this section describes the virtual-TPM verification.
+
+#### Virtual TPM (Parallels)
 
 Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`/`list`, the full test suite,
 and a NativeAOT `dotnet publish -c Release`), all against a **Parallels VM running Windows 11
 ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still open:
 
-- **No physical TPM hardware has been used at any point.** A software/virtual TPM proves the
+- **Physical TPM: only the undocumented July development run (see above).** A software/virtual TPM proves the
   code speaks the CNG/PCP APIs correctly — key creation, wrap/unwrap round-trips, error
   handling — it does not prove the real hardware root-of-trust property holds. Real hardware may
   differ in lockout/anti-hammering behavior, timing, or vendor-specific PCP quirks.

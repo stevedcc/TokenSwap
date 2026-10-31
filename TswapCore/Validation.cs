@@ -225,7 +225,7 @@ public static class Validation
             var command = own.FirstOrDefault(a => a is "-c" or "--command" or "--session-command"
                 || a.StartsWith("--command=", StringComparison.Ordinal) || a.StartsWith("--session-command=", StringComparison.Ordinal)
                 || (a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Contains('c')));
-            if (command != null)
+            if (command is not null)
                 return new(program, InlineReason(program, command));
             // su without -c starts a (login) shell reading stdin; runuser [-u user] cmd runs cmd.
             return program.Equals("runuser", StringComparison.OrdinalIgnoreCase) ? CheckWrapper(program, args)
@@ -241,7 +241,7 @@ public static class Validation
             // Parse awk's options letter by letter: v, F, W take a value (attached or next),
             // f names a program file (attached or next), e is inline program text (gawk).
             var inlineSource = false;
-            var programFiles = new List<string>();
+            List<string> programFiles = [];
             for (var i = 0; i < args.Count; i++)
             {
                 var a = args[i];
@@ -292,7 +292,7 @@ public static class Validation
                     continue;
                 var command = args.Skip(i + 1).TakeWhile(a => a is not (";" or "+")).ToList();
                 var inner = command.Count == 0 ? null : GetBlockedInvocation(command);
-                if (inner != null)
+                if (inner is not null)
                     return inner with { Reason = $"'find {args[i]}' runs '{inner.Program}': {inner.Reason}" };
             }
             return null;
@@ -312,7 +312,7 @@ public static class Validation
         if (program.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || program.Equals("powershell", StringComparison.OrdinalIgnoreCase))
         {
             var flag = args.FirstOrDefault(IsPowerShellInline);
-            return flag != null ? new(program, InlineReason(program, flag)) : null;
+            return flag is not null ? new(program, InlineReason(program, flag)) : null;
         }
 
         if (PythonName.IsMatch(program))
@@ -371,7 +371,7 @@ public static class Validation
         BlockedInvocation? Wrapped(int from)
         {
             var inner = GetBlockedInvocation(args.Skip(from).ToList());
-            return inner == null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
+            return inner is null ? null : inner with { Reason = $"'{program}' runs '{inner.Program}': {inner.Reason}" };
         }
 
         if (program.Equals("command", StringComparison.OrdinalIgnoreCase) && args.Any(a => a is "-v" or "-V"))
@@ -393,7 +393,7 @@ public static class Validation
             {
                 var entry = args[e] == "--entrypoint" && e + 1 < args.Count ? args[e + 1]
                     : args[e].StartsWith("--entrypoint=", StringComparison.Ordinal) ? args[e]["--entrypoint=".Length..] : null;
-                if (entry != null && IsInterpreter(ProgramName(entry)))
+                if (entry is not null && IsInterpreter(ProgramName(entry)))
                     return new(program, $"'{program} --entrypoint {entry}' runs an interpreter whose code arguments can't be checked. {WayOut}");
             }
             var sub = args.FindIndex(a => !a.StartsWith('-'));
@@ -423,7 +423,7 @@ public static class Validation
                 continue;
             if (arg.StartsWith('-'))
             {
-                if (valued != null && valued.Contains(arg, StringComparer.Ordinal))
+                if (valued is not null && valued.Contains(arg, StringComparer.Ordinal))
                     i++;
                 continue;
             }
@@ -508,13 +508,13 @@ public static class Validation
     private static List<string> OwnOptions(string program, List<string> args)
     {
         WrapperValued.TryGetValue(program, out var valued);
-        var own = new List<string>();
+        List<string> own = [];
         for (var i = 0; i < args.Count; i++)
         {
             if (args[i] == "--" || !args[i].StartsWith('-'))
                 break;
             own.Add(args[i]);
-            if (valued != null && valued.Contains(args[i], StringComparer.Ordinal))
+            if (valued is not null && valued.Contains(args[i], StringComparer.Ordinal))
                 i++;
         }
         return own;
@@ -543,7 +543,7 @@ public static class Validation
         for (var i = 0; i < args.Count; i++)
         {
             var arg = args[i];
-            if (host == null)
+            if (host is null)
             {
                 if (arg == "--")
                     continue;
@@ -594,7 +594,7 @@ public static class Validation
                 for (var j = 1; j < arg.Length; j++)
                 {
                     var letter = arg[j];
-                    if (syntax.EndsOptions != null && syntax.EndsOptions.Contains(letter))
+                    if (syntax.EndsOptions is not null && syntax.EndsOptions.Contains(letter))
                         return null; // e.g. python -m module: the module is the script
                     if (syntax.Inline.Contains(letter) && arg[0] == '-')
                         return new(program, InlineReason(program, arg));
@@ -607,7 +607,7 @@ public static class Validation
                             return new(program, $"'{program} {arg} {script}' reads code from stdin, which can transform and print secrets past redaction. {WayOut}");
                         var later = args.Skip(i + (j < arg.Length - 1 ? 1 : 2))
                             .FirstOrDefault(a => a.StartsWith('-') && !a.StartsWith("--", StringComparison.Ordinal) && a.Skip(1).Any(syntax.Inline.Contains));
-                        return later != null ? new(program, InlineReason(program, later)) : null;
+                        return later is not null ? new(program, InlineReason(program, later)) : null;
                     }
                     if (syntax.AttachedOnly.Contains(letter))
                         break; // any rest of the cluster is its value; never the next argument

@@ -60,7 +60,7 @@ public sealed class BrokerRedactor
     /// </summary>
     public static BrokerRedactor ForSecret(ReadOnlySpan<byte> secret, string? basicUser)
     {
-        var forms = new List<byte[]>();
+        List<byte[]> forms = [];
         void Add(byte[] form)
         {
             if (form.Length > 0 && !forms.Any(f => f.AsSpan().SequenceEqual(form)))
@@ -91,18 +91,25 @@ public sealed class BrokerRedactor
         for (var k = 0; k < 3; k++)
         {
             var padded = new byte[k + raw.Length];
-            raw.CopyTo(padded, k);
-            var encoded = Convert.ToBase64String(padded);
-            var start = (8 * k + 5) / 6;
-            var end = 8 * (k + raw.Length) / 6;
-            if (end - start < MinAlignedCoreLength)
-                continue;
-            var core = encoded[start..end];
-            AddText(core);
-            AddText(core.Replace('+', '-').Replace('/', '_'));
+            try
+            {
+                raw.CopyTo(padded, k);
+                var encoded = Convert.ToBase64String(padded);
+                var start = (8 * k + 5) / 6;
+                var end = 8 * (k + raw.Length) / 6;
+                if (end - start < MinAlignedCoreLength)
+                    continue;
+                var core = encoded[start..end];
+                AddText(core);
+                AddText(core.Replace('+', '-').Replace('/', '_'));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(padded); // T13: every iteration, the continue path too
+            }
         }
 
-        if (basicUser != null)
+        if (basicUser is not null)
         {
             var composite = Encoding.ASCII.GetBytes(basicUser + ":").Concat(raw).ToArray();
             Add(composite);

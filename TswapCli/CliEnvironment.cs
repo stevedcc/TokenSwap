@@ -114,7 +114,7 @@ public sealed class CliEnvironment
     /// Detect how tswap was invoked to show correct usage examples.
     /// </summary>
     public static string DetectInvocationPrefix(string? processPath)
-        => processPath == null ? "tswap" : Path.GetFileNameWithoutExtension(processPath);
+        => processPath is null ? "tswap" : Path.GetFileNameWithoutExtension(processPath);
 
     /// <summary>
     /// Brief T7 item 1 (#178, #107): the home of the user who ran sudo, from the system's passwd
@@ -126,7 +126,7 @@ public sealed class CliEnvironment
     {
         if (sudoUser == "root" || sudoUid == "0")
             return null;
-        if (sudoUid == null)
+        if (sudoUid is null)
             throw new TswapException(
                 $"SUDO_USER is '{sudoUser}' but SUDO_UID is not set, so tswap can't check whose vault to use. " +
                 "Run tswap through sudo itself, or set TSWAP_CONFIG_DIR to the folder to use.");
@@ -197,14 +197,14 @@ public sealed class CliEnvironment
         bool? isMacOS = null)
     {
         var configDirOverride = getEnv("TSWAP_CONFIG_DIR");
-        if (configDirOverride != null)
+        if (configDirOverride is not null)
             return configDirOverride;
 
         var macOS = isMacOS ?? OperatingSystem.IsMacOS();
         var sudoUser = getEnv("SUDO_USER");
         string appDataDir;
         string? home;
-        if (sudoUser != null && isPrivileged && !OperatingSystem.IsWindows()
+        if (sudoUser is not null && isPrivileged && !OperatingSystem.IsWindows()
             && InvokingUserHome(sudoUser, getEnv("SUDO_UID"), lookupUser ?? (name => UnixPasswd.Lookup(name))) is { } userHome)
         {
             // T7 fix round 1 (MiMo's review): the same per-platform folder as the user's own

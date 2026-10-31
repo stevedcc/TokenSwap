@@ -43,7 +43,7 @@ public sealed class FixRoundShouldFixTests : IDisposable
         laptop.Ok("v2\nv2\n", "add", "s");
         var otherStates = RecordVaultStore.ForFolder(laptop.VaultDir!, laptop.Config).LoadRecordStates(_vaultKey).States;
 
-        var store = new RecordVaultStore(_m.Dir, clock: () => _now);
+        var store = new RecordVaultStore(_m.Dir, time: new FuncTimeProvider(() => _now));
         var config = store.LoadConfig();
         store.LoadSecrets(_vaultKey);
         // Another process changes the record between this command's load and its write.
@@ -138,7 +138,7 @@ public sealed class FixRoundShouldFixTests : IDisposable
     [Fact]
     public void SaveConfig_KeepsTheHigherLastHlcOnDisk()
     {
-        var stale = new RecordVaultStore(_m.Dir, clock: () => _now);
+        var stale = new RecordVaultStore(_m.Dir, time: new FuncTimeProvider(() => _now));
         var staleConfig = stale.LoadConfig();
         _now = T0.AddDays(1);
         _m.Ok("v", "ingest", "s"); // another process moves LastHlc on

@@ -59,7 +59,7 @@ public sealed class SlotCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length == 0)
+        if (args is [])
             throw new UsageException(Usage(ctx));
 
         var sub = args[0].ToLowerInvariant();
@@ -116,12 +116,12 @@ public sealed class SlotCommand : ICliCommand
         };
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
-        if (hardware != null)
+        if (hardware is not null)
             return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true);
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -155,7 +155,7 @@ public sealed class SlotCommand : ICliCommand
         var config = new Config(
             YubiKeySerials: [],
             RedundancyXor: "",
-            Created: DateTime.UtcNow,
+            Created: ctx.Time.GetUtcNow().UtcDateTime,
             RequiresTouch: blob.RequiresTouch,
             RngMode: rngMode,
             PendingSlotId: Convert.ToBase64String(slotId),
@@ -165,7 +165,7 @@ public sealed class SlotCommand : ICliCommand
         config = KeepRecordStoreFields(ctx, config);
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
@@ -206,7 +206,7 @@ public sealed class SlotCommand : ICliCommand
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -230,7 +230,7 @@ public sealed class SlotCommand : ICliCommand
         var config = new Config(
             YubiKeySerials: [],
             RedundancyXor: "",
-            Created: DateTime.UtcNow,
+            Created: ctx.Time.GetUtcNow().UtcDateTime,
             // As init --tpm/--secure-enclave (brief T11 decision 6): the Secure Enclave key requires
             // presence unless --no-touch; a TPM key here has no PIN/PCR policy (#133). 'slot accept'
             // carries this through to the final config.
@@ -244,7 +244,7 @@ public sealed class SlotCommand : ICliCommand
         config = KeepRecordStoreFields(ctx, config);
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             fileStore.BackupConfig();
         ctx.Storage.SaveConfig(config);
 
@@ -326,7 +326,7 @@ public sealed class SlotCommand : ICliCommand
         string enrolled;
         if (requestedBackend == HardwareBackend.YubiKey)
         {
-            if (request.HwBlob == null)
+            if (request.HwBlob is null)
                 throw new TswapException(
                     "This slot request carries no YubiKey slot blob, so it names no key to enroll. On the requesting " +
                     "machine, run 'tswap slot request <file>' again with one YubiKey plugged in.");
@@ -336,9 +336,9 @@ public sealed class SlotCommand : ICliCommand
         }
         else
         {
-            if (request.HwBlob == null)
+            if (request.HwBlob is null)
                 throw new TswapException(
-                    $"This '{requestedBackend.DisplayName()}' slot request carries no hardware blob, so no device could open " +
+                    $"This '{requestedBackend.DisplayName}' slot request carries no hardware blob, so no device could open " +
                     "its slot. On the requesting machine, run its 'tswap slot request' again.");
             enrolled = requestedBackend == HardwareBackend.Tpm ? "its TPM" : "its Secure Enclave";
         }
@@ -349,7 +349,7 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
 
         var config = ctx.Storage.LoadConfig();
-        if (config.Keyring == null)
+        if (config.Keyring is null)
             throw new TswapException(
                 "This machine has no keyring vault to approve from. Run 'tswap init --keyring' here first " +
                 "(a classic, non-keyring vault has no K_v to share — see MULTI_MACHINE_KEYING.md).");
@@ -394,7 +394,7 @@ public sealed class SlotCommand : ICliCommand
         // nothing. One entry per slot id (approving the same request again refreshes it).
         var approved = (config.ApprovedSlots ?? [])
             .Where(a => a.SlotId != request.SlotId)
-            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, DateTime.UtcNow,
+            .Append(new ApprovedSlot(request.SlotId, request.PublicKey, ctx.Time.GetUtcNow().UtcDateTime,
                 Convert.ToHexString(SHA256.HashData(SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob")))))
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
@@ -461,24 +461,24 @@ public sealed class SlotCommand : ICliCommand
             throw new TswapException($"Slot approve file not found: {path}");
 
         // Fix round 1 (A6): --vault-dir joins an existing shared folder only.
-        if (vaultDir != null && ctx.Storage is IFileVaultStore joinStore
+        if (vaultDir is not null && ctx.Storage is IFileVaultStore joinStore
             && !joinStore.Owner.FileExists(Path.Combine(vaultDir, RecordVaultStore.KeyringFileName)))
             throw new TswapException(
                 $"{vaultDir} has no keyring, so it is not a shared vault folder. Nothing was changed. Point --vault-dir at the " +
                 "folder the enrolled machines share (its 'keyring' file must be there).");
 
         var config = ctx.Storage.LoadConfig();
-        if (config.PendingSlotId == null || config.PendingSlotPublicKey == null || config.PendingSlotPrivateKey == null)
+        if (config.PendingSlotId is null || config.PendingSlotPublicKey is null || config.PendingSlotPrivateKey is null)
             throw new TswapException("No pending 'slot request' found on this machine. Run 'tswap slot request <file>' first.");
 
         // Brief T4 decision 6: a pending request now enrolls one YubiKey and keeps its blob. A
         // pending pair request from an older tswap has none and cannot be finished any more.
-        if (config.PendingSlotHwBlob == null)
+        if (config.PendingSlotHwBlob is null)
             throw new TswapException((config.Backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey
                 ? "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
                   "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
                   "it approved again."
-                : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName()}' slot request has no hardware " +
+                : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName}' slot request has no hardware " +
                   "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
         var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
@@ -502,15 +502,15 @@ public sealed class SlotCommand : ICliCommand
         // Brief T5 decision 2: the pending request enrolled a YubiKey (Backend null) or this
         // machine's TPM / Secure Enclave; the approve file must name the same and carry the same blob.
         var backend = config.Backend ?? HardwareBackend.YubiKey;
-        if (approve.NewSlotHwBlob == null)
+        if (approve.NewSlotHwBlob is null)
             throw new TswapException(backend == HardwareBackend.YubiKey
                 ? "This approve file carries no YubiKey slot blob for the new slot (made by an older tswap?). " +
                   "Have it approved again with this tswap version."
                 : "This approve file carries no hardware blob for the new slot. Have it approved again with this tswap version.");
         if ((approve.NewSlotBackend ?? HardwareBackend.YubiKey) != backend)
             throw new TswapException(
-                $"This approve file is for a '{(approve.NewSlotBackend ?? HardwareBackend.YubiKey).DisplayName()}' slot, which does not " +
-                $"match this machine's pending request ('{backend.DisplayName()}'). " +
+                $"This approve file is for a '{(approve.NewSlotBackend ?? HardwareBackend.YubiKey).DisplayName}' slot, which does not " +
+                $"match this machine's pending request ('{backend.DisplayName}'). " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
         var pendingHwBlob = DecodePending(config.PendingSlotHwBlob, "hardware blob");
         var approveHwBlob = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot hardware blob");
@@ -530,7 +530,7 @@ public sealed class SlotCommand : ICliCommand
             approve.KeyringFormatVersion, vaultId, approve.K, approveSlotId);
 
         byte[] kekSlot;
-        if (blob != null)
+        if (blob is not null)
         {
             // Re-derive this machine's KEK_slot from the key 'slot request' enrolled, with the blob it
             // saved (brief T4): the same key, challenge, salt and slot id give the same KEK_slot.
@@ -564,7 +564,7 @@ public sealed class SlotCommand : ICliCommand
             SlotEnrollmentFileCodec.DecodeFixed(dto.PublicKey, SlotKeyPair.KeySize, "approve file's existing slot public key"),
             SlotEnrollmentFileCodec.DecodeVariable(dto.Wrapped, "approve file's existing slot wrapped bytes"),
             dto.Kind,
-            dto.HwBlob == null ? null : SlotEnrollmentFileCodec.DecodeVariable(dto.HwBlob, "approve file's existing slot hardware blob"))).ToList();
+            dto.HwBlob is null ? null : SlotEnrollmentFileCodec.DecodeVariable(dto.HwBlob, "approve file's existing slot hardware blob"))).ToList();
 
         var finalKeyring = new TswapCore.Keyring.Keyring(
             approve.KeyringFormatVersion, vaultId, approve.K,
@@ -584,33 +584,33 @@ public sealed class SlotCommand : ICliCommand
         };
 
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (vaultDir != null)
+        if (vaultDir is not null)
         {
             // The new slot goes straight into the shared folder's keyring (a union with what is
             // there; another vault's keyring there is refused), and config.json becomes this
             // machine's record-store config.
-            if (fileStore == null)
+            if (fileStore is null)
                 throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
             // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
             // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))
                 c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
-            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, warnings: c.Error).SaveConfig(finalConfig with
+            new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, ctx.Time, c.Error).SaveConfig(finalConfig with
             {
                 Store = RecordVaultStore.StoreName,
                 VaultDir = vaultDir,
                 OriginId = RecordVaultStore.NewOriginId(),
             });
             if (fileStore.Owner.FileExists(fileStore.SecretsFile))
-                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner)}");
+                c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
         }
         else
         {
             ctx.Storage.SaveConfig(finalConfig);
             // A record-store machine (joined with init --vault-dir) already shares the vault's
             // secrets: saving an empty database there would write a tombstone for every one.
-            if (ctx.Storage is not RecordVaultStore && (fileStore == null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
-                ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), vaultKey);
+            if (ctx.Storage is not RecordVaultStore && (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
+                ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
         }
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its
@@ -682,7 +682,7 @@ public sealed class SlotCommand : ICliCommand
         // refuse a vault that can never take the slot before sudo, before any unlock or touch
         // (security review of T4).
         var config = ctx.Storage.LoadConfig();
-        if (config.Keyring == null)
+        if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
                 "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
@@ -784,7 +784,7 @@ public sealed class SlotCommand : ICliCommand
 
         // config.json is not secret: refuse what can never take a slot before sudo or any unlock.
         var config = ctx.Storage.LoadConfig();
-        if (config.Keyring == null)
+        if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to merge into. Only keyring vaults " +
                 "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
@@ -803,12 +803,12 @@ public sealed class SlotCommand : ICliCommand
                 $"The {source} belongs to another vault (its vault id or k differs from this vault's). " +
                 "Nothing was merged; check that you picked the file for this vault.");
 
-        var newSlots = new List<Slot>();
+        List<Slot> newSlots = [];
         foreach (var slot in incoming.Slots)
         {
             var here = keyring.Slots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId))
                 ?? newSlots.FirstOrDefault(s => s.SlotId.AsSpan().SequenceEqual(slot.SlotId));
-            if (here != null)
+            if (here is not null)
             {
                 if (!SameSlot(here, slot))
                     throw new TswapException(
@@ -818,7 +818,7 @@ public sealed class SlotCommand : ICliCommand
             }
             if (slot.Kind == SlotKind.Machine)
             {
-                if (slot.HwBlob == null)
+                if (slot.HwBlob is null)
                     throw new TswapException(
                         $"Slot {ShortId(slot.SlotId)} in the {source} has no hardware blob, so no device could open it from " +
                         "this copy. Nothing was merged.");
@@ -849,7 +849,7 @@ public sealed class SlotCommand : ICliCommand
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         CryptographicOperations.ZeroMemory(vaultKey);
 
-        var toAdd = new List<Slot>();
+        List<Slot> toAdd = [];
         foreach (var slot in newSlots)
         {
             if (IsApproved(slot))
@@ -922,13 +922,13 @@ public sealed class SlotCommand : ICliCommand
             throw new TswapException($"{path} is not valid JSON: {ex.Message}");
         }
 
-        if (root != null && root.ContainsKey(nameof(SlotReceiptFile.ReceiptFormatVersion)))
+        if (root is not null && root.ContainsKey(nameof(SlotReceiptFile.ReceiptFormatVersion)))
         {
             var receipt = SlotReceiptCodec.Deserialize(json);
             return (new TswapCore.Keyring.Keyring(receipt.KeyringFormatVersion, receipt.VaultId, receipt.K, [receipt.Slot]), "slot receipt");
         }
 
-        if (root != null && root.ContainsKey(nameof(Config.Keyring)))
+        if (root is not null && root.ContainsKey(nameof(Config.Keyring)))
         {
             Config? other;
             try
@@ -939,7 +939,7 @@ public sealed class SlotCommand : ICliCommand
             {
                 throw new TswapException($"{path} is not a valid config.json: {ex.Message}");
             }
-            if (other?.Keyring == null)
+            if (other?.Keyring is null)
                 throw new TswapException($"{path} has no keyring to merge from.");
             return (DecodeKeyringOrCorrupt(other, "the other copy's config.json"), "other copy's config.json");
         }
@@ -970,7 +970,7 @@ public sealed class SlotCommand : ICliCommand
         {
             // Slot id, public key AND the hardware blob it was approved with (security review):
             // a receipt with another device's blob is not this approval.
-            return approved.HwBlobSha256 != null && slot.HwBlob != null
+            return approved.HwBlobSha256 is not null && slot.HwBlob is not null
                 && Convert.FromBase64String(approved.SlotId).AsSpan().SequenceEqual(slot.SlotId)
                 && Convert.FromBase64String(approved.PublicKey).AsSpan().SequenceEqual(slot.PublicKey)
                 && CryptographicOperations.FixedTimeEquals(

@@ -90,7 +90,7 @@ public static class SlotReceiptCodec
             throw new TswapException($"Slot receipt is not valid JSON: {ex.Message}");
         }
 
-        if (file == null)
+        if (file is null)
             throw new TswapException("Slot receipt is empty or invalid.");
         if (file.ReceiptFormatVersion != CurrentFormatVersion)
             throw new TswapException(
@@ -111,7 +111,7 @@ public static class SlotReceiptCodec
             throw new TswapException(
                 $"Malformed slot receipt: the wrapped slot is {wrapped.Length} bytes (expected 1 to {MaxWrappedSize}).");
 
-        if (file.HwBlob == null)
+        if (file.HwBlob is null)
             throw new TswapException("Malformed slot receipt: the slot has no hardware blob, so no device could open it.");
         var hwBlob = ValidateHwBlob(SlotEnrollmentFileCodec.DecodeVariable(file.HwBlob, "receipt's hardware blob"), "slot receipt");
 

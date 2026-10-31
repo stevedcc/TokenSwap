@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Security;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.AspNetCore.Http;
@@ -62,7 +63,7 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
             RequestHeaderEncodingSelector = (_, _) => Encoding.Latin1,
             ResponseHeaderEncodingSelector = (_, _) => Encoding.Latin1,
         };
-        if (trustedTestCertificate != null)
+        if (trustedTestCertificate is not null)
         {
             var trusted = X509CertificateLoader.LoadCertificate(trustedTestCertificate.RawData);
             Handler.SslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
@@ -238,9 +239,23 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
         return route.AuthType switch
         {
             BrokerAuthType.Bearer => "Bearer " + value,
-            BrokerAuthType.Basic => "Basic " + Convert.ToBase64String(BasicComposite(route.User!, secret)),
+            BrokerAuthType.Basic => "Basic " + BasicCompositeBase64(route.User!, secret),
             _ => value,
         };
+    }
+
+    /// <summary>The base64 of <c>user:secret</c>; the composite bytes are zeroed once encoded (T13).</summary>
+    private static string BasicCompositeBase64(string user, ReadOnlySpan<byte> secret)
+    {
+        var composite = BasicComposite(user, secret);
+        try
+        {
+            return Convert.ToBase64String(composite);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(composite);
+        }
     }
 
     /// <summary>The bytes of <c>user:secret</c> that a basic route base64-encodes.</summary>

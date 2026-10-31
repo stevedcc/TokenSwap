@@ -18,7 +18,7 @@ public static class Check
     /// </summary>
     public static List<MarkerRef> ScanFile(string filePath)
     {
-        var results = new List<MarkerRef>();
+        List<MarkerRef> results = [];
         string[] lines;
         try
         {
@@ -55,7 +55,7 @@ public static class Check
 
         if (Directory.Exists(path))
         {
-            var results = new List<MarkerRef>();
+            List<MarkerRef> results = [];
             foreach (var file in EnumerateFiles(path))
                 results.AddRange(ScanFile(file));
             return results;
@@ -97,7 +97,7 @@ public static class Check
                 return new CheckResult(marker, SecretStatus.Missing);
             }
             if (previous)
-                return new CheckResult(marker, secret.PreviousValue == null ? SecretStatus.Missing : SecretStatus.Ok);
+                return new CheckResult(marker, secret.PreviousValue is null ? SecretStatus.Missing : SecretStatus.Ok);
             return new CheckResult(marker, secret.BurnedAt.HasValue ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }

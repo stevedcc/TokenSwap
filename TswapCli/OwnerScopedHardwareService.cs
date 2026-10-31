@@ -83,7 +83,7 @@ internal sealed class OwnerScopedHardwareService : IHardwareKeyService, IHardwar
     {
         var backend = ((IHardwareKeyService)service).Backend;
         if (backend != HardwareBackend.SecureEnclave)
-            throw new ArgumentException($"Only the Secure Enclave runs as the vault's owner, not '{backend.DisplayName()}'", nameof(service));
+            throw new ArgumentException($"Only the Secure Enclave runs as the vault's owner, not '{backend.DisplayName}'", nameof(service));
         return new(service, service, scope);
     }
 

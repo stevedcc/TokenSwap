@@ -65,7 +65,7 @@ public sealed class ImportCommand : ICliCommand
         int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
         foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
         {
-            if (secret.BurnedAt != null && !includeBurned)
+            if (secret.BurnedAt is not null && !includeBurned)
             {
                 ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault; use --include-burned to import)");
                 skippedBurned++;
@@ -77,7 +77,7 @@ public sealed class ImportCommand : ICliCommand
                 skippedExisting++;
                 continue;
             }
-            if (secret.Value == null || secret.Value.Contains('\0'))
+            if (secret.Value is null || secret.Value.Contains('\0'))
             {
                 // System.Text.Json can produce null for non-nullable string properties when the
                 // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).

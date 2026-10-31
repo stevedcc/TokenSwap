@@ -415,7 +415,7 @@ public class BrokerServerTests : IAsyncLifetime
         for (var i = 0; i < 30; i++)
         {
             Assert.Null(guard.Refusal("s" + i));
-            guard.RecordAttempt();
+            guard.RecordAttempt("s" + i);
             if (i % 2 == 0)
                 guard.RecordSuccess("s" + i);   // successful unlocks count too
             else

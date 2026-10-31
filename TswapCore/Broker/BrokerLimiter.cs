@@ -11,6 +11,12 @@ public sealed record BrokerLimits
     public TimeSpan Lockout { get; init; } = TimeSpan.FromMinutes(5);
     public int MaxUnlocksPerMinute { get; init; } = 30;
 
+    /// <summary>
+    /// Brief T13: unlock attempts one socket may make a minute, so one socket can't use up
+    /// <see cref="MaxUnlocksPerMinute"/> alone. The global limit stays the ceiling.
+    /// </summary>
+    public int MaxUnlocksPerSocketPerMinute { get; init; } = 20;
+
     /// <summary>Open connections one socket may hold (so one client can't use up the file descriptors).</summary>
     public int MaxConnectionsPerSocket { get; init; } = 16;
 
@@ -110,18 +116,25 @@ public sealed class BrokerLimiter(BrokerLimits limits, TimeProvider time)
 }
 
 /// <summary>
-/// Unlock failure limits (decision 7): after <see cref="BrokerLimits.FailuresBeforeLockout"/> failed
+/// Unlock limits (T8 decision 7; the per-socket budget is brief T13 decision 6): after <see cref="BrokerLimits.FailuresBeforeLockout"/> failed
 /// unlocks in a row on one socket, that socket is refused for <see cref="BrokerLimits.Lockout"/>;
-/// and no more than <see cref="BrokerLimits.MaxFailedUnlocksPerMinute"/> failed unlocks a minute in
-/// total. Only failed unlocks count, never refusals. Times come from the injected clock.
+/// no socket may make more than <see cref="BrokerLimits.MaxUnlocksPerSocketPerMinute"/> unlock
+/// attempts a minute; and no more than <see cref="BrokerLimits.MaxUnlocksPerMinute"/> unlock
+/// attempts a minute in total (successful or not). Refusals never count. Times come from the
+/// injected clock.
 /// </summary>
 public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, (int Failures, DateTimeOffset LockedUntil)> _sockets = new(StringComparer.Ordinal);
     private readonly Queue<DateTimeOffset> _recentAttempts = new();
+    private readonly Dictionary<string, Queue<DateTimeOffset>> _recentBySocket = new(StringComparer.Ordinal);
 
-    /// <summary>Why an unlock may not be tried now (<c>locked-out</c>, <c>unlock-rate</c>), or null when it may.</summary>
+    /// <summary>
+    /// Why an unlock may not be tried now, or null when it may. In order: <c>locked-out</c> (this
+    /// socket's run of failures), <c>socket-unlock-rate</c> (this socket at its own per-minute
+    /// budget), <c>unlock-rate</c> (the global per-minute ceiling). The reason is for the log only.
+    /// </summary>
     public string? Refusal(string socket)
     {
         var now = time.GetUtcNow();
@@ -130,18 +143,25 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
             if (_sockets.TryGetValue(socket, out var state) && state.LockedUntil > now)
                 return "locked-out";
             Prune(now);
+            if (_recentBySocket.TryGetValue(socket, out var mine) && mine.Count >= limits.MaxUnlocksPerSocketPerMinute)
+                return "socket-unlock-rate";
             if (_recentAttempts.Count >= limits.MaxUnlocksPerMinute)
                 return "unlock-rate";
             return null;
         }
     }
 
-    /// <summary>Records an unlock attempt (counted by the global per-minute limit, whatever its outcome).</summary>
-    public void RecordAttempt()
+    /// <summary>Records an unlock attempt on <paramref name="socket"/>, counted globally and for that socket, whatever its outcome.</summary>
+    public void RecordAttempt(string socket)
     {
         var now = time.GetUtcNow();
         lock (_gate)
+        {
             _recentAttempts.Enqueue(now);
+            if (!_recentBySocket.TryGetValue(socket, out var mine))
+                _recentBySocket[socket] = mine = new Queue<DateTimeOffset>();
+            mine.Enqueue(now);
+        }
     }
 
     /// <summary>Records a failed unlock; returns true when it locked <paramref name="socket"/> out.</summary>
@@ -170,8 +190,19 @@ public sealed class BrokerUnlockGuard(BrokerLimits limits, TimeProvider time)
 
     private void Prune(DateTimeOffset now)
     {
-        while (_recentAttempts.Count > 0 && _recentAttempts.Peek() <= now - TimeSpan.FromMinutes(1))
+        var cutoff = now - TimeSpan.FromMinutes(1);
+        while (_recentAttempts.Count > 0 && _recentAttempts.Peek() <= cutoff)
             _recentAttempts.Dequeue();
+        List<string>? empty = null;
+        foreach (var (socket, queue) in _recentBySocket)
+        {
+            while (queue.Count > 0 && queue.Peek() <= cutoff)
+                queue.Dequeue();
+            if (queue.Count == 0)
+                (empty ??= []).Add(socket);
+        }
+        foreach (var socket in empty ?? [])
+            _recentBySocket.Remove(socket);
     }
 }
 

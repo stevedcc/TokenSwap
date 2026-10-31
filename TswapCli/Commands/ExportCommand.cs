@@ -14,9 +14,8 @@ public sealed class ExportCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var path, ..])
             throw new UsageException($"sudo {ctx.Prefix} export <file>");
-        var path = args[0];
 
         ctx.RequireSudo("export");
 
@@ -49,15 +48,15 @@ public sealed class ExportCommand : ICliCommand
 
         var exportFile = new ExportFile(
             ExportFile.CurrentVersion,
-            DateTime.UtcNow,
+            ctx.Time.GetUtcNow().UtcDateTime,
             Convert.ToBase64String(salt),
             Convert.ToBase64String(ciphertext),
             kdf
         );
         ctx.WriteOutputFile(path, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
 
-        var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt == null);
-        var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
+        var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt is null);
+        var burned = db.Secrets.Count(kv => kv.Value.BurnedAt is not null);
         ctx.Console.Out.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
         if (burned > 0)
             ctx.Console.Out.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'sudo {ctx.Prefix} import --include-burned {path}' to preserve them)");

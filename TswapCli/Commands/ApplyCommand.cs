@@ -11,9 +11,8 @@ public sealed class ApplyCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var filePath, ..])
             throw new UsageException($"{ctx.Prefix} apply <file>");
-        var filePath = args[0];
 
         if (!File.Exists(filePath))
             throw new TswapException($"File not found: {filePath}");

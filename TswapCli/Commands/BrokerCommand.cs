@@ -17,9 +17,9 @@ public sealed class BrokerCommand : ICliCommand
     public string Name => "broker";
     public string HelpUsage => "broker <serve|forward|call|route|socket|template> ...";
     public string Description =>
-        "Credential-adding HTTP proxy for containers (serve as the vault user; forward in the container; sudo for route|socket add|remove)";
+        "Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve as the vault user; forward/call in the container; sudo for route|socket|template add|remove)";
 
-    // serve and forward never need sudo (serve refuses root); only config changes do, checked inside.
+    // serve, forward and call never need sudo (serve refuses root); only config changes do, checked inside.
     public bool RequiresSudo => false;
 
     private const string Usage =
@@ -39,20 +39,17 @@ public sealed class BrokerCommand : ICliCommand
     {
         if (OperatingSystem.IsWindows())
             throw new TswapException("'tswap broker' is not supported on Windows (it needs Unix sockets and peer credentials; Linux and macOS only).");
-        if (args.Length == 0)
-            throw new TswapException(Usage);
-
-        return args[0] switch
+        return args switch
         {
-            "serve" when args.Length == 1 => Serve(ctx),
-            "forward" => Forward(ctx, args[1..]),
-            "call" => Call(ctx, args[1..]),
-            "route" when args.Length >= 2 && args[1] == "add" => RouteAdd(ctx, args[2..]),
-            "route" when args.Length >= 2 && args[1] == "remove" => RouteRemove(ctx, args[2..]),
-            "socket" when args.Length >= 2 && args[1] == "add" => SocketAdd(ctx, args[2..]),
-            "socket" when args.Length >= 2 && args[1] == "remove" => SocketRemove(ctx, args[2..]),
-            "template" when args.Length >= 2 && args[1] == "add" => TemplateAdd(ctx, args[2..]),
-            "template" when args.Length >= 2 && args[1] == "remove" => TemplateRemove(ctx, args[2..]),
+            ["serve"] => Serve(ctx),
+            ["forward", ..] => Forward(ctx, args[1..]),
+            ["call", ..] => Call(ctx, args[1..]),
+            ["route", "add", ..] => RouteAdd(ctx, args[2..]),
+            ["route", "remove", ..] => RouteRemove(ctx, args[2..]),
+            ["socket", "add", ..] => SocketAdd(ctx, args[2..]),
+            ["socket", "remove", ..] => SocketRemove(ctx, args[2..]),
+            ["template", "add", ..] => TemplateAdd(ctx, args[2..]),
+            ["template", "remove", ..] => TemplateRemove(ctx, args[2..]),
             _ => throw new TswapException(Usage),
         };
     }
@@ -94,7 +91,7 @@ public sealed class BrokerCommand : ICliCommand
         // The end-to-end tests connect as their own uid, which serve otherwise refuses, on the HTTP
         // and the ssh-agent sockets alike (one switch). Compiled into Debug builds only (fix round 1);
         // there, only with TSWAP_TEST_KEY set (a test key).
-        options = options with { AllowOwnUidForTests = ctx.TestKey != null };
+        options = options with { AllowOwnUidForTests = ctx.TestKey is not null };
 #endif
 
         var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -321,9 +318,8 @@ public sealed class BrokerCommand : ICliCommand
     private static int RouteRemove(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker route remove", "Changing broker.json needs sudo: it decides which credentials containers can use.");
-        if (args.Length != 1)
+        if (args is not [var name])
             throw new TswapException(Usage);
-        var name = args[0];
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         if (config.Routes.All(r => r.Name != name))
@@ -365,9 +361,8 @@ public sealed class BrokerCommand : ICliCommand
     private static int SocketRemove(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker socket remove", "Changing broker.json needs sudo: it decides which credentials containers can use.");
-        if (args.Length != 1)
+        if (args is not [var name])
             throw new TswapException(Usage);
-        var name = args[0];
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         if (config.Sockets.All(s => s.Name != name))
@@ -385,16 +380,16 @@ public sealed class BrokerCommand : ICliCommand
     private static int TemplateAdd(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker template add", "Changing broker.json needs sudo: a template runs host-side commands with vault secrets.");
-        if (args.Length != 1)
+        if (args is not [var file])
             throw new TswapException(Usage);
         string json;
         try
         {
-            json = args[0] == "-" ? ctx.Console.In.ReadToEnd() : File.ReadAllText(args[0]);
+            json = file == "-" ? ctx.Console.In.ReadToEnd() : File.ReadAllText(file);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new TswapException($"Can't read the template file {args[0]}: {ex.Message}");
+            throw new TswapException($"Can't read the template file {file}: {ex.Message}");
         }
         BrokerTemplateConfig template;
         try
@@ -419,9 +414,8 @@ public sealed class BrokerCommand : ICliCommand
     private static int TemplateRemove(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker template remove", "Changing broker.json needs sudo: a template runs host-side commands with vault secrets.");
-        if (args.Length != 1)
+        if (args is not [var name])
             throw new TswapException(Usage);
-        var name = args[0];
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
         if (config.Templates?.Any(t => t.Name == name) != true)
@@ -439,7 +433,7 @@ public sealed class BrokerCommand : ICliCommand
 
     private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known)
     {
-        var positional = new List<string>();
+        List<string> positional = [];
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
         {
