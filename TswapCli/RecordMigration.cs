@@ -341,7 +341,7 @@ internal static class RecordMigration
     {
         const byte k = 1;
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
-        var slots = new List<Slot>();
+        List<Slot> slots = [];
         foreach (var serial in config.YubiKeySerials.Distinct())
         {
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
@@ -375,7 +375,7 @@ internal static class RecordMigration
         CommandContext ctx, string tempDir, Config newConfig, DirectoryOwnerMatcher owner, Keyring keyring,
         SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots)
     {
-        var problems = new List<string>();
+        List<string> problems = [];
         var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner);
         var warnings = new StringWriter();
         var readKeyring = reader.ReadKeyring();

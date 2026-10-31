@@ -51,7 +51,7 @@ internal static class HardwareServices
                 SecureEnclave(testKey, ownerScope),
             ];
 
-        var backends = new List<IHardwareKeyService>();
+        List<IHardwareKeyService> backends = [];
         if (OperatingSystem.IsMacOS()) backends.Add(SecureEnclave(testKey, ownerScope));
         if (OperatingSystem.IsLinux()) backends.Add(new LinuxTpmHardwareService());
         if (OperatingSystem.IsWindows()) backends.Add(new WindowsTpmHardwareService());

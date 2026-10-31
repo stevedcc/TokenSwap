@@ -51,7 +51,7 @@ public static class SecurityWarnings
     /// </summary>
     public static List<SlotPosture> Current(Config config)
     {
-        var result = new List<SlotPosture>();
+        List<SlotPosture> result = [];
         var yubiKeyVault = config.Backend is null or HardwareBackend.YubiKey;
         var pair = config.YubiKeySerials is { Count: 2 } ? $"YubiKeys {string.Join(", ", config.YubiKeySerials)}" : null;
         if (config.Keyring is null)
@@ -143,7 +143,7 @@ public static class SecurityWarnings
     /// </summary>
     public static List<(SlotPosture Slot, string? Was)> Changed(Config config)
     {
-        var changed = new List<(SlotPosture, string?)>();
+        List<(SlotPosture, string?)> changed = [];
         foreach (var slot in Current(config))
         {
             var was = config.AcknowledgedTouch?.GetValueOrDefault(slot.Key);
