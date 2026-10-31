@@ -24,10 +24,17 @@ public interface IUnixOwnership
     /// <summary>
     /// Switches the effective uid and gid to <paramref name="uid"/>/<paramref name="gid"/> (with no
     /// supplementary groups) until the result is disposed; <paramref name="path"/> is for the
-    /// message. Throws, having changed nothing, when the switch fails.
+    /// message. Throws <see cref="OwnerSwitchException"/>, having changed nothing, when the switch fails.
     /// </summary>
     IDisposable ActAs(uint uid, uint gid, string path);
 }
+
+/// <summary>
+/// T12 fix round 1: the identity switch to a folder's owner failed (<see cref="IUnixOwnership.ActAs"/>);
+/// nothing was done as either identity. A hard stop: <c>VaultUnlocker</c> passes it through
+/// unchanged, never adding its other-machine hint or trying other slots after it.
+/// </summary>
+public sealed class OwnerSwitchException(string message) : TswapException(message);
 
 /// <summary>
 /// Every file tswap reads or writes in a vault folder or as a command's output (config, secrets,
@@ -423,13 +430,13 @@ public sealed partial class UnixOwnership : IUnixOwnership
         var groups = new uint[Math.Max(count, 0)];
         fixed (uint* list = groups)
             if (count < 0 || getgroups(groups.Length, list) != groups.Length)
-                throw new TswapException($"Could not read this process's groups (errno {Marshal.GetLastPInvokeError()}); nothing was done with {path}.");
+                throw new OwnerSwitchException($"Could not read this process's groups (errno {Marshal.GetLastPInvokeError()}); nothing was done with {path}.");
         var identity = new Identity(geteuid(), getegid(), groups);
         if (SetGroups([]) != 0 || setegid(gid) != 0 || seteuid(uid) != 0)
         {
             var errno = Marshal.GetLastPInvokeError();
             identity.Dispose();
-            throw new TswapException(
+            throw new OwnerSwitchException(
                 $"Could not switch to uid {uid} (the owner of the folder) for {path} (errno {errno}); nothing was done with it.");
         }
         return identity;

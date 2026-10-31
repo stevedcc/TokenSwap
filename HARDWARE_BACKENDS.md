@@ -253,7 +253,9 @@ was this bug. Now every Secure Enclave call (the unlock, and creating the key in
 request` and `recover`) runs as the **owner of the vault's config folder**, normally the logged-in
 user, so macOS asks them. It is the identity T5 already does all of the vault's file work as
 (`OwnerScopedHardwareService` → `DirectoryOwnerMatcher.AsOwner` on `config.json`: `seteuid`, restored
-after; a switch that fails stops the command and never falls back to root), so it opens only that
+after). A switch that fails is a hard stop: the command fails with T5's error as it is
+(`OwnerSwitchException`), nothing runs as root, and no other slot (a one-key YubiKey slot) is tried.
+So it opens only that
 user's own vault, with that user's presence: less privilege than root, not more. Without sudo
 nothing changes; the TPM and YubiKeys are not affected (they still run as root under sudo). Two
 cases still can't use a `--with-touch` slot under sudo: a vault folder owned by root (`sudo tswap

@@ -17,8 +17,9 @@ internal sealed class VaultOwnerScope(Func<IVaultStore> openStore)
     /// <c>config.json</c>: <c>AsOwner(path)</c> switches to the owner of <c>path</c>'s nearest existing
     /// parent folder, so naming <c>config.json</c> targets the config folder itself (naming the
     /// folder would pick the folder above it). T5's rules decide: not privileged, or the folder is
-    /// this uid's (root's): no switch; a failed switch throws, so the action never runs as root
-    /// instead; a failed restore fails fast. A store that isn't an <see cref="IFileVaultStore"/> has
+    /// this uid's (root's): no switch; a failed switch throws <see cref="OwnerSwitchException"/>, so
+    /// the action never runs as root instead (and <c>VaultUnlocker</c> lets it through unchanged, trying
+    /// no other slot: fix round 1); a failed restore fails fast. A store that isn't an <see cref="IFileVaultStore"/> has
     /// no folder: no switch.
     /// </summary>
     public T Run<T>(Func<T> action) =>

@@ -63,7 +63,11 @@ public class FileOwnershipTests : IDisposable
         /// <summary>T12: the number of switches asked for so far (failed ones included).</summary>
         public int SwitchAttempts { get; private set; }
 
-        /// <summary>T12: the 0-based attempt number that fails, as <see cref="SwitchFails"/> does.</summary>
+        /// <summary>
+        /// T12: the 0-based attempt number that fails, with <see cref="OwnerSwitchException"/> as the
+        /// real <see cref="UnixOwnership.ActAs"/> throws (<see cref="SwitchFails"/> keeps T5's base type
+        /// for its existing test).
+        /// </summary>
         public int? FailSwitchAt { get; set; }
 
         /// <summary>T12: how often an owner was read.</summary>
@@ -82,8 +86,10 @@ public class FileOwnershipTests : IDisposable
             if (OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException(); // never switched on Windows
             var attempt = SwitchAttempts++;
-            if (SwitchFails || FailSwitchAt == attempt)
+            if (SwitchFails)
                 throw new TswapException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
+            if (FailSwitchAt == attempt) // T12 fix round 1: the type UnixOwnership.ActAs throws
+                throw new OwnerSwitchException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
             Switches.Add((Path.GetFullPath(path), uid, gid));
             foreach (var file in RootOnly)
                 File.SetUnixFileMode(file, UnixFileMode.None);

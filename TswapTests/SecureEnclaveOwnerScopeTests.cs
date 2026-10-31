@@ -274,41 +274,133 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         AssertSecureEnclaveCallsRanAsTheOwner("Unlock", dir);
     }
 
-    [Fact]
-    public void Privileged_TheSwitchFails_TheCommandFailsWithT5sError_AndTheSecureEnclaveIsNeverCalled()
+    /// <summary>
+    /// Which switch attempt of a privileged <paramref name="args"/> run is the Secure Enclave's own
+    /// (failing it by path is impossible: the config read and the scope both name config.json).
+    /// Measured on two runs and asserted equal, so a command whose switch sequence changes between
+    /// runs (e.g. a first run narrowing folder modes) fails here loudly instead of mis-targeting.
+    /// </summary>
+    private int SecureEnclaveSwitchAttempt(string dir, params string[] args)
     {
-        if (OperatingSystem.IsWindows()) return;
-        var dir = SecureEnclaveVault();
-        // Which switch attempt is the Secure Enclave's: measured on two identical runs (the first
-        // may narrow folder modes), so the failing run below fails exactly that one, after the
-        // file reads before it succeeded.
-        int ScopeAttempt()
+        int Measure()
         {
             var probe = Root();
             var attempt = -1;
             string? inside = null;
             var record = _onCall;
             _onCall = (_, _) => (attempt, inside) = (probe.SwitchAttempts - 1, probe.CurrentPath);
-            Ok(dir, probe, "", "get", "db");
+            Ok(dir, probe, "", args);
             _onCall = record;
             Assert.Equal(ConfigJson(dir), inside); // the attempt measured is the Secure Enclave's own switch
             return attempt;
         }
-        var first = ScopeAttempt();
-        var scopeAttempt = ScopeAttempt();
-        Assert.True(scopeAttempt > 0, $"no file switch before the Secure Enclave's ({scopeAttempt})");
-        Assert.Equal(first, scopeAttempt);
+        var first = Measure();
+        var second = Measure();
+        Assert.True(second > 0, $"no file switch before the Secure Enclave's ({second})");
+        Assert.Equal(first, second);
         _calls.Clear();
+        return second;
+    }
+
+    private string SwitchFailure(string dir) => $"Could not switch to uid {UserUid} for {ConfigJson(dir)}; nothing was done with it.";
+
+    [Fact]
+    public void Privileged_TheSwitchFails_TheCommandFailsWithT5sError_AndTheSecureEnclaveIsNeverCalled()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = SecureEnclaveVault();
+        var scopeAttempt = SecureEnclaveSwitchAttempt(dir, "get", "db");
         var fake = Root();
         fake.FailSwitchAt = scopeAttempt;
 
         var (exit, stdout, stderr) = Run(dir, fake, "", "get", "db");
 
         Assert.Equal(1, exit);
-        Assert.Contains($"Could not switch to uid {UserUid} for {ConfigJson(dir)}; nothing was done with it.", stderr);
+        Assert.Contains(SwitchFailure(dir), stderr);
+        Assert.DoesNotContain(VaultUnlocker.ForeignHardwareSlotHint, stderr); // fix round 1: T5's error unchanged
         Assert.DoesNotContain("s3cret", stdout);
         Assert.Empty(_calls); // no fallback to root
         Assert.Equal(scopeAttempt, fake.Switches.Count); // the reads before it did happen
+    }
+
+    // Fix round 1 (orchestrator's ruling, MiMo 1, GLM F1): a failed owner switch is a hard stop. In a
+    // keyring vault that also has a one-key YubiKey slot (which would open it), the command fails
+    // with T5's message alone: no "another machine" hint, no YubiKey slot tried.
+    [Fact]
+    public void Privileged_TheSwitchFails_InAVaultWithAYubiKeySlot_IsAHardStop()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = SecureEnclaveVault();
+        Ok(dir, null, "", "slot", "add", "--yubikey");
+        Assert.Equal("s3cret", Ok(dir, null, "", "get", "db").Trim());
+        var scopeAttempt = SecureEnclaveSwitchAttempt(dir, "get", "db");
+        var fake = Root();
+        fake.FailSwitchAt = scopeAttempt;
+
+        var (exit, stdout, stderr) = Run(dir, fake, "", "get", "db");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SwitchFailure(dir), stderr);
+        Assert.DoesNotContain(VaultUnlocker.ForeignHardwareSlotHint, stderr);
+        Assert.DoesNotContain("own backend failed too", stderr); // the YubiKey slots' error, had they been tried
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.Empty(_calls);
+    }
+
+    // MiMo 2: the exception type the brief asks for, below the CLI (which shows only the message).
+    [Fact]
+    public void Scope_ASwitchThatFails_ThrowsT5sOwnerSwitchException_AndTheActionNeverRuns()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = Folder("mac");
+        var fake = Root();
+        fake.FailSwitchAt = 0;
+        var scope = new VaultOwnerScope(() => new Storage(dir, new DirectoryOwnerMatcher(fake)));
+        var ran = false;
+
+        var ex = Assert.Throws<OwnerSwitchException>(() => scope.Run(() => ran = true));
+
+        Assert.Equal(SwitchFailure(dir), ex.Message);
+        Assert.False(ran);
+        Assert.Empty(fake.Switches);
+    }
+
+    // GLM F2 / MiMo 8: first init with no config folder yet: the scope acts as the owner of the
+    // nearest existing folder (the folder-to-be's parent, the user's).
+    [Fact]
+    public void Privileged_InitSecureEnclave_BeforeTheConfigFolderExists_CreatesTheKeyAsItsParentsOwner()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var parent = Path.Combine(_root, "home");
+        Directory.CreateDirectory(parent);
+        var dir = Path.Combine(parent, "tswap");
+        var fake = Root(dirUid: 2000, dirGid: 2001);
+        fake.Owners[parent] = (UserUid, UserGid);
+
+        Ok(dir, fake, "", "init", "--secure-enclave", "--with-touch");
+
+        var enroll = Assert.Single(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Enroll");
+        Assert.Equal((UserUid, UserGid), enroll.As);
+        Assert.Equal(ConfigJson(dir), enroll.SwitchPath);
+        Ok(dir, null, "ok\nok\n", "add", "check");
+        Assert.Equal("ok", Ok(dir, null, "", "get", "check").Trim());
+    }
+
+    // MiMo 6: Backend and IsSimulated touch no hardware, so they never enter the scope.
+    [Fact]
+    public void Decorator_BackendAndIsSimulated_NeverEnterTheScope_EnrollDoes()
+    {
+        var opened = 0;
+        var scope = new VaultOwnerScope(() => { opened++; return new Storage(_root); });
+        var se = Assert.Single(HardwareServices.UnlockBackends(Convert.FromHexString(TestKeyHex), scope),
+            b => b.Backend == HardwareBackend.SecureEnclave);
+
+        _ = se.Backend;
+        _ = se.IsSimulated;
+        Assert.Equal(0, opened);
+
+        ((IHardwareEnrollmentService)se).Enroll();
+        Assert.Equal(1, opened);
     }
 
     // --- the factory (decision 3) ---
@@ -387,6 +479,10 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Assert.True(exit == 0, $"exit {exit}: {stderr}");
         Assert.NotEqual("", stdout.Trim());
+        Assert.DoesNotContain("config folder", stderr);
+        // MiMo 4: opening the store (VaultStores.Open) first probes config.json through the owner
+        // matcher, which reads its folder's owner under a privileged fake: no owner read means the
+        // store was never opened (and on Linux, with no HOME, resolving the folder would fail the command).
         Assert.Equal(0, fake.OwnerReads);
         Assert.Equal(0, fake.SwitchAttempts);
     }

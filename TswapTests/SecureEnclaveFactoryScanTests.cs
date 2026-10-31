@@ -8,7 +8,15 @@ namespace TswapTests;
 /// (<c>TswapCli/HardwareServices.cs</c>), which always wraps it in the owner scope. This scan of the
 /// non-test sources fails when the service type or the Swift shim is named in code anywhere else,
 /// so a later direct construction fails here instead of silently skipping the owner switch under sudo.
-/// Comments and string literals don't count.
+/// Comments and string literals don't count. Fix round 1 (MiMo 3): a simulated Secure Enclave
+/// (<c>new SimulatedHardwareService(HardwareBackend.SecureEnclave, ...)</c>) built outside the factory
+/// fails it too.
+/// <para><b>What it can't see</b> (a tripwire for the realistic regression, not a proof): code in
+/// interpolated-string holes (stripped with the literal); a type named through reflection from a
+/// string (<c>Type.GetType("...SecureEnclaveHardwareService")</c>); Unicode escapes in identifiers;
+/// source generators and other assemblies; a simulated Secure Enclave built with a backend variable;
+/// and an unwrapped construction inside the allowed files themselves, which the factory tests in
+/// <c>SecureEnclaveOwnerScopeTests</c> catch through the factory's entry points instead.</para>
 /// </summary>
 public class SecureEnclaveFactoryScanTests
 {
@@ -51,6 +59,34 @@ public class SecureEnclaveFactoryScanTests
 
         Assert.Empty(offenders);
     }
+
+    private const string SimulatedSecureEnclave = "newSimulatedHardwareService(HardwareBackend.SecureEnclave";
+
+    [Fact]
+    public void ASimulatedSecureEnclave_IsBuiltInCodeOnlyByTheFactory()
+    {
+        var root = RepoRoot();
+
+        var offenders = NonTestSources(root)
+            .Where(f => f != "TswapCli/HardwareServices.cs")
+            .Where(f => BuildsSimulatedSecureEnclave(File.ReadAllText(Path.Combine(root, f))))
+            .ToList();
+
+        Assert.Empty(offenders);
+        Assert.True(BuildsSimulatedSecureEnclave(File.ReadAllText(Path.Combine(root, "TswapCli/HardwareServices.cs")))); // the control
+    }
+
+    [Theory]
+    [InlineData("var s = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key);", true)]
+    [InlineData("var s = new SimulatedHardwareService( HardwareBackend.SecureEnclave,\n key, false);", true)]
+    [InlineData("var s = new SimulatedHardwareService(HardwareBackend.Tpm, key);", false)]
+    [InlineData("// new SimulatedHardwareService(HardwareBackend.SecureEnclave, key)", false)]
+    public void TheScanner_SeesASimulatedSecureEnclaveConstruction(string source, bool expected) =>
+        Assert.Equal(expected, BuildsSimulatedSecureEnclave(source));
+
+    /// <summary>True when code (not comments or literals) builds a simulated Secure Enclave, whitespace ignored.</summary>
+    private static bool BuildsSimulatedSecureEnclave(string source) =>
+        string.Concat(StripCommentsAndLiterals(source).Where(c => !char.IsWhiteSpace(c))).Contains(SimulatedSecureEnclave, StringComparison.Ordinal);
 
     [Fact]
     public void TheFactory_StillBuildsTheService_SoTheScanWatchesTheRightName()
