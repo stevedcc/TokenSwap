@@ -102,7 +102,7 @@ public sealed class BrokerRequestTarget
                 bytes.Add((byte)((Convert.ToByte(raw[i + 1].ToString(), 16) << 4) | Convert.ToByte(raw[i + 2].ToString(), 16)));
                 i += 2;
             }
-            else if (c > 0x7E || c < 0x20)
+            else if (c is > '\x7E' or < '\x20')
             {
                 return null; // a raw request line carries ASCII only
             }

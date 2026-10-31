@@ -386,7 +386,7 @@ public sealed class BrokerPolicy
     {
         ValidateName(socket.Name, "socket");
         var name = socket.Name;
-        if (socket.Uids is null || socket.Uids.Count == 0)
+        if (socket.Uids is null or [])
             throw new BrokerConfigException($"Socket '{name}' allows no uids.");
         List<(uint From, uint To)> ranges = [];
         foreach (var entry in socket.Uids)
