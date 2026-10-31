@@ -1102,7 +1102,11 @@ One hardware backend:
 - **TPM 2.0**: Windows, or Linux with `tpm2-tools` (see [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md)).
 - **Secure Enclave**: a Mac (Apple Silicon tested).
 
-.NET 10 SDK at build time only — the compiled binary has no runtime dependencies.
+The .NET SDK that `global.json` names (.NET 11) at build time only — the compiled binary has no
+runtime dependencies. On x64 (Linux, Windows, Intel Macs) it needs an x86-64-v2 CPU (SSE4.2 and
+POPCNT: Intel Nehalem or AMD Bulldozer and later). .NET 11 raised this floor from x86-64-v1; on an
+older CPU the binary stops at start with "The current CPU is missing one or more of the following
+instruction sets". Arm64 (Linux, Apple Silicon) is unchanged.
 
 ## License
 
