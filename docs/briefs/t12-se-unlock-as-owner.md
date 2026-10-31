@@ -4,7 +4,7 @@ Read AGENTS.md first. One commit per item, test first (watch it fail for the rig
 break-it-once check per key test named in its commit message, `./runtests.sh --unit` after each
 item, the full `./runtests.sh` at the end. No hardware suites, `ykman`, `sudo`, real YubiKeys, a
 real TPM or `~/.config/tswap`: simulated services, `TSWAP_CONFIG_DIR`, temp folders and the
-existing fake `IUnixOwnership` (see `FileOwnershipTests`) only. No new NuGet packages.
+existing fake `IUnixOwnership` (see `FileOwnershipTests`; extend it, e.g. per-path owners, if a test needs it) only. No new NuGet packages.
 
 **This machine is Linux; there is no Mac here.** The owner checks the real behaviour on a Mac
 (item 2). Everything else is testable with the simulated Secure Enclave and the fake ownership seam.
@@ -115,7 +115,7 @@ identity switch, a temp vault folder owned by a fake non-root uid, and a fake "p
 - privileged, folder owned by root (uid 0): no switch, and the value comes back;
 - privileged, **the config folder and its parent owned by different uids**: the switch goes to the
   config folder's owner (pins decision 2's `config.json` target);
-- the fake reports a failed switch: the command fails with T5's error and the Secure Enclave service
+- the fake reports a failed switch: the command fails with T5's error (assert its exception type and message) and the Secure Enclave service
   is never called (no fallback to root);
 - the Secure Enclave service built by the factory is the decorator (decision 3), and `Backend`,
   `IsSimulated` pass through;
