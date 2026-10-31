@@ -1,0 +1,36 @@
+# PROBE (draft PR, not for merge): do tswap's linux-arm64 binaries still run on an Armv8.0 CPU
+# without LSE (Raspberry Pi 4, Cortex-A72) after the .NET 11 retarget? Runs v0.1.0 (.NET 10) and
+# this branch (.NET 11) under qemu-aarch64 with -cpu cortex-a72 (Armv8.0) and -cpu cortex-a76
+# (Armv8.2, has LSE) on the native arm64 runner.
+name: Arm64 floor probe
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static clang zlib1g-dev
+      - name: Publish this branch (net11, linux-arm64, Release AOT)
+        run: dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-arm64 -o net11
+      - name: Fetch v0.1.0 (net10)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1.0 --repo stevedcc/TokenSwap -p tswap-linux-arm64.tar.gz -D v010
+          tar xzf v010/tswap-linux-arm64.tar.gz -C v010
+      - name: Run both under emulated CPUs
+        shell: bash
+        run: |
+          grep -m1 -o 'atomics' /proc/cpuinfo || echo "host: no atomics flag"
+          for cpu in cortex-a72 cortex-a53 cortex-a76; do
+            for b in v010 net11; do
+              out=$(qemu-aarch64-static -cpu "$cpu" "./$b/tswap" prompt-hash 2>&1 | tail -2); rc=$?
+              echo "RESULT cpu=$cpu build=$b exit=${PIPESTATUS[0]} out=$(echo "$out" | tr '\n' ' ')"
+            done
+          done
