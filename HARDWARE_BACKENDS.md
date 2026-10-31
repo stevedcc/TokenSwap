@@ -238,10 +238,37 @@ via CryptoKit); `Unwrap` reconstitutes the key and decrypts — for a key made w
 this is the call that triggers Touch ID / the password prompt. The blob is self-contained: the Secure Enclave key's own `dataRepresentation`
 plus the ciphertext package. In a keyring vault (what `tswap init --secure-enclave` makes) it is
 the machine slot's `hwBlob` and wraps that slot's `KEK_slot`; in a single-slot vault made before
-keyring vaults it is `Config.SecureEnclaveWrappedKey` and wraps the vault key. Registered in
-`TswapCli/Program.cs` behind `OperatingSystem.IsMacOS()`. `TswapTests/SecureEnclaveHardwareServiceTests.cs`
+keyring vaults it is `Config.SecureEnclaveWrappedKey` and wraps the vault key. Built only by
+`HardwareServices.SecureEnclave` (`TswapCli/HardwareServices.cs`) behind `OperatingSystem.IsMacOS()`,
+always wrapped for sudo (next section). `TswapTests/SecureEnclaveHardwareServiceTests.cs`
 holds the trait-gated tests (`Category=SecureEnclave`, run with `./runtests.sh --secure-enclave`
 on a Mac) — they now pass via plain `dotnet test`, no publishing or signing required.
+
+### Under sudo: used as the vault folder's owner, not root (brief T12, issue #157)
+
+macOS asks Touch ID or the password of the process's effective user. Under sudo that was root, so
+a `--with-touch` slot showed *"tswap needs to authenticate to continue — Enter the password for the
+user System Administrator"*, which nobody can answer, and the unlock failed: that dialog under sudo
+was this bug. Now every Secure Enclave call (the unlock, and creating the key in `init`, `slot
+request` and `recover`) runs as the **owner of the vault's config folder**, normally the logged-in
+user, so macOS asks them. It is the identity T5 already does all of the vault's file work as
+(`OwnerScopedHardwareService` → `DirectoryOwnerMatcher.AsOwner` on `config.json`: `seteuid`, restored
+after). A switch that fails is a hard stop: the command fails with T5's error as it is
+(`OwnerSwitchException`), nothing runs as root, and no other slot (a one-key YubiKey slot) is tried;
+the same holds when the folder's owner can't be read there. `VaultUnlocker` treats that error this
+way for every backend, so a TPM vault would stop the same way on a failed owner switch (the switch
+code is shared), though the TPM's own hardware call never switches.
+So it opens only that
+user's own vault, with that user's presence: less privilege than root, not more. Without sudo
+nothing changes; the TPM and YubiKeys are not affected (they still run as root under sudo). Two
+cases still can't use a `--with-touch` slot under sudo: a vault folder owned by root (`sudo tswap
+init` with the vault under `/var/root`) evaluates presence for root, and a folder owned by a uid
+with no login (a service account) asks presence of that uid, which nobody can give; choose
+`--no-touch` for such a vault, or keep it in the user's folder. A slot enrolled with sudo before
+this version (`sudo tswap recover --secure-enclave`, or `init`/`slot request` run with sudo) was
+created as root: if it doesn't unlock, run `recover` again (sudo now creates the key as the owner).
+`SecureEnclaveOwnerScopeTests` covers this with the simulated Secure Enclave and a fake identity
+switch; `SecureEnclaveFactoryScanTests` fails if a Secure Enclave service is built anywhere else.
 
 ### Status: PoC-grade, not yet production-hardened
 

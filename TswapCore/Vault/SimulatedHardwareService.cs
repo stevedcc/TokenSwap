@@ -36,6 +36,26 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     private readonly byte[] _machineKey;
     private readonly bool _requirePresence;
 
+    private static readonly AsyncLocal<Action<HardwareBackend, string>?> CallObserver = new();
+
+    /// <summary>
+    /// Brief T12 test seam: until the result is disposed, every <see cref="Enroll"/> and
+    /// <see cref="Unlock"/> made in the caller's async flow first calls <paramref name="observer"/>
+    /// with this service's backend and the call's name (<c>"Enroll"</c>, <c>"Unlock"</c>), so a
+    /// test can see the identity a call ran as. Flow-local, so parallel tests don't see each other.
+    /// </summary>
+    public static IDisposable ObserveCalls(Action<HardwareBackend, string> observer)
+    {
+        var previous = CallObserver.Value;
+        CallObserver.Value = observer;
+        return new ObserverScope(previous);
+    }
+
+    private sealed class ObserverScope(Action<HardwareBackend, string>? previous) : IDisposable
+    {
+        public void Dispose() => CallObserver.Value = previous;
+    }
+
     /// <param name="requirePresence">
     /// Brief T11: false only for a Secure Enclave enrolled with <c>--no-touch</c>; any other backend
     /// without presence throws, as <c>HardwareServices.Enrollment</c> does.
@@ -58,6 +78,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     /// <summary>Generates a random <c>KEK_slot</c> and wraps it to this simulated machine.</summary>
     public HardwareEnrollment Enroll()
     {
+        CallObserver.Value?.Invoke(Backend, nameof(Enroll));
         var kekSlot = RandomNumberGenerator.GetBytes(KeySize);
 
         var blob = new byte[NonceSize + TagSize + kekSlot.Length + 1];
@@ -77,6 +98,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
     {
         _ = chooseSerial;
+        CallObserver.Value?.Invoke(Backend, nameof(Unlock));
         var blob = HardwareBlobLocator.Read(config, Backend);
 
         // The old length (no flag byte, read as presence) or the new one with a flag of 0 or 1.

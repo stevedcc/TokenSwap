@@ -202,7 +202,7 @@ public sealed class SlotCommand : ICliCommand
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
-        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, requirePresence);
+        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, ctx.OwnerScope, requirePresence);
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;

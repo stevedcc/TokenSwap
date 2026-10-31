@@ -24,10 +24,19 @@ public interface IUnixOwnership
     /// <summary>
     /// Switches the effective uid and gid to <paramref name="uid"/>/<paramref name="gid"/> (with no
     /// supplementary groups) until the result is disposed; <paramref name="path"/> is for the
-    /// message. Throws, having changed nothing, when the switch fails.
+    /// message. Throws <see cref="OwnerSwitchException"/>, having changed nothing, when the switch fails.
     /// </summary>
     IDisposable ActAs(uint uid, uint gid, string path);
 }
+
+/// <summary>
+/// T12 fix round 1: acting as a folder's owner failed: the switch itself, or its setup (reading this
+/// process's groups in <see cref="IUnixOwnership.ActAs"/>; at the Secure Enclave's scope also reading
+/// the folder's owner, round 2). Nothing was done as either identity. A hard stop:
+/// <c>VaultUnlocker</c> passes it through unchanged, never adding its other-machine hint or trying
+/// other slots after it, for any backend.
+/// </summary>
+public sealed class OwnerSwitchException(string message, int exitCode = 1) : TswapException(message, exitCode);
 
 /// <summary>
 /// Every file tswap reads or writes in a vault folder or as a command's output (config, secrets,
@@ -38,7 +47,8 @@ public interface IUnixOwnership
 /// T5: run as root (sudo) on a folder owned by another user (the vault's user, via
 /// <c>SUDO_USER</c> or <c>TSWAP_CONFIG_DIR</c>), tswap does that file work <b>as the folder's
 /// owner</b> (effective uid and gid, no supplementary groups; the <c>sudoedit</c> approach), and
-/// keeps root only for the hardware. So files come out owned by that user, and anything the user
+/// keeps root only for the hardware (except the Secure Enclave: brief T12 runs it as the same
+/// owner, <c>TswapCli.OwnerScopedHardwareService</c>). So files come out owned by that user, and anything the user
 /// planted in their own folder (a symlink to <c>/etc/shadow</c>, a folder swapped for a link
 /// halfway through) gets no further than the user's own rights. Chowning as root instead (the
 /// first fix) followed such links, on the read side too (reviews by MiMo and GLM).
@@ -422,13 +432,13 @@ public sealed partial class UnixOwnership : IUnixOwnership
         var groups = new uint[Math.Max(count, 0)];
         fixed (uint* list = groups)
             if (count < 0 || getgroups(groups.Length, list) != groups.Length)
-                throw new TswapException($"Could not read this process's groups (errno {Marshal.GetLastPInvokeError()}); nothing was done with {path}.");
+                throw new OwnerSwitchException($"Could not read this process's groups (errno {Marshal.GetLastPInvokeError()}); nothing was done with {path}.");
         var identity = new Identity(geteuid(), getegid(), groups);
         if (SetGroups([]) != 0 || setegid(gid) != 0 || seteuid(uid) != 0)
         {
             var errno = Marshal.GetLastPInvokeError();
             identity.Dispose();
-            throw new TswapException(
+            throw new OwnerSwitchException(
                 $"Could not switch to uid {uid} (the owner of the folder) for {path} (errno {errno}); nothing was done with it.");
         }
         return identity;

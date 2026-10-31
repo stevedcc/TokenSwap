@@ -117,8 +117,9 @@ public sealed class VaultUnlocker
             {
                 return OwnBackend(config, selection);
             }
-            catch (TswapException ownBackendError)
+            catch (TswapException ownBackendError) when (ownBackendError is not OwnerSwitchException)
             {
+                // (T12 fix round 1: a failed switch to the vault folder's owner is a hard stop.)
                 // Its backend isn't available here (not in this build, another machine's TPM, no
                 // enrolled pair key plugged in) or has no usable slot: try the one-key slots.
                 return UnlockWithYubiKeySlot(keyring, yubiKeySlots, selection, ownBackendError);
@@ -140,7 +141,8 @@ public sealed class VaultUnlocker
         {
             return UnlockKeyring(config, UnlockHardware(config, selection));
         }
-        catch (TswapException ex) when (config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
+        catch (TswapException ex) when ((config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
+            && ex is not OwnerSwitchException) // T12 fix round 1: a failed owner switch passes unchanged
         {
             // Brief T5 (security review): a TPM / Secure Enclave slot opens only in its own
             // machine's config; other machines' hardware slots are never tried here (a config.json
