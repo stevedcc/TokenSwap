@@ -552,7 +552,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // Early sends (before TreatControlCAsInput=true is set) generate SIGINT with no
     // foreground pgid, which is silently dropped; the process keeps running and more
     // output arrives, resetting the quiescent timer for another attempt.
-    // Returns (exitCode, output); (-2, "") if openpty is unavailable on this platform.
+    // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
+    // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
     private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
     {
         var nameBuf = new byte[256];
@@ -688,7 +689,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
 
     [Fact]
@@ -705,8 +706,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
-        Assert.False(File.Exists(exportPath), "export file must not be created on cancellation");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
+        Assert.False(File.Exists(exportPath), $"export file must not be created on cancellation. Read loop: {loopEnd}");
     }
 
     [Fact]
@@ -724,7 +725,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (exitCode == -2) return; // openpty not available on this platform
 
         Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
 
     // --- Windows ConPTY coverage ---
