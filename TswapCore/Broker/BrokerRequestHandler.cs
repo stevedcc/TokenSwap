@@ -52,6 +52,12 @@ public sealed partial class BrokerRequestHandler(
     /// <summary>The unlock-failure and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
     internal BrokerUnlockGuard UnlockGuard => unlockGuard;
 
+    /// <summary>
+    /// Brief T13: names a short secret once per serve process (routes and templates share it, and a
+    /// reload keeps it); null checks nothing.
+    /// </summary>
+    public BrokerShortSecretWarnings? ShortSecretWarnings { get; init; }
+
     public async Task HandleAsync(HttpContext http)
     {
         var items = http.Features.Get<IConnectionItemsFeature>()?.Items;
@@ -161,6 +167,7 @@ public sealed partial class BrokerRequestHandler(
             ReportFatal(unlocked.FatalReason);
             return;
         }
+        ShortSecretWarnings?.Check(route.SecretName, secret.Value, log); // as soon as it arrives (T13)
         record = record with { Unlocks = 1, UnlockDuration = unlocked.Duration };
 
         BrokerForwardOutcome outcome;

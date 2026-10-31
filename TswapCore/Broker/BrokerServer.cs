@@ -134,6 +134,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 options.Limits, reason => fatal.TrySetResult(reason))
             {
                 Templates = new Templates.BrokerTemplateRuntime(options.Time),
+                ShortSecretWarnings = new BrokerShortSecretWarnings(), // one per serve process; a reload keeps it
             };
             // Brief T9: bwrap is checked at start; a sandbox that can't run refuses template calls (logged), never runs them bare.
             if (policy.Templates.Count > 0 && handler.Templates.Sandbox(policy.BwrapPath).Problem is { } sandboxProblem)

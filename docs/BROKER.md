@@ -71,6 +71,12 @@ never held back. A response with any `Content-Encoding` other than
 `identity` can't be redacted, so it fails closed: `502`, the body is not forwarded, and it is
 logged (the broker asks every upstream for `Accept-Encoding: identity`).
 
+### Redaction confirms whole guesses
+
+A caller whose input comes back in a response can test a complete guess of a secret: a match is
+replaced by `[REDACTED]`. When `serve` reads a secret shorter than 16 bytes for a route or a
+template, it says so once in its log. (Filled in by brief T13 item 4.)
+
 ### What a compromised container can and can't do
 
 **It can**, while it runs:
