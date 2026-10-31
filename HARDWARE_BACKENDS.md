@@ -276,7 +276,7 @@ Functionally verified end-to-end (`tswap init --secure-enclave` → `add`/`get`/
 plus the presence-cancellation failure path — see `TswapSecureEnclave.swift`'s header comment),
 but three things are still open before this should be trusted as a primary vault backend:
 
-- **Only tested on Apple Silicon** (M4 Pro/macOS 26). The Intel-Mac T2 Secure Enclave path is
+- **Only tested on Apple Silicon** (M4 Pro, macOS 26 and 27.2). The Intel-Mac T2 Secure Enclave path is
   untested — CryptoKit's `SecureEnclave` API availability/behavior there is unverified.
 - **No independent cryptographic review.** The ephemeral-ECDH + HKDF-SHA256 + AES-GCM
   construction in `TswapSecureEnclave.swift` is a hand-rolled ECIES equivalent; it's been
@@ -391,17 +391,19 @@ Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -r
 
 | Step | What | Recorded |
 |---|---|---|
-| — | macOS version, chip, "require password after screen saver/sleep" setting | |
-| 1 | `init --no-touch`: warning shown? any prompt? | |
-| 2 | `create` + `names`: any prompt? name listed? | |
-| 3 | `init --with-touch` + `names`: prompt? | |
-| 4 | no-touch vault, ssh, screen unlocked: unlocks? | |
-| 5 | no-touch vault, another account with a copy: unlocks? | |
-| 5 | no-touch vault, root with a copy: unlocks? | |
-| 6 | no-touch vault, ssh, screen locked: unlocks? | |
-| 7 | no-touch vault, ssh, after reboot before login: unlocks? | |
-| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | |
-| 9 | touch vault: step 4 / step 6 / step 7 | |
+| — | macOS version, chip, "require password after screen saver/sleep" setting | macOS 27.2 (26B123), Apple M4 Pro, Swift 6.4, .NET SDK 10.0.403; lock setting not recorded (2026-10-31, #157) |
+| 1 | `init --no-touch`: warning shown? any prompt? | warning shown, no prompt |
+| 2 | `create` + `names`: any prompt? name listed? | no prompt; listed (also `add`/`get`/`list` with zero Touch ID prompts) |
+| 3 | `init --with-touch` + `names`: prompt? | Touch ID on every unlock |
+| 4 | no-touch vault, ssh, screen unlocked: unlocks? | not run |
+| 5 | no-touch vault, another account with a copy: unlocks? | **pending** (release gate) |
+| 5 | no-touch vault, root with a copy: unlocks? | under `sudo` (root) the user's no-touch vault unlocked with no dialog (the vault itself, not a root-owned copy) |
+| 6 | no-touch vault, ssh, screen locked: unlocks? | not run |
+| 7 | no-touch vault, ssh, after reboot before login: unlocks? | not run |
+| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | **pending** (release gate) |
+| 9 | touch vault: step 4 / step 6 / step 7 | not run |
+
+**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. Not run: a second admin account (none on that Mac), a slot made as root by an older build. So `seteuid` to the owner is enough for LocalAuthentication; the forked-`setuid` fallback is not needed.
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 
