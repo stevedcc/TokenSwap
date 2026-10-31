@@ -80,10 +80,10 @@ internal static class RecordMigration
             ?? throw new TswapException($"{vaultDir} can't be a vault folder (it has no parent folder).");
 
         // Everything that can refuse does so before anything is written, touched or unlocked.
-        var plainXor = config.Keyring == null;
-        if (config.Keyring == null && config.PendingSlotId != null)
+        var plainXor = config.Keyring is null;
+        if (config.Keyring is null && config.PendingSlotId is not null)
             throw new TswapException("This machine has a pending 'slot request'; finish it with 'slot accept' before converting.");
-        if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey != null || config.SecureEnclaveWrappedKey != null))
+        if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null))
             throw new TswapException(
                 "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Create a keyring " +
                 $"vault ('{ctx.Prefix} init --tpm' or '--secure-enclave'), move the secrets over with export / import, then convert that.");
@@ -189,7 +189,7 @@ internal static class RecordMigration
         // empty folder -> a non-recursive delete, then rename; anything else -> refuse.
         ctx.MigrationSeams?.BeforeStep?.Invoke(3);
         var target = owner.AsOwner(vaultDir, () => !Directory.Exists(vaultDir) && !File.Exists(vaultDir) ? "absent"
-            : Directory.Exists(vaultDir) && new DirectoryInfo(vaultDir).LinkTarget == null && !Directory.EnumerateFileSystemEntries(vaultDir).Any() ? "empty"
+            : Directory.Exists(vaultDir) && new DirectoryInfo(vaultDir).LinkTarget is null && !Directory.EnumerateFileSystemEntries(vaultDir).Any() ? "empty"
             : "occupied");
         try
         {
@@ -241,7 +241,7 @@ internal static class RecordMigration
         c.Out.WriteLine($"\n✓ Converted to the record store: {db.Secrets.Count} secret(s), one file each.");
         c.Out.WriteLine($"Vault folder (share this one, never config.json): {vaultDir}");
         c.Out.WriteLine($"Previous config backed up to: {configBackup}");
-        if (secretsBackup != null)
+        if (secretsBackup is not null)
             c.Out.WriteLine($"Previous secrets file moved to: {secretsBackup}");
         if (plainXor)
         {
@@ -295,7 +295,7 @@ internal static class RecordMigration
             if (!owner.FileExists(keyringPath))
                 return ConvertedCopy.None;
             var there = KeyringCodec.Decode(owner.ReadAllBytes(keyringPath));
-            if (config.Keyring != null)
+            if (config.Keyring is not null)
                 return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId)
                     ? ConvertedCopy.ThisVault
                     : ConvertedCopy.None;
@@ -397,7 +397,7 @@ internal static class RecordMigration
                 continue;
             if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(secret.Value)), SHA256.HashData(Encoding.UTF8.GetBytes(got.Value))))
                 problems.Add($"'{name}' has a different value");
-            if ((secret.BurnedAt != null) != (got.BurnedAt != null) || secret.BurnReason != got.BurnReason
+            if ((secret.BurnedAt is not null) != (got.BurnedAt is not null) || secret.BurnReason != got.BurnReason
                 || (secret.BurnedAt is { } burned && got.BurnedAt is { } gotBurned && Ms(burned) != Ms(gotBurned)))
                 problems.Add($"'{name}' has a different burned state");
             if (Ms(secret.Created) != Ms(got.Created))

@@ -37,14 +37,14 @@ internal static class CliHost
             //   TSWAP_TEST_SUDO_BYPASS=1 — skips RequireSudo so tests exercise export/import as non-root
             //   (TSWAP_TEST_KEY also selects the simulated TPM/Secure Enclave backend; see HardwareServices.)
             var testKey = HardwareServices.ReadTestKey(getEnv);
-            if (testKey != null && env.Verbose)
+            if (testKey is not null && env.Verbose)
                 console.Out.WriteLine("[TEST MODE] Using TSWAP_TEST_KEY — YubiKey, TPM and Secure Enclave operations simulated");
             bool sudoBypass = false;
 #if DEBUG
             sudoBypass = getEnv("TSWAP_TEST_SUDO_BYPASS") == "1";
 #endif
 
-            IYubiKeyService yubiKeys = testKey != null
+            IYubiKeyService yubiKeys = testKey is not null
                 ? new TestKeyYubiKeyService(testKey)
                 : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
             // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or

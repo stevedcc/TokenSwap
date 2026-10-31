@@ -71,7 +71,7 @@ public sealed record CommandContext(
     {
         // Brief T7 item 5: no banner; one line only for a touch posture that changed since it was
         // last acknowledged.
-        if (warnIfNoTouch && TestKey == null)
+        if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection());
     }
@@ -193,7 +193,7 @@ public sealed record CommandContext(
             var msg = OperatingSystem.IsWindows()
                 ? $"The '{commandName}' command requires an administrator prompt.\nRun tswap from an elevated command prompt."
                 : $"The '{commandName}' command requires sudo.\nRun: sudo {Prefix} {commandName} ...";
-            if (reason != null)
+            if (reason is not null)
                 msg += "\n" + reason;
             throw new TswapException(msg);
         }
