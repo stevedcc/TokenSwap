@@ -350,7 +350,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
-            $"sleep 1\n" + $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+            $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
             $"exec \"{_binaryPath}\"" +
             $" run sh \"{childScript}\" {{{{my-secret}}}}\n");
 
@@ -568,7 +568,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var scriptPath = Path.Combine(_tempDir, $"pty_ctrlc_{Guid.NewGuid():N}.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
-            $"sleep 1\n" + $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
+            $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
             $"exec \"{_binaryPath}\" {quotedArgs}\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
