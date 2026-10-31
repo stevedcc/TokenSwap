@@ -81,7 +81,7 @@ public sealed record YubiKeySelection
             return [wanted];
         }
         if (candidates.Count <= 1)
-            return candidates.ToList();
+            return [.. candidates];
         if (Ask is not null)
         {
             var chosen = Ask(candidates, postures, DefaultChoice(candidates, postures));

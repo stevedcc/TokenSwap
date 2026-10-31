@@ -191,8 +191,8 @@ public sealed class VaultUnlocker
         Keyring.Keyring keyring, List<Slot> yubiKeySlots, YubiKeySelection selection,
         TswapException? ownBackendError)
     {
-        var candidates = new List<(Slot Slot, YubiKeySlotBlob Blob)>();
-        var corruptSlotIds = new List<string>();
+        List<(Slot Slot, YubiKeySlotBlob Blob)> candidates = [];
+        List<string> corruptSlotIds = [];
         foreach (var s in yubiKeySlots)
         {
             try
@@ -236,7 +236,7 @@ public sealed class VaultUnlocker
             .ToList();
         var order = selection.Order(matching, postures, pluggedIn);
 
-        var failures = new List<string>();
+        List<string> failures = [];
         foreach (var serial in order)
         {
             var failure = TryKey(keyring, candidates, serial, order.Count > 1, out var vaultKey);

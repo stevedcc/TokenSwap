@@ -52,7 +52,7 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
                 : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
 
         var order = selection.Order(enrolled, enrolled.Select(_ => config.RequiresTouch).ToList(), connected);
-        var failures = new List<string>();
+        List<string> failures = [];
         foreach (var serial in order)
         {
             byte[] k_current;
