@@ -208,6 +208,8 @@ namespace TswapCore.Broker
                     return;
                 }
                 secretValues = unlocked.Value;
+                foreach (var (secretName, value) in secretValues)
+                    ShortSecretWarnings?.Check(secretName, value.Value, log); // as soon as they arrive (T13)
             }
 
             BrokerTemplateOutput output;

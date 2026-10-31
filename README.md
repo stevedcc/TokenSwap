@@ -351,7 +351,13 @@ vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add y
 
 ## Containers: credentials they never hold
 
-`tswap broker serve` / `tswap broker forward` is a credential-adding HTTP proxy. Containers use the host vault's credentials (git, registries, model APIs) without ever holding them; `sudo tswap broker route|socket add|remove` configures it. Each request unlocks the vault afresh and decrypts only the one secret it needs. It is tested on Fedora CoreOS with SELinux enforcing (a small policy module is included). See [docs/BROKER.md](docs/BROKER.md).
+`tswap broker serve` runs on the host as the vault's user and gives containers the use of the vault's credentials without ever handing them over. Each container gets its own Unix socket, and only the uids listed for it may connect. It offers three things:
+
+- **HTTP routes** (`tswap broker forward` in the container): a credential-adding proxy for git over HTTPS, basic-auth registries and model APIs (registries that issue tokens from a separate realm, such as GHCR and Docker Hub, aren't covered; see the limits in BROKER.md). The broker adds the credential on the way out and redacts its known forms from what comes back (best-effort).
+- **Command templates** (Linux; `tswap broker call <template> name=value ...`): a host-side command the operator defined, such as a deploy trigger or a database CLI, run in a bubblewrap sandbox with the secret as a read-only file or an environment variable. The caller supplies only the declared, validated arguments, never the program, and the known forms of the secret are redacted from the output (best-effort).
+- **An ssh-agent** (`<socket>.ssh.sock`, used through `SSH_AUTH_SOCK`): signs with keys stored as vault secrets, only for the hosts each key lists, and checks that the request really is an SSH login to that host. The client needs OpenSSH 8.9 or newer; an older client gets no signature at all.
+
+`sudo tswap broker route|socket|template add|remove` configures routes, sockets and templates; ssh keys are added to `broker.json` by hand, with `sudo` (see BROKER.md). Each request unlocks the vault afresh and decrypts only the secrets it needs. Store generated secrets for the broker (`tswap create`): redaction can confirm a guessed value, so `serve` logs a warning for a route's or template's secret shorter than 16 bytes. It is tested on Fedora CoreOS with SELinux enforcing (a small policy module is included). See [docs/BROKER.md](docs/BROKER.md) for the setup, the threat model and the limits.
 
 ## Rotating a secret
 
@@ -823,6 +829,8 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `prompt` | No | Show AI agent instructions (the skill file) |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `completion <bash\|zsh\|fish\|powershell>`, `installscript` | No | Shell completion script; platform install script |
+| `broker serve` | No (runs as the vault's user, refuses root) | Run the broker for containers (see [Containers](#containers-credentials-they-never-hold)) |
+| `broker forward --listen 127.0.0.1:<port> [--socket <path>]`, `broker call <template> [name=value ...] [--socket <path>]` | No (in the container) | Use the broker's HTTP routes; call a command template (`call` exits 125 when the broker refused or failed, 124 when the template timed out) |
 | `add <name>` | Yes | Store a user-provided secret value |
 | `get <name>` | Yes | Display a secret value |
 | `list` | Yes | List secrets with creation/modification dates |
@@ -835,6 +843,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `recover --yubikey\|--tpm\|--secure-enclave --with-touch\|--no-touch` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
 | `migrate --to-records [--vault-dir <dir>]` | Yes | Convert to the record store (one file per secret) |
 | `vault merge <folder>` | Yes | Fold another copy of the vault folder into this one |
+| `broker route\|socket\|template add\|remove ...` | Yes | Configure the broker's routes, sockets (who may connect, what they may use) and command templates. Route and template changes and changes to an existing socket's uids, routes or templates load on SIGHUP (`systemctl --user reload tswap-broker`); a new or removed socket, or a new `socket_dir`, needs a restart |
 
 Add `-v` or `--verbose` **before the command** (`tswap -v run ...`) for detailed YubiKey output;
 after the command's first argument it belongs to the command (`tswap run grep -v ...` keeps grep's
