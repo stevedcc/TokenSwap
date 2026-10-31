@@ -341,7 +341,7 @@ requirePresence = true)`), and any other backend with `requirePresence: false` t
 ### Checking a no-touch Secure Enclave slot on a Mac
 
 Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
-**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim). If a
+**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim; the root half of step 5 ran on the vault itself, not on a root-owned copy). If a
 recorded step contradicts a warning claim (a)-(c), the warning text and its test assertions are
 corrected before release, not only the docs.
 
@@ -403,7 +403,7 @@ Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -r
 | 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | yes: with `libtswapse.dylib` built from the pre-T11 Swift source (`4f321a0`), `init --secure-enclave --with-touch` failed with "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_wrap_v2). No key was created: update libtswapse.dylib together with tswap…", exit 1, no files written |
 | 9 | touch vault: step 4 / step 6 / step 7 | not run |
 
-**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so decision 6's remedy (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication; the forked-`setuid` fallback is not needed.
+**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so decision 6's remedy (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication on the tested paths; the forked-`setuid` fallback is not needed for them (a second admin account was not available to test).
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 
