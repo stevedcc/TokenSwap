@@ -67,7 +67,7 @@ public sealed class InitCommand : ICliCommand
         // a future non-file backend needs its own equivalent, not this one.
         var fileStore = ctx.Storage as IFileVaultStore;
 
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
             if (c.ReadLine()?.ToLower() != "yes")
@@ -87,7 +87,7 @@ public sealed class InitCommand : ICliCommand
         if (keyring)
             return ExecuteKeyring(ctx, includeRecovery: !noRecovery);
 
-        if (ctx.TestKey != null)
+        if (ctx.TestKey is not null)
         {
             // Test mode: create synthetic config without YubiKey interaction
             var testConfig = new Config(
@@ -99,7 +99,7 @@ public sealed class InitCommand : ICliCommand
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
             );
             ctx.Storage.SaveConfig(testConfig);
-            if (fileStore == null || !fileStore.Owner.FileExists(fileStore.SecretsFile))
+            if (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile))
                 ctx.Storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>()), ctx.TestKey);
             c.Out.WriteLine("Initialized (test mode)");
             return 0;
@@ -182,12 +182,12 @@ public sealed class InitCommand : ICliCommand
         var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
         // Backing up the previous config/vault before writing over it is a file-store
         // safety net; a non-file backend would need its own equivalent, not this one.
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
             var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
@@ -216,7 +216,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("  [ ] Printed copy (home safe)");
         c.Out.WriteLine("  [ ] Second printed copy (off-site)");
         c.Out.WriteLine("  [ ] Git repository");
-        if (fileStore != null)
+        if (fileStore is not null)
             c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
         else
             c.Out.WriteLine("\nConfig saved.");
@@ -278,13 +278,13 @@ public sealed class InitCommand : ICliCommand
             // anything fails mid-init the old config still matches the old vault backup), then
             // move the old vault aside rather than overwrite it outright.
             var fileStore = ctx.Storage as IFileVaultStore;
-            if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+            if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
             {
                 fileStore.BackupConfig();
             }
             config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
             ctx.Storage.SaveConfig(config);
-            if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
+            if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
             {
                 var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
                 c.SetForeground(ConsoleColor.Yellow);
@@ -307,7 +307,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
             PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
-            if (fileStore != null)
+            if (fileStore is not null)
                 c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
             else
                 c.Out.WriteLine("\nConfig saved.");
@@ -374,7 +374,7 @@ public sealed class InitCommand : ICliCommand
     /// </summary>
     internal static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
     {
-        if (recoveryPrivateKey == null)
+        if (recoveryPrivateKey is null)
         {
             c.Out.WriteLine($"\nNo recovery slot generated (--no-recovery): losing {hardware}");
             c.Out.WriteLine("means total, unrecoverable vault loss — there is no break-glass option.");
@@ -466,7 +466,7 @@ public sealed class InitCommand : ICliCommand
     internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) AssembleKeyring(
         byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null, byte[]? slotId = null)
     {
-        if (backendConfig.Keyring != null || backendConfig.KeyringSlotId != null)
+        if (backendConfig.Keyring is not null || backendConfig.KeyringSlotId is not null)
             throw new ArgumentException("The backend's config must not already carry a keyring", nameof(backendConfig));
 
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
@@ -474,7 +474,7 @@ public sealed class InitCommand : ICliCommand
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         // A one-key YubiKey slot's KEK_slot is derived with its slot id (brief T4), so the caller
         // picks the id first; every other backend lets this method draw it.
-        if (slotId != null && slotId.Length != KeyringFormat.SlotIdSize)
+        if (slotId is not null && slotId.Length != KeyringFormat.SlotIdSize)
             throw new ArgumentException($"slotId must be {KeyringFormat.SlotIdSize} bytes", nameof(slotId));
         slotId ??= RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
         const byte k = 1;
@@ -570,12 +570,12 @@ public sealed class InitCommand : ICliCommand
         // fails mid-init the old config still matches the old vault backup), then move the old
         // vault aside rather than overwrite it.
         var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             fileStore.BackupConfig();
         }
         ctx.Storage.SaveConfig(config);
-        if (fileStore != null && fileStore.Owner.FileExists(fileStore.SecretsFile))
+        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
         {
             var vaultBackup = FileBackup.Move(fileStore.SecretsFile, DateTime.UtcNow, fileStore.Owner);
             c.SetForeground(ConsoleColor.Yellow);
@@ -594,7 +594,7 @@ public sealed class InitCommand : ICliCommand
             : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
         if (backend == HardwareBackend.SecureEnclave)
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
-        if (fileStore != null)
+        if (fileStore is not null)
             c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
         c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");

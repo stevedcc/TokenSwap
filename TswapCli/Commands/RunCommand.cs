@@ -92,7 +92,7 @@ public sealed class RunCommand : ICliCommand
 
     private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
     {
-        if (blocked != null)
+        if (blocked is not null)
             throw new TswapException($"{blocked.Reason}\nUse 'sudo ... get <name>' to view a secret.");
     }
 }

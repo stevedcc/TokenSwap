@@ -42,7 +42,7 @@ public sealed class RestoreCommand : ICliCommand
 
         var restored = ctx.LoadSecrets(key).Secrets[name];
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' restored to its previous value (a new version; the value it replaced is now the previous one).");
-        if (restored.BurnedAt != null)
+        if (restored.BurnedAt is not null)
             ctx.Console.Out.WriteLine($"  ⚠ That value was burned ({restored.BurnReason ?? "no reason given"}); the burn is outstanding again. Rotate it once the service uses it.");
         ctx.Console.Out.WriteLine("  Remember to update the external system that uses it.");
         return 0;

@@ -57,7 +57,7 @@ public sealed class VaultCommand : ICliCommand
         var newSlots = union.Slots.Skip(keyring.Slots.Count).ToList();
         foreach (var slot in newSlots.Where(s => s.Kind == SlotKind.Machine))
         {
-            if (slot.HwBlob == null)
+            if (slot.HwBlob is null)
                 throw new TswapException($"A new slot in the other copy has no hardware blob, so no device could open it. Nothing was merged.");
             SlotReceiptCodec.ValidateHwBlob(slot.HwBlob, "other vault folder");
         }

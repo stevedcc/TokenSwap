@@ -56,8 +56,8 @@ public sealed class ExportCommand : ICliCommand
         );
         ctx.WriteOutputFile(path, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
 
-        var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt == null);
-        var burned = db.Secrets.Count(kv => kv.Value.BurnedAt != null);
+        var nonBurned = db.Secrets.Count(kv => kv.Value.BurnedAt is null);
+        var burned = db.Secrets.Count(kv => kv.Value.BurnedAt is not null);
         ctx.Console.Out.WriteLine($"\n✓ Exported {nonBurned} secret(s) to: {path}");
         if (burned > 0)
             ctx.Console.Out.WriteLine($"  ({burned} burned secret(s) included — skipped on import by default; use 'sudo {ctx.Prefix} import --include-burned {path}' to preserve them)");

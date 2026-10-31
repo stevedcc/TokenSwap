@@ -94,7 +94,7 @@ public sealed class BrokerCommand : ICliCommand
         // The end-to-end tests connect as their own uid, which serve otherwise refuses, on the HTTP
         // and the ssh-agent sockets alike (one switch). Compiled into Debug builds only (fix round 1);
         // there, only with TSWAP_TEST_KEY set (a test key).
-        options = options with { AllowOwnUidForTests = ctx.TestKey != null };
+        options = options with { AllowOwnUidForTests = ctx.TestKey is not null };
 #endif
 
         var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

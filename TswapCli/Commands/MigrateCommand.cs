@@ -49,7 +49,7 @@ public sealed class MigrateCommand : ICliCommand
 
         // Fix round 2 (MiMo F2): what reaches here is a YubiKey vault (TPM and Secure Enclave vaults
         // returned above). A pending 'slot request' has no vault yet.
-        if (config.Keyring == null && config.PendingSlotId != null)
+        if (config.Keyring is null && config.PendingSlotId is not null)
         {
             c.Out.WriteLine($"This machine has a pending slot request; nothing to migrate. Finish it first: {ctx.Prefix} slot accept <approve-file>");
             return 0;
@@ -57,7 +57,7 @@ public sealed class MigrateCommand : ICliCommand
 
         // A classic vault (no keyring, no pending request) needs its two serials; anything else is
         // a damaged config, reported as the unlock reports it.
-        if (config.Keyring == null && config.YubiKeySerials is not { Count: 2 })
+        if (config.Keyring is null && config.YubiKeySerials is not { Count: 2 })
             throw new TswapException(
                 $"Config is corrupted: expected exactly 2 YubiKey serials, found {config.YubiKeySerials?.Count ?? 0}. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
@@ -74,8 +74,8 @@ public sealed class MigrateCommand : ICliCommand
 
         // Each setting is checked independently so that a partially-migrated or
         // manually-edited config still gets prompted for whichever fields are missing.
-        bool needsRngPrompt          = config.RngMode == null;
-        bool needsChallengeMigration = config.UnlockChallenge == null;
+        bool needsRngPrompt          = config.RngMode is null;
+        bool needsChallengeMigration = config.UnlockChallenge is null;
         bool needsTouchMigration  = config.RequiresTouch != true;
         bool needsReInit          = needsChallengeMigration || needsTouchMigration;
 

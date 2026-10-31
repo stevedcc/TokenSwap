@@ -56,7 +56,7 @@ public sealed class RecoverCommand : ICliCommand
         SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
 
         var config = ctx.Storage.LoadConfig();
-        if (config.Keyring == null)
+        if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no recovery slot. Only keyring vaults ('tswap init --keyring', " +
                 "'--tpm' or '--secure-enclave') have a recovery key.");
@@ -68,7 +68,7 @@ public sealed class RecoverCommand : ICliCommand
         ctx.RequireSudo("recover");
 
         // Throws a clear TswapException on an OS without this hardware, before the key is read.
-        var enrollment = hardware == null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
+        var enrollment = hardware is null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
 
         var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring);
         Slot newSlot;
@@ -78,7 +78,7 @@ public sealed class RecoverCommand : ICliCommand
         try
         {
             byte[] kekSlot, hwBlob;
-            if (enrollment == null)
+            if (enrollment is null)
             {
                 c.Out.WriteLine("Recovery key accepted. Enrolling a YubiKey as a new slot.");
                 (yubiKey, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
@@ -118,7 +118,7 @@ public sealed class RecoverCommand : ICliCommand
 
         var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
-        if (hardware != null)
+        if (hardware is not null)
             newConfig = newConfig with
             {
                 Backend = hardware,
@@ -126,7 +126,7 @@ public sealed class RecoverCommand : ICliCommand
                 // Brief T11 decision 6: false only for a --no-touch Secure Enclave slot.
                 RequiresTouch = hardware == HardwareBackend.SecureEnclave && requirePresence != false,
             };
-        if (yubiKey != null)
+        if (yubiKey is not null)
         {
             // Brief T7 item 5 / fix round 1: explained first, then acknowledged with the config write.
             YubiKeySlotEnrollment.PrintTouchPolicy(c, yubiKey);

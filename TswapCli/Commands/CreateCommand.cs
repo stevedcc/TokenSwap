@@ -71,7 +71,7 @@ public sealed class CreateCommand : ICliCommand
     internal static string GenerateValue(CommandContext ctx, Config config, int length)
     {
         char[] password;
-        if (config.RngMode == RngMode.YubiKey && ctx.TestKey == null)
+        if (config.RngMode == RngMode.YubiKey && ctx.TestKey is null)
         {
             ctx.Console.Out.WriteLine("Touch YubiKey for entropy generation...");
             var entropySerial = ctx.SelectEntropySerial();
