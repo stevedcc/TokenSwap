@@ -11,9 +11,8 @@ public sealed class BurnCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var name, ..])
             throw new UsageException($"{ctx.Prefix} burn <name> [reason]");
-        var name = args[0];
         var reason = args.Length >= 2 ? string.Join(" ", args.Skip(1)) : null;
 
         Validation.ValidateName(name);

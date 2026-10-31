@@ -59,7 +59,7 @@ public sealed class SlotCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length == 0)
+        if (args is [])
             throw new UsageException(Usage(ctx));
 
         var sub = args[0].ToLowerInvariant();

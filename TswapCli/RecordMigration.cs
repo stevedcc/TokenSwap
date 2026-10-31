@@ -48,20 +48,13 @@ internal static class RecordMigration
     public static int Run(CommandContext ctx, string[] args)
     {
         var usage = $"sudo {ctx.Prefix} migrate --to-records [--vault-dir <dir>]";
-        string? vaultDirArg = null;
-        switch (args)
+        var vaultDirArg = args switch
         {
-            case ["--to-records"]:
-                break;
-            case ["--to-records", "--vault-dir", var dir] when !dir.StartsWith("--"):
-                vaultDirArg = dir;
-                break;
-            case ["--vault-dir", var dir, "--to-records"] when !dir.StartsWith("--"):
-                vaultDirArg = dir;
-                break;
-            default:
-                throw new UsageException(usage);
-        }
+            ["--to-records"] => null,
+            ["--to-records", "--vault-dir", var dir] when !dir.StartsWith("--") => dir,
+            ["--vault-dir", var dir, "--to-records"] when !dir.StartsWith("--") => dir,
+            _ => throw new UsageException(usage),
+        };
         var c = ctx.Console;
 
         // Decrypts every secret: export's sensitivity class.

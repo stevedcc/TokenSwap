@@ -17,9 +17,8 @@ public sealed class RestoreCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length != 1 || args[0].StartsWith("--"))
+        if (args is not [var name] || name.StartsWith("--"))
             throw new UsageException($"sudo {ctx.Prefix} restore <name>");
-        var name = args[0];
         Validation.ValidateName(name);
         ctx.RequireSudo("restore");
 

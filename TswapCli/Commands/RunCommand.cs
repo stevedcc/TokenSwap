@@ -12,7 +12,7 @@ public sealed class RunCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is [])
             throw new UsageException($"{ctx.Prefix} run <command> [args...]");
 
         var commandArgs = args;

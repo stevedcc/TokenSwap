@@ -14,9 +14,8 @@ public sealed class ExportCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        if (args.Length < 1)
+        if (args is not [var path, ..])
             throw new UsageException($"sudo {ctx.Prefix} export <file>");
-        var path = args[0];
 
         ctx.RequireSudo("export");
 
