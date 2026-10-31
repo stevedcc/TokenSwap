@@ -180,7 +180,7 @@ public sealed class BrokerServer : IAsyncDisposable
         }
         catch
         {
-            if (app != null)
+            if (app is not null)
                 await app.DisposeAsync().ConfigureAwait(false);
             lockFile.Dispose();
             throw;
@@ -278,7 +278,7 @@ public sealed class BrokerServer : IAsyncDisposable
         // else can swap a parent (and so the folder) for one of their own.
         var real = BrokerNative.RealPath(dir)
             ?? throw new TswapException($"Can't resolve socket_dir {dir}.");
-        for (var parent = Path.GetDirectoryName(real); parent != null; parent = Path.GetDirectoryName(parent))
+        for (var parent = Path.GetDirectoryName(real); parent is not null; parent = Path.GetDirectoryName(parent))
             CheckParent(parent, ownership);
         return real;
     }

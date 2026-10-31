@@ -109,7 +109,7 @@ public sealed class BrokerRedactor
             }
         }
 
-        if (basicUser != null)
+        if (basicUser is not null)
         {
             var composite = Encoding.ASCII.GetBytes(basicUser + ":").Concat(raw).ToArray();
             Add(composite);

@@ -161,7 +161,7 @@ public sealed class SshAgentListener
                 var (message, closeReason) = await ReadFrameAsync(input).ConfigureAwait(false);
                 if (message is null)
                 {
-                    if (closeReason != null)
+                    if (closeReason is not null)
                         log.Event($"ssh-connection socket={logName} uid={Num(creds.Uid)} pid={Num(creds.Pid)} closed reason={closeReason}");
                     return;
                 }

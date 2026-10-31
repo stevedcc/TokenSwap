@@ -132,7 +132,7 @@ public sealed class BrokerSandbox(string bwrapPath)
             return $"{BwrapPath} is writable by group or others";
         foreach (var path in new[] { Path.GetFullPath(BwrapPath), real })
         {
-            for (var parent = Path.GetDirectoryName(path); parent != null; parent = Path.GetDirectoryName(parent))
+            for (var parent = Path.GetDirectoryName(path); parent is not null; parent = Path.GetDirectoryName(parent))
             {
                 var p = BrokerNative.Identify(parent, follow: false);
                 if (p is not { } dir)

@@ -354,7 +354,7 @@ public sealed class SshPrivateKey : IDisposable
     /// <summary>Refuses degenerate RSA public values (fix round 1, MiMo M5): an even modulus, an even exponent or one below 3.</summary>
     private static void CheckRsaPublic(ReadOnlySpan<byte> e, ReadOnlySpan<byte> n)
     {
-        if (SshPublicKey.RsaParametersRefusal(e, n) != null)
+        if (SshPublicKey.RsaParametersRefusal(e, n) is not null)
             throw new SshKeyException("its RSA public exponent must be odd and at least 3, and its modulus odd.");
     }
 
@@ -465,7 +465,7 @@ public sealed class SshPrivateKey : IDisposable
                         throw new SshWireException("Ed25519 private key is not a 32-byte octet string");
                     }
                     var key = FromEd25519Seed(seed);
-                    if (outerPublic != null && !SshPublicKey.Ed25519Blob(outerPublic).AsSpan().SequenceEqual(key.PublicBlob))
+                    if (outerPublic is not null && !SshPublicKey.Ed25519Blob(outerPublic).AsSpan().SequenceEqual(key.PublicBlob))
                     {
                         key.Dispose();
                         throw new SshKeyException("its embedded public key differs from the public key derived from its private key.");
@@ -481,7 +481,7 @@ public sealed class SshPrivateKey : IDisposable
         }
         finally
         {
-            if (privateKey != null)
+            if (privateKey is not null)
                 CryptographicOperations.ZeroMemory(privateKey);
         }
     }
@@ -501,7 +501,7 @@ public sealed class SshPrivateKey : IDisposable
             CheckRsaSize(rsa.KeySize);
             var pub = rsa.ExportParameters(includePrivateParameters: false);
             CheckRsaPublic(pub.Exponent, pub.Modulus);
-            if (outerPublic != null)
+            if (outerPublic is not null)
             {
                 var reader = new AsnReader(outerPublic, AsnEncodingRules.DER);
                 var sequence = reader.ReadSequence();
@@ -669,7 +669,7 @@ public sealed class SshPrivateKey : IDisposable
                 var key = FromEcdsaD(type, curve, size, magnitude);
                 foreach (var embedded in new[] { innerPublic, outerPublic })
                 {
-                    if (embedded != null && !PointMatches(embedded, key.PublicBlob, type))
+                    if (embedded is not null && !PointMatches(embedded, key.PublicBlob, type))
                     {
                         key.Dispose();
                         throw new SshKeyException("its embedded public key differs from the public key derived from its private key.");
@@ -741,7 +741,7 @@ public sealed class SshPrivateKey : IDisposable
 
     public void Dispose()
     {
-        if (_seed != null)
+        if (_seed is not null)
             CryptographicOperations.ZeroMemory(_seed);
         _seed = null;
         _ecdsa?.Dispose();
