@@ -100,7 +100,7 @@ def load_scenarios(name):
 def skill_text(args):
     if args.skill == "off":
         return None
-    tswap = args.tswap or os.path.join(REPO_ROOT, "TswapCli", "bin", "Debug", "net10.0", "linux-x64", "tswap")
+    tswap = args.tswap or os.path.join(REPO_ROOT, "TswapCli", "bin", "Debug", "net11.0", "linux-x64", "tswap")
     if not os.path.isfile(tswap):
         sys.exit(f"run.sh: --skill on needs a built tswap for `tswap prompt` ({tswap} not found; build it or pass --tswap)")
     env = {k: v for k, v in os.environ.items() if not k.startswith("TSWAP_")}
