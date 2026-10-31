@@ -113,17 +113,28 @@ public class SlotKeyPairTests
         Assert.Equal(RebexSharedSecretHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, Convert.FromHexString(RebexPeerPublicHex))));
     }
 
-    [Fact]
-    public void ComputeSharedSecret_RejectsLowOrderPeerKey()
+    // Low-order peer keys: X25519 with any of them yields an all-zero shared secret whatever the
+    // private key (RFC 7748 §6.1 says implementations may check for this). u = 0 and u = 1, plus
+    // the two order-8 points from libsodium's X25519 small-order blocklist
+    // (crypto_scalarmult/curve25519/ref10/x25519_ref10.c, has_small_order).
+    public static TheoryData<string> LowOrderPeerKeys =>
+    [
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+        "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+    ];
+
+    [Theory]
+    [MemberData(nameof(LowOrderPeerKeys))]
+    public void ComputeSharedSecret_RejectsLowOrderPeerKey(string peerPublicHex)
     {
-        // u = 0 is a low-order point: X25519 with it yields an all-zero shared secret whatever
-        // the private key (RFC 7748 §6.1 says implementations may check for this). A peer key
-        // like that, e.g. a tampered recovery or ephemeral public key, must fail loudly instead
-        // of feeding a known all-zero IKM into the slot KEK derivation.
+        // A peer key like that, e.g. a tampered recovery or ephemeral public key, must fail
+        // loudly instead of feeding a known all-zero IKM into the slot KEK derivation.
         var slot = SlotKeyPair.Generate();
 
         Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(
-            () => SlotKeyPair.ComputeSharedSecret(slot.PrivateKey, new byte[SlotKeyPair.KeySize]));
+            () => SlotKeyPair.ComputeSharedSecret(slot.PrivateKey, Convert.FromHexString(peerPublicHex)));
     }
 
     [Fact]

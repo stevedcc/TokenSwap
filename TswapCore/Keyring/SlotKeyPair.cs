@@ -28,7 +28,7 @@ namespace TswapCore.Keyring;
 /// scope here (issues #116 and #121).</para>
 ///
 /// <para><b>Curve choice / dependency:</b> the BCL's <see cref="X25519DiffieHellman"/> (new in
-/// .NET 11: OpenSSL on Linux, CNG on Windows, the platform provider on macOS). Until .NET 11 this
+/// .NET 11: OpenSSL on Linux, CNG on Windows, CryptoKit on macOS). Until .NET 11 this
 /// used <c>Rebex.Elliptic.Curve25519</c>; both are RFC 7748 X25519, so keys written by either
 /// work with the other (pinned by <c>SlotKeyPairTests.ComputeSharedSecret_MatchesKeysWrittenByRebex</c>).</para>
 /// </summary>
@@ -58,13 +58,17 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     /// flow, just the underlying Diffie-Hellman primitive.
     ///
     /// Throws <see cref="CryptographicException"/> for a low-order <paramref name="peerPublicKey"/>
-    /// (one that would give an all-zero shared secret), so a tampered public key fails instead of
-    /// deriving a KEK from a known input.
+    /// (one that gives an all-zero shared secret), so a tampered public key fails instead of
+    /// deriving a KEK from a known input. OpenSSL and CNG already refuse to derive one; the
+    /// all-zero check below makes that tswap's own guarantee rather than provider behaviour.
     /// </summary>
     public static byte[] ComputeSharedSecret(byte[] privateKey, byte[] peerPublicKey)
     {
         using var key = X25519DiffieHellman.ImportPrivateKey(privateKey);
         using var peer = X25519DiffieHellman.ImportPublicKey(peerPublicKey);
-        return key.DeriveRawSecretAgreement(peer);
+        var secret = key.DeriveRawSecretAgreement(peer);
+        if (!secret.AsSpan().ContainsAnyExcept((byte)0))
+            throw new CryptographicException("X25519 key agreement produced an all-zero secret (low-order peer public key)");
+        return secret;
     }
 }
