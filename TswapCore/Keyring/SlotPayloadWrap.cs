@@ -107,6 +107,7 @@ public static class SlotPayloadWrap
         }
         catch (CryptographicException)
         {
+            CryptographicOperations.ZeroMemory(payload); // T13: whatever a failed tag check left in it
             throw new TswapException(
                 "Slot unwrap failed: authentication check failed (wrong kekSlot, tampered ciphertext, " +
                 "or a formatVersion/vaultId/k/slotId mismatch)");

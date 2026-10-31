@@ -49,8 +49,14 @@ public sealed partial class BrokerRequestHandler(
     /// <summary>The one-unlock-at-a-time lock, shared with the ssh-agent endpoint (brief T10).</summary>
     internal SemaphoreSlim UnlockGate => _unlock;
 
-    /// <summary>The unlock-failure and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
+    /// <summary>The unlock-failure, per-socket (T13) and global unlock limits, shared with the ssh-agent endpoint (brief T10).</summary>
     internal BrokerUnlockGuard UnlockGuard => unlockGuard;
+
+    /// <summary>
+    /// Brief T13: names a short secret once per serve process (routes and templates share it, and a
+    /// reload keeps it); null checks nothing.
+    /// </summary>
+    public BrokerShortSecretWarnings? ShortSecretWarnings { get; init; }
 
     public async Task HandleAsync(HttpContext http)
     {
@@ -161,6 +167,7 @@ public sealed partial class BrokerRequestHandler(
             ReportFatal(unlocked.FatalReason);
             return;
         }
+        ShortSecretWarnings?.Check(route.SecretName, secret.Value, log); // as soon as it arrives (T13)
         record = record with { Unlocks = 1, UnlockDuration = unlocked.Duration };
 
         BrokerForwardOutcome outcome;
@@ -206,7 +213,7 @@ public sealed partial class BrokerRequestHandler(
         {
             if (unlockGuard.Refusal(socket) is { } refusedNow)
                 return new UnlockOutcome<T>(null, 503, refusedNow, TimeSpan.Zero, 0);
-            unlockGuard.RecordAttempt();
+            unlockGuard.RecordAttempt(socket);
             var task = Task.Run(read);
             try
             {
