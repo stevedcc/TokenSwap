@@ -254,7 +254,10 @@ request` and `recover`) runs as the **owner of the vault's config folder**, norm
 user, so macOS asks them. It is the identity T5 already does all of the vault's file work as
 (`OwnerScopedHardwareService` → `DirectoryOwnerMatcher.AsOwner` on `config.json`: `seteuid`, restored
 after). A switch that fails is a hard stop: the command fails with T5's error as it is
-(`OwnerSwitchException`), nothing runs as root, and no other slot (a one-key YubiKey slot) is tried.
+(`OwnerSwitchException`), nothing runs as root, and no other slot (a one-key YubiKey slot) is tried;
+the same holds when the folder's owner can't be read there. `VaultUnlocker` treats that error this
+way for every backend, so a TPM vault would stop the same way on a failed owner switch (the switch
+code is shared), though the TPM's own hardware call never switches.
 So it opens only that
 user's own vault, with that user's presence: less privilege than root, not more. Without sudo
 nothing changes; the TPM and YubiKeys are not affected (they still run as root under sudo). Two

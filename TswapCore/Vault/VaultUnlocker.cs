@@ -141,7 +141,7 @@ public sealed class VaultUnlocker
         {
             return UnlockKeyring(config, UnlockHardware(config, selection));
         }
-        catch (TswapException ex) when (config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave
+        catch (TswapException ex) when ((config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave)
             && ex is not OwnerSwitchException) // T12 fix round 1: a failed owner switch passes unchanged
         {
             // Brief T5 (security review): a TPM / Secure Enclave slot opens only in its own

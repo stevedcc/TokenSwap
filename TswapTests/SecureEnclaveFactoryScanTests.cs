@@ -88,6 +88,23 @@ public class SecureEnclaveFactoryScanTests
     private static bool BuildsSimulatedSecureEnclave(string source) =>
         string.Concat(StripCommentsAndLiterals(source).Where(c => !char.IsWhiteSpace(c))).Contains(SimulatedSecureEnclave, StringComparison.Ordinal);
 
+    // Round 2 (GLM N1): the real UnixOwnership.ActAs can't be made to fail without root (as a normal
+    // user its first call, setgroups, fails with EPERM, and restoring the groups then fails too, which
+    // is Environment.FailFast: it would kill the test host). So this pins its throws in the source:
+    // every throw in ActAs is the hard-stop type, none is the base TswapException.
+    [Fact]
+    public void TheRealActAs_ThrowsOnlyOwnerSwitchException()
+    {
+        var source = StripCommentsAndLiterals(File.ReadAllText(Path.Combine(RepoRoot(), "TswapCore/FileOwnership.cs")));
+        var start = source.IndexOf("public unsafe IDisposable ActAs(", StringComparison.Ordinal);
+        var end = source.IndexOf("private sealed class Identity", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "UnixOwnership.ActAs not found");
+        var body = source[start..end];
+
+        Assert.Equal(2, body.Split("throw new OwnerSwitchException(").Length - 1);
+        Assert.DoesNotContain("throw new TswapException(", body);
+    }
+
     [Fact]
     public void TheFactory_StillBuildsTheService_SoTheScanWatchesTheRightName()
     {

@@ -275,32 +275,38 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
     }
 
     /// <summary>
-    /// Which switch attempt of a privileged <paramref name="args"/> run is the Secure Enclave's own
-    /// (failing it by path is impossible: the config read and the scope both name config.json).
-    /// Measured on two runs and asserted equal, so a command whose switch sequence changes between
-    /// runs (e.g. a first run narrowing folder modes) fails here loudly instead of mis-targeting.
+    /// Where the Secure Enclave's own scope falls in a privileged run: the number of its switch
+    /// attempt and of its owner read (failing it by path is impossible: the config read and the scope
+    /// both name config.json). Measured on a run in each of <paramref name="dirs"/> (the same command,
+    /// in identical vault states) and asserted equal, so a command whose sequence changes between runs
+    /// (e.g. a first run narrowing folder modes) fails here loudly instead of mis-targeting.
     /// </summary>
-    private int SecureEnclaveSwitchAttempt(string dir, params string[] args)
+    private (int SwitchAttempt, int OwnerRead) ScopePoint(string[] dirs, string stdin, params string[] args)
     {
-        int Measure()
+        (int, int) Measure(string dir)
         {
             var probe = Root();
-            var attempt = -1;
+            var point = (-1, -1);
             string? inside = null;
             var record = _onCall;
-            _onCall = (_, _) => (attempt, inside) = (probe.SwitchAttempts - 1, probe.CurrentPath);
-            Ok(dir, probe, "", args);
+            _onCall = (backend, _) =>
+            {
+                if (backend == HardwareBackend.SecureEnclave)
+                    (point, inside) = ((probe.SwitchAttempts - 1, probe.OwnerReads - 1), probe.CurrentPath);
+            };
+            Ok(dir, probe, stdin, args);
             _onCall = record;
-            Assert.Equal(ConfigJson(dir), inside); // the attempt measured is the Secure Enclave's own switch
-            return attempt;
+            Assert.Equal(ConfigJson(dir), inside); // what was measured is the Secure Enclave's own switch
+            return point;
         }
-        var first = Measure();
-        var second = Measure();
-        Assert.True(second > 0, $"no file switch before the Secure Enclave's ({second})");
-        Assert.Equal(first, second);
+        var points = dirs.Select(Measure).ToList();
+        Assert.All(points, p => Assert.Equal(points[0], p));
+        Assert.True(points[0].Item1 > 0, $"no file switch before the Secure Enclave's ({points[0].Item1})");
         _calls.Clear();
-        return second;
+        return points[0];
     }
+
+    private int SecureEnclaveSwitchAttempt(string dir, params string[] args) => ScopePoint([dir, dir], "", args).SwitchAttempt;
 
     private string SwitchFailure(string dir) => $"Could not switch to uid {UserUid} for {ConfigJson(dir)}; nothing was done with it.";
 
@@ -345,6 +351,101 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.DoesNotContain("own backend failed too", stderr); // the YubiKey slots' error, had they been tried
         Assert.DoesNotContain("s3cret", stdout);
         Assert.Empty(_calls);
+    }
+
+    // Round 2 (MiMo round 2, finding 1): every failure to establish the owner identity at the
+    // scope is the hard-stop type, including T5's "could not read the folder's owner" refusal.
+    [Fact]
+    public void Privileged_TheFoldersOwnerCannotBeReadAtTheScope_IsAHardStop()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = SecureEnclaveVault();
+        Ok(dir, null, "", "slot", "add", "--yubikey"); // a slot that would open the vault
+        var (_, ownerRead) = ScopePoint([dir, dir], "", "get", "db");
+        var fake = Root();
+        fake.FailOwnerReadAt = ownerRead;
+
+        var (exit, stdout, stderr) = Run(dir, fake, "", "get", "db");
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"Running as root, but could not read the owner of {dir}; refusing to touch config.json there as root.", stderr);
+        Assert.DoesNotContain(VaultUnlocker.ForeignHardwareSlotHint, stderr);
+        Assert.DoesNotContain("own backend failed too", stderr);
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.Empty(_calls);
+        Assert.Equal(ownerRead + 1, fake.OwnerReads); // nothing read an owner after the refusal
+    }
+
+    [Fact]
+    public void Scope_TheFoldersOwnerCannotBeRead_ThrowsOwnerSwitchException_AndTheActionNeverRuns()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = Folder("mac");
+        var fake = Root();
+        fake.FailOwnerReadAt = 0;
+        var scope = new VaultOwnerScope(() => new Storage(dir, new DirectoryOwnerMatcher(fake)));
+        var ran = false;
+
+        var ex = Assert.Throws<OwnerSwitchException>(() => scope.Run(() => ran = true));
+
+        Assert.Equal($"Running as root, but could not read the owner of {dir}; refusing to touch config.json there as root.", ex.Message);
+        Assert.False(ran);
+    }
+
+    // The action's own failures are not identity failures: they keep their type.
+    [Fact]
+    public void Scope_AFailureOfTheActionItself_KeepsItsType()
+    {
+        var scope = new VaultOwnerScope(() => new Storage(_root));
+
+        var ex = Assert.Throws<TswapException>(() => scope.Run<int>(() => throw new TswapException("the hardware said no")));
+
+        Assert.Equal("the hardware said no", ex.Message);
+    }
+
+    // Round 2 (MiMo round 2, finding 2): the hard stop reaches the CLI root from the enrolment path
+    // too, and nothing is written.
+    [Fact]
+    public void Privileged_InitSecureEnclave_TheSwitchFails_ExitsWithT5sError_AndWritesNothing()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (attempt, _) = ScopePoint([Folder("probe1"), Folder("probe2")], "", "init", "--secure-enclave", "--with-touch");
+        var dir = Folder("mac");
+        var fake = Root();
+        fake.FailSwitchAt = attempt;
+
+        var (exit, _, stderr) = Run(dir, fake, "", "init", "--secure-enclave", "--with-touch");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SwitchFailure(dir), stderr);
+        Assert.Empty(_calls);
+        Assert.Empty(Directory.GetFileSystemEntries(dir));
+    }
+
+    [Fact]
+    public void Privileged_RecoverSecureEnclave_TheSwitchFails_ExitsWithT5sError_AndChangesNothing()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (router, recoveryKey) = TpmVault();
+        string Copy(string name)
+        {
+            var copy = Folder(name);
+            File.Copy(ConfigJson(router), ConfigJson(copy));
+            File.Copy(Path.Combine(router, "secrets.json.enc"), Path.Combine(copy, "secrets.json.enc"));
+            return copy;
+        }
+        var (attempt, _) = ScopePoint([Copy("probe1"), Copy("probe2")], recoveryKey + "\n", "recover", "--secure-enclave", "--with-touch");
+        var dir = Copy("mac");
+        var before = Directory.GetFileSystemEntries(dir).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList();
+        var fake = Root();
+        fake.FailSwitchAt = attempt;
+
+        var (exit, _, stderr) = Run(dir, fake, recoveryKey + "\n", "recover", "--secure-enclave", "--with-touch");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SwitchFailure(dir), stderr);
+        Assert.Empty(_calls);
+        Assert.Equal(before, Directory.GetFileSystemEntries(dir).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList());
     }
 
     // MiMo 2: the exception type the brief asks for, below the CLI (which shows only the message).

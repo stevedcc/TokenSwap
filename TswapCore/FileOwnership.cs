@@ -30,11 +30,13 @@ public interface IUnixOwnership
 }
 
 /// <summary>
-/// T12 fix round 1: the identity switch to a folder's owner failed (<see cref="IUnixOwnership.ActAs"/>);
-/// nothing was done as either identity. A hard stop: <c>VaultUnlocker</c> passes it through
-/// unchanged, never adding its other-machine hint or trying other slots after it.
+/// T12 fix round 1: acting as a folder's owner failed: the switch itself, or its setup (reading this
+/// process's groups in <see cref="IUnixOwnership.ActAs"/>; at the Secure Enclave's scope also reading
+/// the folder's owner, round 2). Nothing was done as either identity. A hard stop:
+/// <c>VaultUnlocker</c> passes it through unchanged, never adding its other-machine hint or trying
+/// other slots after it, for any backend.
 /// </summary>
-public sealed class OwnerSwitchException(string message) : TswapException(message);
+public sealed class OwnerSwitchException(string message, int exitCode = 1) : TswapException(message, exitCode);
 
 /// <summary>
 /// Every file tswap reads or writes in a vault folder or as a command's output (config, secrets,

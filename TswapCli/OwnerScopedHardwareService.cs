@@ -22,10 +22,30 @@ internal sealed class VaultOwnerScope(Func<IVaultStore> openStore)
     /// no other slot: fix round 1); a failed restore fails fast. A store that isn't an <see cref="IFileVaultStore"/> has
     /// no folder: no switch.
     /// </summary>
-    public T Run<T>(Func<T> action) =>
-        openStore() is IFileVaultStore store
-            ? store.Owner.AsOwner(Path.Combine(store.ConfigDir, "config.json"), action)
-            : action();
+    /// <para>Round 2: every failure before <paramref name="action"/> starts (opening the store, T5's
+    /// "could not read the folder's owner" refusal, the switch itself) leaves here as an
+    /// <see cref="OwnerSwitchException"/>, the hard-stop type, with its message unchanged; a failure
+    /// of the action itself keeps its own type. Only this boundary converts: the file layer's own
+    /// refusal keeps T5's type.</para>
+    public T Run<T>(Func<T> action)
+    {
+        var started = false;
+        T Act()
+        {
+            started = true;
+            return action();
+        }
+        try
+        {
+            return openStore() is IFileVaultStore store
+                ? store.Owner.AsOwner(Path.Combine(store.ConfigDir, "config.json"), Act)
+                : Act();
+        }
+        catch (TswapException ex) when (!started && ex is not OwnerSwitchException)
+        {
+            throw new OwnerSwitchException(ex.Message, ex.ExitCode);
+        }
+    }
 }
 
 /// <summary>

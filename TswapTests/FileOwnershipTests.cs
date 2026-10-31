@@ -49,7 +49,14 @@ public class FileOwnershipTests : IDisposable
         public bool IsPrivileged => privileged;
         public uint EffectiveUid => euid;
         public bool OwnerUnreadable { get; set; }
-        public bool SwitchFails { get; set; }
+        /// <summary>
+        /// T5's original knob: every switch fails with the <b>base</b> <see cref="TswapException"/>,
+        /// as <see cref="UnixOwnership.ActAs"/> threw before T12's fix round 1. Kept only for T5's
+        /// file-layer test, whose exact assertion it serves; it does NOT model today's switch failure
+        /// (that is <see cref="OwnerSwitchException"/>, hard-stopped by <c>VaultUnlocker</c>): use
+        /// <see cref="FailSwitchAt"/> for that.
+        /// </summary>
+        public bool LegacyBaseTypeSwitchFailure { get; set; }
 
         /// <summary>T12: owners of single folders (by full path), overriding the default owner.</summary>
         public Dictionary<string, (uint Uid, uint Gid)> Owners { get; } = [];
@@ -65,18 +72,21 @@ public class FileOwnershipTests : IDisposable
 
         /// <summary>
         /// T12: the 0-based attempt number that fails, with <see cref="OwnerSwitchException"/> as the
-        /// real <see cref="UnixOwnership.ActAs"/> throws (<see cref="SwitchFails"/> keeps T5's base type
-        /// for its existing test).
+        /// real <see cref="UnixOwnership.ActAs"/> throws (<see cref="LegacyBaseTypeSwitchFailure"/> keeps
+        /// T5's base type for its existing test).
         /// </summary>
         public int? FailSwitchAt { get; set; }
 
         /// <summary>T12: how often an owner was read.</summary>
         public int OwnerReads { get; private set; }
 
+        /// <summary>T12 round 2: the 0-based owner read that can't be read (null), as <see cref="OwnerUnreadable"/>.</summary>
+        public int? FailOwnerReadAt { get; set; }
+
         public (uint Uid, uint Gid)? GetOwner(string path)
         {
-            OwnerReads++;
-            if (OwnerUnreadable)
+            var read = OwnerReads++;
+            if (OwnerUnreadable || FailOwnerReadAt == read)
                 return null;
             return Owners.TryGetValue(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)), out var owner) ? owner : (dirUid, dirGid);
         }
@@ -86,7 +96,7 @@ public class FileOwnershipTests : IDisposable
             if (OperatingSystem.IsWindows())
                 throw new PlatformNotSupportedException(); // never switched on Windows
             var attempt = SwitchAttempts++;
-            if (SwitchFails)
+            if (LegacyBaseTypeSwitchFailure)
                 throw new TswapException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
             if (FailSwitchAt == attempt) // T12 fix round 1: the type UnixOwnership.ActAs throws
                 throw new OwnerSwitchException($"Could not switch to uid {uid} for {path}; nothing was done with it.");
@@ -381,7 +391,7 @@ public class FileOwnershipTests : IDisposable
         storage.SaveConfig(SampleConfig());
         var before = File.ReadAllText(P("config.json"));
         var fake = AsRoot();
-        fake.SwitchFails = true;
+        fake.LegacyBaseTypeSwitchFailure = true;
         var failing = new Storage(_dir, new DirectoryOwnerMatcher(fake));
 
         var ex = Assert.Throws<TswapException>(() => failing.SaveConfig(SampleConfig() with { YubiKeySerials = [1] }));
