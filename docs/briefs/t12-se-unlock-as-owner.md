@@ -64,18 +64,31 @@ Secure Enclave key as root (and `init`/`slot request` do too when run with sudo)
    a Secure Enclave service is constructed or called (grep `SecureEnclaveHardwareService`,
    `AppleSecureEnclaveInterop`, `HardwareServices.`, `UnlockHardware`, `rotate`, the broker,
    `Program.cs`) in the report; then make construction go through one factory that always wraps, and
-   add a test that the factory's Secure Enclave service is the decorator. (That test pins the
-   factory; the enumeration in the report is what shows no direct construction is left.) The broker
+   add a test that the factory's Secure Enclave service is the decorator. **Enforce it:** a test that
+   scans the non-test sources and fails if `new SecureEnclaveHardwareService(` or a call into
+   `AppleSecureEnclaveInterop` appears anywhere but the factory (and the service itself), so a later
+   direct construction fails the build's tests instead of silently skipping the owner switch. The broker
    is in that enumeration: if it unlocks a Secure Enclave vault, it goes through the same factory
    (and `serve` is never privileged, so no switch happens there).
 4. **No change** to file I/O, the TPM, YubiKeys, the broker, or the no-sudo commands' behaviour.
 5. **Docs:** one paragraph in `HARDWARE_BACKENDS.md` (Secure Enclave section) and one line in the
    README's sudo/Secure Enclave text: under sudo, the Secure Enclave is used as the vault folder's
-   owner, so Touch ID asks the logged-in owner, not root. Also say: a vault folder owned by root
+   **folder's owner** (normally the logged-in user), not root: the macOS dialog *"Enter the password
+   for the user System Administrator"* under sudo was this bug. Also say: a vault folder owned by root
    (`sudo tswap init` with the vault under `/var/root`) still evaluates presence for root, so a
    `--with-touch` slot there can't be used (choose `--no-touch` or keep the vault in the user's
    folder). And a folder owned by a uid that has no login (a service account) asks presence of that
    uid, which nobody can give: use `--no-touch` for such a vault.
+7. **If `seteuid` isn't enough.** The owner's experiment shows LocalAuthentication follows the
+   effective uid. If the Release build or a case in item 2 shows otherwise, the alternative is a forked
+   child that drops to the owner with a real `setuid` and does the Secure Enclave call there. Don't
+   build that pre-emptively: stop and report with the evidence.
+8. **Threads.** `DirectoryOwnerMatcher` switches the whole process's effective identity, so the
+   scoped call must not overlap another identity switch. The CLI is single-threaded here and
+   `broker serve` is never privileged (no switch); keep the Swift shim synchronous on the calling
+   thread (it blocks during the Touch ID prompt, inside the scope). Note this in the decorator's
+   comment. If an `Enroll` path happens to call `Wrap` through the decorated reference, the nested
+   scope is harmless (same owner).
 6. **Keys created as root before this fix** (`recover --secure-enclave`, or `init`/`slot request`
    run with sudo): whether such a key still unlocks when used as the owner is unknown (a CryptoKit
    key's access control may or may not depend on the uid that made it). The owner's Mac check
@@ -122,7 +135,8 @@ the test.
 
 ### Item 2: docs and the owner's Mac check
 
-The docs from decision 5, and a short "Check on a Mac (owner)" list in the report (not in the docs):
+The docs from decisions 5 and 6, and a short "Check on a Mac (owner)" list in the report (not in the
+docs):
 Run with a **Release (NativeAOT)** build (`dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64`;
 the project sets `PublishAot`, so this is the NativeAOT binary):
 1. `sudo tswap get <name>` on a `--with-touch` vault made as the user: Touch ID for the logged-in
@@ -130,7 +144,10 @@ the project sets `PublishAot`, so this is the NativeAOT binary):
 2. `sudo tswap recover --secure-enclave --with-touch` (with a recovery key), then `tswap names` as the
    user: unlocks with Touch ID.
 3. `sudo tswap get` on a `--no-touch` vault: still no prompt.
-4. A `--with-touch` slot created **as root before this fix** (with the previous build: `sudo tswap
+4. Without sudo, `tswap get` (and `names`) on the `--with-touch` vault: unchanged, Touch ID as before.
+5. Only if the Mac has a second admin account: that admin runs `sudo tswap get` on the first user's
+   vault: the prompt names the vault folder's **owner** (the first user), not the admin. Record it.
+6. A `--with-touch` slot created **as root before this fix** (with the previous build: `sudo tswap
    recover --secure-enclave --with-touch`), then `sudo tswap get` with the new build: does it unlock?
    (Decision 6: record it.)
 
