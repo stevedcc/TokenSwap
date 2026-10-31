@@ -256,6 +256,11 @@ YubiKey, whose posture is set outside tswap): you chose it with the flag. `slot 
 approving machine can't see a requesting Mac's choice; `slot request --no-touch` says so.
 `tswap` and `libtswapse.dylib` beside it ship together: a newer `tswap` with an older dylib refuses
 to enrol ("update libtswapse.dylib together with tswap") rather than make a key it can't vouch for.
+Under sudo, the Secure Enclave is used as the vault **folder's owner** (normally you), not root, so
+Touch ID asks you: the macOS dialog *"Enter the password for the user System Administrator"* under
+sudo was a bug. A vault folder owned by root or by a service account can't use a `--with-touch`
+slot under sudo (choose `--no-touch` there), and a slot enrolled with sudo before this version that
+doesn't unlock needs `recover` again; see [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157).
 
 The slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction,
 a hand-rolled ECIES equivalent. In the words of [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#status-poc-grade-not-yet-production-hardened):
