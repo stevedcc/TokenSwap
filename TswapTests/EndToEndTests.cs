@@ -552,13 +552,14 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // Early sends (before TreatControlCAsInput=true is set) generate SIGINT with no
     // foreground pgid, which is silently dropped; the process keeps running and more
     // output arrives, resetting the quiescent timer for another attempt.
-    // Returns (exitCode, output); (-2, "") if openpty is unavailable on this platform.
-    private (int exitCode, string output) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
+    // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
+    // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
+    private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
     {
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
-        if (ptyRet == int.MinValue) return (-2, "");
+        if (ptyRet == int.MinValue) return (-2, "", "");
         if (ptyRet < 0) throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
         var slavePath = Encoding.ASCII.GetString(nameBuf, 0,
@@ -584,6 +585,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         DateTime? lastDataAt = null;
         DateTime lastCtrlCAt = DateTime.MinValue;
         bool promptSeen = false;
+        // Why the read loop ended, reported in the test's failure message (macOS flake, #210).
+        string loopEnd = "deadline";
+        var started = DateTime.UtcNow;
         // searchFrom tracks how much of sb has already been scanned for waitForPrompt,
         // leaving a (prompt.Length - 1) overlap to catch matches that straddle chunks.
         int searchFrom = 0;
@@ -621,7 +625,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 }
                 if (pr < 0)
                 {
-                    if (Marshal.GetLastPInvokeError() == EINTR) continue;
+                    var pollErrno = Marshal.GetLastPInvokeError();
+                    if (pollErrno == EINTR) continue;
+                    loopEnd = $"poll error errno={pollErrno}";
                     break;
                 }
                 int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
@@ -642,19 +648,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                         TrySendCtrlC();
                     continue;
                 }
-                if (n == 0) break; // EOF
+                if (n == 0) { loopEnd = $"EOF (revents=0x{pfd.revents:x})"; break; }
                 var errno = Marshal.GetLastPInvokeError();
                 if (errno == EINTR || errno == eagain) continue;
+                loopEnd = $"read error errno={errno} (revents=0x{pfd.revents:x})";
                 break; // EIO or other terminal error
             }
 
+            loopEnd += $" after {(DateTime.UtcNow - started).TotalMilliseconds:F0} ms, child exited: {process.HasExited}, prompt seen: {promptSeen}, Ctrl-C sent: {lastCtrlCAt != DateTime.MinValue}";
             if (!process.WaitForExit(TimeSpan.FromSeconds(10)))
             {
                 process.Kill(entireProcessTree: true);
                 process.WaitForExit();
             }
 
-            return (process.ExitCode, sb.ToString());
+            return (process.ExitCode, sb.ToString(), loopEnd);
         }
         finally
         {
@@ -676,12 +684,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
         RunTswap("init");
 
-        var (exitCode, output) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
+        var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
 
         if (exitCode == -2) return; // openpty not available on this platform
 
-        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
 
     [Fact]
@@ -693,13 +701,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("create", "a-secret");
         var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
 
-        var (exitCode, output) = RunTswapWithPtyCtrlC("Export passphrase:", "export", exportPath);
+        var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Export passphrase:", "export", exportPath);
 
         if (exitCode == -2) return; // openpty not available on this platform
 
-        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
-        Assert.False(File.Exists(exportPath), "export file must not be created on cancellation");
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
+        Assert.False(File.Exists(exportPath), $"export file must not be created on cancellation. Read loop: {loopEnd}");
     }
 
     [Fact]
@@ -712,12 +720,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var exportPath = Path.Combine(_tempDir, "ctrlc-import.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        var (exitCode, output) = RunTswapWithPtyCtrlC("Import passphrase:", "import", exportPath);
+        var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Import passphrase:", "import", exportPath);
 
         if (exitCode == -2) return; // openpty not available on this platform
 
-        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]");
-        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]");
+        Assert.True(exitCode == 130, $"Expected exit 130, got {exitCode}. PTY output: [{output}]. Read loop: {loopEnd}");
+        Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
 
     // --- Windows ConPTY coverage ---
