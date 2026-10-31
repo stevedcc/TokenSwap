@@ -60,7 +60,7 @@ public static class RecoverySlotWrap
         }
         catch (CryptographicException)
         {
-            throw new TswapException("Invalid recovery public key: X25519 key agreement with it failed (a low-order point)");
+            throw new TswapException("Invalid recovery public key: X25519 key agreement with it failed (typically a low-order point)");
         }
         var kek = RecoverySlotKek.Derive(sharedSecret, ephemeral.PublicKey);
 

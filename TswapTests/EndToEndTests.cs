@@ -145,6 +145,33 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.DoesNotContain("Not initialized", names.stdout + names.stderr);
     }
 
+    /// <summary>
+    /// X25519 (SlotKeyPair, the .NET 11 BCL's X25519DiffieHellman) inside the published binary,
+    /// which CI runs as NativeAOT: <c>init --keyring</c> wraps the vault key to a fresh recovery
+    /// keypair (generate, import, derive), and <c>recover --yubikey</c> unwraps it again with the
+    /// printed recovery key. A plain <c>init</c> makes a classic vault and never touches X25519.
+    /// </summary>
+    [Fact]
+    public void InitKeyring_ThenRecoverWithTheRecoveryKey_TheSecretReadsBack()
+    {
+        var init = RunTswapWithStdin("\n\n", "init", "--keyring");
+        Assert.True(init.exitCode == 0, $"init --keyring failed: {init.stdout}{init.stderr}");
+        var lines = init.stdout.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        var recoveryKey = lines[lines.IndexOf("Recovery Private Key (base64):") + 1];
+        Assert.Equal(32, Convert.FromBase64String(recoveryKey).Length);
+
+        var ingest = RunTswapWithStdin("e2e-recovered-value", "ingest", "e2e-secret");
+        Assert.True(ingest.exitCode == 0, $"ingest failed: {ingest.stdout}{ingest.stderr}");
+
+        var recover = RunTswapWithStdin(recoveryKey + "\n\n\n", "recover", "--yubikey");
+        Assert.True(recover.exitCode == 0, $"recover failed: {recover.stdout}{recover.stderr}");
+        Assert.Contains("✓ Recovered", recover.stdout);
+
+        var get = RunTswap("get", "e2e-secret");
+        Assert.True(get.exitCode == 0, $"get failed: {get.stdout}{get.stderr}");
+        Assert.Contains("e2e-recovered-value", get.stdout);
+    }
+
     // --- Create ---
 
     // --- Names ---

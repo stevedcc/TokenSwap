@@ -38,7 +38,7 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     public const int KeySize = 32;
 
     /// <summary>
-    /// Generates a fresh, randomly-clamped X25519 keypair. Each call produces an independent
+    /// Generates a fresh X25519 keypair with an RFC 7748 §5-clamped private key. Each call produces an independent
     /// keypair — callers enrolling a new slot call this once and persist both halves per the
     /// keyring's slot schema (public in the clear, private destined for hardware wrapping by a
     /// later wave).
@@ -46,7 +46,15 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     public static SlotKeyPair Generate()
     {
         using var key = X25519DiffieHellman.GenerateKey();
-        return new SlotKeyPair(key.ExportPublicKey(), key.ExportPrivateKey());
+        var privateKey = key.ExportPrivateKey();
+        // RFC 7748 §5 clamping, stored as v0.1.0 (Rebex) stored it: the providers clamp only when
+        // deriving and need not export clamped bytes, while Rebex used a supplied key as it is,
+        // so an unclamped key from a newer tswap would give a v0.1.0 binary a different secret.
+        // Idempotent, and the public key is unchanged by it.
+        privateKey[0] &= 0xF8;
+        privateKey[31] &= 0x7F;
+        privateKey[31] |= 0x40;
+        return new SlotKeyPair(key.ExportPublicKey(), privateKey);
     }
 
     /// <summary>

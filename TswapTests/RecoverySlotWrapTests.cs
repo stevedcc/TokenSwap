@@ -142,7 +142,7 @@ public class RecoverySlotWrapTests
 
         var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
             wrapped, new byte[SlotKeyPair.KeySize], recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
-        Assert.Contains("authentication", ex.Message);
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
     }
 
     [Fact]
