@@ -32,24 +32,51 @@ Secure Enclave key as root (and `init`/`slot request` do too when run with sudo)
 
 ## Decisions (settled here)
 
-1. **Only the Secure Enclave runs as the owner.** A decorator in `TswapCli`, e.g.
-   `OwnerScopedHardwareService(IHardwareKeyService & IHardwareEnrollmentService inner, Func<Func<T>,T>-style scope)`,
-   wraps the Secure Enclave service (real and simulated alike, so tests see it) and runs its
-   `Unlock`, `Enroll`/`Wrap` and unwrap calls inside the vault folder's owner scope. TPM and YubiKey
-   services are never wrapped. `VaultUnlocker` is unchanged.
-2. **The scope is T5's**, not a new mechanism: `DirectoryOwnerMatcher.AsOwner(configDir, …)` for the
-   vault's config folder (the folder `config.json` lives in, resolved as today). Not privileged, or
-   the folder's owner is root: no switch (same rule T5 applies to files). If the switch or the
-   restore fails, the existing behaviour holds (T5 fails fast on a failed restore).
+1. **Only the Secure Enclave runs as the owner.** A decorator in `TswapCli` (e.g.
+   `OwnerScopedHardwareService`; implement both `IHardwareKeyService` and
+   `IHardwareEnrollmentService`, or a combined interface: C# has no `A & B` parameter type) wraps the
+   Secure Enclave service, real and simulated alike so tests see it. It scopes each **entry point**
+   once: `Unlock`, `Enroll` (which calls `Wrap` itself: no nested scope), and any other public call
+   the interfaces expose (check: `Wrap`/`Unwrap` if they are on an interface). `Backend`,
+   `IsSimulated` and every other member pass through unchanged. TPM and YubiKey services are never
+   wrapped, neither for unlock nor for enrolment. `VaultUnlocker` is unchanged.
+2. **The scope is T5's**, not a new mechanism, and **it targets `config.json`'s folder itself**:
+   call `DirectoryOwnerMatcher.AsOwner(Path.Combine(configDir, "config.json"), …)`. `AsOwner(path)`
+   switches to the owner of `path`'s nearest existing **parent** folder, so passing the config folder
+   itself would pick the folder above it (the owner's experiment only worked because
+   `~/Library/Application Support` is also the user's). Not privileged, or that folder is owned by
+   root: no switch (T5's rule for files). **Failure semantics are T5's, unchanged:** a failed switch
+   throws (the command fails, no fallback to root), a failed restore fails fast. A test pins the
+   throw.
+   **The folder comes from the store, lazily.** `CliHost` builds the backends before the store is
+   opened (T7: the store is opened at first use), so the decorator resolves the config folder at call
+   time from the same `IFileVaultStore.ConfigDir` the file I/O uses (a provider, not a value captured
+   at construction). Storage that isn't an `IFileVaultStore`: no switch.
+   **Why this is safe:** the target is the same identity T5 already runs all of this vault's file I/O
+   as. Under sudo with a folder another user owns, the Secure Enclave call runs as that user and can
+   only open that user's own vault (presence is asked of that user): no escalation, a reduction of
+   privilege compared with root.
 3. **Where it's wired:** `CliHost` builds the unlock backends (`HardwareServices.UnlockBackends`) and
    the enrolment services (`HardwareServices.Enrollment`, used by `init`, `slot request`, `recover`);
    give both the scope so the Secure Enclave service is wrapped in every path, including `slot
-   accept`'s `UnlockHardware` of a pending Secure Enclave blob. Find and list every call site of the
-   Secure Enclave service in the report; none may bypass the decorator.
+   accept`'s `UnlockHardware` of a pending Secure Enclave blob. **Before coding**, list every place
+   a Secure Enclave service is constructed or called (grep `SecureEnclaveHardwareService`,
+   `AppleSecureEnclaveInterop`, `HardwareServices.`, `UnlockHardware`, `rotate`, the broker,
+   `Program.cs`) in the report; then make construction go through one factory that always wraps, and
+   add a test that the factory's Secure Enclave service is the decorator (so a new direct
+   construction can't silently bypass it).
 4. **No change** to file I/O, the TPM, YubiKeys, the broker, or the no-sudo commands' behaviour.
 5. **Docs:** one paragraph in `HARDWARE_BACKENDS.md` (Secure Enclave section) and one line in the
    README's sudo/Secure Enclave text: under sudo, the Secure Enclave is used as the vault folder's
-   owner, so Touch ID asks the logged-in owner, not root.
+   owner, so Touch ID asks the logged-in owner, not root. Also say: a vault folder owned by root
+   (`sudo tswap init` with the vault under `/var/root`) still evaluates presence for root, so a
+   `--with-touch` slot there can't be used (choose `--no-touch` or keep the vault in the user's
+   folder).
+6. **Keys created as root before this fix** (`recover --secure-enclave`, or `init`/`slot request`
+   run with sudo): whether such a key still unlocks when used as the owner is unknown (a CryptoKit
+   key's access control may or may not depend on the uid that made it). The owner's Mac check
+   records it (item 2); if it doesn't unlock, the docs say to enrol a new slot for that machine
+   (`recover` again, as the user's sudo now creates it as the owner).
 
 ## Items
 
@@ -64,22 +91,37 @@ identity switch, a temp vault folder owned by a fake non-root uid, and a fake "p
 - privileged + `init --secure-enclave --with-touch`, `slot request --secure-enclave …`, `recover
   --secure-enclave …`: the key creation runs inside the owner switch;
 - privileged + `slot accept` of a pending Secure Enclave request: the unwrap runs as the owner;
-- privileged + TPM vault (simulated TPM): the unlock runs **without** a switch (as today);
-- not privileged + Secure Enclave: no switch at all;
-- privileged, folder owned by root (uid 0): no switch;
+- privileged + TPM vault (simulated TPM): the unlock and `init --tpm` run **without** a switch, and
+  the value comes back / the vault is created;
+- not privileged + Secure Enclave: no switch at all, and the value comes back;
+- privileged, folder owned by root (uid 0): no switch, and the value comes back;
+- privileged, **the config folder and its parent owned by different uids**: the switch goes to the
+  config folder's owner (pins decision 2's `config.json` target);
+- the fake reports a failed switch: the command fails with T5's error and the Secure Enclave service
+  is never called (no fallback to root);
+- the Secure Enclave service built by the factory is the decorator (decision 3), and `Backend`,
+  `IsSimulated` pass through;
 - the decorator passes `requirePresence` through unchanged (T11's blob flag byte still `1`/`0`).
+The tests run through the real command path (`CliHost`/command execution with the fake
+`IUnixOwnership` injected), not by calling the decorator directly; if the seam doesn't reach the
+command path today, add it (test-only, Debug-gated like `TSWAP_TEST_KEY`) and say so.
 Break-it-once: (a) remove the wrapping in the decorator → the Secure Enclave "inside the switch"
-tests fail; (b) wrap the TPM too → the TPM "without a switch" test fails; (c) build the enrolment
-service without the scope → the `recover`/`init` creation tests fail.
+tests fail; (b) wrap the TPM too → the TPM "without a switch" tests fail; (c) build the enrolment
+service without the scope → the `recover`/`init` creation tests fail; (d) pass `configDir` instead of
+`Path.Combine(configDir, "config.json")` → the different-owners test fails.
 
 ### Item 2: docs and the owner's Mac check
 
 The docs from decision 5, and a short "Check on a Mac (owner)" list in the report (not in the docs):
-1. `sudo tswap get <name>` on a `--with-touch` vault: Touch ID for the logged-in user, value returned
-   (no "System Administrator" dialog).
+Run with a **Release (NativeAOT)** build (`dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64`):
+1. `sudo tswap get <name>` on a `--with-touch` vault made as the user: Touch ID for the logged-in
+   user, value returned (no "System Administrator" dialog).
 2. `sudo tswap recover --secure-enclave --with-touch` (with a recovery key), then `tswap names` as the
    user: unlocks with Touch ID.
 3. `sudo tswap get` on a `--no-touch` vault: still no prompt.
+4. A `--with-touch` slot created **as root before this fix** (with the previous build: `sudo tswap
+   recover --secure-enclave --with-touch`), then `sudo tswap get` with the new build: does it unlock?
+   (Decision 6: record it.)
 
 ## Out of scope
 
