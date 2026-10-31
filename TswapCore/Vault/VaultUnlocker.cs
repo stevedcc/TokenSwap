@@ -41,7 +41,7 @@ public sealed class VaultUnlocker
         {
             [HardwareBackend.YubiKey] = _yubiKey,
         };
-        if (additionalBackends != null)
+        if (additionalBackends is not null)
             foreach (var backend in additionalBackends)
                 // TryAdd, not indexer assignment: a duplicate Backend value (including
                 // HardwareBackend.YubiKey, already registered above) would otherwise silently
@@ -87,14 +87,14 @@ public sealed class VaultUnlocker
         // uses), letting a command write secrets under a key that 'slot accept' is about to make
         // permanently unrecoverable once it recovers the *real* K_v from another machine's
         // approve file and overwrites Config.Keyring. See Config.PendingSlotId's doc comment.
-        if (config.Keyring == null && config.PendingSlotId != null)
+        if (config.Keyring is null && config.PendingSlotId is not null)
             throw new TswapException(
                 "This machine has a pending 'slot request' enrollment that has not been completed yet. " +
                 "Run 'tswap slot accept <approve-file>' (using the approve file from an already-enrolled " +
                 "machine) before using this vault.");
 
         // A classic vault (no keyring): the backend recovers the master key itself. Unchanged.
-        if (config.Keyring == null)
+        if (config.Keyring is null)
             return UnlockHardware(config, selection);
 
         // Brief T4 decision 3: a keyring may also hold one-key YubiKey slots (a machine slot whose
@@ -173,7 +173,7 @@ public sealed class VaultUnlocker
         if ((config.Backend ?? HardwareBackend.YubiKey) != HardwareBackend.YubiKey)
             return false;
         var own = FindOwnMachineSlot(config, keyring);
-        return own != null && YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob);
+        return own is not null && YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob);
     }
 
     /// <summary>
@@ -205,7 +205,7 @@ public sealed class VaultUnlocker
             }
         }
         var slotSerials = candidates.Select(c => c.Blob.Serial).Distinct().ToList();
-        var ownFailure = (ownBackendError == null ? "" : $" (The vault's own backend failed too: {ownBackendError.Message})") +
+        var ownFailure = (ownBackendError is null ? "" : $" (The vault's own backend failed too: {ownBackendError.Message})") +
             (corruptSlotIds.Count == 0 ? "" :
                 $" Skipped slot(s) {string.Join(", ", corruptSlotIds)}: their YubiKey slot blob is corrupt; restore config.json from backup.");
 
@@ -220,7 +220,7 @@ public sealed class VaultUnlocker
         }
 
         var matching = pluggedIn.Where(slotSerials.Contains).Distinct().ToList();
-        if (matching.Count == 0 && selection.Serial == null)
+        if (matching.Count == 0 && selection.Serial is null)
             throw new TswapException(
                 "No plugged-in YubiKey matches a slot of this vault. " +
                 (slotSerials.Count == 0 ? "This vault has no readable YubiKey slot; " :
@@ -240,7 +240,7 @@ public sealed class VaultUnlocker
         foreach (var serial in order)
         {
             var failure = TryKey(keyring, candidates, serial, order.Count > 1, out var vaultKey);
-            if (vaultKey != null)
+            if (vaultKey is not null)
                 return vaultKey;
             failures.Add(failure!);
         }
@@ -317,7 +317,7 @@ public sealed class VaultUnlocker
     /// </summary>
     private static Slot? FindOwnMachineSlot(Config config, Keyring.Keyring keyring)
     {
-        if (config.KeyringSlotId == null)
+        if (config.KeyringSlotId is null)
             return keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
 
         byte[] ownSlotId;
@@ -416,7 +416,7 @@ public sealed class VaultUnlocker
                 "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init --keyring'.");
 
         Slot? slot;
-        if (config.KeyringSlotId != null)
+        if (config.KeyringSlotId is not null)
         {
             byte[] ownSlotId;
             try
@@ -435,7 +435,7 @@ public sealed class VaultUnlocker
             slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
         }
 
-        if (slot == null)
+        if (slot is null)
             throw new TswapException(
                 "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init --keyring'.");
 
