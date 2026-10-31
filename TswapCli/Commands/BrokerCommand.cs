@@ -17,9 +17,9 @@ public sealed class BrokerCommand : ICliCommand
     public string Name => "broker";
     public string HelpUsage => "broker <serve|forward|call|route|socket|template> ...";
     public string Description =>
-        "Credential-adding HTTP proxy for containers (serve as the vault user; forward in the container; sudo for route|socket add|remove)";
+        "Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve as the vault user; forward/call in the container; sudo for route|socket|template add|remove)";
 
-    // serve and forward never need sudo (serve refuses root); only config changes do, checked inside.
+    // serve, forward and call never need sudo (serve refuses root); only config changes do, checked inside.
     public bool RequiresSudo => false;
 
     private const string Usage =
