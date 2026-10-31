@@ -4,6 +4,23 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Brief T15: a pull request that changes what ships (the SDK, project or build files, this
+  # workflow) runs the test job and every build leg too, so each shipped runtime identifier is
+  # built, packed and smoke-tested before a tag. Nothing is published from a pull request:
+  # verify-version and release run only on a tag.
+  pull_request:
+    paths:
+      - global.json
+      - '**/*.csproj'
+      - '**/*.props'
+      - '**/*.targets'
+      - nuget.config
+      - '**/packages.lock.json'
+      - '*.slnx'
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -43,6 +60,7 @@ jobs:
 
   verify-version:
     name: Verify Version
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,6 +80,12 @@ jobs:
 
   build:
     needs: [test, verify-version]
+    # On a tag: test and verify-version must both succeed, as before. On a pull request
+    # verify-version is skipped, which must not skip the build.
+    if: >-
+      !cancelled() && needs.test.result == 'success' &&
+      (needs.verify-version.result == 'success' ||
+      (github.event_name == 'pull_request' && needs.verify-version.result == 'skipped'))
     name: Build ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -138,6 +162,7 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
