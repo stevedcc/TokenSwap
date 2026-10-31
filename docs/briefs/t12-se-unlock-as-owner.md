@@ -79,6 +79,12 @@ Secure Enclave key as root (and `init`/`slot request` do too when run with sudo)
    `--with-touch` slot there can't be used (choose `--no-touch` or keep the vault in the user's
    folder). And a folder owned by a uid that has no login (a service account) asks presence of that
    uid, which nobody can give: use `--no-touch` for such a vault.
+6. **Keys created as root before this fix** (`recover --secure-enclave`, or `init`/`slot request`
+   run with sudo): whether such a key still unlocks when used as the owner is unknown (a CryptoKit
+   key's access control may or may not depend on the uid that made it). The owner's Mac check
+   records it (item 2). The docs state the remedy unconditionally, since it is right either way: if a
+   slot enrolled with sudo before this version doesn't unlock, run `recover` again (sudo now creates
+   the key as the owner).
 7. **If `seteuid` isn't enough.** The owner's experiment shows LocalAuthentication follows the
    effective uid. If the Release build or a case in item 2 shows otherwise, the alternative is a forked
    child that drops to the owner with a real `setuid` and does the Secure Enclave call there. Don't
@@ -89,12 +95,6 @@ Secure Enclave key as root (and `init`/`slot request` do too when run with sudo)
    thread (it blocks during the Touch ID prompt, inside the scope). Note this in the decorator's
    comment. If an `Enroll` path happens to call `Wrap` through the decorated reference, the nested
    scope is harmless (same owner).
-6. **Keys created as root before this fix** (`recover --secure-enclave`, or `init`/`slot request`
-   run with sudo): whether such a key still unlocks when used as the owner is unknown (a CryptoKit
-   key's access control may or may not depend on the uid that made it). The owner's Mac check
-   records it (item 2). The docs state the remedy unconditionally, since it is right either way: if a
-   slot enrolled with sudo before this version doesn't unlock, run `recover` again (sudo now creates
-   the key as the owner).
 
 ## Items
 
