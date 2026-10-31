@@ -45,7 +45,7 @@ public static class HardwareBlobLocator
         // KEK_slot a classic vault's master key.
         if (config.PendingSlotId is not null && config.PendingSlotHwBlob is null)
             throw new TswapException(
-                $"Config is corrupted: this machine's pending '{backend.DisplayName()}' slot request has no hardware blob. " +
+                $"Config is corrupted: this machine's pending '{backend.DisplayName}' slot request has no hardware blob. " +
                 "Run 'tswap slot request' again on this machine.");
         if (config.PendingSlotHwBlob is not null && config.PendingSlotId is not null)
         {
@@ -99,7 +99,7 @@ public static class HardwareBlobLocator
 
         if (slot.HwBlob is not { Length: > 0 } hwBlob)
             throw new TswapException(
-                $"Config is corrupted: this machine's keyring slot has no '{backend.DisplayName()}' hardware blob. " +
+                $"Config is corrupted: this machine's keyring slot has no '{backend.DisplayName}' hardware blob. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
         return hwBlob;

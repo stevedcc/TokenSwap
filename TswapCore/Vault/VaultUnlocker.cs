@@ -50,7 +50,7 @@ public sealed class VaultUnlocker
                 // overrideKey's effect. That's a composition-root wiring bug; fail loudly.
                 if (!_backends.TryAdd(backend.Backend, backend))
                     throw new ArgumentException(
-                        $"Duplicate hardware backend registration for '{backend.Backend.DisplayName()}' " +
+                        $"Duplicate hardware backend registration for '{backend.Backend.DisplayName}' " +
                         "— a backend for this value is already registered.", nameof(additionalBackends));
     }
 
@@ -359,7 +359,7 @@ public sealed class VaultUnlocker
         var backend = config.Backend ?? HardwareBackend.YubiKey;
         if (!_backends.TryGetValue(backend, out var service))
             throw new TswapException(
-                $"This vault uses the '{backend.DisplayName()}' hardware backend, which this build of tswap does not support. " +
+                $"This vault uses the '{backend.DisplayName}' hardware backend, which this build of tswap does not support. " +
                 "Use a build that includes it, or restore a vault created with a supported backend.");
 
         // Single-device backends (TPM, Secure Enclave) never choose a serial.

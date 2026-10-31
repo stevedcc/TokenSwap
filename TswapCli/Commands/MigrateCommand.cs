@@ -31,7 +31,7 @@ public sealed class MigrateCommand : ICliCommand
         if (config.Backend is not (null or HardwareBackend.YubiKey))
         {
             c.Out.WriteLine($"'migrate' only applies to YubiKey vaults. This vault uses the " +
-                $"'{config.Backend?.DisplayName()}' backend, which has no touch/entropy settings to migrate.");
+                $"'{config.Backend?.DisplayName}' backend, which has no touch/entropy settings to migrate.");
             return 0;
         }
 
@@ -93,7 +93,7 @@ public sealed class MigrateCommand : ICliCommand
         c.SetForeground(needsRngPrompt ? ConsoleColor.Yellow : ConsoleColor.Green);
         c.Out.WriteLine(needsRngPrompt
             ? "  Entropy mode:     not configured (defaults to system RNG) ⚠"
-            : $"  Entropy mode:     {config.RngMode?.DisplayName()} ✓");
+            : $"  Entropy mode:     {config.RngMode?.DisplayName} ✓");
         c.ResetColor();
 
         c.SetForeground(needsChallengeMigration ? ConsoleColor.Yellow : ConsoleColor.Green);

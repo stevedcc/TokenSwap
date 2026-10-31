@@ -258,7 +258,7 @@ public static class SlotEnrollmentFileCodec
         }
         if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
             throw new TswapException(
-                $"Malformed {what}: it names the '{backend!.Value.DisplayName()}' backend but carries a YubiKey slot blob.");
+                $"Malformed {what}: it names the '{backend!.Value.DisplayName}' backend but carries a YubiKey slot blob.");
         SlotReceiptCodec.ValidateHwBlob(hwBlob, what);
     }
 

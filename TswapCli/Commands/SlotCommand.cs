@@ -338,7 +338,7 @@ public sealed class SlotCommand : ICliCommand
         {
             if (request.HwBlob is null)
                 throw new TswapException(
-                    $"This '{requestedBackend.DisplayName()}' slot request carries no hardware blob, so no device could open " +
+                    $"This '{requestedBackend.DisplayName}' slot request carries no hardware blob, so no device could open " +
                     "its slot. On the requesting machine, run its 'tswap slot request' again.");
             enrolled = requestedBackend == HardwareBackend.Tpm ? "its TPM" : "its Secure Enclave";
         }
@@ -478,7 +478,7 @@ public sealed class SlotCommand : ICliCommand
                 ? "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
                   "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
                   "it approved again."
-                : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName()}' slot request has no hardware " +
+                : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName}' slot request has no hardware " +
                   "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
         var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
@@ -509,8 +509,8 @@ public sealed class SlotCommand : ICliCommand
                 : "This approve file carries no hardware blob for the new slot. Have it approved again with this tswap version.");
         if ((approve.NewSlotBackend ?? HardwareBackend.YubiKey) != backend)
             throw new TswapException(
-                $"This approve file is for a '{(approve.NewSlotBackend ?? HardwareBackend.YubiKey).DisplayName()}' slot, which does not " +
-                $"match this machine's pending request ('{backend.DisplayName()}'). " +
+                $"This approve file is for a '{(approve.NewSlotBackend ?? HardwareBackend.YubiKey).DisplayName}' slot, which does not " +
+                $"match this machine's pending request ('{backend.DisplayName}'). " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
         var pendingHwBlob = DecodePending(config.PendingSlotHwBlob, "hardware blob");
         var approveHwBlob = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot hardware blob");

@@ -72,7 +72,7 @@ internal static class HardwareServices
     {
         if (!requirePresence && backend != HardwareBackend.SecureEnclave)
             throw new ArgumentException(
-                $"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName()}'", nameof(requirePresence));
+                $"Only a Secure Enclave enrolment can choose no presence, not '{backend.DisplayName}'", nameof(requirePresence));
 
         switch (backend)
         {
