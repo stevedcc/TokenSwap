@@ -32,7 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
-| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, simulator-verified only. Windows: CNG Platform Crypto Provider, VM-verified only |
+| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, verified on a physical Intel PTT (#155). Windows: CNG Platform Crypto Provider, verified on a Parallels virtual TPM and, during development, on a physical TPM (Dell XPS 17 9710); a v0.1.0 re-check is open (#156) |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence via the key's access control, chosen at enrolment (`--with-touch` / `--no-touch`, brief T11) and fixed in the key |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
@@ -496,7 +496,7 @@ Codesigning (Developer ID, notarization) still matters for eventually **distribu
 smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
 backend functions. It does not block building, testing, or using this backend locally today.
 
-## Linux TPM: implemented, verified only against a software simulator
+## Linux TPM: implemented, verified on a software simulator and on a physical Intel PTT
 
 `TswapCore/Vault/LinuxTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
 `TswapCore/Vault/Interop/Tpm2ToolsInterop.cs`, which shells out to the `tpm2-tools` CLI
@@ -525,7 +525,25 @@ with a TPM-reported `tpm:parameter(1):integrity check failed` error. That is exa
 "machine-bound, invalidated on factory reset" property this backend needs, with zero extra
 bookkeeping.
 
-### Status: PoC-grade, simulator-verified only — not yet run against real TPM hardware
+### Status: verified on one physical TPM (Intel PTT), single vendor
+
+**Physical hardware (2026-10-29, #155):** a CWWK CW-MBX-AD12 (Intel i3-1215U, firmware TPM: Intel
+PTT, manufacturer `INTC`), the host TPM passed through to a Fedora CoreOS 44 VM on Proxmox
+(`-tpmdev passthrough,…,cancel-path=/dev/null`; a CRB TPM has no cancel file). Results: two
+`tpm2_createprimary -C o` calls give byte-identical public areas (about **1.8 s each** on PTT,
+milliseconds on swtpm); `init --tpm` → `create` → read works, and the value survives a guest
+reboot; an unlock takes **2.5 to 2.9 s**, almost all of it regenerating the primary key. With empty
+owner auth and an unauthorised sealed object tswap makes no auth attempts, so the lockout counter
+stays 0 (a wrong *lockout* auth on this PTT blocks lockout-auth use for 24 hours). Two bugs found
+on that run were fixed in brief T1. Since then the same machine has run every hardware check of
+briefs T5–T12 (remote enrolment, record store, the broker, sudo unlock as root and as a `tss`
+member), with the lockout counter at 0 throughout.
+
+**Still open:** a full host power cycle (a VM reboot doesn't power-cycle the PTT), `tpm2_clear`
+(the TPM holds the router's vault), and a second vendor (a discrete TPM). The paragraphs below are
+from the simulator phase; their "no real hardware" points are superseded by this one.
+
+#### Simulator phase (before 2026-10-29)
 
 Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`, plus the full test suite),
 **but every verification so far is against a software TPM simulator (swtpm), never a physical
@@ -604,7 +622,7 @@ structs and the ESAPI's own transient-object/session lifecycle (which, per the f
 finding above, has sharp edges worth keeping behind a CLI's higher-level error handling rather than
 reimplementing directly).
 
-## Windows TPM: implemented, verified only against this machine's (virtual) TPM
+## Windows TPM: implemented, verified on a virtual TPM and, during development, on a physical one
 
 `TswapCore/Vault/WindowsTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
 `TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, which reaches Windows' TPM-backed CNG
@@ -648,13 +666,24 @@ an isolated key with nothing to configure. The tradeoff is that re-running `init
 leaves the old named key orphaned in the PCP key store rather than cleanly overwriting it —
 harmless key-store clutter, not a correctness issue: each vault uses only its own machine slot's key.
 
-### Status: PoC-grade, verified only against a VM's virtual TPM — not physical TPM hardware
+### Status: virtual TPM verified; physical TPM tested during development, v0.1.0 re-check open
+
+**Physical hardware:** during development (July 2026) the owner also ran the backend on a Dell XPS
+17 9710 (Windows 11, x64, very likely Intel PTT). That run wasn't written down at the time, so its
+commands and results are not recorded here (#156). It used the July code: a single-slot
+`init --tpm` vault, before the keyring v3 machine slot, the recovery slot and remote enrolment. A
+check list for the released v0.1.0 on two physical machines (a Windows 10 desktop and the XPS) is
+in #156.
+
+The rest of this section describes the virtual-TPM verification.
+
+#### Virtual TPM (Parallels)
 
 Functionally verified end-to-end (`tswap init --tpm` → `add`/`get`/`list`, the full test suite,
 and a NativeAOT `dotnet publish -c Release`), all against a **Parallels VM running Windows 11
 ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still open:
 
-- **No physical TPM hardware has been used at any point.** A software/virtual TPM proves the
+- **Physical TPM: only the undocumented July development run (see above).** A software/virtual TPM proves the
   code speaks the CNG/PCP APIs correctly — key creation, wrap/unwrap round-trips, error
   handling — it does not prove the real hardware root-of-trust property holds. Real hardware may
   differ in lockout/anti-hammering behavior, timing, or vendor-specific PCP quirks.
