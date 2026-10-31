@@ -92,6 +92,23 @@ jobs:
           TSWAP_E2E_BINARY="$BINARY" \
             dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
+      # TEMPORARY (#210, removed before merge): repeat the E2E category on macOS to catch the
+      # Ctrl-C flake with the read-loop diagnostics.
+      - name: E2E stress (macOS, temporary)
+        if: runner.os == 'macOS'
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          BINARY=$(find "$PWD/TswapCli/bin/Debug" -type f -path '*/publish/tswap' -print -quit)
+          fails=0
+          for i in $(seq 1 20); do
+            if ! TSWAP_E2E_BINARY="$BINARY" dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E" > "$RUNNER_TEMP/e2e-$i.log" 2>&1; then
+              fails=$((fails+1)); echo "::warning::iteration $i failed"
+              grep -E '\[FAIL\]|Expected exit|Read loop' "$RUNNER_TEMP/e2e-$i.log" | head -20
+            fi
+          done
+          echo "E2E stress: $fails of 20 iterations failed"
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
