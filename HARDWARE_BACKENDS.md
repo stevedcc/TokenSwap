@@ -32,7 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
-| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, verified on a physical Intel PTT (#155). Windows: CNG Platform Crypto Provider, verified on a Parallels virtual TPM and, during development, on a physical TPM (Dell XPS 17 9710); a v0.1.0 re-check is open (#156) |
+| TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, verified on a physical Intel PTT (#155). Windows: CNG Platform Crypto Provider, verified on a Parallels virtual TPM; also run on a physical TPM (Dell XPS 17 9710) during development, not recorded; a v0.1.0 re-check is open (#156) |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence via the key's access control, chosen at enrolment (`--with-touch` / `--no-touch`, brief T11) and fixed in the key |
 
 A rename of the old `IYubiKeyService` would have kept `Challenge(serial, string)` and
@@ -527,20 +527,23 @@ bookkeeping.
 
 ### Status: verified on one physical TPM (Intel PTT), single vendor
 
-**Physical hardware (2026-10-29, #155):** a CWWK CW-MBX-AD12 (Intel i3-1215U, firmware TPM: Intel
-PTT, manufacturer `INTC`), the host TPM passed through to a Fedora CoreOS 44 VM on Proxmox
+**Physical hardware (2026-10-29, #155):** the router's Proxmox host, a CWWK CW-MBX-AD12 with an
+Intel i3-1215U (firmware TPM: Intel PTT, Alder Lake, manufacturer `INTC`; model from #155's first
+comment), the host TPM passed through to a Fedora CoreOS 44 VM on Proxmox
 (`-tpmdev passthrough,…,cancel-path=/dev/null`; a CRB TPM has no cancel file). Results: two
 `tpm2_createprimary -C o` calls give byte-identical public areas (about **1.8 s each** on PTT,
 milliseconds on swtpm); `init --tpm` → `create` → read works, and the value survives a guest
 reboot; an unlock takes **2.5 to 2.9 s**, almost all of it regenerating the primary key. With empty
 owner auth and an unauthorised sealed object tswap makes no auth attempts, so the lockout counter
 stays 0 (a wrong *lockout* auth on this PTT blocks lockout-auth use for 24 hours). Two bugs found
-on that run were fixed in brief T1. Since then the same machine has run every hardware check of
-briefs T5–T12 (remote enrolment, record store, the broker, sudo unlock as root and as a `tss`
-member), with the lockout counter at 0 throughout.
+on that run (a relative config folder, `sudo -u` picking the wrong vault) were fixed in PR #179
+(brief T1). Since then the same machine has run every hardware check of briefs T5–T12, all on
+keyring vaults (`init --tpm` makes one since #151), with the lockout counter at 0 throughout;
+the checks are listed in the project's retros (remote enrolment, record store, the broker, sudo
+unlock as root and as a `tss` member).
 
 **Still open:** a full host power cycle (a VM reboot doesn't power-cycle the PTT), `tpm2_clear`
-(the TPM holds the router's vault), and a second vendor (a discrete TPM). The paragraphs below are
+(the TPM holds the router's vault), and a second TPM vendor. The paragraphs below are
 from the simulator phase; their "no real hardware" points are superseded by this one.
 
 #### Simulator phase (before 2026-10-29)
@@ -622,7 +625,7 @@ structs and the ESAPI's own transient-object/session lifecycle (which, per the f
 finding above, has sharp edges worth keeping behind a CLI's higher-level error handling rather than
 reimplementing directly).
 
-## Windows TPM: implemented, verified on a virtual TPM and, during development, on a physical one
+## Windows TPM: implemented, verified on a virtual TPM, also run on a physical one during development
 
 `TswapCore/Vault/WindowsTpmHardwareService.cs` implements `IHardwareKeyService`, backed by
 `TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, which reaches Windows' TPM-backed CNG
@@ -670,8 +673,8 @@ harmless key-store clutter, not a correctness issue: each vault uses only its ow
 
 **Physical hardware:** during development (July 2026) the owner also ran the backend on a Dell XPS
 17 9710 (Windows 11, x64, very likely Intel PTT). That run wasn't written down at the time, so its
-commands and results are not recorded here (#156). It used the July code: a single-slot
-`init --tpm` vault, before the keyring v3 machine slot, the recovery slot and remote enrolment. A
+commands and results are not recorded here (#156). In July the code supported only a single-slot
+`init --tpm` vault; the keyring v3 machine slot, the recovery slot and remote enrolment came later. A
 check list for the released v0.1.0 on two physical machines (a Windows 10 desktop and the XPS) is
 in #156.
 
