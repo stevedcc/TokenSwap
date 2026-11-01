@@ -291,8 +291,11 @@ builder pins today's behaviour with tests first, see Stage 2).
      on stdout and stderr (a diff-printing dry run would hand the agent every secret).
    - **Completeness:** the plan records the scan's root and file list under the keyed checksum; apply
      re-runs detection over **every** scanned file, including files the plan marks done, and refuses
-     if any flagged value is missing from the plan or still present in a done file (so dropping a
-     plan entry, shrinking the scope or forging a done entry can't leave a secret behind silently).
+     if any flagged **extractable** value is missing from the plan or still present in a done file
+     (so dropping a plan entry, shrinking the scope or forging a done entry can't leave a secret
+     behind silently). Values the design reports but does not extract (secrets in comments,
+     DSN/URL-embedded credentials, JSON-in-string) are carried in the plan as acknowledged leftovers
+     and enforced by `check --verify`.
    - **Round-trip proof:** before rewriting, tswap renders each marker or placeholder the way
      `apply` will, using the **vault value** it will substitute (which, after dedupe, may be an
      existing secret's value), and checks that the rendered file both reproduces the original span's
@@ -408,9 +411,11 @@ location as "rotate or remove by hand". It prints locations and names, never val
   review and `check --verify` are the backstops.
 - **Pre-existing, unchanged:** `run` puts substituted values in the child's argv (visible in `ps`
   to the same user).
-- **Plan files and scan output:** contain no values and no unkeyed hashes of values or files; for
-  values tswap flags, only coarse facts (kind, length bucket, weak/strong), so neither the plan
-  nor the scan narrows the search space for a guess.
+- **Plan files and scan output:** contain no values and no unkeyed hashes of values or files. Strong
+  flagged values and high-entropy unflagged ones get only coarse facts (kind, a length bucket,
+  encoding hints); weak values get only "weak secret (rotate)". A length bucket narrows a guess a
+  little; that is the accepted coarsening, and weak values, the only ones guessable in practice, get
+  no length information at all.
 - **Transport:** metadata and value sections are padded like today's payload; record counts and
   edit timing stay the documented metadata leak.
 
