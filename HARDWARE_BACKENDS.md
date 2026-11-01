@@ -349,7 +349,7 @@ Setup (an unsigned local build and a throwaway config folder; never your real va
 
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
-BIN="$PWD/TswapCli/bin/Release/net10.0/osx-arm64/publish"   # tswap + libtswapse.dylib
+BIN="$PWD/TswapCli/bin/Release/net11.0/osx-arm64/publish"   # tswap + libtswapse.dylib
 T="$BIN/tswap"
 export TSWAP_CONFIG_DIR="$(mktemp -d)"                      # the no-touch vault (steps 1-7)
 sw_vers -productVersion                                     # record: macOS version

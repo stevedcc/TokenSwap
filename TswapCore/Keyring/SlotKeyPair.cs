@@ -1,4 +1,4 @@
-using RebexCurve25519 = Rebex.Security.Cryptography.Curve25519;
+using System.Security.Cryptography;
 
 namespace TswapCore.Keyring;
 
@@ -27,12 +27,10 @@ namespace TswapCore.Keyring;
 /// the wrap/unwrap flow and the slot request/approve/accept commands are explicitly out of
 /// scope here (issues #116 and #121).</para>
 ///
-/// <para><b>Curve choice / dependency:</b> the .NET BCL has no built-in X25519 as of this SDK
-/// (its ECDH support covers only NIST curves). <c>Rebex.Elliptic.Curve25519</c> is a small,
-/// pure-managed (no native/P-Invoke) port of D.J. Bernstein's reference implementation — chosen
-/// over a libsodium binding specifically so this adds no NativeAOT publish complexity (no native
-/// binary per OS/arch to bundle), unlike the existing hardware backends' unavoidable native
-/// shims.</para>
+/// <para><b>Curve choice / dependency:</b> the BCL's <see cref="X25519DiffieHellman"/> (new in
+/// .NET 11: OpenSSL on Linux, CNG on Windows, CryptoKit on macOS). Until .NET 11 this
+/// used <c>Rebex.Elliptic.Curve25519</c>; both are RFC 7748 X25519, so keys written by either
+/// work with the other (pinned by <c>SlotKeyPairTests.ComputeSharedSecret_MatchesKeysWrittenByRebex</c>).</para>
 /// </summary>
 public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
 {
@@ -40,20 +38,23 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     public const int KeySize = 32;
 
     /// <summary>
-    /// Generates a fresh, randomly-clamped X25519 keypair. Each call produces an independent
+    /// Generates a fresh X25519 keypair with an RFC 7748 §5-clamped private key. Each call produces an independent
     /// keypair — callers enrolling a new slot call this once and persist both halves per the
     /// keyring's slot schema (public in the clear, private destined for hardware wrapping by a
     /// later wave).
     /// </summary>
     public static SlotKeyPair Generate()
     {
-        var curve = new RebexCurve25519();
-        // GetPrivateKey() triggers the library's internal EnsurePrivateKey(), which generates
-        // and RFC-7748-clamps 32 random bytes on first use and caches them; GetPublicKey() then
-        // reuses that same cached private key rather than generating a second, unrelated one.
-        var privateKey = curve.GetPrivateKey();
-        var publicKey = curve.GetPublicKey();
-        return new SlotKeyPair(publicKey, privateKey);
+        using var key = X25519DiffieHellman.GenerateKey();
+        var privateKey = key.ExportPrivateKey();
+        // RFC 7748 §5 clamping, stored as v0.1.0 (Rebex) stored it: the providers clamp only when
+        // deriving and need not export clamped bytes, while Rebex used a supplied key as it is,
+        // so an unclamped key from a newer tswap would give a v0.1.0 binary a different secret.
+        // Idempotent, and the public key is unchanged by it.
+        privateKey[0] &= 0xF8;
+        privateKey[31] &= 0x7F;
+        privateKey[31] |= 0x40;
+        return new SlotKeyPair(key.ExportPublicKey(), privateKey);
     }
 
     /// <summary>
@@ -64,16 +65,18 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     /// reintroduce this curve dependency — this method is <b>not itself</b> the wrap/unwrap
     /// flow, just the underlying Diffie-Hellman primitive.
     ///
-    /// <paramref name="privateKey"/> must already be RFC-7748-clamped, as any key returned by
-    /// <see cref="Generate"/> is; raw external randomness (e.g. from a known-answer test vector)
-    /// must be clamped by the caller first — <c>Rebex.Elliptic.Curve25519</c> does this
-    /// internally only for its own randomly-generated keys, not for keys supplied via
-    /// <c>FromPrivateKey</c>.
+    /// Throws <see cref="CryptographicException"/> for a low-order <paramref name="peerPublicKey"/>
+    /// (one that gives an all-zero shared secret), so a tampered public key fails instead of
+    /// deriving a KEK from a known input. OpenSSL and CNG already refuse to derive one; the
+    /// all-zero check below makes that tswap's own guarantee rather than provider behaviour.
     /// </summary>
     public static byte[] ComputeSharedSecret(byte[] privateKey, byte[] peerPublicKey)
     {
-        var curve = new RebexCurve25519();
-        curve.FromPrivateKey(privateKey);
-        return curve.GetSharedSecret(peerPublicKey);
+        using var key = X25519DiffieHellman.ImportPrivateKey(privateKey);
+        using var peer = X25519DiffieHellman.ImportPublicKey(peerPublicKey);
+        var secret = key.DeriveRawSecretAgreement(peer);
+        if (!secret.AsSpan().ContainsAnyExcept((byte)0))
+            throw new CryptographicException("X25519 key agreement produced an all-zero secret (low-order peer public key)");
+        return secret;
     }
 }

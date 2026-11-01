@@ -142,6 +142,45 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.DoesNotContain("Not initialized", names.stdout + names.stderr);
     }
 
+    /// <summary>
+    /// X25519 (SlotKeyPair, the .NET 11 BCL's X25519DiffieHellman) inside the published binary,
+    /// which CI runs as NativeAOT: <c>init --keyring</c> wraps the vault key to a fresh recovery
+    /// keypair (generate, import, derive), and <c>recover --yubikey</c> unwraps it again with the
+    /// printed recovery key. A plain <c>init</c> makes a classic vault and never touches X25519.
+    /// </summary>
+    [Fact]
+    public void InitKeyring_ThenRecoverWithTheRecoveryKey_TheSecretReadsBack()
+    {
+        var init = RunTswapWithStdin("\n\n", "init", "--keyring");
+        Assert.True(init.exitCode == 0, $"init --keyring failed: {init.stdout}{init.stderr}");
+        var lines = init.stdout.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        var label = lines.IndexOf("Recovery Private Key (base64):");
+        Assert.True(label >= 0, $"init --keyring printed no recovery key: {init.stdout}");
+        var recoveryKey = lines[label + 1];
+        var recoveryKeyBytes = Convert.FromBase64String(recoveryKey);
+        Assert.Equal(32, recoveryKeyBytes.Length);
+        // Stored in RFC 7748 §5-clamped form, as v0.1.0 stored it (SlotKeyPair.Generate). Checked
+        // here too because this runs on every CI OS; the unit test cannot fail on Linux, where
+        // OpenSSL already clamps at key generation.
+        Assert.Equal(0, recoveryKeyBytes[0] & 0x07);
+        Assert.Equal(0, recoveryKeyBytes[31] & 0x80);
+        Assert.Equal(0x40, recoveryKeyBytes[31] & 0x40);
+
+        var ingest = RunTswapWithStdin("e2e-recovered-value", "ingest", "e2e-secret");
+        Assert.True(ingest.exitCode == 0, $"ingest failed: {ingest.stdout}{ingest.stderr}");
+
+        var recover = RunTswapWithStdin(recoveryKey + "\n\n\n", "recover", "--yubikey");
+        Assert.True(recover.exitCode == 0, $"recover failed: {recover.stdout}{recover.stderr}");
+        // ASCII part of "✓ Recovered: ... now opens this vault as its own slot": redirected stdout
+        // on Windows is not UTF-8, so the check mark itself does not survive there (CI, #216).
+        Assert.True(recover.stdout.Contains("now opens this vault as its own slot", StringComparison.Ordinal),
+            $"recover did not report the new slot: {recover.stdout}{recover.stderr}");
+
+        var get = RunTswap("get", "e2e-secret");
+        Assert.True(get.exitCode == 0, $"get failed: {get.stdout}{get.stderr}");
+        Assert.Contains("e2e-recovered-value", get.stdout);
+    }
+
     // --- Create ---
 
     // --- Names ---

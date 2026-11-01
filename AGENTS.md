@@ -16,9 +16,9 @@ C# application with a single entry point:
 ```bash
 # Build
 dotnet publish TswapCli/TswapCli.csproj -c Release
-# Linux:   cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
-# Windows: copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
+# Linux:   cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/tswap /usr/local/bin/
+# Windows: copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
 # Linux/macOS:
@@ -214,5 +214,5 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 - 2 YubiKeys with slot 2 configured:
   - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
   - **Less secure**: `ykman otp chalresp --generate 2` (no button press, for CI/automation only)
-- .NET 10 SDK (build time only)
+- The .NET SDK that `global.json` names (.NET 11; build time only)
 - For sudo commands: copy the compiled binary to `/usr/local/bin`
