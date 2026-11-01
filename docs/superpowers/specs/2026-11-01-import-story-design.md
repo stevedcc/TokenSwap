@@ -37,8 +37,10 @@ tswap check ./charts                         # every marker resolves
 tswap apply charts/billing/values.yaml       # deploy-time substitution, as today
 ```
 
-The agent never sees a secret value. If it later reads a file or a command's output, `redact` and
-`run` mask any known secret by fingerprint, decrypting nothing they don't substitute.
+tswap never shows the agent a secret value it can detect. If the agent later reads a file or a
+command's output, `redact` and `run` mask any known secret by fingerprint, decrypting nothing they
+don't substitute. (`run` itself hands substituted values to the child process the agent chose; see
+the trust model.)
 
 ## Goals
 
@@ -85,6 +87,13 @@ design gives is narrower and honest:
   `burned`. Everything that reveals or administers values stays behind the sudo boundary as today
   (`get`, `export`, `import`, `list`, `vault reindex`, `migrate`, slot and key handling); an agent
   never runs sudo (README "Recommended Agent Permissions").
+- **`run` is the documented exception.** It decrypts the tokens it substitutes and hands them to a
+  child process the caller chose; its redaction scrubs the terminal stream, not what the child
+  does with its arguments or environment. An agent allowed to use `run` can learn any value it
+  substitutes through a child that transforms or writes it (README: "Sophisticated exfiltration via
+  `run`" is a non-goal; the blocklist catches honest mistakes). This design doesn't change that;
+  where it matters, the operator restricts which secrets an agent's tooling may name (the broker,
+  and later per-socket tags, #221).
 - **Out of the tooling's reach, named as such:** copies of values outside the scanned files (git
   history beyond the scanned paths, editor swap files, CI logs, anything the agent read itself), and
   secrets the detector can't recognise (a low-entropy value under an innocent key: the owner's
@@ -133,8 +142,11 @@ Each record file keeps its cleartext header and gains two kinds of encrypted sec
 - **Consistency rules:** a record whose metadata lists a version without a value section, or holds
   a value section the metadata doesn't list, fails closed (unreadable, reported). Two ciphertexts for
   one version (possible only through a bug) are a merge error, not a silent choice.
-- **Fingerprint variant set is versioned** in the metadata, so adding variants later (hex,
-  URL-encoding) marks older records as not fully fingerprinted and requires a reindex.
+- **Fingerprint variant set is versioned** in the metadata. A record with an **older** variant set is
+  still matched with the fingerprints it has, and commands warn that a reindex would add the new
+  variants; only a record with **no** fingerprints puts the vault in the "not fully fingerprinted"
+  state that makes `redact`/`tocomment`/`extract` refuse. (So a release that adds, say, hex
+  variants never turns masking off.)
 - **Dropping a version** (history bound, delete) removes its value section and its fingerprints
   together.
 - Retained versions: current plus previous (today's one-level rotation history); a bounded longer
@@ -251,8 +263,10 @@ builder pins today's behaviour with tests first, see Stage 2).
      hints. They are burned on ingest anyway, and detail would only help guess them (`redact` is a
      guessing oracle);
    - values whose fingerprint matches a vault secret: treated as flagged, with the matching name;
-   - values tswap does not flag: full detail (exact length, character classes, entropy estimate),
-     since pass 3 shows them anyway unless the agent marks them secret.
+   - values tswap does not flag: **low-entropy** ones get full detail (exact length, character
+     classes, entropy estimate), since pass 3 shows them anyway; **high-entropy** ones get the same
+     coarse facts as strong secrets (kind, length bucket), matching pass 3, which shows them
+     coarsened (they're the detector's likeliest false negatives).
    Secret-looking text in **key paths and file names** is masked too.
 2. **Classify** (agent): marks which values are secrets in the plan.
 3. **View** (`tswap extract <path> --view --plan plan.yaml`): the files again, with every value
@@ -275,14 +289,18 @@ builder pins today's behaviour with tests first, see Stage 2).
    never leaves a value in neither place.
    - **`--dry-run` prints spans, marker names and structure, never substituted or original text**,
      on stdout and stderr (a diff-printing dry run would hand the agent every secret).
-   - **Completeness:** the plan's coverage is authenticated: apply re-runs detection and refuses if
-     any flagged value in the scanned files is missing from the plan (so dropping a plan entry
-     can't leave a secret behind silently).
+   - **Completeness:** the plan records the scan's root and file list under the keyed checksum; apply
+     re-runs detection over **every** scanned file, including files the plan marks done, and refuses
+     if any flagged value is missing from the plan or still present in a done file (so dropping a
+     plan entry, shrinking the scope or forging a done entry can't leave a secret behind silently).
    - **Round-trip proof:** before rewriting, tswap renders each marker or placeholder the way
-     `apply` will and checks it reproduces the original value's exact bytes (YAML block-scalar
+     `apply` will, using the **vault value** it will substitute (which, after dedupe, may be an
+     existing secret's value), and checks that the rendered file both reproduces the original span's
+     exact bytes and is still valid in its format (YAML block-scalar
      chomping and trailing newlines, quoted-scalar escaping, JSON escaping, XML entities, base64
-     wrapping/padding/url form). Where it can't, that location is refused and listed, never
-     rewritten.
+     wrapping/padding/url form). Where it can't (for example a dedupe match through the
+     whitespace-stripped variant, whose vault value has line breaks the file's single-line scalar
+     can't hold), that location is refused and listed, never rewritten.
    - **Crash recovery:** the plan records which files are done (with their post-rewrite checksum),
      so a re-run after a crash finishes the remaining files instead of refusing on the changed ones.
    - The plan file is sensitive (a complete map of where secrets lived): the summary recommends
@@ -332,7 +350,9 @@ builder pins today's behaviour with tests first, see Stage 2).
   `--view` and the final apply refuse if a file changed. (A plain hash of a file containing a
   low-entropy secret would let the agent brute-force it, so the hash must be keyed.)
 - **Marker injection:** `add`, `create`, `ingest` and `extract` refuse a value that contains marker
-  or placeholder syntax (`# tswap:`, `{{tswap:`), and every substitution (`apply`, placeholders,
+  or placeholder syntax, using exactly the patterns the substitution side matches (`Apply`'s marker
+  regexes, which allow spacing such as `#  tswap :`, and the placeholder pattern including its
+  encoding suffix), and every substitution (`apply`, placeholders,
   RedactingPty) is single-pass over spans, so a value can never become a live marker for another
   secret.
 - **YAML anchors and aliases:** a secret value that carries an anchor (`&pw`) used elsewhere is
