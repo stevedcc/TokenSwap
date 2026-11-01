@@ -56,7 +56,6 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         };
         foreach (var a in args)
             psi.ArgumentList.Add(a);
-        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
         if (withVault)
         {
             psi.Environment["TSWAP_TEST_KEY"] = TestKeyHex;

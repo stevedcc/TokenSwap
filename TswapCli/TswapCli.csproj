@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
-    <PackageReference Include="RedactingPty" Version="1.0.0" />
+    <PackageReference Include="RedactingPty" Version="1.0.2" />
   </ItemGroup>
 
   <ItemGroup>

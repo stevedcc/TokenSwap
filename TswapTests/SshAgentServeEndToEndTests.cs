@@ -60,7 +60,6 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
         };
         foreach (var a in args)
             psi.ArgumentList.Add(a);
-        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
         psi.Environment["TSWAP_TEST_KEY"] = TestKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = ConfigDir;
