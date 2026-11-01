@@ -140,7 +140,7 @@ public class SlotKeyPairTests
         "0100000000000000000000000000000000000000000000000000000000000000",
         "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
         "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
-        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p - 1 (order 2)
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p - 1 (order 4; libsodium labels it order 2)
         "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p (= 0)
         "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", // p + 1 (= 1)
     ];

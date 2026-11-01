@@ -157,8 +157,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var init = RunTswapWithStdin("\n\n", "init", "--keyring");
         Assert.True(init.exitCode == 0, $"init --keyring failed: {init.stdout}{init.stderr}");
         var lines = init.stdout.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
-        var recoveryKey = lines[lines.IndexOf("Recovery Private Key (base64):") + 1];
-        Assert.Equal(32, Convert.FromBase64String(recoveryKey).Length);
+        var label = lines.IndexOf("Recovery Private Key (base64):");
+        Assert.True(label >= 0, $"init --keyring printed no recovery key: {init.stdout}");
+        var recoveryKey = lines[label + 1];
+        var recoveryKeyBytes = Convert.FromBase64String(recoveryKey);
+        Assert.Equal(32, recoveryKeyBytes.Length);
+        // Stored in RFC 7748 §5-clamped form, as v0.1.0 stored it (SlotKeyPair.Generate). Checked
+        // here too because this runs on every CI OS; the unit test cannot fail on Linux, where
+        // OpenSSL already clamps at key generation.
+        Assert.Equal(0, recoveryKeyBytes[0] & 0x07);
+        Assert.Equal(0, recoveryKeyBytes[31] & 0x80);
+        Assert.Equal(0x40, recoveryKeyBytes[31] & 0x40);
 
         var ingest = RunTswapWithStdin("e2e-recovered-value", "ingest", "e2e-secret");
         Assert.True(ingest.exitCode == 0, $"ingest failed: {ingest.stdout}{ingest.stderr}");
