@@ -51,9 +51,6 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
         // deriving and need not export clamped bytes, while Rebex used a supplied key as it is,
         // so an unclamped key from a newer tswap would give a v0.1.0 binary a different secret.
         // Idempotent, and the public key is unchanged by it.
-        privateKey[0] &= 0xF8;
-        privateKey[31] &= 0x7F;
-        privateKey[31] |= 0x40;
         return new SlotKeyPair(key.ExportPublicKey(), privateKey);
     }
 
