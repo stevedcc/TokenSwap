@@ -129,6 +129,35 @@ public class RecoverySlotWrapTests
     }
 
     [Fact]
+    public void Unwrap_LowOrderEphemeralPublicKey_FailsLikeAnyOtherTampering()
+    {
+        // A low-order point makes X25519 itself fail (SlotKeyPair.ComputeSharedSecret throws
+        // CryptographicException). Unwrap must still fail with the same TswapException as a
+        // wrong key or a tampered ciphertext, so the failure stays indistinguishable.
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+
+        var (_, wrapped) = RecoverySlotWrap.Wrap(
+            vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, new byte[SlotKeyPair.KeySize], recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Fact]
+    public void Wrap_LowOrderRecoveryPublicKey_FailsWithTswapException()
+    {
+        // Wrapping K_v to a low-order recovery key would derive the KEK from an all-zero secret
+        // and a salt stored in the clear: a known KEK. It must refuse with a clear error.
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Wrap(
+            vaultKey, new byte[SlotKeyPair.KeySize], FormatVersion, VaultId, K, SlotId));
+        Assert.Contains("recovery public key", ex.Message);
+    }
+
+    [Fact]
     public void Wrap_WrongVaultKeyLength_ThrowsArgumentException()
     {
         var recoveryKeyPair = SlotKeyPair.Generate();
