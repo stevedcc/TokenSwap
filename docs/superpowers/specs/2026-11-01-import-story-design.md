@@ -37,10 +37,10 @@ tswap check ./charts                         # every marker resolves
 tswap apply charts/billing/values.yaml       # deploy-time substitution, as today
 ```
 
-tswap never shows the agent a secret value it can detect. If the agent later reads a file or a
-command's output, `redact` and `run` mask any known secret by fingerprint, decrypting nothing they
-don't substitute. (`run` itself hands substituted values to the child process the agent chose; see
-the trust model.)
+The agent never sees a secret value. As everywhere in tswap, that is the property of normal use,
+not a claim that a determined agent can't get one (owner: "it had never been impossible"; see the
+trust model). If the agent later reads a file or a command's output, `redact` and `run` mask any
+known secret by fingerprint, decrypting nothing they don't substitute.
 
 ## Goals
 
