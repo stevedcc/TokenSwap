@@ -56,9 +56,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
-        // fork() from a JIT-mode .NET process crashes when W^X protection is active.
-        // The deployed AOT binary has no JIT so this is not needed in production.
-        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
         return psi;
     }
 
@@ -326,13 +323,34 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         RunTswap("init");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
+        // The child is a script file printing before / the secret / after (#105 refuses
+        // inline `sh -c` code); tswap execs sh directly with the script and the secret as $1.
+        var childScript = Path.Combine(_tempDir, "print3.sh");
+        File.WriteAllText(childScript, "echo before\necho \"$1\"\necho after\n");
+        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Equal(0, exitCode);
+        Assert.Contains("before",               output);
+        Assert.Contains("after",                output);
+        Assert.DoesNotContain("s3cr3t",         output);
+        Assert.Contains("[REDACTED: my-secret]", output);
+    }
+
+    /// <summary>
+    /// Runs the tswap binary with <paramref name="tswapArgs"/> (a bash-quoted argument string) under
+    /// an outer PTY, so isatty(0/1/2) is true and <c>PtyRunnerFactory.Create()</c> picks
+    /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal, or null
+    /// where openpty isn't available.
+    /// </summary>
+    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs)
+    {
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
         // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
         int ptyRet = OpenPty(ref masterFd, ref slaveFd, nameBuf);
         if (ptyRet == int.MinValue)
-            return; // openpty not available on this platform; skip test
+            return null; // openpty not available on this platform
         if (ptyRet < 0)
             throw new Exception($"openpty failed (errno {Marshal.GetLastPInvokeError()})");
 
@@ -343,23 +361,18 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         //   1. Replace bash's own fds 0/1/2 with the slave PTY (making tswap see a real TTY).
         //   2. Replace bash with the tswap binary so it inherits those slave fds.
         //
-        // The child is a script file printing before / the secret / after (#105 refuses
-        // inline `sh -c` code); tswap execs sh directly with the script and the secret as $1.
-        var childScript = Path.Combine(_tempDir, "print3.sh");
-        File.WriteAllText(childScript, "echo before\necho \"$1\"\necho after\n");
         var scriptPath = Path.Combine(_tempDir, "pty_test.sh");
         File.WriteAllText(scriptPath,
             $"#!/bin/bash\n" +
             $"exec <\"{slavePath}\" >\"{slavePath}\" 2>\"{slavePath}\"\n" +
             $"exec \"{_binaryPath}\"" +
-            $" run sh \"{childScript}\" {{{{my-secret}}}}\n");
+            $" {tswapArgs}\n");
 
         var psi = new ProcessStartInfo { FileName = "bash", UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add(scriptPath);
         psi.Environment["TSWAP_TEST_KEY"]            = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"]    = "1";
         psi.Environment["TSWAP_CONFIG_DIR"]          = _tempDir;
-        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
 
         // Read from the outer PTY master until EIO (all slave fds closed after child exits).
         // poll() with a 500 ms timeout bounds each read attempt so the test can never hang
@@ -374,7 +387,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var sb       = new StringBuilder();
         var buf      = new byte[4096];
         var deadline = DateTime.UtcNow.AddSeconds(60);
-        string output;
         using var process = Process.Start(psi)!;
         try
         {
@@ -408,12 +420,28 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             process.Kill(entireProcessTree: true);
             process.WaitForExit();
         }
-        output = sb.ToString();
-        Assert.Equal(0, process.ExitCode);
-        Assert.Contains("before",               output);
-        Assert.Contains("after",                output);
-        Assert.DoesNotContain("s3cr3t",         output);
-        Assert.Contains("[REDACTED: my-secret]", output);
+        return (process.ExitCode, sb.ToString());
+    }
+
+    /// <summary>
+    /// RedactingPty 1.0.0's forked child crashed (exit 139, no diagnostic) when the command didn't
+    /// exist, on JIT hosts with W^X on (stevedcc/RedactingPty#3, fixed in 1.0.2). tswap's test
+    /// binary is a JIT host and its tests used to set DOTNET_EnableWriteXorExecute=0, which hid it.
+    /// </summary>
+    [Fact]
+    public void Run_CommandNotFound_UnixPty_Exits127WithDiagnostic()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        RunTswap("init");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+
+        if (RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}") is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Equal(127, exitCode);
+        Assert.Contains("redactingpty: exec failed (command not found or not executable)", output);
+        Assert.DoesNotContain("s3cr3t", output);
     }
 
     // --- No args ---
@@ -577,7 +605,6 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         psi.Environment["TSWAP_TEST_KEY"] = _testKeyHex;
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
         psi.Environment["TSWAP_CONFIG_DIR"] = _tempDir;
-        psi.Environment["DOTNET_EnableWriteXorExecute"] = "0";
 
         var sb = new StringBuilder();
         var buf = new byte[4096];
