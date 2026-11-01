@@ -82,16 +82,19 @@ The agent never sees a secret value. If it later reads a file or a command's out
   plaintext find/replace pairs (`StreamReplacement`).
 - Classic single-file vaults (`secrets.json.enc`) decrypt everything by construction.
 
-## Stage 1: foundations (record format v2, fingerprints, reindex, classic deprecation)
+## Stage 1: foundations (record format v3, fingerprints, reindex, classic deprecation)
 
-### Record format v2: split envelopes **(my call; the owner endorsed the direction in #220)**
+### Record format v3: split envelopes **(my call; the owner endorsed the direction in #220)**
+
+(Today's on-disk record format byte is already 2, `KeyringFormat.RecordFormatVersion`; this design
+calls the new layout "v3" throughout.)
 
 Each record file keeps its cleartext header and gains two kinds of encrypted section:
 
 | Section | Contents | Key | Written |
 |---|---|---|---|
-| Metadata (one) | name, record type, created, version stamps, burns, the version list, **fingerprints** of every retained value version, room for labels/tags | `HKDF(K_v, salt = recordId ‖ write stamp, info = "tswap-record-meta-v2")` | on every write |
-| Value (one per retained version) | that version's secret bytes | `HKDF(K_v, salt = recordId ‖ version stamp, info = "tswap-record-value-v2")` | **once**, when the version is created; later writes copy the ciphertext byte for byte |
+| Metadata (one) | name, record type, created, version stamps, burns, the version list, **fingerprints** of every retained value version, room for labels/tags | `HKDF(K_v, salt = recordId ‖ write stamp, info = "tswap-record-meta-v3")` | on every write |
+| Value (one per retained version) | that version's secret bytes | `HKDF(K_v, salt = recordId ‖ version stamp, info = "tswap-record-value-v3")` | **once**, when the version is created; later writes copy the ciphertext byte for byte |
 
 - Each section is AES-256-GCM with a fresh random nonce, padded to the 256-byte bucket, and binds
   the header plus its own role and stamp as associated data (no swapping sections across records,
@@ -112,8 +115,9 @@ base64, base64url; `SecretProcessor.BuildMatchList`), store:
 - a truncated keyed HMAC-SHA-256 of the variant (128 bits), the confirmation.
 
 Keys: `K_fp = HKDF(K_v, info = "tswap-fingerprint-v1")` for the HMAC and
-`K_roll = HKDF(K_v, info = "tswap-rollhash-v1")` for the rolling-hash base; both separate from the
-value, metadata and names keys. Matching domain: the text the commands match today (decoded
+`K_roll = HKDF(K_v, info = "tswap-rollhash-v1")` for the rolling-hash base, and
+`K_plan = HKDF(K_v, info = "tswap-extract-plan-v1")` for `extract`'s file checksums (Stage 4); all
+separate from each other and from the value, metadata and names keys. Matching domain: the text the commands match today (decoded
 strings); the builder fixes the exact encoding and proves `redact`'s output identical to today's
 on a corpus (Stage 2).
 
@@ -124,15 +128,16 @@ builder pins today's behaviour with tests first, see Stage 2).
 
 ### Reindex, sudo only **(owner: refuse and reindex; sudo: owner accepted the recommendation)**
 
-- `sudo tswap vault reindex` rewrites every record as v2 with fingerprints. It is the one command
+- `sudo tswap vault reindex` rewrites every record as v3 with fingerprints. It is the one command
   that decrypts every value, once, inside tswap's own process.
 - Every write path (`add`, `create`, `ingest`, rotate, burn, `slot` operations, migration) writes
-  v2 with fingerprints for the record it touches, so vaults converge on their own.
-- **Mixed fleets (my call):** tswap ≥ 0.2.0 reads v1 and v2. Until `vault reindex` has been run on
-  a vault, writes keep producing v1 (so older binaries on other machines can still read records);
-  `reindex` writes a vault-level marker (in the keyring) and from then on every write is v2. Older
-  binaries meeting a v2 record fail closed with an "upgrade tswap" message (verify what v0.1.x
-  prints today; if it is unclear, say so in the release notes). Release notes: upgrade every
+  v3 with fingerprints for the record it touches once the vault has been reindexed (see mixed
+  fleets), so vaults converge on their own.
+- **Mixed fleets (my call):** tswap ≥ 0.2.0 reads format 2 and 3. Until `vault reindex` has been
+  run on a vault, writes keep producing format 2 (so older binaries on other machines can still
+  read records); `reindex` writes a vault-level marker (in the keyring) and from then on every
+  write is format 3. Older binaries meeting a format-3 record already fail closed ("written by a
+  newer tswap … upgrade tswap to open it", read in the source). Release notes: upgrade every
   machine before reindexing.
 
 ### Classic vaults become migration-only **(owner: "Refuse, force a migration. Only supported for migration")**
@@ -178,10 +183,17 @@ builder pins today's behaviour with tests first, see Stage 2).
 ### Two passes, agent-driven **(owner proposed the two-pass flow)**
 
 1. **Scan** (`tswap extract <path> --scan`): parse every supported file and emit a plan skeleton,
-   with no values at all. Per value: file, key path, comments near it, kind (string, number, bool,
-   empty, PEM block, …), length, character classes, entropy estimate, base64/JSON-in-string hints,
-   and **tswap's verdict** (secret / weak secret / not secret) with its reason (key name, shape,
-   entropy). Per directory: whether it's a Helm chart (`Chart.yaml` name, version, dependencies).
+   with no values at all. Per value: file, key path, comments near it (with any secret-looking
+   text in them masked), kind (string, number, bool, empty, PEM block, …) and **tswap's verdict**
+   (secret / weak secret / not secret) with its reason (key name, shape, entropy). Per directory:
+   whether it's a Helm chart (`Chart.yaml` name, version, dependencies).
+   **What the scan reveals about a value depends on tswap's verdict (owner, on the recommendation):**
+   - values tswap flags (secret or weak): only coarse facts: kind, a length *bucket* (≤16, 17–32,
+     33–64, longer), "weak"/"strong" instead of an entropy figure, encoding hints (base64,
+     JSON-in-string, URL/DSN). No exact length, no character classes, no entropy number: for a weak
+     secret those would shrink the guessing space, and `redact` is already a guessing oracle;
+   - values tswap does not flag: full detail (exact length, character classes, entropy estimate),
+     since pass 3 shows them anyway unless the agent marks them secret.
 2. **Classify** (agent): marks which values are secrets in the plan.
 3. **View** (`tswap extract <path> --view --plan plan.yaml`): the files again, with every value
    that tswap flagged **or** the plan marks as a secret masked, and everything else readable, so
@@ -208,20 +220,43 @@ builder pins today's behaviour with tests first, see Stage 2).
   in pass 3) is accepted on purpose and documented.
 - **Weak secrets (my call):** ingested and immediately marked burned with reason "weak (low
   entropy): rotate", so `tswap burned` lists them.
-- **Secrets from git-tracked files (my call):** ingested and marked burned with reason "was
-  committed to git: rotate"; the summary says rewriting the working copy does not remove the
-  value from history.
-- **Dedupe:** a value whose fingerprint matches an existing vault secret reuses that name; no new
-  record. The same value in several files becomes one secret.
-- **Plan integrity:** the plan records a keyed HMAC (`K_fp`) of each file's content at scan time;
+- **Pushed secrets (owner: "a burn if the secret had been pushed"):** a value that appears in a
+  commit reachable from any remote-tracking ref is burned with reason "was pushed to <remote>:
+  rotate". This applies to newly ingested secrets **and** to an existing vault secret the
+  extraction matches (dedupe below). Detection scans the pushed commits' versions of the file with
+  the fingerprint index, so it needs no decryption. A value committed but never pushed is not
+  burned; the summary warns that local history still holds it (the user can still rewrite it).
+  Either way the summary says rewriting the working copy does not remove the value from history.
+- **Dedupe:** a value whose fingerprint matches an existing vault secret reuses that secret; no
+  new record. The same value in several files becomes one secret. Edge cases (my calls):
+  - a match on a secret's **previous** value gets the `name:previous` marker (so a deploy keeps
+    using the credential the file had, not silently the current one) and a warning that the file
+    still uses a rotated-away value;
+  - a match on a **burned** value reuses the name and says so;
+  - the pushed rule above burns the existing secret where it applies.
+- **Comments:** the detector scans comment text too. Secrets in comments (e.g. a commented-out old
+  password) are masked in every view and reported by line, never extracted or deleted
+  automatically (that would break "only the value's span changes"); if one matches a vault secret
+  by fingerprint, the report names it, and the pushed rule applies.
+- **Encoded and embedded values (my calls):**
+  - a Kubernetes `Secret` manifest's base64 `data:` values are decoded and the decoded value is
+    ingested; the marker tells `apply` to re-encode (`{{tswap:name|base64}}`), and fingerprints
+    cover both forms, so `redact` and `run` catch either;
+  - credentials inside a DSN or URL, and JSON inside a string, are reported and masked but not
+    extracted in this design (#170 covers embedding secrets in larger values).
+- **Plan integrity:** the plan records a keyed HMAC (`K_plan`, its own key) of each file's content at scan time;
   `--view` and the final apply refuse if a file changed. (A plain hash of a file containing a
   low-entropy secret would let the agent brute-force it, so the hash must be keyed.)
 - **Markers per format (my call):**
-  - YAML and `.env`: today's `key: ""  # tswap: name`, which `apply`, `check` and `tocomment`
-    already understand.
-  - JSON (no comments) and XML: the value becomes an in-value placeholder `{{tswap:name}}`;
-    `apply` and `check` learn to substitute and verify it. (It is a step towards #170, secrets
-    embedded in DSNs.)
+  - YAML and `.env` single-line scalars in `key: value` form: today's `key: ""  # tswap: name`,
+    which `apply`, `check` and `tocomment` already understand.
+  - Everything today's line marker can't hold: JSON (no comments), XML, and in YAML multi-line
+    block scalars (PEM keys, certificates), sequence items (`- value`) and flow style. The value
+    becomes an in-value placeholder `{{tswap:name}}` (with an optional encoding suffix such as
+    `|base64`); `apply` and `check` learn format-aware substitution: a YAML block scalar keeps its
+    indentation and line breaks, a JSON string is escaped, an XML value is entity-encoded.
+    (Without this, TLS and SSH keys, the most valuable secrets, couldn't be imported. It is also a
+    step towards #170.)
 - **Parsers:** YAML via a YAML parser library with exact source spans (verify spans on block
   scalars, flow style, anchors and multi-document files before committing to one; AOT/trim clean);
   JSON via `Utf8JsonReader` positions; XML via `XmlReader` `IXmlLineInfo`; `.env` line-based.
@@ -238,7 +273,9 @@ builder pins today's behaviour with tests first, see Stage 2).
 - **Guessing oracle (not new):** `redact` lets anyone who can run it test a guess ("is this string a
   secret?") by putting it in a file. That holds today with plaintext comparison; fingerprints do not
   change it. Short secrets are the exposed ones (T13 already warns about secrets under 16 bytes).
-- **Plan files:** contain no values and no unkeyed hashes of values or files.
+- **Plan files and scan output:** contain no values and no unkeyed hashes of values or files; for
+  values tswap flags, only coarse facts (kind, length bucket, weak/strong), so neither the plan
+  nor the scan narrows the search space for a guess.
 - **Transport:** metadata and value sections are padded like today's payload; record counts and
   edit timing stay the documented metadata leak.
 
@@ -251,7 +288,7 @@ a dedicated security review of the format and key derivations.
 
 ## Left to the builder
 
-- Exact byte layout of v2 records, the encoding domain of fingerprints, and the RedactingPty
+- Exact byte layout of v3 records, the encoding domain of fingerprints, and the RedactingPty
   matcher API shape (within the constraints above).
 - The plan file's schema and format (YAML or JSON), as long as both agent and human can read it.
 - The entropy estimator and the initial key-name list (#15's corpus mining can refine it later).
