@@ -318,8 +318,9 @@ public class SlotMergeTests : IDisposable
         Assert.Equal(after, _router.ConfigText);
         Assert.Equal(backups, _router.Backups);
 
-        // The joiner's whole config.json is a no-op too now: every slot in it is here already.
-        Assert.Contains("Nothing to merge", _router.Ok("", "slot", "merge", _desktop.ConfigPath));
+        // The joiner's whole keyring is a no-op too now: every slot in it is here already. (Brief
+        // T16-S1: a plain accept makes a record vault, whose keyring is in its folder: 'vault merge'.)
+        Assert.Contains("Nothing to merge", _router.Ok("", "vault", "merge", _desktop.VaultDir!));
         Assert.Equal(after, _router.ConfigText);
     }
 
@@ -329,7 +330,8 @@ public class SlotMergeTests : IDisposable
         RouterVault();
         Join(_desktop, _router, SerialA);
 
-        _router.Ok("", "slot", "merge", _desktop.ConfigPath);
+        // Brief T16-S1: the joiner is a record vault (keyring in its folder), merged by 'vault merge'.
+        _router.Ok("", "vault", "merge", _desktop.VaultDir!);
 
         Assert.Equal(3, _router.Keyring.Slots.Count);
         Assert.Null(_router.Config.ApprovedSlots);

@@ -142,14 +142,14 @@ public sealed class InitCommand : ICliCommand
     /// Ruling 4: a new vault goes into an absent or empty folder only, so <c>init</c> can never mix a
     /// new vault into an existing one (joining a shared folder is <c>init --vault-dir</c>).
     /// </summary>
-    private static void RequireAbsentOrEmpty(CommandContext ctx, DirectoryOwnerMatcher owner, string vaultDir)
+    internal static void RequireAbsentOrEmpty(CommandContext ctx, DirectoryOwnerMatcher owner, string vaultDir)
     {
         var usable = owner.AsOwner(vaultDir, () =>
             (!Directory.Exists(vaultDir) && !File.Exists(vaultDir))
             || (Directory.Exists(vaultDir) && !Directory.EnumerateFileSystemEntries(vaultDir).Any()));
         if (!usable)
             throw new TswapException(
-                $"The vault folder {vaultDir} is not empty. 'init' creates a new vault in an absent or empty folder; to use a " +
+                $"The vault folder {vaultDir} is not empty. A new vault is created in an absent or empty folder only; to use a " +
                 $"folder another machine already shares, run '{ctx.Prefix} init --vault-dir {vaultDir}'.");
     }
 
@@ -159,7 +159,7 @@ public sealed class InitCommand : ICliCommand
     /// pointing at it (machine fields only, a new origin id), so an interrupted init never leaves a
     /// config naming a folder that isn't there.
     /// </summary>
-    private static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir)
+    internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir)
     {
         var machine = config with
         {

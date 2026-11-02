@@ -122,9 +122,8 @@ internal static class RecordVaultTestSupport
         Assert.IsType<RecordVaultStore>(VaultStores.Open(machine.Dir));
 
     /// <summary>
-    /// Brief T16-S1: a machine that joined with a plain <c>slot accept</c> holds a classic keyring
-    /// vault (its own copy of the keyring, an empty secrets file), which commands now refuse (ruling
-    /// 5). This converts it (<c>migrate --to-records</c>, opened by its new slot) and gives it
+    /// Brief T16-S1: gives a machine that joined with a plain <c>slot accept</c> (a record vault of its
+    /// own since fix round 2; before, a classic keyring vault, which is converted first)
     /// <paramref name="source"/>'s record files, as sharing the vault folder would; it replaces the
     /// copy of the source's <c>secrets.json.enc</c> those tests made.
     /// </summary>

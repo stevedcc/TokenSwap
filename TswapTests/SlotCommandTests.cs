@@ -61,8 +61,8 @@ public class SlotCommandTests : IDisposable
         return ctx.Unlock(storage.LoadConfig());
     }
 
-    private static Config LoadConfig(string dir) =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (a record vault's keyring is in its vault folder).</summary>
+    private static Config LoadConfig(string dir) => VaultStores.Open(dir).LoadConfig();
 
     // --- Full round trip ---
 
@@ -105,9 +105,6 @@ public class SlotCommandTests : IDisposable
         var apprFile = Path.Combine(dirA, "approve.json");
         Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
         Run(dirB, _keyB, "", "slot", "accept", apprFile);
-        // Brief T16-S1: the plain accept leaves a classic keyring vault, which commands refuse
-        // (ruling 5): it is converted, opened by the accepted slot.
-        Assert.Equal(0, Run(dirB, _keyB, "", "migrate", "--to-records").Item1);
 
         var (addExit, _, _) = Run(dirB, _keyB, "hunter2\nhunter2\n", "add", "my-secret");
         Assert.Equal(0, addExit);

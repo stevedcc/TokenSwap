@@ -167,9 +167,6 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
         Assert.Equal(withTouch ? 1 : 0, FlagOf(OwnSlotBlob(mac)));
         Assert.Equal(withTouch, mac.Config.RequiresTouch); // accept carries it through
-        // Brief T16-S1: the plain accept leaves a classic keyring vault, which commands refuse
-        // (ruling 5): it is converted (opened by the accepted slot) before it is used.
-        mac.Ok("", "migrate", "--to-records");
         AssertUnlocks(mac);
         AssertPostureSummary(stdout, withTouch);
         if (withTouch)

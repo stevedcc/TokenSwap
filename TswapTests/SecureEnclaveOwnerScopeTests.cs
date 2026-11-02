@@ -219,9 +219,6 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Ok(dir, Root(), "", "slot", "accept", approve);
 
         AssertSecureEnclaveCallsRanAsTheOwner("Unlock", dir);
-        // Brief T16-S1: the plain accept leaves a classic keyring vault, which commands refuse
-        // (ruling 5): it is converted, opened by the accepted slot.
-        Ok(dir, null, "", "migrate", "--to-records");
         Ok(dir, null, "mac-pw\nmac-pw\n", "add", "mac"); // the accepted slot opens the vault
         Assert.Equal("mac-pw", Ok(dir, null, "", "get", "mac").Trim());
     }

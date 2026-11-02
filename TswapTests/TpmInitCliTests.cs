@@ -116,8 +116,8 @@ public class TpmInitCliTests : IDisposable
 
     private static byte[] UnlockVault(string dir, byte[] testKey)
     {
-        // Brief T16-S1: the config is read without opening the command's store, so this also unlocks
-        // the classic keyring vault a plain 'slot accept' writes (which commands now refuse).
+        // The config is read through a fresh store (VaultStores.Open: a record vault's keyring is
+        // composed from its folder), without opening the command's store.
         var ctx = Context(dir, testKey, new FakeConsole(), []);
         return ctx.Unlock(VaultStores.Open(dir).LoadConfig());
     }

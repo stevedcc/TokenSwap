@@ -287,6 +287,9 @@ with one YubiKey plugged in, or `--tpm` / `--secure-enclave --with-touch|--no-to
 `sudo tswap slot approve` (on this one), `tswap slot accept` (back on the new one; it writes a
 receipt) and `sudo tswap slot merge <receipt>` (on this one again, so this machine's copy opens
 with the new device too). Move the files yourself (scp, USB). `tswap slots` lists the slots.
+On a machine without a vault, `slot accept` creates a record vault at `~/.config/tswap/vault`
+(as `init` does) holding the keyring and no secrets yet: bring them in with `sudo tswap vault
+merge <copy of the other vault folder>`, or use `--vault-dir` to join a shared folder instead.
 
 ### Remote enrolment of a YubiKey into a TPM vault, step by step
 

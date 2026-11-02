@@ -117,12 +117,9 @@ public class SlotRequestOneKeyTests : IDisposable
 
         // Key A opens the accepted vault on the desktop; key B does not. (v0 carries no secrets:
         // accept makes an empty secrets file, so the router's are copied across, as sharing would.)
-        // Brief T16-S1: the router is a record vault, and the plain accept left the desktop a classic
-        // keyring vault, which commands refuse (ruling 5): it is converted first, then gets the
-        // router's record files.
+        // Brief T16-S1: both are record vaults (a plain accept makes one, owner decision 2026-11-02):
+        // the desktop gets the router's record files.
         _desktopKeys.PluggedIn = [SerialA];
-        var (migrateExit, _, migrateErr) = OnDesktop("", "migrate", "--to-records");
-        Assert.True(migrateExit == 0, migrateErr);
         Directory.CreateDirectory(Path.Combine(_desktopDir, "vault", "records")); // an empty vault has no records folder yet
         foreach (var record in Directory.GetFiles(Path.Combine(_routerDir, "vault", "records")))
             File.Copy(record, Path.Combine(_desktopDir, "vault", "records", Path.GetFileName(record)), overwrite: true);
