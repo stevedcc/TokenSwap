@@ -493,6 +493,27 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal("t-value"u8.ToArray(), Store(_m).ReadSecretValue("t", _key));
     }
 
+    /// <summary>
+    /// Fix round 2 (MiMo 4): the read path recomputes and compares only sets of this build's
+    /// variant-set version (the mismatch case above). A set of an older version (reported by
+    /// LoadMetadata as OlderVariantSet, recomputed by vault reindex) or of a newer one (a later build's
+    /// variants) can't be recomputed here: the read returns the value, and the set is kept as it is.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9)]
+    public void ReadSecretValue_ASetOfAnotherVariantSetVersion_IsKept_AndTheReadWorks(byte setVersion)
+    {
+        WriteMarker(_m);
+        _m.Ok("s-value", "ingest", "s");
+        var otherSet = new FingerprintSet(setVersion, [new FingerprintEntry(VariantKind.Plain, 3, 42, new byte[16])]);
+        Plant(File("s"), Read("s") with { Fingerprints = otherSet }, _key); // its section is copied
+
+        Assert.Equal("s-value"u8.ToArray(), Store(_m).ReadSecretValue("s", _key));
+        Assert.Equal(otherSet, Read("s").Fingerprints);
+        Assert.Equal(otherSet, Store(_m).LoadMetadata(_key, TextWriter.Null).Records.Single().Fingerprints);
+    }
+
     [Fact]
     public void RawFileBytes_HoldNoFingerprintMaterial()
     {
