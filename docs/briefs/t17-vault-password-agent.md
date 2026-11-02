@@ -110,6 +110,9 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
      blob as v1, doesn't remove the password: the KEK, the TPM authorisation or the Enclave credential still needs the
      stretched password, so the unlock fails. The flag only decides whether tswap asks. Tests pin this in Tasks 2, 8 and
      13.
+   - **A YubiKey v2 blob rewritten as v1** can't be told apart from a key whose HMAC secret was reprogrammed: both are
+     a v1 slot whose response doesn't authenticate. So it keeps today's "did not authenticate" text, with one clause
+     added: `… (the key's HMAC secret was reprogrammed, its slot's password flag was removed, or config.json is damaged).`
    - **A stripped header gets its own message**, not ruling 18's "wrong password", because the user was never asked:
      `This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.`
      tswap uses it when a legacy blob unlock fails with `TPM_RC_AUTH_FAIL`, `NTE_INCORRECT_PASSWORD` or the shim's
@@ -117,6 +120,8 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
    - **Version requirement.** Every machine that opens a password slot, or rewrites a keyring holding one, needs tswap
      ≥ 0.2.0. A 0.1.x build reads a `TSTP` or `TSSE` blob as a 1.3 GB length prefix and says "config is corrupted";
      that is shipped code. The README, `MULTI_MACHINE_KEYING.md` and `init --password`'s explanation say so.
+   - **`SlotPassword.Requires` with an unknown header version or flag bit** returns true (the magic is there), so such
+     a slot never reaches pass 1. Its `Split` in pass 3 then throws the "newer tswap" message below.
    - **Unknown versions in this build.** The legacy parsers in `Tpm2ToolsInterop.Unseal`,
      `PlatformCryptoProviderInterop.Unwrap` and `AppleSecureEnclaveInterop.Unwrap` check for the `TSTP`/`TSSE` magic
      first. On an unsplit blob, an unknown header version or an unknown flag bit they say
@@ -149,7 +154,10 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
      - **Linux:** `/run/user/<uid>/tswap` when `/run/user/<uid>` exists and belongs to `<uid>`; otherwise
        `<home of uid>/.cache/tswap/run`.
      - **macOS:** `<home of uid>/Library/Caches/tswap/run`.
-     - **Only `agent serve` creates it**, with mode 0700, after the root refusal of ruling 21.
+     - **Who creates it:** `agent serve` or `broker serve`, with mode 0700 and owned by their own uid. Each creates it
+       only after its own root refusal (ruling 21 for the agent, `Ownership.IsPrivileged` for the broker), and the
+       checks below then apply to the folder they made. The broker must work with no agent, for example after a reboot,
+       when `/run/user/<uid>` is empty.
      - **Clients never create anything there.** A missing folder or socket means "not running".
      - **Checks, as `BrokerServer.CheckSocketDir` does:** `lstat`, so a symlink is refused; owned by `<uid>`; mode 0700;
        and every parent up to `/` owned by `<uid>` or root and not group- or other-writable. A failing folder is
@@ -221,12 +229,21 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       `Environment.ProcessPath`; the child ignores SIGHUP).
     - It writes the 32 stretched bytes to the child's **stdin pipe**, never through argv or the environment, and zeroes
       its own copy.
-    - The child proves the password with one real unlock through a password slot of this machine, checks the unlocked
-      `K_v` against the verifier, and zeroes `K_v`.
+    - The child proves the password with one real unlock through a password slot of this machine. Inside that
+      `UnlockVault` call, before the socket opens, it checks the unlocked `K_v` together with the held stretched bytes
+      against the file's **verifier** (`VaultPasswordFile.Verifies`, which needs both), then zeroes `K_v`.
+    - **The parent's wait for the `ready`/`error` line has no time bound.** The proving unlock may wait for a touch or
+      Touch ID, and the user is at the terminal. Ctrl+C ends both processes: the child is in the parent's process group
+      until it reads its `ready` line, so SIGINT reaches it. That is fine, because nothing has been bound yet, or the
+      bind is undone by the child's exit handler.
+    - **The parent prints its own computed socket path**, never one parsed from the child's line. The `ready` line is
+      relayed for its expiry only, and a test pins that the parent doesn't parse a path out of it (a path containing a
+      space or a newline).
     - The child prints one line, `ready <socket path> <expiry or "no-expiry">` or `error <message>`, which the parent
       relays before it exits. Exit codes: 0 ready, 1 error.
     - **After that line, the child reopens stdin, stdout and stderr on `/dev/null`** (`NUL` on Windows), so that a
-      later write can't hit EPIPE on the dead parent's pipes. A test closes the parent's ends and checks the agent still
+      later write can't hit EPIPE on the dead parent's pipes. On Unix it then calls `setsid()` (`LibraryImport`), so a
+      later Ctrl+C or hangup in that terminal no longer reaches it. A test closes the parent's ends and checks the agent still
       answers `status`.
     - **`agent serve --foreground`** is a foreground run in a terminal (or tmux) that reads the password from it. With
       no terminal it refuses:
@@ -277,6 +294,22 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       failure is never shown when a later pass succeeds. `OwnerSwitchException` passes unchanged.
     - **`broker serve` never consults an agent.** It uses `UnlockSources(AskAgent: null, Prompt: held password)`, so a
       broker's behaviour doesn't depend on whether an agent runs.
+    - **`agent serve`'s own unlocks** (the proving unlock, and every `UnlockVault`) use
+      `UnlockSources(AskAgent: null, Prompt: held password)` too. It never goes through `CommandContext.Unlock`, which
+      would make it ask itself and deadlock on its own unlock gate.
+    - **One prompt per unlock.** In pass 3 the unlocker calls `Prompt` once. It hands every password candidate a
+      provider that returns `Clone()`s of that one instance, and disposes the original when the pass ends. Two password
+      YubiKey slots therefore never mean two prompts.
+    - **No reachable candidate at all.** For example: only a password YubiKey slot, the key not plugged in, and no
+      agent. `CouldNeedPassword` is false, so passes 2 and 3 don't run. The error is today's text from
+      `UnlockWithYubiKeySlot`: `No plugged-in YubiKey matches a slot of this vault. …`
+    - **A password-free vault whose unlock fails** (for example a copied config) never calls either source. It fails
+      with today's message.
+    - **Showing the agent's failure:** when pass 2's agent answered `HardwareFailed(message)` and pass 3 also fails, the
+      combined error adds `The tswap agent could not unlock either: <message>.` after the pass 3 failure.
+    - **Which message wins without a terminal:** the missing-file message (Task 5) comes before ruling 13's
+      no-terminal message. A password slot whose `vault-password` file is missing can't be unlocked by any source, so
+      that is the message the user needs.
     - **A locked broker refuses at once.** Its refusal is immediate, like the busy refusal. The residual timing
       difference from a real unlock is the same as today's busy-versus-served signal, and is noted in BROKER.md.
 14. **The broker** (Linux and macOS, as today):
@@ -286,6 +319,9 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       `locked`. A locked request is **not** an unlock failure and never counts toward `BrokerUnlockGuard`.
     - **ssh keys.** `SshAgentKeyLoader.Load` needs an unlock, so it is deferred until the first successful
       `broker unlock`.
+      - Today a key that can't load stops `serve`. Deferred, the same failure makes that `broker unlock` fail with
+        `ssh key '<name>' can't be loaded: <reason>`, and the broker stays locked. That matches today's fail-stop: no
+        half-working broker.
     - **The control socket** is `<agent socket folder>/broker-<16 hex>/control.sock`.
       - `serve` creates the subfolder with mode 0700, under ruling 6's folder checks.
       - **A stale socket** is replaced only while `serve` holds its existing `flock` (`BrokerServer.TakeLock`), so a
@@ -293,11 +329,15 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       - **Server peer checks:** the vault user's uid only (uid 0 is refused, unlike the agent), plus ruling 20.
       - `sudo tswap broker unlock` is refused on the client side, before any connect:
         `Run 'tswap broker unlock' as the vault user (<name>), without sudo.`
-      - **Client peer checks** (`broker unlock|lock|status`): the server's uid must be the vault owner's uid, as in
-        ruling 7. The client **sends** the stretched password, so this matters more here than for the agent.
-    - **Trust model of the control socket.** It is uid-authenticated, plus ruling 20. Anything that runs as the vault
-      user on the host itself, outside a container, can bind a fake control socket first and capture the stretched
-      password, exactly as with ssh-agent. `docs/BROKER.md` and the README say so.
+      - **Client peer checks** (`broker unlock|lock|status`), applied to the **server**:
+        - its uid must be the vault owner's uid, as in ruling 7;
+        - ruling 20's user-namespace and label checks, using the pid from `SO_PEERCRED` on the client's connected
+          socket and `PeerIdentity`'s code.
+        A container squatting `control.sock` therefore never receives the stretched password. The client **sends** the
+        password, so this matters more here than for the agent, where `keyCheck` catches a fake.
+    - **Trust model of the control socket.** It is uid-authenticated, plus ruling 20's checks in both directions.
+      Anything that runs as the vault user on the host itself, outside a container, can bind a fake control socket first
+      and capture the stretched password, exactly as with ssh-agent. `docs/BROKER.md` and the README say so.
     - **Its protocol** is the agent framing with ops `16` unlock, `17` lock and `18` status.
       - The unlock payload is the 32 stretched bytes, optionally followed by an absolute timeout
         (`expiresUnixSeconds 8 LE`).
@@ -311,6 +351,12 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
         `(typetransition tswap_broker_t <dir type> sock_file "control.sock" tswap_broker_control_t)` for each of
         `user_runtime_t` (`/run/user/<uid>` and folders made in it), `user_tmp_t`, `cache_home_t`, `user_home_t` and
         `data_home_t`.
+      - **Explicit allows** for the broker on its own control socket:
+        `(allow tswap_broker_t tswap_broker_control_t (sock_file (create write getattr setattr unlink open read)))` and
+        `(allow tswap_broker_t self (unix_stream_socket (create bind listen accept read write getattr setattr setopt getopt shutdown)))`.
+        - The module's `files_unconfined_type` attribute probably covers both already. That couldn't be shown on the
+          build machine (no `sesearch`/`seinfo` installed), so the rules are explicit.
+        - Duplicate allows are harmless in CIL.
       - It adds **no** rule that lets `container_t` write a `tswap_broker_control_t` sock_file.
       - The owner checks this on the router (Finish).
     - **No CIL type for the agent.** It runs unconfined. Its container story is ruling 20 plus the docs: the agent's run
@@ -393,8 +439,16 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
 20. **Container peers (Linux), on the agent socket and the broker control socket.** On top of the uid rule:
     - **User namespace:** the server takes the peer pid from `SO_PEERCRED` and refuses a peer whose
       `readlink /proc/<pid>/ns/user` differs from its own `/proc/self/ns/user`.
-      - A rootless Podman container always runs in its own user namespace; sudo and root peers share the host's.
-      - An unreadable link (the peer has exited, or `hidepid`) is refused.
+      - A rootless Podman container always runs in its own user namespace, including with `--userns=keep-id`.
+      - **A uid-0 peer is exempt from this check.** Under `hidepid=2`, or with a non-dumpable root client, its link may
+        be unreadable. A rootless container never presents host uid 0, and host root is trusted (ruling 7). The label
+        check still applies to uid 0.
+      - For any other peer, an unreadable link (the peer has exited, or `hidepid`) is refused.
+      - **Pid reuse:** the server opens `/proc/<pid>` as a directory fd and reads `ns/user` relative to it (`openat` /
+        `readlinkat`). It then re-reads `SO_PEERCRED` and checks the pid and uid are unchanged, so a pid recycled in
+        between can't be checked in the peer's place.
+      - **No `/proc` mounted:** every non-root peer is refused, and the server's stderr or log says once
+        `/proc is not mounted: peers can't be checked, so only root may connect.`
     - **SELinux label:** where SELinux is present, it refuses a peer whose `getsockopt(SOL_SOCKET, SO_PEERSEC = 31)`
       label has the type `container_t`, `spc_t` or `container_runtime_t`. `ENOPROTOOPT` or an empty label (no SELinux)
       skips this check.
@@ -416,10 +470,20 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     - **`agent stop` and `agent status` under sudo** are allowed, through the uid-0 peer rule. Their output says
       `(as root, for <name>'s agent)`.
     - **Probe and bind under a lock.** `agent serve` takes an exclusive `flock` on `<folder>/agent-<16 hex>.lock`
-      (`BrokerServer.TakeLock`'s pattern) around "probe the existing socket, remove it if stale, bind".
-      - A live agent answers the probe, so a second start says
-        `An agent for this vault is already running (<path>).` and exits 1.
-      - A test runs two concurrent starts: exactly one becomes ready, and the other says "already running".
+      (`BrokerServer.TakeLock`'s pattern) and **holds it for its whole lifetime**, releasing it only at exit.
+    - **The lock is held by someone else:** `An agent for this vault is already running (<path>).` and exit 1.
+    - **With the lock taken,** `agent serve` handles an existing path as follows:
+      - **Nothing at the path:** bind.
+      - **A non-socket file, or a socket owned by another uid:** refuse with `BrokerServer.RemoveStaleSocket`'s text,
+        `<path> exists and is not a stale socket of this user; remove it by hand.`
+      - **A socket of this uid:** probe it with a `status` request, with a 2 s connect deadline and a 2 s answer
+        deadline.
+        - Connection refused: the socket is stale, so remove it and bind.
+        - An answer: `already running` (as above).
+        - Accepts but never answers within 2 s: refuse, and don't replace it:
+          `<path> is in use by a process that doesn't answer; stop it, or remove the socket by hand.`
+    - **Tests:** a two-concurrent-starts test (exactly one ready, the other "already running"), and
+      `Probe_AcceptsButNeverAnswers_RefusesWithoutReplacing` and `NonSocketFileAtPath_Refused`, both in Task 10.
 
 ## Global constraints
 
@@ -553,8 +617,8 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
   - `SeWrap_ThenSplit_RoundTrips`. `Split` refuses a `TSSE` blob whose flags byte lacks bit 0.
   - `SlotPassword_Requires_TruthTable`, one row per blob kind.
   - **Stripping the flag doesn't weaken a slot (ruling 3):** with a simulated YubiKey, a v2 slot rewritten as a v1
-    blob (same serial, challenge and salt) fails to unwrap without the password. The TPM case is in Task 8, and the
-    Secure Enclave case is in Task 13.
+    blob (same serial, challenge and salt) fails to unwrap without the password, with ruling 3's extended "did not
+    authenticate" text. The TPM case is in Task 8, and the Secure Enclave case is in Task 13.
   - `LegacyParsers_RecogniseTheMagic`: `TpmSlotBlob`'s and `SecureEnclaveSlotBlob`'s helpers, given a blob with an
     unknown header version (2) or an unknown flag bit (`0x02`), throw the "newer tswap" message from ruling 3, not
     "corrupted". The interop parsers call the same helper (Tasks 8, 9 and 13).
@@ -618,6 +682,12 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     both plugged in → true (pass 1 still runs first); a password-free vault → false.
   - `StrippedHeader_SaysRestoreOrUpgrade`: a simulated password TPM slot with the header removed fails with ruling 3's
     stripped-header message.
+  - `Prompt_CalledOnce_AcrossSeveralPasswordCandidates`: two password YubiKey slots, the first key's slot fails, and
+    `Prompt` was called exactly once.
+  - `NoReachableCandidate_TodaysMessage_NoSourceCalled`: only a password YubiKey slot, the key unplugged, no agent.
+  - `PasswordFreeVault_UnlockFails_NoSourceCalled`.
+  - `AgentFailedAndPromptFailed_MessageNamesBoth`.
+  - `UnknownHeaderVersion_NeverInPass1_SaysNewerTswap` (ruling 3).
 - [ ] **Step 2:** run; expect failures.
 - [ ] **Step 3:** implement.
   - The YubiKey path calls `YubiKeySlotKek.Recover(..., password)`.
@@ -918,6 +988,10 @@ Pinned behaviour:
     - `TwoConcurrentStarts_ExactlyOneReady_OtherAlreadyRunning`.
     - `LiveAgent_SecondStart_AlreadyRunning_LiveSocketUntouched`.
     - `Serve_RefusesRoot_LeavesNothing` (euid seam): no folder, socket, lock or temp file.
+    - `Probe_AcceptsButNeverAnswers_RefusesWithoutReplacing`, `NonSocketFileAtPath_Refused` and
+      `LockHeld_SaysAlreadyRunning` (ruling 21).
+    - `UidZeroPeer_UnreadableNamespace_Accepted_LabelStillChecked` (ruling 20).
+    - `PidReused_BetweenCredAndReadlink_Refused` (seam) and `NoProc_RefusesNonRootPeers_WithTheNamedMessage`.
   - **Durations:** `"90"` → 90 s, `"90m"`, `"1d12h"`, `"1d12h30m"`, `"8h"`. Refused: `"59"`, `"0"`, `"31d"`, `"1x"`,
     `""`, `"-5m"`, `"+5m"`, `" 5m"`, `"5m5m"`, `"5s1m"`, `"99999999999999d"`.
 - [ ] **Step 2–4:** red, implement, green.
@@ -956,6 +1030,10 @@ Pinned behaviour:
   - `AskingLine_PrintedOnlyWhenTheAgentIsAsked`, with the backend-specific suffix (ruling 13).
   - `SudoRoot_FindsOwnersAgent`, with an owner-uid seam (Review focus 5).
   - `Client_ZeroesTheKeyAfterUse`, through the zeroing seam (ruling 8).
+  - `AgentServe_OwnUnlock_NeverAsksAnAgent`: an agent seam that fails if called (ruling 13).
+  - `Start_ReadyLinePath_NotParsed` (ruling 10).
+  - `Start_ProvesWithTheVerifier`: a planted `vault-password` whose verifier is for another password fails the start,
+    even though the hardware unlock succeeded with the simulated service.
   - `Stretched_NotInArgvOrEnvironment_OfTheChild`: the child's start info, recorded through a seam, contains neither
     the hex nor the base64 of the bytes.
   - `Timeout_ParsedAndReportedByStatus`.
@@ -987,6 +1065,11 @@ Pinned behaviour:
     `PeerIdentity`'s seams).
   - `UnlockClient_RefusesServerOfAnotherUid`: a fake control socket owned by another uid (seam) never receives the
     stretched bytes.
+  - `UnlockClient_RefusesServerInAnotherUserNamespace_NeverSends` and `UnlockClient_RefusesServerWithContainerLabel`
+    (ruling 14).
+  - `BrokerServe_CreatesTheRunFolder_WhenMissing`: the control server starts with no run folder; the folder appears
+    0700, owned by the broker's uid, and `broker unlock` reaches it (ruling 6).
+  - `Unlock_SshKeyCantLoad_StaysLocked_NamesTheKey`.
   - `SudoBrokerUnlock_RefusedBeforeConnect` (ruling 14's text).
   - `ControlSocket_FolderIs0700`.
   - `ControlSocket_Stale_ReplacedUnderTheLock`, and `SecondServe_AlreadyRunning`.
@@ -995,8 +1078,8 @@ Pinned behaviour:
   - `PasswordFreeBroker_Unchanged`: the existing broker suites pass untouched, and `broker unlock` on such a broker says
     `This broker's slot has no vault password; it is never locked.`
   - `Cil_DeclaresControlTypeAndNoContainerRule`: a text test on the CIL file. It finds the type, the five named
-    transitions (`user_runtime_t`, `user_tmp_t`, `cache_home_t`, `user_home_t`, `data_home_t`), and no
-    `allow container_t tswap_broker_control_t`.
+    transitions (`user_runtime_t`, `user_tmp_t`, `cache_home_t`, `user_home_t`, `data_home_t`), the two explicit
+    allows of ruling 14, and no `allow container_t tswap_broker_control_t`.
 - [ ] **Step 2–4:** red, implement, green.
 - [ ] **Step 5:** commit (`T17 task 12: a password broker starts locked; broker unlock|lock|status`). Break-it-once: let a
   locked request count as an unlock failure; `Locked_IsNotCountedAsUnlockFailure` must fail.
@@ -1072,7 +1155,8 @@ Pinned behaviour:
     - the blob versions from ruling 3, why flipping a flag never weakens a slot, and the ≥ 0.2.0 requirement;
     - conflict-copy deletion and sync tools (ruling 2).
   - The spec (`docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`): an "Owner amendments" note
-    recording ruling 2's two deviations and ruling 13's reading of "asks the agent first".
+    recording ruling 2's two deviations, ruling 13's reading of "asks the agent first", and Task 9's Windows choice
+    (`PCP_USAGEAUTH` versus the spec's `NCRYPT_PIN_PROPERTY`, as decided by the owner's spike).
   - `HARDWARE_BACKENDS.md`: the TPM auth value, the lockout warning, Windows `PCP_USAGEAUTH`, and the Secure Enclave
     `.applicationPassword` result with ruling 19's wording (enforced by the Enclave; no rate limit shown).
   - `docs/BROKER.md`:
@@ -1113,8 +1197,10 @@ Pinned behaviour:
        in `ausearch -m avc`) **and** must be refused by the agent socket (the agent's `status` shows a refused peer).
      - `broker unlock` from the vault user's shell must succeed.
   2. A real TPM on Linux: one password slot, one wrong password, one right password.
-  3. The `TpmWindows` tests on a Windows machine with a TPM (ruling and Task 9's open question).
-  4. The `SecureEnclave` tests on the Mac (Task 13).
+  3. A real `sudo tswap get` with the agent running, once normally and once with `/proc` mounted `hidepid=2` if the
+     machine allows it (ruling 20's uid-0 exemption).
+  4. The `TpmWindows` tests on a Windows machine with a TPM (ruling and Task 9's open question).
+  5. The `SecureEnclave` tests on the Mac (Task 13).
 - [ ] Tag and release only on the owner's go.
 
 ## Out of scope
