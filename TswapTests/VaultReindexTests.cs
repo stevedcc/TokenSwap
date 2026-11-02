@@ -299,6 +299,46 @@ public sealed class VaultReindexTests : IDisposable
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
     }
 
+    /// <summary>
+    /// Owner decision 2026-11-02 (fix round 2, item 9): in a folder that writes format 3, `vault
+    /// merge` also rewrites a record whose main file isn't format 3, even when its state is equal on
+    /// both sides (a fourth write trigger beside ruling 11's three), so equal format 2 tombstones and
+    /// values don't keep the folder "not fully fingerprinted". A second merge writes nothing.
+    /// </summary>
+    [Fact]
+    public void VaultMerge_InAFormat3Folder_RewritesEqualFormat2Records()
+    {
+        _m.Ok("alpha-1", "ingest", "alpha");
+        _m.Ok("delta-1", "ingest", "delta");
+        _m.Ok("", "delete", "delta"); // an equal tombstone on both sides
+        var otherVault = CopyVault(_m, _other);
+        File.WriteAllText(Marker(_m), "3");
+        Assert.False(Store(_m).LoadMetadata(_key, TextWriter.Null).IsFullyFingerprinted);
+
+        var (exit, stdout, err) = _m.Run("", "vault", "merge", otherVault);
+
+        Assert.True(exit == 0, err);
+        Assert.Contains("2 record(s) written", stdout);
+        foreach (var name in new[] { "alpha", "delta" })
+            Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_m, _key, name))));
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "delta").Type);
+        Assert.Equal("alpha-1", _m.Get("alpha"));
+        Assert.True(Store(_m).LoadMetadata(_key, TextWriter.Null).IsFullyFingerprinted);
+        Assert.Contains("Nothing to merge", _m.Ok("", "vault", "merge", otherVault));
+    }
+
+    /// <summary>Without the marker (and no format 3 read), the folder writes format 2: equal format 2 records stay as they are.</summary>
+    [Fact]
+    public void VaultMerge_InAFormat2Folder_LeavesEqualFormat2RecordsAlone()
+    {
+        _m.Ok("alpha-1", "ingest", "alpha");
+        var otherVault = CopyVault(_m, _other);
+        var before = File.ReadAllBytes(RecordFile(_m, _key, "alpha"));
+
+        Assert.Contains("Nothing to merge", _m.Ok("", "vault", "merge", otherVault));
+        Assert.Equal(before, File.ReadAllBytes(RecordFile(_m, _key, "alpha")));
+    }
+
     [Fact]
     public void VaultMerge_CopiesTheMarker_InBothDirections()
     {
@@ -309,18 +349,12 @@ public sealed class VaultReindexTests : IDisposable
         // The reindexed folder merged into the unreindexed one gives it the marker.
         _other.Ok("", "vault", "merge", _m.VaultDir!);
         Assert.Equal("3", File.ReadAllText(Path.Combine(otherVault, RecordVaultStore.RecordFormatMarkerFileName)).Trim());
-        // Every live record took the reindexed state (fingerprints are state, so it was written, as
-        // format 3). The tombstone's state is equal on both sides and it has no sections, so ruling
-        // 11 doesn't rewrite it: it stays format 2 until a write of it or a reindex here (pinned).
-        foreach (var name in new[] { "alpha", "beta", "gamma" })
-        {
-            Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_other, _key, name))));
-            Assert.NotNull(ReadRecord(_other, _key, name).Fingerprints);
-        }
-        Assert.Equal((byte?)2, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_other, _key, "delta"))));
-        Assert.Equal(1, Store(_other).LoadMetadata(_key, TextWriter.Null).NotFingerprinted);
-        _other.Ok("", "vault", "reindex");
+        // Every record took the reindexed state, in format 3: the live ones because their state
+        // differs (fingerprints are state), the tombstone, equal on both sides, because this folder now
+        // writes format 3 and its file wasn't (owner decision 2026-11-02, fix round 2; it stayed
+        // format 2 before). So the folder is fully fingerprinted without a reindex of its own.
         AssertAllV3WithFingerprints(_other);
+        Assert.True(Store(_other).LoadMetadata(_key, TextWriter.Null).IsFullyFingerprinted);
 
         // The reverse leaves the marker in place: a copy of this vault without a marker (and without
         // records) merged into the reindexed folder.

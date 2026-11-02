@@ -561,12 +561,13 @@ and a padding bucket per section, where format 2 revealed one bucket per record;
 section's ciphertext stays identical across writes, so an observer of the folder can tell a
 metadata-only write (burn, merge) from a value change. Accepted. A record written in format 2 after
 the reindex, or a replayed older copy, leaves that record "not fingerprinted" until a write of that
-record or a `vault reindex` in that folder rewrites it (a `vault merge` rewrites it only when the
-other copy brings a different state or sections). A lingering format 2 conflicted copy is folded by
-the next write of that record, a `vault merge` or a `vault reindex`. A format 2 **tombstone** is
-counted as not fingerprinted too (its type can't be known without decrypting it), and a `vault
-merge` that brings an equal tombstone doesn't rewrite it: after merging a reindexed copy into a
-folder, run `vault reindex` in that folder too.
+record, a `vault merge` or a `vault reindex` in that folder rewrites it. A lingering format 2
+conflicted copy is folded the same ways. A format 2 **tombstone** is counted as not fingerprinted
+too (its type can't be known without decrypting it). **`vault merge` has a fourth write trigger**
+(owner decision 2026-11-02) beside ruling 11's three: in a folder that writes format 3, it rewrites
+every record whose main file isn't format 3, even when the state is equal on both sides, so merging
+a reindexed copy into a folder leaves it fully fingerprinted (tombstones included) without a reindex
+of its own. A second merge then writes nothing.
 
 ## The landmine: threshold downgrade
 

@@ -1189,8 +1189,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>
     /// Brief T6 decision 5 (<c>vault merge</c>): merges <paramref name="incoming"/> states (another
     /// copy of this vault) into this folder by <see cref="RecordMerge"/>, writing only records whose
-    /// state changes (a new write stamp; version and burn stamps are kept, so merging in either
-    /// direction gives the same states). A record that can't be read here is never overwritten
+    /// state or sections change, whose conflicted copies were folded, or (owner decision 2026-11-02)
+    /// whose main file isn't format 3 while this folder writes format 3 (a new write stamp; version
+    /// and burn stamps are kept, so merging in either direction gives the same states). A record that can't be read here is never overwritten
     /// (a warning). Call after <see cref="LoadSecrets"/> or <see cref="LoadRecordStates"/>; the
     /// stale-write guard applies. Returns how many records were written.
     /// </summary>
@@ -1233,9 +1234,13 @@ public sealed class RecordVaultStore : IFileVaultStore
                 continue;
             }
             // Write when the state differs, when the sections differ from the main file's (so both
-            // folders converge on one section), or to remove the conflicted copies folded in.
+            // folders converge on one section), to remove the conflicted copies folded in, or (owner
+            // decision 2026-11-02, a fourth trigger) when this folder writes format 3 and the main
+            // file isn't format 3, so equal format 2 records (tombstones included) don't keep the
+            // folder "not fully fingerprinted" until a reindex.
             if (current?.State is not null && merged.SameState(current.State)
-                && SameSections(merged.Sealed, current.MainState?.Sealed) && current.FoldedCopies is not { Count: > 0 })
+                && SameSections(merged.Sealed, current.MainState?.Sealed) && current.FoldedCopies is not { Count: > 0 }
+                && !(WritesV3 && SecretRecordCodec.FormatVersionOf(current.MainBytes ?? []) != KeyringFormat.RecordFormatVersion))
                 continue;
             writes.Add((fileName, merged));
         }
