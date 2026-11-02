@@ -33,13 +33,13 @@ public class InitKeyringOneKeyTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
-        var ctx = new CommandContext(console, env, new Storage(_dir), _keys, new VaultUnlocker(_keys), TestKey: null, SudoBypass: true);
+        var ctx = new CommandContext(console, env, VaultStores.Open(_dir), _keys, new VaultUnlocker(_keys), TestKey: null, SudoBypass: true);
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
     }
 
-    private Config LoadConfig() =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(_dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring is in its folder).</summary>
+    private Config LoadConfig() => VaultStores.Open(_dir).LoadConfig();
 
     private static Keyring DecodeKeyring(Config config) => KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
@@ -90,7 +90,7 @@ public class InitKeyringOneKeyTests : IDisposable
         var (applyExit, applyOut, applyErr) = Run("", "apply", valuesFile);
         Assert.True(applyExit == 0, applyErr);
 
-        var stored = new Storage(_dir).LoadSecrets(Unlock(), TextWriter.Null).Secrets["db-password"].Value;
+        var stored = VaultStores.Open(_dir).LoadSecrets(Unlock(), TextWriter.Null).Secrets["db-password"].Value;
         Assert.Equal(24, stored.Length);
         Assert.Contains($"password: \"{stored}\"  # tswap: db-password", applyOut);
 
@@ -151,17 +151,4 @@ public class InitKeyringOneKeyTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_dir, "config.json")));
     }
 
-    [Fact]
-    public void Reinit_BacksUpTheOldConfigAndVault()
-    {
-        _keys.PluggedIn = [SerialA];
-        Assert.Equal(0, Run("", "init", "--keyring").Exit);
-        var oldConfig = File.ReadAllText(Path.Combine(_dir, "config.json"));
-
-        Assert.Equal(0, Run("yes\n", "init", "--keyring").Exit);
-
-        var backup = Assert.Single(Directory.GetFiles(_dir, "config.json.bak-*"));
-        Assert.Equal(oldConfig, File.ReadAllText(backup));
-        Assert.Single(Directory.GetFiles(_dir, "secrets.json.enc.bak-*"));
-    }
 }

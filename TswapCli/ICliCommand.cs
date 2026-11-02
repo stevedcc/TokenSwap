@@ -29,6 +29,14 @@ public interface ICliCommand
     bool NeedsVault => true;
 
     /// <summary>
+    /// Brief T16-S1 (ruling 5): true for the few commands that still open a classic single-file
+    /// vault (<c>init</c>, which then refuses with its own message, <c>migrate</c> and <c>export</c>);
+    /// every other command is refused when its store opens on one
+    /// (<see cref="CommandContext.ClassicVaultAllowed"/>).
+    /// </summary>
+    bool WorksOnClassicVault => false;
+
+    /// <summary>
     /// Executes with <paramref name="args"/> = everything after the command name
     /// (the leading global -v/--verbose flags already stripped). Returns the process exit code.
     /// </summary>

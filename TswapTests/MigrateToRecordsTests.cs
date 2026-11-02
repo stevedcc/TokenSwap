@@ -49,11 +49,24 @@ public sealed class MigrateToRecordsTests : IDisposable
     /// <summary>A plain (XOR) vault on keys A and B with 50 secrets; returns the master key and the secrets.</summary>
     private (byte[] MasterKey, Dictionary<string, Secret> Secrets) PlainVaultWithFiftySecrets()
     {
-        _m.Ok("1\n2\n\n", "init");
-        var masterKey = new VaultUnlocker(_keys).Unlock(_m.Config, serials => serials[0]);
+        // Brief T16-S1: init can't make an XOR vault any more; it is written as 0.1's init did.
         var secrets = FiftySecrets();
-        new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret>(secrets)), masterKey);
+        var masterKey = ClassicVaultTestSupport.CreateXorVault(_m, secrets: secrets);
+        Assert.Equal(masterKey, new VaultUnlocker(_keys).Unlock(_m.Config, serials => serials[0]));
         return (masterKey, secrets);
+    }
+
+    /// <summary>
+    /// A secret's value in whichever store the vault is now: through the CLI on a record store; on a
+    /// classic one, which brief T16-S1 (ruling 5) refuses for every command but migrate and export,
+    /// read directly with the vault key.
+    /// </summary>
+    private string ValueOf(string name)
+    {
+        if (_m.Config.Store == RecordVaultStore.StoreName)
+            return _m.Get(name);
+        var key = new VaultUnlocker(_m.Keys).Unlock(_m.Config, serials => serials[0]);
+        return new Storage(_m.Dir).LoadSecrets(key, TextWriter.Null).Secrets[name].Value;
     }
 
     private static void AssertSameSecrets(Dictionary<string, Secret> expected, SecretsDb actual)
@@ -128,9 +141,9 @@ public sealed class MigrateToRecordsTests : IDisposable
             .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial).Order());
 
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(secrets["secret-07"].Value, _m.Get("secret-07"));
+        Assert.Equal(secrets["secret-07"].Value, ValueOf("secret-07"));
         _keys.PluggedIn = [SerialB];
-        Assert.Equal(secrets["secret-08"].Value, _m.Get("secret-08"));
+        Assert.Equal(secrets["secret-08"].Value, ValueOf("secret-08"));
         Assert.Equal(masterKey, RecoveryKeyUnlock.Unlock(keyring, Convert.FromBase64String(RecoveryKeyFrom(output))));
     }
 
@@ -154,9 +167,9 @@ public sealed class MigrateToRecordsTests : IDisposable
     public void ATpmKeyringVault_With50Secrets_Converts_KeepingItsKeyring()
     {
         _m.Tpm = RandomNumberGenerator.GetBytes(32);
-        var initOutput = _m.Ok("", "init", "--tpm");
+        // Brief T16-S1: a classic TPM keyring vault as 0.1's init --tpm made it.
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--tpm");
         var before = _m.Keyring;
-        var vaultKey = RecoveryKeyUnlock.Unlock(before, Convert.FromBase64String(RecoveryKeyFrom(initOutput)));
         var secrets = FiftySecrets();
         new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret>(secrets)), vaultKey);
         var slotId = _m.Config.KeyringSlotId;
@@ -169,7 +182,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Equal(slotId, config.KeyringSlotId);
         Assert.Equal(KeyringCodec.Encode(before), File.ReadAllBytes(Path.Combine(DefaultVaultDir, "keyring")));
         AssertSameSecrets(secrets, ReadRecords(vaultKey));
-        Assert.Equal(secrets["secret-42"].Value, _m.Get("secret-42"));
+        Assert.Equal(secrets["secret-42"].Value, ValueOf("secret-42"));
         Assert.Single(SecretsBackups);
     }
 
@@ -210,7 +223,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         // The vault still opens: classic before step 4, records after it.
         Assert.Equal(step == 4 ? "records" : null, _m.Config.Store);
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(secrets["secret-11"].Value, _m.Get("secret-11"));
+        Assert.Equal(secrets["secret-11"].Value, ValueOf("secret-11"));
         _keys.PluggedIn = [SerialA, SerialB];
 
         // Fix round 1 (A2): only a temp folder older than an hour counts as left by a crash.
@@ -249,7 +262,7 @@ public sealed class MigrateToRecordsTests : IDisposable
                 break;
         }
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(secrets["secret-12"].Value, _m.Get("secret-12"));
+        Assert.Equal(secrets["secret-12"].Value, ValueOf("secret-12"));
     }
 
     [Fact]
@@ -271,7 +284,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_m.ConfigPath));
         _m.MigrationSeams = null;
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(secrets["secret-05"].Value, _m.Get("secret-05"));
+        Assert.Equal(secrets["secret-05"].Value, ValueOf("secret-05"));
     }
 
     [Fact]
@@ -279,8 +292,8 @@ public sealed class MigrateToRecordsTests : IDisposable
     {
         // Fix round 4, item 6: the confident wording only where the vault id matches.
         _keys.PluggedIn = [SerialA];
-        _m.Ok("", "init", "--keyring");
-        _m.Ok("v", "ingest", "s");
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring"); // brief T16-S1: as 0.1's init --keyring made it
+        new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }), vaultKey);
         _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 3) throw new IOException("simulated crash after step 3"); } };
         Assert.NotEqual(0, _m.Run("", "migrate", "--to-records").Exit);
         _m.MigrationSeams = null;
@@ -290,7 +303,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.NotEqual(0, rerun.Exit);
         Assert.Contains("this vault's own converted copy", rerun.Err);
         Assert.Contains("classic vault is intact", rerun.Err);
-        Assert.Equal("v", _m.Get("s"));
+        Assert.Equal("v", ValueOf("s"));
     }
 
     [Fact]
@@ -319,7 +332,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(_m.ConfigPath));
         _m.MigrationSeams = null;
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(secrets["secret-09"].Value, _m.Get("secret-09"));
+        Assert.Equal(secrets["secret-09"].Value, ValueOf("secret-09"));
     }
 
     [Fact]
@@ -537,9 +550,8 @@ public sealed class JoinSharedVaultFolderTests : IDisposable
         _home = new FleetMachine("join-home", _keys);
         _laptop = new FleetMachine("join-laptop", _keys);
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--keyring");
+        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
-        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
     }
 
     public void Dispose()
@@ -571,7 +583,7 @@ public sealed class JoinSharedVaultFolderTests : IDisposable
         var (exit, _, err) = _laptop.Run("", "init", "--vault-dir", empty);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("migrate --to-records", err);
+        Assert.Contains("init --folder", err); // brief T16-S1: init makes a new shareable vault itself now
         Assert.False(File.Exists(_laptop.ConfigPath));
     }
 
@@ -615,10 +627,9 @@ public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
         _home = new FleetMachine("jointpm-home", _keys);
         _router = new FleetMachine("jointpm-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--keyring");
+        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
         _home.Ok("second-value", "ingest", "t"); // two secrets: an empty save would hit the store's guard
-        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
     }
 
     public void Dispose()
@@ -675,13 +686,11 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
         _home = new FleetMachine("acceptdir-home", _keys);
         _laptop = new FleetMachine("acceptdir-laptop", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--keyring");
+        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
-        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
 
-        // The laptop has a classic vault of its own, then asks to join the shared one.
-        _laptop.Ok("", "init", "--tpm");
-        _laptop.Ok("local", "ingest", "local-secret");
+        // The laptop asks to join the shared one. (Brief T16-S1: with a classic vault of its own it
+        // would be refused, ruling 5; it starts with no vault.)
         var request = _laptop.PathOf("request.json");
         _approve = _laptop.PathOf("approve.json");
         _laptop.Ok("yes\n", "slot", "request", "--tpm", request);
@@ -694,39 +703,7 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
         _laptop.Dispose();
     }
 
-    [Fact]
-    public void AnExistingClassicVault_Joins_WithItsConfigBackedUpAndItsSecretsMovedAside()
-    {
-        var backupsBefore = _laptop.Backups.Length;
-        var configBefore = File.ReadAllText(_laptop.ConfigPath);
 
-        _laptop.Ok("", "slot", "accept", _approve, "--vault-dir", _shared);
-
-        Assert.Equal(backupsBefore + 1, _laptop.Backups.Length);
-        Assert.Contains(_laptop.Backups, b => File.ReadAllText(b) == configBefore);
-        Assert.False(File.Exists(_laptop.SecretsPath));
-        Assert.Single(Directory.GetFiles(_laptop.Dir, "secrets.json.enc.bak-*"));
-        Assert.Equal("shared-value", _laptop.Get("s"));
-    }
-
-    [Fact]
-    public void AFailedJoin_LeavesTheOldSecretsFileInPlace()
-    {
-        // Fix round 3, item 5: as init --vault-dir, the secrets file moves only after the config
-        // switch succeeded. Here the folder holds another vault's keyring, so the switch fails.
-        using var stranger = new FleetMachine("acceptdir-stranger", _keys);
-        stranger.Ok("", "init", "--keyring");
-        var foreign = Path.Combine(stranger.Dir, "shared");
-        stranger.Ok("", "migrate", "--to-records", "--vault-dir", foreign);
-        var secretsBefore = File.ReadAllBytes(_laptop.SecretsPath);
-
-        var (exit, _, err) = _laptop.Run("", "slot", "accept", _approve, "--vault-dir", foreign);
-
-        Assert.NotEqual(0, exit);
-        Assert.Contains("another vault", err);
-        Assert.Equal(secretsBefore, File.ReadAllBytes(_laptop.SecretsPath));
-        Assert.Empty(Directory.GetFiles(_laptop.Dir, "secrets.json.enc.bak-*"));
-    }
 
     [Fact]
     public void AFolderWithoutAKeyring_IsRefused_AndNothingChanges()
@@ -763,9 +740,8 @@ public sealed class SlotAddedBetweenApproveAndAcceptTests : IDisposable
         _home = new FleetMachine("between-home", _keys);
         _router = new FleetMachine("between-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--keyring");
+        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("v", "ingest", "s");
-        _home.Ok("", "migrate", "--to-records", "--vault-dir", _shared);
     }
 
     public void Dispose()

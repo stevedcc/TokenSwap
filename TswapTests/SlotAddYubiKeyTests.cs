@@ -42,7 +42,7 @@ public class SlotAddYubiKeyTests : IDisposable
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
         var unlocker = new VaultUnlocker(_keys, overrideKey: null,
             additionalBackends: tpm == null ? null : [new SimulatedHardwareService(HardwareBackend.Tpm, tpm)]);
-        return new CommandContext(console, env, new Storage(_dir), _keys, unlocker, TestKey: tpm, SudoBypass: sudo);
+        return new CommandContext(console, env, VaultStores.Open(_dir), _keys, unlocker, TestKey: tpm, SudoBypass: sudo);
     }
 
     private (int Exit, string Out, string Err) Run(string stdin, byte[]? tpm, params string[] args)
@@ -54,7 +54,8 @@ public class SlotAddYubiKeyTests : IDisposable
 
     private string ConfigPath => Path.Combine(_dir, "config.json");
 
-    private Config LoadConfig() => JsonSerializer.Deserialize(File.ReadAllText(ConfigPath), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring is in its folder).</summary>
+    private Config LoadConfig() => VaultStores.Open(_dir).LoadConfig();
 
     private static Keyring DecodeKeyring(Config config) => KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
@@ -208,36 +209,36 @@ public class SlotAddYubiKeyTests : IDisposable
     [Fact]
     public void PlainVault_IsRefused()
     {
+        // Brief T16-S1: init can't make a plain (XOR) vault any more, so it is written as 0.1's test-mode
+        // init did; slot add on it is refused by ruling 5's classic-vault message (it said "no keyring").
         var testKey = RandomNumberGenerator.GetBytes(32);
-        var yubiKeys = new TestKeyYubiKeyService(testKey);
-        string[] init = ["init"];
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = init };
-        Assert.Equal(0, CliRunner.Run(new CommandContext(new FakeConsole(), env, new Storage(_dir), yubiKeys,
-            new VaultUnlocker(yubiKeys, overrideKey: testKey), testKey, SudoBypass: true), init));
+        ClassicVaultTestSupport.CreateTestModeVault(_dir, testKey);
+        var before = File.ReadAllText(ConfigPath);
 
         var (exit, _, stderr) = Run("", null, "slot", "add", "--yubikey");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("no keyring", stderr);
+        Assert.Contains("classic single-file vault", stderr);
+        Assert.Contains("migrate --to-records", stderr);
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
     }
 
     [Fact]
     public void Version2Keyring_IsRefusedWithAnActionableMessage()
     {
-        File.WriteAllText(ConfigPath, KeyringV2FixtureTests.FixtureConfigJson);
-        File.WriteAllBytes(Path.Combine(_dir, "secrets.json.enc"), Convert.FromBase64String(KeyringV2FixtureTests.FixtureSecretsFileBase64));
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(_dir); // brief T16-S1: a record vault with the v2 keyring
         var testKey = Convert.FromHexString(KeyringV2FixtureTests.FixtureTestKeyHex);
         var yubiKeys = new TestKeyYubiKeyService(testKey);
         var console = new FakeConsole();
         string[] args = ["slot", "add", "--yubikey"];
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
 
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_dir), yubiKeys,
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_dir), yubiKeys,
             new VaultUnlocker(yubiKeys, overrideKey: testKey), testKey, SudoBypass: true), args);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", console.ErrorText);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, File.ReadAllText(ConfigPath));
+        Assert.Equal(configText, File.ReadAllText(ConfigPath));
     }
 
     [Theory]

@@ -53,7 +53,9 @@ public class CommandTests : IDisposable
             Verbose = verbose,
             CommandArgs = commandArgs,
         };
-        var storage = new Storage(_tempDir);
+        // Brief T16-S1: the store is chosen per invocation, as the binary does (VaultStores.Open):
+        // init makes a record vault, which the next invocation opens as one.
+        var storage = VaultStores.Open(_tempDir, warnings: console.Error);
         var yubiKeys = new TestKeyYubiKeyService(_testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: _testKey);
         var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, _testKey, SudoBypass: true);
@@ -61,6 +63,23 @@ public class CommandTests : IDisposable
         var exit = CliRunner.Run(ctx, env.CommandArgs);
         return (exit, console.OutText, console.ErrorText);
     }
+
+    /// <summary>
+    /// Brief T16-S1 (ruling 4): <c>init</c> refuses on an existing vault (it used to re-initialize
+    /// after a "yes"), so a test that needs a fresh vault in the same config folder removes the old
+    /// one (config.json and the vault folder) and runs init again.
+    /// </summary>
+    private void FreshVault()
+    {
+        File.Delete(Path.Combine(_tempDir, "config.json"));
+        var vault = Path.Combine(_tempDir, "vault");
+        if (Directory.Exists(vault))
+            Directory.Delete(vault, true);
+        Assert.Equal(0, RunTswap("init").exitCode);
+    }
+
+    /// <summary>The config as the store composes it (a record vault's keyring lives in its vault folder).</summary>
+    private Config LoadedConfig() => VaultStores.Open(_tempDir).LoadConfig();
 
     // --- Init ---
 
@@ -70,20 +89,10 @@ public class CommandTests : IDisposable
         var (exit, stdout, _) = RunTswap("init");
 
         Assert.Equal(0, exit);
-        Assert.Contains("test mode", stdout);
+        Assert.Contains("Vault folder", stdout);
         Assert.True(File.Exists(Path.Combine(_tempDir, "config.json")));
     }
 
-    [Fact]
-    public void Init_ConfigHasSyntheticSerials()
-    {
-        RunTswap("init");
-
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
-
-        Assert.Equal(new List<int> { 99999999, 99999998 }, config.YubiKeySerials);
-    }
 
     [Fact]
     public void Init_SecureEnclaveAndTpmBothPassed_RejectsAsUsageError()
@@ -106,8 +115,7 @@ public class CommandTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains("keyring", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
 
         Assert.NotNull(config.Keyring);
         // Still a YubiKey vault as far as VaultUnlocker's backend dispatch is concerned —
@@ -144,7 +152,16 @@ public class CommandTests : IDisposable
         RunTswap("init", "--keyring");
         RunTswapWithStdin("first-value\nfirst-value\n", "add", "first-secret");
 
-        RunTswapWithStdin("yes", "init", "--keyring");
+        // Brief T16-S1: init refuses on an existing vault, so the old vault folder is moved aside
+        // and the new vault gets the old record files: they stay unreadable under the new K_v.
+        var vault = Path.Combine(_tempDir, "vault");
+        var old = Path.Combine(_tempDir, "vault-old");
+        Directory.Move(vault, old);
+        File.Delete(Path.Combine(_tempDir, "config.json"));
+        RunTswap("init", "--keyring");
+        Directory.CreateDirectory(Path.Combine(vault, "records"));
+        foreach (var file in Directory.GetFiles(Path.Combine(old, "records")))
+            File.Copy(file, Path.Combine(vault, "records", Path.GetFileName(file)));
 
         var (getExit, _, getStderr) = RunTswap("get", "first-secret");
         Assert.NotEqual(0, getExit);
@@ -162,8 +179,7 @@ public class CommandTests : IDisposable
         Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", stdout);
         Assert.Contains("Recovery Private Key (base64):", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
         var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
         Assert.Equal(2, keyring.Slots.Count);
@@ -180,8 +196,7 @@ public class CommandTests : IDisposable
         Assert.DoesNotContain("Recovery Private Key", stdout);
         Assert.Contains("No recovery slot generated", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
         var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
         Assert.Single(keyring.Slots);
@@ -201,14 +216,6 @@ public class CommandTests : IDisposable
         Assert.Contains("hunter2", getStdout);
     }
 
-    [Fact]
-    public void Init_NoRecoveryWithoutKeyring_RejectsAsUsageError()
-    {
-        var (exit, _, stderr) = RunTswap("init", "--no-recovery");
-
-        Assert.Equal(1, exit);
-        Assert.Contains("Usage:", stderr);
-    }
 
     [Fact]
     public void BuildKeyringConfig_RecoveryPrivateKey_RecoversSameVaultKeyAsMachineSlot()
@@ -407,16 +414,6 @@ public class CommandTests : IDisposable
         Assert.DoesNotContain("unprotected", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Slots_NonKeyringVault_ReturnsHonestMessageWithoutError()
-    {
-        RunTswap("init");
-
-        var (exit, stdout, _) = RunTswap("slots");
-
-        Assert.Equal(0, exit);
-        Assert.Contains("no keyring", stdout);
-    }
 
     // --- Create ---
 
@@ -1182,16 +1179,6 @@ password2: """"  # tswap: missing-mixed-secret");
 
     // --- Init: new config fields ---
 
-    [Fact]
-    public void Init_ConfigHasUnlockChallenge()
-    {
-        RunTswap("init");
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
-
-        Assert.NotNull(config.UnlockChallenge);
-        Assert.Equal(64, config.UnlockChallenge.Length); // 32 bytes as hex
-    }
 
     [Fact]
     public void Init_ConfigHasRngMode()
@@ -1214,10 +1201,11 @@ password2: """"  # tswap: missing-mixed-secret");
     public void Init_Reinit_PipedYes_DoesNotHang()
     {
         RunTswap("init");
-        // "yes\n" answers the "Already initialized. Reinitialize?" prompt.
-        var (exit, stdout, _) = RunTswapWithStdin("yes\n", "init");
-        Assert.Equal(0, exit);
-        Assert.Contains("test mode", stdout);
+        // Brief T16-S1: a second init on a record vault refuses at once, without a prompt to answer.
+        var (exit, stdout, stderr) = RunTswapWithStdin("yes\n", "init");
+        Assert.Equal(1, exit);
+        Assert.Contains("shared record-store vault", stderr);
+        Assert.DoesNotContain("Reinitialize?", stdout);
     }
 
     [Fact]
@@ -1225,23 +1213,16 @@ password2: """"  # tswap: missing-mixed-secret");
     {
         var (exit, _, _) = RunTswap("init");
 
+        // Brief T16-S1: init makes a record vault: its folder holds the keyring and the format
+        // marker, and the next command finds a complete (empty) vault without any warning.
         Assert.Equal(0, exit);
-        Assert.True(File.Exists(Path.Combine(_tempDir, "secrets.json.enc")),
-            "init should create an empty secrets.json.enc so subsequent commands do not warn about a missing vault");
+        Assert.True(File.Exists(Path.Combine(_tempDir, "vault", "keyring")));
+        Assert.True(File.Exists(Path.Combine(_tempDir, "vault", RecordVaultStore.RecordFormatMarkerFileName)));
+        var (namesExit, _, namesErr) = RunTswap("names");
+        Assert.Equal(0, namesExit);
+        Assert.DoesNotContain("arning", namesErr);
     }
 
-    [Fact]
-    public void Names_WarnsMissingVaultOnStderr()
-    {
-        RunTswap("init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
-
-        var (exit, _, stderr) = RunTswap("names");
-
-        // Command succeeds (empty vault) and emits a warning on stderr
-        Assert.Equal(0, exit);
-        Assert.Contains("vault file not found", stderr, StringComparison.OrdinalIgnoreCase);
-    }
 
     // --- Export / Import ---
 
@@ -1277,8 +1258,7 @@ password2: """"  # tswap: missing-mixed-secret");
         // Re-init clears the vault (also delete secrets.json.enc — test key is constant
         // so the old encrypted file remains readable if not explicitly removed)
         // "yes\n" answers the "Already initialized. Reinitialize?" prompt via stdin.
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1300,8 +1280,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1401,8 +1380,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", "--include-burned", exportPath);
 
         Assert.Equal(0, exit);
@@ -1425,8 +1403,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1571,7 +1548,7 @@ password2: """"  # tswap: missing-mixed-secret");
     public void Migrate_OldConfig_UpdatesRngMode()
     {
         // Simulate a pre-feature config: init normally then strip UnlockChallenge
-        RunTswap("init");
+        ClassicVaultTestSupport.CreateTestModeVault(_tempDir, _testKey); // brief T16-S1: init makes record vaults now
         var configPath = Path.Combine(_tempDir, "config.json");
         var config = JsonSerializer.Deserialize(
             File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
@@ -1609,7 +1586,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Migrate_ModernConfig_ReportsUpToDate()
     {
-        RunTswap("init");
+        ClassicVaultTestSupport.CreateTestModeVault(_tempDir, _testKey); // brief T16-S1: init makes record vaults now
         // Modern config has UnlockChallenge set and RequiresTouch from synthetic init
         // We need to also set RequiresTouch = true to satisfy all checks
         var configPath = Path.Combine(_tempDir, "config.json");

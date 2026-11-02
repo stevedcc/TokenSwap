@@ -26,27 +26,20 @@ internal static class RecordVaultTestSupport
     public const int SerialB = 32222222;
 
     /// <summary>
-    /// <c>init --keyring</c> on <paramref name="machine"/> (one YubiKey slot + recovery), then the
-    /// same vault turned into a record store in <paramref name="vaultDir"/> (default
-    /// <c>&lt;dir&gt;/vault</c>): the keyring moves to the vault folder, config.json gets
-    /// <c>Store</c>, <c>VaultDir</c> and a new <c>OriginId</c>. Returns the recovery key (base64).
+    /// <c>init</c> on <paramref name="machine"/> (one YubiKey slot + recovery), a record-store vault
+    /// in <paramref name="vaultDir"/> (default <c>&lt;dir&gt;/vault</c>). Returns the recovery key
+    /// (base64).
+    /// <para>
+    /// Brief T16-S1: <c>init</c> now makes the record vault itself (before, this helper converted an
+    /// <c>init --keyring</c> vault by hand) and marks it <c>record-format 3</c>. The marker is removed
+    /// here, so the folder is what tswap 0.1 made (records written in format 2) and the store's tests
+    /// keep exercising that path; tests of format 3 write the marker themselves (<see cref="WriteMarker"/>).
+    /// </para>
     /// </summary>
     public static string InitRecordVault(FleetMachine machine, string? vaultDir = null)
     {
-        var output = machine.Ok("", "init", "--keyring");
-        var config = machine.Config;
-        vaultDir ??= Path.Combine(machine.Dir, "vault");
-        Directory.CreateDirectory(vaultDir);
-        File.WriteAllBytes(Path.Combine(vaultDir, "keyring"), Convert.FromBase64String(config.Keyring!));
-        var recordConfig = config with
-        {
-            Keyring = null,
-            Store = RecordVaultStore.StoreName,
-            VaultDir = Path.GetFullPath(vaultDir),
-            OriginId = RecordVaultStore.NewOriginId(),
-        };
-        File.WriteAllText(machine.ConfigPath, JsonSerializer.Serialize(recordConfig, TswapJsonContext.Default.Config));
-        File.Delete(machine.SecretsPath);
+        var output = vaultDir is null ? machine.Ok("", "init") : machine.Ok("", "init", "--folder", vaultDir);
+        File.Delete(Path.Combine(machine.VaultDir!, RecordVaultStore.RecordFormatMarkerFileName));
         return RecoveryKeyFrom(output);
     }
 
@@ -127,4 +120,21 @@ internal static class RecordVaultTestSupport
     /// <summary>The store of <paramref name="machine"/>, as the CLI opens it.</summary>
     public static RecordVaultStore Store(FleetMachine machine) =>
         Assert.IsType<RecordVaultStore>(VaultStores.Open(machine.Dir));
+
+    /// <summary>
+    /// Brief T16-S1: a machine that joined with a plain <c>slot accept</c> holds a classic keyring
+    /// vault (its own copy of the keyring, an empty secrets file), which commands now refuse (ruling
+    /// 5). This converts it (<c>migrate --to-records</c>, opened by its new slot) and gives it
+    /// <paramref name="source"/>'s record files, as sharing the vault folder would; it replaces the
+    /// copy of the source's <c>secrets.json.enc</c> those tests made.
+    /// </summary>
+    public static void ConvertAndTakeRecords(FleetMachine joiner, FleetMachine source)
+    {
+        if (joiner.Config.Store != RecordVaultStore.StoreName)
+            joiner.Ok("", "migrate", "--to-records");
+        var records = Path.Combine(joiner.VaultDir!, RecordVaultStore.RecordsFolderName);
+        Directory.CreateDirectory(records);
+        foreach (var file in Directory.GetFiles(source.RecordsDir))
+            File.Copy(file, Path.Combine(records, Path.GetFileName(file)), overwrite: true);
+    }
 }

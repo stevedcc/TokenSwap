@@ -43,7 +43,7 @@ public class SlotCommandTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
-        var storage = new Storage(dir);
+        var storage = VaultStores.Open(dir); // brief T16-S1: chosen per invocation, as the binary does
         var yubiKeys = new TestKeyYubiKeyService(testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
         var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, SudoBypass: true);
@@ -54,7 +54,7 @@ public class SlotCommandTests : IDisposable
 
     private static byte[] UnlockDirectly(string dir, byte[] testKey)
     {
-        var storage = new Storage(dir);
+        var storage = VaultStores.Open(dir); // brief T16-S1: chosen per invocation, as the binary does
         var yubiKeys = new TestKeyYubiKeyService(testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
         var ctx = new CommandContext(new FakeConsole(""), new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = [] }, storage, yubiKeys, unlocker, testKey, SudoBypass: true);
@@ -105,6 +105,9 @@ public class SlotCommandTests : IDisposable
         var apprFile = Path.Combine(dirA, "approve.json");
         Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
         Run(dirB, _keyB, "", "slot", "accept", apprFile);
+        // Brief T16-S1: the plain accept leaves a classic keyring vault, which commands refuse
+        // (ruling 5): it is converted, opened by the accepted slot.
+        Assert.Equal(0, Run(dirB, _keyB, "", "migrate", "--to-records").Item1);
 
         var (addExit, _, _) = Run(dirB, _keyB, "hunter2\nhunter2\n", "add", "my-secret");
         Assert.Equal(0, addExit);
@@ -191,7 +194,10 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init"); // classic, non-keyring vault
+        // Brief T16-S1: init can't make a classic, non-keyring vault any more; it is written as 0.1's
+        // test-mode init did. Approve on it is refused by ruling 5's classic-vault message (it said
+        // "no keyring vault"), and writes no approve file.
+        ClassicVaultTestSupport.CreateTestModeVault(dirA, _keyA);
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
 
@@ -199,7 +205,8 @@ public class SlotCommandTests : IDisposable
         var (exit, _, stderr) = Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("no keyring vault", stderr);
+        Assert.Contains("classic single-file vault", stderr);
+        Assert.False(File.Exists(apprFile));
     }
 
     [Fact]
@@ -371,7 +378,7 @@ public class SlotCommandTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
-        var storage = new Storage(dir);
+        var storage = VaultStores.Open(dir); // brief T16-S1: chosen per invocation, as the binary does
         var yubiKeys = new TestKeyYubiKeyService(testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey);
         var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, SudoBypass: false);

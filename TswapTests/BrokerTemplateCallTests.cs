@@ -405,7 +405,6 @@ public class BrokerTemplateVaultReadTests : IDisposable
         _m.Ok("", "init", "--tpm", "--no-recovery");
         for (var i = 0; i < 50; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
-        _m.Ok("", "migrate", "--to-records");
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
         var decrypted = new List<string>();
         store.RecordDecrypted = decrypted.Add;
@@ -431,7 +430,6 @@ public class BrokerTemplateVaultReadTests : IDisposable
             return;
         _m.Ok("", "init", "--tpm", "--no-recovery");
         _m.Ok("value-0\n", "ingest", "s0");
-        _m.Ok("", "migrate", "--to-records");
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
         var source = new VaultBrokerSecretSource(store,
             new VaultUnlocker(_m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, _m.Tpm!)]));

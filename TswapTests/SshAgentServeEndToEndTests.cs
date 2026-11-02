@@ -89,7 +89,6 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
     {
         Ok("", "init", "--tpm", "--no-recovery");
         Ok(File.ReadAllText(keyFile), "ingest", "deploy-key");
-        Ok("", "migrate", "--to-records");
         var config = new BrokerConfig
         {
             Version = 1,

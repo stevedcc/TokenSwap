@@ -167,6 +167,9 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
         Assert.Equal(withTouch ? 1 : 0, FlagOf(OwnSlotBlob(mac)));
         Assert.Equal(withTouch, mac.Config.RequiresTouch); // accept carries it through
+        // Brief T16-S1: the plain accept leaves a classic keyring vault, which commands refuse
+        // (ruling 5): it is converted (opened by the accepted slot) before it is used.
+        mac.Ok("", "migrate", "--to-records");
         AssertUnlocks(mac);
         AssertPostureSummary(stdout, withTouch);
         if (withTouch)
@@ -538,10 +541,12 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
         var (exit, text) = mac.RunInterleaved("no\n", "init", "--secure-enclave", "--no-touch");
 
-        Assert.Equal(0, exit);
+        // Brief T16-S1 (ruling 4): a second init on a record vault refuses instead of asking to
+        // reinitialise; the --no-touch warning still comes first.
+        Assert.Equal(1, exit);
         var warning = text.IndexOf("can't be changed or removed later", StringComparison.Ordinal);
-        var prompt = text.IndexOf("Already initialized. Reinitialize?", StringComparison.Ordinal);
-        Assert.True(warning >= 0 && prompt > warning, text);
+        var refusal = text.IndexOf("shared record-store vault", StringComparison.Ordinal);
+        Assert.True(warning >= 0 && refusal > warning, text);
     }
 
     [Fact]

@@ -50,7 +50,7 @@ public class SlotReceiptTests : IDisposable
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _routerDir, Verbose = false, CommandArgs = args };
         var unlocker = new VaultUnlocker(_routerKeys, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, tpm)]);
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_routerDir), _routerKeys, unlocker, TestKey: tpm, SudoBypass: true), args);
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_routerDir), _routerKeys, unlocker, TestKey: tpm, SudoBypass: true), args);
         return (exit, console.OutText, console.ErrorText);
     }
 
@@ -58,12 +58,12 @@ public class SlotReceiptTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _desktopDir, Verbose = false, CommandArgs = args };
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_desktopDir), _desktopKeys, new VaultUnlocker(_desktopKeys), TestKey: null, SudoBypass: true), args);
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_desktopDir), _desktopKeys, new VaultUnlocker(_desktopKeys), TestKey: null, SudoBypass: true), args);
         return (exit, console.OutText, console.ErrorText);
     }
 
-    private static Config LoadConfig(string dir) =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring is in its folder).</summary>
+    private static Config LoadConfig(string dir) => VaultStores.Open(dir).LoadConfig();
 
     private static Keyring DecodeKeyring(Config config) => KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 

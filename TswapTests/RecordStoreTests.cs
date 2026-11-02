@@ -31,7 +31,7 @@ public sealed class RecordStoreTests : IDisposable
         Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
 
         using var classic = new FleetMachine("classic", SimulatedYubiKeyService.WithKeys(SerialA));
-        classic.Ok("", "init", "--keyring");
+        ClassicVaultTestSupport.CreateKeyringVault(classic, "--keyring"); // brief T16-S1: init makes record vaults now
         Assert.IsType<Storage>(VaultStores.Open(classic.Dir));
     }
 

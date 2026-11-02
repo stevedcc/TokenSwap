@@ -52,10 +52,8 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         if (OperatingSystem.IsWindows())
             return; // no identity switch on Windows
         _keys.PluggedIn = [SerialA, SerialB];
-        _m.Ok("1\n2\n\n", "init");
-        _keys.PluggedIn = [SerialA];
-        _m.Ok("v", "ingest", "s");
-        _keys.PluggedIn = [SerialA, SerialB];
+        // Brief T16-S1: the XOR vault written as 0.1's init did (init makes record vaults now).
+        ClassicVaultTestSupport.CreateXorVault(_m, secrets: new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) });
         var fake = AsRoot();
         _m.Ownership = new DirectoryOwnerMatcher(fake);
 
@@ -160,8 +158,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
         _keys.PluggedIn = [SerialA];
-        _m.Ok("", "init", "--keyring");
-        _m.Ok("v", "ingest", "s");
+        // Brief T16-S1: a classic keyring vault as 0.1's init --keyring made it, holding "s".
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring");
+        new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }), vaultKey);
         var old = SetUmask(0);
         try
         {

@@ -78,8 +78,9 @@ internal static class RecordMigration
             throw new TswapException("This machine has a pending 'slot request'; finish it with 'slot accept' before converting.");
         if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null))
             throw new TswapException(
-                "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Create a keyring " +
-                $"vault ('{ctx.Prefix} init --tpm' or '--secure-enclave'), move the secrets over with export / import, then convert that.");
+                "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Take the secrets " +
+                $"out with 'sudo {ctx.Prefix} export <file>', create a new vault in another config folder ('{ctx.Prefix} init --tpm' or " +
+                "'--secure-enclave', with TSWAP_CONFIG_DIR set), and import the file there.");
         if (plainXor)
         {
             var pluggedIn = ctx.YubiKeys.ListSerials();
@@ -156,6 +157,9 @@ internal static class RecordMigration
         // vault is untouched, and the next run removes the folder (with a notice).
         var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         temp.SaveConfig(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
+        // Brief T16-S1 (ruling 3): a new record vault starts in record format 3. The marker goes into
+        // the temp folder first, so the snapshot is written in format 3 and the rename carries it.
+        temp.WriteFormatMarker();
         var lastHlc = temp.WriteSnapshot(db, key);
         ctx.MigrationSeams?.AfterStep?.Invoke(1);
 

@@ -71,6 +71,7 @@ public static class CommandRegistry
                 $"'-v'/'--verbose' is a global flag: global flags go before the command, e.g. '{ctx.Prefix} -v {command.Name} ...'. " +
                 $"(After the command's first argument, -v belongs to the command: '{ctx.Prefix} run grep -v ...'.)");
 
+        ctx.ClassicVaultAllowed = command.WorksOnClassicVault;
         return command.Execute(ctx, commandArgs);
     }
 

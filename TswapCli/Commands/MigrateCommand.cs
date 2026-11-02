@@ -9,6 +9,9 @@ public sealed class MigrateCommand : ICliCommand
     public string Description => "Guide to upgrade slots for touch requirement; --to-records (sudo) converts the vault to one file per secret, shareable by sync tools";
     public bool RequiresSudo => false;
 
+    /// <summary>Brief T16-S1 (ruling 5): every form of migrate works on a classic vault (converting it is the point).</summary>
+    public bool WorksOnClassicVault => true;
+
     public int Execute(CommandContext ctx, string[] args)
     {
         // Brief T6 decision 8: the record store conversion.
