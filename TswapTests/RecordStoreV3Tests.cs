@@ -95,6 +95,7 @@ public sealed class RecordStoreV3Tests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("newer tswap", err);
+        Assert.Contains("Upgrade tswap", err);
         Assert.NotEqual(0, burnExit);
         Assert.Contains("newer tswap", burnErr);
         Assert.Equal(before, RecordsSnapshot());
@@ -144,6 +145,8 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.True(exit == 0, err);
         Assert.Contains(RecordVaultStore.RecordFormatMarkerFileName, err);
         Assert.Contains("ignored", err);
+        Assert.Contains("write 3 into it", err); // ruling 3's repair hint
+        Assert.Contains("delete it", err);
         Assert.Equal((byte?)2, SecretRecordCodec.FormatVersionOf(Bytes("s")));
     }
 
@@ -386,6 +389,8 @@ public sealed class RecordStoreV3Tests : IDisposable
 
         Assert.Contains(Path.GetFileName(File("s")), db.UnreadableFiles!);
         Assert.Contains("can't be merged", warnings.ToString());
+        Assert.DoesNotContain("s-value", warnings.ToString());
+        Assert.DoesNotContain("other-value", warnings.ToString());
         Assert.NotEqual(0, getExit);
         Assert.NotEqual(0, burnExit);
         var after = RecordsSnapshot();
@@ -411,6 +416,8 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.True(exit == 0, err);
         Assert.Contains(Path.GetFileName(File("s")), err);
         Assert.Contains("can't be merged", err);
+        Assert.DoesNotContain("s-value", err);
+        Assert.DoesNotContain("forged", err);
         Assert.Equal(sBefore, Bytes("s"));
         Assert.Equal("s-value", _m.Get("s"));
         Assert.Equal("t-new", _m.Get("t"));
@@ -465,19 +472,36 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Null(store.ReadSecretValue("missing", _key));
     }
 
+    /// <summary>
+    /// The read path checks the one value it decrypts against that version's stored fingerprints (as a
+    /// full load validates every copy): a record whose value section doesn't match its fingerprints
+    /// is refused, so a value can't be returned under fingerprints that describe another one.
+    /// </summary>
+    [Fact]
+    public void ReadSecretValue_AValueThatDoesNotMatchItsFingerprints_IsRefused()
+    {
+        WriteMarker(_m);
+        _m.Ok("s-value", "ingest", "s");
+        _m.Ok("t-value", "ingest", "t");
+        var lying = Read("s") with { Fingerprints = Fingerprints(_key, "something-else"u8.ToArray()) };
+        Plant(File("s"), lying, _key); // its section is copied: the value is unchanged, the fingerprints are not its own
+
+        var ex = Assert.Throws<TswapException>(() => Store(_m).ReadSecretValue("s", _key));
+
+        Assert.Contains("fingerprints don't match", ex.Message);
+        Assert.DoesNotContain("s-value", ex.Message);
+        Assert.Equal("t-value"u8.ToArray(), Store(_m).ReadSecretValue("t", _key));
+    }
+
     [Fact]
     public void RawFileBytes_HoldNoFingerprintMaterial()
     {
         WriteMarker(_m);
-        // 24 characters with whitespace (stripped variant) whose base64 has '+' and '/' (base64url variant).
-        const string alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?>~";
-        string value;
-        do
-        {
-            var chars = RandomNumberGenerator.GetItems<char>(alphabet, 22);
-            value = new string(chars[..11]) + " " + new string(chars[11..]) + "?";
-        }
-        while (SecretVariants.For(value).Count != 4);
+        // A fixed value of 24 random characters (brief): a space for the whitespace-stripped variant,
+        // and "?>" so its base64 has a '+' (the base64url variant).
+        const string value = "Kq7?>vM2 xR9~pL4?>wZ8&nT";
+        Assert.Equal(24, value.Length);
+        Assert.Equal(4, SecretVariants.For(value).Count);
         _m.Ok(value, "ingest", "s");
         var file = Bytes("s");
         var record = Read("s");

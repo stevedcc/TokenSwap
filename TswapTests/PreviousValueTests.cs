@@ -142,7 +142,7 @@ public sealed class PreviousValueClassicStoreTests : IDisposable
     public void Dispose() => _m.Dispose();
 
     [Fact]
-    public void PreviousAndRestore_RefuseWithAPointerToMigrate()
+    public void PreviousAndRestore_OnAClassicVault_AreRefusedWithTheMigrationHint()
     {
         var run = _m.Run("", "run", "true", "{{s:previous}}");
         var restore = _m.Run("", "restore", "s");

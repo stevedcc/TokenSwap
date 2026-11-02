@@ -80,6 +80,41 @@ public sealed class ClassicVaultRefusalTests : IDisposable
         Assert.Equal(secrets, File.ReadAllBytes(_m.SecretsPath));
     }
 
+    /// <summary>
+    /// Fix round 1: the theory reaches 'slot' through one subcommand; the others that open the store
+    /// refuse too (accept, approve, add), with the same message, writing nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("accept")]
+    [InlineData("approve")]
+    [InlineData("add")]
+    public void ClassicVault_SlotSubcommandsRefuse(string subcommand)
+    {
+        var file = _m.PathOf("approve.json");
+        File.WriteAllText(file, "{}");
+        // approve reads its request file before it opens the vault, so it gets a real one.
+        using var joiner = new FleetMachine("classic-refusal-joiner", SimulatedYubiKeyService.WithKeys(SerialA));
+        var request = joiner.PathOf("request.json");
+        if (subcommand == "approve")
+            joiner.Ok("", "slot", "request", request);
+        string[] args = subcommand switch
+        {
+            "accept" => ["slot", "accept", file],
+            "approve" => ["slot", "approve", request, _m.PathOf("out.json")],
+            _ => ["slot", "add", "--yubikey"],
+        };
+        var config = File.ReadAllBytes(_m.ConfigPath);
+        var secrets = File.ReadAllBytes(_m.SecretsPath);
+
+        var (exit, _, err) = _m.Run("", args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(Refusal, err);
+        Assert.Equal(config, File.ReadAllBytes(_m.ConfigPath));
+        Assert.Equal(secrets, File.ReadAllBytes(_m.SecretsPath));
+        Assert.False(File.Exists(_m.PathOf("out.json")));
+    }
+
     [Fact]
     public void TheRefusalTheory_CoversTheCommandsBriefT16Names()
     {

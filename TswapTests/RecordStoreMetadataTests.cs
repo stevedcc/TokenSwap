@@ -140,7 +140,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
     }
 
     [Fact]
-    public void LoadMetadata_CopiesDisagreeingOnName_IsUnreadable_InEveryOrder()
+    public void LoadMetadata_TiedCopiesThatDisagree_AreUnreadable_InEveryOrder()
     {
         // A copy can't carry another name at the store level (the record id must be the HMAC of the
         // name inside, so the codec refuses it before any merge); the metadata merge itself refuses
@@ -177,6 +177,37 @@ public sealed class RecordStoreMetadataTests : IDisposable
             Assert.Empty(metadata.Records);
             Assert.Equal([Path.GetFileName(main)], unreadable);
         }
+    }
+
+    /// <summary>
+    /// The real route of a copy that carries another name (fix round 1): its record id must be
+    /// HMAC(K_names, name), so the codec refuses it at decode, before any merge. On both load paths the
+    /// copy is skipped with a warning and kept on disk, and the record stays readable from the others.
+    /// </summary>
+    [Fact]
+    public void ACopyCarryingAnotherName_IsSkippedWithAWarning_TheRecordStaysReadable()
+    {
+        WriteMarker(_m);
+        _m.Ok("s-value", "ingest", "s");
+        var main = FileOf("s");
+        var copy = main + " (1)";
+        var renamed = ReadRecord(_m, _key, "s") with { Name = "t", Write = S(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 1000) };
+        System.IO.File.WriteAllBytes(copy, SecretRecordCodec.Encode(renamed, _key, 3)); // record id of "s", name "t"
+
+        var metadataWarnings = new StringWriter();
+        var metadata = Store(_m).LoadMetadata(_key, metadataWarnings);
+        var fullWarnings = new StringWriter();
+        var db = Store(_m).LoadSecrets(_key, fullWarnings);
+
+        Assert.Empty(metadata.Unreadable);
+        Assert.Equal("s", Assert.Single(metadata.Records).Name);
+        Assert.Contains(Path.GetFileName(copy), metadataWarnings.ToString());
+        Assert.Contains("can't be used", metadataWarnings.ToString());
+        Assert.Null(db.UnreadableFiles);
+        Assert.Equal("s-value", db.Secrets["s"].Value);
+        Assert.Contains(Path.GetFileName(copy), fullWarnings.ToString());
+        Assert.Contains("can't be used", fullWarnings.ToString());
+        Assert.True(System.IO.File.Exists(copy));
     }
 
     [Fact]

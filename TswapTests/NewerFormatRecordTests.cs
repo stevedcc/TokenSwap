@@ -41,7 +41,6 @@ public sealed class NewerFormatRecordTests : IDisposable
     [MemberData(nameof(NewerFormats))]
     public void OlderBuild_NeverDeletesOrOverwritesANewerFormatRecord(string label, byte formatVersion)
     {
-        Assert.NotEmpty(label);
         var recoveryKey = InitRecordVault(_m);
         var vaultKey = VaultKey(_m, recoveryKey);
         _m.Ok("planted-value", "ingest", "planted");
@@ -62,8 +61,8 @@ public sealed class NewerFormatRecordTests : IDisposable
 
         void AssertPlantedUntouched(string after)
         {
-            Assert.True(File.Exists(plantedPath), $"the newer-format record was deleted by: {after}");
-            Assert.True(planted.AsSpan().SequenceEqual(File.ReadAllBytes(plantedPath)), $"the newer-format record was rewritten by: {after}");
+            Assert.True(File.Exists(plantedPath), $"[{label}] the newer-format record was deleted by: {after}");
+            Assert.True(planted.AsSpan().SequenceEqual(File.ReadAllBytes(plantedPath)), $"[{label}] the newer-format record was rewritten by: {after}");
             var store = new RecordVaultStore(_m.Dir);
             var db = store.LoadSecrets(vaultKey, TextWriter.Null);
             Assert.Contains(Path.GetFileName(plantedPath), db.UnreadableFiles ?? []);

@@ -311,12 +311,14 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Equal("3", File.ReadAllText(Path.Combine(otherVault, RecordVaultStore.RecordFormatMarkerFileName)).Trim());
         // Every live record took the reindexed state (fingerprints are state, so it was written, as
         // format 3). The tombstone's state is equal on both sides and it has no sections, so ruling
-        // 11 doesn't rewrite it: it stays format 2 until a write of it or a reindex here.
+        // 11 doesn't rewrite it: it stays format 2 until a write of it or a reindex here (pinned).
         foreach (var name in new[] { "alpha", "beta", "gamma" })
         {
             Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_other, _key, name))));
             Assert.NotNull(ReadRecord(_other, _key, name).Fingerprints);
         }
+        Assert.Equal((byte?)2, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_other, _key, "delta"))));
+        Assert.Equal(1, Store(_other).LoadMetadata(_key, TextWriter.Null).NotFingerprinted);
         _other.Ok("", "vault", "reindex");
         AssertAllV3WithFingerprints(_other);
 

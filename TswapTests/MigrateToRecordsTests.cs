@@ -754,6 +754,34 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
 
 
 
+    /// <summary>
+    /// Fix round 1 (successor of AFailedJoin_LeavesTheOldSecretsFileInPlace): a join into a folder
+    /// holding another vault's keyring fails, and the machine's own state is untouched: its pending
+    /// config.json byte for byte, no vault folder, nothing new but a backup copy of that same config
+    /// (made before the check, harmless), and the foreign folder unchanged.
+    /// </summary>
+    [Fact]
+    public void AFailedJoin_ChangesNothing()
+    {
+        using var stranger = new FleetMachine("acceptdir-stranger", _keys);
+        var foreign = Path.Combine(stranger.Dir, "shared");
+        stranger.Ok("", "init", "--folder", foreign);
+        var foreignBefore = Directory.GetFiles(foreign, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
+        var before = Directory.GetFileSystemEntries(_laptop.Dir).ToHashSet();
+        var configBefore = File.ReadAllText(_laptop.ConfigPath);
+
+        var (exit, _, err) = _laptop.Run("", "slot", "accept", _approve, "--vault-dir", foreign);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("another vault", err);
+        Assert.Equal(configBefore, File.ReadAllText(_laptop.ConfigPath));
+        var added = Directory.GetFileSystemEntries(_laptop.Dir).Where(e => !before.Contains(e)).ToList();
+        Assert.All(added, e => Assert.Contains(e, _laptop.Backups));
+        Assert.All(_laptop.Backups, b => Assert.Equal(configBefore, File.ReadAllText(b)));
+        Assert.False(Directory.Exists(Path.Combine(_laptop.Dir, "vault")));
+        Assert.All(foreignBefore, kv => Assert.Equal(kv.Value, File.ReadAllBytes(kv.Key)));
+    }
+
     [Fact]
     public void AFolderWithoutAKeyring_IsRefused_AndNothingChanges()
     {

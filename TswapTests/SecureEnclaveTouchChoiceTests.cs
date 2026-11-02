@@ -534,7 +534,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     // --- the warning comes first (decision 7): before init's reinitialise prompt and recover's stdin ---
 
     [Fact]
-    public void Init_WarnsBeforeTheReinitialisePrompt()
+    public void Init_OnARecordVault_WarnsBeforeTheRefusal()
     {
         var mac = Mac();
         mac.Ok("", "init", "--secure-enclave", "--with-touch");
