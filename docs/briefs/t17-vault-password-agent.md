@@ -130,7 +130,10 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
        - **`0x00`** → Corrupt. This build never writes it: a password header with no password flag is damage.
      - A higher version (`TSYK` > 2, `TSTP`/`TSSE` > 1) → NeedsNewerTswap.
      - A legacy blob without magic → None; a recovery slot → None.
-     - **`Classify`, `Split` and `Decode` agree** on every outcome. `Split` and `Decode` take no slot id, so they throw
+     - **A blob with a known magic that is truncated or has trailing bytes** (for example a `TSTP` blob without its
+       flags byte, or a 74-byte `TSYK` v2 blob) → Corrupt. The parsers keep their existing
+       `Malformed … Restore config.json from backup.` texts for this case.
+     - **`Classify`, `Split` and `Decode` agree on the flag and version outcomes.** `Split` and `Decode` take no slot id, so they throw
        texts without one, and the caller (which knows the slot) prefixes `Slot <id8>: `. The texts are exactly:
        - NeedsNewerTswap, for all three kinds (including `TSYK`):
          `needs a newer tswap (blob version <v> or unknown flags); upgrade tswap.`
@@ -147,7 +150,11 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
      runs.** No pass tries them, no source is called for them, and no prompt is shown because of them. Other slots
      still unlock as usual (T4's rule: one bad slot never blocks the others).
      - If nothing opens the vault, the error ends with `Slot <id8>: needs a newer tswap …` for each NeedsNewerTswap
-       slot, and with the existing `Skipped slot(s) <ids>: … restore config.json from backup.` text for Corrupt ones.
+       slot. Corrupt slots are reported with T4's skip text, generalised from YubiKey wording to any kind:
+       `Skipped slot(s) <ids>: their slot blob is corrupt; restore config.json from backup.` (The `VaultUnlocker` pin
+       for the YubiKey text moves with it: name that test in the commit message.)
+     - **Where each Corrupt text is used:** the unlocker uses this skip text. `broker serve` and `broker unlock` use
+       `Slot <id8>: a password header without the password flag (corrupt); …`. `slots` uses its mark.
      - **Other callers:**
        - `broker serve` whose own slot is Corrupt refuses to start, with the Corrupt text prefixed by its slot id; one
          that is NeedsNewerTswap refuses with that text. Only None means password-free and Password means locked
@@ -331,8 +338,11 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
         4. unload the ssh keys;
         5. only then set `PR_SET_DUMPABLE 1`.
       - **Unlocks caught by a return to locked:**
-        - **An op-16 unlock already in flight** finishes its proof. The broker then discards the result, zeroing the
-          candidate, and answers it `The broker was locked while unlocking; run 'tswap broker unlock' again.`
+        - **An op-16 unlock already in flight** finishes its proof. The broker then discards the result, zeroing it
+          (the proof's `K_v`) and the candidate, and answers it
+          `The broker was locked while unlocking; run 'tswap broker unlock' again.`
+          - The exception is the unlock whose own deferred ssh-key load failed and so caused this return to locked. It
+            gets ruling 14's `ssh key '<name>' can't be loaded: <reason>` instead.
         - **Unlocks queued at the gate** when step 1 bites are refused **before their payload is read**, with the same
           text.
       - **Password-free brokers** stay non-dumpable from the start, as today.
@@ -493,14 +503,29 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     `Warning: this TPM's lockout password is empty, so anyone who can use the TPM can reset its failed-password counter and keep guessing the vault password. Setting one (as root: tpm2_changeauth -c lockout) affects every program that uses this TPM.`
     - Windows manages the lockout authorisation itself, so it gets no warning.
     - A failed probe is silent (`HARDWARE_BACKENDS.md` says so).
+    - **Windows** prints one extra line instead, at `init`, `slot add`, `slot request` and `recover` with
+      `--password` and a TPM slot:
+      `Windows locks TPM use after about 4 wrong passwords, for up to 8 hours; run 'tswap agent start' to avoid retyping it.`
+    - **No automatic retries on Windows.** tswap never retries a wrong Windows TPM password automatically. Each
+      user-supplied password costs exactly one `Decrypt`, and `agent start`'s proving unlock is the only automatic
+      attempt (Task 9 test).
 18. **Error text for a wrong password at the hardware** (when the password **was** supplied; ruling 3 covers a stripped
     header):
     - **TPM:** `TPM_RC_AUTH_FAIL`, reported by tpm2-tools as `0x98E` for the object's auth session (a swtpm test pins
       the code seen).
-    - **Windows:** `NTE_INCORRECT_PASSWORD` (0x80090027).
-    - Both map to: `Wrong vault password. The TPM counts failed attempts and locks out for a while after several.`
-    - **Lockout:** `TPM_RC_LOCKOUT` (`0x921`) maps to:
+    - **Windows** (codes from the owner's spike, 2026-11-02; Task 9): a wrong usage auth makes `Decrypt` throw
+      `NTE_PERM` (0x80090010, "Access denied"). It is not `NTE_INCORRECT_PASSWORD`.
+    - The TPM's auth failure and Windows' `NTE_PERM` both map to:
+      `Wrong vault password. The TPM counts failed attempts and locks out for a while after several.`
+    - **Lockout, Linux:** `TPM_RC_LOCKOUT` (`0x921`) maps to:
       `The TPM is in dictionary-attack lockout after failed password attempts; wait and try again.`
+    - **Lockout, Windows:** `0x80090031` (the provider ignored the authorisation because dictionary-attack mitigation
+      triggered) and `0x80290409` (the Platform Crypto Device ignored it, which also blocks key **creation**) both map
+      to:
+      `Windows has locked TPM use for this user after too many wrong passwords (by default for up to 8 hours, or until an administrator resets the TPM lockout). Slots on this machine without a vault password may be blocked meanwhile too.`
+    - **Windows, no password supplied:** `NTE_SILENT_CONTEXT` (0x80090022) means the key needs its password and none
+      was set. tswap always sets it for a password slot, so this is a bug path. It maps to:
+      `tswap opened a password-protected TPM key without its password (a tswap bug; please report it).`
     - **YubiKey:** a slot that fails to unwrap with the password supplied says:
       `Wrong vault password (or this slot's key changed).`
     - **Secure Enclave:** the shim's wrong-credential code (`-7`, ruling 19) says:
@@ -712,7 +737,8 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
   (`DeriveV2`)
 - Create: `TswapCore/Keyring/TpmSlotBlob.cs`, `TswapCore/Keyring/SecureEnclaveSlotBlob.cs`,
   `TswapCore/Keyring/SlotPassword.cs`
-- Test: `TswapTests/PasswordSlotBlobTests.cs` (the existing `YubiKeySlotBlobTests` keep passing unchanged)
+- Test: `TswapTests/PasswordSlotBlobTests.cs`. The existing YubiKey blob tests keep passing, except the one input
+  change named in Step 1.
 
 **Interfaces:**
 - Produces:
@@ -744,13 +770,21 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     - `TSTP`: v1 `0x01` → Password; v1 `0x02` → NeedsNewerTswap; v1 `0x03` → NeedsNewerTswap; v1 `0x00` → Corrupt;
       v2 → NeedsNewerTswap;
     - the same five rows for `TSSE`;
+    - truncated blobs with a known magic → Corrupt: `TSTP` v1 without its flags byte; a 74-byte `TSYK` v2;
     - a legacy TPM blob → None; a legacy Secure Enclave blob → None; a recovery slot → None.
   - **Stripping the flag doesn't weaken a slot (ruling 3):** with a simulated YubiKey, a v2 slot rewritten as a v1
     blob (same serial, challenge and salt) fails to unwrap without the password, with ruling 3's extended "did not
     authenticate" text. The TPM case is in Task 8, and the Secure Enclave case is in Task 13.
   - `LegacyParsers_RecogniseTheMagic`: `TpmSlotBlob`'s and `SecureEnclaveSlotBlob`'s helpers, given a blob with an
-    unknown header version (2) or an unknown flag bit (`0x02`), throw the "newer tswap" message from ruling 3, not
-    "corrupted". The interop parsers call the same helper (Tasks 8, 9 and 13).
+    unknown header version (2) or an unknown flag bit (`0x02`), throw the short text
+    `needs a newer tswap (blob version <v> or unknown flags); upgrade tswap.`, not "corrupted".
+    - The interop parsers (Tasks 8, 9 and 13) don't call the helper on an unsplit blob. They detect the magic
+      themselves and throw the legacy text, `This slot needs the vault password and a newer tswap …`, so each test's
+      assertion is unique.
+  - **The existing `YubiKeySlotTests.Decode_UnknownVersion_IsRejected` changes its input** from version 2 (now valid)
+    to version 3, and its asserted version text from `"version 2"` to `"version 3"`, keeping `"newer tswap"`. That is
+    a brief-driven input change; say so in the commit message. `Decode`'s unknown-version message becomes ruling 3's
+    short text. 0.1.x binaries keep their shipped message, which ruling 3's version paragraph describes.
 - [ ] **Step 2:** run; expect compile failures.
 - [ ] **Step 3:** implement to ruling 3.
 - [ ] **Step 4:** pass.
@@ -822,7 +856,9 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     The unlock succeeds and no source is called.
   - `CorruptSlot_Alone_NamedInTheError`: only the corrupt slot. The error names it with the `Skipped slot(s) …` text,
     and no source is called.
-  - `Messages_CallerPrefixesSlotId`: `Split`/`Decode` texts carry no id; the unlocker's text starts `Slot <id8>: `.
+  - `Messages_CallerPrefixesSlotId`: `Split`/`Decode` texts carry no id. The unlocker's **NeedsNewerTswap** text starts
+    `Slot <id8>: `. Corrupt slots in the unlocker use the skip text, pinned by `CorruptSlot_Alone_NamedInTheError`;
+    the `Slot <id8>:`-prefixed Corrupt text belongs to `broker serve` and `broker unlock`.
 - [ ] **Step 2:** run; expect failures.
 - [ ] **Step 3:** implement.
   - The YubiKey path calls `YubiKeySlotKek.Recover(..., password)`.
@@ -944,6 +980,7 @@ table:
   - `Slots_MarksPasswordAndWarns`, with the exact lines.
   - `Init_PasswordExplanation_IncludesVersionLine`.
   - `ClassicConfig_PasswordFlag_RefusedByTheClassicRefusal` (ruling 3).
+  - `WindowsTpmPassword_PrintsTheLockoutLine` (ruling 17; simulated TPM with the platform seam set to Windows).
   - E2E: `init --tpm --password` (test key, password on stdin through the test console seam), then `create`, then
     `get` with the password re-typed.
 - [ ] **Step 2–4:** red, implement, green.
@@ -1025,38 +1062,54 @@ Pinned behaviour:
 
 **Files:**
 - Modify: `TswapCore/Vault/Interop/PlatformCryptoProviderInterop.cs`, `TswapCore/Vault/WindowsTpmHardwareService.cs`
-- Test: `TswapTests/WindowsTpmPasswordTests.cs` (`Category=TpmWindows`; CI's Windows runner has no TPM, so these run on
-  the owner's Windows machine, see Finish)
+- Test: `TswapTests/WindowsTpmPasswordTests.cs` (`Category=TpmWindows`, run on the owner's real hardware, see Finish)
+  and `TswapTests/WindowsTpmPasswordUnitTests.cs` (unit, through a CNG seam)
+
+**Settled by the owner's spike** (2026-11-02: Windows 11 Pro 10.0.26300 ARM in a Parallels VM, virtual TPM 2.0, managed
+`CngKey`, a standard non-elevated user, every open with `CngKeyOpenOptions.Silent`, no dialogs):
+- Creating with `CngProperty("PCP_USAGEAUTH", <32 raw bytes>)`, then a fresh silent `Open`, `SetProperty("PCP_USAGEAUTH",
+  same 32 bytes)` and RSA-OAEP-SHA256 `Decrypt`: **decrypted**.
+  - So the spec's `NCRYPT_PIN_PROPERTY` isn't needed. This is an owner amendment (Task 14).
+- A wrong usage auth: `Decrypt` throws `0x80090010` (`NTE_PERM`, "Access denied").
+- After about 4–6 failures in total: `0x80090031` (dictionary-attack mitigation triggered; authorisation ignored).
+  Creating new keys then also failed, with `0x80290409`.
+  - This matches Windows' TBS defaults for standard users: individual lockout threshold 4, a total threshold of 9
+    across all standard users, and a lockout duration of 480 minutes.
+- No auth with a silent open: `0x80090022` (`NTE_SILENT_CONTEXT`).
+- **Without the silent flag,** Windows shows its own "This application needs to use a cryptographic key" password
+  dialog.
+- **Deletion:** a silently opened password key can be deleted with `CngKey.Delete()` without the auth.
 
 Pinned behaviour:
-- **Creating the key:** add `CngProperty("PCP_USAGEAUTH", <32 stretched bytes>, CngPropertyOptions.None)` to the
-  creation parameters.
-- **Using the key:** before `Decrypt`, set `PCP_USAGEAUTH` to the same 32 bytes on the opened key
-  (`CngKey.SetProperty`).
-- **Open question.** The spec names `NCRYPT_PIN_PROPERTY` for use. The PCP hashes a PIN string before comparing it, so a
-  PIN supplied at use would not match a digest set at creation. This brief uses `PCP_USAGEAUTH` at both ends. If the PCP
-  refuses to set it on an opened key, stop and report: the fallback (a PIN string at both ends, derived as the
-  stretched bytes' hex) changes what is bound, and needs a ruling.
-  (The owner is running a Windows spike that tries `PCP_USAGEAUTH` at creation and at use, and the PIN variant. The
-  controller updates this section with the result before Task 9 starts.)
-- **Wrong password:** the error is mapped per ruling 18. The hardware test records which call raises
-  `NTE_INCORRECT_PASSWORD`: the `SetProperty` or the `Decrypt`.
-- **Keys stay under dictionary-attack protection.** Set no `NCRYPT_PCP_*` flag that exempts them.
-- **The unit seam** records the exact bytes passed at creation and at use.
+- **Creating a password key:** add `CngProperty("PCP_USAGEAUTH", <32 stretched bytes>, CngPropertyOptions.None)` to
+  the creation parameters.
+- **Using it:** open with `CngKeyOpenOptions.Silent`, **always**, for password and password-free keys alike, so Windows
+  never shows its dialog. Then `SetProperty("PCP_USAGEAUTH", <the same 32 bytes>)`, then `Decrypt`.
+- **Exactly one `Decrypt` per supplied password,** with no automatic retry (ruling 17).
+- **Errors** are mapped per ruling 18: `0x80090010` → wrong password; `0x80090031` and `0x80290409` → Windows
+  lockout; `0x80090022` → the bug-path text. `0x80290409` can also come from `Create`, so the enrolment path maps it
+  too.
+- **Keys stay under dictionary-attack protection:** set no `NCRYPT_PCP_*` flag that exempts them.
+- **The unit seam** records the open options, and the exact bytes passed at creation and at use.
 - **Legacy parse:** `Unwrap` recognises the `TSTP` magic before its legacy parse (ruling 3).
 
 - [ ] **Step 1: Write the tests:**
-  - Hardware: `WrapUnwrap_WithPassword_RoundTrips`, `WrongPassword_RightMessage`.
-  - Unit: `NoPassword_KeyCreationUnchanged` (no `PCP_USAGEAUTH` set, through the seam).
-  - Unit: `PasswordSlot_SameBytesAtCreationAndUse`.
-  - Unit: `UnsplitTstpBlob_SaysNewerTswap`.
-- [ ] **Step 2–4:** the unit tests go red then green here. The `TpmWindows` tests compile and are listed in the report
-  as "not run: no TPM".
-- [ ] **Step 5:** commit (`T17 task 9: the TPM usage auth on Windows (hardware run pending)`).
-  - Break-it-once at unit level: set `PCP_USAGEAUTH` for password-free keys too; `NoPassword_KeyCreationUnchanged`
-    must fail.
+  - **Hardware:** `WrapUnwrap_WithPassword_RoundTrips` and `WrongPassword_RightMessage` (0x80090010).
+  - **Unit:**
+    - `NoPassword_KeyCreationUnchanged`: no `PCP_USAGEAUTH` set, through the seam.
+    - `PasswordSlot_SameBytesAtCreationAndUse`.
+    - `EveryOpenIsSilent`.
+    - `OneDecryptPerSuppliedPassword`: a wrong password gives exactly one `Decrypt` call, and no retry.
+    - `ErrorCodes_MapToRuling18`: the seam throws each of 0x80090010, 0x80090031, 0x80290409 (from `Decrypt` and from
+      `Create`) and 0x80090022, and each gives its pinned text.
+    - `UnsplitTstpBlob_SaysNewerTswap`.
+- [ ] **Step 2–4:** the unit tests go red then green. The `TpmWindows` tests compile, and are listed in the report as
+  "not run: owner's hardware". The VM proves the API, not the firmware's lockout behaviour, so the hardware run
+  happens on the owner's XPS or Windows 10 machine.
+- [ ] **Step 5:** commit (`T17 task 9: the TPM usage auth on Windows`).
+  - Break-it-once at unit level: open without `Silent`; `EveryOpenIsSilent` must fail.
   - For the owner's hardware run: drop the use-time `PCP_USAGEAUTH` set;
-    `WrapUnwrap_WithPassword_RoundTrips` and `WrongPassword_RightMessage` must fail.
+    `WrapUnwrap_WithPassword_RoundTrips` must fail with the bug-path text.
 
 ### Task 10: the agent protocol, server and client (core)
 
@@ -1217,7 +1270,8 @@ Pinned behaviour:
   - `LockWithUnlockInFlight_DrainsBeforeDumpable` and `TimeoutWithUnlockInFlight_DrainsBeforeDumpable`: a request's
     unlock is blocked on a gate when the lock or timeout fires. Dumpable 1 comes only after that request has disposed
     its clone. There are two rows: one with an **HTTP request**'s per-request unlock in flight, and one with an op-16
-    proof in flight, which gets `The broker was locked while unlocking; …`.
+    proof in flight, which gets `The broker was locked while unlocking; …`. Its discarded `K_v` and candidate are
+    zeroed (`BeforeFreeObserver` and the key-zeroing seam) before dumpable 1.
   - `UnlockQueuedAtLock_RefusedBeforePayloadRead`, with the same text; `PayloadReadObserver` records no read.
   - `TwoConcurrentUnlocks_OneFails`: the second payload is read only after the first request has finished. Whichever
     order they run in, the outcome is consistent: a wrong password arriving after a correct one is refused as `already
@@ -1311,6 +1365,9 @@ Pinned behaviour:
     - **Version:** every machine touching a password slot needs ≥ 0.2.0.
     - **The threat model:**
       - who it stops and who it doesn't;
+      - **Windows lockout as denial of service.** Windows' TPM lockout counts per Windows user, and across all standard
+        users of the machine (total 9). Another local standard user can trigger it with wrong passwords against their
+        own keys. That locks **everyone's** TPM use, not only tswap's, for hours. They still can't open the vault;
       - the weakest-slot rule;
       - "don't reuse the vault password anywhere else", with ruling 2's two consequences (the verifier oracle for
         whoever opens a mixed vault without the password, and offline guessing of YubiKey v2 slots);
@@ -1330,10 +1387,15 @@ Pinned behaviour:
     - the blob versions from ruling 3, why flipping a flag never weakens a slot, and the ≥ 0.2.0 requirement;
     - conflict-copy deletion and sync tools (ruling 2).
   - The spec (`docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`): an "Owner amendments" note
-    recording ruling 2's two deviations, ruling 13's reading of "asks the agent first", and Task 9's Windows choice
-    (`PCP_USAGEAUTH` versus the spec's `NCRYPT_PIN_PROPERTY`, as decided by the owner's spike).
-  - `HARDWARE_BACKENDS.md`: the TPM auth value, the lockout warning, the Windows usage-auth mechanism **as Task 9 ends
-    up implementing it after the owner's spike**, and the Secure Enclave
+    recording:
+    - ruling 2's two deviations;
+    - ruling 13's reading of "asks the agent first";
+    - **Windows:** the spec's `NCRYPT_PIN_PROPERTY` is replaced by `PCP_USAGEAUTH` at creation and at use (confirmed
+      by the owner's spike), with every open silent;
+    - the Windows lockout facts: about 4 wrong passwords per user and 9 across all standard users lock TPM use for up
+      to 480 minutes, which also blocks key creation and password-free slots.
+  - `HARDWARE_BACKENDS.md`: the TPM auth value, the lockout warning, Windows' `PCP_USAGEAUTH` with silent opens and the
+    spike's error codes and lockout facts (Task 9), and the Secure Enclave
     `.applicationPassword` result with ruling 19's wording (enforced by the Enclave; no rate limit shown).
   - `docs/BROKER.md`:
     - the locked start, and `broker unlock|lock|status`;
