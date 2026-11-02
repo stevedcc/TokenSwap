@@ -471,7 +471,7 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
   `vault reindex` (sudo; refuses without it with the platform-neutral "requires" message).
 
 Behaviour: unlock; load every record (full decode); for each live record that is v2, lacks a fingerprint set, or has an
-older variant set, write it as v3 with a new write stamp (stale-write guard applies; sealed sections copied where they
+older variant set, or is not converged (ruling 9), write it as v3 with a new write stamp (stale-write guard applies; sealed sections copied where they
 exist); tombstones are rewritten as v3 metadata-only records too; skip records already current (ruling 9); refuse
 before writing anything if any record is unreadable (name the files; the user restores or deletes them first); write
 the marker last. Prints counts only (no names, no values). Idempotent: a second run rewrites nothing.
@@ -547,7 +547,7 @@ the marker last. Prints counts only (no names, no values). Idempotent: a second 
   ruling 11; the GCM argument "at most fleet-size encryptions per value key, all of one plaintext; sections are copied,
   never re-encrypted, so any future feature that re-seals under the same version key must revisit this"), the spec's
   Stage 1 section (an "Owner amendment, 2026-11-02" note under the consistency rules quoting ruling 1), a docs line
-  that a lingering v2 conflicted copy keeps its record "not fingerprinted" until a write or `vault reindex` folds it,
+  that a lingering v2 conflicted copy keeps its record "not fingerprinted" until a write of that record, a `vault merge` or a `vault reindex` folds it,
   and that `SecretVariants.CurrentSetVersion` must be bumped whenever the variant computation changes, `AGENTS.md`
   (sudo list: `vault reindex`; project
   overview no longer says "two YubiKeys enrolled once" as the default), `TswapCore/Prompt.cs` only if its text names
