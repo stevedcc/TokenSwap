@@ -6,7 +6,7 @@ namespace TswapTests;
 
 /// <summary>
 /// Fix round 3, item 6: a ':previous' value whose version was burned is warned about in run and
-/// apply; an unknown suffix is an error naming the token; the merge tie-break covers Previous.
+/// apply; an unknown suffix is an error naming the token; the merge conflict rule covers Previous.
 /// </summary>
 public sealed class PreviousValueWarningTests : IDisposable
 {
@@ -79,8 +79,11 @@ public sealed class PreviousValueWarningTests : IDisposable
     }
 
     [Fact]
-    public void TheMergeTieBreak_CoversThePreviousValue()
+    public void TheMergeConflictRule_CoversThePreviousValue()
     {
+        // Brief T16-S1 ruling 11 replaced the content tie-break (fix round 4, item 3 picked the larger
+        // previous value bytewise): two copies sharing a version stamp but not their previous value
+        // now conflict, in both orders, instead of one being picked silently.
         var origin = Enumerable.Repeat((byte)1, 16).ToArray();
         var version = new Stamp(new Hlc(1000, 0), origin);
         SecretRecord Rec(string previous) => RecordMerge.Normalize(new SecretRecord(
@@ -89,8 +92,8 @@ public sealed class PreviousValueWarningTests : IDisposable
         var a = Rec("p1");
         var b = Rec("p2");
 
-        Assert.True(RecordMerge.Merge(a, b).SameState(RecordMerge.Merge(b, a)));
-        // Fix round 4, item 3: the documented winner, the larger previous value bytewise.
-        Assert.Equal("p2"u8.ToArray(), RecordMerge.Merge(a, b).Previous!.Value);
+        Assert.Throws<RecordConflictException>(() => RecordMerge.Merge(a, b));
+        Assert.Throws<RecordConflictException>(() => RecordMerge.Merge(b, a));
+        Assert.True(RecordMerge.Merge(a, a).SameState(a));
     }
 }

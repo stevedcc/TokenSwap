@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using TswapCore.Fingerprints;
+
 namespace TswapCore.Keyring;
 
 /// <summary>
@@ -60,52 +63,185 @@ public static class RecordMerge
         return record with { Burns = burns, Type = TypeOf(isTombstone, record.Version, burns) };
     }
 
+    /// <summary>Merges two versions of one secret: <c>MergeAll([a, b])</c>.</summary>
+    public static SecretRecord Merge(SecretRecord a, SecretRecord b) => MergeAll([a, b]);
+
     /// <summary>
-    /// Merges two versions of one secret (same record id). Commutative, associative and
-    /// idempotent: the winning version is the larger <see cref="SecretRecord.Version"/> stamp
-    /// (ties between identical stamps, which only damage could produce, are decided by content so
-    /// the result still doesn't depend on order: a tombstone wins over a value, then the larger value
-    /// bytewise, then the later created time, then the name, then the previous value: present over
-    /// absent, then its version, then its bytes); burns are the union, then
-    /// <see cref="CanonicalBurns"/>; the write stamp is the larger of the two.
+    /// Brief T16-S1 ruling 11: merges every copy of one secret (the main file, its conflicted
+    /// copies and, for <c>vault merge</c>, the other folder's state) in one step. The result doesn't
+    /// depend on the order of <paramref name="inputs"/>, because every rule is a total order or an
+    /// all-inputs-must-agree check:
+    /// <list type="bullet">
+    /// <item><b>Winner:</b> the input with the largest version stamp. Inputs sharing that stamp must
+    /// agree on tombstone-ness, value, created time, name and previous value (presence, stamp, value).
+    /// Today's content tie-break is gone: two different values under one stamp (only damage or a clock
+    /// rollback makes them) fail closed instead of one being picked silently.</item>
+    /// <item><b>Retained versions</b> (current and previous): every input holding one of their stamps,
+    /// as its current or its previous value, must hold the same plaintext. Versions the winner doesn't
+    /// retain are ignored: a superseded version's damage no longer matters.</item>
+    /// <item><b>Sections</b> (<see cref="SecretRecord.Sealed"/>): per retained version, the ordinally
+    /// smallest section bytes among the inputs holding one. Two machines that each converted a version
+    /// hold different ciphertexts of one plaintext (random nonces, ruling 1); the minimum is a fixed
+    /// point, so every folder converges on one section and a second merge changes nothing.</item>
+    /// <item><b>Fingerprints:</b> per retained version, the set with the highest variant-set version
+    /// (null is bottom); two different sets at one variant-set version conflict.</item>
+    /// <item><b>Extensions:</b> the whole list of the input with the largest write stamp; ties by the
+    /// ordinal order of the encoded list.</item>
+    /// <item><b>Burns:</b> the union, then <see cref="CanonicalBurns"/>. <b>Write stamp:</b> the largest.</item>
+    /// </list>
+    /// A conflict is a <see cref="RecordConflictException"/>: the caller marks that record unreadable
+    /// (warned, never merged or overwritten) and carries on with the others.
     /// </summary>
-    public static SecretRecord Merge(SecretRecord a, SecretRecord b)
+    /// <exception cref="ArgumentException">No inputs, or inputs of different records.</exception>
+    public static SecretRecord MergeAll(IReadOnlyList<SecretRecord> inputs)
     {
-        if (!a.RecordId.AsSpan().SequenceEqual(b.RecordId))
-            throw new ArgumentException("Only versions of one record can be merged", nameof(b));
-        var order = a.Version.CompareTo(b.Version);
-        if (order == 0)
-            order = CompareContent(a, b);
-        var winner = order >= 0 ? a : b;
+        if (inputs.Count == 0)
+            throw new ArgumentException("MergeAll needs at least one input", nameof(inputs));
+        var recordId = inputs[0].RecordId;
+        if (inputs.Any(r => !r.RecordId.AsSpan().SequenceEqual(recordId)))
+            throw new ArgumentException("Only versions of one record can be merged", nameof(inputs));
+
+        var version = inputs.Select(r => r.Version).Aggregate(Stamp.Max);
+        var tied = inputs.Where(r => r.Version.Equals(version)).ToList();
+        var winner = tied[0];
+        foreach (var other in tied.Skip(1))
+            RequireSameVersion(winner, other);
+
         var isTombstone = winner.Type == RecordType.Tombstone;
-        var burns = CanonicalBurns(a.Burns.Concat(b.Burns), winner.Version, isTombstone);
+        List<(Stamp Version, bool IsPrevious)> retained = [];
+        if (!isTombstone)
+        {
+            retained.Add((version, false));
+            if (winner.Previous is { } previous)
+                retained.Add((previous.Version, true));
+        }
+
+        var sealedSections = new Dictionary<Stamp, byte[]>();
+        FingerprintSet? currentFingerprints = null, previousFingerprints = null;
+        foreach (var (stamp, isPrevious) in retained)
+        {
+            var plaintext = isPrevious ? winner.Previous!.Value : winner.Value;
+            byte[]? section = null;
+            FingerprintSet? best = null;
+            List<FingerprintSet> sets = [];
+            foreach (var input in inputs)
+            {
+                if (input.Type == RecordType.Tombstone && input.Version.Equals(stamp))
+                    throw new RecordConflictException($"the version {stamp} is a value in one copy and a delete in another");
+                foreach (var (value, fingerprints) in Holdings(input, stamp))
+                {
+                    if (!value.AsSpan().SequenceEqual(plaintext))
+                        throw new RecordConflictException($"two copies hold different values under the version {stamp}");
+                    if (fingerprints is not null)
+                        sets.Add(fingerprints);
+                    if (input.Sealed is not null && input.Sealed.TryGetValue(stamp, out var candidate)
+                        && (section is null || candidate.AsSpan().SequenceCompareTo(section) < 0))
+                        section = candidate;
+                }
+            }
+            foreach (var group in sets.GroupBy(f => f.VariantSetVersion))
+            {
+                var first = group.First();
+                if (group.Any(f => !f.Equals(first)))
+                    throw new RecordConflictException($"two copies hold different fingerprints of the version {stamp}");
+                if (best is null || first.VariantSetVersion > best.VariantSetVersion)
+                    best = first;
+            }
+            if (section is not null)
+                sealedSections[stamp] = section;
+            if (isPrevious)
+                previousFingerprints = best;
+            else
+                currentFingerprints = best;
+        }
+
+        var write = inputs.Select(r => r.Write).Aggregate(Stamp.Max);
+        var extensions = inputs
+            .Where(r => r.Write.Equals(write))
+            .Select(r => (r.Extensions, Encoded: EncodeExtensions(r.Extensions)))
+            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
+            .Extensions;
+        var burns = CanonicalBurns(inputs.SelectMany(r => r.Burns), version, isTombstone);
         return winner with
         {
-            Write = Stamp.Max(a.Write, b.Write),
+            Write = write,
             Burns = burns,
-            Type = TypeOf(isTombstone, winner.Version, burns),
+            Type = TypeOf(isTombstone, version, burns),
+            Previous = winner.Previous is null ? null : winner.Previous with { Fingerprints = previousFingerprints },
+            Fingerprints = currentFingerprints,
+            Extensions = extensions,
+            Sealed = sealedSections.Count == 0 ? null : sealedSections,
         };
     }
 
-    private static int CompareContent(SecretRecord a, SecretRecord b)
+    /// <summary>The plaintexts (and their fingerprints) <paramref name="record"/> holds under <paramref name="stamp"/>.</summary>
+    private static IEnumerable<(byte[] Value, FingerprintSet? Fingerprints)> Holdings(SecretRecord record, Stamp stamp)
     {
-        var tombstone = (a.Type == RecordType.Tombstone).CompareTo(b.Type == RecordType.Tombstone);
-        if (tombstone != 0)
-            return tombstone;
-        var value = a.Value.AsSpan().SequenceCompareTo(b.Value);
-        if (value != 0)
-            return value;
-        var created = a.CreatedMs.CompareTo(b.CreatedMs);
-        if (created != 0)
-            return created;
-        var name = string.CompareOrdinal(a.Name, b.Name);
-        if (name != 0)
-            return name;
-        // Fix round 3: the previous value last (absent < present, then its version, then its bytes).
-        var hasPrevious = (a.Previous is not null).CompareTo(b.Previous is not null);
-        if (hasPrevious != 0 || a.Previous is null)
-            return hasPrevious;
-        var previousVersion = a.Previous.Version.CompareTo(b.Previous!.Version);
-        return previousVersion != 0 ? previousVersion : a.Previous.Value.AsSpan().SequenceCompareTo(b.Previous.Value);
+        if (record.Type != RecordType.Tombstone && record.Version.Equals(stamp))
+            yield return (record.Value, record.Fingerprints);
+        if (record.Previous is { } previous && previous.Version.Equals(stamp))
+            yield return (previous.Value, previous.Fingerprints);
+    }
+
+    /// <summary>Two copies sharing the winning version stamp must be the same version.</summary>
+    private static void RequireSameVersion(SecretRecord a, SecretRecord b)
+    {
+        var aTombstone = a.Type == RecordType.Tombstone;
+        if (aTombstone != (b.Type == RecordType.Tombstone)
+            || !a.Value.AsSpan().SequenceEqual(b.Value)
+            || a.CreatedMs != b.CreatedMs
+            || a.Name != b.Name
+            || (a.Previous is null) != (b.Previous is null)
+            || (a.Previous is { } pa && (!pa.Version.Equals(b.Previous!.Version) || !pa.Value.AsSpan().SequenceEqual(b.Previous.Value))))
+            throw new RecordConflictException($"two copies share the version {a.Version} but differ in content");
+    }
+
+    /// <summary>The extension list as format 3 stores it (count, then type, length, data), for the tie order.</summary>
+    private static byte[] EncodeExtensions(IReadOnlyList<RecordExtension> extensions)
+    {
+        var bytes = new byte[2 + extensions.Sum(e => 6 + e.Data.Length)];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, (ushort)extensions.Count);
+        var offset = 2;
+        foreach (var extension in extensions)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(offset, 2), extension.Type);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset + 2, 4), (uint)extension.Data.Length);
+            extension.Data.CopyTo(bytes, offset + 6);
+            offset += 6 + extension.Data.Length;
+        }
+        return bytes;
+    }
+
+    /// <summary>
+    /// Brief T16-S1 ruling 11, validation per input: recomputes the fingerprint sets of
+    /// <paramref name="record"/>'s retained values from their plaintext, for the variant-set version
+    /// this build computes (<see cref="SecretVariants.CurrentSetVersion"/>), and refuses a set that
+    /// doesn't match. Full loads call it on every decoded copy before merging, so a stored set can't
+    /// claim fingerprints of a different value (which would hide it from redaction). A set of another
+    /// variant-set version can't be recomputed here and is taken as it is.
+    /// </summary>
+    /// <exception cref="RecordConflictException">A stored set doesn't match its value.</exception>
+    public static void ValidateFingerprints(SecretRecord record, FingerprintKeys keys)
+    {
+        if (record.Type != RecordType.Tombstone)
+            Validate(record.Value, record.Fingerprints, keys);
+        if (record.Previous is { } previous)
+            Validate(previous.Value, previous.Fingerprints, keys);
+
+        static void Validate(byte[] value, FingerprintSet? stored, FingerprintKeys keys)
+        {
+            if (stored is null || stored.VariantSetVersion != SecretVariants.CurrentSetVersion)
+                return;
+            if (!Fingerprinter.Compute(value, keys).Equals(stored))
+                throw new RecordConflictException("a copy's fingerprints don't match its value");
+        }
     }
 }
+
+/// <summary>
+/// Brief T16-S1 ruling 11: the copies of one record can't be merged (two different values under one
+/// version stamp, different fingerprint sets at one variant-set version, or fingerprints that don't
+/// match their value). The store marks that record unreadable (warned, never merged, never
+/// overwritten) and carries on with the others; the user removes the damaged copy.
+/// </summary>
+public sealed class RecordConflictException(string message) : TswapException(message);
