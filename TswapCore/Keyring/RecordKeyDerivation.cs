@@ -87,4 +87,32 @@ public static class RecordKeyDerivation
             throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
         return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, FilenameHasher.KeyLength, salt: null, info: NamesInfo);
     }
+
+    private static readonly byte[] FingerprintInfo = Encoding.UTF8.GetBytes("tswap-fingerprint-v1");
+    private static readonly byte[] RollingHashInfo = Encoding.UTF8.GetBytes("tswap-rollhash-v1");
+
+    /// <summary>
+    /// Brief T16-S1: <c>K_fp = HKDF(K_v, info = "tswap-fingerprint-v1")</c> (no salt), the key of the
+    /// truncated HMAC that confirms a fingerprint match. Its own label keeps it independent of the
+    /// record, names and value keys: a fingerprint reveals nothing usable against them.
+    /// (<c>tswap-extract-plan-v1</c> is reserved for Stage 4's <c>K_plan</c> and not derived here.)
+    /// </summary>
+    public static byte[] DeriveFingerprintKey(byte[] vaultKey)
+    {
+        if (vaultKey.Length != KeyLength)
+            throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, KeyLength, salt: null, info: FingerprintInfo);
+    }
+
+    /// <summary>
+    /// Brief T16-S1: the 8 bytes <c>HKDF(K_v, 8, info = "tswap-rollhash-v1")</c> (no salt) that
+    /// <see cref="Fingerprints.FingerprintKeys"/> maps to the rolling-hash base. Keying the base keeps
+    /// the stored rolling hashes from being a public function of the value.
+    /// </summary>
+    public static byte[] DeriveRollingHashSeed(byte[] vaultKey)
+    {
+        if (vaultKey.Length != KeyLength)
+            throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, sizeof(ulong), salt: null, info: RollingHashInfo);
+    }
 }
