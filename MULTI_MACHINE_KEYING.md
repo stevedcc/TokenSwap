@@ -544,7 +544,9 @@ metadata-only path (no plaintext) uses the same rules with fingerprints standing
 and fails closed where they can't show two sections hold the same value. That stand-in is only sound
 if each copy's fingerprints describe its own value, which the metadata path can't check up front, so
 a read that opens one value section (`ReadSecretValue`) checks that value against its stored set and
-refuses the record on a mismatch.
+refuses the record on a mismatch. Only a set of this build's variant-set version can be checked: a
+set of another version (older or newer) is kept, reported (`OlderVariantSet` for an older one) and
+refreshed by `vault reindex`; it is not checked at read.
 
 **The `record-format` marker.** A vault folder holding `record-format` = `3` (or any command that
 read a format 3 record) writes format 3; otherwise format 2, so machines still on 0.1 can read it.
@@ -565,7 +567,8 @@ record, a `vault merge` or a `vault reindex` in that folder rewrites it. A linge
 conflicted copy is folded the same ways. A format 2 **tombstone** is counted as not fingerprinted
 too (its type can't be known without decrypting it). **`vault merge` has a fourth write trigger**
 (owner decision 2026-11-02) beside ruling 11's three: in a folder that writes format 3, it rewrites
-every record whose main file isn't format 3, even when the state is equal on both sides, so merging
+every record it can read whose main file isn't format 3 (an unreadable or newer-format file, main or
+conflicted copy, is never touched), even when the state is equal on both sides, so merging
 a reindexed copy into a folder leaves it fully fingerprinted (tombstones included) without a reindex
 of its own. A second merge then writes nothing.
 

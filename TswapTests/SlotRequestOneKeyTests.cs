@@ -116,7 +116,7 @@ public class SlotRequestOneKeyTests : IDisposable
         Assert.Equal(desktop.KeyringSlotId, Convert.ToBase64String(keyring.Slots[2].SlotId));
 
         // Key A opens the accepted vault on the desktop; key B does not. (v0 carries no secrets:
-        // accept makes an empty secrets file, so the router's are copied across, as sharing would.)
+        // accept makes a record vault without records, so the router's are copied across, as sharing would.)
         // Brief T16-S1: both are record vaults (a plain accept makes one, owner decision 2026-11-02):
         // the desktop gets the router's record files.
         _desktopKeys.PluggedIn = [SerialA];

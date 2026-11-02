@@ -544,7 +544,7 @@ copy, has no fingerprints until a write of it, a `vault merge` or another `vault
 reports such a vault as "not fully fingerprinted" (a format 2 tombstone counts too: its type can't
 be known without decrypting it). A lingering format 2 sync-conflict copy of a record does the same
 until it is folded by the next write of that record, a `vault merge` or a `vault reindex`. In a
-folder that writes format 3, `vault merge` rewrites every record whose file isn't format 3 yet,
+folder that writes format 3, `vault merge` rewrites every record it can read whose file isn't format 3 yet,
 even one equal on both sides, so merging a reindexed copy leaves the folder fully fingerprinted.
 
 ## Upgrading from 0.1: classic vaults and `vault reindex`
