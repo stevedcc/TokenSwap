@@ -289,6 +289,36 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.NotEqual(planted.Write, merged.Write);
     }
 
+    /// <summary>
+    /// Fix round 1 (MiMo S2): a format 3 tombstone has no value sections, so "incoming state carries
+    /// sections" can't be what selects format 3. Merged from a copy that holds format 3 records into a
+    /// folder without the marker, it is written in format 3 (ruling 3: a format 3 record was read),
+    /// keeping a later build's extension byte for byte (ruling 6) instead of dropping it in format 2.
+    /// </summary>
+    [Fact]
+    public void VaultMerge_V3TombstoneWithAnExtension_IntoAnUnmarkedFolder_KeepsItAndWritesV3()
+    {
+        _m.Ok("s-value", "ingest", "s"); // no marker: format 2
+        var otherVault = CopyVault(_m, _other);
+        var live = ReadRecord(_other, _key, "s");
+        var later = new Stamp(new Hlc(live.Write.Hlc.PhysicalMs + 10_000, 0), Enumerable.Repeat((byte)0x0E, 16).ToArray());
+        var data = RandomNumberGenerator.GetBytes(24);
+        var tombstone = new SecretRecord(live.RecordId, later, RecordType.Tombstone, later, "s", live.CreatedMs, [], [])
+        {
+            Extensions = [new RecordExtension(0x7777, data)],
+        };
+        Plant(RecordFile(_other, _key, "s"), tombstone, _key);
+        Assert.False(System.IO.File.Exists(Path.Combine(otherVault, RecordVaultStore.RecordFormatMarkerFileName)));
+
+        var (exit, _, err) = _m.Run("", "vault", "merge", otherVault);
+
+        Assert.True(exit == 0, err);
+        Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(Bytes("s")));
+        var merged = Read("s");
+        Assert.Equal(RecordType.Tombstone, merged.Type);
+        Assert.Equal(new RecordExtension(0x7777, data), Assert.Single(merged.Extensions));
+    }
+
     [Fact]
     public void FullLoad_TamperedFingerprints_MarksOnlyThatRecordUnreadable()
     {

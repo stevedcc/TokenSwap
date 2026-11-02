@@ -143,6 +143,13 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </summary>
     public bool WritesV3 => _markerFormat == KeyringFormat.RecordFormatVersion || _sawV3;
 
+    /// <summary>
+    /// Brief T16-S1 (ruling 3): whether this store's last load read a format 3 record. <c>vault
+    /// merge</c> passes the other copy's to <see cref="MergeRecords"/>, so state merged in from a
+    /// format 3 copy is written in format 3 (a tombstone carries no sections to tell by).
+    /// </summary>
+    public bool ReadFormat3 => _sawV3;
+
     /// <summary>The marker file in the vault folder.</summary>
     public string RecordFormatMarkerFile => Path.Combine(VaultDir, RecordFormatMarkerFileName);
 
@@ -1178,17 +1185,21 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// Fix round 1 (C): runs after every record's stale-write guard passed and before any record is
     /// written (vault merge saves the keyring there), so a refusal really writes nothing.
     /// </param>
-    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null)
+    /// <param name="incomingReadFormat3">
+    /// Brief T16-S1 (ruling 3, fix round 1): the other copy's load read a format 3 record
+    /// (<see cref="ReadFormat3"/>), so this merge writes format 3: its sections, fingerprints and
+    /// extensions aren't dropped (and the next merge doesn't rewrite them again). Decided by the
+    /// source format, not by whether a state carries sections (a format 3 tombstone has none).
+    /// </param>
+    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null, bool incomingReadFormat3 = false)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
+        if (incomingReadFormat3)
+            _sawV3 = true;
         List<(string FileName, SecretRecord State)> writes = [];
         foreach (var (fileName, state) in incoming.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
             ObserveAll(state);
-            // Brief T16-S1: format 3 state merged in is written as format 3, so its sections and
-            // fingerprints aren't dropped (and the next merge doesn't rewrite it again).
-            if (state.Sealed is not null)
-                _sawV3 = true;
             loaded.TryGetValue(fileName, out var current);
             if (current?.UnreadableReason is not null)
             {

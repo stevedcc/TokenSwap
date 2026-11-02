@@ -107,7 +107,7 @@ public sealed class VaultCommand : ICliCommand
 
             // Every record's stale-write guard is checked before the keyring or config is written
             // (fix round 1, C), so a refusal really writes nothing.
-            var written = store.MergeRecords(incoming, key, beforeWrite: () =>
+            var written = store.MergeRecords(incoming, key, incomingReadFormat3: other.ReadFormat3, beforeWrite: () =>
             {
                 if (toAdd.Count == 0)
                     return;
