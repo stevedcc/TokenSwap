@@ -541,21 +541,32 @@ them) are a **conflict**: that record becomes unreadable (warned, never merged o
 until the damaged conflicted copy is removed; this replaces the old content tie-break. Full loads
 first recompute each copy's fingerprints from its plaintext and treat a mismatch the same way. The
 metadata-only path (no plaintext) uses the same rules with fingerprints standing in for plaintext
-and fails closed where they can't show two sections hold the same value.
+and fails closed where they can't show two sections hold the same value. That stand-in is only sound
+if each copy's fingerprints describe its own value, which the metadata path can't check up front, so
+a read that opens one value section (`ReadSecretValue`) checks that value against its stored set and
+refuses the record on a mismatch.
 
 **The `record-format` marker.** A vault folder holding `record-format` = `3` (or any command that
 read a format 3 record) writes format 3; otherwise format 2, so machines still on 0.1 can read it.
 `vault reindex` writes the marker after every record succeeded. Deleting the marker can't downgrade
-a reindexed vault (reading a format 3 record selects format 3 too); planting it, or a number above
-3, can only make writes refuse (a fail-closed "written by a newer tswap"); anything else in it is a
-warning and counts as absent. Conflicted copies of the marker are ignored.
+a reindexed vault (reading a format 3 record selects format 3 too). Planting a marker holding `3`
+switches every machine sharing the folder to format 3 writes, which machines still on 0.1 can't read
+(an availability lever for whoever can write the folder, like deleting files; no secret is
+exposed); planting a number above 3 makes every write refuse (a fail-closed "written by a newer
+tswap"); anything else in it is a warning and counts as absent. Conflicted copies of the marker are
+ignored.
 
 **Metadata leak delta.** Format 3 reveals the number of sections per record (retained versions + 1)
 and a padding bucket per section, where format 2 revealed one bucket per record; and a value
 section's ciphertext stays identical across writes, so an observer of the folder can tell a
 metadata-only write (burn, merge) from a value change. Accepted. A record written in format 2 after
-the reindex, a replayed older copy, or a lingering format 2 conflicted copy leaves that record
-"not fingerprinted" until a write of that record, a `vault merge` or a `vault reindex` folds it.
+the reindex, or a replayed older copy, leaves that record "not fingerprinted" until a write of that
+record or a `vault reindex` in that folder rewrites it (a `vault merge` rewrites it only when the
+other copy brings a different state or sections). A lingering format 2 conflicted copy is folded by
+the next write of that record, a `vault merge` or a `vault reindex`. A format 2 **tombstone** is
+counted as not fingerprinted too (its type can't be known without decrypting it), and a `vault
+merge` that brings an equal tombstone doesn't rewrite it: after merging a reindexed copy into a
+folder, run `vault reindex` in that folder too.
 
 ## The landmine: threshold downgrade
 

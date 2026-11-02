@@ -58,8 +58,11 @@ public sealed class FingerprintIndex
 
     /// <summary>
     /// Every confirmed hit in <paramref name="text"/>, ordered by start, then length descending,
-    /// then name (ordinal), then current before previous, then variant kind. This is a reporting
-    /// order only; resolving overlaps (today's longest-first replacement) is the caller's job.
+    /// then name (ordinal): the brief's pinned reporting order. Current before previous, then
+    /// variant kind, only complete it into a total order (so equal keys can't come out in either
+    /// order); they are not part of the pinned order and nothing should rely on them. This is a
+    /// reporting order only; resolving overlaps (today's longest-first replacement) is the caller's
+    /// job (Stage 2).
     /// </summary>
     public IReadOnlyList<FingerprintHit> Scan(ReadOnlySpan<char> text)
     {

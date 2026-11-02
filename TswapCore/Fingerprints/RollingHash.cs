@@ -51,7 +51,12 @@ public static class RollingHash
         return Reduce((UInt128)rest * b + incoming);
     }
 
-    /// <summary><c>x mod p</c> for <c>x &lt; 2^122</c>, using <c>2^61 ≡ 1 (mod p)</c>.</summary>
+    /// <summary>
+    /// <c>x mod p</c> using <c>2^61 ≡ 1 (mod p)</c>, for <c>x &lt; 2^123</c>: the callers' largest input
+    /// is <c>(p − 1)² + 0xFFFF</c> (a product of two residues plus a UTF-16 code unit), just above
+    /// <c>2^122</c>. The first fold leaves less than <c>2^63</c>, the second at most <c>p + 3</c>, so one
+    /// conditional subtraction finishes, and nothing overflows a <c>ulong</c> on the way.
+    /// </summary>
     private static ulong Reduce(UInt128 x)
     {
         var folded = (ulong)(x & Modulus) + (ulong)(x >> 61);

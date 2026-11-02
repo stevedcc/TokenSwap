@@ -1431,7 +1431,9 @@ public sealed class RecordVaultStore : IFileVaultStore
 
 /// <summary>
 /// Brief T16-S1: what <see cref="RecordVaultStore.Reindex"/> did. <paramref name="Rewritten"/> and
-/// <paramref name="AlreadyCurrent"/> together count every record; <paramref name="Tombstones"/> says
-/// how many of them are deletes (in either group).
+/// <paramref name="AlreadyCurrent"/> together count every record that has a state: one whose main
+/// file is absent and whose conflicted copies all can't be used has nothing to rewrite and is
+/// counted in neither (its copies are warned about and kept). <paramref name="Tombstones"/> says how
+/// many of the counted records are deletes (in either group).
 /// </summary>
 public sealed record ReindexResult(int Rewritten, int AlreadyCurrent, int Tombstones);

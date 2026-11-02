@@ -537,10 +537,13 @@ section, where format 2 showed one bucket per record; and since a value section 
 across writes, it can tell a metadata-only write (a burn, a merge) from a value change.
 
 A record written in format 2 after the reindex (by a machine still on 0.1), or a replayed older
-copy, has no fingerprints until a write of it, a `vault merge` or another `vault reindex`; tswap
-reports such a vault as "not fully fingerprinted". A lingering format 2 sync-conflict copy of a
-record does the same until it is folded by the next write of that record, a `vault merge` or a
-`vault reindex`.
+copy, has no fingerprints until a write of it or another `vault reindex` in that folder (a `vault
+merge` rewrites it only when the other copy brings something different); tswap reports such a vault
+as "not fully fingerprinted". A lingering format 2 sync-conflict copy of a record does the same
+until it is folded by the next write of that record, a `vault merge` or a `vault reindex`. A format
+2 tombstone counts too (its type can't be known without decrypting it), and merging an equal
+tombstone doesn't rewrite it: **each vault folder that is merged rather than synced should run
+`vault reindex` once**, not only the first.
 
 ## Upgrading from 0.1: classic vaults and `vault reindex`
 
@@ -550,7 +553,9 @@ tswap 0.2 is a breaking release:
    --to-records` (and its plain form, the touch-upgrade guide) and `export` work on a classic
    single-file vault (`secrets.json.enc`); every other command refuses it with that hint. A
    two-YubiKey XOR vault becomes a keyring vault in the same run (plug in every enrolled key).
-2. **Then, once every machine sharing the vault runs 0.2, `sudo tswap vault reindex`.** Machines
+2. **Then, once every machine sharing the vault runs 0.2, `sudo tswap vault reindex`** (once per
+   vault folder: a synced folder needs it once; copies kept in step with `vault merge` each need
+   their own run). Machines
    still on 0.1 can't read records rewritten in format 3; they refuse them (and never delete or
    overwrite them) until they are upgraded.
 3. **`init` makes a record vault** (one YubiKey, TPM or Secure Enclave slot plus a recovery slot,

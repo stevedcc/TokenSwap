@@ -8,9 +8,10 @@ namespace TswapCore;
 /// </summary>
 /// <param name="Records">Every record whose metadata could be read and merged, tombstones included.</param>
 /// <param name="NotFingerprinted">
-/// Live records the fingerprint scan can't see: a format 2 main file or conflicted copy (never
-/// decrypted on this path, ruling 12), or a retained value version without a fingerprint set.
-/// Tombstones are never counted.
+/// Records the fingerprint scan may not see: any record with a format 2 main file or conflicted
+/// copy (never decrypted on this path, ruling 12, so a format 2 tombstone is counted too: its type
+/// is unknown without decrypting it), or a live record with a retained value version without a
+/// fingerprint set. A format 3 tombstone is never counted.
 /// </param>
 /// <param name="OlderVariantSet">
 /// Records fingerprinted by an older variant computation than this build's
