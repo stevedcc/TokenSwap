@@ -1204,7 +1204,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// extensions aren't dropped (and the next merge doesn't rewrite them again). Decided by the
     /// source format, not by whether a state carries sections (a format 3 tombstone has none).
     /// </param>
-    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null, bool incomingReadFormat3 = false)
+    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, bool incomingReadFormat3, Action? beforeWrite = null)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
         if (incomingReadFormat3)
