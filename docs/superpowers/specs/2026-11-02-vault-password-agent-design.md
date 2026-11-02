@@ -1,6 +1,6 @@
 # The vault password and the unlock agent: a second factor against other users of the same machine
 
-Status: design, 2026-11-02. Ships in **v0.2.0** together with the import-story Stage 1 (record format v3), so users
+Status: approved by the owner, 2026-11-02. Ships in **v0.2.0** together with the import-story Stage 1 (record format v3), so users
 re-enrol and migrate once (owner: "Why on earth would I reroll twice? Ride the existing breaking change").
 Decisions marked **(owner)** were made by the owner in the design conversation; **(my call)** are the designer's and
 open to change; anything not marked is left to the builder.
