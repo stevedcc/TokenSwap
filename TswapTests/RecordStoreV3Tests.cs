@@ -96,6 +96,7 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("newer tswap", err);
         Assert.Contains("Upgrade tswap", err);
+        Assert.Contains($"record format {marker},", err); // the marker's own digits, not a clamped number
         Assert.NotEqual(0, burnExit);
         Assert.Contains("newer tswap", burnErr);
         Assert.Equal(before, RecordsSnapshot());
@@ -237,7 +238,10 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal("first"u8.ToArray(), after.Value);
         Assert.Equal("second"u8.ToArray(), after.Previous!.Value);
         Assert.NotEqual(before.Previous!.Version, after.Version); // the restored value is a new version
+        Assert.True(after.Version.CompareTo(before.Version) > 0 && after.Version.CompareTo(before.Previous.Version) > 0,
+            "the restored value's stamp must be newer than both retained stamps (merges keep the newest)");
         Assert.Equal(before.Version, after.Previous.Version);
+        Assert.Equal(2, after.Sealed!.Count); // the superseded version's section is dropped
         Assert.Equal(sectionsBefore[0], sectionsAfter[1]); // "second"'s section, copied byte for byte
         Assert.Equal(sectionsBefore[0], after.Sealed![before.Version]);
         Assert.Equal(Fingerprints(_key, "first"u8.ToArray()), after.Fingerprints);

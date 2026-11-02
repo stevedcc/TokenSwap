@@ -531,7 +531,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
         Assert.DoesNotContain("presence required", stdout.Split('\n').Single(l => l.Contains("Secure Enclave, ")));
     }
 
-    // --- the warning comes first (decision 7): before init's reinitialise prompt and recover's stdin ---
+    // --- the warning comes first (decision 7): before init's refusal on an existing vault and recover's stdin ---
 
     [Fact]
     public void Init_OnARecordVault_WarnsBeforeTheRefusal()

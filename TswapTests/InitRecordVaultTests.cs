@@ -31,6 +31,8 @@ public sealed class InitRecordVaultTests : IDisposable
         Assert.Equal(RecordVaultStore.StoreName, config.Store);
         Assert.Equal(Path.GetFullPath(vaultDir), config.VaultDir);
         Assert.Null(config.Keyring);
+        Assert.Null(config.UnlockChallenge); // a field of the classic XOR pair: a record vault's init writes none
+        Assert.Empty(config.YubiKeySerials);
         Assert.NotNull(config.OriginId);
         Assert.False(File.Exists(_m.SecretsPath));
         Assert.Equal("3", File.ReadAllText(Path.Combine(vaultDir, RecordVaultStore.RecordFormatMarkerFileName)).Trim());

@@ -88,7 +88,7 @@ public sealed class InitCommand : ICliCommand
         if (replacesConfig)
         {
             c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (c.ReadLine()?.ToLowerInvariant() != "yes")
                 return 0;
         }
 
@@ -294,7 +294,7 @@ public sealed class InitCommand : ICliCommand
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Point this machine at the shared folder instead? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (c.ReadLine()?.ToLowerInvariant() != "yes")
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }

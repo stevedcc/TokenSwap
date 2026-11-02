@@ -591,6 +591,11 @@ public sealed class SlotCommand : ICliCommand
             // machine's record-store config.
             if (fileStore is null)
                 throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
+            // Fix round 2: another vault's keyring there is refused before anything is written, the
+            // config backup included, so a failed join leaves nothing behind. (The keyring save below
+            // checks it again, against what is on disk at that moment.)
+            KeyringUnion.RequireSameVault(
+                RecordVaultStore.ForFolder(vaultDir, finalConfig, fileStore.Owner, ctx.Time).ReadKeyring(), finalKeyring, "The shared folder's keyring");
             // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
             // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))

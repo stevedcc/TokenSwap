@@ -757,8 +757,8 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
     /// <summary>
     /// Fix round 1 (successor of AFailedJoin_LeavesTheOldSecretsFileInPlace): a join into a folder
     /// holding another vault's keyring fails, and the machine's own state is untouched: its pending
-    /// config.json byte for byte, no vault folder, nothing new but a backup copy of that same config
-    /// (made before the check, harmless), and the foreign folder unchanged.
+    /// config.json byte for byte, no vault folder, no backup and no other new file (fix round 2: the
+    /// foreign keyring is refused before the backup), and the foreign folder unchanged.
     /// </summary>
     [Fact]
     public void AFailedJoin_ChangesNothing()
@@ -775,9 +775,8 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("another vault", err);
         Assert.Equal(configBefore, File.ReadAllText(_laptop.ConfigPath));
-        var added = Directory.GetFileSystemEntries(_laptop.Dir).Where(e => !before.Contains(e)).ToList();
-        Assert.All(added, e => Assert.Contains(e, _laptop.Backups));
-        Assert.All(_laptop.Backups, b => Assert.Equal(configBefore, File.ReadAllText(b)));
+        Assert.Empty(Directory.GetFileSystemEntries(_laptop.Dir).Where(e => !before.Contains(e)));
+        Assert.Empty(_laptop.Backups);
         Assert.False(Directory.Exists(Path.Combine(_laptop.Dir, "vault")));
         Assert.All(foreignBefore, kv => Assert.Equal(kv.Value, File.ReadAllBytes(kv.Key)));
     }
