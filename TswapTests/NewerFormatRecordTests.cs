@@ -29,13 +29,12 @@ public sealed class NewerFormatRecordTests : IDisposable
 
     /// <summary>
     /// The format bytes this build does not read: one newer than the current one (written as that
-    /// expression, so it stays "one newer" when the format moves on), and, in this commit only, the
-    /// literal 3 that record format v3 will use (labelled so xUnit runs both rows while they are equal).
+    /// expression, so it stays "one newer" when the format moves on). Task 3's commit also ran the
+    /// literal 3, before format 3 became readable; brief T16-S1 task 4 removed that row.
     /// </summary>
     public static TheoryData<string, byte> NewerFormats => new()
     {
         { "current + 1", (byte)(KeyringFormat.RecordFormatVersion + 1) },
-        { "literal 3", 3 },
     };
 
     [Theory]

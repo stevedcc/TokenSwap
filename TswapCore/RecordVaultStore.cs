@@ -723,7 +723,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
             _highestSeen = hlc;
             var written = state with { Write = new Stamp(hlc, origin) };
-            var bytes = SecretRecordCodec.Encode(written, key);
+            var bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersionV2);
             _owner.WriteDurable(Path.Combine(recordsDir, fileName), bytes);
             // Decision 4: the copies merged into what was just written are redundant now.
             if (loaded.TryGetValue(fileName, out var before) && before.FoldedCopies is { Count: > 0 } copies)
