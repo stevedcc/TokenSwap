@@ -69,6 +69,20 @@ public sealed class MigrateToRecordsTests : IDisposable
         return new Storage(_m.Dir).LoadSecrets(key, TextWriter.Null).Secrets[name].Value;
     }
 
+    /// <summary>Every record file in <paramref name="vaultFolder"/> is format 3, with the right fingerprint sets.</summary>
+    private static void AssertAllFormat3WithFingerprints(string vaultFolder, byte[] key)
+    {
+        var files = Directory.GetFiles(Path.Combine(vaultFolder, "records"));
+        Assert.Equal(50, files.Length);
+        foreach (var file in files)
+        {
+            var bytes = File.ReadAllBytes(file);
+            Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(bytes));
+            var record = SecretRecordCodec.Decode(bytes, key);
+            Assert.Equal(Fingerprints(key, record.Value), record.Fingerprints);
+        }
+    }
+
     private static void AssertSameSecrets(Dictionary<string, Secret> expected, SecretsDb actual)
     {
         Assert.Equal(expected.Keys.Order(), actual.Secrets.Keys.Order());
@@ -530,6 +544,41 @@ public sealed class MigrateToRecordsTests : IDisposable
 
         Assert.Contains("requires", _m.Run("1\n", "migrate", "--to-records").Err);
         Assert.Null(_m.Config.Store);
+    }
+
+    /// <summary>
+    /// Brief T16-S1 task 8 / ruling 3 (fix round 1: the test the brief required): a converted vault
+    /// is marked record-format 3 and every record is format 3 with fingerprints.
+    /// </summary>
+    [Fact]
+    public void MigrateToRecords_WritesMarkerAndV3()
+    {
+        var (masterKey, secrets) = PlainVaultWithFiftySecrets();
+
+        _m.Ok("1\n", "migrate", "--to-records");
+
+        Assert.Equal("3", File.ReadAllText(Path.Combine(DefaultVaultDir, RecordVaultStore.RecordFormatMarkerFileName)).Trim());
+        AssertAllFormat3WithFingerprints(DefaultVaultDir, masterKey);
+        Assert.Equal(secrets["secret-07"].Value, ValueOf("secret-07"));
+    }
+
+    /// <summary>
+    /// Ruling 3: migrate writes the marker into its temp folder before the snapshot and the read-back,
+    /// so the rename carries it. A crash after step 1 leaves the temp folder, already marked and
+    /// already format 3, and no vault folder.
+    /// </summary>
+    [Fact]
+    public void MigrateToRecords_TheMarkerIsInTheTempFolderBeforeTheRename()
+    {
+        var (masterKey, _) = PlainVaultWithFiftySecrets();
+        _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 1) throw new IOException("simulated crash after step 1"); } };
+
+        Assert.NotEqual(0, _m.Run("1\n", "migrate", "--to-records").Exit);
+
+        Assert.False(Directory.Exists(DefaultVaultDir));
+        var temp = Assert.Single(TempFolders);
+        Assert.Equal("3", File.ReadAllText(Path.Combine(temp, RecordVaultStore.RecordFormatMarkerFileName)).Trim());
+        AssertAllFormat3WithFingerprints(temp, masterKey);
     }
 }
 
