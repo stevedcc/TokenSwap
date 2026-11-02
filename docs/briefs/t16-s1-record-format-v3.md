@@ -1,0 +1,436 @@
+# Brief T16-S1: record format v3 with keyed fingerprints, `vault reindex`, classic vaults migration-only (v0.2.0)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** every record can be recognised in a file or stream without decrypting its value: record format v3 splits each
+record into an encrypted metadata section (with keyed fingerprints of every retained value) and value sections encrypted
+once, plus `sudo tswap vault reindex`, record vaults by default, and classic vaults refused except for migration.
+
+**Architecture:** the codec gains a v3 layout next to v2 (v2 stays readable). The store keeps decoded `SecretRecord`s for
+today's whole-database commands and adds a metadata-only load path that decrypts no value section, which Stages 2 and 3
+build on. Fingerprints (`TswapCore/Fingerprints/`) are computed from exactly the variants `SecretProcessor` matches today.
+
+**Tech stack:** C# 14 / .NET 10, NativeAOT, xUnit; `System.Security.Cryptography` (`HKDF`, `HMACSHA256`, `AesGcm`) only.
+No new package.
+
+**Spec:** `docs/superpowers/specs/2026-11-01-import-story-design.md`, sections "Constraints", "Stage 1", "Threat model
+additions". The spec is the authority; this brief settles what it leaves to the builder and records the rulings below.
+
+Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (metadata section) and `docs/briefs/t6-record-store.md`
+(decisions 3–6, 10) first. One commit per task, test first, a break-it-once check per task (name in the commit message
+which line you reverted and which test failed). `./runtests.sh --unit` after each task, the full `./runtests.sh` at the
+end. No hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`: simulated services, `TSWAP_CONFIG_DIR`
+and temp folders only.
+
+## Rulings (the designer's calls in this brief; the owner may overrule)
+
+1. **Value sections use a synthetic nonce, not a random one** (refines the spec's "fresh random nonce" for value
+   sections only). `nonce = HMAC-SHA256(K_vn, paddedPlaintext)[0..12]` with
+   `K_vn = HKDF(K_v, salt = recordId ‖ versionStamp, info = "tswap-record-value-nonce-v3")`. Why: two machines that
+   both convert the same v2 version (a concurrent `vault reindex`, or two machines writing after the marker appears)
+   then produce **byte-identical** value sections, so "one ciphertext per version" really holds and "two ciphertexts for
+   one version" stays a sign of damage (fail closed), as the spec says. Same key + same nonce only ever meets the same
+   plaintext, so GCM's nonce rule is kept. Metadata sections keep a fresh random nonce (their key is unique per write).
+2. **No cleartext version stamps.** Value sections follow the metadata section in the order of the metadata's version
+   list; their stamps are learned by decrypting metadata, and each value section's associated data still binds its
+   stamp. A transport observer gains no value-change timestamps beyond what the spec's leak delta already names.
+3. **When this build writes v3:** when the vault folder holds the marker file `record-format` with content `3`, **or**
+   when this command has read any v3 record from the folder (a deleted marker can't silently downgrade a reindexed
+   vault). Otherwise v2. A marker with any other content refuses every write (`written by a newer tswap … upgrade`).
+   New vaults (`init`, `migrate --to-records`) are created with the marker and v3 records from the start.
+4. **Plain `init` makes a record vault**: what `init --keyring` does today (one YubiKey slot plus a recovery slot), in
+   the record store at `<config dir>/vault`, marker included; `--tpm` / `--secure-enclave` likewise. `--keyring` stays
+   accepted as a no-op so scripts keep working. New: `init ... --folder <dir>` creates the vault folder at `<dir>`
+   (absent or empty; for a Syncthing or cloud-drive folder). The two-YubiKey XOR vault can no longer be created (a
+   record store needs a keyring; XOR vaults exist only to be migrated).
+5. **Classic vaults are refused at store open**, for every command except `init`, `migrate` (all forms) and `export`
+   (commands that never open the store are unaffected).
+6. **Unknown metadata extensions are preserved.** The metadata section ends with a list of (type, bytes) extension
+   entries; this build defines none, and keeps entries it doesn't know byte for byte on every rewrite (merge, burn,
+   reindex), so tags (#221) added by a later build survive an older v0.2 machine.
+7. **The fingerprint scanner ships in this stage** (`FingerprintIndex.Scan`, returning every confirmed hit, unresolved).
+   Stages 2 and 3 run in parallel and both consume it; overlap resolution and output formatting are theirs.
+8. **Downgrade/replay bookkeeping:** no new mechanism here (#197 covers rollback detection). This stage only reports
+   such records as "not fingerprinted".
+9. **`vault reindex` skips records already v3 with the current variant set** (nothing to change), and writes the marker
+   only after every record succeeded, so "marker present" means the reindex finished once.
+10. **`K_plan` is not derived in this stage**; its label `tswap-extract-plan-v1` is reserved for Stage 4.
+
+## Global constraints
+
+- Every key derives from `K_v` by HKDF-SHA256 with its own label: metadata `tswap-record-meta-v3` (salt
+  `recordId ‖ writeStamp`), value `tswap-record-value-v3` (salt `recordId ‖ versionStamp`), value nonce
+  `tswap-record-value-nonce-v3` (same salt), `K_fp` `tswap-fingerprint-v1`, `K_roll` `tswap-rollhash-v1` (no salt).
+  Stamps serialise as today (`RecordKeyDerivation.Derive(…, Stamp)`: HLC ms 8 LE, logical 4 LE, origin 16).
+- Associated data per section is only: magic, format version, record id, section role (`0x01` metadata, `0x02` value),
+  and that section's own stamp (write stamp / version stamp). Nothing a later write changes.
+- Each section is AES-256-GCM, padded with zeros to a multiple of 256 bytes (`KeyringFormat.PaddingBucketSize`).
+- Fingerprints never leave an encrypted metadata section or process memory: no logging, no `ToString` that prints
+  them, no files.
+- HMAC comparisons use `CryptographicOperations.FixedTimeEquals`; every match decision confirms on the HMAC.
+- Key material and decrypted values are zeroed after use, as the existing codec and store do.
+- NativeAOT and trim clean; the build stays warning-free.
+- Fixed-binary, explicitly ordered layouts (see `KeyringFormat`'s doc comment for why not JSON).
+
+## Review focus
+
+1. **An empty secret value** (`create`/`ingest` of ""): its version has a fingerprint set with zero entries, and counts
+   as fingerprinted. Test in Task 6.
+2. **Two machines reindex the same vault concurrently**: both produce byte-identical value sections, and the sync
+   conflict copy merges without error. Test in Task 5 (merge) and Task 7 (store-level, two `FleetMachine`s).
+3. **A conflict copy that is v2 against a main file that is v3** (or the reverse): load merges them, the next write is
+   v3 with fingerprints for every retained version. Test in Task 6.
+4. **A value that is not valid UTF-8** (ingested binary): fingerprints are computed from the same decoded string
+   `SecretProcessor` matches today, so redaction behaviour is unchanged. Test in Task 2.
+5. **A metadata extension written by a newer build**: survives a burn and a merge written by this build. Test in Task 4
+   (codec round trip) and Task 6 (store rewrite).
+
+---
+
+### Task 1: one variant list for matching and fingerprints
+
+**Files:**
+- Create: `TswapCore/Fingerprints/SecretVariants.cs`
+- Modify: `TswapCore/SecretProcessor.cs:26-61` (`BuildMatchList` uses `SecretVariants`)
+- Test: `TswapTests/SecretVariantsTests.cs`
+
+**Interfaces:**
+- Produces: `public enum VariantKind : byte { Plain = 0, WhitespaceStripped = 1, Base64 = 2, Base64Url = 3 }`;
+  `public static class SecretVariants { public const byte CurrentSetVersion = 1; public static IReadOnlyList<(VariantKind Kind, string Text)> For(string value); }`
+  (empty list for an empty value; same inclusion rules and order as `BuildMatchList` today).
+
+- [ ] **Step 1: Write the failing tests** `SecretVariantsTests`:
+  `For("abc")` → `[(Plain,"abc"), (Base64,"YWJj")]` (base64url equals base64, so absent);
+  `For("a b\nc")` → contains `(WhitespaceStripped,"abc")`;
+  `For("??>")` (base64 `Pz8+`) → contains `(Base64Url,"Pz8-")`;
+  `For("")` → empty;
+  a property test: for 200 random strings (including `"\uD800"` and multi-line values), the `(MatchType, SearchText)`
+  pairs `BuildMatchList` yields for one secret equal the mapping of `SecretVariants.For` (Plain and WhitespaceStripped →
+  `MatchType.Plaintext`).
+- [ ] **Step 2:** run `./runtests.sh --unit` filtered to `SecretVariantsTests`; expect a compile failure.
+- [ ] **Step 3:** implement `SecretVariants.For`; make `BuildMatchList` build its entries from it (sorting unchanged).
+- [ ] **Step 4:** run the filtered tests and `RedactTests`, `PreviousValueScanTests`: all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 1: one variant list for redaction and fingerprints`). Break-it-once: drop the
+  whitespace-stripped variant from `SecretVariants`; the property test must fail.
+
+### Task 2: fingerprint primitives and the scanner
+
+**Files:**
+- Create: `TswapCore/Fingerprints/FingerprintKeys.cs`, `RollingHash.cs`, `FingerprintSet.cs`, `Fingerprinter.cs`,
+  `FingerprintIndex.cs`
+- Modify: `TswapCore/Keyring/RecordKeyDerivation.cs` (the two labels)
+- Test: `TswapTests/FingerprintTests.cs`, `TswapTests/FingerprintIndexTests.cs`
+
+**Interfaces:**
+- Consumes: `SecretVariants.For`, `VariantKind` (Task 1).
+- Produces:
+  - `public sealed class FingerprintKeys : IDisposable { public static FingerprintKeys Derive(byte[] vaultKey); }`
+    (holds `K_fp` 32 bytes and the rolling-hash base; zeroes `K_fp` on dispose).
+  - `public sealed record FingerprintEntry(VariantKind Kind, int Length, ulong RollingHash, byte[] Hmac)` (Hmac 16 bytes;
+    value equality over all four fields; `ToString` prints kind and length only).
+  - `public sealed record FingerprintSet(byte VariantSetVersion, IReadOnlyList<FingerprintEntry> Entries)` (value
+    equality, entries in `SecretVariants.For` order).
+  - `public static class Fingerprinter { public static FingerprintSet Compute(byte[] valueBytes, FingerprintKeys keys); }`
+    — the value is decoded with `Encoding.UTF8.GetString` (as `RecordVaultStore.ToSecret` does) before `SecretVariants.For`.
+  - `public sealed record FingerprintHit(string Name, bool IsPrevious, VariantKind Kind, int Start, int Length);`
+  - `public sealed class FingerprintIndex { public static FingerprintIndex Build(IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys); public IReadOnlyList<FingerprintHit> Scan(ReadOnlySpan<char> text); public int MaxLength { get; } }`
+    — `Scan` returns every confirmed hit, ordered by `Start`, then `Length` descending, then `Name` ordinal.
+
+Definitions (exact):
+- `Length` = UTF-16 code units of the variant text.
+- `Hmac` = first 16 bytes of `HMAC-SHA256(K_fp, Encoding.UTF8.GetBytes(variantText))`.
+- `p = 2^61 − 1`; base `b = 2 + (u64_le(HKDF(K_v, 8, info = "tswap-rollhash-v1")) mod (p − 3))`, i.e. in [2, p−2].
+  `RollingHash(s) = (Σ_{i=0}^{L−1} s[i]·b^{L−1−i}) mod p` over UTF-16 code units (`UInt128` products, then reduce).
+- `Scan`: for each distinct stored length `L`, slide a window, update the hash in O(1) per character, look up
+  `(L, hash)`; on a hit compute the window's HMAC and compare with every entry under that key (fixed time). A rolling-hash
+  match without an HMAC match is never a hit.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `Keys_AreDistinctFromEachOtherAndFromRecordKeys` (K_fp ≠ names key ≠ record key for one K_v).
+  - `Compute_IsDeterministicPerVaultKey_AndDiffersAcrossVaultKeys`.
+  - `Compute_EmptyValue_HasZeroEntries` (`VariantSetVersion == 1`, `Entries` empty).
+  - `Compute_InvalidUtf8Value_UsesTheDecodedString`: bytes `{0x66, 0xFF, 0x6F}` give the same set as the string
+    `"f�o"`.
+  - `RollingHash_SlidingUpdate_EqualsDirectHash` (random text, every window of length 1..40).
+  - `Scan_FindsEachVariantKind` (plain, whitespace-stripped, base64, base64url of one value inside surrounding text, with
+    the right `Start`/`Length`/`Kind`).
+  - `Scan_PreviousValue_IsFlagged` (`IsPrevious == true`).
+  - `Scan_RollingCollisionWithoutHmacMatch_IsNoHit`: build an index whose entry has a correct `RollingHash` and `Length`
+    but a wrong `Hmac`; scanning the value yields nothing.
+  - `Scan_OverlappingSecrets_ReturnsAllHits` (`"abcdef"` and `"cde"` both found).
+  - `Scan_PemSizedSecret` (a 4,200-character value is found; `MaxLength` ≥ 4200 after its base64 variant).
+- [ ] **Step 2:** run them; expect compile failures.
+- [ ] **Step 3:** implement the five types to the definitions above.
+- [ ] **Step 4:** run them; all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 2: keyed fingerprints and the scanner`). Break-it-once: make `Scan` accept a
+  rolling-hash match without checking the HMAC; `Scan_RollingCollisionWithoutHmacMatch_IsNoHit` must fail.
+
+### Task 3: prove an older build never clobbers a newer-format record (before the codec changes)
+
+The spec asks this "with tests against the v0.1.x code path". Today's code **is** that path (main = v0.1.0 + .NET 10
+refactor; the format code is unchanged since v0.1.0), so write the test first, on the unchanged codec.
+
+**Files:**
+- Test: `TswapTests/NewerFormatRecordTests.cs`
+
+- [ ] **Step 1: Write the test** with a planted record file: valid magic, format byte `KeyringFormat.RecordFormatVersion + 1`
+  (written as that expression, so it stays "one newer" after Task 4), a plausible header and random payload, under a
+  record file name. Then, through the CLI in test mode on that vault: `create other`, `burn other`, `delete other`
+  (sudo bypass), `vault merge` from a second folder that holds a newer write of the same record id, `rotate`, `import`
+  of an export, and a `migrate --to-records` refusal path. After each, assert the planted file's bytes are unchanged and
+  it still exists, and that commands needing it (`get` of its name is impossible: assert instead that `LoadSecrets`
+  reports it in `UnreadableFiles`) fail closed.
+- [ ] **Step 2:** run it on the unchanged code.
+  - **Passes:** commit (`T16-S1 task 3: an older build never deletes or overwrites a newer-format record`). The release
+    notes (Task 9) say "older machines refuse reindexed records until upgraded" (no hard requirement).
+  - **Fails:** STOP and report to the controller with the failing path. Do not fix v0.1.x behaviour here; the release
+    notes must then say "upgrade every machine before `vault reindex`" as a hard requirement, and the owner decides.
+- [ ] **Step 3:** break-it-once: make `SaveSecrets` treat an unreadable record as absent; the test must fail. Revert.
+
+### Task 4: the v3 codec
+
+**Files:**
+- Modify: `TswapCore/Keyring/KeyringFormat.cs` (`RecordFormatVersion = 3`, new `RecordFormatVersionV2 = 2`),
+  `TswapCore/Keyring/SecretRecord.cs`, `TswapCore/Keyring/SecretRecordCodec.cs`,
+  `TswapCore/Keyring/RecordKeyDerivation.cs`
+- Create: `TswapCore/Keyring/RecordMetadata.cs`
+- Test: `TswapTests/SecretRecordCodecV3Tests.cs` (existing `SecretRecordCodecTests` keep passing for v2)
+
+**Interfaces:**
+- Consumes: `FingerprintSet` (Task 2).
+- Produces:
+  - `SecretRecord` gains `FingerprintSet? Fingerprints = null` (of `Version`'s value),
+    `IReadOnlyList<RecordExtension> Extensions` (default empty), and `IReadOnlyDictionary<Stamp, byte[]>? Sealed = null`
+    (value-section bytes by version stamp, as read; not part of `SameState`). `PreviousValue` gains
+    `FingerprintSet? Fingerprints = null`. `SameState` also compares `Fingerprints`, `Previous.Fingerprints` and
+    `Extensions`.
+  - `public sealed record RecordExtension(ushort Type, byte[] Data)` (value equality).
+  - `public sealed record RecordMetadata(byte[] RecordId, Stamp Write, RecordType Type, Stamp Version, string Name, long CreatedMs, IReadOnlyList<BurnEntry> Burns, FingerprintSet? Fingerprints, Stamp? PreviousVersion, FingerprintSet? PreviousFingerprints, IReadOnlyList<RecordExtension> Extensions)`.
+  - `SecretRecordCodec.Encode(SecretRecord record, byte[] vaultKey, byte formatVersion)` — `formatVersion` 2 writes
+    today's layout (fingerprints, extensions and `Sealed` dropped); 3 writes v3: for each retained version, a value
+    section from `record.Sealed[version]` copied byte for byte when present, otherwise encrypted from the plaintext with
+    the synthetic nonce (ruling 1). The existing `Encode(record, key)` overload writes `RecordFormatVersion`.
+  - `SecretRecordCodec.Decode(bytes, key)` reads v2 and v3 (v3 fills `Sealed` with the value-section bytes);
+    `SecretRecordCodec.DecodeMetadata(byte[] bytes, byte[] vaultKey) → RecordMetadata?` decrypts **only** the metadata
+    section of a v3 record and returns null for a v2 record **without decrypting anything**;
+    `SecretRecordCodec.OpenValue(byte[] bytes, byte[] vaultKey, Stamp version) → byte[]` decrypts one value section.
+  - `SecretRecordCodec.PeekHeader` and `FormatVersionOf(byte[] bytes) → byte?` work for both versions.
+  - `RecordKeyDerivation.DeriveMetadataKey(vaultKey, recordId, Stamp write)`,
+    `DeriveValueKey(vaultKey, recordId, Stamp version)`, `DeriveValueNonceKey(vaultKey, recordId, Stamp version)`.
+
+v3 layout (pinned so reviewers can check AAD and nonce use; field encodings follow v2's):
+```
+magic "TSR1" | formatVersion 3 | recordId 32 | writeStamp 28 | valueSectionCount 1
+metadataLength 4 | metadata: nonce 12 | tag 16 | ciphertext (padded to 256)
+per value section, in the metadata's version order: length 4 | nonce 12 | tag 16 | ciphertext (padded to 256)
+metadata plaintext: recordType 1 | versionStamp 28 | createdMs 8 | nameLength 2 + name
+  | versionCount 1 (0 tombstone, 1 current, 2 current + previous), per version: stamp 28 | role 1 (0 current, 1 previous)
+    | hasFingerprints 1, then variantSetVersion 1 | entryCount 1 | per entry: kind 1 | length 4 | rollingHash 8 | hmac 16
+  | burns (as v2) | extensionCount 2, per extension: type 2 | length 4 | data | zero padding
+value plaintext: valueLength 4 | value | zero padding
+AAD (metadata) = magic | 3 | recordId | 0x01 | writeStamp
+AAD (value)    = magic | 3 | recordId | 0x02 | versionStamp
+```
+Strict decoding as v2's (lengths, padding all zero, record id = `HMAC(K_names, name)`), plus: `valueSectionCount` must
+equal the metadata's version count; a tombstone has none; a version listed without a section, or a section without a
+version, is a `TswapException` (fail closed); duplicate stamps in the version list are refused.
+
+- [ ] **Step 1: Write the failing tests** in `SecretRecordCodecV3Tests`:
+  - `RoundTrip_ValueBurnedTombstone_WithAndWithoutPrevious` (all fields, fingerprints and extensions survive).
+  - `DecodeMetadata_DecryptsNoValueSection`: corrupt one byte inside each value section's ciphertext; `DecodeMetadata`
+    still succeeds, `Decode` throws `CryptographicException`.
+  - `DecodeMetadata_V2Record_ReturnsNullWithoutDecrypting`: a v2 record whose payload is garbage (bad tag) gives null,
+    not an exception.
+  - `ValueSection_CopiedBytes_AuthenticateUnderANewWriteStamp`: encode, change `Write`, re-encode with `Sealed` from the
+    decode; the value-section bytes are identical and the record decodes.
+  - `ValueSection_SameVersionSamePlaintext_IsByteIdenticalAcrossEncodes` (synthetic nonce, ruling 1).
+  - `ValueSection_SwappedBetweenVersions_FailsAuthentication` (current and previous sections exchanged).
+  - `ValueSection_FromAnotherRecord_FailsAuthentication`.
+  - `MetadataListsVersionWithoutSection_FailsClosed` and `SectionWithoutVersion_FailsClosed` (hand-built bytes with a
+    valid metadata section).
+  - `UnknownExtension_SurvivesDecodeEncode`.
+  - `V2Records_StillDecode_AndEncodeAsV2WhenAsked` (existing fixtures).
+  - `NewerFormatVersion_IsRefusedWithUpgradeMessage` (format byte 4).
+  - `PadsEachSectionTo256` (ciphertext lengths for a 1-byte, a 300-byte and a 4,200-byte value).
+- [ ] **Step 2:** run them; expect failures.
+- [ ] **Step 3:** implement.
+- [ ] **Step 4:** run `SecretRecordCodecV3Tests`, `SecretRecordCodecTests`, `RecordKeyDerivationTests`: all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 4: record format v3`). Break-it-once: include the write stamp in a value
+  section's AAD; `ValueSection_CopiedBytes_AuthenticateUnderANewWriteStamp` must fail.
+
+### Task 5: merge carries fingerprints and sealed sections
+
+**Files:**
+- Modify: `TswapCore/Keyring/RecordMerge.cs`
+- Test: `TswapTests/RecordMergeV3Tests.cs`
+
+**Interfaces:**
+- Consumes: Task 4's `SecretRecord` fields.
+- Produces: `RecordMerge.Merge` and `Normalize` with these rules: the winner keeps its versions; for each retained
+  version, the fingerprint set with the higher `VariantSetVersion` from either input that has that version (null only
+  if neither has one); `Sealed` is the union by version stamp, restricted to the winner's retained versions; the same
+  stamp with **different** sealed bytes throws `TswapException("two different encryptions of one value version …")`;
+  `Extensions` are the winner's, plus entries of the other input whose `Type` the winner lacks (sorted by type). Merge
+  stays commutative, associative and idempotent.
+
+- [ ] **Step 1: Write the failing tests:** `Merge_KeepsFingerprintsOfTheRetainedVersions`,
+  `Merge_PrefersTheNewerVariantSet`, `Merge_UnionsSealedSections_DropsUnretained`,
+  `Merge_DifferentSealedBytesForOneVersion_Throws`, `Merge_ConcurrentConversion_IsByteIdenticalAndClean` (encode the
+  same v2 record as v3 on two "machines" with different write stamps; decode both; merge succeeds and keeps one section),
+  and a property test over random pairs/triples for commutativity, associativity and idempotence including the new
+  fields.
+- [ ] **Step 2:** run them; expect failures.
+- [ ] **Step 3:** implement.
+- [ ] **Step 4:** run them plus `RecordMergeTests`, `RecordConflictTests`: all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 5: merge rules for fingerprints and value sections`). Break-it-once: keep the
+  first input's sealed bytes on a mismatch; `Merge_DifferentSealedBytesForOneVersion_Throws` must fail.
+
+### Task 6: the store writes v3, preserves sections, and offers a metadata-only load
+
+**Files:**
+- Modify: `TswapCore/RecordVaultStore.cs`
+- Create: `TswapCore/VaultMetadata.cs`
+- Test: `TswapTests/RecordStoreV3Tests.cs`, `TswapTests/RecordStoreMetadataTests.cs`
+
+**Interfaces:**
+- Consumes: Tasks 2, 4, 5.
+- Produces:
+  - `public const string RecordFormatMarkerFileName = "record-format";` and `public bool WritesV3 { get; }` (ruling 3,
+    evaluated after a load).
+  - Every write (`SaveSecrets`, `MergeRecords`, `WriteSnapshot`) encodes with the chosen format. In v3: a new value
+    version gets `Fingerprinter.Compute` of its plaintext and a freshly sealed section; a version that already has a
+    sealed section and fingerprints is copied; a version from a v2 record (plaintext known from the load) is sealed and
+    fingerprinted now.
+  - `public VaultMetadata LoadMetadata(byte[] vaultKey, TextWriter? warnings = null)` with
+    `public sealed record VaultMetadata(IReadOnlyList<RecordMetadata> Records, int NotFingerprinted, int OlderVariantSet, IReadOnlyList<string> Unreadable)`:
+    decrypts metadata sections only; a v2 record is counted in `NotFingerprinted` without being decrypted; a v3 record
+    with a retained version lacking fingerprints is counted there too; `OlderVariantSet` counts records whose sets are
+    below `SecretVariants.CurrentSetVersion`; tombstones are listed but never counted as missing. Conflict copies fold in
+    by the same merge rules on metadata (winner by version stamp, burns by `CanonicalBurns`, fingerprints and extensions
+    as Task 5); identical version stamps with differing content make that record unreadable here (fail closed).
+  - `internal Action<string, Stamp>? ValueDecrypted { get; set; }` — test seam, called for every value section
+    decrypted (`RecordDecrypted` keeps its meaning: a record's metadata/payload decrypted).
+  - `ReadSecretValue(name, key)` decrypts the metadata section and the current value section only.
+  - `public bool FullyFingerprinted(VaultMetadata m) => m.NotFingerprinted == 0 && m.Unreadable.Count == 0;` as a static
+    helper on `VaultMetadata` (`IsFullyFingerprinted`), the one definition Stages 2 and 3 use.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `NoMarker_WritesV2` and `Marker_WritesV3WithFingerprints` (inspect `FormatVersionOf` of the files written by
+    `create`).
+  - `AnyV3RecordRead_WritesV3EvenWithoutMarker` (ruling 3).
+  - `UnknownMarkerContent_RefusesWrites` (`"4"` → `TswapException` naming "newer tswap"; nothing written).
+  - `Burn_CopiesValueSectionsByteForByte` (the named invariant: value-section bytes identical before and after `burn`,
+    and after a `vault merge` that changes only burns).
+  - `Rotate_KeepsPreviousSectionBytes_AddsNewSection`.
+  - `EmptyValue_IsFingerprintedWithZeroEntries` (review focus 1).
+  - `V2CopyAgainstV3Main_MergesAndNextWriteIsV3` (review focus 3, both directions).
+  - `NewerExtension_SurvivesBurnAndMerge` (review focus 5: plant a record with extension type 0x7777 via the codec).
+  - `LoadMetadata_DecryptsNoValueSection`: a vault with 20 v3 secrets (with previous values); `ValueDecrypted` is never
+    called; names, burns and fingerprints match a full load.
+  - `LoadMetadata_CountsV2AndMissingFingerprints_WithoutDecryptingV2` (`RecordDecrypted` not called for the v2 file).
+  - `LoadMetadata_FoldsConflictCopies_LikeTheFullLoad` (property test over random histories: names, types, burns and
+    fingerprints equal those of `LoadSecrets` + fingerprints).
+  - `ReadSecretValue_DecryptsOnlyTheCurrentValueSection`.
+- [ ] **Step 2:** run them; expect failures.
+- [ ] **Step 3:** implement.
+- [ ] **Step 4:** run them plus every `RecordStore*`, `RecordConflict*`, `StaleWriteGuard*`, `Broker*` and
+  `MigrateToRecordsTests`: all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 6: the store writes v3 and loads metadata without decrypting values`).
+  Break-it-once: re-encrypt sealed sections on every write; `Burn_CopiesValueSectionsByteForByte` must fail.
+
+### Task 7: `sudo tswap vault reindex`
+
+**Files:**
+- Modify: `TswapCli/Commands/VaultCommand.cs` (subcommand, help text), `TswapCore/RecordVaultStore.cs`
+  (`public ReindexResult Reindex(byte[] vaultKey)`)
+- Test: `TswapTests/VaultReindexTests.cs`
+
+**Interfaces:**
+- Produces: `public sealed record ReindexResult(int Rewritten, int AlreadyCurrent, int Tombstones);` and the command
+  `vault reindex` (sudo; refuses without it with the platform-neutral "requires" message).
+
+Behaviour: unlock; load every record (full decode); for each live record that is v2, lacks a fingerprint set, or has an
+older variant set, write it as v3 with a new write stamp (stale-write guard applies; sealed sections copied where they
+exist); tombstones are rewritten as v3 metadata-only records too; skip records already current (ruling 9); refuse
+before writing anything if any record is unreadable (name the files; the user restores or deletes them first); write
+the marker last. Prints counts only (no names, no values). Idempotent: a second run rewrites nothing.
+
+- [ ] **Step 1: Write the failing tests:** `Reindex_RequiresSudo`, `Reindex_ConvertsEveryRecord_WritesMarkerLast`
+  (crash seam after the third record: no marker, a re-run finishes, then the marker exists),
+  `Reindex_SecondRun_RewritesNothing`, `Reindex_UnreadableRecord_RefusesBeforeWriting`,
+  `Reindex_OutputHasNoNamesOrValues` (stdout and stderr contain none of the secret names or values),
+  `Reindex_ConcurrentOnTwoMachines_ConvergesCleanly` (review focus 2: two `FleetMachine`s on copies of one vault both
+  reindex; `vault merge` of one copy into the other succeeds and leaves byte-identical value sections), and
+  `Reindex_ThenOlderFormatWrite_IsReportedNotFingerprinted` (plant a v2 write of one record after the reindex;
+  `LoadMetadata.NotFingerprinted == 1`).
+- [ ] **Step 2:** run them; expect failures.
+- [ ] **Step 3:** implement. `vault merge` also copies the other folder's marker when it has one (so merging a
+  reindexed copy keeps v3).
+- [ ] **Step 4:** run them plus `VaultMerge*` tests: all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 7: sudo tswap vault reindex`). Break-it-once: write the marker first; the crash
+  test must fail.
+
+### Task 8: record vaults by default; classic vaults migration-only
+
+**Files:**
+- Modify: `TswapCli/Commands/InitCommand.cs`, `TswapCli/CliHost.cs` (store opening), `TswapCli/ICliCommand.cs`
+  (`bool WorksOnClassicVault => false;`), `TswapCli/Commands/MigrateCommand.cs`, `TswapCli/Commands/ExportCommand.cs`,
+  `TswapCli/RecordMigration.cs` (marker + v3 for the new folder), test harnesses that inject `new Storage(dir)` (use
+  `VaultStores.Open(dir)` per invocation, like the binary)
+- Test: `TswapTests/ClassicVaultRefusalTests.cs`, `TswapTests/InitRecordVaultTests.cs`; existing tests converted
+
+**Interfaces:**
+- Produces: `ICliCommand.WorksOnClassicVault` (true only for `init`, `migrate`, `export`); the refusal message
+  (exact text):
+  `This is a classic single-file vault (secrets.json.enc), which tswap 0.2 only migrates. Run 'sudo tswap migrate --to-records' to convert it (or 'sudo tswap export <file>' to take your secrets out).`
+  with `tswap` replaced by `ctx.Prefix`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `ClassicVault_EveryOtherCommandRefuses` (theory over every registered command with `NeedsVault` true except the
+    three: exit 1, the exact message on stderr, the vault files unchanged).
+  - `ClassicVault_MigrateAndExportStillWork` (`migrate --to-records` converts; `export` writes a file that `import` into
+    a new record vault reads back).
+  - `Init_Plain_MakesARecordVault_WithMarker` (`config.json` `Store == "records"`, `VaultDir == <config dir>/vault`,
+    keyring has one YubiKey slot and a recovery slot, `record-format` contains `3`, a `create` writes a v3 record).
+  - `Init_Folder_CreatesTheVaultThere` and `Init_Folder_RefusesANonEmptyFolder`.
+  - `Init_KeyringFlag_IsAcceptedAsNoOp`.
+  - `MigrateToRecords_WritesMarkerAndV3`.
+- [ ] **Step 2:** run them; expect failures.
+- [ ] **Step 3:** implement, then convert existing tests: a test of a command's behaviour on a classic vault moves to a
+  record vault when the behaviour still exists; a test that only asserted classic behaviour of a now-refused command is
+  replaced by the refusal theory. List every converted or removed test in the commit message with the reason "brief T16-S1
+  ruling 4/5 changed the rule" (AGENTS.md: inputs may change when the brief changes the rules; assertions about
+  behaviour that still exists may not be weakened). Classic-store unit tests of `Storage` itself stay (migration and
+  export still read it).
+- [ ] **Step 4:** `./runtests.sh` (unit + E2E): all pass.
+- [ ] **Step 5:** commit (`T16-S1 task 8: record vaults by default; classic vaults migration-only`). Break-it-once:
+  set `WorksOnClassicVault` true for `names`; the refusal theory must fail.
+
+### Task 9: docs, version and release notes
+
+**Files:**
+- Modify: `TswapCli/TswapCli.csproj` (`<Version>0.2.0</Version>`), `README.md` (init, vault folder, `vault reindex`,
+  classic deprecation, the threat-model lines on fingerprints), `MULTI_MACHINE_KEYING.md` (metadata section: the v3 leak
+  delta from the spec's threat model, the marker, ruling 1's nonce), `AGENTS.md` (sudo list: `vault reindex`; project
+  overview no longer says "two YubiKeys enrolled once" as the default), `TswapCore/Prompt.cs` only if its text names
+  `init` behaviour (then `prompt-hash` tests update)
+- Create: `docs/release-notes/v0.2.0.md` (leads with `sudo tswap migrate --to-records`, then `vault reindex`, the
+  mixed-fleet rule from Task 3's outcome, and what changed for `init`)
+
+- [ ] **Step 1:** update the files; `HelpTests` and `PromptTests` adjust only where the text changed (say so in the
+  commit message).
+- [ ] **Step 2:** `./runtests.sh --unit`: all pass.
+- [ ] **Step 3:** commit (`T16-S1 task 9: docs and v0.2.0`).
+
+### Finish
+
+- [ ] Full `./runtests.sh` from a clean build; record the summary lines in the report.
+- [ ] Push `brief/t16-s1`, open a PR (CI on all three OS must be green), and request the external code review (GLM and
+  MiMo) **plus the dedicated security review of the format and key derivations** the spec requires. Tag and release
+  only on the owner's go.
+
+## Out of scope
+
+- Switching `redact`, `tocomment` or `run` to fingerprints (Stages 2 and 3), `extract` (Stage 4), tags (#221), key
+  rotation (#126), rollback detection (#197), a longer value history than one previous version.
