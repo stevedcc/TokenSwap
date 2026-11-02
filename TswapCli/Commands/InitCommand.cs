@@ -74,15 +74,26 @@ public sealed class InitCommand : ICliCommand
         var fileStore = ctx.Storage as IFileVaultStore
             ?? throw new TswapException("'init' needs a file-based config.");
 
-        // Ruling 4: a classic vault here is converted, never initialized over.
-        if (fileStore.Owner.FileExists(fileStore.ConfigFile) || fileStore.Owner.FileExists(fileStore.SecretsFile))
+        // Ruling 4: a classic vault here is converted, never initialized over. "Classic vault" is the
+        // definition every command's refusal uses (CommandContext.IsClassicVault); any other
+        // config.json (a pending 'slot request', say) gets what init always did: ask, back it up.
+        if (CommandContext.IsClassicVault(ctx.Storage))
             throw new TswapException(
                 $"This config folder holds a classic vault. Convert it with 'sudo {ctx.Prefix} migrate --to-records', or move " +
                 "config.json and secrets.json.enc aside to start a new vault.");
+        var replacesConfig = fileStore.Owner.FileExists(fileStore.ConfigFile);
+        if (replacesConfig)
+        {
+            c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
+            if (c.ReadLine()?.ToLower() != "yes")
+                return 0;
+        }
 
         // Checked before any hardware is touched, so a refusal enrolls nothing.
         var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
         RequireAbsentOrEmpty(ctx, fileStore.Owner, vaultDir);
+        if (replacesConfig)
+            c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
 
         // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
         // recovery slot unless --no-recovery), as a plain init does with one YubiKey.

@@ -140,6 +140,54 @@ public sealed class InitRecordVaultTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
     }
 
+    /// <summary>
+    /// Fix round 1 (MiMo C1 / GLM S1): ruling 4's refusal is for an actual classic vault only. A
+    /// config.json holding just a pending 'slot request' is not one (CommandContext.IsClassicVault's
+    /// definition); init keeps what it did before this brief there: it asks, and "no" changes nothing.
+    /// </summary>
+    [Fact]
+    public void Init_OnAPendingSlotRequestConfig_AsksAsBefore_NoChangesNothing()
+    {
+        _m.Ok("", "slot", "request", _m.PathOf("request.json"));
+        var config = File.ReadAllText(_m.ConfigPath);
+        Assert.NotNull(_m.Config.PendingSlotId);
+
+        var (exit, stdout, err) = _m.Run("no\n", "init");
+
+        Assert.True(exit == 0, err);
+        Assert.Contains("Already initialized. Reinitialize?", stdout);
+        Assert.DoesNotContain("classic", err);
+        Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
+        Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
+    }
+
+    [Fact]
+    public void Init_OnAPendingSlotRequestConfig_Yes_BacksItUpAndMakesTheRecordVault()
+    {
+        _m.Ok("", "slot", "request", _m.PathOf("request.json"));
+        var config = File.ReadAllText(_m.ConfigPath);
+
+        var (exit, _, err) = _m.Run("yes\n", "init");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal(config, File.ReadAllText(Assert.Single(_m.Backups)));
+        AssertRecordVault(Path.Combine(_m.Dir, "vault"));
+        Assert.Null(_m.Config.PendingSlotId);
+    }
+
+    [Fact]
+    public void Init_OnALoneClassicSecretsFile_Refuses()
+    {
+        File.WriteAllBytes(_m.SecretsPath, [1, 2, 3]);
+
+        var (exit, _, err) = _m.Run("yes\n", "init");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("This config folder holds a classic vault.", err);
+        Assert.False(File.Exists(_m.ConfigPath));
+        Assert.Equal([1, 2, 3], File.ReadAllBytes(_m.SecretsPath));
+    }
+
     [Fact]
     public void Init_OnARecordVault_KeepsRefusing()
     {
