@@ -63,6 +63,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     private Dictionary<string, LoadedRecord>? _loaded;
     private TextWriter? _warnings;
     private int? _markerFormat;
+    private string? _markerText;
     private bool _sawV3;
 
     /// <param name="configDir">The machine's config dir (holds <c>config.json</c>).</param>
@@ -755,6 +756,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     private void ReadMarker(TextWriter? warnings)
     {
         _markerFormat = null;
+        _markerText = null;
         var path = RecordFormatMarkerFile;
         if (!_owner.FileExists(path))
             return;
@@ -771,10 +773,17 @@ public sealed class RecordVaultStore : IFileVaultStore
             warnings?.WriteLine($"Warning: the vault folder's {RecordFormatMarkerFileName} marker can't be read ({ex.Message}); it is ignored.");
             return;
         }
-        if (int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var format) && format >= KeyringFormat.RecordFormatVersion)
+        // Digits only: a number of 3 or more is a format; one too large for an int is still a number
+        // above 3 (fix round 1), so it refuses writes like any other newer format.
+        if (text.Length > 0 && text.All(char.IsAsciiDigit))
         {
-            _markerFormat = format;
-            return;
+            var fits = int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var format);
+            if (!fits || format >= KeyringFormat.RecordFormatVersion)
+            {
+                _markerFormat = fits ? format : int.MaxValue;
+                _markerText = text;
+                return;
+            }
         }
         warnings?.WriteLine(
             $"Warning: the vault folder's {RecordFormatMarkerFileName} marker ({path}) doesn't hold a record format this tswap " +
@@ -869,7 +878,7 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private TswapException NewerFormatMarker() => new(
         $"This vault folder was written by a newer tswap: its {RecordFormatMarkerFileName} marker says record format " +
-        $"{_markerFormat}, and this build writes formats {KeyringFormat.RecordFormatVersionV2} and {KeyringFormat.RecordFormatVersion} " +
+        $"{_markerText ?? _markerFormat?.ToString(CultureInfo.InvariantCulture)}, and this build writes formats {KeyringFormat.RecordFormatVersionV2} and {KeyringFormat.RecordFormatVersion} " +
         "only. Upgrade tswap before changing this vault; nothing was written.");
 
     private void Observe(Hlc hlc) => _highestSeen = Hlc.Max(_highestSeen, hlc);

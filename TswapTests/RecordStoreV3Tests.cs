@@ -81,11 +81,13 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.True(store.WritesV3);
     }
 
-    [Fact]
-    public void MarkerNewerVersion_RefusesWrites()
+    [Theory]
+    [InlineData("4")]
+    [InlineData("99999999999")] // fix round 1 (GLM N1): a number above 3 that doesn't fit an int is still above 3
+    public void MarkerNewerVersion_RefusesWrites(string marker)
     {
         _m.Ok("a-value", "ingest", "a");
-        WriteMarker(_m, "4");
+        WriteMarker(_m, marker);
         var before = RecordsSnapshot();
 
         var (exit, _, err) = _m.Run("", "create", "s");
