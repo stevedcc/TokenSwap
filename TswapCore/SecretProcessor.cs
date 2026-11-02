@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using TswapCore.Fingerprints;
 
 namespace TswapCore;
 
@@ -33,27 +34,20 @@ public abstract class SecretProcessor
         var entries = db.Secrets.Select(kv => (Name: kv.Key, Value: kv.Value.Value))
             .Concat(db.Secrets.Where(kv => kv.Value.PreviousValue is not null)
                 .Select(kv => (Name: kv.Key + SecretsDb.PreviousSuffix, Value: kv.Value.PreviousValue!)));
+        // Brief T16-S1: the variants come from SecretVariants, the same list record format v3
+        // fingerprints, so a fingerprint scan matches exactly what this matcher matches.
         foreach (var (name, value) in entries)
         {
-            if (string.IsNullOrEmpty(value)) continue;
-
-            // Add original value
-            list.Add((name, MatchType.Plaintext, value));
-
-            // Add whitespace-normalized variant (newlines/spaces removed)
-            // This helps match secrets that were stored with formatting but appear
-            // without formatting in files, or vice versa
-            var normalized = value.Replace("\r", "").Replace("\n", "").Replace(" ", "").Replace("\t", "");
-            if (normalized != value && !string.IsNullOrEmpty(normalized))
-                list.Add((name, MatchType.Plaintext, normalized));
-
-            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
-            if (base64 != value)
-                list.Add((name, MatchType.Base64, base64));
-
-            var base64Url = base64.Replace('+', '-').Replace('/', '_').TrimEnd('=');
-            if (base64Url != base64 && base64Url != value)
-                list.Add((name, MatchType.Base64Url, base64Url));
+            foreach (var (kind, text) in SecretVariants.For(value))
+            {
+                var type = kind switch
+                {
+                    VariantKind.Base64 => MatchType.Base64,
+                    VariantKind.Base64Url => MatchType.Base64Url,
+                    _ => MatchType.Plaintext,
+                };
+                list.Add((name, type, text));
+            }
         }
 
         // Longest search text first to prevent shorter values partially overlapping longer ones.
