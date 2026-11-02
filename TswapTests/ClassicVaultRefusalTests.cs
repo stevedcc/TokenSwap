@@ -74,7 +74,12 @@ public sealed class ClassicVaultRefusalTests : IDisposable
         var (exit, stdout, err) = _m.Run(command == "import" ? "pass\n" : "value\n", ArgsFor(command, scratch));
 
         Assert.Equal(1, exit);
-        Assert.Contains(Refusal, err);
+        // The broker is Unix only: on Windows it refuses before it opens the vault (as the other
+        // broker tests guard), so that row asserts its own refusal there; elsewhere every row gets
+        // the classic-vault refusal. Either way nothing is written.
+        Assert.Contains(command == "broker" && OperatingSystem.IsWindows()
+            ? "'tswap broker' is not supported on Windows"
+            : Refusal, err);
         Assert.DoesNotContain("db-value", stdout);
         Assert.Equal(config, File.ReadAllBytes(_m.ConfigPath));
         Assert.Equal(secrets, File.ReadAllBytes(_m.SecretsPath));
