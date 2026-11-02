@@ -190,6 +190,35 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal(Fingerprints(_key, "second"u8.ToArray()), record.Fingerprints);
     }
 
+    /// <summary>
+    /// Fix round 1 (MiMo S1): restore makes the previous value current again as a <b>new</b> version
+    /// (a new stamp, so a new value key: its old section, bound to the old stamp, can't serve it).
+    /// No version that already has a section is sealed again: the replaced current value's section is
+    /// carried into the previous slot byte for byte.
+    /// </summary>
+    [Fact]
+    public void Restore_KeepsTheRestoredSectionBytes()
+    {
+        WriteMarker(_m);
+        _m.Ok("first", "ingest", "s");
+        _m.Ok("second", "ingest", "--rotate", "s");
+        var before = Read("s");
+        var sectionsBefore = ValueSections(Bytes("s")); // [current "second", previous "first"]
+
+        _m.Ok("", "restore", "s");
+
+        var after = Read("s");
+        var sectionsAfter = ValueSections(Bytes("s"));
+        Assert.Equal("first"u8.ToArray(), after.Value);
+        Assert.Equal("second"u8.ToArray(), after.Previous!.Value);
+        Assert.NotEqual(before.Previous!.Version, after.Version); // the restored value is a new version
+        Assert.Equal(before.Version, after.Previous.Version);
+        Assert.Equal(sectionsBefore[0], sectionsAfter[1]); // "second"'s section, copied byte for byte
+        Assert.Equal(sectionsBefore[0], after.Sealed![before.Version]);
+        Assert.Equal(Fingerprints(_key, "first"u8.ToArray()), after.Fingerprints);
+        Assert.Equal(before.Fingerprints, after.Previous.Fingerprints);
+    }
+
     [Fact]
     public void EmptyValue_IsFingerprintedWithZeroEntries()
     {
