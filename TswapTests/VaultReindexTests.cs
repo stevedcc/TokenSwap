@@ -327,6 +327,67 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Contains("Nothing to merge", _m.Ok("", "vault", "merge", otherVault));
     }
 
+    /// <summary>A record file in a format this build doesn't read (format 4): the real file's header, a random payload.</summary>
+    private static byte[] Format4Of(byte[] current)
+    {
+        var header = current[..SecretRecordCodec.HeaderSize];
+        header[4] = KeyringFormat.RecordFormatVersion + 1;
+        var payload = System.Security.Cryptography.RandomNumberGenerator.GetBytes(12 + 16 + 512);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(SecretRecordCodec.HeaderSize - 4), (uint)payload.Length);
+        return [.. header, .. payload];
+    }
+
+    /// <summary>
+    /// Fix round 3 (MiMo §4.1): the fourth write trigger never touches a file this build can't read.
+    /// A format 4 main file in a folder that writes format 3 survives `vault merge` byte for byte, is
+    /// reported, and isn't counted as written; the other record is rewritten.
+    /// </summary>
+    [Fact]
+    public void VaultMerge_InAFormat3Folder_LeavesAFormat4MainFileAlone()
+    {
+        _m.Ok("alpha-1", "ingest", "alpha");
+        _m.Ok("beta-1", "ingest", "beta");
+        var otherVault = CopyVault(_m, _other);
+        File.WriteAllText(Marker(_m), "3");
+        var alpha = RecordFile(_m, _key, "alpha");
+        var planted = Format4Of(File.ReadAllBytes(alpha));
+        File.WriteAllBytes(alpha, planted);
+
+        var (exit, stdout, err) = _m.Run("", "vault", "merge", otherVault);
+
+        Assert.True(exit == 0, err);
+        Assert.Contains("1 record(s) written", stdout); // beta only
+        Assert.Contains(Path.GetFileName(alpha), err);
+        Assert.Equal(planted, File.ReadAllBytes(alpha));
+        Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(RecordFile(_m, _key, "beta"))));
+    }
+
+    /// <summary>
+    /// Fix round 3 (MiMo §4.1): a record the fourth trigger rewrites folds only the conflicted copies
+    /// it could read. A format 4 conflicted copy is warned about and stays, byte for byte.
+    /// </summary>
+    [Fact]
+    public void VaultMerge_TheFourthTrigger_KeepsAFormat4ConflictedCopy()
+    {
+        _m.Ok("alpha-1", "ingest", "alpha");
+        var otherVault = CopyVault(_m, _other);
+        File.WriteAllText(Marker(_m), "3");
+        var alpha = RecordFile(_m, _key, "alpha");
+        var copy = alpha + " (1)";
+        var planted = Format4Of(File.ReadAllBytes(alpha));
+        File.WriteAllBytes(copy, planted);
+
+        var (exit, stdout, err) = _m.Run("", "vault", "merge", otherVault);
+
+        Assert.True(exit == 0, err);
+        Assert.Contains("1 record(s) written", stdout); // alpha, rewritten by the fourth trigger
+        Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(File.ReadAllBytes(alpha)));
+        Assert.Contains(Path.GetFileName(copy), err);
+        Assert.True(File.Exists(copy));
+        Assert.Equal(planted, File.ReadAllBytes(copy));
+        Assert.Equal("alpha-1", _m.Get("alpha"));
+    }
+
     /// <summary>Without the marker (and no format 3 read), the folder writes format 2: equal format 2 records stay as they are.</summary>
     [Fact]
     public void VaultMerge_InAFormat2Folder_LeavesEqualFormat2RecordsAlone()
