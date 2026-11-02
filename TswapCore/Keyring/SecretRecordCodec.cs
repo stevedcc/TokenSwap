@@ -815,6 +815,10 @@ public static class SecretRecordCodec
                 for (var e = 0; e < entryCount; e++)
                 {
                     var kind = (VariantKind)plain[offset++];
+                    // Strict for the variant sets this build defines; a newer set version may define
+                    // kinds this build doesn't know, and its records must stay readable (fix round 1).
+                    if (setVersion <= SecretVariants.CurrentSetVersion && kind > VariantKind.Base64Url)
+                        throw new TswapException($"Malformed record: unknown variant kind {(byte)kind} in a fingerprint set of version {setVersion}");
                     var length = BinaryPrimitives.ReadUInt32LittleEndian(plain.AsSpan(offset, 4));
                     offset += 4;
                     if (length > int.MaxValue)

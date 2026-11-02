@@ -527,11 +527,13 @@ public sealed class RecordVaultStore : IFileVaultStore
             return null;
         var fingerprints = previous ? metadata.PreviousFingerprints : metadata.Fingerprints;
 
+        if (!sections.TryGetValue(version, out var section))
+            throw new TswapException($"The record of '{name}' can't be read (a version is listed without its value section).");
         ValueDecrypted?.Invoke(fileName, version);
         byte[] value;
         try
         {
-            value = SecretRecordCodec.OpenSealed(metadata.RecordId, version, sections[version], vaultKey);
+            value = SecretRecordCodec.OpenSealed(metadata.RecordId, version, section, vaultKey);
         }
         catch (Exception ex) when (ex is TswapException or CryptographicException)
         {
@@ -734,10 +736,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </summary>
     private SecretRecord DecodeFull(string file, byte[] bytes, byte[] key)
     {
-        if (SecretRecordCodec.FormatVersionOf(bytes) == KeyringFormat.RecordFormatVersion)
-            _sawV3 = true;
         RecordDecrypted?.Invoke(file);
         var state = SecretRecordCodec.Decode(bytes, key);
+        // Ruling 3 ("has read any v3 record"): only a format 3 record that decoded counts (fix round 1);
+        // a damaged file carrying a format 3 byte selects nothing.
+        if (SecretRecordCodec.FormatVersionOf(bytes) == KeyringFormat.RecordFormatVersion)
+            _sawV3 = true;
         if (ValueDecrypted is { } seam)
         {
             if (state.Type != RecordType.Tombstone)

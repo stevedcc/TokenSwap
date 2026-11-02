@@ -101,6 +101,26 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal("a-value", _m.Get("a")); // reading still works
     }
 
+    /// <summary>
+    /// Fix round 1 (GLM N2): only a format 3 record that decodes selects format 3 writes (ruling 3:
+    /// "has read any v3 record"); a damaged file with a format 3 byte doesn't.
+    /// </summary>
+    [Fact]
+    public void ADamagedFormat3File_DoesNotSelectFormat3()
+    {
+        _m.Ok("a-value", "ingest", "a");
+        var damaged = SecretRecordCodec.Encode(Read("a") with { Name = "b", RecordId = FilenameHasher.ComputeRecordId(RecordKeyDerivation.DeriveNamesKey(_key), "b") }, _key, 3);
+        damaged[^1] ^= 0xFF; // fails authentication
+        System.IO.File.WriteAllBytes(File("b"), damaged);
+
+        _m.Ok("c-value", "ingest", "c");
+
+        Assert.Equal((byte?)2, SecretRecordCodec.FormatVersionOf(Bytes("c")));
+        var store = Store(_m);
+        Assert.Contains(Path.GetFileName(File("b")), store.LoadSecrets(_key, TextWriter.Null).UnreadableFiles!);
+        Assert.False(store.WritesV3);
+    }
+
     [Fact]
     public void MarkerWithCrlfOrBom_IsV3()
     {

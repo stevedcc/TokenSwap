@@ -211,8 +211,14 @@ public sealed class InitCommand : ICliCommand
                 kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId);
 
             config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
-            CreateRecordVault(ctx, fileStore, config, vaultDir);
-            CryptographicOperations.ZeroMemory(vaultKey);
+            try
+            {
+                CreateRecordVault(ctx, fileStore, config, vaultDir);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(vaultKey); // on a failed write too (fix round 1)
+            }
 
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
             c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -490,8 +496,14 @@ public sealed class InitCommand : ICliCommand
 
         var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery, hwBlob);
 
-        CreateRecordVault(ctx, fileStore, config, vaultDir);
-        CryptographicOperations.ZeroMemory(vaultKey);
+        try
+        {
+            CreateRecordVault(ctx, fileStore, config, vaultDir);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(vaultKey); // on a failed write too (fix round 1)
+        }
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");

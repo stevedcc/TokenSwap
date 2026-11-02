@@ -638,6 +638,30 @@ public class SecretRecordCodecV3Tests
         Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(file, VaultKey));
     }
 
+    /// <summary>
+    /// Fix round 1 (GLM N5): a variant kind this build doesn't define, in a set of a variant-set
+    /// version this build defines, is malformed and refused at parse. In a set of a newer version it is
+    /// kept: a later build that adds a variant bumps the set version, and this build must still read
+    /// its records (and keep those fingerprints on rewrite).
+    /// </summary>
+    [Fact]
+    public void UnknownVariantKind_IsRefusedInAKnownSetVersion_KeptInANewerOne()
+    {
+        var id = IdOf("db-pass");
+        FingerprintSet Set(byte setVersion) => new(setVersion, [new FingerprintEntry((VariantKind)7, 5, 42, new byte[16])]);
+        byte[] File(byte setVersion)
+        {
+            var plain = Layout.MetadataPlain(RecordType.Value, Version, "db-pass", [(Version, 0, Set(setVersion))]);
+            return Layout.File(id, Write, 1, Layout.MetadataSection(id, Write, 1, plain),
+                Layout.ValueSection(id, Version, Layout.ValuePlain("hello"u8.ToArray())));
+        }
+
+        Assert.Contains("variant kind", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(File(SecretVariants.CurrentSetVersion), VaultKey)).Message);
+        Assert.Throws<TswapException>(() => SecretRecordCodec.DecodeMetadata(File(SecretVariants.CurrentSetVersion), VaultKey));
+        var newer = SecretRecordCodec.Decode(File(9), VaultKey);
+        Assert.Equal(Set(9), newer.Fingerprints);
+    }
+
     [Fact]
     public void Encode_SealedForAnUnretainedVersion_Throws()
     {

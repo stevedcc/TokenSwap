@@ -248,6 +248,8 @@ public static class RecordMerge
                             $"two copies hold different value sections of the version {stamp} and no fingerprints show them equal");
                 }
             }
+            if (holders.Count == 0)
+                throw new RecordConflictException($"no copy holds a value section of the version {stamp}");
             sealedSections[stamp] = holders.Select(h => h.Section).Aggregate((x, y) => y.AsSpan().SequenceCompareTo(x) < 0 ? y : x);
             if (isPrevious)
                 previousFingerprints = best;
