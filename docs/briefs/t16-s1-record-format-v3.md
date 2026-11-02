@@ -69,8 +69,9 @@ and temp folders only.
    Stages 2 and 3 run in parallel and both consume it; overlap resolution and output formatting are theirs.
 8. **Downgrade/replay bookkeeping:** no new mechanism here (#197 covers rollback detection). This stage only reports
    such records as "not fingerprinted".
-9. **`vault reindex` skips records already v3 with the current variant set** (nothing to change), and writes the marker
-   only after every record succeeded, so "marker present" means the reindex finished once.
+9. **`vault reindex` skips records that are already current and converged**: v3, the current variant set, no conflicted
+   copies, sections equal to the merged ones (ruling 11's write trigger). It writes the marker only after every record
+   succeeded, so "marker present" means the reindex finished once.
 10. **`K_plan` is not derived in this stage**; its label `tswap-extract-plan-v1` is reserved for Stage 4.
 11. **The store merges every copy of a record in one step, and the result doesn't depend on the order of the copies.**
    `RecordMerge.MergeAll(IReadOnlyList<SecretRecord>)` takes the main file, its conflicted copies and (for `vault
@@ -79,7 +80,9 @@ and temp folders only.
    - **Validation first, per input:** a full load recomputes each decoded input's fingerprint sets from its plaintext
      (for variant-set versions this build knows) and treats a mismatch as that record unreadable.
    - **Winner:** the input with the largest version stamp. If inputs share that stamp, they must agree on tombstone-ness,
-     value, created time, name and previous version (stamp and value); otherwise the record conflicts.
+     value, created time, name and previous version (presence, stamp and value: absent vs present is a disagreement);
+     otherwise the record conflicts. The merged write stamp is the largest input write stamp (as today).
+     `MergeAll([])` throws `ArgumentException`.
    - **Retained versions must agree:** for each version the winner retains (current and previous), every input that
      holds that stamp must hold the same plaintext; otherwise the record conflicts. Versions the winner doesn't retain
      are ignored (a superseded version's damage no longer matters).
@@ -98,17 +101,27 @@ and temp folders only.
      copy can't be used" and keeps the record readable; a conflict must not go through that path.
    - **This replaces today's content tie-break** (`RecordMerge.CompareContent`, which silently picked one of two values
      sharing a version stamp, only possible through damage or a clock rollback): such copies now fail closed. Existing
-     tests of that tie-break become conflict tests (brief rule change; list them in the commit). One release-note line.
-   - **Writing the convergence:** a merge writes the record when the merged state differs (`SameState`) **or** when its
-     sections differ from the current main file's (`Sealed` is not part of `SameState`, which stays semantic). The
-     ordinal minimum is a fixed point, so a second merge writes nothing. `MergeRecords`, `SaveSecrets` and `Reindex`
-     all apply this.
+     tests of that tie-break become conflict tests (brief rule change; list them in the commit). The release notes say
+     so, including that the tombstone-wins tie is gone too, and the practical effect: such a record stops working
+     (`get`, `run` of it fail) until the damaged conflicted copy is removed, as the warning says.
+   - **Writing the convergence:** `MergeRecords` (`vault merge`) and `Reindex` write a record when the merged state
+     differs (`SameState`), **or** its sections differ from the current main file's (`Sealed` is not part of
+     `SameState`, which stays semantic), **or** the fold consumed conflicted copies (today's clause, kept: writing is
+     what removes redundant copies, including a lingering v2 copy). The ordinal minimum is a fixed point, so a second
+     merge writes nothing. `SaveSecrets` keeps T6's contract (it writes only records whose secret changed); a record it
+     does write carries the merged sections and removes its folded copies, as today.
    - **The metadata-only path** (no plaintext) uses the same rules with fingerprints standing in for plaintext: two
      copies hold the same plaintext for a version iff they share a variant-set version with equal sets and no shared
      variant-set version with different sets. Where that can't be shown (no sets to compare, or sets that disagree),
      differing sections or any other disagreement make that record unreadable there (fail closed).
    - **Not claimed:** state already consolidated in one folder has dropped superseded copies, so `vault merge` can't see
      damage in a version one side has superseded. That version is not retained by the result, so nothing depends on it.
+     Conversely, a folder holding only a damaged pair conflicts at their own top stamp even if another folder has a
+     newer clean state that would supersede it; that record stays unreadable (never overwritten) until the user removes
+     the damaged copy, which the warning says. Both are inherent to merging a subset, and both fail closed.
+   - **Metadata path across variant-set versions:** two builds with different variant-set versions that converted one
+     record concurrently share no set version, so the metadata path can't prove equal plaintexts and reports the record
+     unreadable until the next full-load write converges it. Documented, accepted.
 12. **A record whose main file or any conflicted copy is format 2 counts as "not fingerprinted"** in the metadata-only
    load, without decrypting the v2 file (its version stamp is inside its payload, so the metadata path can't tell whether
    it is the newer version).
@@ -347,7 +360,8 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
 - Produces: `public sealed class RecordConflictException : TswapException`, a per-input fingerprint validation the
   store's full loads call (name and shape are the implementer's), `public static SecretRecord RecordMerge.MergeAll(IReadOnlyList<SecretRecord> inputs)`
   and `Merge(a, b) => MergeAll([a, b])` with ruling 11's rules; `Normalize` as today. `MergeAll` is invariant under
-  permutation of its inputs and idempotent (`MergeAll([x, x]) == x`, `MergeAll([MergeAll(xs)]) == MergeAll(xs)`).
+  permutation of its inputs and idempotent (`MergeAll([x, x]) == x`, `MergeAll([.. xs, MergeAll(xs)]) == MergeAll(xs)`); a conflict is a conflict in
+  every permutation.
 
 - [ ] **Step 1: Write the failing tests:** `MergeAll_KeepsFingerprintsOfTheRetainedVersions`,
   `MergeAll_PrefersTheNewerVariantSet`, `MergeAll_PicksOneSectionPerVersion_DropsUnretained`,
@@ -359,7 +373,8 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
   `Validate_TamperedFingerprintSet_IsRejected` (a decoded input whose stored set doesn't match its plaintext),
   `MergeAll_ConcurrentConversion_ConvergesOnOneSection` (encode the same v2 record as v3 on two "machines" with
   different write stamps: different sections; decode both; every order keeps the same one), and a property test over
-  random lists of 1–4 inputs for permutation invariance and idempotence whose generator deliberately produces: same-stamp
+  random lists of 1–4 inputs asserting, for every permutation, the same result or the same conflict, plus idempotence,
+  whose generator deliberately produces: same-stamp
   different values (current and previous), damage in superseded versions, equal plaintext with different sections, null,
   known and unknown fingerprint set versions, and colliding extension types with different data under different write
   stamps. Convert `RecordMergeTests`' content-tie-break tests to conflict tests (ruling 11) and list them in the commit.
@@ -395,8 +410,8 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
     value-section bytes from the framing without decrypting them), and a record whose main file **or any conflicted copy** is v2 is counted in `NotFingerprinted` without
     decrypting the v2 file (ruling 12). `VaultMetadata.IsFullyFingerprinted` (a property:
     `NotFingerprinted == 0 && Unreadable.Count == 0`) is the one definition Stages 2 and 3 use.
-  - Full loads validate each input's fingerprints and every `RecordMerge.Merge` caller handles an unmergeable record
-    per record (ruling 11, including `MergeRecords`).
+  - Full loads validate each input's fingerprints, fold every copy with one `RecordMerge.MergeAll` call, and every
+    caller handles a conflicting record per record (ruling 11, including `MergeRecords`).
   - `internal Action<string, Stamp>? ValueDecrypted { get; set; }` — test seam, called for every value section
     decrypted (`RecordDecrypted` keeps its meaning: a record's metadata/payload decrypted).
   - `ReadSecretValue(string name, byte[] key, bool previous = false)` decrypts the metadata section and the one value
@@ -427,6 +442,9 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
   - `FullLoad_TamperedFingerprints_MarksOnlyThatRecordUnreadable` (a conflicted copy whose fingerprint set doesn't
     match its plaintext: the load succeeds, other secrets work, that record is unreadable and its files are untouched).
   - `MergeRecords_UnmergeableRecord_SkipsIt_OthersStillMerge`.
+  - `FullLoad_SameStampDifferentValues_MarksOnlyThatRecordUnreadable` (store level: the load succeeds, other secrets work,
+    that record's files are untouched).
+  - `VaultMerge_RemovesARedundantIdenticalCopy` (a byte-identical conflicted copy is folded and removed, as today).
   - `LoadMetadata_CopiesDisagreeingOnName_IsUnreadable_InEveryOrder` (three copies, all six fold orders).
   - `LoadMetadata_ConcurrentConversionCopies_PickTheSameSectionAsTheFullLoad`.
   - `ReadSecretValue_DecryptsOnlyTheRequestedValueSection` (current, and `previous: true`).
@@ -463,8 +481,11 @@ the marker last. Prints counts only (no names, no values). Idempotent: a second 
   `Reindex_SecondRun_RewritesNothing`, `Reindex_UnreadableRecord_RefusesBeforeWriting`,
   `Reindex_OutputHasNoNamesOrValues` (stdout and stderr contain none of the secret names or values),
   `Reindex_ConcurrentOnTwoMachines_ConvergesCleanly` (review focus 2: two `FleetMachine`s on copies of one vault both
-  reindex; `vault merge` of one copy into the other of A into B writes B with the ordinally smaller section, `vault merge` of B into A then writes A with the same bytes,
-  and a third merge writes nothing), and
+  reindex; after `vault merge` of A into B and of B into A, in either order, both folders hold byte-identical value
+  sections, the ordinal minimum of the two; a third merge in either direction writes 0 records. Assert outcomes, not
+  which merge wrote: that depends on which random section sorts first),
+  `Reindex_HealsALingeringV2Copy` (a v2 conflicted copy beside a current v3 main: `LoadMetadata.NotFingerprinted` is 1,
+  reindex rewrites that record and removes the copy, then it is 0),
   `Reindex_ThenOlderFormatWrite_IsReportedNotFingerprinted` (plant a v2 write of one record after the reindex;
   `LoadMetadata.NotFingerprinted == 1`), `Reindex_EmptyVault_WritesMarkerOnly`,
   `Reindex_UnderSudo_KeepsTheVaultOwnerAndModes` (with the fake `IUnixOwnership` seam `FileOwnershipTests` uses: every
