@@ -142,6 +142,20 @@ Each record file keeps its cleartext header and gains two kinds of encrypted sec
 - **Consistency rules:** a record whose metadata lists a version without a value section, or holds
   a value section the metadata doesn't list, fails closed (unreadable, reported). Two ciphertexts for
   one version (possible only through a bug) are a merge error, not a silent choice.
+
+  > **Owner amendment, 2026-11-02** (brief T16-S1, ruling 1): "Every section uses a fresh random
+  > 96-bit nonce (owner, 2026-11-02, as the spec says; the owner declined the synthetic-nonce
+  > alternative the first draft proposed). Each value section is still encrypted **once** by the
+  > machine that creates or converts its version and copied byte for byte afterwards. Consequence:
+  > two machines that both convert the same v2 version (a concurrent `vault reindex`, or two
+  > machines writing after the marker appears) produce two different, equally valid ciphertexts of
+  > one plaintext. That is legitimate, not damage, and converges by ruling 11. Each such key meets
+  > at most a handful of encryptions (one per machine that converts that version), all of the same
+  > plaintext: a value key is a one-plaintext key by construction, far inside GCM's random-nonce
+  > limits. **This overrules two spec sentences** ("encrypted exactly once and never re-encrypted
+  > under that key"; "two ciphertexts for one version … are a merge error, not a silent choice"):
+  > two ciphertexts of the **same** value are now legitimate and converge silently; two
+  > **different** values for one version stamp are still a fail-closed error (ruling 11)."
 - **Fingerprint variant set is versioned** in the metadata. A record with an **older** variant set is
   still matched with the fingerprints it has, and commands warn that a reindex would add the new
   variants; only a record with **no** fingerprints puts the vault in the "not fully fingerprinted"
