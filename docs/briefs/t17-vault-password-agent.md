@@ -115,8 +115,11 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
      added: `… (the key's HMAC secret was reprogrammed, its slot's password flag was removed, or config.json is damaged).`
    - **A stripped header gets its own message**, not ruling 18's "wrong password", because the user was never asked:
      `This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.`
-     tswap uses it when a legacy blob unlock fails with `TPM_RC_AUTH_FAIL`, `NTE_INCORRECT_PASSWORD` or the shim's
-     `-8` (`LAError -1004`, no credential).
+     tswap uses it when a legacy blob unlock fails with one of:
+     - `TPM_RC_AUTH_FAIL`;
+     - Windows' `NTE_SILENT_CONTEXT` (0x80090022), which is what a silent open of a password key with no auth set
+       gives, exactly the stripped-header case;
+     - the shim's `-8` (`LAError -1004`, no credential).
    - **Version requirement.** Every machine that opens a password slot, or rewrites a keyring holding one, needs tswap
      ≥ 0.2.0. A 0.1.x build reads a `TSTP` or `TSSE` blob as a 1.3 GB length prefix and says "config is corrupted";
      that is shipped code. The README, `MULTI_MACHINE_KEYING.md` and `init --password`'s explanation say so.
@@ -138,7 +141,8 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
        - NeedsNewerTswap, for all three kinds (including `TSYK`):
          `needs a newer tswap (blob version <v> or unknown flags); upgrade tswap.`
        - Corrupt:
-         `a password header without the password flag (corrupt); restore config.json from backup.`
+         `a password header without the password flag, or a truncated blob (corrupt); restore config.json from backup.`
+         `broker serve` and `broker unlock` use this text, so it covers the truncated case too.
        - The legacy parsers' text (`This slot needs the vault password and a newer tswap …`) is used only by
          `Tpm2ToolsInterop`, `PlatformCryptoProviderInterop` and `AppleSecureEnclaveInterop` on an unsplit
          `TSTP`/`TSSE` blob. It is never used for a `TSYK` blob.
@@ -503,18 +507,18 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
     `Warning: this TPM's lockout password is empty, so anyone who can use the TPM can reset its failed-password counter and keep guessing the vault password. Setting one (as root: tpm2_changeauth -c lockout) affects every program that uses this TPM.`
     - Windows manages the lockout authorisation itself, so it gets no warning.
     - A failed probe is silent (`HARDWARE_BACKENDS.md` says so).
-    - **Windows** prints one extra line instead, at `init`, `slot add`, `slot request` and `recover` with
+    - **Windows** prints one extra line instead, at `init`, `slot add`, `slot request`, `slot accept` and `recover`
+      with
       `--password` and a TPM slot:
       `Windows locks TPM use after about 4 wrong passwords, for up to 8 hours; run 'tswap agent start' to avoid retyping it.`
-    - **No automatic retries on Windows.** tswap never retries a wrong Windows TPM password automatically. Each
-      user-supplied password costs exactly one `Decrypt`, and `agent start`'s proving unlock is the only automatic
-      attempt (Task 9 test).
+    - **No automatic retries on Windows:** there is no retry after a wrong password, and each user-supplied password
+      costs exactly one `Decrypt` (Task 9 test).
 18. **Error text for a wrong password at the hardware** (when the password **was** supplied; ruling 3 covers a stripped
     header):
     - **TPM:** `TPM_RC_AUTH_FAIL`, reported by tpm2-tools as `0x98E` for the object's auth session (a swtpm test pins
       the code seen).
     - **Windows** (codes from the owner's spike, 2026-11-02; Task 9): a wrong usage auth makes `Decrypt` throw
-      `NTE_PERM` (0x80090010, "Access denied"). It is not `NTE_INCORRECT_PASSWORD`.
+      `NTE_PERM` (0x80090010, "Access denied").
     - The TPM's auth failure and Windows' `NTE_PERM` both map to:
       `Wrong vault password. The TPM counts failed attempts and locks out for a while after several.`
     - **Lockout, Linux:** `TPM_RC_LOCKOUT` (`0x921`) maps to:
@@ -523,9 +527,10 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       triggered) and `0x80290409` (the Platform Crypto Device ignored it, which also blocks key **creation**) both map
       to:
       `Windows has locked TPM use for this user after too many wrong passwords (by default for up to 8 hours, or until an administrator resets the TPM lockout). Slots on this machine without a vault password may be blocked meanwhile too.`
-    - **Windows, no password supplied:** `NTE_SILENT_CONTEXT` (0x80090022) means the key needs its password and none
-      was set. tswap always sets it for a password slot, so this is a bug path. It maps to:
-      `tswap opened a password-protected TPM key without its password (a tswap bug; please report it).`
+    - **Windows, no password supplied** (`NTE_SILENT_CONTEXT`, 0x80090022):
+      - On a **Password-classified** slot, tswap failed to set an auth it always sets, so this is a bug path. It maps
+        to: `tswap opened a password-protected TPM key without its password (a tswap bug; please report it).`
+      - On a legacy (unsplit) blob it is ruling 3's stripped-header case, with ruling 3's text.
     - **YubiKey:** a slot that fails to unwrap with the password supplied says:
       `Wrong vault password (or this slot's key changed).`
     - **Secure Enclave:** the shim's wrong-credential code (`-7`, ruling 19) says:
@@ -1101,7 +1106,9 @@ Pinned behaviour:
     - `EveryOpenIsSilent`.
     - `OneDecryptPerSuppliedPassword`: a wrong password gives exactly one `Decrypt` call, and no retry.
     - `ErrorCodes_MapToRuling18`: the seam throws each of 0x80090010, 0x80090031, 0x80290409 (from `Decrypt` and from
-      `Create`) and 0x80090022, and each gives its pinned text.
+      `Create`) and 0x80090022 on a Password slot, and each gives its pinned text.
+    - `LegacyBlob_SilentContext_SaysStrippedHeader`: the seam throws 0x80090022 on the legacy (unsplit) path, which
+      gives ruling 3's stripped-header text (mirroring Task 8's `StrippedHeader_StillNeedsThePassword`).
     - `UnsplitTstpBlob_SaysNewerTswap`.
 - [ ] **Step 2–4:** the unit tests go red then green. The `TpmWindows` tests compile, and are listed in the report as
   "not run: owner's hardware". The VM proves the API, not the firmware's lockout behaviour, so the hardware run
@@ -1393,7 +1400,7 @@ Pinned behaviour:
     - **Windows:** the spec's `NCRYPT_PIN_PROPERTY` is replaced by `PCP_USAGEAUTH` at creation and at use (confirmed
       by the owner's spike), with every open silent;
     - the Windows lockout facts: about 4 wrong passwords per user and 9 across all standard users lock TPM use for up
-      to 480 minutes, which also blocks key creation and password-free slots.
+      to 480 minutes. This also blocks key creation, and may block password-free slots.
   - `HARDWARE_BACKENDS.md`: the TPM auth value, the lockout warning, Windows' `PCP_USAGEAUTH` with silent opens and the
     spike's error codes and lockout facts (Task 9), and the Secure Enclave
     `.applicationPassword` result with ruling 19's wording (enforced by the Enclave; no rate limit shown).
@@ -1437,7 +1444,7 @@ Pinned behaviour:
   2. A real TPM on Linux: one password slot, one wrong password, one right password.
   3. A real `sudo tswap get` with the agent running, once normally and once with `/proc` mounted `hidepid=2` if the
      machine allows it (ruling 20's uid-0 exemption).
-  4. The `TpmWindows` tests on a Windows machine with a TPM (ruling and Task 9's open question).
+  4. The `TpmWindows` tests on real Windows hardware with a TPM (the XPS or the Windows 10 machine; Task 9).
   5. The `SecureEnclave` tests on the Mac (Task 13).
 - [ ] Tag and release only on the owner's go.
 
