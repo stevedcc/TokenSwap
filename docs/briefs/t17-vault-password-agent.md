@@ -121,20 +121,28 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
      ≥ 0.2.0. A 0.1.x build reads a `TSTP` or `TSSE` blob as a 1.3 GB length prefix and says "config is corrupted";
      that is shipped code. The README, `MULTI_MACHINE_KEYING.md` and `init --password`'s explanation say so.
    - **Classifying slots.** `SlotPassword.Classify(Slot)` returns `SlotPasswordKind { None, Password, NeedsNewerTswap }`.
-     It looks at the magic and version for all three blob kinds:
-     - `TSYK` version 1 → None; version 2 with flags `0x01` → Password;
-     - `TSYK` version > 2, or version 2 with any other flags → NeedsNewerTswap;
-     - `TSTP` or `TSSE` version 1 with flags `0x01` → Password; any other version or flags → NeedsNewerTswap;
-     - a legacy blob without magic → None; a recovery slot → None.
-     `Requires(slot)` is `Classify(slot) == Password`.
+     It looks at the magic, version and flags for all three blob kinds:
+     - `TSYK` version 1 → None.
+     - `TSYK` version 2, `TSTP` version 1 and `TSSE` version 1, by flags:
+       - **exactly `0x01`** → Password;
+       - **any bit other than bit 0 set** (`0x02`, `0x03`, …) → NeedsNewerTswap;
+       - **`0x00`** → corrupt. This build never writes it: a password header with no password flag is damage, so
+         `Classify` throws `Malformed slot blob <id8>: a password header without the password flag. Restore config.json from backup.`
+     - A higher version (`TSYK` > 2, `TSTP`/`TSSE` > 1) → NeedsNewerTswap.
+     - A legacy blob without magic → None; a recovery slot → None.
+     - **`Classify`, `Split` and `Decode` agree** on all three kinds, with the same messages: `Split` and `Decode` throw
+       the NeedsNewerTswap message for unknown bits or versions, and the corrupt message for `0x00`.
+     `Requires(slot)` is `Classify(slot) == Password`. `slots` shows a NeedsNewerTswap slot's PROTECTION as
+     `needs a newer tswap`.
    - **A NeedsNewerTswap slot is refused when the unlocker classifies the candidates, before any pass runs.** No pass
      tries it, no source is called for it, and no prompt is shown because of it. Other slots still unlock as usual. If
      nothing opens the vault, the error ends with:
-     `Slot <id8> needs a newer tswap (blob version <v>); upgrade tswap.`
+     `Slot <id8> needs a newer tswap (blob version <v> or unknown flags); upgrade tswap.`
    - **Unknown versions in this build.** The legacy parsers in `Tpm2ToolsInterop.Unseal`,
      `PlatformCryptoProviderInterop.Unwrap` and `AppleSecureEnclaveInterop.Unwrap` check for the `TSTP`/`TSSE` magic
      first. On an unsplit blob, an unknown header version or an unknown flag bit they say
-     `This slot needs the vault password and a newer tswap (blob version <v>); upgrade tswap.` instead of "corrupted".
+     `This slot needs the vault password and a newer tswap (blob version <v> or unknown flags); upgrade tswap.` instead
+     of "corrupted".
    - **Classic vaults** (no keyring: `Config.TpmSealedKey`, `SecureEnclaveWrappedKey`, YubiKey pairs) can't carry a
      password: `SlotPassword.Requires` knows only keyring `Slot`s, and classic vaults are migration-only since T16-S1.
      The route is `migrate --to-records`, then a password slot. The existing classic-vault refusal covers `--password`
@@ -286,15 +294,31 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
         broker that is non-dumpable from the start can never be unlocked.
       - **Why it is safe:** while locked the broker holds no secret: no `K_v`, no stretched password, no loaded ssh
         keys. A core dump of it holds nothing, and same-uid host processes are inside the trust model anyway (spec).
-      - **Becoming non-dumpable:** the control server reads an unlock request's header (length and the 22-byte
-        header: magic, version, op 16), then calls `PR_SET_DUMPABLE 0` **before** it reads the 32 stretched bytes
-        from the socket. Until then those bytes sit only in the kernel's socket buffer, never in the broker's memory.
-      - **Locking again:** on `broker lock`, at the timeout, and on a failed unlock proof, the broker zeroes the held
-        password, unloads its ssh keys, and only then sets `PR_SET_DUMPABLE 1`.
+      - **The invariant.** The broker is non-dumpable whenever **any** secret is in its memory: the held stretched
+        password, any handed-out `Clone()`, an unlock request's payload, the `K_v` of a request in flight, or loaded
+        ssh keys. It is dumpable only in the locked state with nothing held.
+      - **Unlock requests are handled one at a time, end to end.** The control server serialises op 16 through its
+        own gate, and reads a request's 32-byte payload only on that request's turn.
+        - On its turn, the server reads the length and the 22-byte header (magic, version, op 16).
+        - If the broker is already unlocked, it refuses **before reading the payload**: `The broker is already
+          unlocked.`
+        - Otherwise it calls `PR_SET_DUMPABLE 0`, and only then reads the 32 bytes. Until then they sit only in the
+          kernel's socket buffer.
+      - **A failed proof** zeroes only the candidate (the broker was locked, so nothing else is held), then sets
+        dumpable 1.
+      - **Every other return to locked** (`broker lock`, the timeout, and a failed deferred ssh-key load) does this, in
+        order:
+        1. stop taking new unlocks;
+        2. wait for every in-flight per-request unlock to finish and dispose its clones;
+        3. zero the held password and any candidate;
+        4. unload the ssh keys;
+        5. only then set `PR_SET_DUMPABLE 1`.
       - **Password-free brokers** stay non-dumpable from the start, as today.
-      - **macOS** has no namespace check, so the broker applies `PT_DENY_ATTACH` (which can't be undone) at its first
-        unlock and keeps it.
-      - **The seam:** `internal static Action<bool>? DumpableObserver` sees every transition.
+      - **macOS:** the broker applies `PT_DENY_ATTACH` **before it reads the payload of the first unlock request** and
+        keeps it for the process lifetime. It can't be undone, which is fine there because macOS has no namespace check
+        and so nothing needs to read the process. A seam, `internal static Action? DenyAttachObserver`, pins the moment.
+      - **Seams:** `internal static Action<bool>? DumpableObserver` sees every transition; `PayloadReadObserver` sees
+        each payload read; `SshKeysUnloadedObserver` sees the unload.
     - **The CLI itself** stays dumpable while it holds `K_v`, as today. The docs say so in one line.
 13. **Unlock order** (spec: "asks the agent first", read as: before any **prompt**). `VaultUnlocker` changes:
     - **Signature:** `Unlock(Config config, YubiKeySelection selection, UnlockSources sources)`, with
@@ -363,13 +387,21 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       - `sudo tswap broker unlock` is refused on the client side, before any connect:
         `Run 'tswap broker unlock' as the vault user (<name>), without sudo.`
       - **Client peer checks, applied to the server:**
-        - **`broker unlock`** checks the server's uid (the vault owner's, as in ruling 7), its label, and its user
-          namespace, using ruling 20's pidfd method on the client's connected socket and `PeerIdentity`'s code.
+        - **`broker unlock`** checks the server's uid (the vault owner's, as in ruling 7). **On Linux** it also checks
+          the server's label and user namespace, using ruling 20's pidfd method on the client's connected socket and
+          `PeerIdentity`'s code.
           - The genuine broker is dumpable while locked (ruling 12), so its link is readable.
           - An **unreadable** link is refused, and nothing is sent:
             `The broker is already unlocked or is not the real broker; run 'tswap broker status'.`
-          - A container squatting `control.sock` therefore never receives the stretched password.
-        - **`broker lock` and `broker status`** send no secret, and check the server's uid and label only.
+          - On Linux, a container squatting `control.sock` therefore never receives the stretched password.
+          - **On macOS** the check is the uid only. Anything running as the vault user, including a VM or container
+            that can see the run folder, can capture the password. That is the trust model below, and the reason the
+            never-mount rule is all there is on macOS.
+        - **`broker lock` and `broker status`** send no secret. They check the server's uid, plus its label on Linux.
+        - **A password-free broker:** `broker unlock` refuses on the client side, before connecting, from the vault's
+          config, because this machine's slot has no password flag:
+          `This broker's slot has no vault password; it is never locked.` (Otherwise the non-dumpable password-free
+          broker would produce the unreadable-link message instead.)
         - **The agent's clients** need no namespace check on the server either: they send nothing secret, and they
           verify the answer against `keyCheck` (ruling 9).
     - **Trust model of the control socket.** It is uid-authenticated, plus ruling 20's checks in both directions.
@@ -478,8 +510,9 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       `readlink /proc/<pid>/ns/user` differs from its own `/proc/self/ns/user`.
       - **What the check distinguishes:** rootless Podman runs every rootless container in its own user namespace, or
         in a child of it, never in the host's initial one. That includes `--userns=host`, `nomap` and `keep-id`.
-        Verified here: the host is `user:[4026531837]`, `podman unshare` is `user:[4026533193]`. Rootful containers run
-        as root, which is out of the trust model.
+        Verified here: the host is `user:[4026531837]`, `podman unshare` is `user:[4026533193]`. Rootful containers are
+        out of the trust model because only root can create them, and root is trusted. (Their processes may run as any
+        host uid in the host's namespace, where both checks would pass.)
       - **What it doesn't distinguish:** tswap itself run inside `podman unshare`, or inside a rootless container,
         shares that namespace with the containers and can't tell them apart. So **"never mount the run folder into a
         container" stays the primary documented rule**, and this check is the second wall.
@@ -489,21 +522,21 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
       - For any other peer, an unreadable link (the peer has exited, or `hidepid`) is refused.
       - **Pid reuse.** `SO_PEERCRED` is a snapshot taken at connect time, so re-reading it proves nothing. The checker
         (`PeerIdentity`, used by both servers and by the `broker unlock` client) therefore does this:
-        1. Get the peer's pidfd with `getsockopt(SO_PEERPIDFD = 77)` (Linux ≥ 6.3, which every supported host has).
-        2. Open `/proc/<pid>` as a directory fd.
+        1. Get the peer's pidfd with `getsockopt(SO_PEERPIDFD = 77)` (Linux ≥ 6.3).
+        2. Open `/proc/<pid>` as a directory fd. The pid comes from `SO_PEERCRED`.
         3. Through that fd, read `ns/user` (`readlinkat`) and `status`'s `Uid:` line, which must match the credential's
            uid.
         4. Check the pidfd is still alive: `pidfd_send_signal(pidfd, 0, NULL, 0) == 0` (syscall 424, through
            `LibraryImport` of `syscall`). An alive pidfd means the pid wasn't recycled, so the directory fd is that same
            process. A dead pidfd is refused.
-        - **Without `SO_PEERPIDFD`** (an older kernel, `ENOPROTOOPT`): steps 2 and 3 only. The residual is stated in
-          the docs: winning the race needs a same-uid process in the host's namespace to take the recycled pid, and
-          such a process is already trusted.
+        - **Without `SO_PEERPIDFD`** (a kernel older than 6.3, `ENOPROTOOPT`): steps 2 and 3 only, with the pid from
+          `SO_PEERCRED`. The residual goes into the docs (Task 14): winning the race needs a same-uid process in the
+          host's namespace to take the recycled pid, and such a process is already trusted.
       - **No `/proc` mounted:** the checks can't run, and the message differs per socket.
         - Agent socket: every non-root peer is refused, and the agent says once
           `/proc is not mounted: peers can't be checked, so only root may use the agent.`
         - Control socket (which refuses root anyway): nothing may connect, and `serve` says once
-          `/proc is not mounted: peers can't be checked, so the broker can't be unlocked.`
+          `/proc is not mounted: peers can't be checked, so the broker can't be unlocked, locked or queried.`
     - **SELinux label:** where SELinux is present, it refuses a peer whose `getsockopt(SOL_SOCKET, SO_PEERSEC = 31)`
       label has the type `container_t`, `spc_t` or `container_runtime_t`. `ENOPROTOOPT` or an empty label (no SELinux)
       skips this check.
@@ -667,18 +700,20 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
 
 - [ ] **Step 1: Write the failing tests:**
   - `YubiKeyV1_EncodesExactlyAsBefore`: a golden 74-byte encoding fixed in the test.
-  - `YubiKeyV2_Is75Bytes_FlagsByteLast_RoundTrips`. Decoding refuses flags `0x02` and refuses version 2 with flags 0
-    (`a version 2 blob must require the password`).
+  - `YubiKeyV2_Is75Bytes_FlagsByteLast_RoundTrips`. `Decode` refuses flags `0x02` and `0x03` with the
+    NeedsNewerTswap message, and flags `0x00` with the corrupt message (ruling 3, both pinned).
   - `DeriveV2_DiffersFromV1_AndFromAnotherPassword`. `DeriveV2` with an all-zero stretched password is still not equal
     to `Derive`.
   - `TpmSplit_LegacyBlob_IsNoPassword_PackageUnchanged` and `TpmWrap_ThenSplit_RoundTrips`.
-    `Split` refuses a `TSTP` blob with version 2 or a flags byte without bit 0.
-  - `SeWrap_ThenSplit_RoundTrips`. `Split` refuses a `TSSE` blob whose flags byte lacks bit 0.
+    `Split` refuses a `TSTP` blob with version 2, or flags `0x02` or `0x03`, with the NeedsNewerTswap message, and
+    flags `0x00` with the corrupt message.
+  - `SeWrap_ThenSplit_RoundTrips`, with the same refusals for `TSSE`.
   - `SlotPassword_Classify_TruthTable`, one row each:
-    - `TSYK` v1 → None; `TSYK` v2 flags `0x01` → Password; `TSYK` v2 flags `0x03` → NeedsNewerTswap; `TSYK` v3 →
-      NeedsNewerTswap;
-    - `TSTP` v1 `0x01` → Password; `TSTP` v2 → NeedsNewerTswap; `TSTP` v1 `0x03` → NeedsNewerTswap;
-    - the same three rows for `TSSE`;
+    - `TSYK`: v1 → None; v2 `0x01` → Password; v2 `0x02` → NeedsNewerTswap; v2 `0x03` → NeedsNewerTswap; v2 `0x00` →
+      corrupt (throws); v3 → NeedsNewerTswap;
+    - `TSTP`: v1 `0x01` → Password; v1 `0x02` → NeedsNewerTswap; v1 `0x03` → NeedsNewerTswap; v1 `0x00` → corrupt;
+      v2 → NeedsNewerTswap;
+    - the same five rows for `TSSE`;
     - a legacy TPM blob → None; a legacy Secure Enclave blob → None; a recovery slot → None.
   - **Stripping the flag doesn't weaken a slot (ruling 3):** with a simulated YubiKey, a v2 slot rewritten as a v1
     blob (same serial, challenge and salt) fails to unwrap without the password, with ruling 3's extended "did not
@@ -855,7 +890,8 @@ then, for every slot kind:
 Every machine that opens this vault's password slots needs tswap 0.2.0 or newer.
 ```
 and the prompt `Add a vault password? (yes/no, default no): `. `slots` marks every machine slot's PROTECTION with
-`, vault password` or `, no password`. When at least one slot has the password, `slots` adds this line after the
+`, vault password`, `, no password` or `needs a newer tswap` (ruling 3; test `Slots_ShowsNeedsNewerTswap`). When at
+least one slot has the password, `slots` adds this line after the
 table:
 `<n> slot(s) open without the password: keep them away from shared machines.`
 
@@ -1133,9 +1169,22 @@ Pinned behaviour:
   - `Unlock_WrongPassword_StaysLocked_SaysWrongPassword`.
   - **E2E on Linux, real binary:** `Unlock_ThenLock_ThenLockedAgain`. This exercises the real `/proc` permissions,
     which the seams can't, and would have caught the non-dumpable deadlock.
-  - `DumpableTransitions`: through `DumpableObserver`, the order is locked → dumpable; non-dumpable before the payload
-    read; zeroed and keys unloaded before dumpable again at lock and at the timeout. A password-free broker is never
-    dumpable.
+  - `DumpableTransitions`: one row per leg, through `DumpableObserver`, `PayloadReadObserver`, `BeforeFreeObserver`
+    and `SshKeysUnloadedObserver`:
+    - locked → dumpable;
+    - unlock: non-dumpable before the payload read;
+    - `broker lock`, the timeout, and a failed deferred ssh-key load: drained, zeroed and keys unloaded before
+      dumpable again;
+    - a failed proof: the candidate zeroed before dumpable again;
+    - a password-free broker: never dumpable.
+  - `LockWithUnlockInFlight_DrainsBeforeDumpable` and `TimeoutWithUnlockInFlight_DrainsBeforeDumpable`: a request's
+    unlock is blocked on a gate when the lock or timeout fires. Dumpable 1 comes only after that request has disposed
+    its clone.
+  - `TwoConcurrentUnlocks_OneFails`: the second payload is read only after the first request has finished. Whichever
+    order they run in, the outcome is consistent: a wrong password arriving after a correct one is refused as `already
+    unlocked` and leaves the held password intact.
+  - `UnlockWhileUnlocked_RefusedBeforePayloadRead`.
+  - `MacOs_DenyAttachBeforeFirstPayloadRead` (seam order; runs on the macOS CI leg).
   - `UnlockClient_UnreadableServerLink_RefusesNothingSent` (seam returning `EACCES`), with ruling 14's text.
   - `LockAndStatus_NoNamespaceCheck_UidAndLabelOnly`.
   - `ControlSocket_RefusesUidZeroAndOthers`.
@@ -1147,7 +1196,8 @@ Pinned behaviour:
     (ruling 14).
   - `BrokerServe_CreatesTheRunFolder_WhenMissing`: the control server starts with no run folder; the folder appears
     0700, owned by the broker's uid, and `broker unlock` reaches it (ruling 6).
-  - `Unlock_SshKeyCantLoad_StaysLocked_NamesTheKey_NotCountedByTheGuard`.
+  - `Unlock_SshKeyCantLoad_StaysLocked_NamesTheKey_NotCountedByTheGuard`. After fixing the key, a following
+    `broker unlock` succeeds, so the failure left the broker dumpable and unlockable.
   - `BrokerServe_AsRoot_Refuses_LeavesNothing`: no run folder, subfolder, socket or lock file (ruling 6).
   - `SudoBrokerUnlock_RefusedBeforeConnect` (ruling 14's text).
   - `ControlSocket_FolderIs0700`.
@@ -1155,7 +1205,8 @@ Pinned behaviour:
   - `Serve_NeverAsksTheAgent`: an agent seam that fails if called (ruling 13).
   - `SshKeys_LoadAfterFirstUnlock`.
   - `PasswordFreeBroker_Unchanged`: the existing broker suites pass untouched, and `broker unlock` on such a broker says
-    `This broker's slot has no vault password; it is never locked.`
+    `This broker's slot has no vault password; it is never locked.` without connecting (the socket seam records no
+    connection).
   - `Cil_DeclaresControlTypeAndNoContainerRule`: a text test on the CIL file. It finds the type, the five named
     transitions (`user_runtime_t`, `user_tmp_t`, `cache_home_t`, `user_home_t`, `data_home_t`), the two explicit
     allows of ruling 14, and no `allow container_t tswap_broker_control_t`.
@@ -1228,6 +1279,8 @@ Pinned behaviour:
     - **Containers:** the agent's run folder and `~/.cache` must never be mounted into a container. That is the
       primary rule. Without SELinux the user-namespace check is the second wall; it doesn't detect tswap run inside the
       containers' namespace (`podman unshare`). On macOS the rule is all there is (ruling 20).
+    - **Peer checks on kernels older than 6.3** (no `SO_PEERPIDFD`): the pid-reuse residual from ruling 20, stated as
+      the ruling states it.
     - **Classic vaults:** they can't carry a password; migrate first (ruling 3).
     - The Files and Environment variables sections get `vault-password` and `TSWAP_AGENT_SOCK`.
   - `MULTI_MACHINE_KEYING.md`:
