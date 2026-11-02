@@ -196,9 +196,87 @@ public sealed class InitRecordVaultTests : IDisposable
 
         var (exit, _, err) = _m.Run("yes\n", "init");
 
-        Assert.NotEqual(0, exit);
+        Assert.Equal(1, exit);
         Assert.Contains("shared record-store vault", err);
         Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
+    }
+
+    /// <summary>A snapshot of every file under <paramref name="folder"/> (path, bytes).</summary>
+    private static Dictionary<string, string> Snapshot(string folder) =>
+        Directory.GetFiles(folder, "*", SearchOption.AllDirectories).ToDictionary(f => f, f => Convert.ToHexString(File.ReadAllBytes(f)));
+
+    /// <summary>
+    /// Fix round 2 (GLM R2 / MiMo 2): the record-vault row is keyed on the config, not on the default
+    /// folder. A vault made with --folder elsewhere is refused before any prompt, with empty stdin and
+    /// with "yes": config.json, its vault folder and the default folder all stay as they were.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("yes\n")]
+    public void Init_OnAFolderRecordVault_RefusesBeforeAnyPrompt(string stdin)
+    {
+        _m.Ok("", "init", "--folder", _outside);
+        var config = File.ReadAllText(_m.ConfigPath);
+        var vault = Snapshot(_outside);
+
+        var (exit, stdout, err) = _m.Run(stdin, "init");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("shared record-store vault", err);
+        Assert.DoesNotContain("Reinitialize?", stdout);
+        Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
+        Assert.Equal(vault, Snapshot(_outside));
+        Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
+        Assert.Empty(_m.Backups);
+    }
+
+    [Fact]
+    public void Init_OnAVaultDirJoinedRecordVault_RefusesBeforeAnyPrompt()
+    {
+        var home = new FleetMachine("init-record-home", _keys);
+        try
+        {
+            home.Ok("", "init", "--folder", _outside);
+            _m.Ok("", "init", "--vault-dir", _outside);
+            var config = File.ReadAllText(_m.ConfigPath);
+            var vault = Snapshot(_outside);
+
+            var (exit, stdout, err) = _m.Run("yes\n", "init");
+
+            Assert.Equal(1, exit);
+            Assert.Contains("shared record-store vault", err);
+            Assert.DoesNotContain("Reinitialize?", stdout);
+            Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
+            Assert.Equal(vault, Snapshot(_outside));
+            Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
+        }
+        finally
+        {
+            home.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// A config.json that names a vault folder but has lost its Store field is still a record vault's
+    /// config by the ruling ("Store == records or a configured VaultDir"): refused, never reinitialised.
+    /// </summary>
+    [Fact]
+    public void Init_OnAConfigWithAVaultDirButNoStore_Refuses()
+    {
+        _m.Ok("", "init", "--folder", _outside);
+        File.WriteAllText(_m.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            _m.Config with { Store = null }, TswapJsonContext.Default.Config));
+        var config = File.ReadAllText(_m.ConfigPath);
+        var vault = Snapshot(_outside);
+
+        var (exit, stdout, err) = _m.Run("yes\n", "init");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(_outside, err);
+        Assert.DoesNotContain("Reinitialize?", stdout);
+        Assert.Equal(config, File.ReadAllText(_m.ConfigPath));
+        Assert.Equal(vault, Snapshot(_outside));
+        Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
     }
 
     [Fact]

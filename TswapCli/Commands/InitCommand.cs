@@ -66,9 +66,12 @@ public sealed class InitCommand : ICliCommand
 
         // A record-store machine's config points at a shared vault folder; a new init here would
         // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
-        if (ctx.Storage is RecordVaultStore shared)
+        // Keyed on the config (fix round 2): a record store's config (Store "records"), or any config.json
+        // that names a vault folder (VaultDir), wherever that folder is, is refused before any prompt.
+        var recordVaultDir = ctx.Storage is RecordVaultStore shared ? shared.LoadConfig().VaultDir : ConfiguredVaultDir(ctx.Storage);
+        if (recordVaultDir is not null)
             throw new TswapException(
-                $"This machine's {shared.ConfigFile} belongs to a shared record-store vault ({shared.LoadConfig().VaultDir}). To set up " +
+                $"This machine's {(ctx.Storage as IFileVaultStore)?.ConfigFile ?? "config.json"} belongs to a shared record-store vault ({recordVaultDir}). To set up " +
                 "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
 
         var fileStore = ctx.Storage as IFileVaultStore
@@ -104,6 +107,24 @@ public sealed class InitCommand : ICliCommand
             return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery);
 
         return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery);
+    }
+
+    /// <summary>
+    /// The vault folder a classic store's config.json names (one that has lost its Store field), or null:
+    /// such a config still belongs to a record vault, so init must not reinitialise over it.
+    /// </summary>
+    private static string? ConfiguredVaultDir(IVaultStore store)
+    {
+        if (store is not IFileVaultStore fileStore || !fileStore.Owner.FileExists(fileStore.ConfigFile))
+            return null;
+        try
+        {
+            return store.LoadConfig().VaultDir;
+        }
+        catch (Exception ex) when (ex is TswapException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null; // unreadable: handled by the steps below as before
+        }
     }
 
     /// <summary>Takes <c>--folder &lt;dir&gt;</c> out of <paramref name="args"/> (at most once, with a value).</summary>
