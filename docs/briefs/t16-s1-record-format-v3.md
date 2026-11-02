@@ -37,8 +37,8 @@ and temp folders only.
 3. **When this build writes v3:** when the vault folder holds the marker file `record-format` whose content, after
    trimming a BOM and whitespace (CR/LF included), is `3`, **or** when this command has read any v3 record from the
    folder (a deleted marker can't silently downgrade a reindexed vault). Otherwise v2. A marker holding a number above 3
-   refuses every write (`written by a newer tswap … upgrade`); an empty or unparsable marker is a warning with a repair
-   hint and counts as absent (a sync artefact must not block all writes). Conflicted copies of the marker are ignored.
+   refuses every write (`written by a newer tswap … upgrade`); any other content (empty, unparsable, or a number
+   below 3) is a warning with a repair hint and counts as absent (a sync artefact must not block all writes). Conflicted copies of the marker are ignored.
    The marker is written through the store's file layer (owner, mode, atomic). New vaults (`init`, `migrate
    --to-records`) are created with the marker and v3 records from the start (`migrate` writes the marker into its temp
    folder before the read-back comparison, so the rename carries it).
@@ -65,20 +65,31 @@ and temp folders only.
 9. **`vault reindex` skips records already v3 with the current variant set** (nothing to change), and writes the marker
    only after every record succeeded, so "marker present" means the reindex finished once.
 10. **`K_plan` is not derived in this stage**; its label `tswap-extract-plan-v1` is reserved for Stage 4.
-11. **Two sections or fingerprint sets for one version stamp** are resolved the same way on every path:
-   - **Same plaintext, different ciphertext** (ruling 1's concurrent conversion): keep the section whose bytes sort
-     first (ordinal), so every machine converges on the same file without another write war. A full merge knows the
-     plaintexts; the metadata-only path, which has none, treats two sections as the same plaintext when their
-     fingerprint sets are equal at the same variant-set version (the plain variant's 128-bit HMAC covers the whole
-     value) and applies the same choice.
-   - **Different plaintext** (only damage or a clock rollback re-minting a stamp): a full merge keeps today's content
-     tie-break (`RecordMerge.CompareContent`), and the version's section and fingerprints come only from an input whose
-     plaintext for that version equals the winner's. The metadata-only path can't tell, so a same-stamp difference in
-     fingerprints (or sections without fingerprints to compare) makes that record unreadable there (fail closed).
-   - **Same plaintext but different fingerprint sets at the same variant-set version** (impossible without a bug, since
-     fingerprints are a function of the value and `K_v`): `RecordConflictException : TswapException`.
-   The store catches `RecordConflictException` **per record** and treats that record as unreadable (warned, never merged,
-   never overwritten), as it does an undecryptable file. It never aborts the load.
+11. **Merging copies of one record (sync conflicts, `vault merge`) gives the same result in every order.** Every rule
+   is either a total order over the data or an "all inputs must agree" check, never a pairwise discard:
+   - **Validation first, per input:** a full load recomputes each decoded input's fingerprint sets from its plaintext
+     (for variant-set versions this build knows) and treats a mismatch as that record unreadable. So, on the full path,
+     two inputs with the same plaintext always carry the same fingerprints for a known variant set.
+   - **Winner:** as today (version stamp, then `RecordMerge.CompareContent` for the damage case of one stamp with
+     different values). A version's section and fingerprints come only from inputs whose plaintext for that version
+     equals the winner's.
+   - **Sections, same plaintext, different ciphertext** (ruling 1's concurrent conversion): keep the section whose
+     bytes sort first (ordinal). A total order, so every machine converges on the same file.
+   - **Fingerprint sets:** the highest variant-set version among the contributing inputs (null merges with anything).
+   - **Extensions** (ruling 6): the whole list of the input with the largest write stamp (ties: ordinal bytes), i.e.
+     last metadata write wins. This build can't know a future extension's own merge rules; a build that adds one defines
+     them inside it.
+   - **The metadata-only path** (no plaintext) folds all copies of a record at once, not pairwise: for one version
+     stamp, the copies must agree on tombstone-ness, name, created time, previous-version stamp and, per variant-set
+     version, fingerprint set; any disagreement makes that record unreadable there (fail closed). Burns merge as today;
+     sections and extensions follow the rules above (equal fingerprints stand in for equal plaintext).
+   - `RecordConflictException : TswapException` remains only as an internal assertion (unreachable after validation).
+   - The store handles a record it can't merge **per record** in every caller of `RecordMerge.Merge`: `LoadSecrets`,
+     `LoadRecordStates`, `ReadSecretValue`, `LoadMetadata` and `MergeRecords` (`vault merge` skips that record with a
+     warning and merges the rest). Such a record is unreadable (`UnreadableReason` set, `State` null, `MainBytes` kept
+     for the stale-write guard): warned, never merged, never overwritten. It never aborts the load. **Trap:**
+     `FoldConflictCopies`' existing `catch (… TswapException …)` around a copy's decode reports "this copy can't be used"
+     and keeps the record readable; a merge conflict must not go through that path.
 12. **A record whose main file or any conflicted copy is format 2 counts as "not fingerprinted"** in the metadata-only
    load, without decrypting the v2 file (its version stamp is inside its payload, so the metadata path can't tell whether
    it is the newer version).
@@ -313,30 +324,28 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
 
 **Interfaces:**
 - Consumes: Task 4's `SecretRecord` fields.
-- Produces: `public sealed class RecordConflictException : TswapException` and `RecordMerge.Merge` / `Normalize` with
-  ruling 11's rules: the winner is chosen as today (version stamp, then `CompareContent`) and keeps its versions; for
-  each retained version, only inputs whose plaintext for that version equals the winner's contribute; among them, the
-  fingerprint set with the higher `VariantSetVersion` (a null set merges with anything; equal versions with different
-  entries throw `RecordConflictException`, message naming the record file, never value bytes), and the section whose
-  bytes sort first; sections are restricted to the winner's retained versions; `Extensions` are the winner's, plus
-  entries of the other input whose `Type` the winner lacks (sorted by type). Merge stays commutative, associative and
-  idempotent on every input that doesn't throw.
+- Produces: `public sealed class RecordConflictException : TswapException` (an assertion, see ruling 11), a per-input
+  fingerprint validation the store's full loads call (name and shape are the implementer's), and `RecordMerge.Merge` /
+  `Normalize` with ruling 11's rules. Merge is commutative, associative and idempotent on every input.
 
 - [ ] **Step 1: Write the failing tests:** `Merge_KeepsFingerprintsOfTheRetainedVersions`,
   `Merge_PrefersTheNewerVariantSet`, `Merge_UnionsSealedSections_DropsUnretained`,
   `Merge_EqualPlaintextDifferentSections_KeepsTheOrdinallySmaller` (in both argument orders),
-  `Merge_EqualVariantSetDifferentEntries_ThrowsRecordConflict`,
-  `Merge_SameStampDifferentValues_KeepsTodaysTieBreak_AndTheWinnersSections` (the damage case: no throw, the content
-  winner's section and fingerprints survive, the loser's are dropped),
+  `Merge_SameStampDifferentValues_KeepsTodaysTieBreak_AndTheWinnersSections` (the damage case: the content winner's
+  section and fingerprints survive, the loser's are dropped),
+  `Merge_ExtensionsFollowTheLargestWriteStamp`,
+  `Validate_TamperedFingerprintSet_IsRejected` (a decoded input whose stored set doesn't match its plaintext),
   `Merge_ConcurrentConversion_ConvergesOnOneSection` (encode the same v2 record as v3 on two "machines" with different
   write stamps: different sections; decode both; merge either way keeps the same one), and a property test over random
-  pairs/triples, including same-stamp inputs, for commutativity, associativity and idempotence (inputs that throw must
-  throw in every order).
+  pairs and triples for commutativity, associativity and idempotence whose generator deliberately produces: same-stamp
+  different values, equal plaintext with different sections, null and higher-version fingerprint sets, and colliding
+  extension types with different data under different write stamps.
 - [ ] **Step 2:** run them; expect failures.
 - [ ] **Step 3:** implement.
 - [ ] **Step 4:** run them plus `RecordMergeTests`, `RecordConflictTests`: all pass.
 - [ ] **Step 5:** commit (`T16-S1 task 5: merge rules for fingerprints and value sections`). Break-it-once: keep the
   first input's section on a mismatch; `Merge_EqualPlaintextDifferentSections_KeepsTheOrdinallySmaller` must fail.
+  Task 4's commit lists the removal of Task 3's literal-`3` case (AGENTS.md test accounting).
 
 ### Task 6: the store writes v3, preserves sections, and offers a metadata-only load
 
@@ -360,12 +369,12 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
     with a retained version lacking fingerprints is counted there too; `OlderVariantSet` counts records whose sets are
     below `SecretVariants.CurrentSetVersion`; tombstones are listed but never counted as missing. Conflict copies fold in
     by the same merge rules on metadata (winner by version stamp, burns by `CanonicalBurns`, fingerprints and extensions
-    as Task 5); same-stamp sections and fingerprints resolve by ruling 11 (equal fingerprints: the
-    ordinally smaller section; different fingerprints, or none to compare: that record unreadable here), and a record whose main file **or any conflicted copy** is v2 is counted in `NotFingerprinted` without
+    as Task 5); copies fold all at once by ruling 11's metadata-path rule (the loader reads the
+    value-section bytes from the framing without decrypting them), and a record whose main file **or any conflicted copy** is v2 is counted in `NotFingerprinted` without
     decrypting the v2 file (ruling 12). `VaultMetadata.IsFullyFingerprinted` (a property:
     `NotFingerprinted == 0 && Unreadable.Count == 0`) is the one definition Stages 2 and 3 use.
-  - Full loads (`LoadSecrets`, `LoadRecordStates`, `ReadSecretValue`) catch `RecordConflictException` per record and
-    treat that record as unreadable (ruling 11).
+  - Full loads validate each input's fingerprints and every `RecordMerge.Merge` caller handles an unmergeable record
+    per record (ruling 11, including `MergeRecords`).
   - `internal Action<string, Stamp>? ValueDecrypted { get; set; }` — test seam, called for every value section
     decrypted (`RecordDecrypted` keeps its meaning: a record's metadata/payload decrypted).
   - `ReadSecretValue(string name, byte[] key, bool previous = false)` decrypts the metadata section and the one value
@@ -377,7 +386,8 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
     `create`).
   - `AnyV3RecordRead_WritesV3EvenWithoutMarker` (ruling 3).
   - `MarkerNewerVersion_RefusesWrites` (`"4"` → `TswapException` naming "newer tswap"; nothing written),
-    `MarkerWithCrlfOrBom_IsV3` (`"﻿3\r\n"`), `MarkerEmptyOrGarbage_WarnsAndCountsAsAbsent`.
+    `MarkerWithCrlfOrBom_IsV3` (a UTF-8 BOM, `3`, CR LF), `MarkerEmptyGarbageOrBelow3_WarnsAndCountsAsAbsent` (`""`, `"x"`,
+    `"2"`), `MarkerConflictCopy_IsIgnored`.
   - `Burn_CopiesValueSectionsByteForByte` (the named invariant: value-section bytes identical before and after `burn`,
     and after a `vault merge` that changes only burns).
   - `Rotate_KeepsPreviousSectionBytes_AddsNewSection`.
@@ -392,12 +402,14 @@ version, is a `TswapException` (fail closed); duplicate stamps in the version li
     fingerprints equal those of the full load; a record with a v2 copy is in `NotFingerprinted`; a same-stamp
     difference is in `Unreadable`).
   - `LoadMetadata_V2ConflictCopyOfAV3Record_IsNotFingerprinted_WithoutDecryptingIt` (ruling 12).
-  - `FullLoad_RecordConflict_MarksOnlyThatRecordUnreadable` (a damaged conflicted copy with equal plaintext and a
-    different fingerprint set at the same variant-set version: the load succeeds, other secrets work, that record is
-    unreadable and its files are untouched).
+  - `FullLoad_TamperedFingerprints_MarksOnlyThatRecordUnreadable` (a conflicted copy whose fingerprint set doesn't
+    match its plaintext: the load succeeds, other secrets work, that record is unreadable and its files are untouched).
+  - `MergeRecords_UnmergeableRecord_SkipsIt_OthersStillMerge`.
+  - `LoadMetadata_CopiesDisagreeingOnName_IsUnreadable_InEveryOrder` (three copies, all six fold orders).
   - `LoadMetadata_ConcurrentConversionCopies_PickTheSameSectionAsTheFullLoad`.
   - `ReadSecretValue_DecryptsOnlyTheRequestedValueSection` (current, and `previous: true`).
-  - `RawFileBytes_HoldNoFingerprintMaterial` (review focus 6): for a known value with all four variants, the record
+  - `RawFileBytes_HoldNoFingerprintMaterial` (review focus 6): for a fixed value of 24 random characters with all
+    four variants (long enough that a chance match in ciphertext is negligible), the record
     file's bytes contain none of the variant texts, none of the 16-byte HMACs and none of the 8-byte rolling hashes
     (little- and big-endian), and no 32-byte window equal to the metadata plaintext's fingerprint block.
 - [ ] **Step 2:** run them; expect failures.
