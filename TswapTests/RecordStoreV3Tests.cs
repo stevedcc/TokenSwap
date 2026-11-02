@@ -41,7 +41,7 @@ public sealed class RecordStoreV3Tests : IDisposable
         System.IO.File.WriteAllBytes(path, SecretRecordCodec.Encode(record, key, format));
 
     private Dictionary<string, string> RecordsSnapshot() =>
-        Directory.GetFiles(_m.RecordsDir).ToDictionary(Path.GetFileName, f => Convert.ToHexString(System.IO.File.ReadAllBytes(f)))!;
+        Directory.GetFiles(_m.RecordsDir).ToDictionary(f => Path.GetFileName(f), f => Convert.ToHexString(System.IO.File.ReadAllBytes(f)));
 
     [Fact]
     public void NoMarker_WritesV2()

@@ -16,17 +16,24 @@ namespace TswapCli.Commands;
 /// (<see cref="Config.ApprovedSlots"/>), otherwise confirmed on a terminal or with <c>--yes</c>;
 /// without either the whole merge is refused before anything is written.
 /// </para>
+/// <para>
+/// Brief T16-S1: <c>vault reindex</c> (sudo, because it decrypts every value once) rewrites every
+/// record in record format 3 with fingerprints and marks the vault folder
+/// (<see cref="RecordVaultStore.Reindex"/>). It prints counts only, never names or values.
+/// </para>
 /// </summary>
 public sealed class VaultCommand : ICliCommand
 {
     public string Name => "vault";
-    public string HelpUsage => "vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin)";
-    public string Description => "Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules";
+    public string HelpUsage => "vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex";
+    public string Description => "Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules; reindex: rewrite every record in record format 3 with fingerprints";
     public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        var usage = $"sudo {ctx.Prefix} vault merge <other-vault-dir> [--yes] [{SlotCommand.RecoveryKeyFlag}]";
+        var usage = $"sudo {ctx.Prefix} vault merge <other-vault-dir> [--yes] [{SlotCommand.RecoveryKeyFlag}] | sudo {ctx.Prefix} vault reindex";
+        if (args is ["reindex"])
+            return Reindex(ctx);
         var (rest, withRecoveryKey) = SlotCommand.SplitRecoveryKeyFlag(args);
         var yes = rest.Contains("--yes");
         var positional = rest.Where(a => a != "--yes").ToArray();
@@ -113,13 +120,49 @@ public sealed class VaultCommand : ICliCommand
                 });
             });
 
-            if (toAdd.Count == 0 && written == 0)
+            // Brief T16-S1: merging a reindexed copy carries its record-format marker over (records first,
+            // the marker last), so this folder keeps writing format 3. A marker here is never replaced.
+            var markerCopied = false;
+            if (other.ReadFormatMarker(c.Error) == KeyringFormat.RecordFormatVersion && store.ReadFormatMarker(c.Error) is null)
+            {
+                store.WriteFormatMarker();
+                markerCopied = true;
+                c.Out.WriteLine($"Copied the other copy's {RecordVaultStore.RecordFormatMarkerFileName} marker: this vault folder now writes record format {KeyringFormat.RecordFormatVersion}.");
+            }
+
+            if (toAdd.Count == 0 && written == 0 && !markerCopied)
             {
                 c.Out.WriteLine($"Nothing to merge: this vault already has everything in {otherDir}.");
                 return 0;
             }
             c.Out.WriteLine($"\n✓ Merged {otherDir} into this vault: {written} record(s) written, {toAdd.Count} slot(s) added.");
             c.Out.WriteLine("The other copy was only read. To bring it up to date too, run this merge the other way round there.");
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
+    private static int Reindex(CommandContext ctx)
+    {
+        if (ctx.Storage is not RecordVaultStore store)
+            throw new TswapException(
+                $"'vault reindex' works on record-store vaults only. Convert this vault first: sudo {ctx.Prefix} migrate --to-records");
+        ctx.RequireSudo("vault reindex");
+        var config = store.LoadConfig();
+        var key = ctx.Unlock(config);
+        try
+        {
+            var result = store.Reindex(key);
+            var c = ctx.Console;
+            c.Out.WriteLine(
+                $"✓ Reindexed: {result.Rewritten} record(s) rewritten in record format {KeyringFormat.RecordFormatVersion} with fingerprints, " +
+                $"{result.AlreadyCurrent} already current ({result.Tombstones} tombstone(s) among them all).");
+            c.Out.WriteLine(
+                $"The vault folder is marked {RecordVaultStore.RecordFormatMarkerFileName} {KeyringFormat.RecordFormatVersion}: every machine " +
+                "sharing it now writes that format. tswap older than 0.2 can't read the rewritten records until it is upgraded.");
             return 0;
         }
         finally

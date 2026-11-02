@@ -129,6 +129,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </summary>
     internal Action<string, Stamp>? ValueDecrypted { get; set; }
 
+    /// <summary>Test seam (brief T16-S1): called after each record a write writes (the reindex crash test).</summary>
+    internal Action? AfterRecordWritten { get; set; }
+
     /// <summary>Test seam (brief T16-S1): the value sections <see cref="LoadMetadata"/> chose, by record file name.</summary>
     internal IReadOnlyDictionary<string, IReadOnlyDictionary<Stamp, byte[]>>? MetadataSections { get; private set; }
 
@@ -772,6 +775,91 @@ public sealed class RecordVaultStore : IFileVaultStore
             "was reindexed, write 3 into it; otherwise delete it.");
     }
 
+    /// <summary>
+    /// Ruling 3: the record format the vault folder's marker names (3, or a newer one), or null when
+    /// it is absent or not understood (warned about on <paramref name="warnings"/>). Reads only.
+    /// </summary>
+    public int? ReadFormatMarker(TextWriter? warnings = null)
+    {
+        ReadMarker(warnings ?? _warnings);
+        return _markerFormat;
+    }
+
+    /// <summary>
+    /// Ruling 3: writes the vault folder's marker (<c>3</c>) through the file layer (as the folder's
+    /// owner, mode 0600, atomically and durably). From then on every machine sharing the folder
+    /// writes format 3. <c>vault reindex</c> writes it after every record succeeded; <c>init</c> and
+    /// <c>migrate --to-records</c> create new vaults with it; <c>vault merge</c> copies it from a
+    /// reindexed copy.
+    /// </summary>
+    public void WriteFormatMarker()
+    {
+        TightenModes();
+        _owner.CreateDirectory(VaultDir);
+        _owner.WriteDurable(RecordFormatMarkerFile, Encoding.UTF8.GetBytes($"{KeyringFormat.RecordFormatVersion}\n"));
+        _markerFormat = KeyringFormat.RecordFormatVersion;
+    }
+
+    /// <summary>
+    /// Brief T16-S1 (<c>sudo tswap vault reindex</c>): rewrites every record that isn't already
+    /// current as format 3 with fingerprints, each with a new write stamp, so it merges like any other
+    /// write; tombstones become format 3 metadata-only records. A record is current (ruling 9) when its
+    /// main file is format 3, it has no conflicted copies, its retained values carry fingerprint sets of
+    /// this build's variant-set version (or newer), and its merged state and sections equal the main
+    /// file's: anything else is rewritten, which also folds a lingering format 2 copy and converges two
+    /// machines' sections. Value sections are copied where they exist; a value read from format 2 is
+    /// sealed now. Refuses before writing anything when a record can't be read. The marker is written
+    /// last, so "marker present" means a reindex finished once; a run interrupted midway is finished by
+    /// running it again (the records already rewritten are current by then).
+    /// </summary>
+    public ReindexResult Reindex(byte[] vaultKey)
+    {
+        var loaded = LoadRecords(vaultKey, _warnings);
+        if (_markerFormat > KeyringFormat.RecordFormatVersion)
+            throw NewerFormatMarker();
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).Order(StringComparer.Ordinal).ToList();
+        if (unreadable.Count > 0)
+            throw new TswapException(
+                $"Refusing to reindex: {unreadable.Count} record(s) can't be read ({string.Join(", ", unreadable)}). Restore each from a " +
+                "backup or another copy, wait for the sync to finish, or delete it, then run the reindex again. Nothing was written.");
+
+        List<(string FileName, SecretRecord State)> writes = [];
+        int alreadyCurrent = 0, tombstones = 0;
+        foreach (var record in loaded.Values.OrderBy(r => r.FileName, StringComparer.Ordinal))
+        {
+            if (record.State is not { } state)
+                continue; // no main file and no usable copy: nothing to rewrite
+            if (state.Type == RecordType.Tombstone)
+                tombstones++;
+            if (IsCurrent(record))
+            {
+                alreadyCurrent++;
+                continue;
+            }
+            writes.Add((record.FileName, state));
+        }
+        WriteRecords(writes, vaultKey, loaded, reindex: true);
+        if (_markerFormat != KeyringFormat.RecordFormatVersion)
+            WriteFormatMarker();
+        return new ReindexResult(writes.Count, alreadyCurrent, tombstones);
+    }
+
+    /// <summary>Ruling 9: a record <see cref="Reindex"/> leaves as it is.</summary>
+    private static bool IsCurrent(LoadedRecord record)
+    {
+        if (record.FoldedCopies is { Count: > 0 } || record.MainBytes is null || record.MainState is not { } main || record.State is not { } state)
+            return false;
+        if (SecretRecordCodec.FormatVersionOf(record.MainBytes) != KeyringFormat.RecordFormatVersion)
+            return false;
+        if (!state.SameState(main) || !SameSections(state.Sealed, main.Sealed))
+            return false;
+        if (state.Type == RecordType.Tombstone)
+            return true;
+        return CurrentSet(state.Fingerprints) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints));
+
+        static bool CurrentSet(FingerprintSet? set) => set is not null && set.VariantSetVersion >= SecretVariants.CurrentSetVersion;
+    }
+
     private TswapException NewerFormatMarker() => new(
         $"This vault folder was written by a newer tswap: its {RecordFormatMarkerFileName} marker says record format " +
         $"{_markerFormat}, and this build writes formats {KeyringFormat.RecordFormatVersionV2} and {KeyringFormat.RecordFormatVersion} " +
@@ -1149,7 +1237,11 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// loaded first, and any change refuses the whole save before anything is written (decision 6).
     /// Each record gets its own write stamp; <c>LastHlc</c> is saved afterwards.
     /// </summary>
-    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded)
+    /// <param name="reindex">
+    /// <c>vault reindex</c>: format 3 regardless of the marker, and fingerprint sets of an older
+    /// variant-set version are recomputed.
+    /// </param>
+    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded, bool reindex = false)
     {
         if (writes.Count == 0)
             return;
@@ -1163,7 +1255,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         _owner.CreateDirectory(VaultDir);
         _owner.CreateDirectory(recordsDir);
         var origin = OriginId();
-        using var fingerprintKeys = WritesV3 ? FingerprintKeys.Derive(key) : null;
+        using var fingerprintKeys = WritesV3 || reindex ? FingerprintKeys.Derive(key) : null;
         foreach (var (fileName, state) in writes)
         {
             var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
@@ -1172,7 +1264,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             byte[] bytes;
             if (fingerprintKeys is not null)
             {
-                written = PrepareV3(written, fingerprintKeys, recomputeOlderSets: false);
+                written = PrepareV3(written, fingerprintKeys, recomputeOlderSets: reindex);
                 bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersion);
                 written = written with { Sealed = written.Type == RecordType.Tombstone ? null : SecretRecordCodec.SectionsOf(bytes, written) };
             }
@@ -1190,6 +1282,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             if (loaded.TryGetValue(fileName, out var before) && before.FoldedCopies is { Count: > 0 } copies)
                 RemoveRedundantCopies(copies);
             loaded[fileName] = new LoadedRecord(fileName, bytes, written, null, MainState: written, Inputs: [written]);
+            AfterRecordWritten?.Invoke();
         }
 
         var machine = MachineConfig with { LastHlc = _highestSeen.ToString() };
@@ -1311,3 +1404,10 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>A new random origin id (base64) for a machine config (decision 1).</summary>
     public static string NewOriginId() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyringFormat.OriginIdSize));
 }
+
+/// <summary>
+/// Brief T16-S1: what <see cref="RecordVaultStore.Reindex"/> did. <paramref name="Rewritten"/> and
+/// <paramref name="AlreadyCurrent"/> together count every record; <paramref name="Tombstones"/> says
+/// how many of them are deletes (in either group).
+/// </summary>
+public sealed record ReindexResult(int Rewritten, int AlreadyCurrent, int Tombstones);
