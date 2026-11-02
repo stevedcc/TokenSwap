@@ -670,12 +670,10 @@ public static class SecretRecordCodec
     }
 
     /// <summary>
-    /// Frames a format 3 file (every length prefix checked against what remains, the file consumed
-    /// exactly), decrypts and parses its metadata section, and checks the framing against it:
-    /// <c>valueSectionCount</c> must equal the metadata's version count. Returns the metadata and
-    /// the still-encrypted value sections in version order.
+    /// Format 3 framing only, nothing decrypted: every length prefix checked against what remains and
+    /// the file consumed exactly (a section no version could list is trailing bytes).
     /// </summary>
-    private static (RecordMetadata Metadata, List<byte[]> Sections) ReadV3Metadata(byte[] bytes, byte[] vaultKey)
+    private static (byte[] RecordId, Stamp Write, byte Count, byte[] MetadataSection, List<byte[]> Sections) FrameV3(byte[] bytes)
     {
         if (bytes.Length < V3HeaderSize + 4)
             throw new TswapException("Malformed record: shorter than the envelope header");
@@ -708,6 +706,36 @@ public static class SecretRecordCodec
         }
         if (offset != bytes.Length)
             throw new TswapException("Malformed record: trailing bytes after the last value section (a section no version lists)");
+        return (recordId, write, count, metadataSection, sections);
+    }
+
+    /// <summary>
+    /// The value sections of a format 3 file this process just encoded from <paramref name="written"/>,
+    /// by version stamp, read from the framing alone (nothing is decrypted): the store keeps them so a
+    /// second write in the same command copies them instead of encrypting again.
+    /// </summary>
+    internal static IReadOnlyDictionary<Stamp, byte[]> SectionsOf(byte[] bytes, SecretRecord written)
+    {
+        var sections = FrameV3(bytes).Sections;
+        Dictionary<Stamp, byte[]> byVersion = [];
+        if (written.Type != RecordType.Tombstone)
+        {
+            byVersion[written.Version] = sections[0];
+            if (written.Previous is { } previous)
+                byVersion[previous.Version] = sections[1];
+        }
+        return byVersion;
+    }
+
+    /// <summary>
+    /// Frames a format 3 file (<see cref="FrameV3"/>), decrypts and parses its metadata section, and
+    /// checks the framing against it:
+    /// <c>valueSectionCount</c> must equal the metadata's version count. Returns the metadata and
+    /// the still-encrypted value sections in version order.
+    /// </summary>
+    private static (RecordMetadata Metadata, List<byte[]> Sections) ReadV3Metadata(byte[] bytes, byte[] vaultKey)
+    {
+        var (recordId, write, count, metadataSection, sections) = FrameV3(bytes);
 
         var key = RecordKeyDerivation.DeriveMetadataKey(vaultKey, recordId, write);
         byte[] plain;

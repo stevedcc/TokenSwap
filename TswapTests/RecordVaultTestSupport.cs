@@ -70,4 +70,61 @@ internal static class RecordVaultTestSupport
     /// <summary>Decodes <paramref name="name"/>'s record file.</summary>
     public static SecretRecord ReadRecord(FleetMachine machine, byte[] vaultKey, string name) =>
         SecretRecordCodec.Decode(File.ReadAllBytes(RecordFile(machine, vaultKey, name)), vaultKey);
+
+    // ---------------------------------------------------------------- brief T16-S1 (record format v3)
+
+    /// <summary>Writes the vault folder's <c>record-format</c> marker (default <c>3</c>).</summary>
+    public static void WriteMarker(FleetMachine machine, string content = "3") =>
+        File.WriteAllText(Path.Combine(machine.VaultDir!, RecordVaultStore.RecordFormatMarkerFileName), content);
+
+    /// <summary>The value sections of a format 3 file, in file order, from its framing (nothing decrypted).</summary>
+    public static List<byte[]> ValueSections(byte[] file)
+    {
+        Assert.Equal(3, file[4]);
+        List<byte[]> sections = [];
+        var offset = SecretRecordCodec.V3HeaderSize;
+        var first = true;
+        while (offset < file.Length)
+        {
+            var length = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(file.AsSpan(offset, 4));
+            if (!first)
+                sections.Add(file.AsSpan(offset + 4, length).ToArray());
+            first = false;
+            offset += 4 + length;
+        }
+        return sections;
+    }
+
+    /// <summary>
+    /// Gives <paramref name="to"/> its own copy of <paramref name="from"/>'s vault folder (scp / USB)
+    /// with a config of its own (new origin id); returns the copy's folder.
+    /// </summary>
+    public static string CopyVault(FleetMachine from, FleetMachine to)
+    {
+        var copy = Path.Combine(to.Dir, "vault");
+        CopyFolder(from.VaultDir!, copy);
+        File.WriteAllText(to.ConfigPath, JsonSerializer.Serialize(
+            from.Config with { VaultDir = copy, OriginId = RecordVaultStore.NewOriginId(), LastHlc = null }, TswapJsonContext.Default.Config));
+        return copy;
+    }
+
+    public static void CopyFolder(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var file in Directory.GetFiles(from))
+            File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+        foreach (var dir in Directory.GetDirectories(from))
+            CopyFolder(dir, Path.Combine(to, Path.GetFileName(dir)));
+    }
+
+    /// <summary>The fingerprint set of <paramref name="value"/> under <paramref name="vaultKey"/>.</summary>
+    public static TswapCore.Fingerprints.FingerprintSet Fingerprints(byte[] vaultKey, byte[] value)
+    {
+        using var keys = TswapCore.Fingerprints.FingerprintKeys.Derive(vaultKey);
+        return TswapCore.Fingerprints.Fingerprinter.Compute(value, keys);
+    }
+
+    /// <summary>The store of <paramref name="machine"/>, as the CLI opens it.</summary>
+    public static RecordVaultStore Store(FleetMachine machine) =>
+        Assert.IsType<RecordVaultStore>(VaultStores.Open(machine.Dir));
 }

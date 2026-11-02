@@ -174,6 +174,105 @@ public static class RecordMerge
         };
     }
 
+    /// <summary>
+    /// Brief T16-S1 ruling 11, the metadata-only path: <see cref="MergeAll"/>'s rules over metadata
+    /// sections and still-encrypted value sections, with no plaintext. Fingerprints stand in for
+    /// plaintext: two copies hold the same plaintext for a version when their sections are
+    /// byte-identical, or when they share a variant-set version with equal sets (and no shared
+    /// variant-set version with different sets). Where that can't be shown (no sets to compare, or
+    /// sets that disagree), differing sections or any other disagreement are a
+    /// <see cref="RecordConflictException"/>: the record is unreadable on this path (fail closed)
+    /// until a full-load write converges its copies. Returns the merged metadata and the chosen
+    /// section of each retained version (the ordinally smallest, as the full load picks).
+    /// </summary>
+    public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) MergeAllMetadata(
+        IReadOnlyList<(RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed)> inputs)
+    {
+        if (inputs.Count == 0)
+            throw new ArgumentException("MergeAllMetadata needs at least one input", nameof(inputs));
+        var recordId = inputs[0].Metadata.RecordId;
+        if (inputs.Any(r => !r.Metadata.RecordId.AsSpan().SequenceEqual(recordId)))
+            throw new ArgumentException("Only versions of one record can be merged", nameof(inputs));
+
+        var version = inputs.Select(r => r.Metadata.Version).Aggregate(Stamp.Max);
+        var tied = inputs.Where(r => r.Metadata.Version.Equals(version)).ToList();
+        var winner = tied[0].Metadata;
+        foreach (var (other, _) in tied.Skip(1))
+        {
+            if ((winner.Type == RecordType.Tombstone) != (other.Type == RecordType.Tombstone)
+                || winner.CreatedMs != other.CreatedMs
+                || winner.Name != other.Name
+                || !Equals(winner.PreviousVersion, other.PreviousVersion))
+                throw new RecordConflictException($"two copies share the version {version} but differ in content");
+        }
+
+        var isTombstone = winner.Type == RecordType.Tombstone;
+        var sealedSections = new Dictionary<Stamp, byte[]>();
+        FingerprintSet? currentFingerprints = null, previousFingerprints = null;
+        foreach (var (stamp, _, isPrevious) in winner.RetainedVersions())
+        {
+            List<(FingerprintSet? Set, byte[] Section)> holders = [];
+            foreach (var (metadata, sections) in inputs)
+            {
+                if (metadata.Type == RecordType.Tombstone && metadata.Version.Equals(stamp))
+                    throw new RecordConflictException($"the version {stamp} is a value in one copy and a delete in another");
+                foreach (var (held, set, _) in metadata.RetainedVersions())
+                {
+                    if (!held.Equals(stamp))
+                        continue;
+                    if (!sections.TryGetValue(stamp, out var section))
+                        throw new RecordConflictException($"a copy lists the version {stamp} without its value section");
+                    holders.Add((set, section));
+                }
+            }
+            FingerprintSet? best = null;
+            foreach (var group in holders.Where(h => h.Set is not null).Select(h => h.Set!).GroupBy(f => f.VariantSetVersion))
+            {
+                var first = group.First();
+                if (group.Any(f => !f.Equals(first)))
+                    throw new RecordConflictException($"two copies hold different fingerprints of the version {stamp}");
+                if (best is null || first.VariantSetVersion > best.VariantSetVersion)
+                    best = first;
+            }
+            for (var i = 0; i < holders.Count; i++)
+            {
+                for (var j = i + 1; j < holders.Count; j++)
+                {
+                    var (a, b) = (holders[i], holders[j]);
+                    if (a.Section.AsSpan().SequenceEqual(b.Section))
+                        continue;
+                    // Different ciphertexts: equal only if fingerprints prove it (sets at one variant-set
+                    // version were checked equal above).
+                    if (a.Set is null || b.Set is null || a.Set.VariantSetVersion != b.Set.VariantSetVersion)
+                        throw new RecordConflictException(
+                            $"two copies hold different value sections of the version {stamp} and no fingerprints show them equal");
+                }
+            }
+            sealedSections[stamp] = holders.Select(h => h.Section).Aggregate((x, y) => y.AsSpan().SequenceCompareTo(x) < 0 ? y : x);
+            if (isPrevious)
+                previousFingerprints = best;
+            else
+                currentFingerprints = best;
+        }
+
+        var write = inputs.Select(r => r.Metadata.Write).Aggregate(Stamp.Max);
+        var extensions = inputs
+            .Where(r => r.Metadata.Write.Equals(write))
+            .Select(r => (r.Metadata.Extensions, Encoded: EncodeExtensions(r.Metadata.Extensions)))
+            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
+            .Extensions;
+        var burns = CanonicalBurns(inputs.SelectMany(r => r.Metadata.Burns), version, isTombstone);
+        return (winner with
+        {
+            Write = write,
+            Burns = burns,
+            Type = TypeOf(isTombstone, version, burns),
+            Fingerprints = currentFingerprints,
+            PreviousFingerprints = previousFingerprints,
+            Extensions = extensions,
+        }, sealedSections);
+    }
+
     /// <summary>The plaintexts (and their fingerprints) <paramref name="record"/> holds under <paramref name="stamp"/>.</summary>
     private static IEnumerable<(byte[] Value, FingerprintSet? Fingerprints)> Holdings(SecretRecord record, Stamp stamp)
     {
