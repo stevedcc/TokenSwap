@@ -81,7 +81,18 @@ public class KeyringV3PairFixtureTests : IDisposable
     private CommandContext Context(SimulatedYubiKeyService keys, FakeConsole console, string[] args)
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
-        return new CommandContext(console, env, new Storage(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: true);
+        return new CommandContext(console, env, VaultStores.Open(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: true);
+    }
+
+    /// <summary>
+    /// Brief T16-S1 (ruling 5): commands refuse a classic vault, so the fixture is converted first
+    /// (migrate --to-records, opened with key A); its pair keyring is copied as it is.
+    /// </summary>
+    private void ConvertFixture()
+    {
+        var console = new FakeConsole();
+        string[] args = ["migrate", "--to-records"];
+        Assert.True(CliRunner.Run(Context(Keys(SerialA), console, args), args) == 0, console.ErrorText);
     }
 
     [Fact]
@@ -104,6 +115,7 @@ public class KeyringV3PairFixtureTests : IDisposable
     [InlineData(SerialB)]
     public void Fixture_EitherKeyAloneUnlocksAndGetReturnsTheSecret(int pluggedIn)
     {
+        ConvertFixture();
         var keys = Keys(pluggedIn);
         var console = new FakeConsole();
         string[] args = ["get", FixtureSecretName];
@@ -134,6 +146,7 @@ public class KeyringV3PairFixtureTests : IDisposable
     [Fact]
     public void Fixture_AnUnenrolledKeyDoesNotUnlock()
     {
+        ConvertFixture();
         var keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB, 33333333);
         keys.PluggedIn = [33333333];
         var console = new FakeConsole();

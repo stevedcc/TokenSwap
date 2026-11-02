@@ -134,11 +134,26 @@ public sealed class FleetMachine : IDisposable
         return stdout.Trim();
     }
 
-    /// <summary>Copies this machine's vault files (config and secrets) into <paramref name="other"/>.</summary>
+    /// <summary>
+    /// Copies this machine's vault into <paramref name="other"/>: a classic vault's config and
+    /// secrets files; a record vault's config and its vault folder (into the other machine's
+    /// <c>vault</c>, its config pointing there, with an origin id of its own, as a copy moved to
+    /// another machine gets). Brief T16-S1: init makes record vaults, so most copies are those.
+    /// </summary>
     public void CopyVaultTo(FleetMachine other)
     {
-        File.Copy(ConfigPath, other.ConfigPath, overwrite: true);
-        File.Copy(SecretsPath, other.SecretsPath, overwrite: true);
+        if (Config.Store != RecordVaultStore.StoreName)
+        {
+            File.Copy(ConfigPath, other.ConfigPath, overwrite: true);
+            File.Copy(SecretsPath, other.SecretsPath, overwrite: true);
+            return;
+        }
+        var copy = Path.Combine(other.Dir, "vault");
+        if (Directory.Exists(copy))
+            Directory.Delete(copy, true);
+        RecordVaultTestSupport.CopyFolder(VaultDir!, copy);
+        File.WriteAllText(other.ConfigPath, JsonSerializer.Serialize(
+            Config with { VaultDir = copy, OriginId = RecordVaultStore.NewOriginId() }, TswapJsonContext.Default.Config));
     }
 
     public void Dispose()

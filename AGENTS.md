@@ -6,7 +6,7 @@ Project instructions for AI agents working in this repository.
 
 TokenSwap (tswap) is a hardware-backed secret manager that solves two problems:
 1. **AI Agent Safety**: AI agents can use passwords via `{{token}}` substitution without seeing plaintext values
-2. **YubiKey Redundancy**: Two YubiKeys enrolled once; either key unlocks the vault via XOR key reconstruction
+2. **Hardware-backed vault key**: one slot per device (YubiKey, TPM, Secure Enclave) plus an offline recovery slot; any one opens the vault (the older two-YubiKey XOR vault is migration-only since v0.2)
 
 C# application with a single entry point:
 - **`TswapCli/Program.cs`** — NativeAOT compiled binary (`dotnet publish TswapCli/TswapCli.csproj -c Release`). ~4MB, ~20ms startup, no runtime dependencies.
@@ -62,7 +62,14 @@ Commands are split by whether they require sudo:
 - **No sudo for a burned secret, sudo otherwise**: `rotate <name> [len]`, `ingest --rotate <name>` — replacing a burned (already compromised) secret is the agent's job; replacing one still in use could break the services using it, so that needs sudo. Listed with the no-sudo commands on the help screen.
 - **No sudo, joining a shared vault folder**: `init --vault-dir <folder>` writes this machine's own config only. `slot accept <file>` on a record-store machine, and `slot accept <file> --vault-dir <folder>`, also write the new slot into the **shared keyring** (a union with the file) without sudo: the human gate for that slot is the earlier `sudo tswap slot approve` on an enrolled machine, which produced the approve file.
 - **No sudo, the broker** ([docs/BROKER.md](docs/BROKER.md)): `broker serve` runs as the vault's own user (it refuses root), and `broker forward` runs inside a container (it needs no vault). `broker route|socket add|remove` requires sudo. On the help screen `broker` is listed without `[sudo]` because its main subcommands never need it.
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `restore <name>` — exposes secret values or changes what the vault holds
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `vault reindex`, `restore <name>` — exposes secret values or changes what the vault holds
+
+**Classic vaults are migration-only (v0.2, brief T16-S1):** on a classic single-file vault every
+command that opens the store refuses (`ICliCommand.WorksOnClassicVault`, checked once when
+`CommandContext.Storage` opens), except `init` (which refuses with its own message), `migrate` and
+`export`. `init` makes a record vault (`<config dir>/vault` or `--folder <dir>`) with the
+`record-format` marker; `vault reindex` rewrites every record in record format 3 (keyed
+fingerprints in an encrypted metadata section, value sections encrypted once and copied).
 
 `slot approve` specifically: it unlocks an *existing* vault and writes out an artifact that
 decrypts that vault's master key for whoever holds the matching private key — the same
@@ -125,9 +132,9 @@ posture that changed since (`SecurityWarnings.NoticeIfChanged`); `tswap slots --
 It is detected from whether `ykman otp calculate` asked for a touch
 (`IYubiKeyService.ChallengeReportingTouch`). Every notice goes to stderr.
 
-### YubiKey XOR Redundancy
+### YubiKey XOR Redundancy (classic vaults, migration only)
 
-On `init`, two YubiKeys produce HMAC-SHA1 responses (K1, K2). An XOR share (K1 XOR K2) is stored in config. At unlock time, either key can derive the other key via the XOR share, then both are combined with PBKDF2 to produce the master key. The master key is never persisted.
+Classic vaults made by `init` before v0.2 work like this (v0.2 only migrates or exports them): two YubiKeys produce HMAC-SHA1 responses (K1, K2). An XOR share (K1 XOR K2) is stored in config. At unlock time, either key can derive the other key via the XOR share, then both are combined with PBKDF2 to produce the master key. The master key is never persisted.
 
 ### Cryptography
 

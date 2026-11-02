@@ -129,16 +129,21 @@ public sealed class PreviousValueClassicStoreTests : IDisposable
 {
     private readonly FleetMachine _m = new("previous-classic", SimulatedYubiKeyService.WithKeys(SerialA));
 
-    public PreviousValueClassicStoreTests() => _m.Ok("", "init", "--keyring");
+    // Brief T16-S1: init makes record vaults now; the classic vault is written as 0.1's init made it,
+    // holding "s" with the value its rotation left ("new"; the classic store keeps no previous value).
+    private readonly byte[] _vaultKey;
+
+    public PreviousValueClassicStoreTests()
+    {
+        (_vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring");
+        new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("new", DateTime.UtcNow, DateTime.UtcNow) }), _vaultKey);
+    }
 
     public void Dispose() => _m.Dispose();
 
     [Fact]
-    public void PreviousAndRestore_RefuseWithAPointerToMigrate()
+    public void PreviousAndRestore_OnAClassicVault_AreRefusedWithTheMigrationHint()
     {
-        _m.Ok("old", "ingest", "s");
-        _m.Ok("new", "ingest", "--rotate", "s");
-
         var run = _m.Run("", "run", "true", "{{s:previous}}");
         var restore = _m.Run("", "restore", "s");
 
@@ -146,6 +151,7 @@ public sealed class PreviousValueClassicStoreTests : IDisposable
         Assert.Contains("migrate --to-records", run.Err);
         Assert.NotEqual(0, restore.Exit);
         Assert.Contains("migrate --to-records", restore.Err);
-        Assert.Equal("new", _m.Get("s"));
+        // get refuses a classic vault too (ruling 5): the value is read directly.
+        Assert.Equal("new", new Storage(_m.Dir).LoadSecrets(_vaultKey, TextWriter.Null).Secrets["s"].Value);
     }
 }

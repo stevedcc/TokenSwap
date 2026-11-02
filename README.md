@@ -8,9 +8,10 @@ from Sealed Secrets, SOPS, age or Vault, which protect a secret at rest; use bot
 1. **AI agents use passwords without seeing them.** tswap substitutes `{{tokens}}` into commands at runtime — the agent never handles plaintext, and secrets never appear in shell history.
 
 2. **The vault key lives in hardware.** A vault opens with a YubiKey (HMAC-SHA1 challenge-response),
-   a TPM 2.0 (Linux, Windows) or a Mac's Secure Enclave. A **keyring vault** has one slot per
-   device, so any enrolled YubiKey, machine or the offline recovery key opens it alone; the older
-   **classic** vault enrolls two YubiKeys at once, either of which unlocks it via an XOR share.
+   a TPM 2.0 (Linux, Windows) or a Mac's Secure Enclave. A vault has one slot per device, so any
+   enrolled YubiKey, machine or the offline recovery key opens it alone. (The older **classic**
+   single-file vault, which enrolled two YubiKeys at once via an XOR share, is only migrated since
+   0.2: see [Upgrading from 0.1](#upgrading-from-01-classic-vaults-and-vault-reindex).)
 
 3. **Several machines, one vault.** Machines join a keyring vault by a hand-carried exchange
    (`slot request` → `slot approve` → `slot accept` → `slot merge`), and the **record store** keeps
@@ -65,10 +66,11 @@ An AI agent **cannot**:
 - Delete secrets (`delete` requires sudo)
 - Exfiltrate via `run` — `echo`, `printf`, pipes, redirects, and inline shell/interpreter code (`sh -c`, `python -c`, ...) are blocked
 
-### YubiKey Cold Storage (classic vault)
+### YubiKey Cold Storage (classic vault, migration only)
 
-A keyring vault (`init --keyring`, below) gives each YubiKey its own slot. The classic vault made
-by plain `tswap init` works like this: two YubiKeys are challenged and an XOR share is computed:
+Every vault `tswap init` makes gives each YubiKey its own slot. The classic vault that `tswap init`
+made before 0.2 worked like this (tswap 0.2 only converts it, with `sudo tswap migrate
+--to-records`, or exports it): two YubiKeys are challenged and an XOR share is computed:
 
 ```
 K1 = HMAC-SHA1(YK1, challenge)
@@ -157,7 +159,8 @@ ykman otp chalresp --generate --touch 2
 # Or without touch (less secure, for advanced/CI use only)
 ykman otp chalresp --generate 2
 
-# Initialize (requires both keys, one at a time)
+# Initialize with ONE key plugged in: a record vault in ~/.config/tswap/vault
+# (add the spare key afterwards with 'sudo tswap slot add --yubikey'; see below)
 tswap init
 
 # Create a secret (random, never displayed)
@@ -177,16 +180,21 @@ tswap names
 ykman otp chalresp --generate --touch 2
 
 # Initialize with ONE key plugged in (several plugged in: tswap asks which; TSWAP_YUBIKEY_SERIAL picks one)
-tswap init --keyring
+tswap init                    # or: tswap init --folder ~/Sync/tswap-vault   (an absent or empty folder)
 
 # Add each spare key as its own slot: plug it in (the first key may stay plugged in) and run
 sudo tswap slot add --yubikey
 tswap slots                   # lists the slots, with each key's serial
 ```
 
-A **keyring vault** has a random vault key wrapped once per slot. Each YubiKey is **its own
-slot**, and any one enrolled key opens the vault alone; there is no XOR share to back up.
-`init --keyring` also makes a break-glass **recovery slot** and prints its private key once
+Every vault `init` makes (since 0.2; `--keyring` is still accepted and changes nothing) is a
+**keyring vault** in the **record store**: a random vault key wrapped once per slot, and one
+encrypted file per secret in a vault folder (`~/.config/tswap/vault`, or `--folder <dir>`, which
+must be absent or empty). Each YubiKey is **its own slot**, and any one enrolled key opens the
+vault alone; there is no XOR share to back up. `init` refuses on a config folder that holds a
+classic vault (convert it with `sudo tswap migrate --to-records`, or move `config.json` and
+`secrets.json.enc` aside to start a new vault). `init` also makes a break-glass **recovery slot**
+and prints its private key once
 (store it offline; `--no-recovery` leaves it out). A key's serial, challenge and salt live in
 its slot, so the vault files plus any one enrolled key open the vault on any machine.
 `slot add --yubikey` refuses a key that already has a slot, and backs up `config.json` before
@@ -279,6 +287,9 @@ with one YubiKey plugged in, or `--tpm` / `--secure-enclave --with-touch|--no-to
 `sudo tswap slot approve` (on this one), `tswap slot accept` (back on the new one; it writes a
 receipt) and `sudo tswap slot merge <receipt>` (on this one again, so this machine's copy opens
 with the new device too). Move the files yourself (scp, USB). `tswap slots` lists the slots.
+On a machine without a vault, `slot accept` creates a record vault at `~/.config/tswap/vault`
+(as `init` does) holding the keyring and no secrets yet: bring them in with `sudo tswap vault
+merge <copy of the other vault folder>`, or use `--vault-dir` to join a shared folder instead.
 
 ### Remote enrolment of a YubiKey into a TPM vault, step by step
 
@@ -407,7 +418,9 @@ secret in a **vault folder**, which a sync tool, a network share or a plain copy
 which two copies of can be merged.
 
 ```bash
-# Convert this machine's vault (sudo: it decrypts everything). Default folder: ~/.config/tswap/vault
+# A new vault straight into a synced folder (an absent or empty one):
+tswap init --folder ~/OneDrive/tswap-vault
+# ...or convert this machine's classic vault (sudo: it decrypts everything). Default folder: ~/.config/tswap/vault
 sudo tswap migrate --to-records --vault-dir ~/OneDrive/tswap-vault
 
 # Another machine joins the same folder:
@@ -494,6 +507,65 @@ files 0600; an existing vault with wider permissions is narrowed on the next wri
 notice. Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files
 inherit the profile folder's permissions.)
 
+### Record format 3 and `vault reindex`
+
+Since 0.2 a record can be recognised in a file or a stream without decrypting its value. Record
+format 3 splits each record into an encrypted **metadata section** (name, burns, the version list,
+and **keyed fingerprints** of every retained value: for each variant tswap matches, plain,
+whitespace-stripped, base64 and base64url, its length, a keyed rolling hash and a truncated keyed
+HMAC) and one encrypted **value section** per retained value (current and previous). A value
+section is encrypted once, by the machine that creates its value, and copied byte for byte by
+every later write (a burn, a merge, a reindex), so commands that only need names, burns or
+fingerprints never decrypt a value.
+
+```bash
+sudo tswap vault reindex     # rewrites every record in format 3 with fingerprints; prints counts only
+```
+
+`vault reindex` decrypts every value once, inside tswap, writes each record that isn't already
+current with a new write stamp (so it merges like any other write), and then writes a
+`record-format` marker into the vault folder. From then on every machine sharing the folder writes
+format 3; until then a vault keeps writing format 2, so machines still on 0.1 can read it. It
+refuses, writing nothing, when a record can't be read. Running it again rewrites nothing; an
+interrupted run is finished by running it again. `vault merge` copies the marker from a reindexed
+copy. A new vault (`init`, `migrate --to-records`) starts in format 3.
+
+**Fingerprints and the threat model:** fingerprints and rolling hashes exist only inside the
+encrypted metadata sections and in tswap's memory, never in a file, a log or the clear; their keys
+derive from the vault key (`K_fp`, `K_roll`), so without it nothing derived from a value is
+readable or guessable offline (and with it every value could be decrypted anyway). No cleartext
+index of hashes exists: it would make short secrets offline-crackable. What format 3 adds for a
+sync provider: the number of sections per record (retained values + 1) and a size bucket per
+section, where format 2 showed one bucket per record; and since a value section stays identical
+across writes, it can tell a metadata-only write (a burn, a merge) from a value change.
+
+A record written in format 2 after the reindex (by a machine still on 0.1), or a replayed older
+copy, has no fingerprints until a write of it, a `vault merge` or another `vault reindex`; tswap
+reports such a vault as "not fully fingerprinted" (a format 2 tombstone counts too: its type can't
+be known without decrypting it). A lingering format 2 sync-conflict copy of a record does the same
+until it is folded by the next write of that record, a `vault merge` or a `vault reindex`. In a
+folder that writes format 3, `vault merge` rewrites every record it can read whose file isn't format 3 yet,
+even one equal on both sides, so merging a reindexed copy leaves the folder fully fingerprinted.
+
+## Upgrading from 0.1: classic vaults and `vault reindex`
+
+tswap 0.2 is a breaking release:
+
+1. **Convert a classic vault first:** `sudo tswap migrate --to-records`. Only `migrate
+   --to-records` (and its plain form, the touch-upgrade guide) and `export` work on a classic
+   single-file vault (`secrets.json.enc`); every other command refuses it with that hint. A
+   two-YubiKey XOR vault becomes a keyring vault in the same run (plug in every enrolled key).
+2. **Then, once every machine sharing the vault runs 0.2, `sudo tswap vault reindex`** (once: a
+   copy kept in step with `vault merge` takes the marker and the format 3 records with the next
+   merge). Machines
+   still on 0.1 can't read records rewritten in format 3; they refuse them (and never delete or
+   overwrite them) until they are upgraded.
+3. **`init` makes a record vault** (one YubiKey, TPM or Secure Enclave slot plus a recovery slot,
+   in `<config dir>/vault` or `--folder <dir>`). `init --keyring` keeps working and means the
+   same; the two-YubiKey XOR vault can no longer be created.
+
+See [docs/release-notes/v0.2.0.md](docs/release-notes/v0.2.0.md) for the full list.
+
 ## Security: YubiKey Touch Requirement
 
 **tswap recommends configuring YubiKey slots with a touch requirement:**
@@ -573,7 +645,8 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture |
-| Brute-force on encrypted vault | AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the vault file (`secrets.json.enc`) could be attacked offline if both the file and XOR share are obtained without a YubiKey |
+| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and XOR share are obtained without a YubiKey |
+| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
 
 ### Design rationale
 

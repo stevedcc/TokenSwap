@@ -41,7 +41,8 @@ public sealed class FixRoundShouldFixTests : IDisposable
         using var laptop = LaptopWithACopy();
         _now = T0.AddMinutes(5);
         laptop.Ok("v2\nv2\n", "add", "s");
-        var otherStates = RecordVaultStore.ForFolder(laptop.VaultDir!, laptop.Config).LoadRecordStates(_vaultKey).States;
+        var other = RecordVaultStore.ForFolder(laptop.VaultDir!, laptop.Config);
+        var otherStates = other.LoadRecordStates(_vaultKey).States;
 
         var store = new RecordVaultStore(_m.Dir, time: new FuncTimeProvider(() => _now));
         var config = store.LoadConfig();
@@ -54,7 +55,7 @@ public sealed class FixRoundShouldFixTests : IDisposable
         var beforeWriteRan = false;
 
         // What vault merge does in beforeWrite: back up and save the config with the keyring.
-        Assert.Throws<TswapException>(() => store.MergeRecords(otherStates, _vaultKey, beforeWrite: () =>
+        Assert.Throws<TswapException>(() => store.MergeRecords(otherStates, _vaultKey, other.ReadFormat3, beforeWrite: () =>
         {
             beforeWriteRan = true;
             store.SaveConfig(config with { RngMode = RngMode.YubiKey });

@@ -495,6 +495,83 @@ key model:
   per-secret edit timing is visible to whoever can watch the folder (see the plan's plain
   statement of that leak).
 
+### Record format 3: metadata and value sections (brief T16-S1, v0.2.0)
+
+Record format 3 (`SecretRecordCodec`, layout pinned in its doc comment) splits a record into one
+encrypted **metadata section** and one encrypted **value section** per retained version (current
+and previous):
+
+- **Keys** derive from `K_v` by HKDF-SHA256, each with its own label: the metadata key
+  `tswap-record-meta-v3` (salt `recordId ‖ write stamp`), the value key `tswap-record-value-v3`
+  (salt `recordId ‖ version stamp`), `K_fp` `tswap-fingerprint-v1` and `K_roll`
+  `tswap-rollhash-v1` (no salt). `tswap-extract-plan-v1` is reserved for Stage 4's `K_plan`.
+- **Associated data** per section is only magic, format version, record id, the section's role
+  and the section's own stamp (the metadata section also binds the value-section count). A value
+  section binds nothing a later write changes, so it can be copied byte for byte under a new write
+  stamp. Version stamps are not in the clear: the sections follow the metadata's version list.
+- **Fingerprints** (inside the metadata section only): for each retained value, each variant
+  `SecretProcessor` matches (`SecretVariants.For`), its UTF-16 length, a rolling hash (polynomial
+  mod 2^61−1, base from `K_roll`) and the first 16 bytes of `HMAC-SHA256(K_fp, variant)`. Every
+  match is confirmed on the HMAC. The set carries a **variant-set version**
+  (`SecretVariants.CurrentSetVersion`); **bump it whenever the variant computation changes**, so
+  records fingerprinted by an older computation are reported and `vault reindex` recomputes them.
+- **Unknown metadata extensions** (type, bytes) are kept byte for byte by every rewrite, so data a
+  later build adds survives an older 0.2 machine's merges and burns.
+
+**Encrypted once, then copied (ruling 1).** Each section uses a fresh random 96-bit nonce. A value
+section is encrypted once, by the machine that creates its version (or converts it from format 2),
+and copied byte for byte by every later write. Two machines can each convert the same format 2
+version (a concurrent `vault reindex`, or two machines writing after the marker appears): they then
+hold two different, equally valid ciphertexts of one plaintext. The merge converges them (below).
+**GCM argument:** a value key is fixed per (record, version), so it meets at most a fleet-size
+number of encryptions, all of one plaintext, far inside random-nonce GCM's limits. Sections are
+copied, never re-encrypted: **any future feature that re-seals under the same version key (for
+example a longer history or a re-encrypting repair) must revisit this argument.**
+
+**Merging every copy at once (ruling 11).** `RecordMerge.MergeAll` takes the main file, its
+conflicted copies and (for `vault merge`) the other folder's state together, and its result
+doesn't depend on their order: the winner is the largest version stamp; copies sharing it must
+agree on tombstone-ness, value, created time, name and previous value; every copy holding a
+retained version must hold the same plaintext (versions the winner doesn't retain are ignored);
+per retained version the **ordinally smallest** section bytes win (a fixed point, so both folders
+of a concurrent reindex converge, and a second merge writes nothing); the highest variant-set
+version of fingerprints wins; the extensions of the copy with the largest write stamp win; burns
+are the union. Two different values under one version stamp (only damage or a clock rollback makes
+them) are a **conflict**: that record becomes unreadable (warned, never merged or overwritten)
+until the damaged conflicted copy is removed; this replaces the old content tie-break. Full loads
+first recompute each copy's fingerprints from its plaintext and treat a mismatch the same way. The
+metadata-only path (no plaintext) uses the same rules with fingerprints standing in for plaintext
+and fails closed where they can't show two sections hold the same value. That stand-in is only sound
+if each copy's fingerprints describe its own value, which the metadata path can't check up front, so
+a read that opens one value section (`ReadSecretValue`) checks that value against its stored set and
+refuses the record on a mismatch. Only a set of this build's variant-set version can be checked: a
+set of another version (older or newer) is kept, reported (`OlderVariantSet` for an older one) and
+refreshed by `vault reindex`; it is not checked at read.
+
+**The `record-format` marker.** A vault folder holding `record-format` = `3` (or any command that
+read a format 3 record) writes format 3; otherwise format 2, so machines still on 0.1 can read it.
+`vault reindex` writes the marker after every record succeeded. Deleting the marker can't downgrade
+a reindexed vault (reading a format 3 record selects format 3 too). Planting a marker holding `3`
+switches every machine sharing the folder to format 3 writes, which machines still on 0.1 can't read
+(an availability lever for whoever can write the folder, like deleting files; no secret is
+exposed); planting a number above 3 makes every write refuse (a fail-closed "written by a newer
+tswap"); anything else in it is a warning and counts as absent. Conflicted copies of the marker are
+ignored.
+
+**Metadata leak delta.** Format 3 reveals the number of sections per record (retained versions + 1)
+and a padding bucket per section, where format 2 revealed one bucket per record; and a value
+section's ciphertext stays identical across writes, so an observer of the folder can tell a
+metadata-only write (burn, merge) from a value change. Accepted. A record written in format 2 after
+the reindex, or a replayed older copy, leaves that record "not fingerprinted" until a write of that
+record, a `vault merge` or a `vault reindex` in that folder rewrites it. A lingering format 2
+conflicted copy is folded the same ways. A format 2 **tombstone** is counted as not fingerprinted
+too (its type can't be known without decrypting it). **`vault merge` has a fourth write trigger**
+(owner decision 2026-11-02) beside ruling 11's three: in a folder that writes format 3, it rewrites
+every record it can read whose main file isn't format 3 (an unreadable or newer-format file, main or
+conflicted copy, is never touched), even when the state is equal on both sides, so merging
+a reindexed copy into a folder leaves it fully fingerprinted (tombstones included) without a reindex
+of its own. A second merge then writes nothing.
+
 ## The landmine: threshold downgrade
 
 If `k` (or `formatVersion`) lived in a plaintext field, a thief with the synced files **and one

@@ -43,7 +43,8 @@ public class TpmInitCliTests : IDisposable
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
         var yubiKeys = new TestKeyYubiKeyService(testKey);
-        var storage = new Storage(dir);
+        // Brief T16-S1: the store is chosen per invocation, as the binary does (init makes a record vault).
+        var storage = VaultStores.Open(dir, warnings: console.Error);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey,
             additionalBackends: HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => storage)));
         return new CommandContext(console, env, storage, yubiKeys, unlocker, testKey, SudoBypass: true);
@@ -56,8 +57,8 @@ public class TpmInitCliTests : IDisposable
         return (exit, console.OutText, console.ErrorText);
     }
 
-    private static Config LoadConfig(string dir) =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring lives in its vault folder).</summary>
+    private static Config LoadConfig(string dir) => VaultStores.Open(dir).LoadConfig();
 
     [Theory]
     [InlineData("--tpm", HardwareBackend.Tpm)]
@@ -115,8 +116,10 @@ public class TpmInitCliTests : IDisposable
 
     private static byte[] UnlockVault(string dir, byte[] testKey)
     {
+        // The config is read through a fresh store (VaultStores.Open: a record vault's keyring is
+        // composed from its folder), without opening the command's store.
         var ctx = Context(dir, testKey, new FakeConsole(), []);
-        return ctx.Unlock(ctx.Storage.LoadConfig());
+        return ctx.Unlock(VaultStores.Open(dir).LoadConfig());
     }
 
     private static string RecoveryPrivateKeyFrom(string stdout)
@@ -252,10 +255,22 @@ public class TpmInitCliTests : IDisposable
             ["legacy"] = new("legacy-value", DateTime.UtcNow, DateTime.UtcNow),
         }), vaultKey);
 
-        var (exit, stdout, stderr) = Run(dir, KeyA, "", "get", "legacy");
-
+        // Brief T16-S1 (ruling 5): a classic vault opens only for export (and migrate, which refuses a
+        // single-slot vault): the export decrypts it, and its secret reads back in a new vault.
+        var export = Path.Combine(dir, "legacy-export.json");
+        var (exit, _, stderr) = Run(dir, KeyA, "pass\npass\n", "export", export);
         Assert.True(exit == 0, stderr);
+        var newVault = NewTempDir();
+        Assert.Equal(0, Run(newVault, KeyA, "", "init", "--tpm").ExitCode);
+        Assert.Equal(0, Run(newVault, KeyA, "pass\n", "import", export).ExitCode);
+
+        var (getExit, stdout, getErr) = Run(newVault, KeyA, "", "get", "legacy");
+
+        Assert.True(getExit == 0, getErr);
         Assert.Contains("legacy-value", stdout);
+        var (migrateExit, _, migrateErr) = Run(dir, KeyA, "", "migrate", "--to-records");
+        Assert.NotEqual(0, migrateExit);
+        Assert.Contains("export", migrateErr);
     }
 
     // --- init rejects unknown arguments (#177, the init half) ---
@@ -395,7 +410,8 @@ public class TpmInitCliTests : IDisposable
         var config = LoadConfig(dir);
         var keyring = DecodeKeyring(config);
         var stripped = keyring with { Slots = keyring.Slots.Select(s => s with { HwBlob = null }).ToList() };
-        new Storage(dir).SaveConfig(config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(stripped)) });
+        // Brief T16-S1: a record vault's keyring lives in its vault folder.
+        File.WriteAllBytes(Path.Combine(config.VaultDir!, RecordVaultStore.KeyringFileName), KeyringCodec.Encode(stripped));
 
         var (exit, _, stderr) = Run(dir, KeyA, "", "names");
 

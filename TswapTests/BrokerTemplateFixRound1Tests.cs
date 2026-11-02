@@ -316,7 +316,6 @@ public class BrokerTemplateFixRound1Tests(ITestOutputHelper output) : IDisposabl
             return; // templates are Linux only
         using var m = new FleetMachine("tplvault") { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };
         m.Ok("", "init", "--tpm", "--no-recovery");
-        m.Ok("", "migrate", "--to-records");
 
         var host = BrokerHostContext.ForVault(m.Dir, null);
 

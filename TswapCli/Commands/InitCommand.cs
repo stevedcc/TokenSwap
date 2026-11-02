@@ -5,15 +5,29 @@ using TswapCore.Vault;
 
 namespace TswapCli.Commands;
 
+/// <summary>
+/// Brief T16-S1 (ruling 4): <c>init</c> makes a record vault (one file per secret, shareable by
+/// sync tools) with one YubiKey slot, or this machine's TPM / Secure Enclave slot, plus a recovery
+/// slot: in <c>&lt;config dir&gt;/vault</c>, or in <c>--folder &lt;dir&gt;</c> (absent or empty, e.g. a
+/// Syncthing or cloud-drive folder), with the <c>record-format</c> marker, so it writes record
+/// format 3 from the start. The two-YubiKey XOR vault can no longer be created (a record store needs
+/// a keyring; XOR vaults exist only to be migrated). <c>--keyring</c> is accepted as a no-op so old
+/// scripts keep working. On a config folder holding a classic vault <c>init</c> refuses.
+/// </summary>
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => $"init [--keyring] [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] | init --vault-dir <shared folder>";
-    public string Description => "Initialize with 2 YubiKeys; --keyring for a keyring vault with one YubiKey slot (add keys with 'slot add --yubikey'); --tpm (Windows/Linux) or --secure-enclave (macOS) for a keyring vault on this machine's hardware; --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). Keyring vaults get a recovery slot; --no-recovery opts out";
+    public string HelpUsage => $"init [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder): one YubiKey slot (add keys with 'slot add --yubikey'), or this machine's --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning); plus a recovery slot unless --no-recovery. --keyring is accepted for old scripts. --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
-    /// <summary>The only arguments <c>init</c> accepts, each at most once (#177).</summary>
+    /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
+    public bool WorksOnClassicVault => true;
+
+    /// <summary>The only arguments <c>init</c> accepts, each at most once (#177); <c>--folder</c> takes a value.</summary>
     private static readonly string[] KnownFlags = ["--keyring", "--tpm", "--secure-enclave", "--no-recovery"];
+
+    private const string FolderFlag = "--folder";
 
     public int Execute(CommandContext ctx, string[] args)
     {
@@ -31,196 +45,136 @@ public sealed class InitCommand : ICliCommand
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [--keyring] [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] " +
-                    $"(valid flags: {string.Join(", ", KnownFlags)}, {SecureEnclaveTouchChoice.WithTouch}, {SecureEnclaveTouchChoice.NoTouch}; " +
-                    "--tpm and --secure-enclave are mutually exclusive)";
+        var usage = $"{ctx.Prefix} init [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] [{FolderFlag} <dir>] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {SecureEnclaveTouchChoice.WithTouch}, " +
+                    $"{SecureEnclaveTouchChoice.NoTouch}; --tpm and --secure-enclave are mutually exclusive)";
+        (args, var newFolder) = SplitFolder(args, usage);
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         if (args.Any(a => !KnownFlags.Contains(a)) || args.Distinct().Count() != args.Length)
             throw new UsageException(usage);
 
         var tpm = args.Contains("--tpm");
         var secureEnclave = args.Contains("--secure-enclave");
-        var keyring = args.Contains("--keyring");
         var noRecovery = args.Contains("--no-recovery");
+        // --keyring: every vault init makes is a keyring vault now; accepted so scripts keep working.
 
         if (tpm && secureEnclave)
             throw new UsageException(usage);
-
-        // --no-recovery (issue #120) only means anything for a keyring vault: the classic
-        // derived-key YubiKey vault has no keyring to add a recovery slot to. Reject it there
-        // rather than silently ignoring it.
-        if (noRecovery && !(keyring || tpm || secureEnclave))
-            throw new UsageException($"{ctx.Prefix} init --no-recovery requires --keyring, --tpm or --secure-enclave");
 
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
 
         // A record-store machine's config points at a shared vault folder; a new init here would
         // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
-        if (ctx.Storage is RecordVaultStore shared)
+        // Keyed on the config (fix round 2): a record store's config (Store "records"), or any config.json
+        // that names a vault folder (VaultDir), wherever that folder is, is refused before any prompt.
+        var recordVaultDir = ctx.Storage is RecordVaultStore shared ? shared.LoadConfig().VaultDir : ConfiguredVaultDir(ctx.Storage);
+        if (recordVaultDir is not null)
             throw new TswapException(
-                $"This machine's {shared.ConfigFile} belongs to a shared record-store vault ({shared.LoadConfig().VaultDir}). To set up " +
+                $"This machine's {(ctx.Storage as IFileVaultStore)?.ConfigFile ?? "config.json"} belongs to a shared record-store vault ({recordVaultDir}). To set up " +
                 "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
 
-        // Detecting an existing config to prompt about reinitializing (and, further
-        // down, backing it up before overwriting) is inherently file-store-specific;
-        // a future non-file backend needs its own equivalent, not this one.
-        var fileStore = ctx.Storage as IFileVaultStore;
+        var fileStore = ctx.Storage as IFileVaultStore
+            ?? throw new TswapException("'init' needs a file-based config.");
 
-        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        // Ruling 4: a classic vault here is converted, never initialized over. "Classic vault" is the
+        // definition every command's refusal uses (CommandContext.IsClassicVault); any other
+        // config.json (a pending 'slot request', say) gets what init always did: ask, back it up.
+        if (CommandContext.IsClassicVault(ctx.Storage))
+            throw new TswapException(
+                $"This config folder holds a classic vault. Convert it with 'sudo {ctx.Prefix} migrate --to-records', or move " +
+                "config.json and secrets.json.enc aside to start a new vault.");
+        var replacesConfig = fileStore.Owner.FileExists(fileStore.ConfigFile);
+        if (replacesConfig)
         {
             c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (c.ReadLine()?.ToLowerInvariant() != "yes")
                 return 0;
         }
 
-        // Brief T2 decision 2: --tpm and --secure-enclave always make a keyring vault (machine
-        // slot + recovery slot unless --no-recovery); --keyring is implied and accepted. No flag
-        // creates the old single-slot TPM/Secure Enclave form any more; existing single-slot
-        // vaults still unlock unchanged (VaultUnlocker reads their single-slot field).
+        // Checked before any hardware is touched, so a refusal enrolls nothing.
+        var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
+        RequireAbsentOrEmpty(ctx, fileStore.Owner, vaultDir);
+        if (replacesConfig)
+            c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
+
+        // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
+        // recovery slot unless --no-recovery), as a plain init does with one YubiKey.
         if (secureEnclave)
-            return ExecuteHardwareKeyring(ctx, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, requirePresence: requirePresence!.Value);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, requirePresence: requirePresence!.Value);
 
         if (tpm)
-            return ExecuteHardwareKeyring(ctx, HardwareBackend.Tpm, includeRecovery: !noRecovery);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery);
 
-        if (keyring)
-            return ExecuteKeyring(ctx, includeRecovery: !noRecovery);
+        return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery);
+    }
 
-        if (ctx.TestKey is not null)
+    /// <summary>
+    /// The vault folder a classic store's config.json names (one that has lost its Store field), or null:
+    /// such a config still belongs to a record vault, so init must not reinitialise over it.
+    /// </summary>
+    private static string? ConfiguredVaultDir(IVaultStore store)
+    {
+        if (store is not IFileVaultStore fileStore || !fileStore.Owner.FileExists(fileStore.ConfigFile))
+            return null;
+        try
         {
-            // Test mode: create synthetic config without YubiKey interaction
-            var testConfig = new Config(
-                new List<int> { TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2 },
-                new string('0', 40), // 20-byte zero XOR share (hex)
-                ctx.Time.GetUtcNow().UtcDateTime,
-                null,
-                RngMode.System,
-                Convert.ToHexString(RandomNumberGenerator.GetBytes(32))
-            );
-            ctx.Storage.SaveConfig(testConfig);
-            if (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile))
-                ctx.Storage.SaveSecrets(new SecretsDb([]), ctx.TestKey);
-            c.Out.WriteLine("Initialized (test mode)");
-            return 0;
+            return store.LoadConfig().VaultDir;
         }
-
-        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  tswap - YubiKey Initialization       ║");
-        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-
-        // Generate a vault-unique unlock challenge so the HMAC response cannot be
-        // pre-computed by someone who briefly accesses a YubiKey without the config.
-        var unlockChallenge = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-
-        // Challenge first YubiKey
-        c.Out.WriteLine("Insert YubiKey #1 and press Enter...");
-        if (!c.IsInputRedirected)
-            c.ReadLine();
-        var serial1 = ctx.SelectSerial();
-        // Brief T7 item 5: whether each key asked for a touch is its posture.
-        var answer1 = ctx.YubiKeys.ChallengeReportingTouch(serial1, unlockChallenge);
-        var k1 = answer1.Response;
-
-        // Challenge second YubiKey
-        c.Out.WriteLine("\nRemove YubiKey #1, insert YubiKey #2, press Enter...");
-        if (!c.IsInputRedirected)
-            c.ReadLine();
-        var serial2 = ctx.SelectSerial();
-
-        if (serial1 == serial2)
-            throw new TswapException("Same YubiKey detected. Please use two different YubiKeys.");
-
-        var answer2 = ctx.YubiKeys.ChallengeReportingTouch(serial2, unlockChallenge);
-        var k2 = answer2.Response;
-
-        // Touch requirement for both keys: from the challenges, else the service's own detection.
-        var touch1 = answer1.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial1);
-        var touch2 = answer2.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial2);
-
-        bool? requiresTouch = null;
-        if (touch1.HasValue && touch2.HasValue)
+        catch (Exception ex) when (ex is TswapException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
         {
-            requiresTouch = touch1.Value && touch2.Value;
+            return null; // unreadable: handled by the steps below as before
         }
+    }
 
-        // Compute XOR redundancy
-        var xorShare = Crypto.XorBytes(k1, k2);
+    /// <summary>Takes <c>--folder &lt;dir&gt;</c> out of <paramref name="args"/> (at most once, with a value).</summary>
+    private static (string[] Remaining, string? Folder) SplitFolder(string[] args, string usage)
+    {
+        var index = Array.IndexOf(args, FolderFlag);
+        if (index < 0)
+            return (args, null);
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--") || args.Count(a => a == FolderFlag) > 1)
+            throw new UsageException(usage);
+        return ([.. args[..index], .. args[(index + 2)..]], args[index + 1]);
+    }
 
-        // Choose RNG mode for secret generation
-        c.Out.WriteLine("\nPassword generation entropy source:");
-        c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
-        c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
-        c.Out.Write("Choose [1/2, default 1]: ");
-        var rngChoice = c.ReadLine()?.Trim();
-        var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
+    /// <summary>
+    /// Ruling 4: a new vault goes into an absent or empty folder only, so <c>init</c> can never mix a
+    /// new vault into an existing one (joining a shared folder is <c>init --vault-dir</c>).
+    /// </summary>
+    internal static void RequireAbsentOrEmpty(CommandContext ctx, DirectoryOwnerMatcher owner, string vaultDir)
+    {
+        var usable = owner.AsOwner(vaultDir, () =>
+            (!Directory.Exists(vaultDir) && !File.Exists(vaultDir))
+            || (Directory.Exists(vaultDir) && !Directory.EnumerateFileSystemEntries(vaultDir).Any()));
+        if (!usable)
+            throw new TswapException(
+                $"The vault folder {vaultDir} is not empty. A new vault is created in an absent or empty folder only; to use a " +
+                $"folder another machine already shares, run '{ctx.Prefix} init --vault-dir {vaultDir}'.");
+    }
 
-        // Every fresh init gets its own random master-key salt rather than the legacy shared
-        // constant (see Crypto.MasterKeySalt) — init already mints a brand-new XOR share and
-        // challenge per vault, so doing the same for the salt is free and closes off the
-        // "every tswap vault uses the identical salt" property without touching any existing
-        // vault (those have no MasterKeySalt in config.json and keep using the constant).
-        var masterKeySalt = RandomNumberGenerator.GetBytes(32);
-
-        // Save config
-        var config = new Config(
-            new List<int> { serial1, serial2 },
-            Convert.ToHexString(xorShare),
-            ctx.Time.GetUtcNow().UtcDateTime,
-            requiresTouch,
-            rngMode,
-            unlockChallenge,
-            MasterKeySalt: Convert.ToBase64String(masterKeySalt)
-        );
-        config = SecurityWarnings.Acknowledge(config); // explained below
-
-        // Re-initialisation generates a new master key (new challenge + new XOR share), so any
-        // existing vault is no longer decryptable with it. Back up both files before writing
-        // new ones so recovery (restore both .bak files together) remains possible.
-        // Config is backed up first — if anything fails mid-init the old config still matches
-        // the old vault backup.
-        var newVaultKey = Crypto.DeriveKey(k1, k2, masterKeySalt);
-        // Backing up the previous config/vault before writing over it is a file-store
-        // safety net; a non-file backend would need its own equivalent, not this one.
-        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+    /// <summary>
+    /// Ruling 4: writes a new record vault. The vault folder first (the keyring and the
+    /// <c>record-format</c> marker, through the file layer), then this machine's <c>config.json</c>
+    /// pointing at it (machine fields only, a new origin id), so an interrupted init never leaves a
+    /// config naming a folder that isn't there.
+    /// </summary>
+    internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir)
+    {
+        var machine = config with
         {
-            fileStore.BackupConfig();
-        }
-        ctx.Storage.SaveConfig(config);
-        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
-        {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
-            c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
-            c.Out.WriteLine("  restore both .bak files under their original names.");
-            c.ResetColor();
-        }
-        ctx.Storage.SaveSecrets(new SecretsDb([]), newVaultKey);
-
-        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
-        c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
-        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine($"YubiKey Serials: {serial1}, {serial2}");
-
-        // Brief T7 item 5: the touch posture, explained once (stderr), here where it is chosen.
-        SecurityWarnings.ExplainTouch(c, $"YubiKeys {serial1}, {serial2}", requiresTouch);
-
-        c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
-
-        c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP XOR SHARE NOW\n");
-        c.Out.WriteLine("XOR Share (hex):");
-        c.Out.WriteLine(config.RedundancyXor);
-        c.Out.WriteLine("\nBackup locations required:");
-        c.Out.WriteLine("  [ ] Password manager (Bitwarden/1Password)");
-        c.Out.WriteLine("  [ ] Printed copy (home safe)");
-        c.Out.WriteLine("  [ ] Second printed copy (off-site)");
-        c.Out.WriteLine("  [ ] Git repository");
-        if (fileStore is not null)
-            c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
-        else
-            c.Out.WriteLine("\nConfig saved.");
-        return 0;
+            Keyring = null,
+            Store = RecordVaultStore.StoreName,
+            VaultDir = vaultDir,
+            OriginId = RecordVaultStore.NewOriginId(),
+        };
+        fileStore.Owner.CreateDirectory(fileStore.ConfigDir);
+        var folderStore = RecordVaultStore.ForFolder(vaultDir, machine, fileStore.Owner, ctx.Time);
+        folderStore.SaveConfig(machine with { Keyring = config.Keyring });
+        folderStore.WriteFormatMarker();
+        // config.json through the record store: atomic, as the folder's owner, and with decision 10's
+        // tightening of the config dir and vault folder (one notice), as init has always done.
+        new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, ctx.Time, ctx.Console.Error).SaveConfig(machine);
     }
 
     /// <summary>
@@ -238,7 +192,7 @@ public sealed class InitCommand : ICliCommand
     /// <para>No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the
     /// challenge, and unlock challenges it again the same way.</para>
     /// </summary>
-    private static int ExecuteKeyring(CommandContext ctx, bool includeRecovery)
+    private static int ExecuteKeyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, bool includeRecovery)
     {
         var c = ctx.Console;
 
@@ -249,8 +203,11 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("(k = 1) — see MULTI_MACHINE_KEYING.md. Add more keys later, each as its own");
         c.Out.WriteLine($"slot that opens the vault alone: sudo {ctx.Prefix} slot add --yubikey\n");
 
+        // Test mode (TSWAP_TEST_KEY, Debug builds only) asks nothing, as its init always did: there is
+        // no key to insert, and a test's stdin may never close.
+        var testMode = ctx.TestKey is not null;
         c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
-        if (!c.IsInputRedirected)
+        if (!c.IsInputRedirected && !testMode)
             c.ReadLine();
 
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
@@ -261,7 +218,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
             c.Out.WriteLine("  [2] YubiKey     — two YubiKey touches per create; hardware-primary, immune to OS RNG compromise");
             c.Out.Write("Choose [1/2, default 1]: ");
-            var rngChoice = c.ReadLine()?.Trim();
+            var rngChoice = testMode ? null : c.ReadLine()?.Trim();
             var rngMode = rngChoice == "2" ? RngMode.YubiKey : RngMode.System;
 
             var backendConfig = new Config(
@@ -274,26 +231,15 @@ public sealed class InitCommand : ICliCommand
             var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(
                 kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId);
 
-            // Same re-init backup dance as every other init path: back up config first (if
-            // anything fails mid-init the old config still matches the old vault backup), then
-            // move the old vault aside rather than overwrite it outright.
-            var fileStore = ctx.Storage as IFileVaultStore;
-            if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
-            {
-                fileStore.BackupConfig();
-            }
             config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
-            ctx.Storage.SaveConfig(config);
-            if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
+            try
             {
-                var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
-                c.SetForeground(ConsoleColor.Yellow);
-                c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
-                c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
-                c.Out.WriteLine("  restore both .bak files under their original names.");
-                c.ResetColor();
+                CreateRecordVault(ctx, fileStore, config, vaultDir);
             }
-            ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
+            finally
+            {
+                CryptographicOperations.ZeroMemory(vaultKey); // on a failed write too (fix round 1)
+            }
 
             c.Out.WriteLine("\n╔════════════════════════════════════════╗");
             c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -307,16 +253,20 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
             PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
-            if (fileStore is not null)
-                c.Out.WriteLine($"\nConfig saved to: {fileStore.ConfigFile}");
-            else
-                c.Out.WriteLine("\nConfig saved.");
+            PrintVaultFolder(c, fileStore, vaultDir);
             return 0;
         }
         finally
         {
             CryptographicOperations.ZeroMemory(kekSlot);
         }
+    }
+
+    /// <summary>Where the new vault went: the shareable folder, and the per-machine config.</summary>
+    private static void PrintVaultFolder(IConsole c, IFileVaultStore fileStore, string vaultDir)
+    {
+        c.Out.WriteLine($"\nVault folder: {vaultDir} (record format {KeyringFormat.RecordFormatVersion}; to share it, sync this folder, never config.json)");
+        c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
     }
 
     /// <summary>
@@ -337,14 +287,14 @@ public sealed class InitCommand : ICliCommand
         var folderStore = RecordVaultStore.ForFolder(vaultDir, probe, fileStore.Owner, ctx.Time);
         if (!fileStore.Owner.FileExists(folderStore.KeyringFile))
             throw new TswapException(
-                $"{vaultDir} has no keyring, so it is not a shared vault folder (yet). To make a new shareable vault, run " +
-                $"'{ctx.Prefix} init' (or --keyring / --tpm / --secure-enclave), then 'sudo {ctx.Prefix} migrate --to-records --vault-dir {vaultDir}'.");
+                $"{vaultDir} has no keyring, so it is not a shared vault folder (yet). To make a new shareable vault there, run " +
+                $"'{ctx.Prefix} init --folder {vaultDir}' (with --tpm or --secure-enclave for this machine's hardware).");
         var keyring = folderStore.ReadKeyring();
 
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             c.Out.Write("Already initialized. Point this machine at the shared folder instead? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (c.ReadLine()?.ToLowerInvariant() != "yes")
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }
@@ -528,7 +478,8 @@ public sealed class InitCommand : ICliCommand
     /// <para>The TPM backends are verified against swtpm (Linux) and a VM's virtual TPM
     /// (Windows) and an Intel PTT (#155); see <c>HARDWARE_BACKENDS.md</c>.</para>
     /// </summary>
-    private static int ExecuteHardwareKeyring(CommandContext ctx, HardwareBackend backend, bool includeRecovery, bool requirePresence = true)
+    private static int ExecuteHardwareKeyring(
+        CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool requirePresence = true)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -566,25 +517,14 @@ public sealed class InitCommand : ICliCommand
 
         var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery, hwBlob);
 
-        // Same re-init backup dance as every other init path: back up config first (if anything
-        // fails mid-init the old config still matches the old vault backup), then move the old
-        // vault aside rather than overwrite it.
-        var fileStore = ctx.Storage as IFileVaultStore;
-        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
+        try
         {
-            fileStore.BackupConfig();
+            CreateRecordVault(ctx, fileStore, config, vaultDir);
         }
-        ctx.Storage.SaveConfig(config);
-        if (fileStore is not null && fileStore.Owner.FileExists(fileStore.SecretsFile))
+        finally
         {
-            var vaultBackup = FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner);
-            c.SetForeground(ConsoleColor.Yellow);
-            c.Out.WriteLine($"\nExisting vault moved to backup: {vaultBackup}");
-            c.Out.WriteLine("Previous config backed up alongside it. To recover old secrets:");
-            c.Out.WriteLine("  restore both .bak files under their original names.");
-            c.ResetColor();
+            CryptographicOperations.ZeroMemory(vaultKey); // on a failed write too (fix round 1)
         }
-        ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
 
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
@@ -594,9 +534,8 @@ public sealed class InitCommand : ICliCommand
             : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
         if (backend == HardwareBackend.SecureEnclave)
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
-        if (fileStore is not null)
-            c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
-        c.Out.WriteLine($"\nThe machine slot's hardware blob in config.json is meaningless without this machine's");
+        PrintVaultFolder(c, fileStore, vaultDir);
+        c.Out.WriteLine($"\nThe machine slot's hardware blob in the keyring is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
         if (backend == HardwareBackend.SecureEnclave)
         {

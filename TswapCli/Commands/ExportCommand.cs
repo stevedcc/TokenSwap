@@ -12,6 +12,9 @@ public sealed class ExportCommand : ICliCommand
     public string Description => "Export all secrets to an encrypted backup";
     public bool RequiresSudo => true;
 
+    /// <summary>Brief T16-S1 (ruling 5): a user can always take their secrets out of a classic vault.</summary>
+    public bool WorksOnClassicVault => true;
+
     public int Execute(CommandContext ctx, string[] args)
     {
         if (args is not [var path, ..])

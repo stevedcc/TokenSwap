@@ -38,7 +38,7 @@ public class HelpTests : IDisposable
             Verbose = false,
             CommandArgs = args,
         };
-        var storage = new Storage(_tempDir);
+        var storage = VaultStores.Open(_tempDir); // brief T16-S1: chosen per invocation, as the binary does
         var yubiKeys = new TestKeyYubiKeyService(_testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: _testKey);
         var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, _testKey, SudoBypass: sudoBypass);

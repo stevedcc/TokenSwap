@@ -23,10 +23,9 @@ public class BrokerVaultReadTests : IDisposable
     /// <summary>A TPM vault with <paramref name="count"/> secrets s0..sN, migrated to a record store.</summary>
     private RecordVaultStore RecordVault(int count)
     {
-        _m.Ok("", "init", "--tpm", "--no-recovery");
+        _m.Ok("", "init", "--tpm", "--no-recovery"); // brief T16-S1: init makes the record vault itself
         for (var i = 0; i < count; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
-        _m.Ok("", "migrate", "--to-records");
         return Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
     }
 
@@ -97,8 +96,11 @@ public class BrokerVaultReadTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
             return;
-        _m.Ok("", "init", "--tpm", "--no-recovery");
+        // Brief T16-S1: a classic vault as 0.1's init --tpm made it (init makes record vaults now); the
+        // route is added first, since broker route add opens the vault too.
+        var initOutput = _m.Ok("", "init", "--tpm");
         _m.Ok("", "broker", "route", "add", "api", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
+        ClassicVaultTestSupport.FoldIntoClassicKeyringVault(_m.Dir, initOutput);
 
         var (exit, _, err) = _m.Run("", "broker", "serve");
 
@@ -113,8 +115,9 @@ public class BrokerVaultReadTests : IDisposable
             return; // no identity switch on Windows
         // BROKER.md's setup step: `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate
         // --to-records`, run as root on the vault user's folder (T5's DirectoryOwnerMatcher).
-        _m.Ok("", "init", "--tpm", "--no-recovery");
-        _m.Ok("value\n", "ingest", "tok");
+        // Brief T16-S1: a classic TPM keyring vault as 0.1's init made it (init makes record vaults now).
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--tpm");
+        new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["tok"] = new("value", DateTime.UtcNow, DateTime.UtcNow) }), vaultKey);
         var root = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0); // the folder is uid 1000's
         _m.Ownership = new DirectoryOwnerMatcher(root);
 

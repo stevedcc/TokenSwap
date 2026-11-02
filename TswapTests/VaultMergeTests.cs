@@ -220,7 +220,7 @@ public sealed class VaultMergeTests : IDisposable
     public void OnAClassicVault_IsRefused()
     {
         using var classic = new FleetMachine("merge-classic", _keys);
-        classic.Ok("", "init", "--keyring");
+        ClassicVaultTestSupport.CreateKeyringVault(classic, "--keyring"); // brief T16-S1: init makes record vaults now
 
         Assert.Contains("migrate --to-records", classic.Run("", "vault", "merge", _home.VaultDir!).Err);
     }

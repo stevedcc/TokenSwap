@@ -598,7 +598,6 @@ public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) 
         for (var i = 0; i < 20; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
         _m.Ok(File.ReadAllText(path), "ingest", "deploy-key"); // ingest trims the trailing newline
-        _m.Ok("", "migrate", "--to-records");
         var store = Assert.IsType<TswapCore.RecordVaultStore>(TswapCore.VaultStores.Open(_m.Dir));
         var decrypted = new List<string>();
         store.RecordDecrypted = decrypted.Add;

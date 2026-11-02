@@ -591,6 +591,11 @@ public sealed class SlotCommand : ICliCommand
             // machine's record-store config.
             if (fileStore is null)
                 throw new TswapException("'slot accept --vault-dir' needs a file-based config.");
+            // Fix round 2: another vault's keyring there is refused before anything is written, the
+            // config backup included, so a failed join leaves nothing behind. (The keyring save below
+            // checks it again, against what is on disk at that moment.)
+            KeyringUnion.RequireSameVault(
+                RecordVaultStore.ForFolder(vaultDir, finalConfig, fileStore.Owner, ctx.Time).ReadKeyring(), finalKeyring, "The shared folder's keyring");
             // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
             // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))
@@ -604,13 +609,23 @@ public sealed class SlotCommand : ICliCommand
             if (fileStore.Owner.FileExists(fileStore.SecretsFile))
                 c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
         }
+        else if (ctx.Storage is RecordVaultStore)
+        {
+            // A record-store machine (joined with init --vault-dir) already shares the vault's folder:
+            // the new slot goes into its keyring (a union), and no record is written.
+            ctx.Storage.SaveConfig(finalConfig);
+        }
         else
         {
-            ctx.Storage.SaveConfig(finalConfig);
-            // A record-store machine (joined with init --vault-dir) already shares the vault's
-            // secrets: saving an empty database there would write a tombstone for every one.
-            if (ctx.Storage is not RecordVaultStore && (fileStore is null || !fileStore.Owner.FileExists(fileStore.SecretsFile)))
-                ctx.Storage.SaveSecrets(new SecretsDb([]), vaultKey);
+            // Owner decision 2026-11-02 (brief T16-S1 fix round 2): a machine without a vault gets a
+            // record vault at <config dir>/vault, with the record-format marker, as plain init makes
+            // it; a plain accept never writes a classic vault (which commands refuse) again.
+            if (fileStore is null)
+                throw new TswapException("'slot accept' needs a file-based config.");
+            var newVaultDir = Path.GetFullPath(Path.Combine(fileStore.ConfigDir, "vault"));
+            InitCommand.RequireAbsentOrEmpty(ctx, fileStore.Owner, newVaultDir);
+            InitCommand.CreateRecordVault(ctx, fileStore, finalConfig, newVaultDir);
+            c.Out.WriteLine($"Vault folder: {newVaultDir} (a record vault, record format {KeyringFormat.RecordFormatVersion}; empty until you add secrets or merge another copy's folder)");
         }
 
         // Brief T5 decision 1: the finished slot goes back to the approver as a receipt, so its

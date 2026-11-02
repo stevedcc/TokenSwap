@@ -69,12 +69,36 @@ public class KeyringV2FixtureTests : IDisposable
     private static Config FixtureConfig() =>
         JsonSerializer.Deserialize(FixtureConfigJson, TswapJsonContext.Default.Config)!;
 
+    /// <summary>
+    /// Brief T16-S1: the fixture's version 2 keyring in a record vault (what <c>migrate
+    /// --to-records</c> makes of it: the keyring file is copied as it is), in
+    /// <paramref name="configDir"/> with its folder at <c>vault</c>. Commands now refuse the classic
+    /// fixture itself (ruling 5), so the version 2 refusals are tested here. Returns the config.json
+    /// text written.
+    /// </summary>
+    internal static string WriteAsRecordVault(string configDir)
+    {
+        var fixture = JsonSerializer.Deserialize(FixtureConfigJson, TswapJsonContext.Default.Config)!;
+        var vaultDir = Path.Combine(configDir, "vault");
+        Directory.CreateDirectory(vaultDir);
+        File.WriteAllBytes(Path.Combine(vaultDir, RecordVaultStore.KeyringFileName), Convert.FromBase64String(fixture.Keyring!));
+        var text = JsonSerializer.Serialize(fixture with
+        {
+            Keyring = null,
+            Store = RecordVaultStore.StoreName,
+            VaultDir = vaultDir,
+            OriginId = RecordVaultStore.NewOriginId(),
+        }, TswapJsonContext.Default.Config);
+        File.WriteAllText(Path.Combine(configDir, "config.json"), text);
+        return text;
+    }
+
     private CommandContext Context(FakeConsole console, string[] args)
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
         var yubiKeys = new TestKeyYubiKeyService(_testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: _testKey);
-        return new CommandContext(console, env, new Storage(_dir), yubiKeys, unlocker, _testKey, SudoBypass: true);
+        return new CommandContext(console, env, VaultStores.Open(_dir), yubiKeys, unlocker, _testKey, SudoBypass: true);
     }
 
     [Fact]
@@ -91,6 +115,12 @@ public class KeyringV2FixtureTests : IDisposable
     [Fact]
     public void Fixture_UnlocksAndGetReturnsTheSecret()
     {
+        // Brief T16-S1 (ruling 5): a classic vault is converted before use; the version 2 fixture
+        // converts, and the secret reads back from the record vault.
+        string[] migrate = ["migrate", "--to-records"];
+        var migrateConsole = new FakeConsole();
+        Assert.True(CliRunner.Run(Context(migrateConsole, migrate), migrate) == 0, migrateConsole.ErrorText);
+        Assert.Equal(2, KeyringCodec.Decode(File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring"))).FormatVersion);
         var console = new FakeConsole();
         string[] args = ["get", FixtureSecretName];
 
@@ -129,6 +159,10 @@ public class KeyringV2FixtureTests : IDisposable
         var requestFile = Path.Combine(newMachineDir, "request.json");
         var approveFile = Path.Combine(newMachineDir, "approve.json");
         Assert.Equal(0, RunOn(newMachineDir, newMachineKey, "slot", "request", requestFile));
+        // Brief T16-S1 (ruling 5): the classic fixture is converted first (its keyring stays version 2).
+        Assert.Equal(0, RunOn(_dir, _testKey, "migrate", "--to-records"));
+        var configAfterMigration = File.ReadAllText(Path.Combine(_dir, "config.json"));
+        var keyringAfterMigration = File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring"));
 
         var console = new FakeConsole();
         string[] approve = ["slot", "approve", requestFile, approveFile];
@@ -138,7 +172,8 @@ public class KeyringV2FixtureTests : IDisposable
         Assert.Contains("format version 2", console.ErrorText);
         Assert.Contains("tswap init --keyring", console.ErrorText);
         Assert.False(File.Exists(approveFile));
-        Assert.Equal(FixtureConfigJson, File.ReadAllText(Path.Combine(_dir, "config.json")));
+        Assert.Equal(configAfterMigration, File.ReadAllText(Path.Combine(_dir, "config.json")));
+        Assert.Equal(keyringAfterMigration, File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring")));
         Assert.Equal(0, RunOn(_dir, _testKey, "get", FixtureSecretName));
     }
 
@@ -160,6 +195,6 @@ public class KeyringV2FixtureTests : IDisposable
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
         var yubiKeys = new TestKeyYubiKeyService(testKey);
-        return new CommandContext(console, env, new Storage(dir), yubiKeys, new VaultUnlocker(yubiKeys, overrideKey: testKey), testKey, SudoBypass: true);
+        return new CommandContext(console, env, VaultStores.Open(dir), yubiKeys, new VaultUnlocker(yubiKeys, overrideKey: testKey), testKey, SudoBypass: true);
     }
 }

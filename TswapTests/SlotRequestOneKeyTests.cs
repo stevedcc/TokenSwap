@@ -49,7 +49,7 @@ public class SlotRequestOneKeyTests : IDisposable
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _routerDir, Verbose = false, CommandArgs = args };
         var unlocker = new VaultUnlocker(_routerKeys, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, RouterTpm)]);
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_routerDir), _routerKeys, unlocker, TestKey: RouterTpm, SudoBypass: true), args);
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_routerDir), _routerKeys, unlocker, TestKey: RouterTpm, SudoBypass: true), args);
         return (exit, console.OutText, console.ErrorText);
     }
 
@@ -57,12 +57,12 @@ public class SlotRequestOneKeyTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _desktopDir, Verbose = false, CommandArgs = args };
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_desktopDir), _desktopKeys, new VaultUnlocker(_desktopKeys), TestKey: null, SudoBypass: true), args);
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_desktopDir), _desktopKeys, new VaultUnlocker(_desktopKeys), TestKey: null, SudoBypass: true), args);
         return (exit, console.OutText, console.ErrorText);
     }
 
-    private static Config LoadConfig(string dir) =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring is in its folder).</summary>
+    private static Config LoadConfig(string dir) => VaultStores.Open(dir).LoadConfig();
 
     private static Keyring DecodeKeyring(Config config) => KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
@@ -116,9 +116,13 @@ public class SlotRequestOneKeyTests : IDisposable
         Assert.Equal(desktop.KeyringSlotId, Convert.ToBase64String(keyring.Slots[2].SlotId));
 
         // Key A opens the accepted vault on the desktop; key B does not. (v0 carries no secrets:
-        // accept makes an empty secrets file, so copy the router's across, as sharing would.)
-        File.Copy(Path.Combine(_routerDir, "secrets.json.enc"), Path.Combine(_desktopDir, "secrets.json.enc"), overwrite: true);
+        // accept makes a record vault without records, so the router's are copied across, as sharing would.)
+        // Brief T16-S1: both are record vaults (a plain accept makes one, owner decision 2026-11-02):
+        // the desktop gets the router's record files.
         _desktopKeys.PluggedIn = [SerialA];
+        Directory.CreateDirectory(Path.Combine(_desktopDir, "vault", "records")); // an empty vault has no records folder yet
+        foreach (var record in Directory.GetFiles(Path.Combine(_routerDir, "vault", "records")))
+            File.Copy(record, Path.Combine(_desktopDir, "vault", "records", Path.GetFileName(record)), overwrite: true);
         var (getExit, getOut, getErr) = OnDesktop("", "get", "router");
         Assert.True(getExit == 0, getErr);
         Assert.Equal("router-pw", getOut.Trim());
@@ -268,8 +272,7 @@ public class SlotRequestOneKeyTests : IDisposable
     [Fact]
     public void ApproveOnAVersion2Vault_IsRefused()
     {
-        File.WriteAllText(Path.Combine(_routerDir, "config.json"), KeyringV2FixtureTests.FixtureConfigJson);
-        File.WriteAllBytes(Path.Combine(_routerDir, "secrets.json.enc"), Convert.FromBase64String(KeyringV2FixtureTests.FixtureSecretsFileBase64));
+        KeyringV2FixtureTests.WriteAsRecordVault(_routerDir); // brief T16-S1: a record vault with the v2 keyring
         Request(SerialA);
         var testKey = Convert.FromHexString(KeyringV2FixtureTests.FixtureTestKeyHex);
         var yubiKeys = new TestKeyYubiKeyService(testKey);
@@ -277,7 +280,7 @@ public class SlotRequestOneKeyTests : IDisposable
         string[] args = ["slot", "approve", RequestFile, ApproveFile];
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _routerDir, Verbose = false, CommandArgs = args };
 
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_routerDir), yubiKeys,
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_routerDir), yubiKeys,
             new VaultUnlocker(yubiKeys, overrideKey: testKey), testKey, SudoBypass: true), args);
 
         Assert.NotEqual(0, exit);

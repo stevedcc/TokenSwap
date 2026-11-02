@@ -244,7 +244,9 @@ public class SlotMergeTests : IDisposable
         }, TswapCore.TswapJsonContext.Default.Config));
         var before = _router.ConfigText;
 
-        var (exit, _, stderr) = _router.Run("", "slot", "merge", copy.ConfigPath);
+        // Brief T16-S1: the copy is a record vault, whose keyring is in its folder (its config.json
+        // carries none), so its slots come in by 'vault merge' of that folder.
+        var (exit, _, stderr) = _router.Run("", "vault", "merge", copy.VaultDir!);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("did not approve", stderr);
@@ -277,7 +279,8 @@ public class SlotMergeTests : IDisposable
         other.Ok("", "init", "--tpm");
         var before = _router.ConfigText;
 
-        var (exit, _, stderr) = _router.Run("", "slot", "merge", other.ConfigPath, "--yes");
+        // Brief T16-S1: another record vault's keyring is in its folder; 'vault merge' reads it.
+        var (exit, _, stderr) = _router.Run("", "vault", "merge", other.VaultDir!, "--yes");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("another vault", stderr);
@@ -290,14 +293,14 @@ public class SlotMergeTests : IDisposable
         RouterVault();
         var receipt = Join(_desktop, _router, SerialA);
         var v2 = Another("v2");
-        File.WriteAllText(v2.ConfigPath, KeyringV2FixtureTests.FixtureConfigJson);
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(v2.Dir); // brief T16-S1: a record vault with the v2 keyring
 
         var (exit, _, stderr) = v2.Run("", "slot", "merge", receipt, "--yes");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", stderr);
         Assert.Contains("create a new vault", stderr);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, v2.ConfigText);
+        Assert.Equal(configText, v2.ConfigText);
     }
 
     [Fact]
@@ -315,8 +318,9 @@ public class SlotMergeTests : IDisposable
         Assert.Equal(after, _router.ConfigText);
         Assert.Equal(backups, _router.Backups);
 
-        // The joiner's whole config.json is a no-op too now: every slot in it is here already.
-        Assert.Contains("Nothing to merge", _router.Ok("", "slot", "merge", _desktop.ConfigPath));
+        // The joiner's whole keyring is a no-op too now: every slot in it is here already. (Brief
+        // T16-S1: a plain accept makes a record vault, whose keyring is in its folder: 'vault merge'.)
+        Assert.Contains("Nothing to merge", _router.Ok("", "vault", "merge", _desktop.VaultDir!));
         Assert.Equal(after, _router.ConfigText);
     }
 
@@ -326,7 +330,8 @@ public class SlotMergeTests : IDisposable
         RouterVault();
         Join(_desktop, _router, SerialA);
 
-        _router.Ok("", "slot", "merge", _desktop.ConfigPath);
+        // Brief T16-S1: the joiner is a record vault (keyring in its folder), merged by 'vault merge'.
+        _router.Ok("", "vault", "merge", _desktop.VaultDir!);
 
         Assert.Equal(3, _router.Keyring.Slots.Count);
         Assert.Null(_router.Config.ApprovedSlots);
@@ -347,8 +352,9 @@ public class SlotMergeTests : IDisposable
         Assert.Equal(3, _router.Keyring.Slots.Count);
         Assert.Equal(3, copy.Keyring.Slots.Count);
 
-        // The copy's config.json: its own approval (the laptop) is not the router's, so --yes.
-        var stdout = _router.Ok("", "slot", "merge", copy.ConfigPath, "--yes");
+        // The copy's keyring (brief T16-S1: in its vault folder, merged by 'vault merge'): its own
+        // approval (the laptop) is not the router's, so --yes.
+        var stdout = _router.Ok("", "vault", "merge", copy.VaultDir!, "--yes");
         Assert.Contains("1 slot", stdout);
 
         Assert.Equal(4, _router.Keyring.Slots.Count);
@@ -360,7 +366,7 @@ public class SlotMergeTests : IDisposable
         _router.Tpm = tpm;
 
         // And back the other way: the copy gets the desktop's slot, so both are the union.
-        copy.Ok("", "slot", "merge", _router.ConfigPath, "--yes");
+        copy.Ok("", "vault", "merge", _router.VaultDir!, "--yes");
         Assert.Equal(
             _router.Keyring.Slots.Select(s => Convert.ToBase64String(s.SlotId)).Order(),
             copy.Keyring.Slots.Select(s => Convert.ToBase64String(s.SlotId)).Order());

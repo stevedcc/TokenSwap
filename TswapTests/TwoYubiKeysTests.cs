@@ -255,9 +255,10 @@ public class TwoYubiKeysTests : IDisposable
     // A classic XOR vault: either enrolled key opens it, so unattended takes the first that answers.
     private void ClassicVaultWithAAndB()
     {
+        // Brief T16-S1: init can't make a classic XOR vault any more; it is written as 0.1's init did.
         _m.Keys.PluggedIn = [SerialA, SerialB];
-        _m.Ok("1\n2\n1\n", "init"); // enrolment still asks which key is #1 and #2, then the entropy mode
-        _m.Ok("", "create", "classic-secret");
+        ClassicVaultTestSupport.CreateXorVault(_m, SerialA, SerialB,
+            new Dictionary<string, Secret> { ["classic-secret"] = new("v", DateTime.UtcNow, DateTime.UtcNow) });
         _m.Keys.Challenges.Clear();
     }
 
@@ -268,11 +269,13 @@ public class TwoYubiKeysTests : IDisposable
         _m.Keys.PluggedIn = [SerialC, SerialA, SerialB];
         _m.Keys.NotAnswering.Add(SerialA);
 
-        var (exit, stdout, stderr) = _m.Run("2\n", "names");
+        // Brief T16-S1 (ruling 5): a classic vault opens for export and migrate only, so the unattended
+        // unlock is exercised by export: its two passphrase reads, and no read for a key choice.
+        var (exit, stdout, stderr) = _m.Run("pass\npass\n2\n", "export", _m.PathOf("export.json"));
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains("classic-secret", stdout);
-        Assert.Equal(0, _m.LastConsole!.Reads);
+        Assert.Contains("Exported 1 secret(s)", stdout);
+        Assert.Equal(2, _m.LastConsole!.Reads);
         Assert.DoesNotContain("Select YubiKey", stdout + stderr);
         Assert.Equal([SerialA, SerialB], _m.Keys.Challenges.Select(c => c.Serial));
     }
@@ -284,7 +287,7 @@ public class TwoYubiKeysTests : IDisposable
         _m.Keys.PluggedIn = [SerialA];
         _m.YubiKeySerialVariable = SerialB.ToString();
 
-        var (exit, _, stderr) = _m.Run("", "names");
+        var (exit, _, stderr) = _m.Run("pass\npass\n", "export", _m.PathOf("export.json")); // brief T16-S1: export, not names (ruling 5)
 
         Assert.Equal(1, exit);
         Assert.Contains("TSWAP_YUBIKEY_SERIAL", stderr);

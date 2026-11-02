@@ -53,8 +53,9 @@ public class SlotRequestHardwareTests : IDisposable
         _router.Ok("", "slot", "approve", request, approve);
         joiner.Ok("", "slot", "accept", approve);
         _router.Ok("", "slot", "merge", approve + ".receipt.json");
-        // v0 carries no secrets: accept makes an empty secrets file; take the router's.
-        File.Copy(_router.SecretsPath, joiner.SecretsPath, overwrite: true);
+        // v0 carries no secrets: accept makes an empty secrets file; take the router's (brief T16-S1:
+        // after converting the accepted classic vault, the router's record files).
+        RecordVaultTestSupport.ConvertAndTakeRecords(joiner, _router);
     }
 
     /// <summary>

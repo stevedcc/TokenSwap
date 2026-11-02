@@ -45,8 +45,69 @@ public sealed record CommandContext(
         _storage = new(openStorage);
     }
 
-    /// <summary>The vault store, opened on first use.</summary>
-    public IVaultStore Storage => _storage.Value;
+    /// <summary>
+    /// The vault store, opened on first use. Brief T16-S1 (ruling 5): a classic single-file vault is
+    /// refused here, when the store opens, unless the running command works on one
+    /// (<see cref="ClassicVaultAllowed"/>), so a command that never opens the store is unaffected.
+    /// </summary>
+    public IVaultStore Storage
+    {
+        get
+        {
+            var store = _storage.Value;
+            // Once, at the first use: a command that has since written config.json (slot request on a
+            // machine without a vault) must not refuse its own later reads.
+            if (!_classicChecked)
+            {
+                if (!ClassicVaultAllowed && IsClassicVault(store))
+                    throw ClassicVaultRefusal(Prefix);
+                _classicChecked = true;
+            }
+            return store;
+        }
+    }
+
+    private bool _classicChecked;
+
+    /// <summary>
+    /// Brief T16-S1: whether the running command may open a classic vault
+    /// (<see cref="ICliCommand.WorksOnClassicVault"/>); set by <see cref="CommandRegistry.Dispatch"/>.
+    /// </summary>
+    public bool ClassicVaultAllowed { get; set; }
+
+    /// <summary>
+    /// A classic vault: the single-file store holding an initialized vault, i.e. a
+    /// <c>secrets.json.enc</c>, or a <c>config.json</c> that names a way to open one (a keyring, the
+    /// two-YubiKey pair, or a single-slot TPM / Secure Enclave key). A folder with neither is not
+    /// initialized (commands report that as before), and a <c>config.json</c> holding only a pending
+    /// <c>slot request</c> belongs to a machine about to join a shared vault folder with
+    /// <c>slot accept --vault-dir</c>: neither is refused. An unreadable config.json is left to the
+    /// command, which reports it as before.
+    /// </summary>
+    internal static bool IsClassicVault(IVaultStore store)
+    {
+        if (store is not TswapCore.Storage classic)
+            return false;
+        if (classic.Owner.FileExists(classic.SecretsFile))
+            return true;
+        if (!classic.Owner.FileExists(classic.ConfigFile))
+            return false;
+        try
+        {
+            var config = classic.LoadConfig();
+            return config.Keyring is not null || config.YubiKeySerials is { Count: > 0 }
+                || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null;
+        }
+        catch (Exception ex) when (ex is TswapException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Brief T16-S1 (ruling 5): the one refusal every command but init, migrate and export gives on a classic vault.</summary>
+    internal static TswapException ClassicVaultRefusal(string prefix) => new(
+        $"This is a classic single-file vault (secrets.json.enc), which tswap 0.2 only migrates. Run 'sudo {prefix} migrate " +
+        $"--to-records' to convert it (or 'sudo {prefix} export <file>' to take your secrets out).");
 
     /// <summary>
     /// Brief T12: runs a Secure Enclave call as this vault folder's owner (see

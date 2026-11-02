@@ -23,8 +23,14 @@ public static class KeyringFormat
     /// value, not a breaking rewrite of this constant's meaning.
     /// <para><b>2 since T6 fix round 1:</b> the payload gained the previous value. Version 1 was
     /// written only by pre-release builds of brief T6 and is refused (<see cref="SecretRecordCodec.Decode"/>).</para>
+    /// <para><b>3 since brief T16-S1 (v0.2.0):</b> split envelopes, an encrypted metadata section with
+    /// keyed fingerprints plus one value section per retained version. Format 2 stays readable, and is
+    /// still what the store writes until the vault folder holds the <c>record-format</c> marker.</para>
     /// </summary>
-    public const byte RecordFormatVersion = 2;
+    public const byte RecordFormatVersion = 3;
+
+    /// <summary>Brief T16-S1: the single-payload layout of v0.1.x, still read and written on request.</summary>
+    public const byte RecordFormatVersionV2 = 2;
 
     /// <summary>
     /// 4-byte sanity marker at the start of every record file/blob. Distinguishes a

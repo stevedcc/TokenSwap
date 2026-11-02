@@ -66,7 +66,8 @@ public class RecoveryKeyTests : IDisposable
 
         Assert.Equal(3, desktop.Keyring.Slots.Count);
         _keys.PluggedIn = [];
-        _router.Ok("", "slot", "merge", desktop.ConfigPath, "--yes");
+        // Brief T16-S1: the copy is a record vault (keyring in its folder), merged back by 'vault merge'.
+        _router.Ok("", "vault", "merge", desktop.VaultDir!, "--yes");
         Assert.Equal(desktop.Keyring.Slots.Select(s => s.SlotId), _router.Keyring.Slots.Select(s => s.SlotId));
 
         var tpm = _router.Tpm;
@@ -318,13 +319,13 @@ public class RecoveryKeyTests : IDisposable
     [Fact]
     public void Recover_OnAVersion2Keyring_IsRefusedWithTheExistingMessage()
     {
-        File.WriteAllText(_router.ConfigPath, KeyringV2FixtureTests.FixtureConfigJson);
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(_router.Dir); // brief T16-S1: a record vault with the v2 keyring
 
         var (exit, _, stderr) = _router.Run("anything\n", "recover", "--yubikey");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", stderr);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, _router.ConfigText);
+        Assert.Equal(configText, _router.ConfigText);
     }
 
     [Fact]
