@@ -187,6 +187,68 @@ public class VaultUnlockerPasswordTests
     }
 
     [Fact]
+    public void WrongPassword_TpmAndYubiKeySlots_TheServicesCloneIsFreedToo()
+    {
+        // Review T17 p4 MiMo I3: on the failure path the clone handed to the service is freed as well as the
+        // original (ruling 13's per-service finally), not only on success.
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var tpmVault = new VaultBuilder();
+        var own = tpmVault.AddTpmSlot(MachineKey, password: true);
+        var ykVault = new VaultBuilder();
+        ykVault.AddYubiKeySlot(keys, SerialA, password: true);
+        var frees = 0;
+        StretchedPassword.BeforeFreeObserver = _ => Interlocked.Increment(ref frees);
+        try
+        {
+            Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(SimulatedYubiKeyService.WithKeys()),
+                tpmVault.Config(HardwareBackend.Tpm, own), new UnlockSources(null, Prompt(WrongPassword))));
+            Assert.Equal(2, frees); // the TPM service's clone and the original
+
+            frees = 0;
+            Assert.ThrowsAny<TswapException>(() => Unlock(new VaultUnlocker(keys),
+                ykVault.Config(null, null), new UnlockSources(null, Prompt(WrongPassword))));
+            Assert.Equal(2, frees); // the YubiKey candidate's clone and the original
+        }
+        finally
+        {
+            StretchedPassword.BeforeFreeObserver = null;
+        }
+    }
+
+#pragma warning disable CA1416 // the Secure Enclave service runs against the fake shim here
+    [Fact]
+    public void WrongPassword_SecureEnclaveService_FreesWhatTheProviderGave()
+    {
+        var shim = new FakeSecureEnclaveShim();
+        using var _ = TswapCore.Vault.Interop.AppleSecureEnclaveInterop.UseShim(shim);
+        using var right = StretchedPassword.FromBytes(Password);
+        var service = new SecureEnclaveHardwareService(requirePresence: false);
+        var (_, hwBlob) = service.Enroll(right);
+        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+            SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
+        var given = new List<StretchedPassword>();
+        var frees = 0;
+        StretchedPassword.BeforeFreeObserver = _ => Interlocked.Increment(ref frees);
+        try
+        {
+            Assert.Throws<VaultPasswordRefusedException>(() => service.Unlock(config, _ => 0, () =>
+            {
+                var p = StretchedPassword.FromBytes(WrongPassword);
+                given.Add(p);
+                return p;
+            }));
+        }
+        finally
+        {
+            StretchedPassword.BeforeFreeObserver = null;
+        }
+
+        Assert.Equal(1, frees);
+        Assert.Throws<ObjectDisposedException>(() => Assert.Single(given).CopyTo(new byte[32]));
+    }
+#pragma warning restore CA1416
+
+    [Fact]
     public void ProvidedPassword_IsDisposedAfterAFailedUnlock()
     {
         var vault = new VaultBuilder();
@@ -541,6 +603,22 @@ public class VaultUnlockerPasswordTests
         var own3 = passwordFree.AddTpmSlot(MachineKey, password: false);
         passwordFree.AddYubiKeySlot(keys, SerialA, password: false);
         Assert.False(VaultUnlocker.CouldNeedPassword(passwordFree.Config(HardwareBackend.Tpm, own3), [SerialA, SerialB]));
+
+        // Review T17 p4 MiMo M3: a corrupt or needs-newer-tswap slot is set aside, never counted as a password slot
+        // (ruling 3), so a vault whose only "password" slots are such slots never asks for the password.
+        var corruptOwn = new VaultBuilder();
+        var own4 = corruptOwn.AddTpmSlot(MachineKey, password: true);
+        var tstp = (byte[])corruptOwn.Slots[0].HwBlob!.Clone();
+        tstp[5] = 0x00; // a TSTP header without the password flag: corrupt
+        corruptOwn.ReplaceBlob(own4, tstp);
+        Assert.False(VaultUnlocker.CouldNeedPassword(corruptOwn.Config(HardwareBackend.Tpm, own4), []));
+
+        var newerYubiKey = new VaultBuilder();
+        var newer = newerYubiKey.AddYubiKeySlot(keys, SerialA, password: true);
+        var tsyk = (byte[])newerYubiKey.Slots[0].HwBlob!.Clone();
+        tsyk[^1] = 0x03; // a flag this tswap doesn't know: needs a newer tswap
+        newerYubiKey.ReplaceBlob(newer, tsyk);
+        Assert.False(VaultUnlocker.CouldNeedPassword(newerYubiKey.Config(null, null), [SerialA]));
     }
 
     // ------------------------------------------------------------------ set-aside slots (ruling 3)

@@ -172,14 +172,16 @@ public class VaultPasswordFileTests
     {
         var bytes = Create().Encode();
 
+        // 8-byte windows (review T17 p4 MiMo M6: 16 let an 8-byte leak through).
+        const int Window = 8;
         foreach (var secret in new[] { Stretched, VaultKey })
         {
-            for (var s = 0; s + 16 <= secret.Length; s++)
+            for (var s = 0; s + Window <= secret.Length; s++)
             {
-                var window = secret.AsSpan(s, 16);
-                for (var f = 0; f + 16 <= bytes.Length; f++)
-                    Assert.False(bytes.AsSpan(f, 16).SequenceEqual(window),
-                        $"file bytes {f}..{f + 15} equal a secret window at {s}");
+                var window = secret.AsSpan(s, Window);
+                for (var f = 0; f + Window <= bytes.Length; f++)
+                    Assert.False(bytes.AsSpan(f, Window).SequenceEqual(window),
+                        $"file bytes {f}..{f + Window - 1} equal a secret window at {s}");
             }
         }
     }

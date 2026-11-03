@@ -192,10 +192,20 @@ public class TpmLockoutWarningTests : IDisposable
         // FleetMachine runs in test mode (a simulated TPM): the real tpm2_getcap would probe this machine's TPM,
         // which the simulated slot doesn't use. No seam: nothing is printed, whatever the real TPM says.
         var m = Machine("test-mode");
+        // Review T17 p4 MiMo M1: record every tpm2-tools call, so the test fails if the real probe runs at all,
+        // not only when this machine's real TPM happens to have an empty lockout auth.
+        var calls = new List<string>();
+        using var _ = TswapCore.Vault.Interop.Tpm2ToolsInterop.UseRunner((command, _, _, _) =>
+        {
+            lock (calls)
+                calls.Add(command);
+            return new TswapCore.Vault.Interop.TpmToolRun(0, "lockoutAuthSet: 0\n"u8.ToArray(), "");
+        });
 
         var (exit, stdout, stderr) = m.Run(Twice(Password), "init", "--tpm", "--password", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         Assert.Equal(0, Count(stdout + stderr));
+        Assert.DoesNotContain("tpm2_getcap", calls);
     }
 }

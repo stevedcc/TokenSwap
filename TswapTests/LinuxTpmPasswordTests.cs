@@ -115,7 +115,7 @@ public sealed class LinuxTpmPasswordTests
         {
             var loaded = LoadPackage(package, tmp);
 
-            var withHex = Tool("tpm2_unseal", null, "-c", loaded, "-p", "hex:" + Convert.ToHexString(Bytes(password)));
+            var withHex = Tool("tpm2_unseal", null, "-c", loaded, "-p", "hex:" + Convert.ToHexStringLower(Bytes(password)));
             Assert.Equal(0, withHex.Exit);
             Assert.Equal(key, withHex.Stdout);
 

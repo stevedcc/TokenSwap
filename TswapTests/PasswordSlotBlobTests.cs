@@ -295,6 +295,9 @@ public class PasswordSlotBlobTests
             { "TSYK v2 0x00", YubiKey(2, 0x00), SlotPasswordKind.Corrupt },
             { "TSYK v3", YubiKey(3, 0x01), SlotPasswordKind.NeedsNewerTswap },
             { "TSYK v2, 74 bytes", v2[..74], SlotPasswordKind.Corrupt },
+            // Review T17 p4 MiMo M3: ruling 3's "trailing" half, for the fixed-length YubiKey blobs.
+            { "TSYK v2, a trailing byte", [.. v2, 0x00], SlotPasswordKind.Corrupt },
+            { "TSYK v1, a trailing byte", [.. v1, 0x00], SlotPasswordKind.Corrupt },
             { "TSTP without its flags byte", "TSTP"u8.ToArray().Append((byte)1).ToArray(), SlotPasswordKind.Corrupt },
             { "legacy TPM", LegacyTpm, SlotPasswordKind.None },
             { "legacy Secure Enclave", LegacySe, SlotPasswordKind.None },
