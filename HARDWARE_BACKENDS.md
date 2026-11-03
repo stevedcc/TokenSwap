@@ -825,11 +825,11 @@ its backend the 32-byte **stretched password**. Where the hardware can, the hard
   unwrap, which refuses with that path's generic "Could not unlock with the Secure Enclave…" text
   instead of the TPM's stripped-header text (it can't tell the case apart). The password still
   protects the slot. Which unwrap depends on the presence choice recorded in `config.json`
-  (`RequiresTouch`, brief T11): a `--no-touch` slot uses `tswap_se_unwrap_no_interaction` (the old
+  (`--with-touch` / `--no-touch`): a `--no-touch` slot uses `tswap_se_unwrap_no_interaction` (the old
   unwrap with the key restored under `interactionNotAllowed`, no credential), so a stripped password
-  key fails at once instead of waiting for an application-password dialog nobody can answer (CI's
-  headless runner waited until its 30 s bound); a `--with-touch` slot, or one with no recorded choice
-  (every slot before T11 had presence), keeps the old interactive `tswap_se_unwrap`, where the user at
+  key fails at once instead of waiting for an application-password dialog nobody can answer (on a
+  machine with no one at it, that wait never ends); a `--with-touch` slot, or one with no recorded
+  choice (a slot made before the choice existed, which always had presence), keeps the old interactive `tswap_se_unwrap`, where the user at
   the machine can cancel the dialog. An older `libtswapse.dylib` without the new entry point fails
   closed for `--no-touch` slots ("update libtswapse.dylib together with tswap").
 - **Copies tswap can't wipe:** the shim's Swift `Data(bytes:count:)` copy of the credential and the

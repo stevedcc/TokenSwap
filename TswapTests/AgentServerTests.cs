@@ -54,10 +54,16 @@ public class AgentServerTests : IAsyncLifetime
         var server = await _h.StartAsync();
         var real = PeerIdentity.ReadCredentials;
         PeerIdentity.ReadCredentials = socket => (AgentHarness.MyUid + 1, Environment.ProcessId);
-        Assert.Null(await _h.RawAsync(AgentOp.Status));
-        Assert.Null(await _h.RawAsync(AgentOp.Status));
-        Assert.Equal(2, server.RefusedPeers);
-        PeerIdentity.ReadCredentials = real;
+        try
+        {
+            Assert.Null(await _h.RawAsync(AgentOp.Status));
+            Assert.Null(await _h.RawAsync(AgentOp.Status));
+            Assert.Equal(2, server.RefusedPeers);
+        }
+        finally
+        {
+            PeerIdentity.ReadCredentials = real; // review T17 re-review N8: restored even when an assertion fails
+        }
 
         var running = Assert.IsType<AgentAnswer.Running>(await Task.Run(() =>
             AgentClient.Status(_h.SocketPath, _h.VaultId, AgentHarness.MyUid)));

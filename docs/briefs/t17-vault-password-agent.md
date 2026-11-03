@@ -154,7 +154,7 @@ reports (`t17-impl-report*.md`) and in the docs Task 14 wrote.
 3. **The keyring format doesn't change. Only password slots get new blob bytes**, so a vault without a password stays
    byte-identical to today (Goal 4).
    - **YubiKey:** `YubiKeySlotBlob` version 2 is version 1 plus a trailing `flags` byte (bit 0 = password; other bits
-     must be 0), `EncodedSize = 75`. It is written only for password slots, which always have bit 0 set. Version 1 is
+     must be 0), 75 bytes (`PasswordEncodedSize`; `EncodedSize` stays the version-1 size, 74). It is written only for password slots, which always have bit 0 set. Version 1 is
      unchanged.
      - The v2 KEK is
        `HKDF-SHA256(ikm = response(20) ‖ stretched(32), salt = blob.Salt, info = "tswap/yubikey-slot/v2" ‖ slotId, 32)`.
