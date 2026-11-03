@@ -304,7 +304,9 @@ public sealed class BrokerPasswordState : IDisposable
         if (expiresAt is { } deadline)
         {
             var due = deadline - _time.GetUtcNow();
-            var timer = _time.CreateTimer(_ => _ = ReturnToLockedAsync("timeout"), null,
+            // The callback names this unlock's generation: a timer whose callback still runs after Dispose (it was
+            // already queued) or that outlived a lock never ends a later unlock.
+            var timer = _time.CreateTimer(_ => _ = ReturnToLockedCoreAsync("timeout", arrivedGeneration), null,
                 due < TimeSpan.Zero ? TimeSpan.Zero : due, Timeout.InfiniteTimeSpan);
             lock (_gate)
                 _expiry = timer;
@@ -331,7 +333,13 @@ public sealed class BrokerPasswordState : IDisposable
     /// new unlocks; wait for every in-flight unlock (leases, and a proof in flight) to finish and dispose
     /// its clones; zero the held password; unload the ssh keys; only then make the process dumpable.
     /// </summary>
-    public async Task ReturnToLockedAsync(string reason)
+    public Task ReturnToLockedAsync(string reason) => ReturnToLockedCoreAsync(reason, onlyGeneration: null);
+
+    /// <summary>
+    /// <see cref="ReturnToLockedAsync"/>; with <paramref name="onlyGeneration"/> (an unlock's timeout), nothing
+    /// happens unless that unlock is still the current one.
+    /// </summary>
+    private async Task ReturnToLockedCoreAsync(string reason, int? onlyGeneration)
     {
         await _transitions.WaitAsync().ConfigureAwait(false);
         try
@@ -342,6 +350,8 @@ public sealed class BrokerPasswordState : IDisposable
             ITimer? expiry;
             lock (_gate)
             {
+                if (onlyGeneration is { } generation && generation != _generation)
+                    return;
                 wasUnlocked = _unlocked;
                 if (!wasUnlocked && !_proofInFlight)
                 {

@@ -488,6 +488,37 @@ public class BrokerLockedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StaleExpiryTimer_FiringAfterALockAndANewUnlock_DoesNotLockTheNewUnlock()
+    {
+        // Review T17 re-review (verify before merge): a timer's callback can still run after Dispose (it was
+        // already queued). The first unlock's timer, fired late, must not end a later unlock.
+        if (OperatingSystem.IsWindows())
+            return;
+        await _c.StartAsync();
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync(expiresAt: _c.Clock.GetUtcNow().AddMinutes(5)));
+        var firstTimer = _c.Clock.CreatedCallbacks.Last();
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.LockAsync());
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync(expiresAt: _c.Clock.GetUtcNow().AddMinutes(60)));
+        var secondExpiry = _c.State.ExpiresAt;
+
+        firstTimer(); // its return to locked would run to its end here: nothing it awaits is pending
+
+        Assert.False(_c.State.IsLocked);
+        Assert.Equal(secondExpiry, _c.State.ExpiresAt);
+
+        // The second unlock's own timer still ends it.
+        var locked = ControlHarness.NewSignal();
+        BrokerPasswordState.DumpableObserver = d =>
+        {
+            if (d)
+                locked.TrySetResult();
+        };
+        _c.Clock.Advance(TimeSpan.FromMinutes(60));
+        await locked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(_c.State.IsLocked);
+    }
+
+    [Fact]
     public async Task DumpableTransitions_FailedProof_ClonesAndCandidateFreedBeforeDumpable()
     {
         if (OperatingSystem.IsWindows())
