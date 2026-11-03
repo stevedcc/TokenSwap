@@ -245,11 +245,12 @@ public sealed class BrokerHarness : IAsyncDisposable
     /// The harness connects as its own uid, which the broker refuses (brief T9); true (the default)
     /// turns that refusal off, as the binary's Debug-only test seam does.
     /// </param>
+    /// <param name="password">Brief T17 task 12: a password broker's lock state (null: password-free, as before).</param>
     public async Task<BrokerServer> StartAsync(string? configJson = null, IBrokerForwarder? forwarder = null,
-        IUnixOwnership? ownership = null, BrokerLimits? limits = null, bool allowOwnUid = true)
+        IUnixOwnership? ownership = null, BrokerLimits? limits = null, bool allowOwnUid = true, BrokerPasswordState? password = null)
     {
         Holder = new BrokerPolicyHolder(BrokerPolicy.Parse(configJson ?? Config()));
-        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits) with { AllowOwnUidForTests = allowOwnUid });
+        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits) with { AllowOwnUidForTests = allowOwnUid, Password = password });
         return Server;
     }
 

@@ -9,6 +9,40 @@ public enum SshKeyType { Ed25519, EcdsaP256, EcdsaP384, EcdsaP521, Rsa }
 /// <summary>A key that can't be used: unparsable, encrypted, inconsistent, unsupported or too small.</summary>
 public sealed class SshKeyException(string message) : TswapException(message);
 
+/// <summary>
+/// One configured key that can't be loaded (brief T17 ruling 14: a deferred load names it as
+/// <c>ssh key '&lt;name&gt;' can't be loaded: &lt;reason&gt;</c>). <see cref="Exception.Message"/> is the text
+/// <c>serve</c> has always stopped with; <see cref="SshAgentKeyLoader.Load"/> itself still throws a plain
+/// <see cref="TswapException"/> with it.
+/// </summary>
+public sealed class SshKeyLoadException(string keyName, string reason, string message) : TswapException(message)
+{
+    public string KeyName { get; } = keyName;
+    public string Reason { get; } = reason;
+}
+
+/// <summary>
+/// A password broker's ssh keys (brief T17 ruling 14): empty while locked, loaded after the first
+/// successful <c>broker unlock</c> (<see cref="SshAgentKeyLoader.Load"/>), emptied at every return to locked.
+/// </summary>
+public sealed class DeferredSshKeys
+{
+    private static readonly IReadOnlyDictionary<string, SshAgentKey> None = new Dictionary<string, SshAgentKey>();
+    private volatile IReadOnlyDictionary<string, SshAgentKey> _current = None;
+
+    /// <summary>The keys the agent endpoint lists and signs with now.</summary>
+    public IReadOnlyDictionary<string, SshAgentKey> Current => _current;
+
+    /// <summary>Loads every configured key (one unlock each); a key that can't be loaded throws <see cref="SshKeyLoadException"/> and nothing is kept.</summary>
+    public void Load(BrokerPolicy policy, ISshKeySource source)
+    {
+        SshAgentKeyLoader.Validate(policy);
+        _current = SshAgentKeyLoader.LoadValidated(policy, source);
+    }
+
+    public void Unload() => _current = None;
+}
+
 /// <summary>A sign request refused by the signing layer; the message is a fixed reason word for the log.</summary>
 public sealed class SshSignRefusedException(string reason) : Exception(reason);
 
@@ -29,7 +63,8 @@ public interface ISshKeySource
 /// the vault key at once. Like <see cref="VaultBrokerSecretSource"/>, without its header-value check
 /// (a PEM key has line breaks).
 /// </summary>
-public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlocker) : ISshKeySource
+/// <remarks>Brief T17: <paramref name="password"/> is a password broker's held password, null for a password-free one; no unlock asks an agent.</remarks>
+public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlocker, TswapCore.VaultPassword.VaultPasswordProvider? password = null) : ISshKeySource
 {
     public byte[] ReadKey(string secretName)
     {
@@ -37,10 +72,9 @@ public sealed class VaultSshKeySource(RecordVaultStore store, VaultUnlocker unlo
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, _ => throw new TswapException(
-                "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
+            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {
             throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
         }
@@ -70,6 +104,23 @@ public static class SshAgentKeyLoader
 {
     public static Dictionary<string, SshAgentKey> Load(BrokerPolicy policy, ISshKeySource source)
     {
+        Validate(policy);
+        try
+        {
+            return LoadValidated(policy, source);
+        }
+        catch (SshKeyLoadException ex)
+        {
+            throw new TswapException(ex.Message); // serve's start: the text it has always stopped with
+        }
+    }
+
+    /// <summary>
+    /// The checks that need no unlock (brief T17: a password broker runs them at <c>serve</c> start, and
+    /// loads the keys only after its first <c>broker unlock</c>).
+    /// </summary>
+    public static void Validate(BrokerPolicy policy)
+    {
         // Checked before any unlock (fix round 1): a socket lists at most as many keys as an identities
         // answer carries, and no two keys share a secret (the first name would silently win at sign time).
         foreach (var socket in policy.Sockets.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
@@ -79,7 +130,14 @@ public static class SshAgentKeyLoader
         foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
             if (!bySecret.TryAdd(config.SecretName, config.Name))
                 throw new TswapException($"Ssh keys '{bySecret[config.SecretName]}' and '{config.Name}' use the same secret '{config.SecretName}'; each key needs its own.");
+    }
 
+    /// <summary>
+    /// <see cref="Load"/> after <see cref="Validate"/>, for a password broker's deferred load (brief T17): a
+    /// key that can't be loaded throws <see cref="SshKeyLoadException"/>, which names it.
+    /// </summary>
+    internal static Dictionary<string, SshAgentKey> LoadValidated(BrokerPolicy policy, ISshKeySource source)
+    {
         var keys = new Dictionary<string, SshAgentKey>(StringComparer.Ordinal);
         foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
         {
@@ -91,22 +149,24 @@ public static class SshAgentKeyLoader
             }
             catch (BrokerUnlockException ex)
             {
-                throw new TswapException($"{what}: the vault can't be unlocked to derive its public key ({ex.Message}).");
+                throw new SshKeyLoadException(config.Name, $"the vault can't be unlocked to derive its public key ({ex.Message})",
+                    $"{what}: the vault can't be unlocked to derive its public key ({ex.Message}).");
             }
             catch (BrokerSecretException ex)
             {
-                throw new TswapException($"{what}: {ex.Message}.");
+                throw new SshKeyLoadException(config.Name, ex.Message, $"{what}: {ex.Message}.");
             }
             try
             {
                 using var key = SshPrivateKey.Parse(secret);
                 if (keys.Values.FirstOrDefault(k => k.PublicBlob.AsSpan().SequenceEqual(key.PublicBlob)) is { } twin)
-                    throw new TswapException($"Ssh keys '{twin.Name}' and '{config.Name}' hold the same private key; list it once (with every host it may sign in to).");
+                    throw new SshKeyLoadException(config.Name, $"it holds the same private key as '{twin.Name}'",
+                        $"Ssh keys '{twin.Name}' and '{config.Name}' hold the same private key; list it once (with every host it may sign in to).");
                 keys[config.Name] = new SshAgentKey(config.Name, config.SecretName, key.PublicBlob);
             }
             catch (SshKeyException ex)
             {
-                throw new TswapException($"{what} can't be used: {ex.Message}");
+                throw new SshKeyLoadException(config.Name, ex.Message, $"{what} can't be used: {ex.Message}");
             }
             finally
             {

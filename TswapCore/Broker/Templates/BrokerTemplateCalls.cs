@@ -144,6 +144,12 @@ namespace TswapCore.Broker
                 await Refuse(400, "argument", argProblem).ConfigureAwait(false);
                 return;
             }
+            // Brief T17: a locked broker refuses every call at once, as a busy one; never counted.
+            if (IsLocked)
+            {
+                await Refuse(503, "locked").ConfigureAwait(false);
+                return;
+            }
             var (sandbox, problem) = Templates.Sandbox(policy.BwrapPath);
             if (problem is not null)
             {

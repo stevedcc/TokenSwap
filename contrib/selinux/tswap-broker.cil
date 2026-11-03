@@ -85,3 +85,25 @@
 ; ---- the one rule for containers: connect to the broker's sockets, nothing else. (The socket
 ; file itself is container_file_t, from socket_dir's label, which containers may already write.)
 (allow container_t tswap_broker_t (unix_stream_socket (connectto)))
+
+; ---- brief T17: a password broker's control socket, <run folder>/broker-<16 hex>/control.sock
+; (`tswap broker unlock|lock|status`). It gets its own type, so no container rule ever reaches it:
+; containers may connect to tswap_broker_t's sockets only through container_file_t sock_files
+; (above), and nothing here lets container_t write or connect through a tswap_broker_control_t one.
+(type tswap_broker_control_t)
+(roletype object_r tswap_broker_control_t)
+(typeattributeset file_type (tswap_broker_control_t))
+(typeattributeset non_security_file_type (tswap_broker_control_t))
+(typeattributeset non_auth_file_type (tswap_broker_control_t))
+; The run folder is /run/user/<uid>/tswap (user_tmp_t: Fedora labels /run/user/<uid> user_tmp_t) or,
+; without /run/user/<uid>, ~/.cache/tswap/run (cache_home_t); the home and data folders cover a folder
+; made elsewhere in the home. (No user_runtime_t rule: Fedora's targeted policy has no such type, and a
+; rule naming an unknown type stops the whole module from loading.)
+(typetransition tswap_broker_t user_tmp_t sock_file "control.sock" tswap_broker_control_t)
+(typetransition tswap_broker_t cache_home_t sock_file "control.sock" tswap_broker_control_t)
+(typetransition tswap_broker_t user_home_t sock_file "control.sock" tswap_broker_control_t)
+(typetransition tswap_broker_t data_home_t sock_file "control.sock" tswap_broker_control_t)
+; Explicit, although files_unconfined_type probably covers both (no sesearch on the build machine to
+; show it); a duplicate allow is harmless in CIL.
+(allow tswap_broker_t tswap_broker_control_t (sock_file (create write getattr setattr unlink open read)))
+(allow tswap_broker_t self (unix_stream_socket (create bind listen accept read write getattr setattr setopt getopt shutdown)))
