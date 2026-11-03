@@ -273,20 +273,23 @@ public sealed class BrokerPasswordState : IDisposable
     internal bool CompleteProof(StretchedPassword candidate, DateTimeOffset? expiresAt, int arrivedGeneration)
     {
         bool keep;
+        // One lock for the decision and the hold: a return to locked can't begin between them.
         lock (_gate)
+        {
             keep = !_locking && _generation == arrivedGeneration;
+            if (keep)
+            {
+                _held = candidate;
+                _expiresAt = expiresAt;
+                _unlocked = true;
+                EndProofLocked();
+            }
+        }
         if (!keep)
         {
             candidate.Dispose();
             EndProof();
             return false;
-        }
-        lock (_gate)
-        {
-            _held = candidate;
-            _expiresAt = expiresAt;
-            _unlocked = true;
-            EndProofLocked();
         }
         if (expiresAt is { } deadline)
         {

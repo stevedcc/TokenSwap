@@ -101,10 +101,14 @@ public sealed class BrokerControlServer : IAsyncDisposable
     /// <summary>Test seam: an unlock request is about to wait for the unlock gate.</summary>
     internal static Action? UnlockQueuedObserver;
 
+    /// <summary>Test seam: a proof's candidate is now held; the answer has not been sent yet.</summary>
+    internal static Action? ProofHeldObserver;
+
     internal static void ResetSeamsForTests()
     {
         PayloadReadObserver = null;
         UnlockQueuedObserver = null;
+        ProofHeldObserver = null;
     }
 
     private readonly BrokerControlOptions _options;
@@ -414,6 +418,7 @@ public sealed class BrokerControlServer : IAsyncDisposable
                 await RefuseAsync(stream, BrokerPasswordState.LockedWhileUnlockingText).ConfigureAwait(false);
                 return;
             }
+            ProofHeldObserver?.Invoke();
 
             // Ruling 14: the ssh keys load now, under a lease, so a return to locked waits for them.
             if (_options.LoadSshKeys is { } load)
@@ -447,11 +452,13 @@ public sealed class BrokerControlServer : IAsyncDisposable
                     await RefuseAsync(stream, AgentServer.SafeMessage(new TswapException(keyFailure))).ConfigureAwait(false);
                     return;
                 }
-                if (state.Generation != arrived || state.IsLocked)
-                {
-                    await RefuseAsync(stream, BrokerPasswordState.LockedWhileUnlockingText).ConfigureAwait(false);
-                    return;
-                }
+            }
+            // A return to locked since the proof (broker lock, the timeout) caught this unlock, with or
+            // without ssh keys to load: ruling 12's answer, never "Ok" for a broker that holds nothing.
+            if (state.Generation != arrived || state.IsLocked)
+            {
+                await RefuseAsync(stream, BrokerPasswordState.LockedWhileUnlockingText).ConfigureAwait(false);
+                return;
             }
             _options.Log(state.ExpiresAt is { } until
                 ? $"unlocked until {until.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z"

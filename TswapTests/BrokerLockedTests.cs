@@ -588,6 +588,31 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(1, _c.ProveCalls);
     }
 
+    [Fact]
+    public async Task LockAfterTheProofHeld_NoSshKeys_AnswersLockedWhileUnlocking()
+    {
+        // Review T17 p2 (MiMo B1, GLM I-1): with no ssh keys configured, a return to locked that runs
+        // after the candidate is held but before the answer is sent must not be answered "Ok".
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.Null(_c.LoadSshKeys);
+        await _c.StartAsync();
+        var locks = 0;
+        BrokerControlServer.ProofHeldObserver = () =>
+        {
+            locks++;
+            _c.State.ReturnToLockedAsync("lock").GetAwaiter().GetResult();
+        };
+
+        var answer = await _c.UnlockAsync();
+
+        Assert.Equal(1, locks);
+        Assert.Equal(BrokerPasswordState.LockedWhileUnlockingText, ControlHarness.Refusal(answer));
+        Assert.True(_c.State.IsLocked);
+        Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
+        Assert.DoesNotContain("unlocked", _c.LogText);
+    }
+
     // ================================================================== macOS (seam order; the steps are faked, so this runs everywhere)
 
     [Fact]
