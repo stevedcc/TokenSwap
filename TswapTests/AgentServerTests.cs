@@ -46,6 +46,26 @@ public class AgentServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Status_ReportsTheRefusedPeersCount_OverTheWire()
+    {
+        // Review T17 p5 GLM minor 4: a non-zero count reaches 'agent status' (12-byte status payload).
+        if (OperatingSystem.IsWindows())
+            return;
+        var server = await _h.StartAsync();
+        var real = PeerIdentity.ReadCredentials;
+        PeerIdentity.ReadCredentials = socket => (AgentHarness.MyUid + 1, Environment.ProcessId);
+        Assert.Null(await _h.RawAsync(AgentOp.Status));
+        Assert.Null(await _h.RawAsync(AgentOp.Status));
+        Assert.Equal(2, server.RefusedPeers);
+        PeerIdentity.ReadCredentials = real;
+
+        var running = Assert.IsType<AgentAnswer.Running>(await Task.Run(() =>
+            AgentClient.Status(_h.SocketPath, _h.VaultId, AgentHarness.MyUid)));
+
+        Assert.Equal(2u, running.RefusedPeers);
+    }
+
+    [Fact]
     public async Task Server_AcceptsUidZero()
     {
         if (OperatingSystem.IsWindows())

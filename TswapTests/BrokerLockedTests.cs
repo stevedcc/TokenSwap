@@ -1048,6 +1048,8 @@ public class BrokerLockedTests : IAsyncLifetime
         // While another process holds the lock, the stale socket is left alone.
         var lockPath = Path.ChangeExtension(_c.SocketPath, ".lock");
         var held = await BrokerHarness.HoldLockInAnotherProcessAsync(lockPath);
+        if (OperatingSystem.IsLinux())
+            Assert.NotNull(held); // review T17 p5 M3: util-linux flock is there; the headline half must run
         if (held is not null)
         {
             using (held)

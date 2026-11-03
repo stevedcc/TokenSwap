@@ -21,7 +21,9 @@ public class SecureEnclavePasswordHardwareTests
     [Fact]
     public void RealEnclave_TouchAndPassword_RoundTrips_WrongPasswordRefused()
     {
-        // Touch the sensor when asked (twice: the right password, then possibly for the wrong one).
+        // Touch the sensor when asked (twice: the right password, then for the wrong one). Don't cancel: a
+        // cancelled prompt (-8) fails the test, since it can't tell a wrong password from a cancel (review
+        // T17 p4 I1, and p1 MiMo M8: a presence-required key must still report the wrong password as such).
         using var password = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
         using var wrong = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
         var service = new SecureEnclaveHardwareService(requirePresence: true);
@@ -32,8 +34,7 @@ public class SecureEnclavePasswordHardwareTests
 
         Assert.Equal(kek, service.Unlock(config, _ => 0, () => password.Clone()));
 
-        var ex = Assert.ThrowsAny<TswapException>(() => service.Unlock(config, _ => 0, () => wrong.Clone()));
-        Assert.True(ex is VaultPasswordRefusedException || ex.Message.Contains("code -8", StringComparison.Ordinal),
-            $"expected the wrong-password text, or -8 if the prompt was cancelled; got: {ex.Message}");
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() => service.Unlock(config, _ => 0, () => wrong.Clone()));
+        Assert.Equal(VaultPasswordMessages.WrongPasswordSecureEnclave, ex.Message);
     }
 }

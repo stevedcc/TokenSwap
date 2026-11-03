@@ -172,7 +172,9 @@ public class TpmLockoutWarningTests : IDisposable
         var m = Machine("recover");
         var init = m.Ok(Twice(Password), "init", "--tpm", "--password");
         var lines = init.ReplaceLineEndings("\n").Split('\n').ToList();
-        var recoveryKey = lines[lines.IndexOf("Recovery Private Key (base64):") + 1];
+        var marker = lines.IndexOf("Recovery Private Key (base64):");
+        Assert.True(marker >= 0, init); // review T17 p4 M4: a drifted marker fails here, not on line 0
+        var recoveryKey = lines[marker + 1];
         Probe(true);
         m.Tpm = RandomNumberGenerator.GetBytes(32); // a replaced TPM
 
