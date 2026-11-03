@@ -77,7 +77,8 @@ public static class BrokerConfigFile
         FileStream stream;
         try
         {
-            var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.ReadWrite };
+            // FileShare.None: .NET then takes the exclusive flock at open (one atomic step); FileShare.ReadWrite took a shared flock that the explicit exclusive flock below had to convert, and a conversion isn't atomic, so two takers could both give up (#236).
+            var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             stream = owner.AsOwner(path, () => new FileStream(path, options));
         }

@@ -330,7 +330,8 @@ public sealed class BrokerServer : IAsyncDisposable
             {
                 Mode = FileMode.OpenOrCreate,
                 Access = FileAccess.ReadWrite,
-                Share = FileShare.ReadWrite,
+                // FileShare.None: .NET then takes the exclusive flock at open (one atomic step); FileShare.ReadWrite took a shared flock that the explicit exclusive flock below had to convert, and a conversion isn't atomic, so two takers could both give up (#236).
+                Share = FileShare.None,
             };
             if (!OperatingSystem.IsWindows())
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
