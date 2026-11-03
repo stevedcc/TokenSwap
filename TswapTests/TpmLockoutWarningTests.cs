@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using TswapCli;
+using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Interop;
 using Xunit;
 
 namespace TswapTests;
@@ -85,6 +87,25 @@ public class TpmLockoutWarningTests : IDisposable
         Assert.True(exit == 0, stderr);
         Assert.Equal(0, Count(stdout + stderr));
         Assert.Equal(1, _probes);
+    }
+
+    [Theory]
+    [InlineData("io")]
+    [InlineData("tswap")]
+    [InlineData("other")]
+    public void Probe_AnyFailure_IsSilentNull(string kind)
+    {
+        // Ruling 17, review T17 p1 GLM M1 / MiMo I3: a failed probe is silent, whatever failed.
+        if (!OperatingSystem.IsLinux())
+            return;
+        using var _ = Tpm2ToolsInterop.UseRunner((_, _, _, _) => throw (kind switch
+        {
+            "io" => new IOException("pipe broke"),
+            "tswap" => new TswapException("tpm2-tools does not appear to be installed"),
+            _ => (Exception)new InvalidOperationException("No process is associated with this object."),
+        }));
+
+        Assert.Null(TpmLockoutProbe.IsLockoutAuthEmpty());
     }
 
     [Fact]

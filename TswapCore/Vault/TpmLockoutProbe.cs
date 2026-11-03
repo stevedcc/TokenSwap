@@ -29,12 +29,9 @@ public static partial class TpmLockoutProbe
             var match = LockoutAuthSet().Match(stdout);
             return match.Success ? match.Groups["v"].Value == "0" : null;
         }
-        catch (TswapException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            return null; // tpm2-tools missing
-        }
-        catch (IOException)
-        {
+            // Advisory only (ruling 17): tpm2-tools missing, a broken pipe, anything else, never an error.
             return null;
         }
     }
