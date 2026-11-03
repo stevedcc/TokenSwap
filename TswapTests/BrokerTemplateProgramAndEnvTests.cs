@@ -103,14 +103,56 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     }
 
     [Fact]
-    public void AProgramThatCanNotBeResolved_IsRefused()
+    public void AMissingProgramOutsideTheBinds_Loads()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        // Controller ruling: a tool that isn't installed is not a load error (it would take every
+        // socket and route offline); the call fails at run time, as before.
+        const string missing = "/usr/bin/tswap-test-no-such-program";
+        Assert.False(Path.Exists(missing));
+
+        var t = BrokerPolicy.Parse(Config(missing, Work), Host()).Templates["t"];
+
+        Assert.Equal(missing, t.Program);
+    }
+
+    [Fact]
+    public async Task AMissingProgramOutsideTheBinds_PassesServesValidation()
     {
         if (!OperatingSystem.IsLinux())
             return; // templates are Linux only (bwrap)
         const string missing = "/usr/bin/tswap-test-no-such-program";
-        Assert.False(Path.Exists(missing));
+        await using var h = new BrokerHarness();
+        var config = Config(missing, Work).Replace("\"/run/tswap-broker\"", J(h.SocketDir))
+            .Replace("\"uids\": [\"100999\"]", $"\"uids\": [\"{BrokerHarness.MyUid}\"]");
 
-        Assert.Equal($"template t: program {missing} can't be resolved (it must exist on this host, under /usr, /bin, /sbin, /lib or /lib64)",
+        await h.StartAsync(config);
+
+        Assert.Equal(missing, h.Holder!.Current.Templates["t"].Program);
+        await h.WaitForLogAsync("started: ");
+    }
+
+    [Fact]
+    public void AMissingProgramInsideABind_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var missing = Path.Combine(Work, "not-yet", "tool");
+
+        Assert.Equal(InsideBind(missing, Work), Refused(Config(missing, Work)));
+    }
+
+    [Fact]
+    public void AMissingProgramBelowASymlinkIntoABind_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var link = Path.Combine(_root, "link");
+        File.CreateSymbolicLink(link, Work);
+        var missing = Path.Combine(link, "tool"); // its nearest existing ancestor resolves into the bind
+
+        Assert.StartsWith($"template t: program {missing} (resolves to {Path.Combine(Work, "tool")}) is inside bind {Work}",
             Refused(Config(missing, Work)));
     }
 

@@ -410,8 +410,6 @@ public static class BrokerTemplateValidator
         CheckProgramOutsideBinds(name, program, binds);
         if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal)))
             throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or /lib64 (since v0.2 a program may no longer live in a bind).");
-        if (BrokerNative.RealPath(program) is null)
-            throw new BrokerConfigException($"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved (it must exist on this host, under /usr, /bin, /sbin, /lib or /lib64)");
         if (bwrapPath is not null)
             CheckBwrapOutsideBinds(name, bwrapPath, binds);
 
@@ -457,11 +455,14 @@ public static class BrokerTemplateValidator
     /// <summary>
     /// Brief I224 D7 H3: the program may not be at or under any bind of its template, read-only or
     /// not (a container may write the folder through another mount), compared as configured and
-    /// resolved (symlinks followed) against each bind's configured and resolved path.
+    /// resolved (symlinks followed) against each bind's configured and resolved path. A program that
+    /// doesn't exist is not a load error (controller ruling: one missing tool must not take every
+    /// socket offline; the call fails at run time); it is resolved through its nearest existing
+    /// ancestor instead, as <c>bwrap_path</c> is.
     /// </summary>
     private static void CheckProgramOutsideBinds(string name, string program, IReadOnlyList<BrokerTemplateBind> binds)
     {
-        var resolved = BrokerNative.RealPath(program);
+        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program);
         foreach (var bind in binds)
         {
             if (!new[] { program, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
