@@ -63,9 +63,9 @@ Each socket gets exactly one of two new fields:
   container's label carries a level) (MiMo I9, r2 GLM N3, r2 MiMo F8): four or more `:`-separated parts, each
   non-empty, printable ASCII without whitespace, at most 256 bytes.
 - `uid_only: true`: today's behaviour, chosen on purpose. `uid_only: false` is refused (say `true` or leave it out).
-- Neither field: `socket <name> names no container: run "sudo tswap broker socket bind <name> --pid <pid>" or set
-  "uid_only": true`. Both: `socket <name> has both "container" and "uid_only": remove one`.
-- The neither-field rule must not lock the operator out of the fix (r2 GLM N1): `socket bind` and `socket add` load
+- Neither field: `socket <name> names no container: run "sudo tswap broker socket bind <name> --pid <pid>" or "sudo
+  tswap broker socket bind <name> --uid-only"`. Both: `socket <name> has both "container" and "uid_only": remove one`.
+- The neither-field rule must not lock the operator out of the fix (r2 GLM N1): `socket bind`, `socket add` and any other socket command that mutates the file (r3 MiMo R4) load
   `broker.json` with that one rule suspended, apply their change, and validate the result with every other rule
   before writing. If sockets with neither field remain, they still write and then print
   `still to bind before serve starts: <names>`. `serve` and every other load apply the rule.
@@ -106,7 +106,8 @@ order (T17's method, extended):
    pidfd; for a `container` socket that is **not** a pass: no pidfd -> refuse `no-pidfd` (MiMo B3). The agent and
    control sockets keep their fallback unchanged.
 2. `/proc/<pid>` as a directory fd. Failure with ENOENT or EACCES while the pidfd is alive -> the broker can't see
-   the peer (`hidepid`) -> `proc-hidden`; with the pidfd dead -> `peer-exited` (MiMo M2). Today `OpenPeer` returns
+   the peer (`hidepid`) -> `proc-hidden`; with the pidfd dead -> `peer-exited` (MiMo M2);
+   any other failure -> `identity-unreadable` (r3). Today `OpenPeer` returns
    `PeerProcess?` and disposes the pidfd when the dirfd open fails, so a caller can't tell these apart (r2 MiMo F3).
    Add a richer opener beside it: `PeerIdentity.OpenPeerDetailed` (seam `Func<Socket, PeerOpenResult>`), where
    `PeerOpenResult` carries the `PeerProcess?` on success, or on failure whether a pidfd was obtained, whether it was
@@ -152,7 +153,9 @@ label `system_u:system_r:container_t:s0:c168,c863`. Whether `tswap_broker_t` may
   (`SshAgentListener.Refusal`, which now takes the `BrokerPeer`): the **stored** facts against the **current**
   policy, never a fresh `/proc` read. One shared function does this comparison for both.
 - A SIGHUP that rebinds a socket refuses the next request/message of an already-open connection. Unbinding
-  (`container` replaced by `uid_only`) takes effect the same way: stored facts are then ignored.
+  (`container` replaced by `uid_only`) takes effect the same way: stored facts are then ignored. Binding a socket
+  that was `uid_only` refuses the next request/message of a connection accepted before (it has no stored facts):
+  reason `identity-unreadable` (r3 MiMo R1); task 3 test 5 gets that row too.
 - `<name>.sock` and `<name>.ssh.sock` use the same binding (the config binds the container, not the file).
 - The control socket and the agent socket are untouched.
 
@@ -314,7 +317,7 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
 - Tests: the predicate on each refused unit and on `lane1.service`, `libpod-abc.scope` accepted; each D1 rule
   (accepted and refused: `.../user@1001.service`, `.../user@1001.service/init.scope`,
   `/user.slice/user-1001.slice/session-3.scope`, `.../session-c2.scope`, `/user.slice/user-1001.slice`, `/a/b.service/`, `/a/../b.service`,
-  `/a//b.service`, 1025 bytes, a space, both fields, neither, `uid_only: false`, labels `a::b:c` and with a space
+  `/a//b.service`, 1025 bytes, a space, both fields, neither, `uid_only: false`, labels `a::b:c`, `a:b:c` and with a space
   refused) with their exact messages; uid-0 warning text and that `serve` logs it; each D2 refusal via its seam;
   the real `socketpair` probe succeeds on Linux CI; a v0.1 `broker.json` fixture refused with the exact D1 message.
 - Break-it-once: remove `user@<digits>.service` from the predicate; the `.../user@1001.service` test must fail. Then
@@ -439,7 +442,8 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
 
 - H3 and the one-call change in `BrokerPolicy.Validate` for `bwrap_path`.
 - Existing template fixtures whose program sits inside a bind (the only way a non-system program was valid before)
-  move the program under `/usr` or drop the bind (r2 GLM N4): a test-input change the brief requires; say so in the
+  point it at a program under `/usr` (and drop the bind if it was there only for the program) (r2 GLM N4,
+  r3 MiMo R3): a test-input change the brief requires; say so in the
   commit message. No assertion changes.
 - H4.
 - Tests: H3 refused for `rw` and read-only binds; a program reached through a symlink that resolves into a bind
