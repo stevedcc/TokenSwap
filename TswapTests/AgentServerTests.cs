@@ -511,6 +511,54 @@ public class AgentServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Stop_WhileAnUnlockIsAboutToCloneTheHeldPassword_TheCloneIsRefused()
+    {
+        // Review T17 p2 MiMo I1: the stop zeroes Held while an unlock may still clone it. The clone after
+        // the zeroing must be refused (ObjectDisposedException, StretchedPassword's lock serialises
+        // Clone/CopyTo against Dispose), never a read of freed memory, and the client gets Expired.
+        if (OperatingSystem.IsWindows())
+            return;
+        var deadline = _h.Clock.GetUtcNow() + TimeSpan.FromMinutes(5);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cloneOutcome = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim();
+        var held = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
+        _h.Unlock = () =>
+        {
+            entered.SetResult();
+            release.Wait();
+            try
+            {
+                using var clone = held.Clone();
+                cloneOutcome.SetResult(null);
+            }
+            catch (ObjectDisposedException ex)
+            {
+                cloneOutcome.SetResult(ex);
+                throw;
+            }
+            return _h.Key.ToArray();
+        };
+        try
+        {
+            var server = await _h.StartAsync(_h.Options(expiresAt: deadline) with { Held = held });
+            var inFlight = _h.RawAsync(AgentOp.Unlock);
+            await entered.Task;
+
+            _h.Clock.Advance(TimeSpan.FromMinutes(5));
+
+            Assert.Equal(AgentStatus.Expired, (await inFlight)?.Status);
+            await server.Stopped;
+            release.Set();
+            Assert.IsType<ObjectDisposedException>(await cloneOutcome.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task ExpiryInThePast_StopsAtOnce()
     {
         if (OperatingSystem.IsWindows())
