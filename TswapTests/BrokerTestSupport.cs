@@ -282,7 +282,16 @@ public sealed class BrokerHarness : IAsyncDisposable
     {
         using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await client.ConnectAsync(new UnixDomainSocketEndPoint(SocketPath(socketName)));
-        await client.SendAsync(Encoding.Latin1.GetBytes(request));
+        try
+        {
+            await client.SendAsync(Encoding.Latin1.GetBytes(request));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.Shutdown or SocketError.ConnectionReset)
+        {
+            // EPIPE/ECONNRESET: the broker refused the connection at accept and closed it before the request was
+            // written. Nothing was answered: zero bytes, the same outcome as a close after the write.
+            return [];
+        }
         var received = new MemoryStream();
         var buffer = new byte[8192];
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // a hang fails the test, it never passes it
