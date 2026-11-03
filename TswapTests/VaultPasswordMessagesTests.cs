@@ -46,9 +46,12 @@ public class VaultPasswordMessagesTests
     [Fact]
     public void Ruling17_LockoutWarnings_AreTheBriefsWords()
     {
+        // CA1416: reading a constant text is platform-neutral; the brief pins the words on every OS.
+#pragma warning disable CA1416
         Assert.Equal("Warning: this TPM's lockout password is empty, so anyone who can use the TPM can reset its failed-password " +
                      "counter and keep guessing the vault password. Setting one (as root: tpm2_changeauth -c lockout) affects every " +
                      "program that uses this TPM.", TpmLockoutProbe.EmptyLockoutAuthWarning);
+#pragma warning restore CA1416
         Assert.Equal("Windows locks TPM use after about 4 wrong passwords, for up to 8 hours; run 'tswap agent start' to avoid retyping it.",
             VaultPasswordChoice.WindowsLockoutLine);
     }
