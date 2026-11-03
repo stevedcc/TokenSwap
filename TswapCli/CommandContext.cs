@@ -140,7 +140,19 @@ public sealed record CommandContext(
         // last acknowledged.
         if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
-        return Unlocker.Unlock(config, UnlockSelection());
+        // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
+        return Unlocker.Unlock(config, UnlockSelection(),
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)));
+    }
+
+    /// <summary>
+    /// Brief T17: the seam through which <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's
+    /// pass 2). Null until task 11 wires the agent client in: no agent is consulted yet.
+    /// </summary>
+    internal Func<byte[]?>? AgentSource(Config config)
+    {
+        _ = config;
+        return null;
     }
 
     /// <summary>

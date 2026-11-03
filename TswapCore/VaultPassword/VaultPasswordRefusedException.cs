@@ -21,6 +21,10 @@ public static class VaultPasswordMessages
     public const string StrippedHeader =
         "This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.";
 
+    /// <summary>Task 5: a password slot, but the vault folder has no <c>vault-password</c> file to stretch with.</summary>
+    public const string MissingFile =
+        "This vault's slot needs the vault password, but the vault folder has no vault-password file. If it is synced, wait for the sync; otherwise restore it from a backup of the folder.";
+
     /// <summary>Ruling 13: pass 2's agent failure, appended after the pass 3 failure.</summary>
     public static string AgentAlsoFailed(string agentMessage) =>
         $"The tswap agent could not unlock either: {agentMessage.TrimEnd('.')}.";

@@ -49,7 +49,14 @@ public static class VaultPasswordKdf
     /// <summary>Test seam: sees the password's UTF-8 bytes after stretching, once zeroed.</summary>
     internal static Action<ReadOnlySpan<byte>>? PasswordBytesObserver;
 
-    public static StretchedPassword Stretch(string password, byte[] salt, VaultPasswordParams p)
+    public static StretchedPassword Stretch(string password, byte[] salt, VaultPasswordParams p) =>
+        Stretch(password, salt, p, warnings: null);
+
+    /// <summary>
+    /// As <see cref="Stretch(string, byte[], VaultPasswordParams)"/>; a failed memory lock of the result is
+    /// reported on <paramref name="warnings"/> (the CLI's console) instead of <see cref="Console.Error"/>.
+    /// </summary>
+    public static StretchedPassword Stretch(string password, byte[] salt, VaultPasswordParams p, TextWriter? warnings)
     {
         ArgumentNullException.ThrowIfNull(password);
         if (salt.Length != SaltSize)
@@ -62,7 +69,7 @@ public static class VaultPasswordKdf
         try
         {
             ExportCrypto.DeriveArgon2id(passwordBytes, salt, p.MemoryKiB, p.TimeCost, p.Parallelism, output);
-            return StretchedPassword.FromBytes(output);
+            return StretchedPassword.FromBytes(output, warnings);
         }
         finally
         {

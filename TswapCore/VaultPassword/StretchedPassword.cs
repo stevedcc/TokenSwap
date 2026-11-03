@@ -30,11 +30,18 @@ public sealed unsafe partial class StretchedPassword : IDisposable
 
     private static int _lockWarningPrinted;
 
+    /// <summary>Test seam: makes every lock fail, as an exhausted <c>RLIMIT_MEMLOCK</c> would.</summary>
+    internal static bool SimulateLockFailure;
+
+    /// <summary>Test seam: lets the once-per-process lock warning print again.</summary>
+    internal static void ResetLockWarning() => Interlocked.Exchange(ref _lockWarningPrinted, 0);
+
     private readonly Lock _gate = new();
     private readonly nuint _allocationSize;
+    private readonly TextWriter? _warnings;
     private byte* _memory;
 
-    private StretchedPassword(ReadOnlySpan<byte> bytes)
+    private StretchedPassword(ReadOnlySpan<byte> bytes, TextWriter? warnings)
     {
         if (bytes.Length != Size)
             throw new ArgumentException($"A stretched vault password is {Size} bytes, not {bytes.Length}", nameof(bytes));
@@ -42,14 +49,22 @@ public sealed unsafe partial class StretchedPassword : IDisposable
         _allocationSize = (nuint)Math.Max(Environment.SystemPageSize, Size);
         _memory = (byte*)NativeMemory.AlignedAlloc(_allocationSize, _allocationSize);
         NativeMemory.Clear(_memory, _allocationSize);
-        IsLocked = LockMemory(_memory, _allocationSize);
+        _warnings = warnings;
+        IsLocked = LockMemory(_memory, _allocationSize, warnings);
         bytes.CopyTo(new Span<byte>(_memory, Size));
     }
 
     ~StretchedPassword() => Release(observe: false);
 
     /// <summary>A holder of a copy of <paramref name="bytes"/>, which must be <see cref="Size"/> bytes.</summary>
-    public static StretchedPassword FromBytes(ReadOnlySpan<byte> bytes) => new(bytes);
+    public static StretchedPassword FromBytes(ReadOnlySpan<byte> bytes) => new(bytes, warnings: null);
+
+    /// <summary>
+    /// As <see cref="FromBytes(ReadOnlySpan{byte})"/>; a failed lock is reported on
+    /// <paramref name="warnings"/> (the CLI's console) instead of <see cref="Console.Error"/>, and so is a
+    /// failed lock of every <see cref="Clone"/> made from it.
+    /// </summary>
+    public static StretchedPassword FromBytes(ReadOnlySpan<byte> bytes, TextWriter? warnings) => new(bytes, warnings);
 
     /// <summary>True when the memory is locked against swapping.</summary>
     public bool IsLocked { get; }
@@ -60,7 +75,7 @@ public sealed unsafe partial class StretchedPassword : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_memory is null, this);
-            return new StretchedPassword(new ReadOnlySpan<byte>(_memory, Size));
+            return new StretchedPassword(new ReadOnlySpan<byte>(_memory, Size), _warnings);
         }
     }
 
@@ -106,13 +121,18 @@ public sealed unsafe partial class StretchedPassword : IDisposable
 
     private const int MadvDontDump = 16; // Linux MADV_DONTDUMP
 
-    private static bool LockMemory(byte* memory, nuint size)
+    private static bool LockMemory(byte* memory, nuint size, TextWriter? warnings)
     {
         bool locked;
         int error;
         try
         {
-            if (OperatingSystem.IsWindows())
+            if (SimulateLockFailure)
+            {
+                locked = false;
+                error = -1;
+            }
+            else if (OperatingSystem.IsWindows())
             {
                 locked = VirtualLock(memory, size);
                 error = locked ? 0 : Marshal.GetLastPInvokeError();
@@ -133,7 +153,7 @@ public sealed unsafe partial class StretchedPassword : IDisposable
         }
 
         if (!locked && Interlocked.Exchange(ref _lockWarningPrinted, 1) == 0)
-            Console.Error.WriteLine(
+            (warnings ?? Console.Error).WriteLine(
                 $"Warning: couldn't lock the stretched vault password's memory against swapping (error {error}); " +
                 "it may be written to swap.");
         return locked;
