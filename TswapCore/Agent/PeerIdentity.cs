@@ -59,6 +59,19 @@ public sealed record PeerPolicy(uint Uid, bool AllowRoot, bool CheckUserNamespac
         CheckLabel: true, "");
 }
 
+/// <summary>
+/// Brief I224 D3.2: what <see cref="PeerIdentity.OpenPeerDetailed"/> found. On success <see cref="Peer"/> is the
+/// opened peer (its pidfd may still be missing: <see cref="PeerProcess.HasPidfd"/>). On failure it says whether a
+/// pidfd was obtained, whether that pidfd was alive when <c>/proc/&lt;pid&gt;</c> failed to open, and the errno of
+/// that open (0 when it was never tried, e.g. no peer credentials).
+/// </summary>
+public sealed record PeerOpenResult(PeerProcess? Peer, int Pid, bool GotPidfd, bool PidfdAlive, int Errno)
+{
+    public static PeerOpenResult Opened(PeerProcess peer) => new(peer, peer.Pid, peer.HasPidfd, peer.HasPidfd, 0);
+
+    public static PeerOpenResult Failed(int pid, bool gotPidfd, bool pidfdAlive, int errno) => new(null, pid, gotPidfd, pidfdAlive, errno);
+}
+
 /// <summary>The outcome of <see cref="PeerIdentity.Check"/>: allowed, or the reason it was refused (for the log).</summary>
 public readonly record struct PeerVerdict(bool Allowed, uint? Uid, int Pid, string? Reason)
 {
@@ -102,6 +115,16 @@ public static partial class PeerIdentity
     /// <summary>Opens the peer's pidfd and <c>/proc/&lt;pid&gt;</c> directory fd, or null when <c>/proc/&lt;pid&gt;</c> can't be opened.</summary>
     internal static Func<Socket, PeerProcess?> OpenPeer = socket => DefaultOpenPeer(socket);
 
+    /// <summary>
+    /// Brief I224 D3.2: opens the peer as <see cref="OpenPeer"/> does, but on failure says whether a pidfd was
+    /// obtained, whether it was alive when <c>/proc/&lt;pid&gt;</c> failed to open, and that open's errno, so a
+    /// caller can tell a hidden <c>/proc</c> (<c>hidepid</c>) from a peer that exited.
+    /// </summary>
+    internal static Func<Socket, PeerOpenResult> OpenPeerDetailed = DefaultOpenPeerDetailed;
+
+    /// <summary>Brief I224 D3.3: the peer's <c>cgroup</c> file, read as bytes through the directory fd, or null when unreadable.</summary>
+    internal static Func<PeerProcess, byte[]?> ReadCgroup = DefaultReadCgroup;
+
     /// <summary>The peer's <c>ns/user</c> link (<c>user:[…]</c>), or null when unreadable.</summary>
     internal static Func<PeerProcess, string?> ReadUserNamespace = DefaultReadUserNamespace;
 
@@ -124,6 +147,8 @@ public static partial class PeerIdentity
     {
         ReadCredentials = BrokerNative.TryGetPeerCredentials;
         OpenPeer = socket => DefaultOpenPeer(socket);
+        OpenPeerDetailed = DefaultOpenPeerDetailed;
+        ReadCgroup = DefaultReadCgroup;
         ReadUserNamespace = DefaultReadUserNamespace;
         ReadStatusUid = DefaultReadStatusUid;
         PidfdAlive = DefaultPidfdAlive;
@@ -187,6 +212,28 @@ public static partial class PeerIdentity
         return PeerVerdict.Allow(uid, pid);
     }
 
+    /// <summary>
+    /// Brief I224 D3.3: the path of a <c>/proc/&lt;pid&gt;/cgroup</c> on a cgroup v2 host, or null. The content
+    /// is decoded as UTF-8 with replacement characters (a bound path is 0x21-0x7E only, and a replacement
+    /// character can't become ASCII, so decoding can't create a match). It must be exactly one line
+    /// <c>0::&lt;path&gt;</c> (the kernel's trailing newline optional), the path absolute with no empty,
+    /// <c>.</c> or <c>..</c> segment: a <c>..</c> means the peer is outside this process's cgroup namespace
+    /// root. Other bytes are kept; such a path can't equal a validated binding.
+    /// </summary>
+    public static string? ParseCgroupV2(ReadOnlySpan<byte> content)
+    {
+        var text = Encoding.UTF8.GetString(content);
+        if (text.EndsWith('\n'))
+            text = text[..^1];
+        if (text.Contains('\n') || !text.StartsWith("0::/", StringComparison.Ordinal))
+            return null;
+        var path = text[3..];
+        foreach (var segment in path[1..].Split('/'))
+            if (segment is "" or "." or "..")
+                return null;
+        return path;
+    }
+
     /// <summary>The type field of an SELinux context (<c>user:role:type:level</c>), or null.</summary>
     internal static string? LabelType(string label)
     {
@@ -234,6 +281,57 @@ public static partial class PeerIdentity
             return null;
         }
         return new PeerProcess(creds.Pid, pidfd, new SafeFileHandle(dirfd, ownsHandle: true));
+    }
+
+    /// <summary>
+    /// Brief I224 D3.1-2: step 1, the pidfd (none when the kernel lacks <c>SO_PEERPIDFD</c>); step 2,
+    /// <c>/proc/&lt;pid&gt;</c> as a directory fd. When that open fails, the pidfd's liveness at that moment and
+    /// the errno are kept, and the pidfd is closed.
+    /// </summary>
+    internal static PeerOpenResult DefaultOpenPeerDetailed(Socket socket)
+    {
+        if (!OperatingSystem.IsLinux() || BrokerNative.TryGetPeerCredentials(socket) is not { Pid: > 0 } creds)
+            return PeerOpenResult.Failed(-1, gotPidfd: false, pidfdAlive: false, errno: 0);
+        SafeFileHandle? pidfd = null;
+        try
+        {
+            Span<byte> value = stackalloc byte[4];
+            if (socket.GetRawSocketOption(SolSocket, SoPeerPidfd, value) == 4)
+                pidfd = new SafeFileHandle(BitConverter.ToInt32(value), ownsHandle: true);
+        }
+        catch (SocketException)
+        {
+            // ENOPROTOOPT: a kernel older than 6.5 (the error decides, not the number).
+        }
+        var dirfd = open($"/proc/{creds.Pid}", ORdonly | ODirectory | OCloexec);
+        if (dirfd < 0)
+        {
+            var errno = Marshal.GetLastPInvokeError();
+            var alive = pidfd is not null && WithFd(pidfd, fd => syscall(SysPidfdSendSignal, fd, 0, 0, 0) == 0);
+            pidfd?.Dispose();
+            return PeerOpenResult.Failed(creds.Pid, pidfd is not null, alive, errno);
+        }
+        return PeerOpenResult.Opened(new PeerProcess(creds.Pid, pidfd, new SafeFileHandle(dirfd, ownsHandle: true)));
+    }
+
+    /// <summary>The largest <c>cgroup</c> file read; a longer one is unreadable (a v2 line is at most a path).</summary>
+    private const int MaxCgroupFileBytes = 8192;
+
+    internal static byte[]? DefaultReadCgroup(PeerProcess peer)
+    {
+        if (peer.Directory is not { IsInvalid: false } dir)
+            return null;
+        var fd = WithFd(dir, d => (int?)openat(d, "cgroup", ORdonly | OCloexec));
+        if (fd is not >= 0)
+            return null;
+        using var handle = new SafeFileHandle(fd.Value, ownsHandle: true);
+        using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 0);
+        var buffer = new byte[MaxCgroupFileBytes + 1];
+        var total = 0;
+        int n;
+        while (total < buffer.Length && (n = stream.Read(buffer, total, buffer.Length - total)) > 0)
+            total += n;
+        return total > MaxCgroupFileBytes ? null : buffer[..total];
     }
 
     internal static string? DefaultReadUserNamespace(PeerProcess peer)
