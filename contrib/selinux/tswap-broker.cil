@@ -91,9 +91,9 @@
 ; target). /proc/<pid>/ entries carry the task's own label, so the target is container_t, not proc_t. No
 ; lnk_file rule: the broker never reads /proc/<pid>/ns/* of a client (readlink of another uid's namespace link
 ; is ptrace-gated).
-; D3.5: pidfd_send_signal(pidfd, 0) after the reads is checked as signull; without it every container is
-; refused as peer-exited.
-(allow tswap_broker_t container_t (process (signull)))
+; D3.5's liveness check polls the pidfd (readable once the process exits), which needs no permission; an
+; earlier signull rule for pidfd_send_signal(pidfd, 0) was dropped with it (the signal's uid check refused every
+; container client of another uid, found on the router).
 ; D3.2: opening /proc/<pid> as a directory fd.
 (allow tswap_broker_t container_t (dir (open read search getattr)))
 ; D3.3: reading status and cgroup through that directory fd.
@@ -103,7 +103,7 @@
 ; (container.if: mcs_constrained($1_t)), and the loaded policy names the attribute mcs_constrained_type. Those
 ; constraints limit subjects in that attribute, and tswap_broker_t is not one (it already has mcssetcats), so
 ; they are not expected to apply. If the router shows an MCS denial for these reads, the candidate exemptions are
-; refpolicy's mcsreadall (file reads) and mcskillall (signull). Unverified: they could not be checked on the build
+; refpolicy's mcsreadall (file reads). Unverified: they could not be checked on the build
 ; machine (no setools, the policy module store is root-only, and its devel headers have no mcs.if).
 
 ; ---- brief T17: a password broker's control socket, <run folder>/broker-<16 hex>/control.sock

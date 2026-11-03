@@ -92,7 +92,7 @@ public readonly record struct PeerVerdict(bool Allowed, uint? Uid, int Pid, stri
 /// <item>Linux, every peer but uid 0: its user namespace must be this process's. Against pid reuse:
 /// take the peer's pidfd (<c>SO_PEERPIDFD</c>), open <c>/proc/&lt;pid&gt;</c> as a directory fd, read
 /// <c>ns/user</c> and <c>status</c>'s <c>Uid:</c> line through it (the uid must be the credential's), then
-/// check the pidfd is still alive (<c>pidfd_send_signal(pidfd, 0)</c>). Without <c>SO_PEERPIDFD</c>
+/// check the pidfd is still alive (<c>poll</c>: not yet readable). Without <c>SO_PEERPIDFD</c>
 /// (kernels before 6.5; the error decides, not the number) the directory fd and status uid alone. An unreadable namespace is refused. Without
 /// <c>/proc</c> every such peer is refused with the policy's message.</item>
 /// </list>
@@ -262,7 +262,6 @@ public static partial class PeerIdentity
     private const int SoPeerSec = 31;
     private const int SoPeerPidfd = 77;
     private const int ORdonly = 0, ODirectory = 0x10000, OCloexec = 0x80000;
-    private const long SysPidfdSendSignal = 424;
 
     internal static PeerProcess? DefaultOpenPeer(Socket socket) => DefaultOpenPeer(socket, usePidfd: true);
 
@@ -309,7 +308,7 @@ public static partial class PeerIdentity
         if (dirfd < 0)
         {
             var errno = Marshal.GetLastPInvokeError();
-            var alive = probeOnFailure && pidfd is not null && WithFd(pidfd, fd => syscall(SysPidfdSendSignal, fd, 0, 0, 0) == 0);
+            var alive = probeOnFailure && pidfd is not null && WithFd(pidfd, PidfdFdAlive);
             pidfd?.Dispose();
             return PeerOpenResult.Failed(creds.Pid, pidfd is not null, alive, errno);
         }
@@ -371,7 +370,28 @@ public static partial class PeerIdentity
     {
         if (peer.Pidfd is not { IsInvalid: false } pidfd)
             return false;
-        return WithFd(pidfd, fd => syscall(SysPidfdSendSignal, fd, 0, 0, 0) == 0);
+        return WithFd(pidfd, PidfdFdAlive);
+    }
+
+    /// <summary>
+    /// Whether the process behind <paramref name="pidfd"/> is still running: a pidfd becomes readable when its
+    /// process exits, so a zero-timeout <c>poll</c> that reports nothing means alive. Not
+    /// <c>pidfd_send_signal(pidfd, 0)</c>: that applies the signal permission check, so it failed with EPERM for a
+    /// live peer of another uid (every container client of the broker, root for the agent; found on the router,
+    /// #224 owner check). A poll error counts as not alive.
+    /// </summary>
+    private static bool PidfdFdAlive(int pidfd)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var entry = new PollFd { Fd = pidfd, Events = PollIn };
+            var ready = poll(ref entry, 1, 0);
+            if (ready == 0)
+                return true;
+            if (ready > 0 || Marshal.GetLastPInvokeError() != Eintr)
+                return false;
+        }
+        return false;
     }
 
     internal static string? DefaultReadPeerLabel(Socket socket)
@@ -451,8 +471,16 @@ public static partial class PeerIdentity
     [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     private static unsafe partial nint readlinkat(int dirfd, string path, byte* buffer, nuint size);
 
-    // long syscall(long number, ...): pidfd_send_signal(pidfd, sig, info, flags). The four arguments are
-    // integers in registers on Linux x64 and arm64, so the fixed signature passes them as the variadic call would.
+    private const short PollIn = 0x1;
+    private const int Eintr = 4;
+
+    private struct PollFd
+    {
+        public int Fd;
+        public short Events;
+        public short Revents;
+    }
+
     [LibraryImport("libc", SetLastError = true)]
-    private static partial long syscall(long number, long pidfd, long signal, nint info, long flags);
+    private static partial int poll(ref PollFd fds, nuint count, int timeout);
 }
