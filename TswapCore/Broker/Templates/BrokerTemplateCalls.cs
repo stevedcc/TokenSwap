@@ -304,15 +304,7 @@ namespace TswapCore.Broker
             catch (Exception ex) when (ex is not OutOfMemoryException
                                        && !(ex is OperationCanceledException && http.RequestAborted.IsCancellationRequested))
             {
-                var status = http.Response.HasStarted ? http.Response.StatusCode : 502;
-                try
-                {
-                    await WriteUniformAsync(http, 502).ConfigureAwait(false); // aborts when the response has started
-                }
-                catch (Exception writeFailed) when (writeFailed is not OutOfMemoryException)
-                {
-                    http.Abort(); // the 502 couldn't be written either: close unanswered
-                }
+                var status = await AnswerInternalErrorAsync(http).ConfigureAwait(false);
                 log.Template(record with { Status = status, Reason = "internal-error", ErrorType = ex.GetType().Name, Duration = time.GetElapsedTime(started) });
             }
         }

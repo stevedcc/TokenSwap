@@ -459,4 +459,83 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
         Assert.DoesNotContain("secret-looking", log);
         Assert.DoesNotContain("s3cr3t", log);
     }
+
+    /// <summary>A response body whose every write fails, as a connection that went away mid-answer.</summary>
+    private sealed class FailingBody : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException("the client went away");
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new IOException("the client went away"));
+    }
+
+    /// <summary>Throws after making the uniform 502's write fail too (I224 fix round 1, F2).</summary>
+    private sealed class ThrowingForwarderWithAFailingBody : IBrokerForwarder
+    {
+        public Task<BrokerForwardOutcome> ForwardAsync(HttpContext http, BrokerForwardRequest request, CancellationToken cancellationToken)
+        {
+            http.Response.Body = new FailingBody();
+            throw new InvalidOperationException("secret-looking message s3cr3t");
+        }
+    }
+
+    /// <summary>Starts a 200 answer, then throws (I224 fix round 1, F2: the log shows the status that was sent).</summary>
+    private sealed class ThrowingForwarderAfterTheHeaders : IBrokerForwarder
+    {
+        public async Task<BrokerForwardOutcome> ForwardAsync(HttpContext http, BrokerForwardRequest request, CancellationToken cancellationToken)
+        {
+            http.Response.StatusCode = 200;
+            await http.Response.StartAsync(cancellationToken);
+            await http.Response.Body.FlushAsync(cancellationToken);
+            throw new InvalidOperationException("secret-looking message s3cr3t");
+        }
+    }
+
+    /// <summary>The one <c>internal-error</c> line of the log (fails when there are none or several).</summary>
+    private string TheInternalErrorLine() =>
+        Assert.Single(_h.LogText.ToString().Split('\n'), line => line.Contains("reason=internal-error", StringComparison.Ordinal));
+
+    [Fact]
+    public async Task AForwarderThatThrows_WhenThe502CantBeWrittenEither_AbortsTheConnection_AndLogsOnce()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync(forwarder: new ThrowingForwarderWithAFailingBody());
+
+        // Connection: close, so a Kestrel 500 (keep-alive otherwise) would end the exchange and show.
+        var response = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n");
+
+        Assert.Equal("", Encoding.ASCII.GetString(response)); // aborted unanswered: no 502, and no Kestrel 500
+        await _h.WaitForLogAsync("reason=internal-error");
+        var line = TheInternalErrorLine();
+        Assert.Contains(" status=502 ", line);
+        Assert.Contains("reason=internal-error type=InvalidOperationException", line);
+        Assert.DoesNotContain("s3cr3t", _h.LogText.ToString());
+    }
+
+    [Fact]
+    public async Task AForwarderThatThrowsAfterTheHeaders_AbortsTheConnection_AndLogsTheStatusSent()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync(forwarder: new ThrowingForwarderAfterTheHeaders());
+
+        var response = Encoding.ASCII.GetString(await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"));
+
+        Assert.StartsWith("HTTP/1.1 200", response);
+        Assert.DoesNotContain("502", response);
+        Assert.DoesNotContain("\r\n0\r\n\r\n", response); // aborted: the chunked body never ends
+        await _h.WaitForLogAsync("reason=internal-error");
+        var line = TheInternalErrorLine();
+        Assert.Contains(" status=200 ", line);
+        Assert.Contains("reason=internal-error type=InvalidOperationException", line);
+    }
 }

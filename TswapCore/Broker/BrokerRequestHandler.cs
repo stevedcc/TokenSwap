@@ -86,12 +86,32 @@ public sealed partial class BrokerRequestHandler(
         catch (Exception ex) when (ex is not OutOfMemoryException
             && !(ex is OperationCanceledException && http.RequestAborted.IsCancellationRequested))
         {
-            await WriteUniformAsync(http, StatusCodes.Status502BadGateway).ConfigureAwait(false); // aborts when started
+            var status = await AnswerInternalErrorAsync(http).ConfigureAwait(false);
             var record = http.Items.TryGetValue(RecordItemKey, out var r) && r is BrokerRequestRecord known
                 ? known
                 : new BrokerRequestRecord { Socket = "?", Uid = 0, Pid = 0, Method = http.Request.Method, Path = "" };
-            log.Request(record with { Status = 502, Reason = "internal-error", ErrorType = ex.GetType().Name });
+            log.Request(record with { Status = status, Reason = "internal-error", ErrorType = ex.GetType().Name });
         }
+    }
+
+    /// <summary>
+    /// Brief I224 H5, shared by both halves (requests and templates): answers an exception that escaped a
+    /// handler with the uniform 502 when nothing was sent yet, else aborts the connection; when the 502
+    /// can't be written either, aborts too, so nothing reaches Kestrel. Returns the status to log: the one
+    /// already sent when the response had started, else 502. The caller logs exactly once, after this.
+    /// </summary>
+    private async Task<int> AnswerInternalErrorAsync(HttpContext http)
+    {
+        var status = http.Response.HasStarted ? http.Response.StatusCode : StatusCodes.Status502BadGateway;
+        try
+        {
+            await WriteUniformAsync(http, StatusCodes.Status502BadGateway).ConfigureAwait(false); // aborts when started
+        }
+        catch (Exception writeFailed) when (writeFailed is not OutOfMemoryException)
+        {
+            http.Abort(); // the 502 couldn't be written either: close unanswered
+        }
+        return status;
     }
 
     private async Task HandleCoreAsync(HttpContext http)
