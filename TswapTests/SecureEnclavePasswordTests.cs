@@ -238,6 +238,103 @@ public class SecureEnclavePasswordTests
             Parameters("tswap_se_unwrap_v2"));
     }
 
+    // ------------------------------------------------------------------ T17 fix round 2: no interaction for a no-presence slot
+
+    private static Config ConfigWith(byte[] hwBlob, bool? requiresTouch) => ConfigWith(hwBlob) with { RequiresTouch = requiresTouch };
+
+    [Fact]
+    public void Se_StrippedHeader_NoPresenceSlot_RefusedAtOnce_WithoutInteraction()
+    {
+        // CI run 41619549912: through the interactive tswap_se_unwrap a stripped password key waits for a dialog
+        // nobody can answer. The slot is recorded as made without presence (RequiresTouch false), so the unwrap
+        // allows no interaction and refuses at once, with today's generic text (implementation ruling 2).
+        var shim = new FakeSecureEnclaveShim();
+        using var _ = AppleSecureEnclaveInterop.UseShim(shim);
+        using var password = Password(6);
+        var service = new SecureEnclaveHardwareService(requirePresence: false);
+        var (_, hwBlob) = service.Enroll(password);
+        var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
+
+        var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(package, requiresTouch: false), _ => 0,
+            () => throw new InvalidOperationException("a stripped slot looks password-free: no prompt")));
+
+        Assert.StartsWith(GenericUnwrapText, ex.Message);
+        Assert.Equal(["wrap_v3", "unwrap_no_interaction"], shim.Calls); // the interactive unwrap is never called
+    }
+
+    [Fact]
+    public void Se_StrippedHeader_PresenceSlot_KeepsTheInteractiveUnwrap()
+    {
+        // A presence slot keeps the old path: the user is at the machine and can cancel the dialog.
+        var shim = new FakeSecureEnclaveShim();
+        using var _ = AppleSecureEnclaveInterop.UseShim(shim);
+        using var password = Password(7);
+        var service = new SecureEnclaveHardwareService(requirePresence: true);
+        var (_, hwBlob) = service.Enroll(password);
+        var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
+
+        var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(package, requiresTouch: true), _ => 0, password: null));
+
+        Assert.StartsWith(GenericUnwrapText, ex.Message);
+        Assert.Equal(["wrap_v3", "unwrap"], shim.Calls);
+    }
+
+    [Fact]
+    public void SeLegacyNoPresenceSlot_OpensWithoutInteraction()
+    {
+        var shim = new FakeSecureEnclaveShim();
+        using var _ = AppleSecureEnclaveInterop.UseShim(shim);
+        var service = new SecureEnclaveHardwareService(requirePresence: false);
+        var (kek, hwBlob) = service.Enroll(password: null);
+
+        var recovered = service.Unlock(ConfigWith(hwBlob, requiresTouch: false), _ => 0,
+            () => throw new InvalidOperationException("a password-free slot must not ask for the password"));
+
+        Assert.Equal(kek, recovered);
+        Assert.Equal(["wrap_v2", "unwrap_no_interaction"], shim.Calls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(null)] // not recorded: every Secure Enclave slot before brief T11 had presence
+    public void SeLegacyPresenceOrUnknownSlot_KeepsTheInteractiveUnwrap(bool? requiresTouch)
+    {
+        var shim = new FakeSecureEnclaveShim();
+        using var _ = AppleSecureEnclaveInterop.UseShim(shim);
+        var service = new SecureEnclaveHardwareService(requirePresence: true);
+        var (kek, hwBlob) = service.Enroll(password: null);
+
+        var recovered = service.Unlock(ConfigWith(hwBlob, requiresTouch), _ => 0, password: null);
+
+        Assert.Equal(kek, recovered);
+        Assert.Equal(["wrap_v2", "unwrap"], shim.Calls);
+    }
+
+    [Fact]
+    public void MissingNoInteractionEntryPoint_FailsClosed()
+    {
+        var shim = new FakeSecureEnclaveShim { WithoutNewEntryPoints = true };
+        using var _ = AppleSecureEnclaveInterop.UseShim(shim);
+        var service = new SecureEnclaveHardwareService(requirePresence: false);
+        var (_, hwBlob) = service.Enroll(password: null);
+
+        var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(hwBlob, requiresTouch: false), _ => 0, password: null));
+
+        Assert.Contains("tswap_se_unwrap_no_interaction", ex.Message);
+        Assert.Contains("update libtswapse.dylib together with tswap", ex.Message);
+        Assert.Equal(["wrap_v2", "unwrap_no_interaction"], shim.Calls); // never the interactive unwrap instead
+    }
+
+    [Fact]
+    public void TheInterop_DeclaresTheNoInteractionUnwrap_WithTheOldUnwrapsSignature()
+    {
+        static Type[] Parameters(string name) =>
+            typeof(AppleSecureEnclaveInterop).GetMethod(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+                .GetParameters().Select(p => p.ParameterType).ToArray();
+
+        Assert.Equal(Parameters("tswap_se_unwrap"), Parameters("tswap_se_unwrap_no_interaction"));
+    }
+
     private static Slot MachineSlot(byte[] hwBlob) =>
         new(RandomNumberGenerator.GetBytes(16), new byte[32], new byte[60], SlotKind.Machine, hwBlob);
 }
@@ -247,13 +344,14 @@ public class SecureEnclavePasswordTests
 /// The shim's contract without the Enclave: the "key" is a random id, the ECIES package a pad XOR. A
 /// password key (made by <c>wrap_v3</c>) holds its credential; <c>unwrap_v2</c> with a different one gives
 /// <c>-7</c>, and the old <c>unwrap</c> (no credential) gives <c>-2</c>, as the controller's ruling expects
-/// on the old entry point.
+/// on the old entry point. <c>unwrap_no_interaction</c> (T17 fix round 2) opens only a key made without presence
+/// and without a credential; any other key would need interaction there, so it gives <c>-8</c>.
 /// </summary>
 internal sealed class FakeSecureEnclaveShim : ISecureEnclaveShim
 {
     public const int BlobSize = 16;
 
-    private readonly Dictionary<string, (byte[]? Credential, byte[] Pad)> _keys = [];
+    private readonly Dictionary<string, (byte[]? Credential, byte[] Pad, bool Presence)> _keys = [];
 
     public bool WithoutNewEntryPoints { get; init; }
     public List<string> Calls { get; } = [];
@@ -268,7 +366,7 @@ internal sealed class FakeSecureEnclaveShim : ISecureEnclaveShim
     public int WrapV2(byte[] plaintext, int plaintextLen, byte[] outBlob, ref int outBlobLen, byte[] outCiphertext, ref int outCiphertextLen, int requirePresence)
     {
         Calls.Add("wrap_v2");
-        return Wrap(plaintext, plaintextLen, outBlob, ref outBlobLen, outCiphertext, ref outCiphertextLen, credential: null);
+        return Wrap(plaintext, plaintextLen, outBlob, ref outBlobLen, outCiphertext, ref outCiphertextLen, credential: null, requirePresence == 1);
     }
 
     public int WrapV3(byte[] plaintext, int plaintextLen, byte[] outBlob, ref int outBlobLen, byte[] outCiphertext, ref int outCiphertextLen,
@@ -281,7 +379,7 @@ internal sealed class FakeSecureEnclaveShim : ISecureEnclaveShim
         if (credentialLen != 32)
             return -6;
         WrapV3Calls.Add((requirePresence, credential.ToArray()));
-        return Wrap(plaintext, plaintextLen, outBlob, ref outBlobLen, outCiphertext, ref outCiphertextLen, credential.ToArray());
+        return Wrap(plaintext, plaintextLen, outBlob, ref outBlobLen, outCiphertext, ref outCiphertextLen, credential.ToArray(), requirePresence == 1);
     }
 
     public int Unwrap(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen)
@@ -290,6 +388,17 @@ internal sealed class FakeSecureEnclaveShim : ISecureEnclaveShim
         if (!_keys.TryGetValue(Convert.ToHexString(blob, 0, blobLen), out var key))
             return -2;
         return key.Credential is not null ? -2 : Open(key.Pad, ciphertext, ciphertextLen, outPlaintext, ref outPlaintextLen);
+    }
+
+    public int UnwrapNoInteraction(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen)
+    {
+        Calls.Add("unwrap_no_interaction");
+        if (WithoutNewEntryPoints)
+            throw new EntryPointNotFoundException("Unable to find an entry point named 'tswap_se_unwrap_no_interaction'");
+        if (!_keys.TryGetValue(Convert.ToHexString(blob, 0, blobLen), out var key))
+            return -2;
+        // A password key wants its credential and a presence key Touch ID: both need interaction, which is not allowed.
+        return key.Credential is not null || key.Presence ? -8 : Open(key.Pad, ciphertext, ciphertextLen, outPlaintext, ref outPlaintextLen);
     }
 
     public int UnwrapV2(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] credential, int credentialLen,
@@ -309,11 +418,12 @@ internal sealed class FakeSecureEnclaveShim : ISecureEnclaveShim
         return Open(key.Pad, ciphertext, ciphertextLen, outPlaintext, ref outPlaintextLen);
     }
 
-    private int Wrap(byte[] plaintext, int plaintextLen, byte[] outBlob, ref int outBlobLen, byte[] outCiphertext, ref int outCiphertextLen, byte[]? credential)
+    private int Wrap(byte[] plaintext, int plaintextLen, byte[] outBlob, ref int outBlobLen, byte[] outCiphertext, ref int outCiphertextLen,
+        byte[]? credential, bool presence)
     {
         var id = RandomNumberGenerator.GetBytes(BlobSize);
         var pad = RandomNumberGenerator.GetBytes(plaintextLen);
-        _keys[Convert.ToHexString(id)] = (credential, pad);
+        _keys[Convert.ToHexString(id)] = (credential, pad, presence);
         id.CopyTo(outBlob, 0);
         outBlobLen = BlobSize;
         for (var i = 0; i < plaintextLen; i++)

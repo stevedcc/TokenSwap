@@ -140,13 +140,17 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         Assert.Equal(SecureEnclaveReturnCodes.CredentialLength, rc);
     }
 
+    /// <summary>What "at once" means for a refusal that must not wait for a dialog: well under <see cref="CallTimeout"/>.</summary>
+    private static readonly TimeSpan PromptRefusal = TimeSpan.FromSeconds(5);
+
     [Fact]
     public void RealEnclave_StrippedHeader_Refused()
     {
-        // Ruling 3 with the controller's ruling for the Secure Enclave: without its TSSE header the slot looks
-        // password-free and goes through the old tswap_se_unwrap, which passes no credential. It must be
-        // refused (today's generic text), and promptly: the time it took is in the test output, so a dialog
-        // that a CI runner can't answer shows up as the timeout failure, not silence.
+        // Ruling 3 with the controller's rulings for the Secure Enclave: without its TSSE header the slot looks
+        // password-free and gets today's generic text. CI run 41619549912: through the interactive tswap_se_unwrap
+        // the key waited for an application-password dialog until the 30 s bound. The slot is recorded as made
+        // without presence (config.json's RequiresTouch false, as init --no-touch writes it), so the unwrap allows
+        // no interaction (tswap_se_unwrap_no_interaction) and must refuse at once.
         if (!CanRun() || !OperatingSystem.IsMacOS())
             return;
         StrippedHeader();
@@ -160,12 +164,15 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
         var (_, hwBlob) = Bounded("wrap_v3", () => service.Enroll(password));
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
-            SecureEnclaveWrappedKey: Convert.ToBase64String(package));
+            SecureEnclaveWrappedKey: Convert.ToBase64String(package), RequiresTouch: false);
 
-        var ex = Bounded("the old unwrap of a stripped password slot", () =>
+        var watch = Stopwatch.StartNew();
+        var ex = Bounded("the no-interaction unwrap of a stripped password slot", () =>
             Record.Exception(() => service.Unlock(config, _ => 0, password: null)));
+        watch.Stop();
 
         var refused = Assert.IsAssignableFrom<TswapException>(ex);
         Assert.StartsWith("Could not unlock with the Secure Enclave.", refused.Message);
+        Assert.True(watch.Elapsed < PromptRefusal, $"refused after {watch.Elapsed.TotalSeconds:F1} s, not at once");
     }
 }

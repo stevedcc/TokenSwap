@@ -84,8 +84,16 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
             using var stretched = password();
             key = AppleSecureEnclaveInterop.UnwrapWithPassword(package, stretched);
         }
+        else if (config.RequiresTouch == false)
+        {
+            // T17 fix round 2: a slot recorded as made without presence (brief T11's --no-touch) never needs a
+            // dialog, so none is allowed: a password slot whose TSSE header was stripped fails here at once instead
+            // of waiting for an application-password dialog nobody can answer.
+            key = AppleSecureEnclaveInterop.UnwrapWithoutInteraction(package);
+        }
         else
         {
+            // Presence required (or not recorded: every slot before T11 had it): the user is at the machine.
             key = Unwrap(package);
         }
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying

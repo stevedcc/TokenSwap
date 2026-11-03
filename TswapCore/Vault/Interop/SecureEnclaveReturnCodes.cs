@@ -95,6 +95,15 @@ internal static class SecureEnclaveReturnCodes
         $"No key was created: {UpdateTogether} (re-run 'tswap installscript', review it, then run the script). " +
         $"({cause.Message})");
 
+    /// <summary>
+    /// T17 fix round 2: a dylib without <c>tswap_se_unwrap_no_interaction</c> beside a newer tswap. Fails closed: the
+    /// interactive <c>tswap_se_unwrap</c> is never tried instead (it could wait for a dialog nobody can answer).
+    /// </summary>
+    public static Exception MissingUnwrapNoInteraction(EntryPointNotFoundException cause) => new TswapException(
+        "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_unwrap_no_interaction, needed for a Secure " +
+        $"Enclave slot made without touch): {UpdateTogether} (re-run 'tswap installscript', review it, then run the script). " +
+        $"({cause.Message})");
+
     /// <summary>Brief T17: a dylib without <c>tswap_se_unwrap_v2</c> beside a newer tswap. Fails closed: the old unwrap is never tried instead.</summary>
     public static Exception MissingUnwrapV2(EntryPointNotFoundException cause) => new TswapException(
         "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_unwrap_v2, needed for a vault password slot): " +

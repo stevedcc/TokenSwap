@@ -372,3 +372,74 @@ public func tswap_se_unwrap_v2(
     return -2
   }
 }
+
+// MARK: - T17 fix round 2: the legacy unwrap without interaction
+//
+// A slot without the TSSE header goes through `tswap_se_unwrap`, which allows interaction. For a key
+// made with presence that is right: Touch ID asks, and the user can cancel. But a password slot whose
+// header was stripped also lands there, and its key (`.applicationPassword`) then waits for a system
+// dialog asking for an "application password" nobody can type (the credential is 32 binary bytes);
+// a headless caller waits for ever (CI run 41619549912 timed out after 30 s). tswap records each Secure
+// Enclave slot's presence choice outside the key (config.json's RequiresTouch, brief T11), so for a slot
+// recorded as made without presence it calls this entry point instead: the same unwrap, but the key is
+// restored under a context with `interactionNotAllowed`, so any key that needs interaction (a stripped
+// password key, or a presence key recorded wrongly) fails at once with an LAError instead of asking.
+// A key made without presence never needs interaction, so it opens here as it does in `tswap_se_unwrap`.
+// No credential is given: `setCredential` and `.applicationPassword` stay in the two password entry
+// points. A new entry point, so `tswap_se_unwrap` stays byte for byte and an older dylib fails closed.
+//
+// Returns 0 on success; -1 buffer too small; -2 decryption failed after a successful key agreement, or
+// key agreement failed without an LAError (e.g. a blob from another Mac); -3 a malformed ciphertext
+// package; -8 an LAError (interaction needed but not allowed).
+
+/// Unlock without interaction, for a slot recorded as made without presence: as `tswap_se_unwrap`, with
+/// the key restored under an `LAContext` whose `interactionNotAllowed` is true. Never shows a dialog.
+@_cdecl("tswap_se_unwrap_no_interaction")
+public func tswap_se_unwrap_no_interaction(
+  _ blob: UnsafePointer<UInt8>, _ blobLen: Int32,
+  _ ciphertext: UnsafePointer<UInt8>, _ ciphertextLen: Int32,
+  _ outPlaintext: UnsafeMutablePointer<UInt8>, _ outPlaintextLen: UnsafeMutablePointer<Int32>
+) -> Int32 {
+  let blobData = Data(bytes: blob, count: Int(blobLen))
+  let package = Data(bytes: ciphertext, count: Int(ciphertextLen))
+  guard package.count > ephemeralPublicKeyLength + nonceLength + tagLength else { return -3 }
+  let ephemeralPublicKeyRaw = package.prefix(ephemeralPublicKeyLength)
+  let rest = package.dropFirst(ephemeralPublicKeyLength)
+  let nonceRaw = rest.prefix(nonceLength)
+  let ciphertextAndTag = rest.dropFirst(nonceLength)
+  let ct = ciphertextAndTag.dropLast(tagLength)
+  let tag = ciphertextAndTag.suffix(tagLength)
+
+  let ephemeralPublicKey: P256.KeyAgreement.PublicKey
+  do {
+    ephemeralPublicKey = try P256.KeyAgreement.PublicKey(x963Representation: ephemeralPublicKeyRaw)
+  } catch {
+    return -3
+  }
+
+  let shared: SharedSecret
+  do {
+    let context = LAContext()
+    context.interactionNotAllowed = true
+    let seKey = try SecureEnclave.P256.KeyAgreement.PrivateKey(
+      dataRepresentation: blobData, authenticationContext: context)
+    shared = try seKey.sharedSecretFromKeyAgreement(with: ephemeralPublicKey)
+  } catch {
+    return laErrorCode(error) != nil ? -8 : -2
+  }
+
+  do {
+    let symmetricKey = shared.hkdfDerivedSymmetricKey(
+      using: SHA256.self, salt: Data(), sharedInfo: hkdfInfo, outputByteCount: 32)
+    let nonce = try AES.GCM.Nonce(data: nonceRaw)
+    let sealedBox = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct, tag: tag)
+    let plaintext = try AES.GCM.open(sealedBox, using: symmetricKey)
+
+    guard plaintext.count <= Int(outPlaintextLen.pointee) else { return -1 }
+    plaintext.copyBytes(to: outPlaintext, count: plaintext.count)
+    outPlaintextLen.pointee = Int32(plaintext.count)
+    return 0
+  } catch {
+    return -2
+  }
+}

@@ -646,9 +646,11 @@ password slots get new blob bytes, so a vault without a password stays byte-iden
   or the KEK still needs the stretched password, so the unlock fails. The flag only decides whether
   tswap asks. A stripped TPM header gets its own message
   (`This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.`);
-  a stripped Secure Enclave header goes through the old unwrap and gets that path's generic "Could
-  not unlock with the Secure Enclave" text (the shim's old entry point can't tell the case apart, and
-  a system dialog can't supply the 32-byte credential either); a YubiKey v2 blob rewritten as v1
+  a stripped Secure Enclave header goes through the password-free unwrap and gets that path's generic
+  "Could not unlock with the Secure Enclave" text (the shim's password-free entry points can't tell the
+  case apart, and a system dialog can't supply the 32-byte credential either). For a slot made with
+  `--no-touch` that unwrap allows no interaction, so it refuses at once; a `--with-touch` slot keeps the
+  interactive unwrap, where the dialog can be cancelled; a YubiKey v2 blob rewritten as v1
   can't be told from a reprogrammed key and gets the "did not authenticate" text with "its slot's
   password flag was removed" among the causes.
 - **Version requirement.** Every machine that opens a password slot, or rewrites a keyring that holds

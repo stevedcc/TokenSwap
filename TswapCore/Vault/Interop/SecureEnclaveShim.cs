@@ -23,6 +23,12 @@ internal interface ISecureEnclaveShim
     /// <summary><c>tswap_se_unwrap</c>: every password-free unlock.</summary>
     int Unwrap(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen);
 
+    /// <summary>
+    /// <c>tswap_se_unwrap_no_interaction</c> (T17 fix round 2): <see cref="Unwrap"/> under a context that allows no
+    /// interaction, for a slot recorded as made without presence.
+    /// </summary>
+    int UnwrapNoInteraction(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen);
+
     /// <summary><c>tswap_se_unwrap_v2</c> (brief T17): unwrap under a context carrying the credential.</summary>
     int UnwrapV2(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] credential, int credentialLen,
         byte[] outPlaintext, ref int outPlaintextLen);

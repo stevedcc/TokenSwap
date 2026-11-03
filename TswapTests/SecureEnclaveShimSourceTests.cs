@@ -175,5 +175,24 @@ public class SecureEnclaveShimPasswordSourceTests
             Assert.DoesNotContain("LAContext", Code(Body(old)));
     }
 
+    // T17 fix round 2: the legacy unwrap without interaction, for a slot recorded as made without presence.
+
+    [Fact]
+    public void UnwrapNoInteraction_HasTheOldUnwrapsParameters() =>
+        Assert.Equal(ParameterTypes("tswap_se_unwrap"), ParameterTypes("tswap_se_unwrap_no_interaction"));
+
+    [Fact]
+    public void UnwrapNoInteraction_AllowsNoInteraction_AndTakesNoCredential()
+    {
+        var body = Code(Body("tswap_se_unwrap_no_interaction"));
+        Assert.Contains("context.interactionNotAllowed = true", body);
+        Assert.Contains("dataRepresentation: blobData, authenticationContext: context", body);
+        Assert.Equal(1, Count(body, "interactionNotAllowed")); // set once, never back to false
+        Assert.Equal(1, Count(body, "LAContext()"));           // one context: no interactive retry
+        Assert.DoesNotContain("setCredential", body);
+        Assert.DoesNotContain(".applicationPassword", body);
+        Assert.Contains("-8", body);
+    }
+
     private static int Count(string text, string what) => Regex.Matches(text, Regex.Escape(what)).Count;
 }

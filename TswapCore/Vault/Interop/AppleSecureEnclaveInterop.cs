@@ -76,6 +76,16 @@ internal static partial class AppleSecureEnclaveInterop
         byte[] outPlaintext, ref int outPlaintextLen);
 
     /// <summary>
+    /// T17 fix round 2: <see cref="tswap_se_unwrap"/> with the key restored under a context that allows no
+    /// interaction (<c>interactionNotAllowed</c>), for a slot recorded as made without presence. Same parameters.
+    /// </summary>
+    [LibraryImport(Lib)]
+    private static partial int tswap_se_unwrap_no_interaction(
+        byte[] blob, int blobLen,
+        byte[] ciphertext, int ciphertextLen,
+        byte[] outPlaintext, ref int outPlaintextLen);
+
+    /// <summary>
     /// Brief T17 (ruling 19): <see cref="tswap_se_wrap_v2"/> for a vault password slot. The key is created with
     /// <c>.applicationPassword</c> added to its flags, under a context carrying <paramref name="credential"/> (the
     /// 32 stretched bytes) through <c>LAContext.setCredential</c>. A new entry point, so an old dylib fails closed.
@@ -119,6 +129,9 @@ internal static partial class AppleSecureEnclaveInterop
 
         public int Unwrap(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen) =>
             tswap_se_unwrap(blob, blobLen, ciphertext, ciphertextLen, outPlaintext, ref outPlaintextLen);
+
+        public int UnwrapNoInteraction(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] outPlaintext, ref int outPlaintextLen) =>
+            tswap_se_unwrap_no_interaction(blob, blobLen, ciphertext, ciphertextLen, outPlaintext, ref outPlaintextLen);
 
         public int UnwrapV2(byte[] blob, int blobLen, byte[] ciphertext, int ciphertextLen, byte[] credential, int credentialLen,
             byte[] outPlaintext, ref int outPlaintextLen) =>
@@ -258,6 +271,41 @@ internal static partial class AppleSecureEnclaveInterop
         var rc = Shim.Unwrap(blob, blob.Length, ciphertext, ciphertext.Length, plaintext, ref plaintextLen);
         if (rc != 0)
             throw SecureEnclaveReturnCodes.UnwrapFailure(rc);
+
+        // A copy of the key's length; the full buffer (holding the key too) is zeroed, not left to the GC.
+        var key = plaintext.AsSpan(0, plaintextLen).ToArray();
+        CryptographicOperations.ZeroMemory(plaintext);
+        return key;
+    }
+
+    /// <summary>
+    /// T17 fix round 2: <see cref="Unwrap"/> for a slot recorded as made without presence
+    /// (<see cref="Config.RequiresTouch"/> false), through <c>tswap_se_unwrap_no_interaction</c>: no dialog can
+    /// appear, so a key that would need one fails at once with today's generic text instead of waiting. That is a
+    /// password slot whose <c>TSSE</c> header was stripped (its key wants the application password, which only the
+    /// header's path supplies; the controller's ruling: fail fast, not wait). A key made without presence opens
+    /// as before. An older dylib without the entry point fails closed: the interactive unwrap is never tried instead.
+    /// </summary>
+    public static byte[] UnwrapWithoutInteraction(byte[] wrapped)
+    {
+        var (blob, ciphertext) = SplitPackage(wrapped);
+
+        var plaintext = new byte[256];
+        var plaintextLen = plaintext.Length;
+        int rc;
+        try
+        {
+            rc = Shim.UnwrapNoInteraction(blob, blob.Length, ciphertext, ciphertext.Length, plaintext, ref plaintextLen);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            throw SecureEnclaveReturnCodes.MissingUnwrapNoInteraction(ex);
+        }
+        if (rc != 0)
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            throw SecureEnclaveReturnCodes.UnwrapFailure(rc); // -8 (interaction needed) gets the generic text too
+        }
 
         // A copy of the key's length; the full buffer (holding the key too) is zeroed, not left to the GC.
         var key = plaintext.AsSpan(0, plaintextLen).ToArray();
