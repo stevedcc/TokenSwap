@@ -246,6 +246,9 @@ public static class BrokerTemplateValidator
     /// <summary>Checks a secret name as tswap names them (plain, not <c>{{...}}</c>).</summary>
     public static bool IsSecretName(string? name) => name is not null && SecretNameRegex.IsMatch(name);
 
+    /// <summary>True when <paramref name="path"/> has a <c>.</c> or <c>..</c> segment (brief I224 round 2, G1).</summary>
+    public static bool HasDotSegment(string path) => path.Split('/').Any(s => s is "." or "..");
+
     /// <summary>True when <paramref name="s"/> has a NUL or another control character (C0, DEL or C1).</summary>
     public static bool HasControl(string s) => s.Any(c => c < 0x20 || c is >= '\x7f' and <= '\x9f');
 
@@ -270,8 +273,12 @@ public static class BrokerTemplateValidator
         var program = t.Argv[0];
         if (program.Contains('{') || program.Contains('}'))
             throw Ex("argv[0] must be a literal path: no {arg} placeholder or {{secret}} (the caller may never choose the program).");
-        if (!program.StartsWith('/') || HasControl(program) || program.Split('/').Any(s => s is "." or ".."))
+        if (!program.StartsWith('/') || HasControl(program))
             throw Ex($"argv[0] must be an absolute path with no '.' or '..' segments (got '{BrokerPolicy.Printable(program)}').");
+        // I224 round 2 (G1): the kernel takes "link/.." through the link, a lexical comparison doesn't.
+        if (HasDotSegment(program))
+            throw new BrokerConfigException(
+                $"template {name}: program {BrokerPolicy.Printable(program)} has a \".\" or \"..\" segment; give the literal absolute path (argv[0])");
 
         // Secrets never in argv, cwd, binds or a files path (decision 3).
         for (var i = 1; i < t.Argv.Count; i++)
@@ -499,7 +506,7 @@ public static class BrokerTemplateValidator
         if (tooManyLinks)
             throw new BrokerConfigException(
                 $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} can't be resolved (more than {MaxSymlinks} symbolic links), so it can't be checked against template {name}'s binds");
-        var names = new[] { Path.GetFullPath(bwrapPath), resolved }.OfType<string>().ToList();
+        var names = new[] { bwrapPath, resolved }.OfType<string>().ToList(); // as configured: no lexical ".." collapse
         foreach (var bind in binds)
             if (names.Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
                 throw new BrokerConfigException(
@@ -674,7 +681,9 @@ public static class BrokerTemplateValidator
     {
         tooManyLinks = false;
         var pending = new Stack<string>(); // the components still to walk, the next one on top
-        Push(pending, Path.GetFullPath(path));
+        // I224 round 2 (G1): an absolute path is walked as given, never through Path.GetFullPath, which would
+        // collapse "link/.." lexically; the ".." branch below takes it against the real folder, as the kernel does.
+        Push(pending, Path.IsPathRooted(path) ? path : Path.GetFullPath(path));
         var resolved = "/";
         var links = 0;
         var missing = false;
@@ -685,6 +694,7 @@ public static class BrokerTemplateValidator
             if (part == "..")
             {
                 resolved = Path.GetDirectoryName(resolved) ?? "/";
+                missing = false; // back in a folder that may exist: look at what follows again
                 continue;
             }
             var candidate = Path.Join(resolved, part);

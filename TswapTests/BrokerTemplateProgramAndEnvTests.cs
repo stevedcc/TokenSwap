@@ -369,6 +369,65 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", problem);
     }
 
+    // ------------------------------------------------------------------ H3: ".." through a link (I224 round 2, G1)
+
+    [Theory]
+    [InlineData("/usr/bin/../bin/true")]
+    [InlineData("/usr/bin/./true")]
+    public void AProgramWithADotSegment_IsRefusedWithTheMessage(string program)
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        Assert.Equal($"template t: program {program} has a \".\" or \"..\" segment; give the literal absolute path (argv[0])",
+            Refused(Config(program, Work)));
+    }
+
+    [Theory]
+    [InlineData("/usr/bin/../bin/bwrap")]
+    [InlineData("/usr/./bin/bwrap")]
+    public void ABwrapPathWithADotSegment_IsRefusedWithTheMessage(string bwrap)
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        Assert.Equal($"bwrap_path {bwrap} has a \".\" or \"..\" segment; give the literal absolute path",
+            Refused(Config("/usr/bin/true", Work, bwrapPath: bwrap)));
+    }
+
+    [Fact]
+    public void TheDotDotThroughADanglingLinkLayout_IsRefusedAtLoad()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        // The reviewer's layout: tool-link -> Work/v2 (missing), so the kernel takes tool-link/.. as Work.
+        var link = DanglingLinkIntoTheBind();
+        var program = link + "/../deploy";
+        var bwrap = link + "/../bwrap";
+
+        // Refused either by the "." / ".." rule or, without it, by the resolver: never the system-roots message.
+        Assert.Matches("has a \".\" or \"..\" segment|is inside bind", Refused(Config(program, Work, rw: true)));
+        Assert.Matches("has a \".\" or \"..\" segment|is inside template t's bind", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
+    }
+
+    [Fact]
+    public void TheDotDotThroughADanglingLinkLayout_IsRefusedBeforeEveryRun()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        // Validate refuses ".." in argv[0] and bwrap_path, so the template is built directly: the per-run
+        // re-check must take tool-link/.. as the kernel does (Work), not lexically (_root).
+        var link = DanglingLinkIntoTheBind();
+        var program = link + "/../deploy";
+        var loaded = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true), Host()).Templates["t"];
+        var template = new BrokerTemplatePolicy("t", program, [new[] { (program, false) }], loaded.Args, loaded.Env, loaded.Files,
+            loaded.Binds, loaded.Cwd, loaded.Network, loaded.Limits, loaded.Timeout, loaded.MaxOutputBytes, loaded.Rate);
+
+        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var problem));
+        Assert.StartsWith($"template t: program {program} (resolves to {Path.Combine(Work, "deploy")}) is inside bind {Work}", problem);
+
+        Assert.False(BrokerTemplateValidator.RecheckBinds(loaded, Host(), null, link + "/../bwrap", out var bwrapProblem));
+        Assert.Equal($"bwrap_path {link}/../bwrap is inside template t's bind {Work}", bwrapProblem);
+    }
+
     // ------------------------------------------------------------------ H4: the env denylist
 
     [Theory]

@@ -147,8 +147,10 @@ public sealed class BrokerPolicy
         }
 
         string? bwrap = config.BwrapPath;
-        if (bwrap is not null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl) || bwrap.Split('/').Any(s => s is "." or "..")))
+        if (bwrap is not null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl)))
             throw new BrokerConfigException($"bwrap_path must be an absolute path (got '{Printable(bwrap)}'); bwrap is never looked up on PATH.");
+        if (bwrap is not null && BrokerTemplateValidator.HasDotSegment(bwrap))
+            throw new BrokerConfigException($"bwrap_path {Printable(bwrap)} has a \".\" or \"..\" segment; give the literal absolute path");
 
         // Brief T9: templates (Linux only; checked against the host on every load).
         var templates = new Dictionary<string, BrokerTemplatePolicy>(StringComparer.Ordinal);
