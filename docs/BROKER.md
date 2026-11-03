@@ -310,8 +310,8 @@ sudo -iu vault tswap broker lock
   (`Run 'tswap broker unlock' as the vault user (<name>), without sudo.`); `sudo -iu vault` is fine.
   On a broker whose slot has no password they say `This broker's slot has no vault password; it is
   never locked.` and connect to nothing.
-- **`broker unlock` needs a terminal.** Without one it gives the general "needs the vault password"
-  text, which suggests the agent; for a broker, run `broker unlock` from a terminal instead. Before it
+- **`broker unlock` needs a terminal.** Without one it refuses with `broker unlock reads the vault
+  password from a terminal; there is none. Run 'tswap broker unlock' from your session.` Before it
   asks for the password it checks that the broker answers (`No 'tswap broker serve' answers at <path>;
   is it running?` otherwise) and prints, on stderr, the RAM disclosure with "The broker keeps" for its
   first words (and, on a Mac with a Secure Enclave slot, the line about the Secure Enclave library's

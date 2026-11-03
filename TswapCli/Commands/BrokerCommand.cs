@@ -209,6 +209,9 @@ public sealed class BrokerCommand : ICliCommand
     public const string NeverLockedText = "This broker's slot has no vault password; it is never locked.";
 
     /// <summary>The RAM disclosure (Global constraints), with "The broker keeps" for its first words.</summary>
+    public const string UnlockNoTerminalText =
+        "broker unlock reads the vault password from a terminal; there is none. Run 'tswap broker unlock' from your session.";
+
     public const string RamDisclosure =
         "The broker keeps your stretched vault password in memory until you stop it or it times out. Root, or anything that can read this process's memory, can take it while it runs; it still needs this machine's TPM/YubiKey/Secure Enclave to open the vault.";
 
@@ -291,14 +294,14 @@ public sealed class BrokerCommand : ICliCommand
         // A broker that doesn't answer is said before the password is typed (the unlock itself still decides).
         if (BrokerControlClient.Status(path, vaultId, uid) is not BrokerControlAnswer.State and var absent)
             throw Failure(absent, path);
-        // The disclosure comes before the password is read: it is what the user decides on. Without a
-        // terminal the provider refuses next, so there is nothing to disclose.
-        if (!ctx.Console.IsInputRedirected)
-        {
-            ctx.Console.Error.WriteLine(RamDisclosure);
-            if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave)
-                ctx.Console.Error.WriteLine(SecureEnclaveCopyLine);
-        }
+        // Without a terminal: refused before anything is read. Not the general text, which suggests the agent;
+        // a broker never asks one (review T17 p3 MiMo M-5).
+        if (ctx.Console.IsInputRedirected)
+            throw new TswapException(UnlockNoTerminalText);
+        // The disclosure comes before the password is read: it is what the user decides on.
+        ctx.Console.Error.WriteLine(RamDisclosure);
+        if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave)
+            ctx.Console.Error.WriteLine(SecureEnclaveCopyLine);
         using var password = TerminalPasswordProvider.For(ctx, config)();
         var expiresAt = timeout is { } t ? ctx.Time.GetUtcNow() + t : (DateTimeOffset?)null;
         switch (BrokerControlClient.Unlock(path, vaultId, uid, password, expiresAt))

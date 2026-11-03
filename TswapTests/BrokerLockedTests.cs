@@ -282,6 +282,24 @@ public class BrokerLockedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BrokerUnlock_NoTerminal_SaysRunItFromATerminal_NotTheAgent()
+    {
+        // Review T17 p3 MiMo M-5: a broker never asks an agent, so its refusal without a terminal doesn't suggest one.
+        if (OperatingSystem.IsWindows())
+            return;
+        using var m = new FleetMachine("bk-piped") { Tpm = RandomNumberGenerator.GetBytes(32) };
+        var c = await RealVaultBrokerAsync(m);
+
+        var (exit, _, stderr) = m.Run(Password + "\n", "broker", "unlock");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("broker unlock reads the vault password from a terminal; there is none. Run 'tswap broker unlock' from your session.", stderr);
+        Assert.DoesNotContain("agent", stderr);
+        Assert.Equal(0, m.LastConsole!.Reads);
+        Assert.True(c.State.IsLocked);
+    }
+
+    [Fact]
     public void BrokerUnlock_NoBrokerRunning_SaysSoBeforeThePrompt()
     {
         // Review T17 p3 GLM I1 (second half): a broker that doesn't answer is found before the password is typed.
