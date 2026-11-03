@@ -141,7 +141,7 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
        - NeedsNewerTswap, for all three kinds (including `TSYK`):
          `needs a newer tswap (blob version <v> or unknown flags); upgrade tswap.`
        - Corrupt:
-         `a password header without the password flag, or a truncated blob (corrupt); restore config.json from backup.`
+         `a password header without the password flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.`
          `broker serve` and `broker unlock` use this text, so it covers the truncated case too.
        - The legacy parsers' text (`This slot needs the vault password and a newer tswap …`) is used only by
          `Tpm2ToolsInterop`, `PlatformCryptoProviderInterop` and `AppleSecureEnclaveInterop` on an unsplit
@@ -158,7 +158,7 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
        `Skipped slot(s) <ids>: their slot blob is corrupt; restore config.json from backup.` (The `VaultUnlocker` pin
        for the YubiKey text moves with it: name that test in the commit message.)
      - **Where each Corrupt text is used:** the unlocker uses this skip text. `broker serve` and `broker unlock` use
-       `Slot <id8>: a password header without the password flag (corrupt); …`. `slots` uses its mark.
+       the Corrupt text above with the `Slot <id8>: ` prefix. `slots` uses its mark.
      - **Other callers:**
        - `broker serve` whose own slot is Corrupt refuses to start, with the Corrupt text prefixed by its slot id; one
          that is NeedsNewerTswap refuses with that text. Only None means password-free and Password means locked
