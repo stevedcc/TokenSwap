@@ -211,6 +211,20 @@ public class VaultPasswordEnrolmentTests : IDisposable
     }
 
     [Fact]
+    public void Init_SecureEnclaveWithPasswordFlag_PrintsTheEnclaveLineOnce()
+    {
+        // Review T17 p5 GLM minor 4: the Secure Enclave's explanation line (simulated Enclave, any platform).
+        var m = new FleetMachine("se-lines", SimulatedYubiKeyService.WithKeys()) { SecureEnclave = RandomNumberGenerator.GetBytes(32) };
+        _machines.Add(m);
+
+        var (exit, stdout, stderr) = m.Run(Twice(Password), "init", "--secure-enclave", "--with-touch", "--password", "--no-recovery");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Single(stdout.ReplaceLineEndings("\n").Split('\n'), line => line == VaultPasswordChoice.SecureEnclaveLine);
+        Assert.DoesNotContain(YubiKeyLine, stdout);
+    }
+
+    [Fact]
     public void ShortPassword_Warns_DoesNotRefuse()
     {
         var m = Machine("short");
