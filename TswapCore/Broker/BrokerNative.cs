@@ -266,6 +266,23 @@ public static partial class BrokerNative
         }
     }
 
+    /// <summary>The user name of <paramref name="uid"/> from the password database (<c>getpwuid_r</c>), or null.</summary>
+    public static unsafe string? NameOf(uint uid)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+        var entry = stackalloc byte[256];
+        var buffer = new byte[16384];
+        nint result;
+        fixed (byte* b = buffer)
+        {
+            if (getpwuid_r(uid, entry, b, (nuint)buffer.Length, &result) != 0 || result == 0)
+                return null;
+            var name = *(nint*)entry; // pw_name is the first field on Linux and macOS
+            return name == 0 ? null : Marshal.PtrToStringUTF8(name);
+        }
+    }
+
     [LibraryImport("libc", SetLastError = true)]
     private static unsafe partial int getpwuid_r(uint uid, byte* entry, byte* buffer, nuint size, nint* result);
 
