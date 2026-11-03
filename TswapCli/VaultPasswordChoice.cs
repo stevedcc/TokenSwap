@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TswapCore;
+using TswapCore.Vault;
 using TswapCore.VaultPassword;
 
 namespace TswapCli;
@@ -51,6 +52,15 @@ internal static class VaultPasswordChoice
     /// <summary>Test seam (ruling 17): whether this is Windows, for the TPM lockout line.</summary>
     internal static Func<bool> IsWindows = OperatingSystem.IsWindows;
 
+    /// <summary>Test seam (ruling 17): whether this is Linux, for the TPM lockout probe.</summary>
+    internal static Func<bool> IsLinux = OperatingSystem.IsLinux;
+
+    /// <summary>
+    /// Test seam (ruling 17, Linux): the TPM lockout probe. Null: <see cref="TpmLockoutProbe.IsLockoutAuthEmpty"/>,
+    /// except in test mode (<c>TSWAP_TEST_KEY</c>), whose simulated TPM is not the machine's.
+    /// </summary>
+    internal static Func<bool?>? ProbeLockout;
+
     /// <summary>
     /// Takes <c>--password</c> / <c>--no-password</c> out of <paramref name="args"/>: null for neither. Both,
     /// or either one twice, is a usage error.
@@ -99,9 +109,34 @@ internal static class VaultPasswordChoice
             c.Error.WriteLine(NoPasswordLine);
             chosen = false;
         }
-        if (chosen && backend == HardwareBackend.Tpm && IsWindows())
-            c.Out.WriteLine(WindowsLockoutLine);
+        if (chosen)
+            PrintTpmLockoutNotice(ctx, backend);
         return chosen;
+    }
+
+    /// <summary>
+    /// Ruling 17, once per TPM password-slot enrolment: on Windows, <see cref="WindowsLockoutLine"/>; on Linux,
+    /// <see cref="TpmLockoutProbe.EmptyLockoutAuthWarning"/> on stderr when the probe says the TPM's lockout
+    /// password is empty, nothing when it is set or the probe failed. Nothing for any other backend.
+    /// </summary>
+    public static void PrintTpmLockoutNotice(CommandContext ctx, HardwareBackend backend)
+    {
+        if (backend != HardwareBackend.Tpm)
+            return;
+        if (IsWindows())
+        {
+            ctx.Console.Out.WriteLine(WindowsLockoutLine);
+            return;
+        }
+        if (!IsLinux())
+            return;
+        var empty = ProbeLockout is { } probe ? probe()
+            : ctx.TestKey is null && OperatingSystem.IsLinux() ? TpmLockoutProbe.IsLockoutAuthEmpty()
+            : null;
+        if (empty == true)
+#pragma warning disable CA1416 // a const string, compiled in: no Linux-only API runs here
+            ctx.Console.Error.WriteLine(TpmLockoutProbe.EmptyLockoutAuthWarning);
+#pragma warning restore CA1416
     }
 
     private static void PrintBackendLines(IConsole c, HardwareBackend backend)

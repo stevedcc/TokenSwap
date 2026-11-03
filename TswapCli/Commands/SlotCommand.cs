@@ -659,8 +659,7 @@ public sealed class SlotCommand : ICliCommand
         {
             if (passwordFile is not null)
             {
-                if (backend == HardwareBackend.Tpm && VaultPasswordChoice.IsWindows())
-                    c.Out.WriteLine(VaultPasswordChoice.WindowsLockoutLine);
+                VaultPasswordChoice.PrintTpmLockoutNotice(ctx, backend);
                 stretched = VaultPasswordChoice.AskExisting(ctx, passwordFile, vaultKey);
             }
             VaultPasswordProvider? provider = stretched is null ? null : stretched.Clone;
