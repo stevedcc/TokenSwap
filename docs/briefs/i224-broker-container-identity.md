@@ -6,7 +6,8 @@ Read AGENTS.md and CLAUDE.md first, then `docs/BROKER.md` ("Threat model", "Limi
 extends). One commit per task, TDD, break-it-once per key test, full `./runtests.sh` once per lane at the end.
 
 Review history: brief round 1 by GLM and MiMo (2026-11-03, `~/RiderProjects/tswap-wt/tools/i224-brief-{glm,mimo}.md`),
-both "request changes"; this version folds in every finding. References like "(MiMo B3)" point there.
+both "request changes"; round 2 (`i224-brief-r2-{glm,mimo}.md`), both "request changes" on a few points; this version
+folds in every finding. "(MiMo B3)" points to round 1, "(r2 GLM N1)" / "(r2 MiMo F3)" to round 2.
 
 ## Why
 
@@ -44,23 +45,30 @@ Each socket gets exactly one of two new fields:
 - `container.cgroup` (required inside `container`): the cgroup v2 path of the container's systemd unit, as the
   host's root cgroup namespace shows it. Load validation: starts with `/`; no empty, `.` or `..` segment; no trailing
   `/`; printable ASCII only (0x21-0x7E); at most 1024 bytes; and the last segment passes **one shared predicate**
-  `BrokerContainerUnit.Refusal(string lastSegment) -> string?` (null = a container unit), used by this validation and
-  by `socket bind --pid` alike (GLM B1, MiMo B1). It refuses, each with its own reason:
+  `BrokerContainerUnit.Refusal(string lastSegment) -> string?` (null = not a reserved unit), used by this validation
+  and by `socket bind --pid` alike (GLM B1, MiMo B1). It is a deny-list of units known not to be containers, not a
+  proof that a unit is one. It refuses, each with its own reason:
   - a last segment not ending in `.service` or `.scope` (`/user.slice/user-1001.slice` would be every process of a
     user): `not a systemd unit`;
   - `user@<digits>.service`: `the user manager: every process of that user`;
   - `init.scope`, `manager.scope`: `the user manager itself`;
-  - `session-<digits>.scope`: `a login session`;
+  - `session-<anything>.scope` (logind uses `session-3.scope` and `session-c2.scope`; both exist on the dev
+    machine): `a login session` (r2 MiMo F1);
   - `-.scope`: `the root scope`.
   Message shape: `socket <name>: container.cgroup <path> is not a container (<reason>)`.
 - `container.selinux_label` (optional): an exact, whole SELinux label (`user:role:type:level`). Corroboration only:
   any container of the same host user can ask Podman for another container's MCS level (GLM review A, I2), and the
   level changes on every container start unless the unit pins it (`SecurityLabelLevel=` in Quadlet). Validation
-  matches what `PeerIdentity.SelinuxLabel` accepts from the kernel (MiMo I9): four or more `:`-separated parts, each
+  is at least as strict as what `PeerIdentity.SelinuxLabel` accepts from the kernel, and stricter on purpose (a
+  container's label carries a level) (MiMo I9, r2 GLM N3, r2 MiMo F8): four or more `:`-separated parts, each
   non-empty, printable ASCII without whitespace, at most 256 bytes.
 - `uid_only: true`: today's behaviour, chosen on purpose. `uid_only: false` is refused (say `true` or leave it out).
 - Neither field: `socket <name> names no container: run "sudo tswap broker socket bind <name> --pid <pid>" or set
   "uid_only": true`. Both: `socket <name> has both "container" and "uid_only": remove one`.
+- The neither-field rule must not lock the operator out of the fix (r2 GLM N1): `socket bind` and `socket add` load
+  `broker.json` with that one rule suspended, apply their change, and validate the result with every other rule
+  before writing. If sockets with neither field remain, they still write and then print
+  `still to bind before serve starts: <names>`. `serve` and every other load apply the rule.
 - `broker.json` stays `version: 1`: field presence tells v0.1 and v0.2 configs apart and both directions refuse
   loudly (a v0.1 tswap refuses the new fields as unknown; v0.2 refuses a socket with neither). Don't bump it.
 - `uids` stays and is still required: the uid check and the cgroup check must **both** pass. The own-uid refusal
@@ -75,12 +83,14 @@ Each socket gets exactly one of two new fields:
 `serve` refuses a config (at start; on SIGHUP the old config is kept and the reason logged, as today) when:
 - a socket has `container` and the platform is not Linux;
 - a socket has `container` and the kernel gives no `SO_PEERPIDFD`: probe once at start on a **`socketpair()`**
-  (a listening socket has no peer and always fails, MiMo B3). The flag was added in Linux 6.5; the probe, not the
-  number, decides;
-- a socket has `container` and `/proc/self/cgroup` is not one `0::/...` line (cgroup v1 or hybrid), or its path
-  contains `..` or is `/` in a way that shows `serve` is not in the host's root cgroup namespace (MiMo M1: a nested
-  cgroup namespace renders short paths and nothing would match). Decide the exact root-namespace test, document it,
-  test it via the seam;
+  (a listening socket has no peer and always fails, MiMo B3). The flag was added in Linux **6.5**. The round-1
+  reviews disagreed (GLM 6.5, MiMo 6.3); the controller checked the kernel list: the series was still "PATCH net-next
+  v7 0/4 Add SCM_PIDFD and SO_PEERPIDFD" in June 2023, after 6.3's release (April 2023), so it merged for 6.5. The
+  probe, not the number, decides;
+- a socket has `container` and `/proc/self/cgroup` is not exactly one `0::/...` line (cgroup v1 or hybrid), or its
+  path contains a `..` segment. That is the whole start check (r2 MiMo F9): a `serve` in a nested cgroup namespace
+  is not detected at start but fails closed anyway (peers outside its namespace root show `..` and are refused as
+  `identity-unreadable`), and BROKER.md says `serve` must run in the host's root cgroup namespace;
 - a socket has `container.selinux_label` and SELinux is not enabled (no `/sys/fs/selinux/enforce`).
 
 Each refusal names the socket and the reason. `uid_only` sockets start everywhere `serve` starts today.
@@ -93,14 +103,20 @@ On every accepted connection to a socket with `container`, after the existing ow
 order (T17's method, extended):
 
 1. `SO_PEERPIDFD` -> pidfd. `PeerIdentity.DefaultOpenPeer` falls back to the dirfd alone when the kernel gives no
-   pidfd; for a `container` socket that is **not** a pass: `PeerProcess.HasPidfd == false` -> refuse `no-pidfd`
-   (MiMo B3). The agent and control sockets keep their fallback unchanged.
-2. `/proc/<pid>` as a directory fd (`DefaultOpenPeer`). Failure with ENOENT or EACCES while the pidfd is alive -> the
-   broker can't see the peer (`hidepid`) -> `proc-hidden`; with the pidfd dead -> `peer-exited` (MiMo M2). Log
+   pidfd; for a `container` socket that is **not** a pass: no pidfd -> refuse `no-pidfd` (MiMo B3). The agent and
+   control sockets keep their fallback unchanged.
+2. `/proc/<pid>` as a directory fd. Failure with ENOENT or EACCES while the pidfd is alive -> the broker can't see
+   the peer (`hidepid`) -> `proc-hidden`; with the pidfd dead -> `peer-exited` (MiMo M2). Today `OpenPeer` returns
+   `PeerProcess?` and disposes the pidfd when the dirfd open fails, so a caller can't tell these apart (r2 MiMo F3).
+   Add a richer opener beside it: `PeerIdentity.OpenPeerDetailed` (seam `Func<Socket, PeerOpenResult>`), where
+   `PeerOpenResult` carries the `PeerProcess?` on success, or on failure whether a pidfd was obtained, whether it was
+   alive when the dirfd open failed, and the errno. `OpenPeer` keeps its signature and behaviour (build it on the new
+   one or leave it); `PeerIdentity.Check`'s refusal words and their tests must not change. Log
    `proc-hidden` once per serve also as an event: `can't see client processes in /proc (hidepid?): mount /proc with
    gid=<group> and add the vault user to it`.
 3. Through the dirfd: `status` (effective uid must equal `SO_PEERCRED`'s, as T17 does) and `cgroup`, read as bytes
-   (MiMo M4). Parse: exactly one line `0::<path>`, with or without the trailing `\n` (the kernel always writes one;
+   (MiMo M4) and decoded as UTF-8 with replacement characters (r2 MiMo F5: a bound path is 0x21-0x7E only and a
+   replacement character can't produce ASCII, so decoding can't create a false match). Parse: exactly one line `0::<path>`, with or without the trailing `\n` (the kernel always writes one;
    accept both); `<path>` must start with `/` and contain no empty, `.` or `..` segment (a `..` means the peer is
    outside the broker's cgroup-namespace root). Anything else -> `identity-unreadable`. A path with bytes outside
    0x21-0x7E is kept (it can't equal a validated bound path, so it ends as `cgroup-mismatch`).
@@ -182,17 +198,26 @@ characters (the observed name is attacker-influenced, MiMo M3); reason words exa
   `~/.cache/tswap/run`; which one is used can change between load and serve): a bind may not be one, contain one or
   be inside one, **whether or not the folder exists yet** (compare paths after resolving the nearest existing
   ancestor, as well as `st_dev:st_ino` when it exists). Message names both risks: `bind <path> contains the broker's
-  run folder <folder> (a template could delete or use the control socket)`. Compute the paths by calling
-  `AgentSocketPath`'s existing logic; don't edit that file.
+  run folder <folder> (a template could delete or use the control socket)`. Only the `~/.cache/tswap/run` candidate
+  is new work: `/run/user/<uid>/tswap` is already covered by the `/run` forbidden root (r2 MiMo F10). `Folder` with
+  the machine's inputs returns the `/run` path whenever that folder exists, so it can't name the home candidate:
+  build it as `Folder` does (`<home of vault uid>/.cache/tswap/run`; templates are Linux-only) or call `Folder` with
+  synthetic `Inputs` whose run-user folder is absent. Don't edit `AgentSocketPath.cs`.
 - H2 (both B reviews): `BrokerTemplateCalls` skips `RecheckBinds` when `policy.Host` is null. Fail closed: a null
-  `Host` refuses the call with the existing "binds" refusal. `Validate` sets `Host` whenever templates exist, so this
-  is hardening (GLM M7, MiMo I4); the test builds such a policy through an `internal` test-only factory.
+  `Host` refuses **every** template call, with or without binds (r2 MiMo F6), with the existing "binds" refusal.
+  `Validate` sets `Host` whenever templates exist, so this is hardening (GLM M7, MiMo I4); the test builds such a
+  policy through an `internal` test-only factory. MiMo I4's type-level alternative (non-null `Host` by type) is
+  deliberately not done: `BrokerPolicy`'s constructor is private and `Validate` is its only producer.
 - H3 (GLM B, PB-4; GLM I2; MiMo I5): refuse at validation a template program that, **resolved** (symlinks followed;
   unresolvable -> refused), is at or under any of that template's binds (resolved and configured paths, `rw` or
   read-only: a read-only bind is still a folder a container may be able to write through another mount). Message:
   `template <name>: program <path> is inside bind <bind>; a program may no longer live in a bind: install it under
   /usr or ship it in the image`. The same for `bwrap_path` at or under **any** template's bind (worse: a replaced
-  bwrap runs outside the sandbox): `bwrap_path <path> is inside template <name>'s bind <bind>`. Today a program
+  bwrap runs outside the sandbox): `bwrap_path <path> is inside template <name>'s bind <bind>`, checked on the
+  **effective** path (after defaulting to `/usr/bin/bwrap`). For `bwrap_path` only, an unresolvable path is not a
+  load error (today a missing bwrap refuses template calls with a logged reason and `serve` starts; keep that,
+  r2 MiMo F7): compare the configured path and its nearest existing ancestor instead. When the bind covers a system
+  root (`/usr`, `/opt`), the message adds `bind <bind> covers system programs; bind a narrower folder`. Today a program
   outside `/usr /bin /sbin /lib /lib64` must be inside a bind; after H3 such a program is invalid outright. Both are
   v0.2 breaking changes; BROKER.md's "Command templates" section says so.
 - H4 (MiMo B, S-5; MiMo I6): the template env-name denylist (`CodeEnvNames`/`CodeEnvPrefixes` in
@@ -233,6 +258,13 @@ headers; the `cwd` re-check.
   fields, duplicate keys) stays.
 - Linux-only tests key off `OperatingSystem.IsLinux()` and **fail** (not skip) on a Linux kernel without
   `SO_PEERPIDFD` (MiMo, tests): CI's ubuntu-latest runner runs them. macOS and Windows CI must stay green.
+- End-to-end identity tests need a client in a cgroup that passes D1 (r2 GLM N2, MiMo F4): the test process itself
+  may sit in a `session-*.scope` (an ssh login) or an unbindable CI path. The client side of those tests runs as a
+  child started with `systemd-run --user --scope --unit=tswap-test-<random> <client>` (checked on the dev machine:
+  the child sits in `.../user@1000.service/app.slice/tswap-test-<x>.scope`), and the socket is bound to that scope.
+  When `systemd-run --user` is unavailable (no user manager, as on some CI runners), fall back to the test process's
+  own cgroup if it passes D1; if neither works, skip with the exact reason. Report which path CI and the dev machine
+  took. The pure and seam tests never depend on this.
 - Never touch `~/.config/tswap`, never run `sudo tswap`. Never `rm` with wildcards; delete only files you created,
   by name.
 
@@ -281,11 +313,12 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
   the rules; say so in the commit message). Don't change any assertion.
 - Tests: the predicate on each refused unit and on `lane1.service`, `libpod-abc.scope` accepted; each D1 rule
   (accepted and refused: `.../user@1001.service`, `.../user@1001.service/init.scope`,
-  `/user.slice/user-1001.slice/session-3.scope`, `/user.slice/user-1001.slice`, `/a/b.service/`, `/a/../b.service`,
+  `/user.slice/user-1001.slice/session-3.scope`, `.../session-c2.scope`, `/user.slice/user-1001.slice`, `/a/b.service/`, `/a/../b.service`,
   `/a//b.service`, 1025 bytes, a space, both fields, neither, `uid_only: false`, labels `a::b:c` and with a space
   refused) with their exact messages; uid-0 warning text and that `serve` logs it; each D2 refusal via its seam;
   the real `socketpair` probe succeeds on Linux CI; a v0.1 `broker.json` fixture refused with the exact D1 message.
-- Break-it-once: remove `user@<digits>.service` from the predicate; the `.../user@1001.service` test must fail.
+- Break-it-once: remove `user@<digits>.service` from the predicate; the `.../user@1001.service` test must fail. Then
+  narrow `session-*` back to digits only; the `session-c2.scope` test must fail.
 
 ## Task 2 (A): reading and matching the peer's cgroup
 
@@ -299,7 +332,8 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
   newline; refuses two lines, a `1:name=systemd:` v1 line, a relative path, `..`, an empty segment; a path with a
   space parses and then mismatches. Matcher: equal, under, the prefix-sibling cases of review focus 1, label
   equal/different/missing.
-- Tests (seams): `HasPidfd == false` -> `no-pidfd` (the fallback is not a pass); dirfd ENOENT and EACCES with live
+- `PeerIdentity.OpenPeerDetailed` and `PeerOpenResult` (D3.2); T17's `PeerIdentity` tests pass unchanged.
+- Tests (seams): no pidfd -> `no-pidfd` (the fallback is not a pass); dirfd ENOENT and EACCES with live
   pidfd -> `proc-hidden`; dirfd ENOENT with dead pidfd -> `peer-exited`; status uid differs -> refused; pidfd dead
   after reads -> `peer-exited` (review focus 2); a seam that throws -> `identity-unreadable`.
 - Test (real, Linux): a `socketpair` in the test process; `Observe` on one end returns the test process's own
@@ -313,10 +347,12 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
 - D5 log fields and reasons (`BrokerLog`), including the once-per-serve `proc-hidden` event.
 - H5's request-handler half (D7).
 - Tests (end-to-end, Linux, through a real `serve` the way existing `BrokerServer` tests run it):
-  1. socket bound to the test process's own cgroup (the exact path from `/proc/self/cgroup`) -> a request is
+  1. socket bound to the client's cgroup (Global constraints: a transient scope, or the fallback) -> a request is
      forwarded;
   2. bound to another unit path -> the connection is closed with no response bytes; log has `cgroup-mismatch` and
-     the observed path. This is also review focus 5 (the test runner is a host process with a listed uid); name it so;
+     the observed path;
+  2b. review focus 5, named so: the socket is bound to a transient scope and the client is the test process itself
+     (a host process with a listed uid, outside that scope) -> refused `cgroup-mismatch`;
   3. the ssh agent socket of a mismatching socket -> closed before the first frame, log `cgroup-mismatch` (MiMo I7);
   4. `uid_only` socket -> behaves as before (one existing test re-run is enough);
   5. rebind (rewrite `broker.json`, reload) after an HTTP connection is accepted and before its request is sent ->
@@ -338,7 +374,9 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
   `/system.slice/lane1.service`; `/user.slice/user-1001.slice/user@1001.service/init.scope` -> refused (the user
   manager); a path with no unit -> refused with the path shown; a path with `..` -> refused.
 - CLI tests in the style of `BrokerCommandTests` (they use a fake ownership/sudo seam; follow them): bind with each
-  option writes the expected `broker.json`; `socket add` without one of the three options refused; platform refusals
+  option writes the expected `broker.json`; bind with each option on a **v0.1 fixture** (sockets with neither field)
+  succeeds and leaves a config that loads once every socket is bound (r2 GLM N1); with two v0.1 sockets, binding one
+  writes the file and the message names the other socket still to bind; `socket add` without one of the three options refused; platform refusals
   via the existing platform seam; the written file and its temp file are 0600 and owned as the existing socket
   commands' are.
 - Break-it-once: drop the `user@<digits>.service` skip in the derivation; the Quadlet derivation test must fail.
@@ -357,8 +395,8 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
     `tswap_broker_t` (name the candidate after checking what the Fedora policy defines, e.g. by searching the
     installed policy's CIL if readable without root; otherwise say you couldn't).
   - The owner verifies on the router; say in the report that CI can't.
-- `PeerIdentity.cs`: its comments say `SO_PEERPIDFD` is Linux >= 6.3. Reword to "a kernel with `SO_PEERPIDFD`
-  (Linux 6.5 per the kernel's history; the code's behaviour depends on the probe/the error, not the number)".
+- `PeerIdentity.cs`: its comments say `SO_PEERPIDFD` is Linux >= 6.3; it is 6.5 (D2 has the evidence). Fix the
+  number and add that the code's behaviour depends on the probe or the error, not the number.
 - `docs/BROKER.md` (outside "Command templates"):
   - "Limits of the identity check": rewrite for the new model. What the binding closes: another container of the
     same user, another user's container, host processes. Residual risks, one sentence each: an admitted container can
@@ -394,16 +432,20 @@ H5's two halves: request handler in task 3 (A), template handler in task 9 (B); 
 
 - The runtime refusal in `BrokerTemplateCalls`, and the `internal` test-only factory in `BrokerPolicy.cs` (the
   allowed exception). Say in the report whether any production path can produce a null `Host` with templates.
-- Test: a policy with `Host = null` and a template with a bind -> the call is refused with the "binds" refusal and
-  the sandbox is never started. Break-it-once: restore the old condition; the test must fail.
+- Tests: a policy with `Host = null`, a template with a bind and one without -> both calls refused with the "binds"
+  refusal and the sandbox never started. Break-it-once: restore the old condition; the test must fail.
 
 ## Task 8 (B): H3 and H4, template validation
 
 - H3 and the one-call change in `BrokerPolicy.Validate` for `bwrap_path`.
+- Existing template fixtures whose program sits inside a bind (the only way a non-system program was valid before)
+  move the program under `/usr` or drop the bind (r2 GLM N4): a test-input change the brief requires; say so in the
+  commit message. No assertion changes.
 - H4.
 - Tests: H3 refused for `rw` and read-only binds; a program reached through a symlink that resolves into a bind
   refused; an unresolvable program refused; `/usr/bin/x` with a bind `/srv/x` accepted; `bwrap_path` inside a
-  template's bind refused, outside accepted. H4: a table test with every new name and one name per new prefix
+  template's bind refused, outside accepted, missing-but-outside still loads; a bind `/opt` with a program in it
+  gets the "narrower folder" clause. H4: a table test with every new name and one name per new prefix
   refused, and `LANG`/`TZ`/`PGPASSWORD` still accepted.
 - Break-it-once: remove `OPENSSL_` from the prefixes; its row must fail.
 
