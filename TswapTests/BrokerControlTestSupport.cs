@@ -51,8 +51,14 @@ internal sealed class ControlHarness : IAsyncDisposable
                 }
             }
         };
-        StretchedPassword.BeforeFreeObserver = span => Add(span.ContainsAnyExcept((byte)0) ? "free-NOT-zeroed" : "free");
+        // The harness's own client copy (UnlockAsync) is logged apart: it is freed when the client returns, which
+        // can race the server's return to dumpable (a lock waiting on this unlock), and it isn't the broker's.
+        StretchedPassword.BeforeFreeObserver = span => Add(
+            ClientFlow.Value ? "client-free" : span.ContainsAnyExcept((byte)0) ? "free-NOT-zeroed" : "free");
     }
+
+    /// <summary>True in the flow of <see cref="UnlockAsync"/>'s client call (an AsyncLocal: the broker's own tasks don't see it).</summary>
+    private static readonly AsyncLocal<bool> ClientFlow = new();
 
     public DirectoryInfo Root { get; }
     public byte[] VaultId { get; }
@@ -205,6 +211,7 @@ internal sealed class ControlHarness : IAsyncDisposable
     /// <summary>The client's unlock, off the test thread (the client is synchronous).</summary>
     public Task<BrokerControlAnswer> UnlockAsync(bool right = true, DateTimeOffset? expiresAt = null) => Task.Run(() =>
     {
+        ClientFlow.Value = true;
         using var password = Password(right);
         return BrokerControlClient.Unlock(SocketPath, VaultId, MyUid, password, expiresAt);
     });
