@@ -292,10 +292,20 @@ public sealed class VaultUnlocker
     public const string NoPasswordSlotHereText =
         "No slot of this vault on this machine that needs the vault password can be used right now, so the password can't be proven here.";
 
+    /// <summary>
+    /// <paramref name="ex"/> with the set-aside suffix, of the same kind: a refused password, an unavailable
+    /// password or an agent failure stays one (review T17 p1 I2), so a caller can still tell them apart.
+    /// </summary>
     private static TswapException WithSuffix(TswapException ex, string suffix) =>
         suffix.Length == 0 || ex.Message.EndsWith(suffix, StringComparison.Ordinal)
             ? ex
-            : new TswapException(ex.Message + suffix, ex.ExitCode);
+            : ex switch
+            {
+                VaultPasswordRefusedException => new VaultPasswordRefusedException(ex.Message + suffix),
+                VaultPasswordUnavailableException => new VaultPasswordUnavailableException(ex.Message + suffix),
+                AgentUnlockFailedException => new AgentUnlockFailedException(ex.Message + suffix),
+                _ => new TswapException(ex.Message + suffix, ex.ExitCode),
+            };
 
     /// <summary>
     /// Brief T17 ruling 13: true when a <b>password</b> candidate is reachable on this machine: the own

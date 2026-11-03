@@ -330,6 +330,26 @@ public class VaultUnlockerPasswordTests
     }
 
     [Fact]
+    public void PasswordSlotsOnly_WrongPassword_WithASetAsideSlot_KeepsTheRefusedType()
+    {
+        // Review T17 p1 MiMo I2: the set-aside suffix must not turn a refused password into a plain error.
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var vault = new VaultBuilder();
+        var own = vault.AddTpmSlot(MachineKey, password: true);
+        var corrupt = vault.AddYubiKeySlot(keys, SerialA, password: true);
+        var blob = (byte[])vault.Slots[1].HwBlob!.Clone();
+        blob[^1] = 0x00;
+        vault.ReplaceBlob(corrupt, blob);
+        using var wrong = StretchedPassword.FromBytes(WrongPassword);
+
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
+            Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, wrong));
+
+        Assert.StartsWith(WrongPasswordText, ex.Message);
+        Assert.EndsWith($"Skipped slot(s) {Id8(corrupt)}: their slot blob is corrupt; restore config.json from backup.", ex.Message);
+    }
+
+    [Fact]
     public void PasswordSlotsOnly_PasswordYubiKeyBesideAPasswordFreeTpm_UsesTheYubiKey()
     {
         var keys = SimulatedYubiKeyService.WithKeys(SerialA);

@@ -581,6 +581,65 @@ public sealed class AgentCommandTests : IDisposable
                         VaultPasswordMessages.AgentAlsoFailed("The simulated TPM is unplugged."), stderr);
     }
 
+    // Review T17 p1 MiMo I2 / p3 GLM I2 (controller: pin the typed-exception semantics at the CLI boundary).
+
+    [Fact]
+    public void Agent_HardwareFailed_ThenTerminal_ThePromptStillOpensTheVault()
+    {
+        // AgentUnlockFailedException is pass 2 failing, not the unlock: the prompt follows (ruling 13).
+        var (m, _) = TpmPasswordVault("agent-failed-prompt");
+        var (gotBefore, value, errBefore) = m.RunOnTerminal(Password + "\n", "get", "db");
+        Assert.True(gotBefore == 0 && value.Length > 0, errBefore);
+        FakeAgent(m, () => throw new TswapException("The simulated TPM is unplugged."));
+
+        var (exit, stdout, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(value, stdout);
+        Assert.Contains(TerminalPasswordProvider.PromptText, stderr);
+    }
+
+    [Fact]
+    public void Agent_HardwareFailed_ThenWrongPassword_ExactTextsOfBoth_ExitOne()
+    {
+        var (m, _) = TpmPasswordVault("agent-failed-wrong");
+        FakeAgent(m, () => throw new TswapException("The simulated TPM is unplugged."));
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("not the password\n", "get", "db");
+
+        Assert.Equal(1, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains(VaultPasswordMessages.WrongPasswordKdf + " " +
+                        VaultPasswordMessages.AgentAlsoFailed("The simulated TPM is unplugged."), stderr);
+    }
+
+    [Fact]
+    public void WrongPasswordAtThePrompt_NoAgent_ExactRefusedText_ExitOne()
+    {
+        var (m, _) = TpmPasswordVault("wrong-no-agent");
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("not the password\n", "get", "db");
+
+        Assert.Equal(1, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains(VaultPasswordMessages.WrongPasswordKdf, stderr);
+        Assert.DoesNotContain("another machine", stderr); // never relabelled as a foreign slot
+    }
+
+    [Fact]
+    public void Client_KeyCheckMismatch_OnATerminal_RefusesWithoutPrompting()
+    {
+        // Ruling 9: a key that fails keyCheck refuses; it is not a pass-2 failure that falls back to the prompt.
+        var (m, _) = TpmPasswordVault("mismatch-terminal");
+        FakeAgent(m, () => RandomNumberGenerator.GetBytes(32));
+
+        var (exit, _, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"The tswap agent at {m.AgentSocket} returned a key that doesn't open this vault; not using it.", stderr);
+        Assert.DoesNotContain(TerminalPasswordProvider.PromptText, stderr);
+    }
+
     [Fact]
     public void PasswordFreeVault_NeverConnects()
     {
