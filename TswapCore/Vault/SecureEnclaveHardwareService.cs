@@ -45,11 +45,13 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
     /// </summary>
     public HardwareEnrollment Enroll(StretchedPassword? password)
     {
-        // Brief T17 task 13 adds the Enclave-enforced password (.applicationPassword).
-        if (password is not null)
-            throw new NotImplementedException("Secure Enclave password slots arrive with brief T17 task 13.");
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+        // Brief T17 task 13: a password slot's key is made with .applicationPassword and the stretched
+        // password as its credential, so the Enclave enforces it (ruling 19); its blob gets the TSSE header.
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrollment(kekSlot,
+                SecureEnclaveSlotBlob.Wrap(AppleSecureEnclaveInterop.WrapWithPassword(kekSlot, requirePresence, password)));
     }
 
     public HardwareBackend Backend => HardwareBackend.SecureEnclave;
@@ -71,15 +73,21 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
         // in SecureEnclaveWrappedKey. Same "Config is corrupted" errors as before for the latter.
         var wrapped = HardwareBlobLocator.Read(config, HardwareBackend.SecureEnclave);
 
-        // Brief T17: a password slot's blob carries the TSSE header (task 13 implements its unwrap).
+        // Brief T17: a password slot's blob carries the TSSE header; the provider is called only then, and
+        // its result is disposed here (ruling 13).
         var (needsPassword, package) = SecureEnclaveSlotBlob.Split(wrapped);
+        byte[] key;
         if (needsPassword)
         {
             if (password is null)
                 throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
-            throw new NotImplementedException("Secure Enclave password slots arrive with brief T17 task 13.");
+            using var stretched = password();
+            key = AppleSecureEnclaveInterop.UnwrapWithPassword(package, stretched);
         }
-        var key = Unwrap(package);
+        else
+        {
+            key = Unwrap(package);
+        }
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
         // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or

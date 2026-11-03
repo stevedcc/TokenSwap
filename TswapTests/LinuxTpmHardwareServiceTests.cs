@@ -24,6 +24,7 @@ namespace TswapTests;
 /// </summary>
 [SupportedOSPlatform("linux")]
 [Trait("Category", "Tpm")]
+[Collection(TpmDeviceCollection.Name)]
 public class LinuxTpmHardwareServiceTests
 {
     [Fact]

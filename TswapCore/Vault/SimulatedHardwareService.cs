@@ -36,7 +36,9 @@ namespace TswapCore.Vault;
 /// <see cref="SecureEnclaveSlotBlob"/>) around the package. The package also ends with one more byte,
 /// <c>'P'</c> after the presence flag ("the object needs a password"), the simulated counterpart of a
 /// TPM object's auth value: a package whose header was stripped fails with ruling 3's stripped-header
-/// text, as <c>TPM_RC_AUTH_FAIL</c> does.</para>
+/// text, as <c>TPM_RC_AUTH_FAIL</c> does. A simulated Secure Enclave mirrors the shim instead (brief T17 task 13):
+/// a wrong password gives the <c>-7</c> text, and a stripped header today's generic unwrap text, as the old
+/// <c>tswap_se_unwrap</c> it then goes through says.</para>
 /// </summary>
 public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
 {
@@ -174,7 +176,11 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         if (!needsPassword)
         {
             if (objectNeedsPassword)
-                throw new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader);
+                throw Backend == HardwareBackend.SecureEnclave
+                    // Brief T17 task 13 (the controller's ruling on ruling 3): a stripped Secure Enclave slot
+                    // goes through the old tswap_se_unwrap, which says today's generic text.
+                    ? Interop.SecureEnclaveReturnCodes.UnwrapFailure(-2)
+                    : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader);
             return Decrypt(blob, _machineKey) ?? throw new TswapException(
                 $"Simulated '{Backend.DisplayName}' operation failed while unwrapping the key: the blob was made " +
                 "on a different machine or is corrupted.");
@@ -186,7 +192,10 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         var wrapKey = WrapKey(stretched);
         try
         {
-            return Decrypt(blob, wrapKey) ?? throw new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordKdf);
+            // The Secure Enclave mirrors the shim's -7 (brief T17 task 13); the TPM keeps ruling 18's KDF text.
+            return Decrypt(blob, wrapKey) ?? throw (Backend == HardwareBackend.SecureEnclave
+                ? Interop.SecureEnclaveReturnCodes.UnwrapV2Failure(Interop.SecureEnclaveReturnCodes.WrongCredential)
+                : new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordKdf));
         }
         finally
         {

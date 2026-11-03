@@ -561,13 +561,17 @@ public class VaultUnlockerPasswordTests
     }
 
     [Fact]
-    public void LinuxTpm_PasswordBlob_NotImplementedUntilTask8()
+    public void LinuxTpm_UnsplitPasswordBlob_RefusedBeforeTpm2Tools()
     {
         if (!OperatingSystem.IsLinux())
             return;
-        // Brief T17 task 3: the real Linux TPM auth value arrives with task 8; until then a TSTP blob
-        // is refused before tpm2-tools is touched.
+        // Brief T17 task 8 replaced task 3's NotImplementedException placeholder: an unsplit TSTP blob is
+        // still refused before tpm2-tools is touched, now with ruling 3's legacy-parser text
+        // (Tpm2ArgvTests.UnsplitTstpBlob_SaysNewerTswap pins it in full).
         var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6]);
-        Assert.Throws<NotImplementedException>(() => TswapCore.Vault.Interop.Tpm2ToolsInterop.Unseal(tstp));
+#pragma warning disable CA1416 // guarded by the IsLinux return above; the analyzer doesn't follow it into the lambda
+        var ex = Assert.Throws<TswapException>(() => TswapCore.Vault.Interop.Tpm2ToolsInterop.Unseal(tstp));
+#pragma warning restore CA1416
+        Assert.Equal(VaultPasswordMessages.LegacyParserNeedsNewerTswap(1), ex.Message);
     }
 }
