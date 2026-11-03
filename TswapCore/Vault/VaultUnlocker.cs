@@ -301,7 +301,7 @@ public sealed class VaultUnlocker
             ? ex
             : ex switch
             {
-                VaultPasswordRefusedException => new VaultPasswordRefusedException(ex.Message + suffix),
+                VaultPasswordRefusedException refused => new VaultPasswordRefusedException(ex.Message + suffix, refused.Reason),
                 VaultPasswordUnavailableException => new VaultPasswordUnavailableException(ex.Message + suffix),
                 AgentUnlockFailedException => new AgentUnlockFailedException(ex.Message + suffix),
                 _ => new TswapException(ex.Message + suffix, ex.ExitCode),

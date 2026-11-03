@@ -82,7 +82,7 @@ internal static class SecureEnclaveReturnCodes
     {
         CredentialLength => CredentialLengthRefused("tswap_se_unwrap_v2"),
         // Ruling 18: no lockout sentence, the spike showed no Enclave rate limit.
-        WrongCredential => new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordSecureEnclave),
+        WrongCredential => new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordSecureEnclave, VaultPasswordRefusal.WrongPassword),
         AuthenticationFailed => new TswapException(
             "Could not unlock with the Secure Enclave: this slot also needs Touch ID or the login password, and that " +
             "was cancelled, failed, or could not be asked for (code -8)."),

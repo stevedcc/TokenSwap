@@ -202,6 +202,7 @@ public class Tpm2ArgvTests
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, wrong));
 
         Assert.Equal(VaultPasswordMessages.WrongPasswordTpm, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason);
         Assert.Single(tpm.Calls, c => c.Command == "tpm2_unseal");
     }
 
@@ -219,6 +220,7 @@ public class Tpm2ArgvTests
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, password));
 
         Assert.Equal(VaultPasswordMessages.TpmLockoutLinux, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.Lockout, ex.Reason);
     }
 
     [Fact]
@@ -236,6 +238,7 @@ public class Tpm2ArgvTests
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package));
 
         Assert.Equal(VaultPasswordMessages.StrippedHeader, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.StrippedHeader, ex.Reason);
     }
 
     [Theory]

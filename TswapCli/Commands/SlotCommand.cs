@@ -682,7 +682,7 @@ public sealed class SlotCommand : ICliCommand
                 {
                     kekSlot = ctx.Unlocker.UnlockHardware(config with { Keyring = null }, YubiKeySelection.FromChooser(serials => serials[0]), provider);
                 }
-                catch (VaultPasswordRefusedException ex) when (stretched is not null && ex.Message.StartsWith("Wrong vault password", StringComparison.Ordinal))
+                catch (VaultPasswordRefusedException ex) when (stretched is not null && ex.Reason == VaultPasswordRefusal.WrongPassword)
                 {
                     // The password passed the verifier, so the hardware object was made with another one.
                     throw new TswapException(AcceptRequestPasswordDiffersText);

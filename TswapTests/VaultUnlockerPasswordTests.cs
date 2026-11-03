@@ -348,6 +348,7 @@ public class VaultUnlockerPasswordTests
 
         Assert.StartsWith(WrongPasswordText, ex.Message);
         Assert.EndsWith($"Skipped slot(s) {Id8(corrupt)}: their slot blob is corrupt; restore config.json from backup.", ex.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason); // kept through the set-aside suffix
     }
 
     [Fact]

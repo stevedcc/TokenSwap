@@ -85,6 +85,7 @@ public class SecureEnclavePasswordTests
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => simulated.Unlock(ConfigWith(hwBlob), _ => 0, () => wrong.Clone()));
 
         Assert.Equal(VaultPasswordMessages.WrongPasswordSecureEnclave, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason);
         Assert.Equal(kek, simulated.Unlock(ConfigWith(hwBlob), _ => 0, () => right.Clone()));
     }
 
@@ -124,6 +125,7 @@ public class SecureEnclavePasswordTests
 
         var unwrap7 = Assert.IsType<VaultPasswordRefusedException>(SecureEnclaveReturnCodes.UnwrapV2Failure(-7));
         Assert.Equal(VaultPasswordMessages.WrongPasswordSecureEnclave, unwrap7.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, unwrap7.Reason);
 
         var unwrap8 = SecureEnclaveReturnCodes.UnwrapV2Failure(-8);
         Assert.IsType<TswapException>(unwrap8);

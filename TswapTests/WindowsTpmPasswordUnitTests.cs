@@ -90,18 +90,19 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => PlatformCryptoProviderInterop.Unwrap(blob, wrong));
 
         Assert.Equal(VaultPasswordMessages.WrongPasswordTpm, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, ((VaultPasswordRefusedException)ex).Reason);
         Assert.Equal(1, _store.DecryptCalls);
         Assert.Single(_store.Opens);
         Assert.Equal(Bytes(wrong), Assert.Single(_store.UsageAuthsSet));
     }
 
     [Theory]
-    [InlineData(0x80090010u, "decrypt", VaultPasswordMessages.WrongPasswordTpm)]
-    [InlineData(0x80090031u, "decrypt", VaultPasswordMessages.TpmLockoutWindows)]
-    [InlineData(0x80290409u, "decrypt", VaultPasswordMessages.TpmLockoutWindows)]
-    [InlineData(0x80290409u, "create", VaultPasswordMessages.TpmLockoutWindows)]
-    [InlineData(0x80090022u, "decrypt", VaultPasswordMessages.WindowsSilentContextBug)]
-    public void ErrorCodes_MapToRuling18(uint code, string where, string expected)
+    [InlineData(0x80090010u, "decrypt", VaultPasswordMessages.WrongPasswordTpm, VaultPasswordRefusal.WrongPassword)]
+    [InlineData(0x80090031u, "decrypt", VaultPasswordMessages.TpmLockoutWindows, VaultPasswordRefusal.Lockout)]
+    [InlineData(0x80290409u, "decrypt", VaultPasswordMessages.TpmLockoutWindows, VaultPasswordRefusal.Lockout)]
+    [InlineData(0x80290409u, "create", VaultPasswordMessages.TpmLockoutWindows, VaultPasswordRefusal.Lockout)]
+    [InlineData(0x80090022u, "decrypt", VaultPasswordMessages.WindowsSilentContextBug, VaultPasswordRefusal.Other)]
+    public void ErrorCodes_MapToRuling18(uint code, string where, string expected, VaultPasswordRefusal reason)
     {
         using var password = Password(5);
         TswapException ex;
@@ -119,6 +120,7 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
             Assert.Equal(1, _store.DecryptCalls);
         }
         Assert.Equal(expected, ex.Message);
+        Assert.Equal(reason, ((VaultPasswordRefusedException)ex).Reason);
     }
 
     [Fact]
@@ -145,6 +147,7 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => PlatformCryptoProviderInterop.Unwrap(package));
 
         Assert.Equal(VaultPasswordMessages.StrippedHeader, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.StrippedHeader, ex.Reason);
         Assert.Empty(_store.UsageAuthsSet);
     }
 

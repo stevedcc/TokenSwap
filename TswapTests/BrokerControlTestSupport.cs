@@ -180,7 +180,7 @@ internal sealed class ControlHarness : IAsyncDisposable
         var right = CryptographicOperations.FixedTimeEquals(bytes, Right);
         CryptographicOperations.ZeroMemory(bytes);
         if (!right)
-            throw new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordTpm);
+            throw new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordTpm, VaultPasswordRefusal.WrongPassword);
         return RandomNumberGenerator.GetBytes(32);
     }
 

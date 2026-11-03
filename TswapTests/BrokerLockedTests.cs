@@ -1328,6 +1328,7 @@ public class BrokerLockedTests : IAsyncLifetime
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => BrokerPasswordProof.Prove(store, unlocker, candidate));
 
         Assert.StartsWith("Wrong vault password", ex.Message);
+        Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason);
     }
 
     [Fact]

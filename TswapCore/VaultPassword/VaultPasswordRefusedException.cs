@@ -4,8 +4,28 @@ namespace TswapCore.VaultPassword;
 /// The hardware or the key derivation refused a slot because of its vault password (brief T17 rulings 3
 /// and 18): a wrong password, a lockout, or a stripped password header. The unlocker passes it on
 /// unchanged, without the "another machine's slot" hint, because the slot does belong here.
+/// <see cref="Reason"/> says which, so a caller never has to read it off the text (review T17 p3 MiMo M-4).
 /// </summary>
-public sealed class VaultPasswordRefusedException(string message) : TswapException(message);
+public sealed class VaultPasswordRefusedException(string message, VaultPasswordRefusal reason) : TswapException(message)
+{
+    public VaultPasswordRefusal Reason { get; } = reason;
+}
+
+/// <summary>Why the hardware or the key derivation refused a password slot.</summary>
+public enum VaultPasswordRefusal
+{
+    /// <summary>The password given is not the one the slot was made with (ruling 18's wrong-password texts).</summary>
+    WrongPassword,
+
+    /// <summary>The TPM's dictionary-attack lockout (ruling 18's lockout texts).</summary>
+    Lockout,
+
+    /// <summary>The slot's hardware needs a password its blob doesn't say it needs (ruling 3).</summary>
+    StrippedHeader,
+
+    /// <summary>Anything else the password caused (e.g. Windows' silent-context bug).</summary>
+    Other,
+}
 
 /// <summary>The fixed user-facing texts of brief T17 rulings 3, 13 and 18.</summary>
 public static class VaultPasswordMessages

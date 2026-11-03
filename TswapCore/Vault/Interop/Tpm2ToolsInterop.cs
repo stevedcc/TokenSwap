@@ -326,11 +326,11 @@ internal static partial class Tpm2ToolsInterop
     private static TswapException UnlockFailed(string stderr, bool passwordSupplied)
     {
         if (LockoutCode().IsMatch(stderr))
-            return new VaultPasswordRefusedException(VaultPasswordMessages.TpmLockoutLinux);
+            return new VaultPasswordRefusedException(VaultPasswordMessages.TpmLockoutLinux, VaultPasswordRefusal.Lockout);
         if (AuthFailCode().IsMatch(stderr))
-            return new VaultPasswordRefusedException(passwordSupplied
-                ? VaultPasswordMessages.WrongPasswordTpm
-                : VaultPasswordMessages.StrippedHeader);
+            return passwordSupplied
+                ? new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordTpm, VaultPasswordRefusal.WrongPassword)
+                : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader, VaultPasswordRefusal.StrippedHeader);
         return new TswapException(
             "Could not unlock with the TPM. The sealed key may have been created on a different " +
             "machine, the TPM may have been cleared since enrollment, or config.json may be " +

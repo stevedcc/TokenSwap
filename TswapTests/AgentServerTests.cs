@@ -470,7 +470,7 @@ public class AgentServerTests : IAsyncLifetime
         _h.Unlock = () => throw new VaultPasswordRefusedException(
             $"Wrong vault password. stretched={Convert.ToHexString(stretched)} lower={Convert.ToHexStringLower(stretched)} " +
             $"b64={Convert.ToBase64String(stretched)} key={Convert.ToBase64String(key)} hexkey={Convert.ToHexStringLower(key)} " +
-            $"raw={raw} {new string('x', 600)}");
+            $"raw={raw} {new string('x', 600)}", VaultPasswordRefusal.WrongPassword);
         await _h.StartAsync();
 
         var response = await _h.RawAsync(AgentOp.Unlock);

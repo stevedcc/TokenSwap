@@ -50,7 +50,7 @@ public static class BrokerPasswordProof
             }
             var file = read ?? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
             if (!file.Verifies(key, candidate))
-                throw new VaultPasswordRefusedException(WrongPasswordVerifierText);
+                throw new VaultPasswordRefusedException(WrongPasswordVerifierText, VaultPasswordRefusal.WrongPassword);
             return key;
         }
         catch

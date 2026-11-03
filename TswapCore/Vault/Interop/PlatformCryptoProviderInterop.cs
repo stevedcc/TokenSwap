@@ -226,13 +226,13 @@ internal static class PlatformCryptoProviderInterop
     private static VaultPasswordRefusedException? MapPasswordError(CryptographicException ex, bool passwordSupplied) =>
         KnownCode(ex) switch
         {
-            NteDaLockout or TpmDaLockout => new(VaultPasswordMessages.TpmLockoutWindows),
-            NtePerm when passwordSupplied => new(VaultPasswordMessages.WrongPasswordTpm),
+            NteDaLockout or TpmDaLockout => new(VaultPasswordMessages.TpmLockoutWindows, VaultPasswordRefusal.Lockout),
+            NtePerm when passwordSupplied => new(VaultPasswordMessages.WrongPasswordTpm, VaultPasswordRefusal.WrongPassword),
             // A Password slot always sets the auth, so this is a bug there; on a legacy (unsplit) blob it
             // is ruling 3's stripped header.
-            NteSilentContext => new(passwordSupplied
-                ? VaultPasswordMessages.WindowsSilentContextBug
-                : VaultPasswordMessages.StrippedHeader),
+            NteSilentContext => passwordSupplied
+                ? new(VaultPasswordMessages.WindowsSilentContextBug, VaultPasswordRefusal.Other)
+                : new(VaultPasswordMessages.StrippedHeader, VaultPasswordRefusal.StrippedHeader),
             _ => null,
         };
 
@@ -268,7 +268,7 @@ internal static class PlatformCryptoProviderInterop
         {
             // 0x80290409 blocks key creation too while Windows' TPM lockout lasts (ruling 18).
             if (KnownCode(ex) is NteDaLockout or TpmDaLockout)
-                throw new VaultPasswordRefusedException(VaultPasswordMessages.TpmLockoutWindows);
+                throw new VaultPasswordRefusedException(VaultPasswordMessages.TpmLockoutWindows, VaultPasswordRefusal.Lockout);
             throw new TswapException($"TPM operation failed while creating the TPM key: {ex.Message}");
         }
     }

@@ -180,7 +180,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
                     // Brief T17 task 13 (the controller's ruling on ruling 3): a stripped Secure Enclave slot
                     // goes through the old tswap_se_unwrap, which says today's generic text.
                     ? Interop.SecureEnclaveReturnCodes.UnwrapFailure(-2)
-                    : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader);
+                    : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader, VaultPasswordRefusal.StrippedHeader);
             return Decrypt(blob, _machineKey) ?? throw new TswapException(
                 $"Simulated '{Backend.DisplayName}' operation failed while unwrapping the key: the blob was made " +
                 "on a different machine or is corrupted.");
@@ -195,7 +195,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
             // The Secure Enclave mirrors the shim's -7 (brief T17 task 13); the TPM keeps ruling 18's KDF text.
             return Decrypt(blob, wrapKey) ?? throw (Backend == HardwareBackend.SecureEnclave
                 ? Interop.SecureEnclaveReturnCodes.UnwrapV2Failure(Interop.SecureEnclaveReturnCodes.WrongCredential)
-                : new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordKdf));
+                : new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordKdf, VaultPasswordRefusal.WrongPassword));
         }
         finally
         {
