@@ -165,6 +165,28 @@ public class AgentServerTests : IAsyncLifetime
         Assert.True(label is null || label.Split(':').Length >= 3, label);
     }
 
+    [Theory]
+    // CI run 41619549912: on Ubuntu SO_PEERSEC answers with AppArmor's label, not an SELinux context.
+    [InlineData("unconfined")]
+    [InlineData("unconfined\0")]
+    [InlineData("docker-default (enforce)")]
+    [InlineData("containers-default-0.50.1 (enforce)\0")]
+    [InlineData(":ns:container_t (enforce)")]
+    [InlineData("")]
+    [InlineData("\0")]
+    public void PeerLabel_NotAnSelinuxContext_IsNoLabel(string raw) =>
+        Assert.Null(PeerIdentity.SelinuxLabel(Encoding.UTF8.GetBytes(raw)));
+
+    [Theory]
+    [InlineData("unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023")]
+    [InlineData("system_u:system_r:container_t:s0:c12,c34")]
+    [InlineData("user_u:user_r:user_t")]
+    public void PeerLabel_SelinuxContext_IsKept(string context)
+    {
+        Assert.Equal(context, PeerIdentity.SelinuxLabel(Encoding.UTF8.GetBytes(context + "\0")));
+        Assert.Equal(context, PeerIdentity.SelinuxLabel(Encoding.UTF8.GetBytes(context)));
+    }
+
     [Fact]
     public async Task Client_RefusesAServerOfAnotherUid()
     {

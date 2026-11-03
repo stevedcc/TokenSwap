@@ -73,8 +73,8 @@ public readonly record struct PeerVerdict(bool Allowed, uint? Uid, int Pid, stri
 /// <item>The uid from <c>SO_PEERCRED</c> (<c>getpeereid</c> on macOS) must be the policy's, or root
 /// where the policy allows it.</item>
 /// <item>Linux with SELinux: a peer whose <c>SO_PEERSEC</c> label has the type <c>container_t</c>,
-/// <c>spc_t</c> or <c>container_runtime_t</c> is refused (uid 0 included). No label
-/// (<c>ENOPROTOOPT</c>, or empty) skips this check.</item>
+/// <c>spc_t</c> or <c>container_runtime_t</c> is refused (uid 0 included). No SELinux label
+/// (<c>ENOPROTOOPT</c>, empty, or another LSM's label such as AppArmor's) skips this check.</item>
 /// <item>Linux, every peer but uid 0: its user namespace must be this process's. Against pid reuse:
 /// take the peer's pidfd (<c>SO_PEERPIDFD</c>), open <c>/proc/&lt;pid&gt;</c> as a directory fd, read
 /// <c>ns/user</c> and <c>status</c>'s <c>Uid:</c> line through it (the uid must be the credential's), then
@@ -111,7 +111,7 @@ public static partial class PeerIdentity
     /// <summary>Whether the peer's pidfd still refers to a live process.</summary>
     internal static Func<PeerProcess, bool> PidfdAlive = DefaultPidfdAlive;
 
-    /// <summary>The peer's SELinux label (<c>SO_PEERSEC</c>), or null when there is none (<c>ENOPROTOOPT</c>, or empty).</summary>
+    /// <summary>The peer's SELinux label (<c>SO_PEERSEC</c>), or null when there is none (<c>ENOPROTOOPT</c>, empty, or not an SELinux context).</summary>
     internal static Func<Socket, string?> ReadPeerLabel = DefaultReadPeerLabel;
 
     /// <summary>This process's own <c>ns/user</c> link, or null.</summary>
@@ -282,13 +282,28 @@ public static partial class PeerIdentity
         {
             Span<byte> buffer = stackalloc byte[256];
             var length = socket.GetRawSocketOption(SolSocket, SoPeerSec, buffer);
-            var label = Encoding.UTF8.GetString(buffer[..length]).TrimEnd('\0');
-            return label.Length == 0 ? null : label;
+            return SelinuxLabel(buffer[..length]);
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ProtocolOption)
         {
             return null; // ENOPROTOOPT: no SELinux (no labelled networking)
         }
+    }
+
+    /// <summary>
+    /// The SELinux context <c>SO_PEERSEC</c> returned, or null when it returned none. <c>SO_PEERSEC</c> answers
+    /// with the label of whichever LSM provides it: on Ubuntu that is AppArmor (<c>unconfined</c>,
+    /// <c>docker-default (enforce)</c>), which is not an SELinux context and carries no SELinux type, so it
+    /// counts as no label (the check is SELinux's, ruling 20). A context is <c>user:role:type[:level]</c>:
+    /// at least three non-empty fields and no whitespace.
+    /// </summary>
+    internal static string? SelinuxLabel(ReadOnlySpan<byte> raw)
+    {
+        var label = Encoding.UTF8.GetString(raw).TrimEnd('\0');
+        if (label.Length == 0 || label.Any(char.IsWhiteSpace))
+            return null;
+        var fields = label.Split(':');
+        return fields.Length >= 3 && fields[0].Length > 0 && fields[1].Length > 0 && fields[2].Length > 0 ? label : null;
     }
 
     internal static string? DefaultReadOwnUserNamespace()
