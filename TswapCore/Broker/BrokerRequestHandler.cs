@@ -61,10 +61,40 @@ public sealed partial class BrokerRequestHandler(
     /// <summary>Brief T17 ruling 14: a password broker's lock state; null for a password-free broker.</summary>
     public BrokerPasswordState? Password { get; init; }
 
+    /// <summary>Brief I224 D4: the connection gate (shared with the ssh-agent listener, which reaches it through this handler).</summary>
+    public required BrokerContainerGate Gate { get; init; }
+
     /// <summary>True while a password broker is locked: requests get the busy refusal, logged <c>locked</c>, never counted.</summary>
     internal bool IsLocked => Password?.IsLocked == true;
 
+    /// <summary>The request's log record so far (brief I224 H5: what the outer catch logs).</summary>
+    private const string RecordItemKey = "tswap.broker.record";
+
+    /// <summary>
+    /// One request. Brief I224 H5: an exception escaping the handler (a bug, a forwarder that throws) is not
+    /// Kestrel's 500, which would differ from the uniform refusals: the uniform 502 when the response has not
+    /// started, else the connection is aborted; logged once as <c>internal-error</c> with the exception's type
+    /// name, never its message (it may quote a header value). Not caught: the cancellation of an aborted
+    /// request and <see cref="OutOfMemoryException"/>.
+    /// </summary>
     public async Task HandleAsync(HttpContext http)
+    {
+        try
+        {
+            await HandleCoreAsync(http).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException
+            && !(ex is OperationCanceledException && http.RequestAborted.IsCancellationRequested))
+        {
+            await WriteUniformAsync(http, StatusCodes.Status502BadGateway).ConfigureAwait(false); // aborts when started
+            var record = http.Items.TryGetValue(RecordItemKey, out var r) && r is BrokerRequestRecord known
+                ? known
+                : new BrokerRequestRecord { Socket = "?", Uid = 0, Pid = 0, Method = http.Request.Method, Path = "" };
+            log.Request(record with { Status = 502, Reason = "internal-error", ErrorType = ex.GetType().Name });
+        }
+    }
+
+    private async Task HandleCoreAsync(HttpContext http)
     {
         var items = http.Features.Get<IConnectionItemsFeature>()?.Items;
         var peer = items?.TryGetValue(BrokerServer.PeerItemKey, out var p) == true ? p as BrokerPeer : null;
@@ -91,16 +121,19 @@ public sealed partial class BrokerRequestHandler(
             Method = method,
             Path = rawTarget,
         };
+        http.Items[RecordItemKey] = record;
 
         // Read (and zero) the raw Connection header's names at once.
         var connectionNamed = sniffer.TakeConnectionNamedHeaders();
-        if (!policy.Sockets.TryGetValue(peer.Socket, out var socket) || !socket.AllowsUid(peer.Uid))
+        // The config may have changed between accepting the connection and this request (brief I224 D4: the
+        // facts stored at accept against the current policy, never a fresh /proc read): close it, unanswered.
+        if (BrokerContainerGate.Recheck(policy, peer) is { } recheck)
         {
-            // The config changed between accepting the connection and this request: close it, unanswered.
-            log.Connection(peer.Socket, peer.Uid, peer.Pid, socket is null ? "socket-removed" : "uid-not-allowed");
+            log.Connection(peer.Socket, peer.Uid, peer.Pid, recheck, peer.Cgroup, peer.Label);
             http.Abort();
             return;
         }
+        var socket = policy.Sockets[peer.Socket];
 
         if (HttpMethods.IsConnect(method) || !rawTarget.StartsWith('/'))
         {
@@ -182,6 +215,7 @@ public sealed partial class BrokerRequestHandler(
         }
         ShortSecretWarnings?.Check(route.SecretName, secret.Value, log); // as soon as it arrives (T13)
         record = record with { Unlocks = 1, UnlockDuration = unlocked.Duration };
+        http.Items[RecordItemKey] = record;
 
         BrokerForwardOutcome outcome;
         using (secret)

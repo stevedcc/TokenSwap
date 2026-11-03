@@ -1,0 +1,462 @@
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using TswapCore;
+using TswapCore.Agent;
+using TswapCore.Broker;
+using TswapCore.Broker.SshAgent;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace TswapTests;
+
+/// <summary>
+/// Brief I224 task 3, end to end (Linux): an in-process <c>serve</c> with a socket bound to a container,
+/// and a client in a cgroup D1 accepts (<see cref="BrokerContainerClient"/>: a transient systemd scope
+/// running <c>tswap broker forward</c>, or this process's own cgroup). Each test writes which client path it
+/// took.
+/// </summary>
+[Trait("Category", "E2E")]
+public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinaryFixture>, IAsyncLifetime
+{
+    private readonly string _binary;
+    private readonly ITestOutputHelper _output;
+    private readonly BrokerHarness _h = new();
+    private readonly List<BrokerContainerClient> _clients = [];
+    private BrokerServer? _server;
+    private BrokerPolicyHolder? _holder;
+    private readonly TaskCompletionSource<BrokerPeer> _admitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>A valid unit path no test process is in.</summary>
+    private const string Elsewhere = "/user.slice/user-1000.slice/user@1000.service/app.slice/tswap-test-nobody.scope";
+
+    private static readonly byte[] K1 = SshAgentMessages.Ed25519Blob(1);
+
+    public BrokerContainerGateEndToEndTests(TswapBinaryFixture binary, ITestOutputHelper output)
+    {
+        _binary = binary.BinaryPath;
+        _output = output;
+    }
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        foreach (var c in _clients)
+            await c.DisposeAsync();
+        if (_server is not null)
+            await _server.StopAsync();
+        await _h.DisposeAsync();
+    }
+
+    private static string Binding(string? cgroup) =>
+        cgroup is null ? "\"uid_only\": true" : $"\"container\": {{ \"cgroup\": {JsonSerializer.Serialize(cgroup)} }}";
+
+    /// <summary>One socket <c>lane1</c> (this uid, route <c>echo</c>, ssh key <c>k1</c>) bound to <paramref name="cgroup"/> (null: uid-only).</summary>
+    private string Config(string? cgroup) => $$"""
+        {
+          "version": 1,
+          "socket_dir": {{JsonSerializer.Serialize(_h.SocketDir)}},
+          "sockets": [ { "name": "lane1", "uids": ["{{BrokerHarness.MyUid}}"], "routes": ["echo"], "ssh_keys": ["k1"], {{Binding(cgroup)}} } ],
+          "routes": [ { "name": "echo", "upstream": "https://upstream.example/base", "auth": { "type": "bearer", "secret": "{{"{{tok}}"}}" }, "path": "" } ],
+          "ssh_keys": [ { "name": "k1", "secret": "key-one", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] } ]
+        }
+        """;
+
+    private async Task StartAsync(string? cgroup)
+    {
+        var policy = BrokerPolicy.Parse(Config(cgroup));
+        _holder = new BrokerPolicyHolder(policy);
+        _server = await BrokerServer.StartAsync(_h.Options() with
+        {
+            Policy = _holder,
+            SshAgent = new SshAgentOptions
+            {
+                Keys = new Dictionary<string, SshAgentKey> { ["k1"] = new("k1", "key-one", K1) },
+                KeySource = new FakeSshKeySource(_ => null),
+            },
+            OnAdmittedForTests = peer => _admitted.TrySetResult(peer),
+        });
+    }
+
+    private void Reload(string? cgroup) => Assert.True(_server!.Reload(() => BrokerPolicy.Parse(Config(cgroup))));
+
+    private string Log => _h.LogText.ToString();
+
+    private async Task<BrokerContainerClient?> ClientAsync(string target, bool requireScope = false, bool @delegate = false)
+    {
+        if (!OperatingSystem.IsLinux())
+            return null; // SO_PEERPIDFD and /proc: Linux only
+        var client = await BrokerContainerClient.StartAsync(_binary, target, reason => _output.WriteLine($"SKIPPED: {reason}"),
+            requireScope, @delegate);
+        if (client is null)
+            return null;
+        _clients.Add(client);
+        _output.WriteLine($"client path: {client.Mode} ({client.Cgroup})");
+        return client;
+    }
+
+    /// <summary>
+    /// Sends <paramref name="request"/> and reads until the broker closes. A gate refusal can close the connection
+    /// before the request is written (EPIPE/ECONNRESET on the send): that is zero response bytes too.
+    /// </summary>
+    internal static async Task<byte[]> ExchangeAsync(Socket socket, string request)
+    {
+        try
+        {
+            await socket.SendAsync(Encoding.ASCII.GetBytes(request));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.Shutdown or SocketError.ConnectionReset)
+        {
+            return [];
+        }
+        var received = new MemoryStream();
+        var buffer = new byte[8192];
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // a hang fails the test
+        while (true)
+        {
+            int n;
+            try
+            {
+                n = await socket.ReceiveAsync(buffer, SocketFlags.None, guard.Token);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                break;
+            }
+            if (n == 0)
+                break;
+            received.Write(buffer, 0, n);
+        }
+        return received.ToArray();
+    }
+
+    private const string Get = "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n";
+
+    // 1
+    [Fact]
+    public async Task BoundToTheClientsCgroup_TheRequestIsForwarded()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(client.Cgroup);
+        using var socket = await client.ConnectAsync();
+        var text = Encoding.ASCII.GetString(await ExchangeAsync(socket, Get));
+        Assert.StartsWith("HTTP/1.1 200", text);
+        Assert.EndsWith("ok https://upstream.example/base/a", text);
+        Assert.Equal(1, _h.FakeForwarder.Calls);
+        Assert.Equal(client.Cgroup, (await _admitted.Task).Cgroup);
+        Assert.DoesNotContain("refused-connection", Log);
+    }
+
+    // 2
+    [Fact]
+    public async Task BoundToAnotherUnit_TheConnectionIsClosedUnanswered_AndTheObservedPathIsLogged()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(Elsewhere);
+        using var socket = await client.ConnectAsync();
+        Assert.Empty(await ExchangeAsync(socket, Get));
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+        Assert.Equal(0, _h.Secrets.Unlocks);
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        Assert.Contains($"refused-connection socket=lane1 uid={BrokerHarness.MyUid} ", Log);
+        Assert.Contains($"reason=cgroup-mismatch cgroup=\"{client.Cgroup}\"", Log);
+    }
+
+    // 2b: review focus 5
+    [Fact]
+    public async Task ReviewFocus5_AHostProcessWithAListedUid_OutsideTheBoundScope_IsRefusedCgroupMismatch()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"), requireScope: true) is not { } scope)
+            return;
+        await StartAsync(scope.Cgroup);
+        // The client is this test process itself: the same uid, but not in the scope.
+        using (var direct = await ConnectUnixAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1")))
+            Assert.Empty(await ExchangeAsync(direct, Get));
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        Assert.Contains($"reason=cgroup-mismatch cgroup=\"{BrokerContainerClient.OwnCgroup()}\"", Log);
+    }
+
+    // 3
+    [Fact]
+    public async Task TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame()
+    {
+        if (await ClientAsync(SshAgentListener.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(Elsewhere);
+        using var agent = new SshAgentTestClient(await client.ConnectAsync());
+        await agent.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        Assert.True(await agent.ClosedWithoutReplyAsync());
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        Assert.Contains($"refused-connection socket=lane1.ssh uid={BrokerHarness.MyUid} ", Log);
+        Assert.Contains($"cgroup=\"{client.Cgroup}\"", Log);
+    }
+
+    // 5, HTTP
+    [Fact]
+    public async Task ARebindAfterAcceptAndBeforeTheRequest_GetsZeroResponseBytes()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(client.Cgroup);
+        using var socket = await client.ConnectAsync();
+        await socket.SendAsync(Array.Empty<byte>());
+        var admitted = await _admitted.Task.WaitAsync(TimeSpan.FromSeconds(30)); // accepted by the gate, with its identity
+        Assert.Equal(client.Cgroup, admitted.Cgroup);
+
+        Reload(Elsewhere);
+
+        Assert.Empty(await ExchangeAsync(socket, Get));
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        Assert.Contains($"reason=cgroup-mismatch cgroup=\"{client.Cgroup}\"", Log);
+    }
+
+    // 5, ssh: rebind between two messages
+    [Fact]
+    public async Task ARebindBetweenTwoSshMessages_RefusesTheSecond()
+    {
+        if (await ClientAsync(SshAgentListener.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(client.Cgroup);
+        using var agent = new SshAgentTestClient(await client.ConnectAsync());
+        Assert.Single(SshAgentMessages.ParseIdentities((await agent.RequestAsync(SshAgentMessages.RequestIdentities))!));
+
+        Reload(Elsewhere);
+
+        await agent.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        Assert.True(await agent.ClosedWithoutReplyAsync());
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        Assert.Contains($"refused-connection socket=lane1.ssh uid={BrokerHarness.MyUid} ", Log);
+    }
+
+    // 5, ssh: unbind between two messages
+    [Fact]
+    public async Task AnUnbindBetweenTwoSshMessages_AnswersTheSecond()
+    {
+        if (await ClientAsync(SshAgentListener.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(client.Cgroup);
+        using var agent = new SshAgentTestClient(await client.ConnectAsync());
+        Assert.Single(SshAgentMessages.ParseIdentities((await agent.RequestAsync(SshAgentMessages.RequestIdentities))!));
+
+        Reload(null);
+
+        Assert.Single(SshAgentMessages.ParseIdentities((await agent.RequestAsync(SshAgentMessages.RequestIdentities))!));
+        Assert.DoesNotContain("refused-connection", Log);
+    }
+
+    // 5, ssh: a uid-only socket bound between two messages (r3 MiMo R1)
+    [Fact]
+    public async Task BindingAUidOnlySocketBetweenTwoSshMessages_RefusesTheSecond_IdentityUnreadable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await StartAsync(null);
+        using var agent = new SshAgentTestClient(await ConnectUnixAsync(SshAgentListener.SocketPath(_h.SocketDir, "lane1")));
+        Assert.Single(SshAgentMessages.ParseIdentities((await agent.RequestAsync(SshAgentMessages.RequestIdentities))!));
+        Assert.Null((await _admitted.Task).Cgroup); // accepted with no stored identity
+
+        Reload(Elsewhere);
+
+        await agent.SendFrameAsync(SshAgentMessages.RequestIdentities);
+        Assert.True(await agent.ClosedWithoutReplyAsync());
+        await _h.WaitForLogAsync("reason=identity-unreadable");
+        Assert.Contains($"refused-connection socket=lane1.ssh uid={BrokerHarness.MyUid} ", Log);
+    }
+
+    // 5, HTTP: a uid-only socket bound after accept (r3 MiMo R1)
+    [Fact]
+    public async Task BindingAUidOnlySocketAfterAccept_RefusesTheRequest_IdentityUnreadable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await StartAsync(null);
+        using var socket = await ConnectUnixAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"));
+        await _admitted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Reload(Elsewhere);
+
+        Assert.Empty(await ExchangeAsync(socket, Get));
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+        await _h.WaitForLogAsync("reason=identity-unreadable");
+    }
+
+    // 7
+    [Fact]
+    public async Task AProcessInAChildCgroupOfTheBoundUnit_IsAdmitted()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"), requireScope: true, @delegate: true) is not { } client)
+            return;
+        var child = Path.Combine("/sys/fs/cgroup" + client.Cgroup, "tswap-child");
+        try
+        {
+            Directory.CreateDirectory(child);
+            File.WriteAllText(Path.Combine(child, "cgroup.procs"), client.RelayPid!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _output.WriteLine($"SKIPPED: can't create a child cgroup under {client.Cgroup} (no cgroup delegation): {ex.Message}");
+            return;
+        }
+        try
+        {
+            await StartAsync(client.Cgroup);
+            using var socket = await client.ConnectAsync();
+            var text = Encoding.ASCII.GetString(await ExchangeAsync(socket, Get));
+            Assert.StartsWith("HTTP/1.1 200", text);
+            Assert.Equal(client.Cgroup + "/tswap-child", (await _admitted.Task).Cgroup);
+        }
+        finally
+        {
+            await client.DisposeAsync(); // the relay leaves the child cgroup empty, so it can go
+            _clients.Remove(client);
+            try
+            {
+                Directory.Delete(child);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // systemd already removed the emptied transient scope, with its child
+            }
+        }
+    }
+
+    internal static async Task<Socket> ConnectUnixAsync(string path)
+    {
+        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await socket.ConnectAsync(new UnixDomainSocketEndPoint(path));
+        return socket;
+    }
+}
+
+/// <summary>
+/// Brief I224 task 3 through <see cref="PeerIdentity"/>'s seams: the once-per-serve <c>proc-hidden</c> event and
+/// the escaping and cap of an attacker-influenced observed cgroup in the log.
+/// </summary>
+[Collection(StaticSeamCollection.Name)]
+public sealed class BrokerContainerGateSeamTests : IAsyncLifetime
+{
+    private readonly BrokerHarness _h = new();
+    private BrokerServer? _server;
+    private const string Unit = "/user.slice/user-1000.slice/user@1000.service/app.slice/lane1.service";
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        PeerIdentity.ResetSeamsForTests();
+        if (_server is not null)
+            await _server.StopAsync();
+        await _h.DisposeAsync();
+    }
+
+    private async Task StartAsync()
+    {
+        var holder = new BrokerPolicyHolder(BrokerPolicy.Parse($$"""
+            {
+              "version": 1,
+              "socket_dir": {{JsonSerializer.Serialize(_h.SocketDir)}},
+              "sockets": [ { "name": "lane1", "uids": ["{{BrokerHarness.MyUid}}"], "routes": ["echo"], "container": { "cgroup": "{{Unit}}" } } ],
+              "routes": [ { "name": "echo", "upstream": "https://upstream.example/base", "auth": { "type": "bearer", "secret": "{{"{{tok}}"}}" }, "path": "" } ]
+            }
+            """));
+        _server = await BrokerServer.StartAsync(_h.Options() with
+        {
+            Policy = holder,
+            ContainerHost = BrokerContainerHost.Real with { IsLinux = () => true, PeerPidfdAvailable = () => true, ReadOwnCgroup = () => "0::/a.service\n"u8.ToArray() },
+        });
+    }
+
+    private const string Get = "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n";
+
+    private async Task<byte[]> RefusedAsync()
+    {
+        using var socket = await BrokerContainerGateEndToEndTests.ConnectUnixAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"));
+        return await BrokerContainerGateEndToEndTests.ExchangeAsync(socket, Get);
+    }
+
+    [Fact]
+    public async Task ProcHidden_IsRefused_AndTheHidepidEventIsLoggedOncePerServe()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        PeerIdentity.OpenPeerDetailed = _ => PeerOpenResult.Failed(4242, gotPidfd: true, pidfdAlive: true, errno: 13);
+        await StartAsync();
+        Assert.Empty(await RefusedAsync());
+        Assert.Empty(await RefusedAsync());
+        await _h.WaitForLogAsync("reason=proc-hidden");
+        var log = _h.LogText.ToString();
+        Assert.Equal(2, log.Split("reason=proc-hidden").Length - 1);
+        const string hint = "event can't see client processes in /proc (hidepid?): mount /proc with gid=<group> and add the vault user to it";
+        Assert.Equal(1, log.Split(hint).Length - 1);
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+    }
+
+    [Fact]
+    public async Task AnObservedCgroup_IsEscapedThenCappedAt256_InTheLog()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var hostile = "/evil\nrequest socket=lane1 \"x\\" + new string('a', 400);
+        PeerIdentity.OpenPeerDetailed = _ => PeerOpenResult.Opened(new PeerProcess(4242,
+            new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(100000), ownsHandle: false),
+            new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(100001), ownsHandle: false)));
+        PeerIdentity.ReadStatusUid = _ => BrokerHarness.MyUid;
+        PeerIdentity.ReadCgroup = _ => Encoding.UTF8.GetBytes("0::" + hostile.Replace("\n", "\u2028") + "\n");
+        PeerIdentity.PidfdAlive = _ => true;
+        await StartAsync();
+        Assert.Empty(await RefusedAsync());
+        await _h.WaitForLogAsync("reason=cgroup-mismatch");
+        var line = _h.LogText.ToString().Split('\n').Single(l => l.Contains("reason=cgroup-mismatch"));
+        var value = line[(line.IndexOf("cgroup=\"", StringComparison.Ordinal) + "cgroup=\"".Length)..].TrimEnd('\r');
+        Assert.EndsWith("\"", value);
+        value = value[..^1];
+        Assert.StartsWith("/evil\\u2028request socket=lane1 \\\"x\\\\aaa", value);
+        Assert.Equal(BrokerLog.MaxObservedLength, value.Length);
+    }
+}
+
+/// <summary>Brief I224 H5, the request handler's half: an exception escaping it is the uniform 502, logged once by type.</summary>
+public sealed class BrokerInternalErrorTests : IAsyncLifetime
+{
+    private readonly BrokerHarness _h = new();
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync() => await _h.DisposeAsync();
+
+    private sealed class ThrowingForwarder : IBrokerForwarder
+    {
+        public Task<BrokerForwardOutcome> ForwardAsync(HttpContext http, BrokerForwardRequest request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("secret-looking message s3cr3t");
+    }
+
+    [Fact]
+    public async Task AForwarderThatThrows_GetsTheUniform502_AndOneInternalErrorLine()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync(forwarder: new ThrowingForwarder());
+        var thrown = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n");
+
+        // The uniform 502 of another failure, at the same (manual) clock time.
+        _h.Secrets = new FakeBrokerSecrets(_ => throw new BrokerSecretException("unusable"));
+        await _h.Server!.StopAsync();
+        await _h.StartAsync();
+        var uniform = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n");
+
+        Assert.StartsWith("HTTP/1.1 502", Encoding.ASCII.GetString(uniform));
+        Assert.Equal(Encoding.ASCII.GetString(uniform), Encoding.ASCII.GetString(thrown));
+        var log = _h.LogText.ToString();
+        Assert.Equal(1, log.Split("reason=internal-error").Length - 1);
+        Assert.Contains("status=502 bytes_in=0 bytes_out=0 unlocks=1", log);
+        Assert.Contains("reason=internal-error type=InvalidOperationException", log);
+        Assert.DoesNotContain("secret-looking", log);
+        Assert.DoesNotContain("s3cr3t", log);
+    }
+}
