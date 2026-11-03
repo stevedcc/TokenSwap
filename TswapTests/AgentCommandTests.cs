@@ -681,12 +681,12 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     [Fact]
-    public void Client_OtherVaultsAgent_SaysSo_AndFallsBack()
+    public async Task Client_OtherVaultsAgent_SaysSo_AndFallsBack()
     {
         var (m, _) = TpmPasswordVault("other-vault");
         var options = new AgentServerOptions(m.AgentSocket!, RandomNumberGenerator.GetBytes(16),
             () => throw new InvalidOperationException("never"), null, TimeProvider.System, AgentHarness.MyUid);
-        _fakeAgents.Add(AgentServer.StartAsync(options).GetAwaiter().GetResult());
+        _fakeAgents.Add(await AgentServer.StartAsync(options));
 
         var (exit, _, stderr) = m.Run("", "get", "db");
 
