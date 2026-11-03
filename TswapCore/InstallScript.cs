@@ -18,15 +18,33 @@ public static class InstallScript
 
         BINARY="TSWAP_BINARY_PATH_PLACEHOLDER"
 
+        # Temporary files of this run, removed however it ends. BROKER_PENDING is set between updating the
+        # tswap-broker SELinux module and replacing the broker's labelled copy, which must match.
+        CLEANUP=()
+        BROKER_PENDING=""
+        on_exit() {
+          local status=$? p
+          for p in "${CLEANUP[@]+"${CLEANUP[@]}"}"; do
+            [ -e "$p" ] || continue
+            rm -rf "$p" 2>/dev/null || sudo rm -rf "$p" 2>/dev/null || true
+          done
+          if [ -n "$BROKER_PENDING" ] && [ "$status" -ne 0 ]; then
+            echo "!!  Stopped after updating the tswap-broker module but before its labelled copy; they must match. Run this script again." >&2
+          fi
+        }
+        trap on_exit EXIT
+
         # install_binary SRC DEST [sudo]: copies next to DEST, then renames over it. A running tswap (an unlock
         # agent, a broker) keeps its old file and the new one appears at once; never an in-place overwrite, which
         # on macOS rewrites the pages of a running signed binary.
         install_binary() {
-          local src="$1" dest="$2" run="${3:-}"
+          local src="$1" dest="$2" run="${3:-}" tmp
           $run mkdir -p "$(dirname "$dest")"
-          $run cp -f "$src" "$dest.new.$$"
-          $run chmod 0755 "$dest.new.$$"
-          $run mv -f "$dest.new.$$" "$dest"
+          tmp="$($run mktemp "$dest.new.XXXXXX")"
+          CLEANUP+=("$tmp")
+          $run cp -f "$src" "$tmp"
+          $run chmod 0755 "$tmp"
+          $run mv -f "$tmp" "$dest"
         }
 
         echo "==> Installing tswap binary..."
@@ -90,15 +108,33 @@ public static class InstallScript
 
         BINARY="TSWAP_BINARY_PATH_PLACEHOLDER"
 
+        # Temporary files of this run, removed however it ends. BROKER_PENDING is set between updating the
+        # tswap-broker SELinux module and replacing the broker's labelled copy, which must match.
+        CLEANUP=()
+        BROKER_PENDING=""
+        on_exit() {
+          local status=$? p
+          for p in "${CLEANUP[@]+"${CLEANUP[@]}"}"; do
+            [ -e "$p" ] || continue
+            rm -rf "$p" 2>/dev/null || sudo rm -rf "$p" 2>/dev/null || true
+          done
+          if [ -n "$BROKER_PENDING" ] && [ "$status" -ne 0 ]; then
+            echo "!!  Stopped after updating the tswap-broker module but before its labelled copy; they must match. Run this script again." >&2
+          fi
+        }
+        trap on_exit EXIT
+
         # install_binary SRC DEST [sudo]: copies next to DEST, then renames over it. A running tswap (an unlock
         # agent, a broker) keeps its old file and the new one appears at once; never an in-place overwrite, which
         # on macOS rewrites the pages of a running signed binary.
         install_binary() {
-          local src="$1" dest="$2" run="${3:-}"
+          local src="$1" dest="$2" run="${3:-}" tmp
           $run mkdir -p "$(dirname "$dest")"
-          $run cp -f "$src" "$dest.new.$$"
-          $run chmod 0755 "$dest.new.$$"
-          $run mv -f "$dest.new.$$" "$dest"
+          tmp="$($run mktemp "$dest.new.XXXXXX")"
+          CLEANUP+=("$tmp")
+          $run cp -f "$src" "$tmp"
+          $run chmod 0755 "$tmp"
+          $run mv -f "$tmp" "$dest"
         }
 
         echo "==> Installing tswap binary..."
@@ -162,8 +198,7 @@ public static class InstallScript
             Where-Object { $_.CommandLine -match '\bagent\s+serve\b' })
         if ($RunningAgents.Count -gt 0) {
             Write-Host "A tswap unlock agent is running (pid $($RunningAgents.ProcessId -join ', ')) from the binary this would replace."
-            Write-Host "Stop it first: tswap agent stop   (then run this script again, and unlock again afterwards)"
-            exit 1
+            throw "Stop it first: tswap agent stop   (then run this script again, and unlock again afterwards)"
         }
 
         Write-Host "==> Installing tswap binary..."
@@ -239,22 +274,48 @@ public static class InstallScript
         var moduleStep = module is null
             ? ""
             : $"""
-               if command -v semodule >/dev/null 2>&1 && sudo semodule -l 2>/dev/null | awk '{"{print $1}"}' | grep -qx tswap-broker; then
-                 echo "==> Updating the tswap-broker SELinux module..."
-                 CIL_DIR="$(mktemp -d)"
-                 # semodule names a module after its file, so the file is tswap-broker.cil.
-                 echo "{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(module))}" | base64 -d > "$CIL_DIR/tswap-broker.cil"
-                 sudo semodule -i "$CIL_DIR/tswap-broker.cil"
-                 rm -rf "$CIL_DIR"
-                 echo "    Installed the tswap-broker module"
+               if [ -n "$SEMODULE" ]; then
+                 if MODULES="$(sudo "$SEMODULE" -l 2>/dev/null)"; then
+                   # grep without -q reads all its input, so pipefail can't see a SIGPIPE from awk.
+                   if printf '%s\n' "$MODULES" | awk '{"{print $1}"}' | grep -Ex 'tswap-broker(\.pp)?' >/dev/null; then
+                     echo "==> Updating the tswap-broker SELinux module..."
+                     CIL_DIR="$(mktemp -d)"
+                     CLEANUP+=("$CIL_DIR")
+                     # semodule names a module after its file, so the file is tswap-broker.cil.
+                     echo "{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(module))}" | base64 -d > "$CIL_DIR/tswap-broker.cil"
+                     if [ -e /usr/local/libexec/tswap-broker ]; then BROKER_PENDING=1; fi
+                     sudo "$SEMODULE" -i "$CIL_DIR/tswap-broker.cil"
+                     echo "    Installed the tswap-broker module"
+                   fi
+                 else
+                   echo "    Note: couldn't list the SELinux modules (sudo semodule -l failed), so the tswap-broker module was not checked."
+                 fi
                fi
 
                """;
-        return moduleStep + """
+        return """
+            # sbin_tool NAME: the path of an admin tool, also where the user's PATH has no /usr/sbin.
+            sbin_tool() {
+              command -v "$1" 2>/dev/null && return 0
+              local d
+              for d in /usr/sbin /sbin; do
+                if [ -x "$d/$1" ]; then echo "$d/$1"; return 0; fi
+              done
+              return 1
+            }
+            SEMODULE="$(sbin_tool semodule || true)"
+            RESTORECON="$(sbin_tool restorecon || true)"
+
+            """ + moduleStep + """
             if [ -e /usr/local/libexec/tswap-broker ]; then
               echo "==> Updating the broker's labelled copy..."
               install_binary "$BINARY" /usr/local/libexec/tswap-broker sudo
-              if command -v restorecon >/dev/null 2>&1; then sudo restorecon -v /usr/local/libexec/tswap-broker; fi
+              if [ -n "$RESTORECON" ]; then
+                sudo "$RESTORECON" -v /usr/local/libexec/tswap-broker
+              elif [ -n "$SEMODULE" ]; then
+                echo "!!  restorecon not found: /usr/local/libexec/tswap-broker is now labelled bin_t, so the broker would run unconfined and containers couldn't connect. As root: restorecon -v /usr/local/libexec/tswap-broker" >&2
+              fi
+              BROKER_PENDING=""
               echo "    Installed to /usr/local/libexec/tswap-broker"
             fi
             """;
@@ -296,9 +357,9 @@ public static class InstallScript
             : $"""
                echo "==> Installing Secure Enclave support library..."
                DYLIB_TMP="$(mktemp)"
+               CLEANUP+=("$DYLIB_TMP")
                echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -D > "$DYLIB_TMP"
                install_binary "$DYLIB_TMP" /usr/local/bin/libtswapse.dylib sudo
-               rm -f "$DYLIB_TMP"
                echo "    Installed to /usr/local/bin/libtswapse.dylib"
                """;
         return BashMacOSTemplate

@@ -82,12 +82,13 @@ public class InstallScriptUpgradeTests
     public void Linux_RefreshesTheBrokerCopy_OnlyWhenItExists_ThenRestoresItsLabel()
     {
         var script = InstallScript.GetBashScript("/tmp/tswap", Cil);
-        var start = script.IndexOf("if [ -e /usr/local/libexec/tswap-broker ]", StringComparison.Ordinal);
+        var start = script.IndexOf("if [ -e /usr/local/libexec/tswap-broker ]; then\n", StringComparison.Ordinal);
         Assert.True(start >= 0, "no broker-copy step");
         var block = script[start..script.IndexOf("\nfi", start, StringComparison.Ordinal)];
         Assert.Contains("install_binary \"$BINARY\" /usr/local/libexec/tswap-broker sudo", block);
-        Assert.Contains("restorecon -v /usr/local/libexec/tswap-broker", block);
-        Assert.True(block.IndexOf("install_binary", StringComparison.Ordinal) < block.IndexOf("restorecon", StringComparison.Ordinal),
+        Assert.Contains("\"$RESTORECON\" -v /usr/local/libexec/tswap-broker", block);
+        Assert.Contains("restorecon not found", block); // never a silent unlabelled copy
+        Assert.True(block.IndexOf("install_binary", StringComparison.Ordinal) < block.IndexOf("\"$RESTORECON\"", StringComparison.Ordinal),
             "restorecon must label the new copy, so it runs after it");
     }
 
@@ -95,22 +96,23 @@ public class InstallScriptUpgradeTests
     public void Linux_ReinstallsTheEmbeddedModule_OnlyWhenItIsLoaded_UnderItsOwnName()
     {
         var script = InstallScript.GetBashScript("/tmp/tswap", Cil);
-        Assert.Contains("semodule -l", script);
-        Assert.Contains("grep -qx tswap-broker", script);
+        Assert.Contains("\"$SEMODULE\" -l", script);
+        Assert.Contains("grep -Ex 'tswap-broker(\\.pp)?'", script);
         // semodule names a module after its file: the file must be tswap-broker.cil (a 2026-11-03 router slip
         // installed tswap-broker-b.cil as a second module).
         Assert.Contains("/tswap-broker.cil\"", script);
-        Assert.Contains("semodule -i", script);
+        Assert.Contains("\"$SEMODULE\" -i", script);
         Assert.Contains(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Cil)), script);
         // The module first: it carries the file context that restorecon applies to the copy.
-        Assert.True(script.IndexOf("semodule -i", StringComparison.Ordinal) < script.IndexOf("restorecon -v", StringComparison.Ordinal));
+        Assert.True(script.IndexOf("\"$SEMODULE\" -i", StringComparison.Ordinal) < script.IndexOf("\"$RESTORECON\" -v", StringComparison.Ordinal));
     }
 
     [Fact]
     public void Linux_WithoutAnEmbeddedModule_HasNoModuleStep_ButStillRefreshesTheCopy()
     {
         var script = InstallScript.GetBashScript("/tmp/tswap");
-        Assert.DoesNotContain("semodule", script);
+        Assert.DoesNotContain("-i \"$CIL_DIR", script);
+        Assert.DoesNotContain("tswap-broker.cil", script);
         Assert.Contains("/usr/local/libexec/tswap-broker", script);
     }
 
@@ -156,10 +158,146 @@ public class InstallScriptUpgradeTests
         Assert.True(check >= 0, "no running-agent check");
         Assert.True(check < script.IndexOf("Copy-Item", StringComparison.Ordinal), "the check must come before the copy (a running exe is locked)");
         Assert.Contains("tswap agent stop", script);
-        Assert.Contains("exit 1", script);
+        Assert.Contains("throw \"Stop it first", script); // throw, not exit: a dot-sourced script mustn't close the shell
+        Assert.DoesNotContain("exit 1", script);
+    }
+
+    // ── Behaviour of the generated pieces ─────────────────────────────────────
+
+    [Theory]
+    [InlineData("broker", "/usr/local/libexec/tswap-broker broker serve", true)]
+    [InlineData("broker", "/usr/local/bin/tswap broker serve", true)]
+    [InlineData("broker", "tswap broker socket add lane1", false)]
+    [InlineData("broker", "vim notes/broker serve", false)]
+    [InlineData("agent", "/usr/local/bin/tswap agent serve --timeout 8h", true)]
+    [InlineData("agent", "/home/u/.local/bin/tswap agent serve", true)]
+    [InlineData("agent", "tswap agent stop", false)]
+    [InlineData("agent", "tswap agent start", false)]
+    public void TheRunningProcessPatterns_MatchRealCommandLines(string kind, string commandLine, bool matches)
+    {
+        Assert.Equal(matches, System.Text.RegularExpressions.Regex.IsMatch(commandLine, PgrepPattern(InstallScript.GetBashScript("/tmp/tswap", Cil), kind)));
+    }
+
+    [Fact]
+    public void TheBrokerPattern_MatchesTheShippedUnitsExecStart()
+    {
+        var unit = File.ReadAllLines(Path.Combine(RepoRoot(), "contrib", "systemd", "tswap-broker.service"));
+        var execStart = unit.Single(l => l.StartsWith("ExecStart=", StringComparison.Ordinal))["ExecStart=".Length..];
+        Assert.Matches(PgrepPattern(InstallScript.GetBashScript("/tmp/tswap", Cil), "broker"), execStart);
+    }
+
+    [Fact]
+    public void TheModuleInTheGeneratedScript_DecodesToTheContribFile()
+    {
+        var module = InstallScript.BrokerSelinuxModule()!;
+        var script = InstallScript.GetBashScript("/tmp/tswap", module);
+        var payload = System.Text.RegularExpressions.Regex.Match(script, "echo \"([A-Za-z0-9+/=]+)\" \\| base64 -d > \"\\$CIL_DIR/tswap-broker.cil\"");
+        Assert.True(payload.Success, "no module payload in the script");
+        var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payload.Groups[1].Value));
+        Assert.Equal(File.ReadAllText(Path.Combine(RepoRoot(), "contrib", "selinux", "tswap-broker.cil")), decoded);
+    }
+
+    [Fact]
+    public void InstallBinary_WorksUnderTheScriptsOwnShellOptions_AndLeavesNoTemp()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
+        try
+        {
+            var source = Path.Combine(dir, "src");
+            File.WriteAllText(source, "new");
+            var target = Path.Combine(dir, "sub", "tswap");
+            var (exit, error) = Bash(["-c", "set -euo pipefail\n" + Prelude(InstallScript.GetBashScript("/tmp/tswap")) + $"\ninstall_binary '{source}' '{target}'"], "");
+
+            Assert.True(exit == 0, $"failed: {error}");
+            Assert.Equal("new", File.ReadAllText(target));
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead |
+                         UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute, File.GetUnixFileMode(target));
+            Assert.Empty(Directory.GetFiles(Path.Combine(dir, "sub"), "tswap.new.*"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AStopBetweenTheModuleAndTheCopy_SaysToRunAgain_AndTemporaryFilesAreRemoved()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
+        try
+        {
+            var leftover = Path.Combine(dir, "leftover");
+            File.WriteAllText(leftover, "x");
+            var (exit, error) = Bash(["-c", "set -euo pipefail\n" + Prelude(InstallScript.GetBashScript("/tmp/tswap")) +
+                                           $"\nCLEANUP+=('{leftover}')\nBROKER_PENDING=1\nfalse"], "");
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains("they must match. Run this script again.", error);
+            Assert.False(File.Exists(leftover), "the trap didn't remove the temporary file");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ASuccessfulRun_SaysNothingAboutAMismatch()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var (exit, error) = Bash(["-c", "set -euo pipefail\n" + Prelude(InstallScript.GetBashScript("/tmp/tswap")) + "\nBROKER_PENDING=\"\"\ntrue"], "");
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain("must match", error);
+    }
+
+    [Fact]
+    public void ThePowerShellScript_Parses()
+    {
+        if (!OperatingSystem.IsWindows())
+            return; // Windows PowerShell ships with every Windows runner
+        var path = Path.Combine(Path.GetTempPath(), $"tswap-install-{Guid.NewGuid():N}.ps1");
+        File.WriteAllText(path, InstallScript.GetPowerShellScript("C:\\tswap.exe"));
+        try
+        {
+            var psi = new ProcessStartInfo("powershell") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-Command",
+                         $"$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$null, [ref]$e); if ($e) {{ $e | ForEach-Object {{ $_.ToString() }}; exit 1 }}" })
+                psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi)!;
+            var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            Assert.True(p.ExitCode == 0, $"PowerShell parse errors: {output}");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>The pgrep -f pattern the Linux script uses for a running broker or agent.</summary>
+    private static string PgrepPattern(string script, string kind)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(script, $"pgrep [^\\n]*-f '([^']*{kind} serve)'");
+        Assert.True(m.Success, $"no pgrep for {kind}");
+        return m.Groups[1].Value;
+    }
+
+    /// <summary>The script's shared prelude: cleanup trap and install_binary, as generated.</summary>
+    private static string Prelude(string script)
+    {
+        var start = script.IndexOf("# Temporary files of this run", StringComparison.Ordinal);
+        Assert.True(start >= 0, "no prelude");
+        var function = script.IndexOf("install_binary() {", start, StringComparison.Ordinal);
+        var end = script.IndexOf("\n}", function, StringComparison.Ordinal);
+        return script[start..(end + 2)];
+    }
 
     private static string FunctionText(string script, string name)
     {
