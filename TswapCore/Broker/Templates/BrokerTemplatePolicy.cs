@@ -477,11 +477,11 @@ public static class BrokerTemplateValidator
     {
         if (binds.Count == 0)
             return;
-        var tooManyLinks = false;
-        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program, out tooManyLinks);
-        if (tooManyLinks)
+        string? unresolvable = null;
+        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program, out unresolvable);
+        if (unresolvable is not null)
             throw new BrokerConfigException(
-                $"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved (more than {MaxSymlinks} symbolic links), so it can't be checked against the binds");
+                $"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved ({unresolvable}), so it can't be checked against the binds");
         foreach (var bind in binds)
         {
             if (!new[] { program, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
@@ -502,10 +502,10 @@ public static class BrokerTemplateValidator
     {
         if (binds.Count == 0)
             return;
-        var resolved = ResolveNearestExisting(bwrapPath, out var tooManyLinks);
-        if (tooManyLinks)
+        var resolved = ResolveNearestExisting(bwrapPath, out var unresolvable);
+        if (unresolvable is not null)
             throw new BrokerConfigException(
-                $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} can't be resolved (more than {MaxSymlinks} symbolic links), so it can't be checked against template {name}'s binds");
+                $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} can't be resolved ({unresolvable}), so it can't be checked against template {name}'s binds");
         var names = new[] { bwrapPath, resolved }.OfType<string>().ToList(); // as configured: no lexical ".." collapse
         foreach (var bind in binds)
             if (names.Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
@@ -664,7 +664,7 @@ public static class BrokerTemplateValidator
     /// <summary>Linux's own limit on symbolic links followed in one lookup (<c>MAXSYMLINKS</c>).</summary>
     private const int MaxSymlinks = 40;
 
-    /// <inheritdoc cref="ResolveNearestExisting(string, out bool)"/>
+    /// <inheritdoc cref="ResolveNearestExisting(string, out string?)"/>
     internal static string? ResolveNearestExisting(string path) => ResolveNearestExisting(path, out _);
 
     /// <summary>
@@ -674,12 +674,12 @@ public static class BrokerTemplateValidator
     /// fix round 1, MiMo p2 B1: <c>/usr/lib/tool-link/deploy</c> with <c>tool-link -&gt; /srv/tools/v2</c>
     /// missing is <c>/srv/tools/v2/deploy</c>); from the first missing (or unreadable) entry on, the
     /// rest is appended by name. For a path that exists this is its real path. Null, with
-    /// <paramref name="tooManyLinks"/> set, after more than <see cref="MaxSymlinks"/> links (a loop): the
-    /// path can't be checked, and the callers refuse it.
+    /// <paramref name="unresolvable"/> saying why, after more than <see cref="MaxSymlinks"/> links (a loop) or
+    /// at a link that can't be read (I224 round 2, G5): the path can't be checked, and the callers refuse it.
     /// </summary>
-    internal static string? ResolveNearestExisting(string path, out bool tooManyLinks)
+    internal static string? ResolveNearestExisting(string path, out string? unresolvable)
     {
-        tooManyLinks = false;
+        unresolvable = null;
         var pending = new Stack<string>(); // the components still to walk, the next one on top
         // I224 round 2 (G1): an absolute path is walked as given, never through Path.GetFullPath, which would
         // collapse "link/.." lexically; the ".." branch below takes it against the real folder, as the kernel does.
@@ -705,7 +705,7 @@ public static class BrokerTemplateValidator
                 {
                     if (++links > MaxSymlinks)
                     {
-                        tooManyLinks = true;
+                        unresolvable = $"more than {MaxSymlinks} symbolic links";
                         return null;
                     }
                     if (ReadLink(candidate) is { } target)
@@ -713,6 +713,11 @@ public static class BrokerTemplateValidator
                         Push(pending, target);
                         if (target.StartsWith('/'))
                             resolved = "/";
+                    }
+                    else if (BrokerNative.LStat(candidate) is { Type: BrokerNative.EntryType.Symlink })
+                    {
+                        unresolvable = $"can't read symbolic link {BrokerPolicy.Printable(candidate)}";
+                        return null;
                     }
                     else
                     {
@@ -734,8 +739,14 @@ public static class BrokerTemplateValidator
         }
     }
 
+    /// <summary>Test seam (I224 round 2, G5): <c>readlink</c>, see <see cref="DefaultReadLink"/>.</summary>
+    internal static Func<string, string?> ReadLink { get; set; } = DefaultReadLink;
+
+    /// <summary>The real <see cref="ReadLink"/>, for tests to restore it.</summary>
+    internal static readonly Func<string, string?> DefaultReadLinkForTests = DefaultReadLink;
+
     /// <summary><c>readlink</c> of <paramref name="link"/>, or null when it is no longer a link or can't be read.</summary>
-    private static string? ReadLink(string link)
+    private static string? DefaultReadLink(string link)
     {
         try
         {
