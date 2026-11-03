@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -463,7 +464,7 @@ public sealed class BrokerControlServer : IAsyncDisposable
                 return;
             }
             _options.Log(state.ExpiresAt is { } until
-                ? $"unlocked until {until.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z"
+                ? $"unlocked until {until.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)}Z"
                 : "unlocked (no timeout)");
             await SendAsync(stream, AgentStatus.Ok).ConfigureAwait(false);
         }

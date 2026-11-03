@@ -148,6 +148,25 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, h.Secrets.Unlocks);
     }
 
+    [Theory]
+    [InlineData("th-TH")] // the Buddhist calendar: year 2569
+    [InlineData("fi-FI")] // '.' as the time separator
+    [InlineData("ar-SA")] // the Hijri calendar
+    public void BrokerTimes_AreTheSameInEveryCulture(string culture)
+    {
+        // Review T17 p3 MiMo M-8: 'broker unlock' and 'broker status' print times as the agent does, culture-invariant.
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(culture);
+            Assert.Equal("2026-11-03 10:30:05Z", BrokerCommand.FormatTime(new DateTimeOffset(2026, 11, 3, 10, 30, 5, TimeSpan.Zero)));
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
     [Fact]
     public async Task Locked_IsNotCountedAsUnlockFailure()
     {
@@ -189,6 +208,30 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
         Assert.False(Assert.IsType<BrokerControlAnswer.State>(await _c.StatusAsync()).Unlocked);
         Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
+    }
+
+    [Fact]
+    public async Task Unlock_LogLine_TimeIsTheSameInEveryCulture()
+    {
+        // Review T17 p3 MiMo M-8, the broker's own log line: the Buddhist calendar must not move the year.
+        if (OperatingSystem.IsWindows())
+            return;
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("th-TH");
+            await _c.StartAsync();
+            var expires = _c.Clock.GetUtcNow().AddHours(8);
+
+            Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync(expiresAt: expires));
+
+            var expected = expires.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Contains($"unlocked until {expected}Z", _c.LogText);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
     }
 
     [Fact]

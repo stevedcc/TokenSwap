@@ -305,7 +305,7 @@ public sealed class BrokerCommand : ICliCommand
         {
             case BrokerControlAnswer.Done:
                 ctx.Console.Out.WriteLine(expiresAt is { } e
-                    ? $"The broker is unlocked; it locks again at {e.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z."
+                    ? $"The broker is unlocked; it locks again at {FormatTime(e)}."
                     : "The broker is unlocked.");
                 return 0;
             case var other:
@@ -337,7 +337,7 @@ public sealed class BrokerCommand : ICliCommand
                 return 0;
             case BrokerControlAnswer.State unlocked:
                 ctx.Console.Out.WriteLine(unlocked.ExpiresAt is { } e
-                    ? $"The broker is unlocked until {e.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z."
+                    ? $"The broker is unlocked until {FormatTime(e)}."
                     : "The broker is unlocked (no timeout).");
                 ctx.Console.Out.WriteLine($"refused peers: {unlocked.RefusedPeers}");
                 return 0;
@@ -345,6 +345,10 @@ public sealed class BrokerCommand : ICliCommand
                 throw Failure(other, path);
         }
     }
+
+    /// <summary>A UTC time as <c>yyyy-MM-dd HH:mm:ssZ</c>, the same in every culture (the agent's times are too).</summary>
+    internal static string FormatTime(DateTimeOffset at) =>
+        at.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "Z";
 
     private static TswapException Failure(BrokerControlAnswer answer, string path) => answer switch
     {
