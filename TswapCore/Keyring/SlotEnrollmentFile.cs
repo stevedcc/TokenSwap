@@ -114,7 +114,10 @@ public sealed record SlotApproveFile(
     string NewSlotWrapped,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewSlotHwBlob = null,
     // Brief T5 decision 2: the request's Backend, passed on (null for a YubiKey slot).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? NewSlotBackend = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? NewSlotBackend = null,
+    // Brief T17 ruling 16: base64 of the approver's vault-password file, when its vault folder has one. Optional,
+    // so the format version stays 2: a 0.1.x reader ignores the member (TswapJsonContext allows unmapped members).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? VaultPassword = null)
 {
     /// <summary>Current format version this build writes and requires on read (2 since brief T4,
     /// which added <see cref="NewSlotHwBlob"/>).</summary>

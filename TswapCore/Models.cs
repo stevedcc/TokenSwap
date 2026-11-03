@@ -168,7 +168,12 @@ public record Config(List<int> YubiKeySerials,
     // acknowledged on this machine. Written by init, slot add, slot request and migrate when they
     // explain the posture, and by 'tswap slots --ack'; everyday commands print a one-line notice only
     // for a posture that differs from it. Omitted when null (nothing acknowledged yet).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? AcknowledgedTouch = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? AcknowledgedTouch = null,
+    // Brief T17 ruling 16, a machine field: base64 of the vault-password file that 'slot request --password'
+    // read (and, for a TPM or Secure Enclave request, sealed against). 'slot accept' requires the approve
+    // file's copy and the target folder's file (if any) to be byte-identical to it, then clears it with
+    // the other pending fields. Omitted when null (every request without --password).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingVaultPassword = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's

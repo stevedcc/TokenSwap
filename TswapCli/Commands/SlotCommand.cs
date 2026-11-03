@@ -40,7 +40,7 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
+    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
     public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot; slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
@@ -102,8 +102,22 @@ public sealed class SlotCommand : ICliCommand
         // instead of a YubiKey (no flag: the one-YubiKey request, unchanged). Checked before any
         // prompt, hardware or write.
         // Brief T11: --secure-enclave needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> (--tpm and --secure-enclave are mutually exclusive)";
+        var usage = $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> " +
+                    "(--tpm and --secure-enclave are mutually exclusive; --vault-dir, the shared vault folder, goes with --password)";
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
+        // Brief T17 ruling 16: --password reads the vault folder's vault-password file (--vault-dir, or the
+        // folder of this machine's existing config).
+        (args, var passwordFlag) = VaultPasswordChoice.Split(args, usage);
+        string? passwordFolder = null;
+        var folderIndex = Array.IndexOf(args, "--vault-dir");
+        if (folderIndex >= 0)
+        {
+            if (passwordFlag != true || folderIndex + 1 >= args.Length || args[folderIndex + 1].StartsWith("--")
+                || args.Count(a => a == "--vault-dir") > 1)
+                throw new UsageException(usage);
+            passwordFolder = args[folderIndex + 1];
+            args = [.. args[..folderIndex], .. args[(folderIndex + 2)..]];
+        }
         var flags = args.Where(a => a.StartsWith("--")).ToArray();
         var positional = args.Where(a => !a.StartsWith("--")).ToArray();
         if (positional.Length != 1 || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
@@ -118,7 +132,7 @@ public sealed class SlotCommand : ICliCommand
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
         if (hardware is not null)
-            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true);
+            return ExecuteHardwareRequest(ctx, hardware.Value, path, requirePresence ?? true, passwordFlag, passwordFolder);
         var c = ctx.Console;
 
         var fileStore = ctx.Storage as IFileVaultStore;
@@ -136,6 +150,12 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
         c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
 
+        // Brief T17 ruling 16: a YubiKey request only records the v2 blob (and the folder's vault-password
+        // file); the password is typed at 'slot accept', which derives KEK_slot with it.
+        var vaultPassword = VaultPasswordChoice.Decide(ctx, passwordFlag, HardwareBackend.YubiKey)
+            ? ReadRequestVaultPassword(ctx, passwordFolder).Bytes
+            : null;
+
         c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
         if (!c.IsInputRedirected) c.ReadLine();
 
@@ -144,6 +164,8 @@ public sealed class SlotCommand : ICliCommand
         var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
         // Not kept: 'slot accept' re-derives KEK_slot from the same key and blob.
         CryptographicOperations.ZeroMemory(kekSlot);
+        if (vaultPassword is not null)
+            blob = blob.WithPassword();
 
         c.Out.WriteLine("\nPassword generation entropy source:");
         c.Out.WriteLine("  [1] System RNG  — one YubiKey touch per create (default)");
@@ -162,7 +184,8 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotId: Convert.ToBase64String(slotId),
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
-            PendingSlotHwBlob: hwBlob);
+            PendingSlotHwBlob: hwBlob,
+            PendingVaultPassword: vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
         config = KeepRecordStoreFields(ctx, config);
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
@@ -181,6 +204,8 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"YubiKey Serial: {blob.Serial}");
         YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        if (vaultPassword is not null)
+            c.Out.WriteLine("This slot needs the vault password: 'slot accept' asks for it.");
         PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
         c.Out.WriteLine($"\nRequest file written to: {path}");
         c.Out.WriteLine("Move this file to an already-enrolled machine yourself (scp/USB/paste) —");
@@ -199,7 +224,8 @@ public sealed class SlotCommand : ICliCommand
     /// blob in the request file. <c>KEK_slot</c> itself is zeroed: <c>slot accept</c> recovers it
     /// from the blob. No YubiKey is touched.
     /// </summary>
-    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path, bool requirePresence)
+    private static int ExecuteHardwareRequest(CommandContext ctx, HardwareBackend backend, string path, bool requirePresence,
+        bool? passwordFlag, string? passwordFolder)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -221,9 +247,23 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("X25519 keypair. Nothing is shared or usable as a vault yet — carry the request");
         c.Out.WriteLine("file this produces to an already-enrolled machine and run 'slot approve' there.\n");
 
+        // Brief T17 ruling 16: a TPM or Secure Enclave request asks for the password now and seals with it
+        // (unchecked: there is no K_v here; 'slot accept' checks it against the verifier).
+        byte[]? vaultPassword = null;
+        byte[] kekSlot, sealedBlob;
         var slotKeyPair = SlotKeyPair.Generate();
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (kekSlot, sealedBlob) = enrollment.Enroll(password: null);
+        if (VaultPasswordChoice.Decide(ctx, passwordFlag, backend))
+        {
+            var (bytes, file) = ReadRequestVaultPassword(ctx, passwordFolder);
+            vaultPassword = bytes;
+            using var stretched = VaultPasswordChoice.AskUnverified(ctx, file);
+            (kekSlot, sealedBlob) = enrollment.Enroll(stretched);
+        }
+        else
+        {
+            (kekSlot, sealedBlob) = enrollment.Enroll(password: null);
+        }
         // Not kept: 'slot accept' recovers KEK_slot from the blob with this machine's hardware.
         CryptographicOperations.ZeroMemory(kekSlot);
 
@@ -241,7 +281,8 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotId: Convert.ToBase64String(slotId),
             PendingSlotPublicKey: Convert.ToBase64String(slotKeyPair.PublicKey),
             PendingSlotPrivateKey: Convert.ToBase64String(slotKeyPair.PrivateKey),
-            PendingSlotHwBlob: hwBlob);
+            PendingSlotHwBlob: hwBlob,
+            PendingVaultPassword: vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
         config = KeepRecordStoreFields(ctx, config);
         config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: a YubiKey's posture is explained below
 
@@ -255,6 +296,8 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"Backend: {hardware}");
+        if (vaultPassword is not null)
+            c.Out.WriteLine("This slot needs the vault password: 'slot accept' asks for it again and checks it.");
         if (backend == HardwareBackend.SecureEnclave)
         {
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
@@ -271,6 +314,36 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"  {ctx.Prefix} slot accept <approve-file>");
         return 0;
     }
+
+    /// <summary>Ruling 16: <c>slot request --password</c> without a vault folder that has a <c>vault-password</c> file.</summary>
+    internal const string RequestNeedsFolderText =
+        "slot request --password needs the shared vault folder (its vault-password file). Enrol without the password and re-enrol this slot later, or pass --vault-dir.";
+
+    /// <summary>
+    /// Brief T17 ruling 16: the <c>vault-password</c> file a password request records, read from
+    /// <paramref name="folder"/> (<c>--vault-dir</c>) or else from the vault folder of this machine's existing
+    /// config, and decoded strictly for that folder's keyring. Refuses with <see cref="RequestNeedsFolderText"/>
+    /// when there is no such folder or file, and with ruling 2's message on conflict copies.
+    /// </summary>
+    private static (byte[] Bytes, VaultPasswordFile File) ReadRequestVaultPassword(CommandContext ctx, string? folder)
+    {
+        var fileStore = ctx.Storage as IFileVaultStore;
+        var vaultDir = folder is not null ? Path.GetFullPath(folder) : (ctx.Storage as RecordVaultStore)?.VaultDir;
+        if (vaultDir is null)
+            throw new TswapException(RequestNeedsFolderText);
+        var owner = fileStore?.Owner ?? DirectoryOwnerMatcher.Default;
+        var folderStore = FolderStore(ctx, vaultDir, owner);
+        if (!owner.FileExists(folderStore.KeyringFile))
+            throw new TswapException(RequestNeedsFolderText);
+        var bytes = folderStore.ReadVaultPasswordBytes() ?? throw new TswapException(RequestNeedsFolderText);
+        return (bytes, VaultPasswordFile.Decode(bytes, folderStore.ReadKeyring().VaultId));
+    }
+
+    /// <summary>A record store for the shared vault folder <paramref name="vaultDir"/>, for reading and writing its files.</summary>
+    private static RecordVaultStore FolderStore(CommandContext ctx, string vaultDir, DirectoryOwnerMatcher owner) =>
+        RecordVaultStore.ForFolder(vaultDir,
+            new Config([], "", ctx.Time.GetUtcNow().UtcDateTime, Store: RecordVaultStore.StoreName, VaultDir: vaultDir, OriginId: RecordVaultStore.NewOriginId()),
+            owner, ctx.Time);
 
     private static void WriteRequestFile(CommandContext ctx, string path, byte[] slotId, byte[] publicKey, string hwBlob, HardwareBackend? backend = null)
     {
@@ -358,6 +431,14 @@ public sealed class SlotCommand : ICliCommand
         var keyring = DecodeKeyringOrCorrupt(config);
         RequireKeyringThatTakesYubiKeySlots(keyring);
 
+        // Brief T17 ruling 16: the approve file carries this vault's vault-password file. A request for a
+        // password slot needs it; any other request gets it too when the folder has one, because the new
+        // copy's other slots may need it.
+        var requestHwBlob = SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob");
+        var requestNeedsPassword = SlotPassword.Classify(new Slot(newSlotId, requesterPublicKey, [], SlotKind.Machine, requestHwBlob))
+            == SlotPasswordKind.Password;
+        var vaultPassword = ApproveVaultPassword(ctx, keyring, requestNeedsPassword);
+
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
         byte[] ephemeralPublicKey, wrapped;
         try
@@ -386,7 +467,8 @@ public sealed class SlotCommand : ICliCommand
             Convert.ToBase64String(ephemeralPublicKey),
             Convert.ToBase64String(wrapped),
             request.HwBlob,
-            request.Backend);
+            request.Backend,
+            vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
 
         ctx.WriteOutputFile(approvePath, SlotEnrollmentFileCodec.SerializeApprove(approveFile));
 
@@ -407,6 +489,39 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("Carry this file back to the requesting machine yourself (scp/USB/paste) —");
         c.Out.WriteLine("do not drop it in a sync folder — then run 'slot accept' there.");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T17 ruling 16: this vault folder's <c>vault-password</c> bytes for the approve file, decoded strictly
+    /// for this vault first. A password request (<paramref name="required"/>) refuses without them; for any
+    /// other request a missing file is simply left out, and an unusable one (conflict copies) is left out with a
+    /// note, since the new slot doesn't need it.
+    /// </summary>
+    private static byte[]? ApproveVaultPassword(CommandContext ctx, TswapCore.Keyring.Keyring keyring, bool required)
+    {
+        var store = ctx.Storage as RecordVaultStore;
+        if (required)
+        {
+            var bytes = store?.ReadVaultPasswordBytes() ?? throw new TswapException(
+                "This slot request is for a slot with the vault password, but this machine's vault folder has no vault-password " +
+                "file to send with it. Approve it on a machine whose vault folder has the file, or have the slot requested without --password.");
+            VaultPasswordFile.Decode(bytes, keyring.VaultId);
+            return bytes;
+        }
+        if (store is null)
+            return null;
+        try
+        {
+            var bytes = store.ReadVaultPasswordBytes();
+            if (bytes is not null)
+                VaultPasswordFile.Decode(bytes, keyring.VaultId);
+            return bytes;
+        }
+        catch (TswapException ex)
+        {
+            ctx.Console.Error.WriteLine($"Note: the approve file carries no vault-password file ({ex.Message})");
+            return null;
+        }
     }
 
     // --- slot accept (runs back on the new machine) ---
@@ -526,27 +641,58 @@ public sealed class SlotCommand : ICliCommand
         var ephemeralPublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
         var wrapped = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotWrapped, "approve file's wrapped slot payload");
 
+        // Brief T17 ruling 16: the vault-password files of the request, the approve file and the target folder.
+        var owner = (ctx.Storage as IFileVaultStore)?.Owner ?? DirectoryOwnerMatcher.Default;
+        var targetStore = vaultDir is not null ? FolderStore(ctx, vaultDir, owner) : ctx.Storage as RecordVaultStore;
+        var (approveVaultPassword, passwordFile) = CheckAcceptVaultPasswords(
+            config, approve, targetStore, vaultId, new Slot(pendingSlotId, pendingPublicKey, [], SlotKind.Machine, pendingHwBlob));
+
         var vaultKey = RecoverySlotWrap.Unwrap(
             wrapped, ephemeralPublicKey, pendingPrivateKey,
             approve.KeyringFormatVersion, vaultId, approve.K, approveSlotId);
 
+        // A password slot: the password is asked for once and checked against the verifier with the recovered
+        // K_v before any hardware is touched (ruling 15's refusal on a mismatch).
+        StretchedPassword? stretched = null;
         byte[] kekSlot;
-        if (blob is not null)
+        try
         {
-            // Re-derive this machine's KEK_slot from the key 'slot request' enrolled, with the blob it
-            // saved (brief T4): the same key, challenge, salt and slot id give the same KEK_slot.
-            if (!ctx.YubiKeys.ListSerials().Contains(blob.Serial))
-                throw new TswapException(
-                    $"Plug in YubiKey {blob.Serial} (the key this machine's slot request enrolled) and run 'slot accept' again.");
-            kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, pendingSlotId);
+            if (passwordFile is not null)
+            {
+                if (backend == HardwareBackend.Tpm && VaultPasswordChoice.IsWindows())
+                    c.Out.WriteLine(VaultPasswordChoice.WindowsLockoutLine);
+                stretched = VaultPasswordChoice.AskExisting(ctx, passwordFile, vaultKey);
+            }
+            VaultPasswordProvider? provider = stretched is null ? null : stretched.Clone;
+            if (blob is not null)
+            {
+                // Re-derive this machine's KEK_slot from the key 'slot request' enrolled, with the blob it
+                // saved (brief T4): the same key, challenge, salt and slot id give the same KEK_slot.
+                if (!ctx.YubiKeys.ListSerials().Contains(blob.Serial))
+                    throw new TswapException(
+                        $"Plug in YubiKey {blob.Serial} (the key this machine's slot request enrolled) and run 'slot accept' again.");
+                kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, pendingSlotId, provider);
+            }
+            else
+            {
+                // Brief T5 decision 2: unseal/unwrap the pending blob with this machine's TPM or Secure
+                // Enclave (HardwareBlobLocator reads PendingSlotHwBlob for a pending config).
+                // Fix round 1 (A5): on a record-store machine LoadConfig composes the shared keyring into
+                // Config.Keyring; the pending blob is what this machine's hardware must open here.
+                try
+                {
+                    kekSlot = ctx.Unlocker.UnlockHardware(config with { Keyring = null }, YubiKeySelection.FromChooser(serials => serials[0]), provider);
+                }
+                catch (VaultPasswordRefusedException ex) when (stretched is not null && ex.Message.StartsWith("Wrong vault password", StringComparison.Ordinal))
+                {
+                    // The password passed the verifier, so the hardware object was made with another one.
+                    throw new TswapException(AcceptRequestPasswordDiffersText);
+                }
+            }
         }
-        else
+        finally
         {
-            // Brief T5 decision 2: unseal/unwrap the pending blob with this machine's TPM or Secure
-            // Enclave (HardwareBlobLocator reads PendingSlotHwBlob for a pending config).
-            // Fix round 1 (A5): on a record-store machine LoadConfig composes the shared keyring into
-            // Config.Keyring; the pending blob is what this machine's hardware must open here.
-            kekSlot = ctx.Unlocker.UnlockHardware(config with { Keyring = null }, serials => serials[0]);
+            stretched?.Dispose();
         }
         Slot machineSlot;
         try
@@ -582,6 +728,7 @@ public sealed class SlotCommand : ICliCommand
             PendingSlotPublicKey = null,
             PendingSlotPrivateKey = null,
             PendingSlotHwBlob = null,
+            PendingVaultPassword = null,
         };
 
         var fileStore = ctx.Storage as IFileVaultStore;
@@ -597,6 +744,7 @@ public sealed class SlotCommand : ICliCommand
             // checks it again, against what is on disk at that moment.)
             KeyringUnion.RequireSameVault(
                 RecordVaultStore.ForFolder(vaultDir, finalConfig, fileStore.Owner, ctx.Time).ReadKeyring(), finalKeyring, "The shared folder's keyring");
+            WriteMissingVaultPassword(targetStore!, approveVaultPassword);
             // As init --vault-dir (fix round 1, A6; order fix round 3): back up config.json, switch
             // it, and only then move secrets.json.enc aside, so a failed switch leaves the old vault.
             if (fileStore.Owner.FileExists(fileStore.ConfigFile))
@@ -610,10 +758,11 @@ public sealed class SlotCommand : ICliCommand
             if (fileStore.Owner.FileExists(fileStore.SecretsFile))
                 c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
         }
-        else if (ctx.Storage is RecordVaultStore)
+        else if (ctx.Storage is RecordVaultStore recordStore)
         {
             // A record-store machine (joined with init --vault-dir) already shares the vault's folder:
             // the new slot goes into its keyring (a union), and no record is written.
+            WriteMissingVaultPassword(recordStore, approveVaultPassword);
             ctx.Storage.SaveConfig(finalConfig);
         }
         else
@@ -625,7 +774,7 @@ public sealed class SlotCommand : ICliCommand
                 throw new TswapException("'slot accept' needs a file-based config.");
             var newVaultDir = Path.GetFullPath(Path.Combine(fileStore.ConfigDir, "vault"));
             InitCommand.RequireAbsentOrEmpty(ctx, fileStore.Owner, newVaultDir);
-            InitCommand.CreateRecordVault(ctx, fileStore, finalConfig, newVaultDir);
+            InitCommand.CreateRecordVault(ctx, fileStore, finalConfig, newVaultDir, approveVaultPassword);
             c.Out.WriteLine($"Vault folder: {newVaultDir} (a record vault, record format {KeyringFormat.RecordFormatVersion}; empty until you add secrets or merge another copy's folder)");
         }
 
@@ -641,6 +790,49 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");
         c.Out.WriteLine("Until then, only this machine's copy of the vault has the new slot.");
         return 0;
+    }
+
+    /// <summary>Ruling 16: the TPM refused a password that passed the verifier at <c>slot accept</c>.</summary>
+    internal const string AcceptRequestPasswordDiffersText = "The password typed at 'slot request' differs; run 'slot request' again.";
+
+    /// <summary>
+    /// Brief T17 ruling 16, at <c>slot accept</c>, before any password is asked for or hardware touched. For a
+    /// password request (<see cref="Config.PendingVaultPassword"/>), the request's copy, the approve file's copy
+    /// and the target folder's file (if any) must be byte-identical; the returned file is the one the password is
+    /// checked against. Either way, the approve file's copy (decoded for this vault) is returned for a vault folder
+    /// that has none yet.
+    /// </summary>
+    private static (VaultPasswordFile? ApproveFile, VaultPasswordFile? PasswordFile) CheckAcceptVaultPasswords(
+        Config config, SlotApproveFile approve, RecordVaultStore? targetStore, byte[] vaultId, Slot pendingSlot)
+    {
+        var pending = config.PendingVaultPassword is null ? null : DecodePending(config.PendingVaultPassword, "vault-password file");
+        if (pending is null && SlotPassword.Classify(pendingSlot) == SlotPasswordKind.Password)
+            throw new TswapException(
+                "Config is corrupted: this machine's pending slot request needs the vault password but has no copy of the " +
+                "vault-password file. Run 'tswap slot request --password' again on this machine, and have it approved again.");
+        var fromApprove = approve.VaultPassword is null
+            ? null
+            : SlotEnrollmentFileCodec.DecodeVariable(approve.VaultPassword, "approve file's vault-password file");
+        var approveFile = fromApprove is null ? null : VaultPasswordFile.Decode(fromApprove, vaultId);
+        if (pending is null)
+            return (approveFile, null);
+
+        var inTarget = targetStore?.ReadVaultPasswordBytes();
+        if (fromApprove is null || !fromApprove.AsSpan().SequenceEqual(pending)
+            || (inTarget is not null && !inTarget.AsSpan().SequenceEqual(pending)))
+            throw new TswapException(
+                "The vault-password files of this machine's slot request, the approve file" +
+                (inTarget is null ? "" : " and the vault folder") + " differ (or the approve file has none), so the password " +
+                "slot can't be accepted. Run 'slot request --password' again against the vault folder's current file, and " +
+                "have it approved again. Nothing was changed.");
+        return (approveFile, VaultPasswordFile.Decode(pending, vaultId));
+    }
+
+    /// <summary>Writes the approve file's <c>vault-password</c> file into a vault folder that has none.</summary>
+    private static void WriteMissingVaultPassword(RecordVaultStore store, VaultPasswordFile? file)
+    {
+        if (file is not null && store.ReadVaultPasswordBytes() is null)
+            store.WriteVaultPassword(file);
     }
 
     /// <summary>
