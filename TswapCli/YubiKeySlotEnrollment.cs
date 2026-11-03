@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
+using TswapCore.VaultPassword;
 
 namespace TswapCli;
 
@@ -21,9 +22,12 @@ internal static class YubiKeySlotEnrollment
     /// the responses compared in constant time (security review of T4): a key that answers the
     /// same challenge differently would make a slot that never opens, so it is refused before
     /// anything is written. The caller zeroes the returned <c>KEK_slot</c> after use.
+    ///
+    /// <para>Brief T17: with <paramref name="password"/> the slot is a password slot: a version 2 blob, and
+    /// <c>KEK_slot</c> from <see cref="YubiKeySlotKek.DeriveV2"/>. The caller keeps ownership of it.</para>
     /// </summary>
     public static (YubiKeySlotBlob Blob, byte[] KekSlot) Enroll(
-        CommandContext ctx, byte[] slotId, IReadOnlyCollection<int>? alreadyEnrolled = null)
+        CommandContext ctx, byte[] slotId, IReadOnlyCollection<int>? alreadyEnrolled = null, StretchedPassword? password = null)
     {
         var c = ctx.Console;
         var pluggedIn = ctx.YubiKeys.ListSerials();
@@ -36,7 +40,7 @@ internal static class YubiKeySlotEnrollment
                 $"Every plugged-in YubiKey ({string.Join(", ", pluggedIn)}) already has a slot in this vault. " +
                 "Plug in a YubiKey that has no slot yet; each key needs only one slot.");
 
-        return EnrollSerial(ctx, slotId, ctx.ChooseSerialAmong(eligible));
+        return EnrollSerial(ctx, slotId, ctx.ChooseSerialAmong(eligible), password);
     }
 
     /// <summary>
@@ -44,7 +48,7 @@ internal static class YubiKeySlotEnrollment
     /// (brief T6: <c>migrate --to-records</c> gives each key of a plain XOR vault its own slot),
     /// with the same double challenge as <see cref="Enroll"/>.
     /// </summary>
-    public static (YubiKeySlotBlob Blob, byte[] KekSlot) EnrollSerial(CommandContext ctx, byte[] slotId, int serial)
+    public static (YubiKeySlotBlob Blob, byte[] KekSlot) EnrollSerial(CommandContext ctx, byte[] slotId, int serial, StretchedPassword? password = null)
     {
         var c = ctx.Console;
         c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
@@ -53,6 +57,8 @@ internal static class YubiKeySlotEnrollment
         var probe = YubiKeySlotBlob.Create(serial, requiresTouch: null);
         var answer = ctx.YubiKeys.ChallengeReportingTouch(serial, probe.ChallengeString);
         var blob = probe.WithRequiresTouch(answer.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial));
+        if (password is not null)
+            blob = blob.WithPassword();
         var first = answer.Response;
         var second = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
         try
@@ -61,7 +67,9 @@ internal static class YubiKeySlotEnrollment
                 throw new TswapException(
                     $"YubiKey {serial} answered the same challenge differently; it can't be used as a slot. " +
                     "Check that its slot 2 is configured for HMAC-SHA1 challenge-response, or use another key.");
-            return (blob, YubiKeySlotKek.Derive(first, blob.Salt, slotId));
+            return (blob, password is null
+                ? YubiKeySlotKek.Derive(first, blob.Salt, slotId)
+                : YubiKeySlotKek.DeriveV2(first, password, blob.Salt, slotId));
         }
         finally
         {

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
+using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
 
@@ -686,9 +687,11 @@ public sealed class SlotCommand : ICliCommand
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
         // Brief T11: slot add creates no Secure Enclave key; a touch choice here is refused with
         // where it belongs, never ignored.
-        var addUsage = $"{ctx.Prefix} slot add --yubikey [{RecoveryKeyFlag}]";
+        var addUsage = $"{ctx.Prefix} slot add --yubikey {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}]";
         if (positional.Any(SecureEnclaveTouchChoice.IsSecureEnclaveFlag))
             throw new UsageException($"{addUsage}\n{SecureEnclaveTouchChoice.NotForSlotAdd}");
+        // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
+        (positional, var passwordFlag) = VaultPasswordChoice.Split(positional, addUsage);
         if (positional is not ["--yubikey"])
             throw new UsageException(addUsage);
         var c = ctx.Console;
@@ -716,7 +719,7 @@ public sealed class SlotCommand : ICliCommand
         ctx.RequireSudo("slot add");
 
         var keyring = KeyringCodec.Decode(keyringBytes);
-        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey);
+        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
 
         var enrolled = keyring.Slots
             .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
@@ -725,18 +728,30 @@ public sealed class SlotCommand : ICliCommand
             .ToHashSet();
 
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, enrolled);
+        VaultPasswordChoice.Resolved? password = null;
+        YubiKeySlotBlob blob;
         Slot newSlot;
         try
         {
-            var slotKeyPair = SlotKeyPair.Generate();
-            newSlot = MachineSlotWrap.Wrap(
-                vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
-                keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
+            // Brief T17 ruling 15: a later password slot is checked against the verifier with K_v.
+            password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
+                vaultKey, keyring.VaultId, "slot add --yubikey");
+            (blob, var kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, enrolled, password?.Stretched);
+            try
+            {
+                var slotKeyPair = SlotKeyPair.Generate();
+                newSlot = MachineSlotWrap.Wrap(
+                    vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+                    keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(kekSlot);
+            }
         }
         finally
         {
-            CryptographicOperations.ZeroMemory(kekSlot);
+            password?.Dispose();
             CryptographicOperations.ZeroMemory(vaultKey);
         }
 
@@ -752,9 +767,14 @@ public sealed class SlotCommand : ICliCommand
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
+        // Brief T17: a first password slot's vault-password file goes in before the keyring that needs it.
+        if (password is not null && ctx.Storage is RecordVaultStore recordStore)
+            password.WriteNewFile(recordStore);
         ctx.Storage.SaveConfig(newConfig);
 
         c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
+        if (password is not null)
+            c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
         YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
         PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
@@ -1036,15 +1056,17 @@ public sealed class SlotCommand : ICliCommand
     /// or, with <paramref name="withRecoveryKey"/>, the recovery key from stdin
     /// (<see cref="UnlockWithRecoveryKey"/>). The caller zeroes the returned <c>K_v</c>.
     /// </summary>
-    internal static byte[] UnlockForKeyringChange(CommandContext ctx, Config config, TswapCore.Keyring.Keyring keyring, bool withRecoveryKey) =>
-        withRecoveryKey ? UnlockWithRecoveryKey(ctx, keyring) : ctx.Unlock(config);
+    /// <param name="keyOnFirstLine">Brief T17: the key is the first line of stdin only (a <c>--password</c>
+    /// enrolment reads the vault password from the lines after it).</param>
+    internal static byte[] UnlockForKeyringChange(CommandContext ctx, Config config, TswapCore.Keyring.Keyring keyring, bool withRecoveryKey, bool keyOnFirstLine = false) =>
+        withRecoveryKey ? UnlockWithRecoveryKey(ctx, keyring, keyOnFirstLine) : ctx.Unlock(config);
 
     /// <summary>
     /// Reads the recovery private key from stdin (refused when stdin is a terminal: typing it would
     /// show it) and recovers <c>K_v</c> from the keyring's recovery slot. Every bad key ends in
     /// <see cref="RecoveryKeyUnlock.FailureMessage"/>. The key bytes are zeroed here.
     /// </summary>
-    internal static byte[] UnlockWithRecoveryKey(CommandContext ctx, TswapCore.Keyring.Keyring keyring)
+    internal static byte[] UnlockWithRecoveryKey(CommandContext ctx, TswapCore.Keyring.Keyring keyring, bool keyOnFirstLine = false)
     {
         if (!keyring.Slots.Any(s => s.Kind == SlotKind.Recovery))
             throw new TswapException(RecoveryKeyUnlock.NoRecoverySlotMessage);
@@ -1052,7 +1074,7 @@ public sealed class SlotCommand : ICliCommand
             throw new TswapException(
                 "The recovery key is read from stdin only, and stdin is a terminal here (typing the key would show it). " +
                 $"Instead, pipe it in, for example: sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey");
-        var recoveryKey = RecoveryKeyUnlock.ReadKey(ctx.Console.In);
+        var recoveryKey = RecoveryKeyUnlock.ReadKey(ctx.Console.In, keyOnFirstLine);
         try
         {
             return RecoveryKeyUnlock.Unlock(keyring, recoveryKey);

@@ -31,7 +31,14 @@ public static class RecoveryKeyUnlock
     /// <see cref="SlotKeyPair.KeySize"/> bytes. Anything else throws <see cref="FailureMessage"/>.
     /// The read buffer is zeroed before returning.
     /// </summary>
-    public static byte[] ReadKey(TextReader input)
+    public static byte[] ReadKey(TextReader input) => ReadKey(input, firstLineOnly: false);
+
+    /// <summary>
+    /// Brief T17: as <see cref="ReadKey(TextReader)"/>, but with <paramref name="firstLineOnly"/> it stops at
+    /// the first line break, so the lines after the key stay on stdin for the vault password that a
+    /// <c>--password</c> enrolment then reads.
+    /// </summary>
+    public static byte[] ReadKey(TextReader input, bool firstLineOnly)
     {
         var buffer = new char[MaxInputChars + 1];
         var decoded = new byte[MaxInputChars];
@@ -39,8 +46,16 @@ public static class RecoveryKeyUnlock
         {
             var total = 0;
             int read;
-            while (total < buffer.Length && (read = input.Read(buffer, total, buffer.Length - total)) > 0)
-                total += read;
+            if (firstLineOnly)
+            {
+                while (total < buffer.Length && (read = input.Read()) >= 0 && read != '\n')
+                    buffer[total++] = (char)read;
+            }
+            else
+            {
+                while (total < buffer.Length && (read = input.Read(buffer, total, buffer.Length - total)) > 0)
+                    total += read;
+            }
             if (total > MaxInputChars)
                 throw new TswapException(FailureMessage);
 

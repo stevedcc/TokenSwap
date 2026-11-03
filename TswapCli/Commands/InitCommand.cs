@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
+using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
 
@@ -17,8 +18,8 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => $"init [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
-    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder): one YubiKey slot (add keys with 'slot add --yubikey'), or this machine's --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning); plus a recovery slot unless --no-recovery. --keyring is accepted for old scripts. --vault-dir joins a folder another machine shares";
+    public string HelpUsage => $"init [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder): one YubiKey slot (add keys with 'slot add --yubikey'), or this machine's --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning); plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --keyring is accepted for old scripts. --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
     /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
@@ -45,11 +46,14 @@ public sealed class InitCommand : ICliCommand
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [--tpm|{SecureEnclaveTouchChoice.Flags}] [--no-recovery] [{FolderFlag} <dir>] " +
+        var usage = $"{ctx.Prefix} init [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
                     $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {SecureEnclaveTouchChoice.WithTouch}, " +
-                    $"{SecureEnclaveTouchChoice.NoTouch}; --tpm and --secure-enclave are mutually exclusive)";
+                    $"{SecureEnclaveTouchChoice.NoTouch}, {VaultPasswordChoice.PasswordFlag}, {VaultPasswordChoice.NoPasswordFlag}; " +
+                    "--tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password)";
         (args, var newFolder) = SplitFolder(args, usage);
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
+        // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
+        (args, var passwordFlag) = VaultPasswordChoice.Split(args, usage);
         if (args.Any(a => !KnownFlags.Contains(a)) || args.Distinct().Count() != args.Length)
             throw new UsageException(usage);
 
@@ -101,12 +105,12 @@ public sealed class InitCommand : ICliCommand
         // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
         // recovery slot unless --no-recovery), as a plain init does with one YubiKey.
         if (secureEnclave)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, requirePresence: requirePresence!.Value);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, passwordFlag, requirePresence: requirePresence!.Value);
 
         if (tpm)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery, passwordFlag);
 
-        return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery);
+        return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag);
     }
 
     /// <summary>
@@ -159,7 +163,9 @@ public sealed class InitCommand : ICliCommand
     /// pointing at it (machine fields only, a new origin id), so an interrupted init never leaves a
     /// config naming a folder that isn't there.
     /// </summary>
-    internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir)
+    /// <param name="vaultPassword">Brief T17: the vault's new <c>vault-password</c> file (its first password
+    /// slot), written into the folder after the keyring and the marker and before config.json; or null.</param>
+    internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir, VaultPasswordFile? vaultPassword = null)
     {
         var machine = config with
         {
@@ -172,6 +178,8 @@ public sealed class InitCommand : ICliCommand
         var folderStore = RecordVaultStore.ForFolder(vaultDir, machine, fileStore.Owner, ctx.Time);
         folderStore.SaveConfig(machine with { Keyring = config.Keyring });
         folderStore.WriteFormatMarker();
+        if (vaultPassword is not null)
+            folderStore.WriteVaultPassword(vaultPassword);
         // config.json through the record store: atomic, as the folder's owner, and with decision 10's
         // tightening of the config dir and vault folder (one notice), as init has always done.
         new RecordVaultStore(fileStore.ConfigDir, fileStore.Owner, ctx.Time, ctx.Console.Error).SaveConfig(machine);
@@ -192,7 +200,7 @@ public sealed class InitCommand : ICliCommand
     /// <para>No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the
     /// challenge, and unlock challenges it again the same way.</para>
     /// </summary>
-    private static int ExecuteKeyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, bool includeRecovery)
+    private static int ExecuteKeyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, bool includeRecovery, bool? passwordFlag)
     {
         var c = ctx.Console;
 
@@ -206,12 +214,14 @@ public sealed class InitCommand : ICliCommand
         // Test mode (TSWAP_TEST_KEY, Debug builds only) asks nothing, as its init always did: there is
         // no key to insert, and a test's stdin may never close.
         var testMode = ctx.TestKey is not null;
+        // Brief T17 ruling 15: the password is chosen before the key is enrolled (it goes into KEK_slot).
+        using var password = NewVaultPassword(ctx, passwordFlag, HardwareBackend.YubiKey);
         c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
         if (!c.IsInputRedirected && !testMode)
             c.ReadLine();
 
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
+        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
         try
         {
             c.Out.WriteLine("\nPassword generation entropy source:");
@@ -229,12 +239,12 @@ public sealed class InitCommand : ICliCommand
                 RngMode: rngMode);
 
             var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(
-                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId);
+                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, password?.VaultKey, password?.VaultId);
 
             config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
             try
             {
-                CreateRecordVault(ctx, fileStore, config, vaultDir);
+                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
             }
             finally
             {
@@ -249,6 +259,7 @@ public sealed class InitCommand : ICliCommand
                 ? "Backend: YubiKey keyring (k = 1, 2 slots: this key + recovery)"
                 : "Backend: YubiKey keyring (k = 1, 1 slot: this key only)");
             YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+            PrintPasswordLine(c, password);
             c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
             c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
@@ -413,15 +424,23 @@ public sealed class InitCommand : ICliCommand
     /// a legacy pair slot. <paramref name="slotId"/> is the machine slot's id when the caller has
     /// already derived <paramref name="kekSlot"/> with it (a one-key YubiKey slot); else random.
     /// </summary>
+    /// <para>Brief T17: <paramref name="vaultKey"/> and <paramref name="vaultId"/> are given when the caller
+    /// already needed them (a first password slot's <c>vault-password</c> file is keyed to both); else
+    /// random. A given <paramref name="vaultKey"/> is copied, so the caller zeroes its own.</para>
     internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) AssembleKeyring(
-        byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null, byte[]? slotId = null)
+        byte[] kekSlot, Config backendConfig, bool includeRecovery, byte[]? hwBlob = null, byte[]? slotId = null,
+        byte[]? vaultKey = null, byte[]? vaultId = null)
     {
         if (backendConfig.Keyring is not null || backendConfig.KeyringSlotId is not null)
             throw new ArgumentException("The backend's config must not already carry a keyring", nameof(backendConfig));
+        if (vaultKey is not null && vaultKey.Length != KeyringFormat.VaultKeySize)
+            throw new ArgumentException($"vaultKey must be {KeyringFormat.VaultKeySize} bytes", nameof(vaultKey));
+        if (vaultId is not null && vaultId.Length != KeyringFormat.VaultIdSize)
+            throw new ArgumentException($"vaultId must be {KeyringFormat.VaultIdSize} bytes", nameof(vaultId));
 
-        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        vaultKey = vaultKey is null ? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize) : (byte[])vaultKey.Clone();
         var slotKeyPair = SlotKeyPair.Generate();
-        var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
+        vaultId ??= RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         // A one-key YubiKey slot's KEK_slot is derived with its slot id (brief T4), so the caller
         // picks the id first; every other backend lets this method draw it.
         if (slotId is not null && slotId.Length != KeyringFormat.SlotIdSize)
@@ -479,7 +498,7 @@ public sealed class InitCommand : ICliCommand
     /// (Windows) and an Intel PTT (#155); see <c>HARDWARE_BACKENDS.md</c>.</para>
     /// </summary>
     private static int ExecuteHardwareKeyring(
-        CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool requirePresence = true)
+        CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool? passwordFlag, bool requirePresence = true)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -493,13 +512,15 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"This vault's master key (K_v) is random and wrapped by this machine's {hardware}");
         c.Out.WriteLine("slot (k = 1). Other machines can join later with 'slot request/approve/accept'.\n");
+        // Brief T17 ruling 15: chosen before the hardware object is made (the object needs it).
+        using var password = NewVaultPassword(ctx, passwordFlag, backend);
         c.Out.WriteLine(backend == HardwareBackend.Tpm
             ? "Sealing a new key to this machine's TPM..."
             : requirePresence
                 ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
                 : "Creating a Secure Enclave key with no presence requirement (--no-touch)...");
 
-        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
+        var (kekSlot, hwBlob) = enrollment.Enroll(password?.Stretched);
 
         // The backend's own fields. YubiKeySerials = [] and RedundancyXor = "" as every
         // non-YubiKey vault has always written (issue #151's note: no on-disk change). The blob
@@ -515,11 +536,12 @@ public sealed class InitCommand : ICliCommand
             RngMode: RngMode.System,
             Backend: backend);
 
-        var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(kekSlot, backendConfig, includeRecovery, hwBlob);
+        var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(
+            kekSlot, backendConfig, includeRecovery, hwBlob, vaultKey: password?.VaultKey, vaultId: password?.VaultId);
 
         try
         {
-            CreateRecordVault(ctx, fileStore, config, vaultDir);
+            CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
         }
         finally
         {
@@ -534,6 +556,7 @@ public sealed class InitCommand : ICliCommand
             : $"Backend: {hardware} keyring (k = 1, 1 slot: machine only)");
         if (backend == HardwareBackend.SecureEnclave)
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
+        PrintPasswordLine(c, password);
         PrintVaultFolder(c, fileStore, vaultDir);
         c.Out.WriteLine($"\nThe machine slot's hardware blob in the keyring is meaningless without this machine's");
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
@@ -546,5 +569,44 @@ public sealed class InitCommand : ICliCommand
         }
         PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T17 ruling 15: a new vault's first slot. With a password (<see cref="VaultPasswordChoice.Decide"/>),
+    /// <c>K_v</c> and the vault id are drawn here, before enrolment, because the <c>vault-password</c> file is
+    /// keyed to both; the password is asked for twice. Null without a password.
+    /// </summary>
+    private static NewPassword? NewVaultPassword(CommandContext ctx, bool? flag, HardwareBackend backend)
+    {
+        if (!VaultPasswordChoice.Decide(ctx, flag, backend))
+            return null;
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
+        try
+        {
+            var (stretched, file) = VaultPasswordChoice.CreateNew(ctx, vaultKey, vaultId, "init");
+            return new NewPassword(stretched, file, vaultKey, vaultId);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(vaultKey);
+            throw;
+        }
+    }
+
+    /// <summary>A new vault's password: the stretched bytes, its file, and the <c>K_v</c> and vault id it is keyed to.</summary>
+    private sealed record NewPassword(StretchedPassword Stretched, VaultPasswordFile File, byte[] VaultKey, byte[] VaultId) : IDisposable
+    {
+        public void Dispose()
+        {
+            Stretched.Dispose();
+            CryptographicOperations.ZeroMemory(VaultKey);
+        }
+    }
+
+    private static void PrintPasswordLine(IConsole c, NewPassword? password)
+    {
+        if (password is not null)
+            c.Out.WriteLine("Vault password:  this slot needs it (or a running 'tswap agent') for every unlock");
     }
 }
