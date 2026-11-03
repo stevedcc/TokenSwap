@@ -162,7 +162,7 @@ public sealed class BrokerPolicy
             {
                 if (template is null)
                     throw new BrokerConfigException("broker.json has a null template.");
-                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds);
+                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds, bwrap ?? DefaultBwrapPath);
                 if (!templates.TryAdd(compiled.Name, compiled))
                     throw new BrokerConfigException($"Template '{compiled.Name}' is defined twice.");
             }
@@ -205,6 +205,14 @@ public sealed class BrokerPolicy
         return new BrokerPolicy(config, socketDir, sockets, routes, templates, sshKeys, bwrap ?? DefaultBwrapPath,
             templates.Count > 0 ? host : null, warnings);
     }
+
+    /// <summary>
+    /// Tests only (brief I224 D7 H2): <paramref name="policy"/> with no host context although it may
+    /// have templates, a state <see cref="Validate"/> never produces, to show template calls fail closed.
+    /// </summary>
+    internal static BrokerPolicy WithoutHostForTests(BrokerPolicy policy) =>
+        new(policy.Source, policy.SocketDir, policy.Sockets, policy.Routes, policy.Templates, policy.SshKeys,
+            policy.BwrapPath, null, policy.Warnings);
 
     /// <summary>
     /// Brief I224 D1: the sockets that name neither a container nor <c>uid_only</c>, in file order;

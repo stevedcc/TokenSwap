@@ -981,8 +981,12 @@ default `/usr/bin/bwrap`), never through `PATH`. It must resolve to a regular fi
 not writable by group or others, and every folder above it (above the configured path and above
 the resolved one) must be root's and not writable by group or others, with no sticky exception;
 a symlink at the configured path must be root's. So no other user can swap it between checks; the
-rule is checked at start and again before every call. `serve` also checks at start that it makes
-a sandbox with every option the broker uses. If `bwrap` is missing, fails these checks, is too
+rule is checked at start and again before every call. Since v0.2 the effective `bwrap_path` (after
+the default) may also not be at or under any template's bind, read-only or not: a replaced `bwrap`
+would run outside the sandbox. That is checked when `broker.json` loads, on the configured path and
+on its resolved one (for a `bwrap` that doesn't exist yet, through its nearest existing folder); a
+missing `bwrap` outside the binds still loads, and calls are refused as below. `serve` also checks
+at start that it makes a sandbox with every option the broker uses. If `bwrap` is missing, fails these checks, is too
 old (0.5 or later is needed for `--perms`), the C library is older than glibc 2.36
 (`posix_spawn_file_actions_addclosefrom_np`, `pidfd_open`), or user namespaces are disabled, template calls are refused (`503`,
 `broker call` exits 125) and logged. **A template never runs unsandboxed.** On Ubuntu 24.04,
@@ -1031,7 +1035,14 @@ Each bind must, after symlink resolution:
 - never be the vault folder, `broker.json`'s folder, the socket folder or sudo's configuration
   (`/etc/sudoers`, `/etc/sudo.conf`, `/etc/sudoers.d`), nor a folder above or inside one of them,
   **compared by `st_dev:st_ino`**, so a bind-mount alias or a hard link doesn't get past a name
-  check; and never the vault user's home or a folder above it (a folder inside it is fine).
+  check; and never the vault user's home or a folder above it (a folder inside it is fine);
+- never be, contain or be inside the broker's run folder, where its control socket lives (since
+  v0.2): `/run/user/<uid>/tswap`, already refused as under `/run`, or `~/.cache/tswap/run` when the
+  vault user has no `/run/user/<uid>`. Which one `serve` uses can change between a load and a start,
+  so both are protected, **whether or not they exist yet**: compared by name (the folder's nearest
+  existing ancestor resolved) and by `st_dev:st_ino` when it exists. A bind of `~/.cache` would let a
+  template delete the control socket or connect to it (it admits the vault uid, which the template's
+  child has).
 
 `cwd` must be inside one of the binds (`/tmp` when unset). The checks run when a template is added,
 on every load, and again **before every run** (a path can change owner).
@@ -1053,9 +1064,9 @@ any route. `sudo tswap broker socket add <name> --uids ... --templates deploy,si
 | Field | Meaning |
 |---|---|
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
-| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path inside the sandbox (under `/usr`, `/bin`, `/sbin`, `/lib*` or a bind), never a placeholder; `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
+| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a placeholder, and never at or under one of the template's binds (read-only ones too), as configured or resolved (a program not installed yet through its nearest existing folder; it still loads, and its calls fail until it is installed): a container that can write a bound folder (through another mount) could replace the program. Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the image. `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter or git run code they name (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `BASH_FUNC_*`, `PYTHONSTARTUP`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONINSPECT`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `PERL5DB`, `RUBYOPT`, `RUBYLIB`, `NODE_OPTIONS`, `NODE_PATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_CONFIG*`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`). The list catches mistakes; it isn't complete, so choose tools you know |
+| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or load, trust or write files, they name: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. The list catches mistakes; it isn't complete, so choose tools you know |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
@@ -1190,6 +1201,26 @@ One line per call in the journal and `broker.log`: socket, peer uid and pid, tem
 values (escaped, length-capped), status, exit code, how it ended, bytes in and out, whether it was
 truncated, unlocks, duration and a reason for refusals. Never a secret, an env value, or argv after
 substitution.
+
+A failure inside the broker during a call (a bug, a failed write) never reaches the caller as a
+`500`: before any output it gets the uniform `502` (`broker call` exits 125), after the first frame
+the connection is closed without the last frame. Its one log line has
+`reason=internal-error type=<exception type>`, never the exception's message.
+
+### Changed in v0.2.0 (breaking)
+
+- A template's program must be under `/usr`, `/bin`, `/sbin` or `/lib*` and not be at or under any
+  of its binds; before, a program inside a bind was accepted. Move such a program
+  under `/usr` or into the image, and drop the bind if it was there only for the program.
+- `bwrap_path` may not be at or under any template's bind.
+- A bind may not be, contain or be inside the broker's run folder (`~/.cache/tswap/run` for a vault
+  user without `/run/user/<uid>`), existing or not.
+- More env names are refused, among them every name with one of the new prefixes (`PYTHON`, `PERL`,
+  `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_`,
+  `CURL_`) and `HOME`, `TMPDIR`.
+
+A `broker.json` that breaks one of these rules no longer loads: `serve` refuses to start, and a
+reload keeps the old config and logs why.
 
 ## Platforms
 
