@@ -478,6 +478,24 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.True(_c.State.IsLocked);
     }
 
+    [Fact]
+    public async Task MissingVaultPasswordFile_IsNotCountedByTheGuard()
+    {
+        // Review T17 p2 MiMo minor 2: a broken configuration (no vault-password file, or conflicting
+        // copies) must not trip the brute-force guard and then refuse the right password.
+        if (OperatingSystem.IsWindows())
+            return;
+        var missing = true;
+        await _c.StartAsync(prove: candidate =>
+            missing ? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile) : _c.Prove(candidate));
+        for (var i = 0; i < new BrokerLimits().FailuresBeforeLockout + 1; i++)
+            Assert.Equal(VaultPasswordMessages.MissingFile, ControlHarness.Refusal(await _c.UnlockAsync()));
+        missing = false;
+
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
+        Assert.False(_c.State.IsLocked);
+    }
+
     // ================================================================== returns to locked with work in flight
 
     /// <summary>A route secret source whose unlock takes a clone of the held password, as the real one does, and can block.</summary>
