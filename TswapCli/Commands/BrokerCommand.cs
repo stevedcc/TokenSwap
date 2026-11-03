@@ -37,7 +37,7 @@ public sealed class BrokerCommand : ICliCommand
         "  sudo tswap broker route add <name> --upstream https://host[/base] --auth bearer|basic|header --secret <secret-name>\n" +
         "        [--user <basic-user>] [--header <header-name>] --path <regex> [--methods GET,HEAD,POST] [--idle-timeout <sec>]\n" +
         "  sudo tswap broker route remove <name>\n" +
-        "  sudo tswap broker socket add <name> --uids <uid|N-M>[,...] [--routes <route>[,...]] [--templates <template>[,...]] [--socket-dir <dir>]\n" +
+        "  sudo tswap broker socket add <name> --uids <uid|N-M>[,...] [--routes <route>[,...]] [--templates <template>[,...]] [--socket-dir <dir>] [--uid-only]\n" +
         "  sudo tswap broker socket remove <name>\n" +
         "  sudo tswap broker template add <file.json|->\n" +
         "  sudo tswap broker template remove <name>";
@@ -469,8 +469,16 @@ public sealed class BrokerCommand : ICliCommand
         BrokerConfigFile.ReadRaw(Owner(ctx), ctx.Env.ConfigDir)
         ?? new BrokerConfig { Version = BrokerConfig.CurrentVersion };
 
-    private static void Save(CommandContext ctx, BrokerConfig config) =>
-        BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config, Host(ctx));
+    /// <summary>
+    /// Writes broker.json for an editing command. Brief I224 D1: a file whose sockets aren't all bound still
+    /// writes (so a v0.1 file can be fixed one socket at a time); the sockets still to bind are named on stderr.
+    /// </summary>
+    private static void Save(CommandContext ctx, BrokerConfig config)
+    {
+        var unbound = BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config, Host(ctx));
+        if (unbound.Count > 0)
+            ctx.Console.Error.WriteLine($"still to bind before serve starts: {string.Join(", ", unbound)}");
+    }
 
     /// <summary>
     /// The host context templates are checked against (brief T9 decision 2): the vault user is the
@@ -555,7 +563,7 @@ public sealed class BrokerCommand : ICliCommand
     private static int SocketAdd(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker socket add", "Changing broker.json needs sudo: it decides which credentials containers can use.");
-        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--templates", "--socket-dir"]);
+        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--templates", "--socket-dir"], flags: ["--uid-only"]);
         if (positional.Count != 1)
             throw new TswapException(Usage);
         var name = positional[0];
@@ -565,6 +573,7 @@ public sealed class BrokerCommand : ICliCommand
             Uids = SplitList(Required(options, "--uids")),
             Routes = options.TryGetValue("--routes", out var r) ? SplitList(r) : [],
             Templates = options.TryGetValue("--templates", out var t) ? SplitList(t) : null,
+            UidOnly = options.ContainsKey("--uid-only") ? true : null, // brief I224 D1; task 4 adds --pid and --cgroup
         };
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
@@ -651,14 +660,20 @@ public sealed class BrokerCommand : ICliCommand
 
     // ------------------------------------------------------------------ argument parsing
 
-    private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known)
+    /// <summary>Splits <paramref name="args"/>: options in <paramref name="known"/> take a value; <paramref name="flags"/> take none (stored as "").</summary>
+    private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known, string[]? flags = null)
     {
         List<string> positional = [];
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            if (arg.StartsWith("--", StringComparison.Ordinal))
+            if (flags?.Contains(arg) == true)
+            {
+                if (!options.TryAdd(arg, ""))
+                    throw new TswapException($"{arg} given twice.");
+            }
+            else if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 if (!known.Contains(arg))
                     throw new TswapException($"Unknown option '{BrokerPolicy.Printable(arg)}'.\n{Usage}");

@@ -33,9 +33,9 @@ public sealed class SshAgentHarness : IAsyncDisposable
               "version": 1,
               "socket_dir": {{JsonSerializer.Serialize(Broker.SocketDir)}},
               "sockets": [
-                { "name": "lane1", "uids": [{{lane1Uids ?? $"\"{BrokerHarness.MyUid}\""}}], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(lane1Keys ?? ["k1"])}} },
-                { "name": "other", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(otherKeys ?? ["k2"])}} },
-                { "name": "plain", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [] }
+                { "name": "lane1", "uid_only": true, "uids": [{{lane1Uids ?? $"\"{BrokerHarness.MyUid}\""}}], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(lane1Keys ?? ["k1"])}} },
+                { "name": "other", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(otherKeys ?? ["k2"])}} },
+                { "name": "plain", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [] }
               ],
               "routes": [],
               "ssh_keys": [ {{keysJson}} ]

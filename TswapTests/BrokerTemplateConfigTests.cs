@@ -49,7 +49,7 @@ public class BrokerTemplateConfigTests : IDisposable
         {
           "version": 1,
           "socket_dir": "/run/tswap-broker",
-          "sockets": [ { "name": "lane1", "uids": ["100999"], "routes": [], "templates": [{{socketTemplates}}] } ],
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": [], "templates": [{{socketTemplates}}] } ],
           "routes": [],
           "templates": [ {{templateJson}} ]
         }
@@ -141,7 +141,7 @@ public class BrokerTemplateConfigTests : IDisposable
             {
               "version": 1,
               "socket_dir": "/run/tswap-broker",
-              "sockets": [ { "name": "lane1", "uids": ["100999"], "routes": [], "ssh_keys": ["github-deploy"] } ],
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": [], "ssh_keys": ["github-deploy"] } ],
               "routes": [],
               "ssh_keys": [
                 { "name": "github-deploy", "secret": "gh-ssh-key",
@@ -694,7 +694,7 @@ public class BrokerTemplateConfigTests : IDisposable
         File.WriteAllText(file, Template());
 
         m.Ok("", "broker", "template", "add", file);
-        m.Ok("", "broker", "socket", "add", "lane1", "--uids", "100999", "--templates", "deploy", "--socket-dir", "/run/tswap-broker");
+        m.Ok("", "broker", "socket", "add", "lane1", "--uids", "100999", "--templates", "deploy", "--socket-dir", "/run/tswap-broker", "--uid-only");
 
         var policy = BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, m.Dir);
         Assert.Equal("/usr/bin/git", policy.Templates["deploy"].Program);

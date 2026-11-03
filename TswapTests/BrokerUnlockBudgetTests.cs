@@ -139,8 +139,8 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
           "version": 1,
           "socket_dir": {{{J(_h.SocketDir)}}},
           "sockets": [
-            { "name": "lane1", "uids": ["{{{BrokerHarness.MyUid}}}"], "routes": [], "templates": ["t"] },
-            { "name": "other", "uids": ["{{{BrokerHarness.MyUid}}}"], "routes": [], "templates": ["t"] }
+            { "name": "lane1", "uid_only": true, "uids": ["{{{BrokerHarness.MyUid}}}"], "routes": [], "templates": ["t"] },
+            { "name": "other", "uid_only": true, "uids": ["{{{BrokerHarness.MyUid}}}"], "routes": [], "templates": ["t"] }
           ],
           "routes": [],
           "templates": [ {
@@ -198,7 +198,7 @@ public class BrokerUnlockBudgetTests(ITestOutputHelper output) : IAsyncLifetime
             {
               "version": 1,
               "socket_dir": {{J(ssh.Broker.SocketDir)}},
-              "sockets": [ { "name": "lane1", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["a"] } ],
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["a"] } ],
               "routes": [],
               "ssh_keys": [ { "name": "a", "secret": "sa", "allowed_host_keys": ["{{X.Fingerprint}}"] } ]
             }

@@ -41,6 +41,9 @@ public sealed record BrokerServerOptions
     /// request gets the uniform busy refusal, logged as <c>locked</c> and never counted as an unlock failure.
     /// </summary>
     public BrokerPasswordState? Password { get; init; }
+
+    /// <summary>Brief I224 D2: the platform facts a <c>container</c> socket needs (tests fake them).</summary>
+    public BrokerContainerHost ContainerHost { get; init; } = BrokerContainerHost.Real;
 }
 
 /// <summary>
@@ -121,6 +124,9 @@ public sealed class BrokerServer : IAsyncDisposable
         var policy = options.Policy.Current;
         if (policy.Sockets.Count == 0)
             throw new TswapException("broker.json defines no sockets; add one with 'sudo tswap broker socket add'.");
+        // Brief I224 D2: a container binding this host can't check refuses the start (nothing is created).
+        if (options.ContainerHost.StartRefusal(policy) is { } containerRefusal)
+            throw new TswapException(containerRefusal);
         var socketDir = CheckSocketDir(policy.SocketDir, options.Ownership);
         var lockFile = TakeLock(socketDir);
         WebApplication? app = null;
@@ -185,6 +191,11 @@ public sealed class BrokerServer : IAsyncDisposable
             foreach (var path in paths)
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
+            // Brief I224 D2 and D1: how each socket admits its clients, and what validation warned about.
+            foreach (var line in BrokerContainerHost.StartLines(policy))
+                options.Log.Event(line);
+            foreach (var warning in policy.Warnings)
+                options.Log.Event(warning);
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
             return new BrokerServer(options, lockFile, app, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task, SshAgentListener = sshAgent };
         }
@@ -372,10 +383,17 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>Re-reads the config with <paramref name="load"/> (SIGHUP): a valid file is swapped in, an invalid one keeps the current config.</summary>
     public bool Reload(Func<BrokerPolicy> load)
     {
-        var ok = _options.Policy.TryReload(load, _options.Log.Event);
+        var ok = _options.Policy.TryReload(() =>
+        {
+            var next = load();
+            // Brief I224 D2: a new binding this host can't check keeps the current config, like any invalid file.
+            return _options.ContainerHost.StartRefusal(next) is { } refusal ? throw new BrokerConfigException(refusal) : next;
+        }, _options.Log.Event);
         if (ok)
         {
             var current = _options.Policy.Current;
+            foreach (var warning in current.Warnings) // brief I224 D1
+                _options.Log.Event(warning);
             foreach (var path in _socketPaths.Where(p => !SshAgent.SshAgentListener.IsAgentSocketPath(p))) // brief T10: agent sockets (<name>.ssh.sock) are SshAgentListener.Reloaded's
             {
                 var name = Path.GetFileNameWithoutExtension(path);

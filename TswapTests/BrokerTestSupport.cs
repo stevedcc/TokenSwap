@@ -238,8 +238,8 @@ public sealed class BrokerHarness : IAsyncDisposable
           "version": 1,
           "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(SocketDir)}},
           "sockets": [
-            { "name": "lane1", "uids": [{{lane1Uids ?? $"\"{MyUid}\""}}], "routes": [{{lane1Routes}}] },
-            { "name": "other", "uids": ["{{MyUid}}"], "routes": [{{otherRoutes}}] }
+            { "name": "lane1", "uid_only": true, "uids": [{{lane1Uids ?? $"\"{MyUid}\""}}], "routes": [{{lane1Routes}}] },
+            { "name": "other", "uid_only": true, "uids": ["{{MyUid}}"], "routes": [{{otherRoutes}}] }
           ],
           "routes": [ {{routesJson}} ]
         }

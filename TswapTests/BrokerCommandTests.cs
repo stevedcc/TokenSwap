@@ -23,7 +23,7 @@ public class BrokerCommandTests : IDisposable
     ];
 
     private static readonly string[] AddLane =
-        ["broker", "socket", "add", "lane1", "--uids", "100999,200000-265535", "--routes", "github", "--socket-dir", "/run/tswap-broker"];
+        ["broker", "socket", "add", "lane1", "--uids", "100999,200000-265535", "--routes", "github", "--socket-dir", "/run/tswap-broker", "--uid-only"];
 
     [Fact]
     public void WithoutSudo_ConfigChangesAreRefused_AndNothingIsWritten()
