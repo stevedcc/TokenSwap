@@ -855,6 +855,27 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Empty(labelled.Received);
     }
 
+    [Fact]
+    public async Task StatusClient_SilentServer_NotRunningAfterTwoSeconds()
+    {
+        // Review T17 p5 GLM I1, implementation ruling 3: a squatter that accepts and never answers can't hang
+        // 'broker status'. ('broker lock' waits up to 120 s by design: it may have to drain a running unlock.)
+        if (!OperatingSystem.IsLinux())
+            return;
+        var silent = FakeServer(answer: null);
+        BrokerControlClient.Time = _c.Clock;
+
+        var answer = Task.Run(() => BrokerControlClient.Status(silent.Path_, _c.VaultId, MyUid));
+        await silent.FirstBytes.WaitAsync(TimeSpan.FromSeconds(30));
+        _c.Clock.Advance(BrokerControlClient.StatusResponseTimeout - TimeSpan.FromMilliseconds(1));
+        Assert.False(answer.IsCompleted);
+        _c.Clock.Advance(TimeSpan.FromMilliseconds(1));
+
+        // Well within the fake server's own 30 s guard, after which its end of file would also read as NotRunning.
+        Assert.IsType<BrokerControlAnswer.NotRunning>(await answer.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(TimeSpan.FromSeconds(2), BrokerControlClient.StatusResponseTimeout);
+    }
+
     // ================================================================== the server's checks of its peers (ruling 20)
 
     [Fact]

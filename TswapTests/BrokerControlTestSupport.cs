@@ -267,6 +267,11 @@ internal sealed class FakeControlServer : IDisposable
 
     public string Path_ { get; }
 
+    /// <summary>Completes when the first bytes of a request have arrived.</summary>
+    public Task FirstBytes => _firstBytes.Task;
+
+    private readonly TaskCompletionSource _firstBytes = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     /// <summary>Completes when the one client has gone.</summary>
     public Task Served { get; }
 
@@ -300,6 +305,7 @@ internal sealed class FakeControlServer : IDisposable
                 return;
             lock (_received)
                 _received.Write(buffer, 0, n);
+            _firstBytes.TrySetResult();
             if (answer is not null && !answered)
             {
                 answered = true;

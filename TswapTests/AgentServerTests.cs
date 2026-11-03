@@ -759,6 +759,33 @@ public class AgentServerTests : IAsyncLifetime
         Assert.IsType<AgentAnswer.NotRunning>(await answer);
     }
 
+    [Theory]
+    [InlineData("status")]
+    [InlineData("stop")]
+    public async Task Client_StatusAndStop_SilentServer_NotRunningAfterTwoSeconds(string op)
+    {
+        // Review T17 p5 GLM I1, implementation ruling 3: a squatter that accepts and never answers can't hang
+        // 'agent status' or 'agent stop' (2 s), unlike an unlock (120 s).
+        if (OperatingSystem.IsWindows())
+            return;
+        Directory.CreateDirectory(_h.Folder);
+        using var listener = Listen(_h.SocketPath); // the kernel accepts into the backlog; nobody answers
+        AgentClient.Time = _h.Clock;
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        AgentClient.RequestSentObserver = () => sent.TrySetResult();
+
+        var answer = Task.Run(() => op == "status"
+            ? AgentClient.Status(_h.SocketPath, _h.VaultId, AgentHarness.MyUid)
+            : AgentClient.Stop(_h.SocketPath, _h.VaultId, AgentHarness.MyUid));
+        await sent.Task;
+        _h.Clock.Advance(AgentClient.ControlResponseTimeout - TimeSpan.FromMilliseconds(1));
+        Assert.False(answer.IsCompleted);
+        _h.Clock.Advance(TimeSpan.FromMilliseconds(1));
+
+        Assert.IsType<AgentAnswer.NotRunning>(await answer.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(TimeSpan.FromSeconds(2), AgentClient.ControlResponseTimeout);
+    }
+
     [Fact]
     public void Client_MissingFolder_IsNotRunning_CreatesNothing()
     {
