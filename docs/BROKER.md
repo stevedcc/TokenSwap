@@ -225,7 +225,13 @@ What stays from v0.1, for every socket:
 With the `tswap-broker` module (`contrib/selinux/tswap-broker.cil`), the broker runs in its own
 domain, `tswap_broker_t`, and **containers may connect to the broker's sockets and to nothing
 else of the vault user's**: the module's only rule for containers is `container_t` →
-`tswap_broker_t` `unix_stream_socket connectto`. Only a dedicated copy of the binary
+`tswap_broker_t` `unix_stream_socket connectto`. (Since v0.2.0 the module also lets the broker look at container processes, which a socket
+bound to a container needs: `tswap_broker_t` → `container_t` `process signull`, `dir { open read search
+getattr }` and `file { open read getattr }`, for its pidfd liveness check and for reading `/proc/<pid>/status`
+and `cgroup`. These grant containers nothing. Without them every container on a bound socket is refused,
+mostly as `peer-exited`. Whether an MCS constraint also applies (the broker runs at `s0`, containers at
+`s0:cX,cY`) is checked on the real host; `container_t` is MCS-constrained as a subject, the broker is not, so
+none is expected.) Only a dedicated copy of the binary
 (`/usr/local/libexec/tswap-broker`) is labelled to enter it; the `tswap` everyone runs stays
 `unconfined_t`.
 
