@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
+using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
 
@@ -69,6 +70,20 @@ public sealed class VaultCommand : ICliCommand
             SlotReceiptCodec.ValidateHwBlob(slot.HwBlob, "other vault folder");
         }
 
+        // Brief T17 ruling 2: two different vault-password files can't be merged (each belongs to the password
+        // slots made against it); one the other copy alone has is copied here, after the records. Checked
+        // (and the other's decoded for this vault) before anything is written. Conflicted copies refuse too.
+        var ownVaultPassword = store.ReadVaultPasswordBytes();
+        var otherVaultPassword = other.ReadVaultPasswordBytes();
+        if (ownVaultPassword is not null && otherVaultPassword is not null
+            && !ownVaultPassword.AsSpan().SequenceEqual(otherVaultPassword))
+            throw new TswapException(
+                $"This vault folder and {otherDir} have different vault-password files. Keep one (delete the other) " +
+                "before merging. Nothing was merged.");
+        var vaultPasswordToCopy = ownVaultPassword is null && otherVaultPassword is not null
+            ? VaultPasswordFile.Decode(otherVaultPassword, keyring.VaultId)
+            : null;
+
         var approvedHere = config.ApprovedSlots ?? [];
         var unapproved = newSlots.Where(s => !SlotCommand.IsApproved(approvedHere, s)).ToList();
         if (unapproved.Count > 0 && !yes && c.IsInputRedirected)
@@ -130,7 +145,13 @@ public sealed class VaultCommand : ICliCommand
                 c.Out.WriteLine($"Copied the other copy's {RecordVaultStore.RecordFormatMarkerFileName} marker: this vault folder now writes record format {KeyringFormat.RecordFormatVersion}.");
             }
 
-            if (toAdd.Count == 0 && written == 0 && !markerCopied)
+            if (vaultPasswordToCopy is not null)
+            {
+                store.WriteVaultPassword(vaultPasswordToCopy);
+                c.Out.WriteLine($"Copied the other copy's {RecordVaultStore.VaultPasswordFileName} file into this vault folder.");
+            }
+
+            if (toAdd.Count == 0 && written == 0 && !markerCopied && vaultPasswordToCopy is null)
             {
                 c.Out.WriteLine($"Nothing to merge: this vault already has everything in {otherDir}.");
                 return 0;
