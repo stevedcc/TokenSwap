@@ -18,7 +18,9 @@ tswap broker forward  --(bind-mounted Unix socket)-->  peer uid check, route che
   socket per client.
 - `tswap broker forward --listen 127.0.0.1:<port> [--socket /run/tswap.sock]` runs inside the
   container and relays each TCP connection on that loopback port to the socket, byte for byte.
-- `sudo tswap broker route|socket add|remove` changes `broker.json`.
+- `sudo tswap broker route|socket add|remove` and `sudo tswap broker socket bind` change `broker.json`.
+  Each socket names the container it serves, or says it is `uid_only` (see "Limits of the identity
+  check").
 - **Command templates** (Linux only): `tswap broker call <template> [name=value ...]` inside the
   container asks the broker to run an operator-defined command on the host, in a `bwrap` sandbox,
   with a secret in its environment or a read-only file. See [Command templates](#command-templates).
@@ -136,8 +138,9 @@ secret's length.
   back);
 - use another socket's routes, or a route its socket doesn't list (the same `404` as a route that
   doesn't exist);
-- reach another container's socket (only its own is bind-mounted, and the peer uid must be on
-  that socket's list);
+- use another container's socket (only its own is bind-mounted, the peer uid must be on that
+  socket's list, and on a socket bound to a container the connecting process must be in that
+  container's cgroup);
 - push or fetch where the path regex excludes, or step outside the upstream's base path with
   `..`, `%2e%2e`, `%2f`, `..;`, `//host` or double encoding (each a uniform `404`: every refusal
   of a route, socket, method or path gets the same bytes, headers included, except the `Date`
@@ -148,23 +151,74 @@ secret's length.
 
 ### Limits of the identity check
 
-- **The bind-mount is the boundary between containers of the same host user.** The broker
-  identifies a client by the socket the connection arrived on and the peer uid the kernel
-  reports for it (`SO_PEERCRED` on Linux, `getpeereid` on macOS). Rootless Podman gives all
-  containers of one host user the same subuid range unless the operator separates them, so two
-  such containers can have the same uids: what keeps container A off container B's socket is
-  that only B's socket file is mounted into B.
-- **Credentials are fixed at `connect()`.** An allowed process can relay for another (pass the
-  connected fd, or proxy bytes). The uid is not a delegation boundary.
+Since v0.2.0 every socket names the container it serves (`container` in `broker.json`, set with
+`sudo tswap broker socket bind`, see Setup step 7) or says explicitly that it is `uid_only`. A
+connection to a bound socket is admitted only when **both** checks pass:
+
+- the peer uid the kernel reports (`SO_PEERCRED` on Linux, `getpeereid` on macOS) is on the socket's
+  `uids` list, as before; and
+- the peer's cgroup, read from the kernel through a pidfd (`SO_PEERPIDFD`, then
+  `/proc/<pid>/cgroup` through a directory fd pinned by that pidfd, then a check that the pidfd is
+  still alive), is the bound unit's cgroup or lies under it. With `selinux_label` set, the label
+  `SO_PEERSEC` reports must also be exactly that label.
+
+Every other outcome refuses: no pidfd, a hidden or unreadable `/proc` entry, a peer that exited
+during the check, a cgroup path that can't be parsed, a mismatch. The connection is closed before
+anything is parsed, unanswered, and logged as `refused-connection` with the reason
+(`no-pidfd`, `proc-hidden`, `identity-unreadable`, `peer-exited`, `cgroup-mismatch`,
+`label-mismatch`) and the observed `cgroup=` and `label=` (escaped, at most 256 characters). The
+facts read at accept are kept for the connection: every request and every ssh-agent message is
+checked again against the current `broker.json`, so a reload that rebinds a socket refuses the next
+request or message of a connection that was already open.
+
+**What the binding closes:** another container of the same host user (rootless Podman gives all
+containers of one user the same subuid range, so the uid alone can't tell them apart; the socket
+file mounted into the wrong container, a shared volume or a copied socket no longer helps), another
+user's container, and host processes that happen to have a listed uid.
+
+**What it doesn't close** (one line each):
+
+- **An admitted container can relay for others.** Credentials and identity are fixed at `connect()`;
+  an allowed process can pass the connected fd on or proxy bytes.
+- **Everything inside the admitted container is that container:** `podman exec`, sidecars, and every
+  process in its network namespace that reaches `forward`'s loopback port.
+- **The binding separates containers from each other, not from their owner.** The uid is
+  unforgeable, but the cgroup is writable by whoever systemd delegated it to: the host user who runs
+  the containers can move any of their processes (even one thread, through `cgroup.threads`) into
+  the bound cgroup, or start a replacement with the same unit name.
+- **Binding a pod's unit admits every container in the pod.**
+- **An MCS label is corroboration, not identity:** any container of the same host user can ask Podman
+  for another container's level, and the level changes on every start unless the unit pins it
+  (`SecurityLabelLevel=` in Quadlet).
+- **Root and the vault user are above the model** (see "The vault user is root-equivalent for its
+  secrets").
+- **Out of scope:** containers run with `--privileged`, `--userns=host`, `--userns=keep-id`, or
+  `--cgroupns=host` with a writable cgroupfs.
+- **Platforms:** macOS, Windows and Linux kernels without `SO_PEERPIDFD` (before 6.5) can't bind a
+  socket; there every socket is `uid_only`, and the bind-mount is the only boundary between
+  containers of one user, as in v0.1.
+- **`hidepid`:** a `/proc` mounted with `hidepid=1` or `2` hides the containers' processes from the
+  broker, and every bound socket refuses (`proc-hidden`, with a one-time hint in the log). Mount
+  `/proc` with `gid=<group>` and add the vault user to that group.
+- **`serve` must run in the host's root cgroup namespace** (a systemd user unit does). In a nested
+  one, peers outside its root show `..` in their path and are refused.
+
+What stays from v0.1, for every socket:
+
 - **Any process in the container's network namespace can use the forwarded port.** `forward`
   listens on a literal `127.0.0.1` or `::1` only (never `0.0.0.0`, a host name or a LAN
   address), but inside the container every process can connect to it.
 - The socket files are `0666` (a rootless container's uid is not the vault user's), so any
-  process on the host that can reach the path could connect. **The peer-uid check is the real
-  gate:** a uid not on the socket's list is closed before anything is parsed, unanswered, and
-  logged. `socket_dir` must be owned by the vault user, not group- or world-writable, and not a
-  symlink, and every folder above its real path must be root's (or the vault user's) and not
-  group- or world-writable; `serve` refuses to start otherwise.
+  process on the host that can reach the path could connect. **The peer checks are the real
+  gate:** a uid not on the socket's list, or (for a bound socket) a process outside its container,
+  is closed before anything is parsed, unanswered, and logged. `socket_dir` must be owned by the
+  vault user, not group- or world-writable, and not a symlink, and every folder above its real path
+  must be root's (or the vault user's) and not group- or world-writable; `serve` refuses to start
+  otherwise.
+- **A `uid_only` socket** (chosen on purpose, `"uid_only": true`) behaves as every socket did in
+  v0.1: the bind-mount is the boundary between containers of the same host user. A `uids` entry
+  that includes 0 is accepted with a warning in the log (every root process and rootful container
+  on the host has uid 0).
 
 ### SELinux
 
@@ -717,9 +771,15 @@ sudo tswap broker route add openai --upstream https://api.openai.com/v1 --auth b
 sudo tswap broker route add anthropic --upstream https://api.anthropic.com/v1 --auth header \
     --header x-api-key --secret anthropic-key --path 'messages'
 
-# one socket per container (or purpose): which host uids may connect, which routes it may use
-sudo tswap broker socket add lane1 --uids 100999 --routes github,v2,openai --socket-dir /srv/tswap-broker
+# one socket per container (or purpose): which host uids may connect, which routes it may use, and
+# which container it serves (here a user Quadlet unit lane1.service of host user 1001; see step 7)
+sudo tswap broker socket add lane1 --uids 100999 --routes github,v2,openai --socket-dir /srv/tswap-broker \
+    --cgroup /user.slice/user-1001.slice/user@1001.service/app.slice/lane1.service
 ```
+
+`socket add` requires exactly one of `--cgroup <path>`, `--pid <pid>` (a running container's
+process; step 7) or `--uid-only` (any process with a listed uid, as in v0.1). A container that
+isn't running yet and isn't a Quadlet unit can start as `--uid-only` and be bound in step 7.
 
 Rules (checked on every load, not only on `add`):
 
@@ -736,6 +796,14 @@ Rules (checked on every load, not only on `add`):
   end yourself (`$`) when a prefix is too wide. The regex never sees the query. The query is
   forwarded unchanged; one containing a raw `#` is refused (the uniform `404`);
 - `idle_timeout_sec` (default 120) ends a stream with no bytes moving;
+- every socket has exactly one of `container` (`{ "cgroup": "<unit path>" }`, optionally with
+  `"selinux_label"`) and `"uid_only": true`. A socket with neither (a v0.1 file) is refused with
+  `socket <name> names no container: run "sudo tswap broker socket bind <name> --pid <pid>" or "sudo
+  tswap broker socket bind <name> --uid-only"`; the editing commands still write such a file and
+  print `still to bind before serve starts: <names>`, so a v0.1 file can be fixed one socket at a
+  time. `container.cgroup` is an absolute cgroup v2 path of printable ASCII, at most 1024 bytes,
+  ending in a `.service` or `.scope` unit that is not a user manager (`user@<uid>.service`,
+  `init.scope`), a login session (`session-*.scope`) or the root scope (`-.scope`);
 - unknown fields are refused, and `version` must be 1.
 
 A hand edit is allowed but gets the same checks: `serve` refuses an invalid file at start, and on
@@ -753,7 +821,7 @@ sudo -iu vault systemctl --user daemon-reload
 sudo -iu vault systemctl --user enable --now tswap-broker
 ```
 
-After a `route` change or a change to a socket's uids or routes:
+After a `route` change or a change to a socket's uids, routes or binding:
 `systemctl --user reload tswap-broker` (SIGHUP; the new file is validated completely, then
 swapped in; a request keeps the config it started with). A new or removed socket, or a new
 `socket_dir`, needs `systemctl --user restart tswap-broker`.
@@ -763,6 +831,9 @@ Logs: one line per request in the journal and in `broker.log` (mode `0600`) next
 length-capped), status, bytes both ways, unlock count and duration, and a reason for refusals.
 Never a credential, a header value or a body. If `broker.log` can't be written (disk full, an
 I/O error), serving goes on: the failure is reported once and lines go to the journal only.
+At start `serve` logs one line per socket, `socket <name>: container <cgroup>[ label <label>]` or
+`socket <name>: uid-only (any process with a listed uid is admitted)`, and any warnings (a socket
+whose `uids` include 0).
 
 ### 5. Finding a container's uid
 
@@ -777,8 +848,9 @@ The broker sees the **host** uid of the process that connects. With rootless Pod
 - with `--userns=keep-id` the container user *is* the host user's uid.
 
 Allow exactly the uid(s) the container's `forward` and clients run as, or a range
-(`--uids 100000-165535`) when you accept every uid of that user's containers (see "Limits of the
-identity check").
+(`--uids 100000-165535`) for every uid of that user's containers: on a socket bound to a container
+(step 7) the cgroup check then tells the containers apart; on a `uid_only` socket the bind-mount is
+the only boundary (see "Limits of the identity check").
 
 ### 6. Starting a container
 
@@ -793,7 +865,45 @@ podman run -d --name lane1 -v /srv/tswap-broker/lane1.sock:/run/tswap.sock <imag
 No `:z` or `:Z` on the socket mount (see the SELinux note in step 2). `forward` needs no vault,
 home folder, YubiKey or TPM (it reads nothing but its arguments).
 
-### 7. Using it from inside the container
+### 7. Bind the socket to its container
+
+A socket names the container it serves by the cgroup of the container's systemd unit. The broker
+admits a connection only from a process in that cgroup or below it (and with a listed uid).
+
+**A Quadlet container (recommended):** its unit name is stable, so the path is known before it
+starts. For a user Quadlet `lane1.container` (unit `lane1.service`) of host user 1001:
+
+```bash
+sudo tswap broker socket bind lane1 \
+    --cgroup /user.slice/user-1001.slice/user@1001.service/app.slice/lane1.service
+```
+
+The formula is `/user.slice/user-<owner uid>.slice/user@<owner uid>.service/app.slice/<unit>.service`;
+a system Quadlet is `/system.slice/<unit>.service`. Check with
+`systemctl --user show -p ControlGroup lane1.service` as the owner. The container's processes sit in
+`<unit>/libpod-payload-<id>`, which is under the bound path.
+
+**Anything else:** bind to a running container's process:
+
+```bash
+sudo tswap broker socket bind lane1 --pid "$(podman inspect -f '{{.State.Pid}}' lane1)"   # as the owner's podman
+```
+
+`--pid` reads `/proc/<pid>/cgroup` and binds the first `.service` or `.scope` unit in it (after the
+user manager). A plain `podman run` container's binding is its `libpod-<id>.scope`, so it changes
+when the container is recreated: re-run `socket bind` then (the command says so). `--with-label`
+also records the process's SELinux label; it changes on every container start unless the unit pins
+`SecurityLabelLevel=`.
+
+`--uid-only` makes a socket uid-only again. `socket bind` writes the file the same way as the other
+socket commands; reload the broker afterwards (`systemctl --user reload tswap-broker`).
+`<name>.ssh.sock` uses `<name>`'s binding.
+
+**Upgrading a v0.1 `broker.json`:** `serve` refuses it until every socket is bound. Bind each socket
+in turn (`socket bind <name> --cgroup ...`, `--pid ...` or `--uid-only`); each run names the sockets
+still to bind.
+
+### 8. Using it from inside the container
 
 **git** (the route's name is the first path segment):
 
@@ -1103,6 +1213,20 @@ Elsewhere:
   credentials on a Unix socket, so it must run on the same Linux kernel as the containers, for
   example inside the Podman machine VM, not on the macOS or Windows host.
 
+**Binding a socket to a container** (v0.2.0) needs, besides the above:
+
+- Linux with `SO_PEERPIDFD`, which arrived in **Linux 6.5**. `serve` probes for it once at start (on
+  a `socketpair()`) and refuses a config with a bound socket when the kernel doesn't give it; the
+  probe decides, not the version number;
+- a pure cgroup v2 host (`/proc/self/cgroup` is one `0::/...` line; cgroup v1 and hybrid hosts are
+  refused at start) and `serve` in the host's root cgroup namespace;
+- SELinux enabled (`/sys/fs/selinux/enforce` exists) when a socket also binds a `selinux_label`;
+- a `/proc` the vault user can see the containers' processes in (no `hidepid` without `gid=`).
+
+Each refusal names the socket and the reason; on a reload the running config is kept. Sockets marked
+`uid_only` start everywhere `serve` starts. On macOS `socket bind --pid`, `--cgroup` and
+`--with-label` refuse (`binding a socket to a container needs Linux; use --uid-only`).
+
 ## Limits (v1)
 
 - `tswap broker` is Unix only (Linux and macOS); on Windows every subcommand refuses with "not
@@ -1113,6 +1237,10 @@ Elsewhere:
   a token from the realm itself. Basic-auth registries are covered.
 - No TLS on the socket (it is a local Unix socket), no arbitrary `run` over the socket, no key
   caching.
+- A socket's container binding needs Linux 6.5 or later (`SO_PEERPIDFD`), cgroup v2 and `serve` in
+  the host's root cgroup namespace; elsewhere sockets are `uid_only`. The binding separates
+  containers from each other, not from the host user who runs them (see "Limits of the identity
+  check").
 - Templates run on Linux only (they need `bwrap`), always as the vault user's uid (in a sandbox);
   running them as another uid would need root or capabilities.
 - Request and response trailers are never forwarded; `Range` requests are dropped (no partial
