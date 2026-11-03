@@ -565,7 +565,9 @@ public class BrokerContainerConfigTests
 /// <summary>
 /// Brief I224 task 1: the editing commands (<c>socket add</c>, <c>route add</c> ...) write a file whose sockets
 /// still need binding, and say which (D1, r2 GLM N1); <c>socket add --uid-only</c> writes <c>"uid_only": true</c>.
-/// </summary>
+/// <remarks>I224 fix round 1 (MiMo p1 I1): in the static-seam collection, as <see cref="BrokerSocketBindCommandTests"/> is,
+/// because it drives <c>BrokerCommand</c> (and its static seams) in-process through <see cref="FleetMachine"/>.</remarks>
+[Collection(StaticSeamCollection.Name)]
 public class BrokerContainerCommandTests : IDisposable
 {
     private readonly FleetMachine _m = new("brokerbind");
