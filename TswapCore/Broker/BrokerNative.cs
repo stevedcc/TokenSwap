@@ -157,10 +157,12 @@ public static partial class BrokerNative
         {
             int pidfd = -1;
             uint length = sizeof(int);
-            if (getsockopt(fds[0], SolSocket, SoPeerPidfd, &pidfd, &length) != 0 || length != sizeof(int) || pidfd < 0)
-                return false;
-            close(pidfd);
-            return true;
+            var got = getsockopt(fds[0], SolSocket, SoPeerPidfd, &pidfd, &length) == 0;
+            // I224 fix round 1 (MiMo p1 M2, GLM p1 m7): close the probed pidfd on every path. A short write
+            // leaves the high bytes of -1 in place, so a partial value is negative and never closed by mistake.
+            if (got && pidfd >= 0)
+                close(pidfd);
+            return got && length == sizeof(int) && pidfd >= 0;
         }
         finally
         {

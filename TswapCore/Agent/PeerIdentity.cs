@@ -257,10 +257,26 @@ public static partial class PeerIdentity
     /// <c>SO_PEERPIDFD</c>); step 2, <c>/proc/&lt;pid&gt;</c> as a directory fd, the pid from
     /// <c>SO_PEERCRED</c>.
     /// </summary>
-    internal static PeerProcess? DefaultOpenPeer(Socket socket, bool usePidfd)
+    internal static PeerProcess? DefaultOpenPeer(Socket socket, bool usePidfd) =>
+        OpenPeerCore(socket, usePidfd, probeOnFailure: false).Peer;
+
+    /// <summary>
+    /// Brief I224 D3.1-2: step 1, the pidfd (none when the kernel lacks <c>SO_PEERPIDFD</c>); step 2,
+    /// <c>/proc/&lt;pid&gt;</c> as a directory fd. When that open fails, the pidfd's liveness at that moment and
+    /// the errno are kept, and the pidfd is closed.
+    /// </summary>
+    internal static PeerOpenResult DefaultOpenPeerDetailed(Socket socket) =>
+        OpenPeerCore(socket, usePidfd: true, probeOnFailure: true);
+
+    /// <summary>
+    /// Steps 1 and 2, shared by <see cref="DefaultOpenPeer(Socket, bool)"/> and <see cref="DefaultOpenPeerDetailed"/>
+    /// (I224 fix round 1, GLM p1 M1: one copy of the pidfd and dirfd code). When the directory open fails the
+    /// pidfd is closed; before that, with <paramref name="probeOnFailure"/>, whether it was still alive is read.
+    /// </summary>
+    private static PeerOpenResult OpenPeerCore(Socket socket, bool usePidfd, bool probeOnFailure)
     {
         if (!OperatingSystem.IsLinux() || BrokerNative.TryGetPeerCredentials(socket) is not { Pid: > 0 } creds)
-            return null;
+            return PeerOpenResult.Failed(-1, gotPidfd: false, pidfdAlive: false, errno: 0);
         SafeFileHandle? pidfd = null;
         if (usePidfd)
         {
@@ -278,37 +294,8 @@ public static partial class PeerIdentity
         var dirfd = open($"/proc/{creds.Pid}", ORdonly | ODirectory | OCloexec);
         if (dirfd < 0)
         {
-            pidfd?.Dispose();
-            return null;
-        }
-        return new PeerProcess(creds.Pid, pidfd, new SafeFileHandle(dirfd, ownsHandle: true));
-    }
-
-    /// <summary>
-    /// Brief I224 D3.1-2: step 1, the pidfd (none when the kernel lacks <c>SO_PEERPIDFD</c>); step 2,
-    /// <c>/proc/&lt;pid&gt;</c> as a directory fd. When that open fails, the pidfd's liveness at that moment and
-    /// the errno are kept, and the pidfd is closed.
-    /// </summary>
-    internal static PeerOpenResult DefaultOpenPeerDetailed(Socket socket)
-    {
-        if (!OperatingSystem.IsLinux() || BrokerNative.TryGetPeerCredentials(socket) is not { Pid: > 0 } creds)
-            return PeerOpenResult.Failed(-1, gotPidfd: false, pidfdAlive: false, errno: 0);
-        SafeFileHandle? pidfd = null;
-        try
-        {
-            Span<byte> value = stackalloc byte[4];
-            if (socket.GetRawSocketOption(SolSocket, SoPeerPidfd, value) == 4)
-                pidfd = new SafeFileHandle(BitConverter.ToInt32(value), ownsHandle: true);
-        }
-        catch (SocketException)
-        {
-            // ENOPROTOOPT: a kernel older than 6.5 (the error decides, not the number).
-        }
-        var dirfd = open($"/proc/{creds.Pid}", ORdonly | ODirectory | OCloexec);
-        if (dirfd < 0)
-        {
             var errno = Marshal.GetLastPInvokeError();
-            var alive = pidfd is not null && WithFd(pidfd, fd => syscall(SysPidfdSendSignal, fd, 0, 0, 0) == 0);
+            var alive = probeOnFailure && pidfd is not null && WithFd(pidfd, fd => syscall(SysPidfdSendSignal, fd, 0, 0, 0) == 0);
             pidfd?.Dispose();
             return PeerOpenResult.Failed(creds.Pid, pidfd is not null, alive, errno);
         }
