@@ -207,6 +207,14 @@ public sealed class BrokerPolicy
     }
 
     /// <summary>
+    /// Tests only (brief I224 D7 H2): <paramref name="policy"/> with no host context although it may
+    /// have templates, a state <see cref="Validate"/> never produces, to show template calls fail closed.
+    /// </summary>
+    internal static BrokerPolicy WithoutHostForTests(BrokerPolicy policy) =>
+        new(policy.Source, policy.SocketDir, policy.Sockets, policy.Routes, policy.Templates, policy.SshKeys,
+            policy.BwrapPath, null, policy.Warnings);
+
+    /// <summary>
     /// Brief I224 D1: the sockets that name neither a container nor <c>uid_only</c>, in file order;
     /// <c>serve</c> refuses the file until this is empty.
     /// </summary>

@@ -157,7 +157,10 @@ namespace TswapCore.Broker
                 await Refuse(503, "sandbox-unavailable").ConfigureAwait(false);
                 return;
             }
-            if (policy.Host is { } host && !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, out var bindProblem))
+            // Brief I224 D7 H2: no host context means the binds can't be re-checked; fail closed for
+            // every call, with or without binds (Validate always sets it when there are templates).
+            string? bindProblem = "no host context to re-check the binds against";
+            if (policy.Host is not { } host || !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, out bindProblem))
             {
                 log.Event($"template '{name}' refused: {bindProblem}");
                 await Refuse(503, "binds").ConfigureAwait(false);
