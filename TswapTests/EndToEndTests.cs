@@ -390,13 +390,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         using var process = Process.Start(psi)!;
         try
         {
-            PtyClose(slaveFd); slaveFd = -1; // close our copy; child holds it
-
+            // The parent keeps its copy of the slave open until it is done (#234): the child is a bash wrapper that
+            // opens the slave by path a moment after it starts, and with no slave open at all macOS reports EOF on
+            // the master (revents POLLIN|POLLHUP), which ended the read loop before tswap had started. Holding the
+            // slave means the master never sees EOF, so the loop ends when the child has exited and the master is
+            // drained.
             while (DateTime.UtcNow < deadline)
             {
                 var pfd = new TestPollFd { fd = masterFd, events = POLLIN_FLAG };
                 int pr = PtyPoll(ref pfd, 1, 500);
-                if (pr == 0) continue; // timeout — check deadline and loop
+                if (pr == 0)
+                {
+                    if (process.HasExited)
+                        break; // exited and nothing left to read
+                    continue; // timeout — check deadline and loop
+                }
                 if (pr < 0)
                 {
                     if (Marshal.GetLastPInvokeError() == EINTR) continue;
@@ -636,14 +644,22 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         try
         {
             using var process = Process.Start(psi)!;
-            PtyClose(slaveFd); slaveFd = -1;
-
+            // The parent keeps its copy of the slave open until it is done (#234): the child is a bash wrapper that
+            // opens the slave by path a moment after it starts, and with no slave open at all macOS reports EOF on
+            // the master (revents POLLIN|POLLHUP), which ended the read loop before tswap had started. Holding the
+            // slave means the master never sees EOF, so the loop ends when the child has exited and the master is
+            // drained.
             while (DateTime.UtcNow < deadline)
             {
                 var pfd = new TestPollFd { fd = masterFd, events = 1 }; // POLLIN
                 int pr = PtyPoll(ref pfd, 1, 200);
                 if (pr == 0)
                 {
+                    if (process.HasExited)
+                    {
+                        loopEnd = "child exited, master drained";
+                        break;
+                    }
                     // No new data for 200 ms. Fire if quiescent for 500 ms total.
                     if (lastDataAt.HasValue &&
                         DateTime.UtcNow - lastDataAt.Value > TimeSpan.FromMilliseconds(500))
