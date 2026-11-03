@@ -144,7 +144,8 @@ public sealed class BrokerCommand : ICliCommand
         {
             if (state is not null)
             {
-                // Brief T17 ruling 14: the control socket, after BrokerServer took the socket folder's lock.
+                // Brief T17 ruling 14: the control socket, after BrokerServer took the socket folder's lock; the control
+                // server takes control.lock beside its own socket.
                 var vaultId = VaultIdOf(vaultConfig);
                 var uid = Ownership.EffectiveUid;
                 if (sshAgent is not null)

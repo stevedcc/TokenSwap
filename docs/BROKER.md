@@ -295,7 +295,9 @@ vault, since that would be decrypted whole for every request; convert it with
 When the vault user's slot on this machine has the vault password (README, "The vault password and
 the agent"), `serve` starts **locked**: after a reboot, a restart, or with the disk copied, the
 broker opens nothing until a human unlocks it. A broker whose slot has no password behaves exactly as
-before. A slot that needs a newer tswap, or whose blob is corrupt, stops `serve` with that slot's id
+before. Only this machine's own slot decides: a broker whose own slot has no password never prompts
+and never asks an agent, so it can't use the vault's password YubiKey slots; give the broker machine
+a password slot of its own if it should serve through one. A slot that needs a newer tswap, or whose blob is corrupt, stops `serve` with that slot's id
 and text.
 
 ```bash
@@ -340,7 +342,8 @@ sudo -iu vault tswap broker lock
   `The broker was locked while unlocking; run 'tswap broker unlock' again.` A second `broker unlock`
   of an unlocked broker is refused before its password is read (`The broker is already unlocked.`).
   A hung unlock (a wedged TPM) holds `broker lock` until it returns or the client's 120 s deadline
-  passes; `serve`'s exit after repeated unlock timeouts is the backstop.
+  passes, and the held password stays in memory until then, past the unlock's timeout; `serve`'s exit
+  after repeated unlock timeouts is the backstop.
 
 ### The control socket and its trust model
 

@@ -282,6 +282,21 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     [Fact]
+    public void Start_ReadyReply_ReadsAtMostSixteenLines()
+    {
+        // Review T17 p3 GLM M2: a ready reply whose path never ends in an expiry is not read without bound.
+        var (m, _) = TpmPasswordVault("ready-bounded");
+        _children.Script = "ready /tmp/x\n" + string.Concat(Enumerable.Repeat("more of the path\n", 20)) +
+                           "tail 2030-01-02T03:04:05Z\n";
+
+        var (exit, stdout, stderr) = Start(m);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("It holds the vault password until it times out or 'tswap agent stop'.", stdout);
+        Assert.DoesNotContain("2030-01-02T03:04:05Z", stdout); // past the bound: never read
+    }
+
+    [Fact]
     public void Start_ZeroesItsCopy_BeforeWaitingForTheChild()
     {
         // Ruling 10: the parent writes the 32 bytes to the child's stdin and zeroes its own copy; it doesn't keep

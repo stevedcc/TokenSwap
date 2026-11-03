@@ -134,13 +134,17 @@ public sealed class AgentCommand : ICliCommand
         if (line is null || !line.StartsWith("ready ", StringComparison.Ordinal))
             return line ?? "";
         var text = line;
-        while (!IsExpiry(line.Split(' ')[^1]) && output.ReadLine() is { } next)
+        // At most MaxReplyLines lines: the child is this binary, but a reply that never ends must not hold
+        // 'agent start' (or its memory) for ever; without an expiry the parent says only that it runs.
+        for (var lines = 1; lines < MaxReplyLines && !IsExpiry(line.Split(' ')[^1]) && output.ReadLine() is { } next; lines++)
         {
             line = next;
             text += "\n" + next;
         }
         return text;
     }
+
+    private const int MaxReplyLines = 16;
 
     private static bool IsExpiry(string word) =>
         word == "no-expiry" || DateTimeOffset.TryParseExact(word, ExpiryFormat, CultureInfo.InvariantCulture,
