@@ -48,6 +48,7 @@ public sealed class BrokerContainerGate(BrokerServerOptions options)
         string? cgroup = null, label = null;
         if (allowed.Container is { } bound)
         {
+            options.BeforeIdentityReadForTests?.Invoke();
             var observed = BrokerContainerMatch.Observe(socket!, c.Uid, bound);
             if (!observed.Allowed)
             {

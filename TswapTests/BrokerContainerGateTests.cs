@@ -64,7 +64,7 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
         }
         """;
 
-    private async Task StartAsync(string? cgroup)
+    private async Task StartAsync(string? cgroup, Action? beforeIdentityRead = null)
     {
         var policy = BrokerPolicy.Parse(Config(cgroup));
         _holder = new BrokerPolicyHolder(policy);
@@ -77,6 +77,7 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
                 KeySource = new FakeSshKeySource(_ => null),
             },
             OnAdmittedForTests = peer => _admitted.TrySetResult(peer),
+            BeforeIdentityReadForTests = beforeIdentityRead,
         });
     }
 
@@ -214,6 +215,110 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
         Assert.Equal(0, _h.FakeForwarder.Calls);
         await _h.WaitForLogAsync("reason=cgroup-mismatch");
         Assert.Contains($"reason=cgroup-mismatch cgroup=\"{client.Cgroup}\"", Log);
+    }
+
+    // 5, HTTP: unbind after accept (I224 fix round 1, MiMo p1 M3 / GLM p1 m5)
+    [Fact]
+    public async Task AnUnbindAfterAcceptAndBeforeTheRequest_IsForwarded()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1")) is not { } client)
+            return;
+        await StartAsync(client.Cgroup);
+        using var socket = await client.ConnectAsync();
+        await socket.SendAsync(Array.Empty<byte>());
+        var admitted = await _admitted.Task.WaitAsync(TimeSpan.FromSeconds(30)); // accepted by the gate, with its identity
+        Assert.Equal(client.Cgroup, admitted.Cgroup);
+
+        Reload(null);
+
+        var text = Encoding.ASCII.GetString(await ExchangeAsync(socket, Get));
+        Assert.StartsWith("HTTP/1.1 200", text);
+        Assert.EndsWith("ok https://upstream.example/base/a", text);
+        Assert.Equal(1, _h.FakeForwarder.Calls);
+        Assert.DoesNotContain("refused-connection", Log);
+    }
+
+    // Review focus 2, end to end (I224 fix round 1, MiMo p1 M3)
+    [Fact]
+    public async Task AClientThatConnectsAndExits_IsRefused_AndNothingIsForwarded()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"), requireScope: true) is not { } client)
+            return;
+        var atTheGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var exited = new ManualResetEventSlim();
+        await StartAsync(client.Cgroup, beforeIdentityRead: () =>
+        {
+            atTheGate.TrySetResult();
+            exited.Wait(TimeSpan.FromSeconds(30)); // a failing test can't hold the gate for longer
+        });
+        try
+        {
+            using var socket = await client.ConnectAsync();
+            await socket.SendAsync(Encoding.ASCII.GetBytes(Get));
+            await atTheGate.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the relay's connection, its identity not read yet
+
+            // The connecting process (the relay) exits and is reaped while its connection waits at the gate.
+            await client.DisposeAsync();
+            _clients.Remove(client);
+            exited.Set();
+
+            Assert.Empty(await ExchangeAsync(socket, ""));
+            await _h.WaitForLogAsync("refused-connection socket=lane1 ");
+        }
+        finally
+        {
+            exited.Set();
+        }
+        Assert.False(_admitted.Task.IsCompleted); // never admitted
+        Assert.Equal(0, _h.FakeForwarder.Calls);
+        Assert.Equal(0, _h.Secrets.Unlocks);
+        // peer-exited: the pidfd is dead. A kernel that gives no pidfd for an exited peer refuses no-pidfd;
+        // a reused pid would show another cgroup. Each is a refusal; an admission is not.
+        Assert.Matches("refused-connection socket=lane1 uid=[0-9]+ pid=[0-9]+ reason=(peer-exited|no-pidfd|cgroup-mismatch)", Log);
+        _output.WriteLine($"refusal: {System.Text.RegularExpressions.Regex.Match(Log, "reason=[a-z-]+").Value}");
+    }
+
+    // Review focus 1, end to end (I224 fix round 1, MiMo p1 M3): a sibling whose name has the bound unit as a prefix
+    [Fact]
+    public async Task BoundToAPrefixOfTheClientsCgroupName_IsRefusedCgroupMismatch()
+    {
+        if (await ClientAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"), requireScope: true, @delegate: true) is not { } client)
+            return;
+        // The client moves into <scope>/lane1.service-x; the socket is bound to <scope>/lane1.service, a bare
+        // string prefix of the client's path but not its folder.
+        var sibling = Path.Combine("/sys/fs/cgroup" + client.Cgroup, "lane1.service-x");
+        try
+        {
+            Directory.CreateDirectory(sibling);
+            File.WriteAllText(Path.Combine(sibling, "cgroup.procs"), client.RelayPid!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _output.WriteLine($"SKIPPED: can't create a child cgroup under {client.Cgroup} (no cgroup delegation): {ex.Message}");
+            return;
+        }
+        try
+        {
+            await StartAsync(client.Cgroup + "/lane1.service");
+            using var socket = await client.ConnectAsync();
+            Assert.Empty(await ExchangeAsync(socket, Get));
+            Assert.Equal(0, _h.FakeForwarder.Calls);
+            await _h.WaitForLogAsync("reason=cgroup-mismatch");
+            Assert.Contains($"reason=cgroup-mismatch cgroup=\"{client.Cgroup}/lane1.service-x\"", Log);
+        }
+        finally
+        {
+            await client.DisposeAsync(); // the relay leaves the child cgroup empty, so it can go
+            _clients.Remove(client);
+            try
+            {
+                Directory.Delete(sibling);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // systemd already removed the emptied transient scope, with its child
+            }
+        }
     }
 
     // 5, ssh: rebind between two messages

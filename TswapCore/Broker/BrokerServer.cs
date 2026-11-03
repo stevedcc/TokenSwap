@@ -49,6 +49,12 @@ public sealed record BrokerServerOptions
     /// <summary>Test seam (brief I224 task 3): called with each connection the gate admitted, before any byte is read.</summary>
     internal Action<BrokerPeer>? OnAdmittedForTests { get; init; }
 
+    /// <summary>
+    /// Test seam (I224 fix round 1, review focus 2): called on a container socket's connection after the uid
+    /// checks and before its identity is read, so a test can make the client exit in between.
+    /// </summary>
+    internal Action? BeforeIdentityReadForTests { get; init; }
+
     /// <summary>Brief I224 D2: the platform facts a <c>container</c> socket needs (tests fake them).</summary>
     public BrokerContainerHost ContainerHost { get; init; } = BrokerContainerHost.Real;
 }
