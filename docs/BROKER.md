@@ -231,7 +231,9 @@ else of the vault user's**: the module's only rule for containers is `container_
 bound to a container needs: `tswap_broker_t` → `container_t` `dir { open read search getattr }` and
 `file { open read getattr }`, for reading `/proc/<pid>/status` and `cgroup`. These grant containers nothing.
 Without them every container on a bound socket is refused. The liveness check polls the peer's pidfd, which
-needs no permission. Whether an MCS constraint also applies (the broker runs at `s0`, containers at
+needs no permission; a poll error refuses the peer. Upgrade the module and the binary together: a tswap
+older than this fix checks liveness with signal 0, which this module no longer allows and which never worked for
+a client of another uid, so it refuses every container client as `peer-exited`. Whether an MCS constraint also applies (the broker runs at `s0`, containers at
 `s0:cX,cY`) is checked on the real host; `container_t` is MCS-constrained as a subject, the broker is not, so
 none is expected.) Only a dedicated copy of the binary
 (`/usr/local/libexec/tswap-broker`) is labelled to enter it; the `tswap` everyone runs stays
