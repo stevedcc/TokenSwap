@@ -373,7 +373,8 @@ public sealed class AgentCommandTests : IDisposable
         var (exit, _, stderr) = Start(m);
 
         Assert.Equal(1, exit);
-        Assert.Contains(AgentCommand.VerifierMismatchText, stderr);
+        // Review T17 p5 MiMo I2: the shared text of fix round 3's ruling, the one broker unlock gives too.
+        Assert.Contains(VaultPasswordMessages.VerifierMismatch, stderr);
         Assert.False(File.Exists(m.AgentSocket!));
         // The hardware unlock itself succeeded: the refusal came from the verifier.
         Assert.DoesNotContain(VaultPasswordMessages.WrongPasswordKdf, stderr);
@@ -424,7 +425,7 @@ public sealed class AgentCommandTests : IDisposable
 
         Assert.Equal(1, exit);
         Assert.Contains(VaultPasswordMessages.WrongPasswordKdf, stderr);
-        Assert.DoesNotContain(AgentCommand.VerifierMismatchText, stderr);
+        Assert.DoesNotContain(VaultPasswordMessages.VerifierMismatch, stderr);
         Assert.Empty(m.Keys.Challenges);
         Assert.False(File.Exists(m.AgentSocket!));
     }
@@ -448,7 +449,7 @@ public sealed class AgentCommandTests : IDisposable
         Assert.StartsWith("error ", childLine);
         AssertHoldsNoSecret(childLine, stretchedBytes, vaultKey);
         AssertHoldsNoSecret(stdout + stderr, stretchedBytes, vaultKey);
-        AssertHoldsNoSecret(AgentCommand.VerifierMismatchText, stretchedBytes, vaultKey);
+        AssertHoldsNoSecret(VaultPasswordMessages.VerifierMismatch, stretchedBytes, vaultKey);
     }
 
     [Fact]

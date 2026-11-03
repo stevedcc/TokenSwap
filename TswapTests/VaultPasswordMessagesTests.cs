@@ -54,6 +54,18 @@ public class VaultPasswordMessagesTests
     }
 
     [Fact]
+    public void VerifierMismatch_IsTheControllersWords_AndNotAWrongPassword()
+    {
+        // Review T17 p5 MiMo I2 (controller ruling, fix round 3): the hardware accepted the password but the
+        // vault-password file's verifier refused it. One text for agent start and broker unlock; the password was
+        // proven by the hardware, so it never reads as a wrong password.
+        Assert.Equal("The vault password opened this machine's slot but does not match the vault's vault-password file " +
+                     "(it may belong to another vault or be out of sync). Copy vault-password from a machine where the " +
+                     "password works, or re-enrol this slot.", VaultPasswordMessages.VerifierMismatch);
+        Assert.False(VaultPasswordMessages.VerifierMismatch.StartsWith("Wrong vault password", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SecureEnclavePresenceFailure_IsItsOwnText_NotTheStrippedHeaders()
     {
         // Review T17 p4 MiMo M5: the shim's -8 on the password unwrap says Touch ID or the login password failed;

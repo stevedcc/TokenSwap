@@ -27,7 +27,8 @@ public static class BrokerPasswordProof
     /// (<see cref="VaultUnlocker.UnlockWithPasswordSlots"/>: never a password-free slot, an agent or a prompt)
     /// with <paramref name="candidate"/>, then the vault's <c>vault-password</c> verifier, which needs both
     /// the key and the password. Returns <c>K_v</c>; the caller zeroes it. A wrong password fails at the
-    /// hardware (ruling 18's texts) or at the verifier.
+    /// hardware (ruling 18's texts); a password the hardware accepts but the verifier refuses is
+    /// <see cref="VaultPasswordMessages.VerifierMismatch"/> (<see cref="VaultPasswordRefusal.FileMismatch"/>).
     /// </summary>
     public static byte[] Prove(RecordVaultStore store, VaultUnlocker unlocker, StretchedPassword candidate)
     {
@@ -50,7 +51,8 @@ public static class BrokerPasswordProof
             }
             var file = read ?? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
             if (!file.Verifies(key, candidate))
-                throw new VaultPasswordRefusedException(WrongPasswordVerifierText, VaultPasswordRefusal.WrongPassword);
+                // The hardware proved the password: the file (or this slot) is out of step, not a guess.
+                throw new VaultPasswordRefusedException(VaultPasswordMessages.VerifierMismatch, VaultPasswordRefusal.FileMismatch);
             return key;
         }
         catch
@@ -59,7 +61,4 @@ public static class BrokerPasswordProof
             throw;
         }
     }
-
-    /// <summary>The hardware opened, but the password doesn't match the vault's <c>vault-password</c> verifier.</summary>
-    public const string WrongPasswordVerifierText = "Wrong vault password (it doesn't match this vault's vault-password file).";
 }

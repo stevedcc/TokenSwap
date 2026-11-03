@@ -398,8 +398,11 @@ public sealed class BrokerControlServer : IAsyncDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // A missing or conflicting vault-password file is a broken configuration, not a guess:
-                // like a broken ssh key, it must not trip the brute-force guard.
-                if (ex is not VaultPasswordUnavailableException && _options.Guard.RecordFailure(GuardKey))
+                // like a broken ssh key, it must not trip the brute-force guard. Nor does a verifier that
+                // refuses a password the hardware accepted (review T17 p5 MiMo I2): guessing can't get there.
+                var aGuess = ex is not (VaultPasswordUnavailableException
+                    or VaultPasswordRefusedException { Reason: VaultPasswordRefusal.FileMismatch });
+                if (aGuess && _options.Guard.RecordFailure(GuardKey))
                     _options.Log("control: locked out after repeated wrong vault passwords");
                 state.FailProof(candidate);
                 _options.Log("control: unlock refused (the proof failed)");

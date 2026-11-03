@@ -68,10 +68,6 @@ public sealed class AgentCommand : ICliCommand
     public const string ServeNoInputText =
         "agent serve reads the stretched password from 'tswap agent start'; run that instead (or 'tswap agent serve --foreground' in a terminal).";
 
-    /// <summary>Ruling 10: the proving unlock opened the vault, but the password fails the verifier.</summary>
-    public const string VerifierMismatchText =
-        "That password doesn't match this vault's vault-password file; the agent won't hold it.";
-
     public const string ExitedWithoutStartingText = "The agent exited without starting.";
 
     /// <summary>
@@ -406,7 +402,7 @@ public sealed class AgentCommand : ICliCommand
         try
         {
             if (!file.Verifies(vaultKey, held))
-                throw new TswapException(VerifierMismatchText);
+                throw new VaultPasswordRefusedException(VaultPasswordMessages.VerifierMismatch, VaultPasswordRefusal.FileMismatch);
         }
         finally
         {

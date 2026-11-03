@@ -623,7 +623,8 @@ keyCheck = HMAC-SHA256(HKDF-SHA256(K_v, 32, info = "tswap-vault-key-check-v1"), 
   password. Don't create the vault password on two machines at the same moment: a write refuses
   when the folder already has a different file, but two first writes in the same instant race, and
   the later rename wins (the other machine's new slot then fails the verifier, and `agent start` /
-  `broker unlock` refuse it; enrol it again). `vault merge` refuses before writing anything when both folders have different files,
+  `broker unlock` refuse it with `The vault password opened this machine's slot but does not match the
+  vault's vault-password file …`; enrol it again). `vault merge` refuses before writing anything when both folders have different files,
   and copies the file into this folder when only the other copy has one.
 
 **Where the flag lives: the slot's own hardware blob.** The keyring format does not change (its

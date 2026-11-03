@@ -616,6 +616,25 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.False(_c.State.IsLocked);
     }
 
+    [Fact]
+    public async Task VerifierMismatch_IsNotCountedByTheGuard()
+    {
+        // Review T17 p5 MiMo I2 (controller ruling, fix round 3): the hardware accepted the password and only the
+        // vault-password file refused it; guessing can't produce that, so the brute-force guard doesn't count it.
+        if (OperatingSystem.IsWindows())
+            return;
+        var mismatch = true;
+        await _c.StartAsync(prove: candidate => mismatch
+            ? throw new VaultPasswordRefusedException(VaultPasswordMessages.VerifierMismatch, VaultPasswordRefusal.FileMismatch)
+            : _c.Prove(candidate));
+        for (var i = 0; i < new BrokerLimits().FailuresBeforeLockout + 1; i++)
+            Assert.Equal(VaultPasswordMessages.VerifierMismatch, ControlHarness.Refusal(await _c.UnlockAsync()));
+        mismatch = false;
+
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
+        Assert.False(_c.State.IsLocked);
+    }
+
     // ================================================================== returns to locked with work in flight
 
     /// <summary>A route secret source whose unlock takes a clone of the held password, as the real one does, and can block.</summary>
@@ -1365,7 +1384,7 @@ public class BrokerLockedTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Prove_RightHardwareButWrongVerifier_IsWrongPassword()
+    public void Prove_RightHardwareButWrongVerifier_IsAFileMismatch_NotAWrongPassword()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1384,8 +1403,10 @@ public class BrokerLockedTests : IAsyncLifetime
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => BrokerPasswordProof.Prove(store, unlocker, candidate));
 
-        Assert.StartsWith("Wrong vault password", ex.Message);
-        Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason);
+        // Review T17 p5 MiMo I2, controller ruling (fix round 3): the hardware proved the password, so this is the
+        // shared file-mismatch text, not "Wrong vault password", and not a wrong-password refusal.
+        Assert.Equal(VaultPasswordMessages.VerifierMismatch, ex.Message);
+        Assert.Equal(VaultPasswordRefusal.FileMismatch, ex.Reason);
     }
 
     [Fact]
@@ -1470,7 +1491,7 @@ public class BrokerLockedTests : IAsyncLifetime
         var ex = Assert.ThrowsAny<TswapException>(() => BrokerPasswordProof.Prove(store, unlocker, candidate));
 
         Assert.Contains(VaultPasswordMessages.WrongPasswordKdf, ex.Message);
-        Assert.DoesNotContain(BrokerPasswordProof.WrongPasswordVerifierText, ex.Message);
+        Assert.DoesNotContain(VaultPasswordMessages.VerifierMismatch, ex.Message);
         Assert.Empty(m.Keys.Challenges);
     }
 

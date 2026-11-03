@@ -25,6 +25,13 @@ public enum VaultPasswordRefusal
 
     /// <summary>Anything else the password caused (e.g. Windows' silent-context bug).</summary>
     Other,
+
+    /// <summary>
+    /// The hardware accepted the password but the <c>vault-password</c> file's verifier refused it
+    /// (<see cref="VaultPasswordMessages.VerifierMismatch"/>): the file or this slot is out of step, not a guess,
+    /// so the broker's brute-force guard doesn't count it.
+    /// </summary>
+    FileMismatch,
 }
 
 /// <summary>The fixed user-facing texts of brief T17 rulings 3, 13 and 18.</summary>
@@ -44,6 +51,14 @@ public static class VaultPasswordMessages
     /// <summary>Task 5: a password slot, but the vault folder has no <c>vault-password</c> file to stretch with.</summary>
     public const string MissingFile =
         "This vault's slot needs the vault password, but the vault folder has no vault-password file. If it is synced, wait for the sync; otherwise restore it from a backup of the folder.";
+
+    /// <summary>
+    /// Review T17 p5 MiMo I2 (controller ruling, fix round 3): this machine's password slot opened with the
+    /// password, but the vault's <c>vault-password</c> file's verifier refuses it. <c>agent start</c> and
+    /// <c>broker unlock</c> both say this; it is not a wrong password (the hardware proved it).
+    /// </summary>
+    public const string VerifierMismatch =
+        "The vault password opened this machine's slot but does not match the vault's vault-password file (it may belong to another vault or be out of sync). Copy vault-password from a machine where the password works, or re-enrol this slot.";
 
     /// <summary>Ruling 13: pass 2's agent failure, appended after the pass 3 failure.</summary>
     public static string AgentAlsoFailed(string agentMessage) =>
