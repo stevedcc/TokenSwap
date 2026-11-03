@@ -208,10 +208,11 @@ public sealed class BrokerCommand : ICliCommand
     /// <summary>Ruling 14: <c>broker unlock|lock|status</c> on a vault whose slot here has no vault password.</summary>
     public const string NeverLockedText = "This broker's slot has no vault password; it is never locked.";
 
-    /// <summary>The RAM disclosure (Global constraints), with "The broker keeps" for its first words.</summary>
+    /// <summary><c>broker unlock</c> without a terminal (a broker never asks an agent, so the text doesn't suggest one).</summary>
     public const string UnlockNoTerminalText =
         "broker unlock reads the vault password from a terminal; there is none. Run 'tswap broker unlock' from your session.";
 
+    /// <summary>The RAM disclosure (Global constraints), with "The broker keeps" for its first words.</summary>
     public const string RamDisclosure =
         "The broker keeps your stretched vault password in memory until you stop it or it times out. Root, or anything that can read this process's memory, can take it while it runs; it still needs this machine's TPM/YubiKey/Secure Enclave to open the vault.";
 
