@@ -146,13 +146,36 @@ public sealed record CommandContext(
     }
 
     /// <summary>
-    /// Brief T17: the seam through which <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's
-    /// pass 2). Null until task 11 wires the agent client in: no agent is consulted yet.
+    /// Brief T17 task 11: how <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's pass 2,
+    /// <see cref="AgentUnlock"/>). <c>agent serve</c> and <c>broker serve</c> never come here: their own unlocks
+    /// pass no agent source, so an agent never asks itself.
     /// </summary>
-    internal Func<byte[]?>? AgentSource(Config config)
+    internal Func<byte[]?>? AgentSource(Config config) => AgentUnlock.For(this, config);
+
+    /// <summary>Test seam (ruling 8): sees each vault key an agent handed this command, after it was zeroed.</summary>
+    internal static Action<ReadOnlySpan<byte>>? AgentKeyZeroedObserver;
+
+    private readonly List<byte[]> _agentKeys = [];
+
+    /// <summary>A vault key from the agent, zeroed by <see cref="ZeroAgentKeys"/> when the command is done with it.</summary>
+    internal void TrackAgentKey(byte[] key)
     {
-        _ = config;
-        return null;
+        lock (_agentKeys)
+            _agentKeys.Add(key);
+    }
+
+    /// <summary>Ruling 8: zeroes every vault key an agent handed this command (<see cref="CliRunner"/>'s <c>finally</c>).</summary>
+    internal void ZeroAgentKeys()
+    {
+        lock (_agentKeys)
+        {
+            foreach (var key in _agentKeys)
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+                AgentKeyZeroedObserver?.Invoke(key);
+            }
+            _agentKeys.Clear();
+        }
     }
 
     /// <summary>

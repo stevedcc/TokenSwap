@@ -490,7 +490,7 @@ public sealed partial class AgentServer : IAsyncDisposable
     /// ASCII, with any run that could be key material removed, and at most 512 bytes. Any other
     /// exception says only that the unlock failed.
     /// </summary>
-    internal static string SafeMessage(Exception ex)
+    public static string SafeMessage(Exception ex)
     {
         var text = ex is TswapException ? ex.Message : "The agent's hardware unlock failed.";
         var printable = new StringBuilder(text.Length);

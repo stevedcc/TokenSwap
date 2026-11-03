@@ -55,6 +55,7 @@ public sealed class ClassicVaultRefusalTests : IDisposable
         "recover" => [command, "--yubikey"],
         "vault" => [command, "reindex"],
         "broker" => [command, "serve"],
+        "agent" => [command, "status"],
         _ => [command],
     };
 

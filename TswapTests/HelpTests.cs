@@ -95,6 +95,18 @@ public class HelpTests : IDisposable
         Assert.Contains("sudo --preserve-env=TSWAP_YUBIKEY_SERIAL", stdout);
     }
 
+    // Brief T17 task 11: the agent command (no sudo) and TSWAP_AGENT_SOCK are on the help screen.
+    [Fact]
+    public void TopLevelHelp_ListsTheAgentAndItsVariable()
+    {
+        var (_, stdout, _) = Run(sudoBypass: true, "--help");
+
+        var line = stdout.Split('\n').Single(l => l.Contains("tswap agent "));
+        Assert.Contains("agent <start [--timeout <d>]|serve [--foreground]|stop|status>", line);
+        Assert.DoesNotContain("[sudo]", line);
+        Assert.Contains("TSWAP_AGENT_SOCK", stdout);
+    }
+
     [Fact]
     public void GetHelp_NeedsNeitherSudoNorAVault()
     {

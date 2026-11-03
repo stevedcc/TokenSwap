@@ -20,6 +20,7 @@ public static class CommandRegistry
         new RotateCommand(),
         new NamesCommand(),
         new SlotsCommand(),
+        new AgentCommand(),
         new RunCommand(),
         new CheckCommand(),
         new RedactCommand(),
@@ -138,6 +139,8 @@ public static class CommandRegistry
         o.WriteLine("  SUDO_USER's home from the system's user database, checked against SUDO_UID.");
         o.WriteLine("  TSWAP_YUBIKEY_SERIAL the YubiKey to unlock with when several are plugged in (sudo drops");
         o.WriteLine("                      it unless kept, e.g. sudo --preserve-env=TSWAP_YUBIKEY_SERIAL; intended).");
+        o.WriteLine("  TSWAP_AGENT_SOCK    the tswap agent's socket (default: one per vault in the vault user's run folder;");
+        o.WriteLine("                      sudo drops it, and finds that user's agent by the vault folder's owner).");
         o.WriteLine("  With several keys and no terminal, tswap never prompts: it tries the keys with a slot,");
         o.WriteLine("  no-touch first, then unknown, then touch-required. On a terminal it asks (on stderr),");
         o.WriteLine("  offering the touch-required key as the default.");

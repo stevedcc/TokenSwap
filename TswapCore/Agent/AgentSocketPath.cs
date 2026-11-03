@@ -29,7 +29,7 @@ public static class AgentSocketPath
     private const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     /// <summary>What <see cref="For(uint, byte[], Func{string, string?}, Inputs)"/> reads from the machine (tests swap it).</summary>
-    internal sealed record Inputs(string RunUserRoot, Func<uint, string?> HomeOf, IUnixOwnership Ownership, bool MacOs)
+    public sealed record Inputs(string RunUserRoot, Func<uint, string?> HomeOf, IUnixOwnership Ownership, bool MacOs)
     {
         public static Inputs Machine => new("/run/user", BrokerNative.HomeOf, new UnixOwnership(), OperatingSystem.IsMacOS());
     }
@@ -55,7 +55,7 @@ public static class AgentSocketPath
         return For(ownerUid, vaultId, env, Inputs.Machine);
     }
 
-    internal static string For(uint ownerUid, byte[] vaultId, Func<string, string?> env, Inputs inputs)
+    public static string For(uint ownerUid, byte[] vaultId, Func<string, string?> env, Inputs inputs)
     {
         var overridden = env(Variable);
         var path = string.IsNullOrEmpty(overridden)

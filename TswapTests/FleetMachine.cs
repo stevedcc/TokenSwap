@@ -22,6 +22,7 @@ public sealed class FleetMachine : IDisposable
         Dir = Path.Combine(Path.GetTempPath(), $"tswap-fleet-{name}-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Dir);
         Keys = keys ?? SimulatedYubiKeyService.WithKeys();
+        AgentSocket = DefaultAgentSocket;
     }
 
     public string Dir { get; }
@@ -99,23 +100,46 @@ public sealed class FleetMachine : IDisposable
     public (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
 
+    /// <summary>
+    /// Brief T17 task 11: the <c>TSWAP_AGENT_SOCK</c> value this machine's commands see. By default a socket in
+    /// this machine's own folder, so a test never meets the user's real agent; null models an unset variable
+    /// (sudo drops it), where the path comes from the vault owner's uid.
+    /// </summary>
+    public string? AgentSocket { get; set; }
+
+    /// <summary>The default <see cref="AgentSocket"/>: <c>&lt;Dir&gt;/run/agent.sock</c> (the agent makes <c>run</c> 0700).</summary>
+    public string DefaultAgentSocket => Path.Combine(Dir, "run", "agent.sock");
+
     private (int Exit, string Out, string Err) Run(FakeConsole console, string[] args)
     {
         LastConsole = console;
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable };
+        var ctx = Context(console, args);
+        var exit = CliRunner.Run(ctx, args);
+        return (exit, console.OutText, console.ErrorText);
+    }
+
+    /// <summary>
+    /// Brief T17 task 11: the context one command of this machine runs with (what <see cref="Run(string, string[])"/>
+    /// builds), for a test that runs a command itself, e.g. the <c>agent serve</c> child in process.
+    /// </summary>
+    public CommandContext Context(FakeConsole console, string[] args)
+    {
+        var env = new CliEnvironment
+        {
+            Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable,
+            AgentSocketVariable = AgentSocket,
+        };
         var backends = new List<IHardwareKeyService>();
         if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
         var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
-        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        return new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
         };
-        var exit = CliRunner.Run(ctx, args);
-        return (exit, console.OutText, console.ErrorText);
     }
 
     /// <summary>Runs and asserts success, returning stdout.</summary>

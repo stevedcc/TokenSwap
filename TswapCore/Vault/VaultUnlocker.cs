@@ -196,7 +196,17 @@ public sealed class VaultUnlocker
         if (sources.Prompt is null)
             throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal +
                 (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)));
-        using var original = sources.Prompt();
+        StretchedPassword prompted;
+        try
+        {
+            prompted = sources.Prompt();
+        }
+        catch (VaultPasswordUnavailableException ex) when (agentFailure is not null)
+        {
+            // No password to be had (no terminal, no vault-password file): still say why the agent failed.
+            throw new VaultPasswordUnavailableException(ex.Message + " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure));
+        }
+        using var original = prompted;
         VaultPasswordProvider provider = original.Clone;
 
         TswapException? pass3Error = null;
