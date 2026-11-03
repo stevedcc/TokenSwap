@@ -259,8 +259,10 @@ internal static partial class AppleSecureEnclaveInterop
         if (rc != 0)
             throw SecureEnclaveReturnCodes.UnwrapFailure(rc);
 
-        Array.Resize(ref plaintext, plaintextLen);
-        return plaintext;
+        // A copy of the key's length; the full buffer (holding the key too) is zeroed, not left to the GC.
+        var key = plaintext.AsSpan(0, plaintextLen).ToArray();
+        CryptographicOperations.ZeroMemory(plaintext);
+        return key;
     }
 
     /// <summary>
@@ -293,8 +295,10 @@ internal static partial class AppleSecureEnclaveInterop
         if (rc != 0)
             throw SecureEnclaveReturnCodes.UnwrapV2Failure(rc);
 
-        Array.Resize(ref plaintext, plaintextLen);
-        return plaintext;
+        // A copy of the key's length; the full buffer (holding the key too) is zeroed, not left to the GC.
+        var key = plaintext.AsSpan(0, plaintextLen).ToArray();
+        CryptographicOperations.ZeroMemory(plaintext);
+        return key;
     }
 
     /// <summary>

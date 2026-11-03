@@ -23,9 +23,14 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
     public bool IsSimulated => yubiKeys.IsSimulated;
 
     /// <remarks>Brief T17: a legacy pair slot or classic vault never has the vault password, so
-    /// <paramref name="password"/> is never called.</remarks>
+    /// <paramref name="password"/> must be null (one-key YubiKey slots use it through
+    /// <c>YubiKeySlotKek.Recover</c>). A route that passes one anyway is a bug: refused, never ignored.</remarks>
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
-        => Unlock(config, YubiKeySelection.FromChooser(chooseSerial));
+    {
+        if (password is not null)
+            throw new ArgumentException("A classic YubiKey vault has no vault password; this unlock can't use one.", nameof(password));
+        return Unlock(config, YubiKeySelection.FromChooser(chooseSerial));
+    }
 
     /// <summary>
     /// Unlocks a classic XOR vault (brief T7 item 4): either enrolled key works with the share, so

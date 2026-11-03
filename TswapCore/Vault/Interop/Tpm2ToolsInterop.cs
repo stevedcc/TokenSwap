@@ -420,7 +420,10 @@ internal static partial class Tpm2ToolsInterop
         stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();
         process.WaitForExit();
-        return new TpmToolRun(process.ExitCode, stdoutBuffer.ToArray(), stderr);
+        // stdout can be the unsealed key: the stream's own buffer is zeroed once copied out.
+        var stdout = stdoutBuffer.ToArray();
+        CryptographicOperations.ZeroMemory(stdoutBuffer.GetBuffer());
+        return new TpmToolRun(process.ExitCode, stdout, stderr);
     }
 
     private static Process Start(string command, IReadOnlyList<string> args, bool redirectStdin)

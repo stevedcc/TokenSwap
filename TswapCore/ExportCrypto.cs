@@ -50,7 +50,15 @@ public static class ExportCrypto
         var parallelism = kdf.Parallelism ?? throw new TswapException("Export file is missing its Argon2id parallelism parameter");
 
         var derived = new byte[32];
-        DeriveArgon2id(Encoding.UTF8.GetBytes(passphrase), salt, memoryKiB, timeCost, parallelism, derived);
+        var passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
+        try
+        {
+            DeriveArgon2id(passphraseBytes, salt, memoryKiB, timeCost, parallelism, derived);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(passphraseBytes);
+        }
         return derived;
     }
 

@@ -499,7 +499,9 @@ A broker whose slot has the password starts **locked** and is unlocked once with
 - **The derivation is best effort.** The typed password is a .NET string, which can't be zeroed, and
   Argon2id's 64 MiB working memory and output array live on the managed heap, which may be swapped and
   can't be zeroed reliably. tswap zeroes its own UTF-8 bytes and output buffer. "Locked, never swapped"
-  applies to the held stretched password only.
+  applies to the held stretched password only. On Linux the TPM auth text (`hex:` and the stretched
+  bytes in hex) also sits in the kernel's pages of the memfd tpm2-tools reads it from, until that
+  child exits; tswap can't wipe those.
 - **The tswap CLI stays dumpable** while it holds the vault key during a command, as before.
 - **The agent's answers are authenticated by the vault folder.** The key check proves an answer is
   this vault's key given a `vault-password` file only the vault's machines can write: someone who can

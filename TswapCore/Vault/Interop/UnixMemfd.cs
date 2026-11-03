@@ -58,6 +58,8 @@ internal sealed partial class UnixMemfd : IDisposable
                     throw new TswapException(
                         $"TPM operation failed while preparing the password for the TPM: write failed (errno {errno}).");
                 }
+                if (n == 0) // never for a memfd; without this check it would loop for ever
+                    throw new TswapException("TPM operation failed while preparing the password for the TPM: write wrote nothing.");
                 written += (int)n;
             }
             return memfd;
