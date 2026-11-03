@@ -624,13 +624,21 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
     }
 
     /// <summary>Starts a 200 answer, then throws (I224 fix round 1, F2: the log shows the status that was sent).</summary>
+    /// <summary>
+    /// Sends the 200 headers, then throws once the client has read them (<see cref="HeadersRead"/>). Without that
+    /// wait the throw could abort the connection before Kestrel had written the headers to the socket (FlushAsync
+    /// doesn't promise that); macOS CI then read nothing (PR #232, run 41697297718).
+    /// </summary>
     private sealed class ThrowingForwarderAfterTheHeaders : IBrokerForwarder
     {
+        public TaskCompletionSource HeadersRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public async Task<BrokerForwardOutcome> ForwardAsync(HttpContext http, BrokerForwardRequest request, CancellationToken cancellationToken)
         {
             http.Response.StatusCode = 200;
             await http.Response.StartAsync(cancellationToken);
             await http.Response.Body.FlushAsync(cancellationToken);
+            await HeadersRead.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
             throw new InvalidOperationException("secret-looking message s3cr3t");
         }
     }
@@ -662,9 +670,34 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
     {
         if (OperatingSystem.IsWindows())
             return;
-        await _h.StartAsync(forwarder: new ThrowingForwarderAfterTheHeaders());
+        var forwarder = new ThrowingForwarderAfterTheHeaders();
+        await _h.StartAsync(forwarder: forwarder);
 
-        var response = Encoding.ASCII.GetString(await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"));
+        // Read the headers first, then let the forwarder throw, then read to the end (abort or close).
+        using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await client.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath("lane1")));
+        await client.SendAsync(Encoding.ASCII.GetBytes("GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n"));
+        var received = new MemoryStream();
+        var buffer = new byte[8192];
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // a hang fails the test
+        while (true)
+        {
+            int n;
+            try
+            {
+                n = await client.ReceiveAsync(buffer, SocketFlags.None, guard.Token);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+            {
+                break;
+            }
+            if (n == 0)
+                break;
+            received.Write(buffer, 0, n);
+            if (Encoding.ASCII.GetString(received.ToArray()).Contains("\r\n\r\n", StringComparison.Ordinal))
+                forwarder.HeadersRead.TrySetResult();
+        }
+        var response = Encoding.ASCII.GetString(received.ToArray());
 
         Assert.StartsWith("HTTP/1.1 200", response);
         Assert.DoesNotContain("502", response);
