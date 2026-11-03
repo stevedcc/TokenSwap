@@ -190,7 +190,7 @@ public class YubiKeySlotTests
     [Fact]
     public void IsYubiKeyBlob_IsFalseForOtherBackendsBlobsAndNoBlob()
     {
-        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, new byte[32]).Enroll();
+        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, new byte[32]).Enroll(password: null);
 
         Assert.False(YubiKeySlotBlob.IsYubiKeyBlob(tpmBlob));
         Assert.False(YubiKeySlotBlob.IsYubiKeyBlob(null));
@@ -202,10 +202,10 @@ public class YubiKeySlotTests
     public void Decode_UnknownVersion_IsRejected()
     {
         var bytes = Blob().Encode();
-        bytes[4] = 2;
+        bytes[4] = 3;
 
         var ex = Assert.Throws<TswapException>(() => YubiKeySlotBlob.Decode(bytes));
-        Assert.Contains("version 2", ex.Message);
+        Assert.Contains("version 3", ex.Message);
         Assert.Contains("newer tswap", ex.Message);
     }
 

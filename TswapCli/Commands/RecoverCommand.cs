@@ -30,7 +30,7 @@ namespace TswapCli.Commands;
 public sealed class RecoverCommand : ICliCommand
 {
     public string Name => "recover";
-    public string HelpUsage => $"recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} [--recovery-key-stdin]  (recovery key on stdin)";
+    public string HelpUsage => $"recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} [--recovery-key-stdin]  (recovery key on stdin)";
     public string Description => "Break glass: open the vault with the recovery private key (piped on stdin) and enroll this machine's YubiKey, TPM or Secure Enclave as a new slot (--secure-enclave needs --with-touch or --no-touch)";
     public bool RequiresSudo => true;
 
@@ -38,11 +38,15 @@ public sealed class RecoverCommand : ICliCommand
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        var usage = $"{ctx.Prefix} recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} [{SlotCommand.RecoveryKeyFlag}] " +
-                    $"(the recovery key is read from stdin only, e.g. sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey)";
+        var usage = $"{ctx.Prefix} recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} [{SlotCommand.RecoveryKeyFlag}] " +
+                    $"(the recovery key is read from stdin only, e.g. sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey; " +
+                    "with --password the key is stdin's first line and the vault password follows on the next)";
         // Brief T11: the touch choice first (--secure-enclave needs exactly one), then exactly one device.
         var (rest, _) = SlotCommand.SplitRecoveryKeyFlag(args);
         (rest, var requirePresence) = SecureEnclaveTouchChoice.Split(rest, usage);
+        // Brief T17 ruling 15: --password / --no-password. Stdin carries the recovery key, so without a flag
+        // the new slot gets no password (and one line says so).
+        (rest, var passwordFlag) = VaultPasswordChoice.Split(rest, usage);
         if (rest is not [var device] || !Devices.Contains(device))
             throw new UsageException(usage);
         HardwareBackend? hardware = device switch
@@ -70,18 +74,22 @@ public sealed class RecoverCommand : ICliCommand
         // Throws a clear TswapException on an OS without this hardware, before the key is read.
         var enrollment = hardware is null ? null : HardwareServices.Enrollment(hardware.Value, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true);
 
-        var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring);
+        var vaultKey = SlotCommand.UnlockWithRecoveryKey(ctx, keyring, keyOnFirstLine: passwordFlag == true);
         Slot newSlot;
         string deviceName;
         YubiKeySlotBlob? yubiKey = null;
+        VaultPasswordChoice.Resolved? password = null;
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
         try
         {
+            // Brief T17 ruling 15: the vault's password (checked with K_v), or the first one (asked twice).
+            password = VaultPasswordChoice.Resolve(ctx, passwordFlag, hardware ?? HardwareBackend.YubiKey,
+                ctx.Storage as RecordVaultStore, vaultKey, keyring.VaultId, "recover");
             byte[] kekSlot, hwBlob;
             if (enrollment is null)
             {
                 c.Out.WriteLine("Recovery key accepted. Enrolling a YubiKey as a new slot.");
-                (yubiKey, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
+                (yubiKey, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
                 hwBlob = yubiKey.Encode();
                 deviceName = $"YubiKey {yubiKey.Serial}";
             }
@@ -89,7 +97,7 @@ public sealed class RecoverCommand : ICliCommand
             {
                 deviceName = hardware == HardwareBackend.Tpm ? "this machine's TPM" : "this machine's Secure Enclave";
                 c.Out.WriteLine($"Recovery key accepted. Enrolling {deviceName} as a new slot.");
-                (kekSlot, hwBlob) = enrollment.Enroll();
+                (kekSlot, hwBlob) = enrollment.Enroll(password?.Stretched);
             }
             try
             {
@@ -113,6 +121,7 @@ public sealed class RecoverCommand : ICliCommand
         }
         finally
         {
+            password?.Dispose();
             CryptographicOperations.ZeroMemory(vaultKey);
         }
 
@@ -138,11 +147,16 @@ public sealed class RecoverCommand : ICliCommand
             var backup = fileStore.BackupConfig();
             c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
+        // Brief T17: a first password slot's vault-password file goes in before the keyring that needs it.
+        if (password is not null && ctx.Storage is RecordVaultStore recordStore)
+            password.WriteNewFile(recordStore);
         ctx.Storage.SaveConfig(newConfig);
 
         c.Out.WriteLine($"\n✓ Recovered: {deviceName} now opens this vault as its own slot. The recovery slot stays.");
         if (hardware == HardwareBackend.SecureEnclave)
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence != false));
+        if (password is not null)
+            c.Out.WriteLine("The new slot needs the vault password (or a running 'tswap agent') for every unlock.");
         SlotCommand.PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
         c.Out.WriteLine("Other copies of the vault don't have the new slot yet: on each, run");

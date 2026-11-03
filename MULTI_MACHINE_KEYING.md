@@ -572,6 +572,112 @@ conflicted copy, is never touched), even when the state is equal on both sides, 
 a reindexed copy into a folder leaves it fully fingerprinted (tombstones included) without a reindex
 of its own. A second merge then writes nothing.
 
+### The vault password (brief T17, v0.2.0)
+
+An optional second factor on any machine or YubiKey slot (spec:
+`docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`; user docs: README, "The vault
+password and the agent"). One password per vault; slots with and without it can be mixed.
+
+**Stretching.** The password (UTF-8 after NFC normalisation, so one password stretches alike on
+macOS, Linux and Windows) goes through Argon2id with m = 65536 KiB, t = 3, p = 1 and a 32-byte random
+salt per vault, giving the 32-byte **stretched password**. Every backend, the agent and the broker
+use only those 32 bytes.
+
+**The `vault-password` file** (`<vault folder>/vault-password`, 130 bytes, written atomically as the
+folder's owner):
+
+```
+magic "TSVP" | version 1 | vaultId 16 | kdf 1 (1 = Argon2id) | memoryKiB 4 LE | timeCost 4 LE | parallelism 4 LE
+  | salt 32 | verifier 32 | keyCheck 32
+header   = every byte before verifier (magic through salt)
+verifier = HMAC-SHA256(HKDF-SHA256(K_v, 32, info = "tswap-vault-password-verifier-v1"), header ‖ stretched)
+keyCheck = HMAC-SHA256(HKDF-SHA256(K_v, 32, info = "tswap-vault-key-check-v1"), header)
+```
+
+- The salt and parameters are in the clear: a joining machine needs them before it has `K_v`.
+- **Decoding is strict:** exact length, known magic, version and KDF, m in [19456, 262144] KiB, t in
+  [1, 8], p in [1, 4], and a vault id equal to the keyring's. A planted file can make an unlock cost
+  at most 256 MiB and t = 8 (about 1.2 s on the build machine); a weakened one only derives other
+  bytes, which the hardware or the YubiKey KDF then refuses.
+- **The verifier** binds the whole header and the stretched password, so it also authenticates the
+  salt and parameters once `K_v` is known. It is checked at every later password enrolment (one
+  password per vault), at `slot accept` of a password request, and in the proofs of `agent start` and
+  `broker unlock`.
+- **The key check** lets a client confirm that a vault key returned by the agent is this vault's key
+  without the password. Its guarantee rests on the folder's write protection: someone who can write
+  the vault folder can plant a file keyed to their own `K_v` plus a fake agent.
+- **No new guessing target without `K_v`:** both values need the random 256-bit vault key. With
+  `K_v` (for example through a slot **without** the password of a mixed vault) the verifier becomes
+  an offline oracle for the fleet password at one Argon2id per guess; hence "don't reuse the vault
+  password anywhere else".
+- **Conflict copies** (two machines each created one) make every password operation refuse:
+  `The vault folder has two different vault-password files (<names>). Keep one (delete the other) before using the vault password.`
+  Password-free unlocks keep working. A byte-identical copy is not a conflict: the store deletes it
+  on its next password write, and only a file matching the conflict-copy pattern, never
+  `vault-password` itself. A sync tool that propagates that deletion does no harm, since the copy was
+  redundant. The files are compared by content: the refusal comes only when there are at least two
+  different contents (an unreadable copy counts as one). A lone conflict copy with no
+  `vault-password` file refuses with `The vault folder has a conflict copy of the vault-password file
+  (<name>) but no vault-password file. If it holds this vault's password, rename it to
+  vault-password; otherwise delete it.` `broker unlock` never counts either refusal as a wrong
+  password. Don't create the vault password on two machines at the same moment: a write refuses
+  when the folder already has a different file, but two first writes in the same instant race, and
+  the later rename wins (the other machine's new slot then fails the verifier, and `agent start` /
+  `broker unlock` refuse it with `The vault password opened this machine's slot but does not match the
+  vault's vault-password file …`; enrol it again). `vault merge` refuses before writing anything when both folders have different files,
+  and copies the file into this folder when only the other copy has one.
+
+**Where the flag lives: the slot's own hardware blob.** The keyring format does not change (its
+version is in every slot's AAD, so it can't be upgraded without every machine's hardware), and only
+password slots get new blob bytes, so a vault without a password stays byte-identical:
+
+| Slot | Password blob | Key |
+|---|---|---|
+| YubiKey | `YubiKeySlotBlob` version 2 = version 1 plus a `flags` byte (bit 0 = password), 75 bytes | `KEK_slot = HKDF-SHA256(ikm = response(20) ‖ stretched(32), salt = blob.Salt, info = "tswap/yubikey-slot/v2" ‖ slotId, 32)` |
+| TPM (Linux, Windows) | `"TSTP" \| version 1 \| flags 1` followed by today's package (read as a 4-byte length, `TSTP` is 0x50545354, larger than any blob) | the TPM object's auth value / PCP usage auth = the stretched password |
+| Secure Enclave | `"TSSE" \| version 1 \| flags 1` followed by today's package, whose key was made with `.applicationPassword` | the Enclave's application password = the stretched password |
+
+- **Classification** (`SlotPassword.Classify`, which never throws): flags exactly `0x01` is a password
+  slot; any other bit set, or a higher blob version, is "needs a newer tswap"; `0x00`, or a known
+  magic with truncated or trailing bytes, is corrupt. Such slots are set aside before an unlock and
+  only named in its error; the other slots still unlock (T4's rule). `tswap slots` shows them as
+  `needs a newer tswap` / `corrupt (restore config.json from backup)`.
+- **Flipping a flag never weakens a slot.** Stripping a TPM or Secure Enclave header, or rewriting a
+  YubiKey v2 blob as v1, doesn't remove the password: the TPM authorisation, the Enclave credential
+  or the KEK still needs the stretched password, so the unlock fails. The flag only decides whether
+  tswap asks. A stripped TPM header gets its own message
+  (`This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.`);
+  a stripped Secure Enclave header goes through the password-free unwrap and gets that path's generic
+  "Could not unlock with the Secure Enclave" text (the shim's password-free entry points can't tell the
+  case apart, and a system dialog can't supply the 32-byte credential either). For a slot made with
+  `--no-touch` that unwrap allows no interaction, so it refuses at once; a `--with-touch` slot keeps the
+  interactive unwrap, where the dialog can be cancelled; a YubiKey v2 blob rewritten as v1
+  can't be told from a reprogrammed key and gets the "did not authenticate" text with "its slot's
+  password flag was removed" among the causes.
+- **Version requirement.** Every machine that opens a password slot, or rewrites a keyring that holds
+  one, needs tswap 0.2.0 or newer: 0.1.x reads a `TSTP` or `TSSE` blob as a 1.3 GB length prefix and
+  says the config is corrupted.
+- **Classic vaults** (no keyring) can't carry a password: migrate first, then add a password slot.
+
+**Unlock order** (`VaultUnlocker`): pass 1 tries every password-free
+candidate in the usual order (the own backend's slot if it has no password, then the password-free
+YubiKey slots); pass 2, only if nothing opened and a password slot is reachable here, asks the agent;
+pass 3 prompts once and tries the password slots with clones of that one password. A password-free
+vault runs pass 1 only, with the same calls and errors as before, and never contacts an agent.
+`agent serve` and `broker serve` pass no agent source, so neither asks an agent (or itself). The
+proofs of `agent start` and `broker unlock` use `VaultUnlocker.UnlockWithPasswordSlots`: only this
+machine's password slots, so the hardware checks the password even where a password-free slot would
+open the vault, followed by the verifier.
+
+**Joining.** `slot request --password` reads `vault-password` (from `--vault-dir` or this machine's
+config) and seals a TPM / Secure Enclave request with the typed password; the pending config keeps a
+copy of the file (`PendingVaultPassword`). `slot approve` puts the approver's file into the approve
+file (`VaultPassword`; the approve file stays version 2, which 0.1.x readers ignore). `slot accept`
+refuses unless the three copies are byte-identical, asks once, checks the verifier with the recovered
+`K_v` before any hardware call, then recovers `KEK_slot` with the password; a TPM refusal after a
+verified password means the request was sealed with a different one
+(`The password typed at 'slot request' differs; run 'slot request' again.`).
+
 ## The landmine: threshold downgrade
 
 If `k` (or `formatVersion`) lived in a plaintext field, a thief with the synced files **and one

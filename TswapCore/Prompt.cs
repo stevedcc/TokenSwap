@@ -79,6 +79,10 @@ automated/silent unlocking by malicious processes.
    uses it with `%CMD% run`. Never delete and re-create a secret to rotate it
 8. When you create or ingest a secret, always inform the user of the secret name you used
 9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
+10. If a command fails because the vault's slot on this machine needs the vault password, stop and
+   ask the user to run `%CMD% agent start` in their own terminal (or `%CMD% broker unlock` for a locked
+   broker), then retry. You never ask for, type or pass the vault password, and you never run those two
+   commands yourself
 
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty

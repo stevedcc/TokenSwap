@@ -112,6 +112,12 @@ public sealed class SlotsCommand : ICliCommand
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
         }
 
+        // Brief T17 ruling 3 / task 6: with at least one password slot, say how many open without it.
+        var kinds = keyring.Slots.Where(s => s.Kind == SlotKind.Machine).Select(SlotPassword.Classify).ToList();
+        var withoutPassword = kinds.Count(k => k == SlotPasswordKind.None);
+        if (kinds.Contains(SlotPasswordKind.Password) && withoutPassword > 0)
+            sb.Append($"\n{withoutPassword} slot(s) open without the password: keep them away from shared machines.\n");
+
         var changed = SecurityWarnings.Changed(config);
         if (changed.Count > 0)
             sb.Append("\nTouch setting not acknowledged on this machine: " +
@@ -160,7 +166,21 @@ public sealed class SlotsCommand : ICliCommand
     /// physical custody of it, which is a real, if unusual, control (see
     /// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
-    private static string DescribeMachineProtection(Config config, Slot slot) =>
+    private static string DescribeMachineProtection(Config config, Slot slot) => SlotPassword.Classify(slot) switch
+    {
+        // Brief T17 ruling 3: a slot this build can't use is named, never described as if it worked.
+        SlotPasswordKind.NeedsNewerTswap => NeedsNewerTswapMark,
+        SlotPasswordKind.Corrupt => CorruptMark,
+        var kind => DescribeHardware(config, slot) + (kind == SlotPasswordKind.Password ? ", vault password" : ", no password"),
+    };
+
+    /// <summary>Brief T17: the PROTECTION of a slot whose blob needs a newer tswap.</summary>
+    internal const string NeedsNewerTswapMark = "needs a newer tswap";
+
+    /// <summary>Brief T17: the PROTECTION of a slot whose blob is corrupt.</summary>
+    internal const string CorruptMark = "corrupt (restore config.json from backup)";
+
+    private static string DescribeHardware(Config config, Slot slot) =>
         // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
         // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
         YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)

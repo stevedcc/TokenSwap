@@ -119,6 +119,17 @@ public static partial class BrokerNative
         return prctl(PrSetDumpable, 0, 0, 0, 0) == 0;
     }
 
+    /// <summary>
+    /// Linux: <c>prctl(PR_SET_DUMPABLE, dumpable ? 1 : 0)</c> (brief T17 ruling 12: a password broker is
+    /// dumpable only while it holds nothing). Returns false when it failed; a no-op returning true elsewhere.
+    /// </summary>
+    public static bool SetDumpable(bool dumpable)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+        return prctl(PrSetDumpable, dumpable ? 1u : 0u, 0, 0, 0) == 0;
+    }
+
     /// <summary>Linux: <c>prctl(PR_GET_DUMPABLE)</c> (1 dumpable, 0 not); -1 elsewhere.</summary>
     public static int GetDumpable() => OperatingSystem.IsLinux() ? prctl(PrGetDumpable, 0, 0, 0, 0) : -1;
 
@@ -263,6 +274,23 @@ public static partial class BrokerNative
             // struct passwd { char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid; char *pw_gecos; char *pw_dir; char *pw_shell; }
             var dir = *(nint*)(entry + (OperatingSystem.IsMacOS() ? 48 : 32));
             return dir == 0 ? null : Marshal.PtrToStringUTF8(dir);
+        }
+    }
+
+    /// <summary>The user name of <paramref name="uid"/> from the password database (<c>getpwuid_r</c>), or null.</summary>
+    public static unsafe string? NameOf(uint uid)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+        var entry = stackalloc byte[256];
+        var buffer = new byte[16384];
+        nint result;
+        fixed (byte* b = buffer)
+        {
+            if (getpwuid_r(uid, entry, b, (nuint)buffer.Length, &result) != 0 || result == 0)
+                return null;
+            var name = *(nint*)entry; // pw_name is the first field on Linux and macOS
+            return name == 0 ? null : Marshal.PtrToStringUTF8(name);
         }
     }
 

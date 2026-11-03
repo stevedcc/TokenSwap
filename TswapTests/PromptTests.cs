@@ -96,4 +96,19 @@ public class PromptTests
         Assert.Contains("- `sudo tswap restore <name>`", text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..]);
         Assert.Contains("reversible", text);
     }
+
+    [Fact]
+    public void Template_TellsTheAgentToLeaveTheVaultPasswordToTheUser()
+    {
+        // Brief T17 task 14: a password slot without a running tswap agent fails without a terminal; the AI
+        // agent asks the user to start the tswap agent and never handles the vault password itself.
+        var text = Prompt.GetText("tswap");
+        var rules = text[text.IndexOf("## Key rules", StringComparison.Ordinal)..];
+        Assert.Contains("needs the vault password", rules);
+        Assert.Contains("ask the user to run `tswap agent start`", rules);
+        Assert.Contains("never ask for, type or pass the vault password", rules);
+        var should = text[text.IndexOf("## Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)];
+        Assert.DoesNotContain("agent start", should);
+        Assert.DoesNotContain("broker unlock", should);
+    }
 }

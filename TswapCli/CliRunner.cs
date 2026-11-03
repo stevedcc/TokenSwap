@@ -30,5 +30,10 @@ public static class CliRunner
             ctx.Console.Error.WriteLine($"\n❌ Error: {ex.Message}");
             return 1;
         }
+        finally
+        {
+            // Brief T17 ruling 8: a vault key the agent handed this command is zeroed once the command is done.
+            ctx.ZeroAgentKeys();
+        }
     }
 }

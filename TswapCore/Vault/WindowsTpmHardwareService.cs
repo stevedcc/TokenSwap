@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
@@ -41,10 +43,14 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
     /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.
     /// </summary>
-    public HardwareEnrollment Enroll()
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+        // Brief T17 task 9: a password slot's key carries the stretched password as its PCP_USAGEAUTH,
+        // and its blob the TSTP header (ruling 3).
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password)));
     }
 
     /// <summary>
@@ -56,5 +62,6 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     /// <summary>Unlock side: unwraps a payload produced by <see cref="Wrap"/> using this machine's named TPM-backed key.</summary>
     public byte[] Unwrap(byte[] wrapped) => PlatformCryptoProviderInterop.Unwrap(wrapped);
 
-    protected override byte[] RecoverKey(byte[] wrapped) => Unwrap(wrapped);
+    protected override byte[] RecoverKey(byte[] wrapped, StretchedPassword? password) =>
+        password is null ? Unwrap(wrapped) : PlatformCryptoProviderInterop.Unwrap(wrapped, password);
 }

@@ -236,7 +236,7 @@ public class VaultUnlockerTests
         var (yubi, config, _, _) = MakeVault();
         yubi.Connected = []; // YubiKey backend would throw if it were consulted
         var secureEnclave = Simulated(HardwareBackend.SecureEnclave);
-        var (kekSlot, hwBlob) = secureEnclave.Enroll();
+        var (kekSlot, hwBlob) = secureEnclave.Enroll(password: null);
 
         var unlocker = new VaultUnlocker(yubi, additionalBackends: [secureEnclave]);
         var key = unlocker.Unlock(config with

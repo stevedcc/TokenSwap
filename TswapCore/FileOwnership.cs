@@ -76,6 +76,12 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, Time
     public static DirectoryOwnerMatcher Default { get; } = new();
 
     /// <summary>
+    /// The identity seam this matcher applies (brief T17 task 11: <c>tswap agent</c> reads the euid and the vault
+    /// owner's uid through it, so tests that fake root fake it for the agent too).
+    /// </summary>
+    public IUnixOwnership Ownership => _ownership;
+
+    /// <summary>
     /// Replaces <paramref name="path"/> atomically: a new temp file in the same folder, then a
     /// rename over the name. An existing regular file keeps a mode the user chose for it.
     /// </summary>

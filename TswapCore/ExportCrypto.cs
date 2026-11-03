@@ -49,14 +49,39 @@ public static class ExportCrypto
         var timeCost = kdf.TimeCost ?? throw new TswapException("Export file is missing its Argon2id time cost parameter");
         var parallelism = kdf.Parallelism ?? throw new TswapException("Export file is missing its Argon2id parallelism parameter");
 
-        using var argon2 = new Argon2id(Encoding.UTF8.GetBytes(passphrase))
+        var derived = new byte[32];
+        var passphraseBytes = Encoding.UTF8.GetBytes(passphrase);
+        try
+        {
+            DeriveArgon2id(passphraseBytes, salt, memoryKiB, timeCost, parallelism, derived);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(passphraseBytes);
+        }
+        return derived;
+    }
+
+    /// <summary>
+    /// The Argon2id step over a passphrase already encoded to bytes, writing the 32-byte result into
+    /// <paramref name="output"/> (brief T17: the vault password stretches through this). The array
+    /// Konscious returns is zeroed after the copy; the caller zeroes <paramref name="passphrase"/> and
+    /// <paramref name="output"/> when done with them.
+    /// </summary>
+    internal static void DeriveArgon2id(byte[] passphrase, byte[] salt, int memoryKiB, int timeCost, int parallelism, Span<byte> output)
+    {
+        if (output.Length != 32)
+            throw new ArgumentException("The Argon2id output buffer must be 32 bytes", nameof(output));
+        using var argon2 = new Argon2id(passphrase)
         {
             Salt = salt,
             MemorySize = memoryKiB,
             Iterations = timeCost,
             DegreeOfParallelism = parallelism,
         };
-        return argon2.GetBytes(32);
+        var derived = argon2.GetBytes(32);
+        derived.CopyTo(output);
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(derived);
     }
 
     /// <summary>

@@ -246,7 +246,7 @@ public class TpmInitCliTests : IDisposable
         // Decision 2: single-slot TPM vaults made before this brief keep working unchanged: the
         // blob in TpmSealedKey recovers the vault key directly (no keyring).
         var dir = NewTempDir();
-        var (vaultKey, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, KeyA).Enroll();
+        var (vaultKey, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, KeyA).Enroll(password: null);
         var storage = new Storage(dir);
         storage.SaveConfig(new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System,
             Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(blob)));
@@ -396,7 +396,7 @@ public class TpmInitCliTests : IDisposable
         Assert.Null(Assert.Single(keyring.Slots, s => s.Kind == SlotKind.Recovery).HwBlob);
 
         // The slot's blob is what unlocks: the simulated machine recovers KEK_slot from it.
-        var kekSlot = new SimulatedHardwareService(backend, KeyA).Unlock(config, _ => 0);
+        var kekSlot = new SimulatedHardwareService(backend, KeyA).Unlock(config, _ => 0, password: null);
         var (kv, _) = SlotSecretPayload.Decode(SlotPayloadWrap.Unwrap(
             machine.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, machine.SlotId));
         Assert.Equal(UnlockVault(dir, KeyA), kv);

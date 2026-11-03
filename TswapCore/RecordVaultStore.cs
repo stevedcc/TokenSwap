@@ -53,6 +53,13 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </summary>
     public const string RecordFormatMarkerFileName = "record-format";
 
+    /// <summary>
+    /// Brief T17 ruling 2: the vault folder's <c>vault-password</c> file (<see cref="VaultPassword.VaultPasswordFile"/>):
+    /// the vault password's salt, Argon2id parameters, verifier and key check, shared by every machine of
+    /// the vault. Sync tools' conflicted copies that differ from it make every password operation refuse.
+    /// </summary>
+    public const string VaultPasswordFileName = "vault-password";
+
     private readonly DirectoryOwnerMatcher _owner;
     private readonly TimeProvider _time;
 
@@ -153,6 +160,9 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     /// <summary>The marker file in the vault folder.</summary>
     public string RecordFormatMarkerFile => Path.Combine(VaultDir, RecordFormatMarkerFileName);
+
+    /// <summary>Brief T17: the <c>vault-password</c> file in the vault folder.</summary>
+    public string VaultPasswordPath => Path.Combine(VaultDir, VaultPasswordFileName);
 
     /// <summary>Test seam: removes a redundant conflicted copy (default: through the file layer).</summary>
     internal Action<string>? DeleteFile { get; init; }
@@ -319,6 +329,112 @@ public sealed class RecordVaultStore : IFileVaultStore
                 _warnings?.WriteLine($"Warning: could not remove the redundant conflicted copy {Path.GetFileName(path)} ({ex.Message}); remove it by hand.");
             }
         }
+    }
+
+    // ------------------------------------------------------------------ brief T17: vault-password
+
+    /// <summary>
+    /// The <c>vault-password</c> file, decoded strictly for the vault <paramref name="vaultId"/>
+    /// (<see cref="VaultPassword.VaultPasswordFile.Decode"/>); null when the folder has none. Throws ruling 2's
+    /// conflict message when a sync tool's conflicted copy differs from it.
+    /// </summary>
+    public VaultPassword.VaultPasswordFile? ReadVaultPassword(byte[] vaultId) =>
+        ReadVaultPasswordBytes() is { } bytes ? VaultPassword.VaultPasswordFile.Decode(bytes, vaultId) : null;
+
+    /// <summary>
+    /// The raw bytes of the <c>vault-password</c> file (for <c>slot request</c> and approve files), or null
+    /// when the folder has none. Byte-identical conflicted copies are fine; a differing one throws ruling 2's
+    /// conflict message.
+    /// </summary>
+    public byte[]? ReadVaultPasswordBytes() => ReadVaultPasswordWithCopies().Bytes;
+
+    /// <summary>A sync tool's conflict copy of <c>vault-password</c> and no <c>vault-password</c> file ({0}: the copy's name).</summary>
+    public const string LoneConflictCopyText =
+        "The vault folder has a conflict copy of the vault-password file ({0}) but no vault-password file. " +
+        "If it holds this vault's password, rename it to vault-password; otherwise delete it.";
+
+    /// <summary>
+    /// The <c>vault-password</c> file and its sync-tool conflict copies, grouped by content (ruling 2, review T17
+    /// fix round 1): byte-identical copies are not a conflict (they are returned for removal on the next write,
+    /// and a read uses any one of them); two or more different contents refuse with the "two different" text,
+    /// naming every file; a lone conflict copy with no <c>vault-password</c> file refuses with
+    /// <see cref="LoneConflictCopyText"/>. An unreadable copy can't be shown identical, so it counts as a
+    /// content of its own. <c>Canonical</c> says whether the <c>vault-password</c> file itself exists.
+    /// </summary>
+    private (byte[]? Bytes, bool Canonical, List<(string Path, byte[] Bytes)> IdenticalCopies) ReadVaultPasswordWithCopies()
+    {
+        var vaultDir = VaultDir;
+        var bytes = ReadCanonicalVaultPassword();
+        var copies = _owner.AsOwner(vaultDir, () => RecordDirectoryScanner.FindConflictCopies(new DirectoryInfo(vaultDir), VaultPasswordFileName))
+            .Select(c => c.ConflictingFilename)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        List<byte[]> contents = bytes is null ? [] : [bytes];
+        var unreadable = 0;
+        List<(string, byte[])> readable = [];
+        foreach (var name in copies)
+        {
+            var copyPath = Path.Combine(vaultDir, name);
+            byte[] copyBytes;
+            try
+            {
+                copyBytes = _owner.ReadAllBytes(copyPath);
+            }
+            catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+            {
+                unreadable++;
+                continue;
+            }
+            readable.Add((copyPath, copyBytes));
+            if (!contents.Any(c => c.AsSpan().SequenceEqual(copyBytes)))
+                contents.Add(copyBytes);
+        }
+        if (contents.Count + unreadable >= 2)
+            throw new TswapException(
+                $"The vault folder has two different vault-password files ({string.Join(", ", (bytes is null ? [] : new[] { VaultPasswordFileName }).Concat(copies))}). " +
+                "Keep one (delete the other) before using the vault password.");
+        if (bytes is null && copies.Count == 1)
+            throw new TswapException(string.Format(System.Globalization.CultureInfo.InvariantCulture, LoneConflictCopyText, copies[0]));
+        return (bytes ?? (contents.Count == 1 ? contents[0] : null), bytes is not null, readable);
+    }
+
+    /// <summary>The <c>vault-password</c> file's bytes, or null when there is none (also when a sync tool removed it just now).</summary>
+    private byte[]? ReadCanonicalVaultPassword()
+    {
+        var path = VaultPasswordPath;
+        if (!_owner.FileExists(path))
+            return null;
+        try
+        {
+            return _owner.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null; // gone between the two calls: no file, as if the check had come a moment later
+        }
+    }
+
+    /// <summary>
+    /// Writes the <c>vault-password</c> file atomically and durably through the file layer, as the keyring
+    /// is written (0600, as the folder's owner). Refuses while a differing conflicted copy exists (ruling 2)
+    /// or when the folder already has a different file (another machine created the vault password first:
+    /// overwriting it would lock out that machine's password slots). Byte-identical conflicted copies are
+    /// then removed (only files matching the sync tools' conflict-copy names, never the file itself); a
+    /// failed removal is a warning.
+    /// </summary>
+    public void WriteVaultPassword(VaultPassword.VaultPasswordFile file)
+    {
+        var bytes = file.Encode();
+        var (existing, canonical, identical) = ReadVaultPasswordWithCopies();
+        if (existing is not null && !existing.AsSpan().SequenceEqual(bytes))
+            throw new TswapException(
+                $"The vault folder {VaultDir} already has a different vault-password file. Every password slot of a vault " +
+                "uses the same password: use the existing one, or remove the file by hand only if no slot uses it.");
+        TightenModes();
+        _owner.CreateDirectory(VaultDir);
+        if (!canonical)
+            _owner.WriteDurable(VaultPasswordPath, bytes);
+        RemoveRedundantCopies(identical);
     }
 
     private static string ToolName(SyncConflictTool tool) => tool switch

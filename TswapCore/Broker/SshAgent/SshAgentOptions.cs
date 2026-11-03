@@ -6,6 +6,12 @@ public sealed record SshAgentOptions
     /// <summary>The keys loaded at start, by name (public parts only).</summary>
     public required IReadOnlyDictionary<string, SshAgentKey> Keys { get; init; }
 
+    /// <summary>
+    /// Brief T17: a password broker's keys, which change at unlock and lock (<see cref="DeferredSshKeys.Current"/>);
+    /// null: <see cref="Keys"/>, fixed at start.
+    /// </summary>
+    public Func<IReadOnlyDictionary<string, SshAgentKey>>? CurrentKeys { get; init; }
+
     /// <summary>Where each signature's private key comes from: a fresh unlock reading only that key's record.</summary>
     public required ISshKeySource KeySource { get; init; }
 

@@ -52,6 +52,10 @@ internal static class CliHost
             bool sudoBypass = false;
 #if DEBUG
             sudoBypass = getEnv("TSWAP_TEST_SUDO_BYPASS") == "1";
+            // Brief T17 test seam: TSWAP_TEST_TERMINAL=1 with TSWAP_TEST_KEY plays a terminal on piped
+            // stdin, so an E2E test can type the vault password at its prompt. Debug builds only.
+            if (testKey is not null && getEnv("TSWAP_TEST_TERMINAL") == "1")
+                console = new TestTerminalConsole(console);
 #endif
 
             IYubiKeyService yubiKeys = testKey is not null
@@ -84,4 +88,22 @@ internal static class CliHost
             return 1;
         }
     }
+
+#if DEBUG
+    /// <summary>
+    /// Brief T17 test seam (Debug only): <paramref name="inner"/> reporting a terminal although stdin is
+    /// piped. Its password reads still take a line from stdin, as <see cref="SystemConsole"/> does on piped input.
+    /// </summary>
+    private sealed class TestTerminalConsole(IConsole inner) : IConsole
+    {
+        public TextWriter Out => inner.Out;
+        public TextWriter Error => inner.Error;
+        public TextReader In => inner.In;
+        public bool IsInputRedirected => false;
+        public string? ReadLine() => inner.ReadLine();
+        public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo);
+        public void SetForeground(ConsoleColor color) => inner.SetForeground(color);
+        public void ResetColor() => inner.ResetColor();
+    }
+#endif
 }
