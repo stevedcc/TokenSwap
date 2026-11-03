@@ -223,16 +223,30 @@ public static partial class PeerIdentity
     /// </summary>
     public static string? ParseCgroupV2(ReadOnlySpan<byte> content)
     {
-        var text = Encoding.UTF8.GetString(content);
-        if (text.EndsWith('\n'))
-            text = text[..^1];
-        if (text.Contains('\n') || !text.StartsWith("0::/", StringComparison.Ordinal))
+        if (CgroupV2Path(content) is not { } path)
             return null;
-        var path = text[3..];
+        // Unlike the shape check, every segment must be a name: this refuses "0::/" (the root cgroup, whose
+        // path has one empty segment) as well as "." and "..". A peer is never the root, and a binding can't be
+        // (D1); serve's own start check (BrokerContainerHost.OwnCgroupProblem) uses CgroupV2Path and accepts
+        // "0::/", because serve itself may well run in the root cgroup of its namespace.
         foreach (var segment in path[1..].Split('/'))
             if (segment is "" or "." or "..")
                 return null;
         return path;
+    }
+
+    /// <summary>
+    /// The shape of a cgroup v2 <c>/proc/&lt;pid&gt;/cgroup</c>, shared by <see cref="ParseCgroupV2"/>, <c>serve</c>'s
+    /// start check and <c>socket bind --pid</c> (I224 fix round 1, F5): exactly one line <c>0::/...</c> (the
+    /// kernel's trailing newline optional), decoded as UTF-8 with replacement characters. Returns the absolute
+    /// path after <c>0::</c>, its segments unchecked, or null (cgroup v1 or hybrid, several lines, a relative path).
+    /// </summary>
+    public static string? CgroupV2Path(ReadOnlySpan<byte> content)
+    {
+        var text = Encoding.UTF8.GetString(content);
+        if (text.EndsWith('\n'))
+            text = text[..^1];
+        return text.Contains('\n') || !text.StartsWith("0::/", StringComparison.Ordinal) ? null : text[3..];
     }
 
     /// <summary>The type field of an SELinux context (<c>user:role:type:level</c>), or null.</summary>

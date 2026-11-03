@@ -1,4 +1,4 @@
-using System.Text;
+using TswapCore.Agent;
 
 namespace TswapCore.Broker;
 
@@ -72,14 +72,11 @@ public sealed record BrokerContainerHost
     internal static string? OwnCgroupProblem(byte[]? content)
     {
         const string NotV2 = "\"container\" needs a cgroup v2 host (/proc/self/cgroup must be one \"0::/...\" line)";
-        if (content is null)
+        // The shape only (PeerIdentity.CgroupV2Path): "0::/" is accepted here, as serve may run in the root
+        // cgroup; ParseCgroupV2 refuses it for peers, which are never the root (see its comment).
+        if (content is null || PeerIdentity.CgroupV2Path(content) is not { } path)
             return NotV2;
-        var text = Encoding.UTF8.GetString(content);
-        if (text.EndsWith('\n'))
-            text = text[..^1];
-        if (text.Contains('\n') || !text.StartsWith("0::/", StringComparison.Ordinal))
-            return NotV2;
-        if (text[3..].Split('/').Contains(".."))
+        if (path.Split('/').Contains(".."))
             return "\"container\" needs serve in the host's root cgroup namespace (/proc/self/cgroup has a \"..\" segment)";
         return null;
     }

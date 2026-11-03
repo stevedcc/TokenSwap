@@ -161,27 +161,19 @@ public class BrokerContainerConfigTests
 
     // I224 fix round 1 (MiMo p1 M4): a "container" with no usable "cgroup" is refused when the file is read
     // (BrokerContainerConfig.Cgroup is required and non-null in the JSON context), never bound to nothing.
+    // Only our loader's refusal and the field's name are pinned, not the serializer's wording.
     [Theory]
     [InlineData("\"container\": { }")]
     [InlineData("\"container\": { \"selinux_label\": \"system_u:system_r:container_t:s0:c12,c34\" }")]
+    [InlineData("\"container\": { \"cgroup\": null }")]
     public void Container_WithoutACgroup_IsRefused(string binding)
     {
         if (OperatingSystem.IsWindows())
             return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
-        Assert.Equal("broker.json can't be read: JSON deserialization for type 'TswapCore.Broker.BrokerContainerConfig' was missing required properties including: 'cgroup'.",
-            Refused(WithSocket(binding)));
-    }
+        var message = Refused(WithSocket(binding));
 
-    [Fact]
-    public void Container_WithANullCgroup_IsRefused()
-    {
-        if (OperatingSystem.IsWindows())
-            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
-        var message = Refused(WithSocket("\"container\": { \"cgroup\": null }"));
-
-        // The JSON reader's own text, up to the line and byte position it appends.
-        Assert.StartsWith("broker.json can't be read: The constructor parameter 'Cgroup' on type 'TswapCore.Broker.BrokerContainerConfig' " +
-            "doesn't allow null values. Consider updating its nullability annotation. Path: $.sockets[0].container.cgroup | ", message);
+        Assert.StartsWith("broker.json can't be read: ", message);
+        Assert.Contains("cgroup", message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

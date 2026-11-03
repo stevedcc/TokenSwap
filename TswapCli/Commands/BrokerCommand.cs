@@ -677,11 +677,9 @@ public sealed class BrokerCommand : ICliCommand
         var refused = $"socket {name}: can't bind to process {id}";
         var cgroupFile = $"/proc/{id}/cgroup";
         var raw = ReadProcFile(cgroupFile) ?? throw new TswapException($"{refused}: {cgroupFile} can't be read (is the process running?)");
-        var text = System.Text.Encoding.UTF8.GetString(raw);
-        var line = text.EndsWith('\n') ? text[..^1] : text;
-        if (line.Contains('\n') || !line.StartsWith("0::", StringComparison.Ordinal))
-            throw new TswapException($"{refused}: {cgroupFile} is not one cgroup v2 line (0::/...): {BrokerLog.Escape(text, 512)}");
-        var path = line[3..];
+        // The shared shape check (one absolute "0::/..." line); Derive then names a ".." segment with the path read (D6).
+        var path = PeerIdentity.CgroupV2Path(raw)
+            ?? throw new TswapException($"{refused}: {cgroupFile} is not one cgroup v2 line (0::/...): {BrokerLog.Escape(System.Text.Encoding.UTF8.GetString(raw), 512)}");
         var derived = BrokerContainerUnit.Derive(path);
         if (derived.Unit is not { } unit)
             throw new TswapException($"{refused}: {derived.Refusal}; its cgroup is {BrokerLog.Escape(path, 1024)}");

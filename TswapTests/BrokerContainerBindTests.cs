@@ -273,6 +273,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         "socket lane1: can't bind to process 9: it names no systemd unit (.service or .scope) other than a user manager; its cgroup is /user.slice/user-1001.slice")]
     [InlineData("0::/../x/lane1.service\n",
         "socket lane1: can't bind to process 9: it has a \"..\" segment: the process is outside this cgroup namespace's view; its cgroup is /../x/lane1.service")]
+    // I224 fix round 1 (F5, both p1): a relative v2 path is not a cgroup v2 line either
+    [InlineData("0::a.service\n",
+        "socket lane1: can't bind to process 9: /proc/9/cgroup is not one cgroup v2 line (0::/...): 0::a.service\\n")]
     [InlineData("1:name=systemd:/a.service\n0::/a.service\n",
         "socket lane1: can't bind to process 9: /proc/9/cgroup is not one cgroup v2 line (0::/...): 1:name=systemd:/a.service\\n0::/a.service\\n")]
     public void Bind_Pid_Refusals_NameThePathRead(string content, string message)
