@@ -4,10 +4,13 @@ namespace TswapCore.Agent;
 
 /// <summary>
 /// Brief T17 ruling 10: once <c>agent serve</c> has printed its <c>ready</c> line, it lets go of the terminal
-/// session that started it. Its stdin, stdout and stderr are reopened on <c>/dev/null</c> (<c>NUL</c> on
-/// Windows), so a later write can't hit <c>EPIPE</c> on the dead parent's pipes and the parent's reader sees
-/// end of file; then, on Unix, <c>setsid()</c> makes it a session leader of its own, so a later Ctrl+C or
-/// hangup in that terminal no longer reaches it.
+/// session that started it. On Unix its stdin, stdout and stderr are reopened on <c>/dev/null</c>, so a later
+/// write can't hit <c>EPIPE</c> on the dead parent's pipes and the parent's reader sees end of file; then
+/// <c>setsid()</c> makes it a session leader of its own, so a later Ctrl+C or hangup in that terminal no
+/// longer reaches it. On Windows only .NET's console readers and writers are pointed at nothing (no write
+/// reaches the parent's pipes after this); the std handles are not reopened on <c>NUL</c> or closed,
+/// because <c>agent serve</c>'s own stdin stream still owns its handle, and closing it underneath that
+/// stream would let a reused handle number be closed later. The parent's pipe ends close when it exits.
 /// </summary>
 public static partial class ProcessDetach
 {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using TswapCli;
@@ -693,6 +694,63 @@ public sealed class AgentCommandTests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains(AgentSocketPath.OtherVaultMessage(m.AgentSocket!), stderr);
         Assert.Contains(VaultPasswordMessages.NoTerminal, stderr);
+    }
+
+    [Fact]
+    public void Signals_Windows_NoPosixRegistration_CtrlCStillStops()
+    {
+        // Review T17 p3 GLM B1: the detached Windows agent must not die after 'ready' on a signal
+        // registration; on Windows serve registers no POSIX signal, only a Ctrl+C hook (foreground).
+        var registered = new List<PosixSignal>();
+        Action? ctrlC = null;
+        var unhooked = false;
+        var stops = 0;
+
+        using (AgentServeHost.StopOnSignals(() => stops++, isWindows: true,
+                   register: (signal, _) => { registered.Add(signal); return new Released(() => { }); },
+                   hookCtrlC: handler => { ctrlC = handler; return new Released(() => unhooked = true); }))
+        {
+            Assert.Empty(registered);
+            Assert.NotNull(ctrlC);
+            ctrlC!();
+            Assert.Equal(1, stops);
+        }
+        Assert.True(unhooked);
+    }
+
+    [Fact]
+    public void Signals_Windows_CtrlCHookFails_ServeKeepsRunning()
+    {
+        // No console after the detach can make the Ctrl+C hook throw; that must never stop serve.
+        using var signals = AgentServeHost.StopOnSignals(() => { }, isWindows: true,
+            register: (_, _) => throw new PlatformNotSupportedException(),
+            hookCtrlC: _ => throw new System.ComponentModel.Win32Exception(6));
+        Assert.NotNull(signals);
+    }
+
+    [Fact]
+    public void Signals_Unix_SigtermAndSigintStop()
+    {
+        var handlers = new Dictionary<PosixSignal, Action<PosixSignalContext>>();
+        var released = 0;
+        var stops = 0;
+
+        using (AgentServeHost.StopOnSignals(() => stops++, isWindows: false,
+                   register: (signal, handler) => { handlers.Add(signal, handler); return new Released(() => released++); },
+                   hookCtrlC: _ => throw new InvalidOperationException("not on Unix")))
+        {
+            Assert.Equal(new HashSet<PosixSignal> { PosixSignal.SIGINT, PosixSignal.SIGTERM }, handlers.Keys.ToHashSet());
+            var term = new PosixSignalContext(PosixSignal.SIGTERM);
+            handlers[PosixSignal.SIGTERM](term);
+            Assert.True(term.Cancel);
+            Assert.Equal(1, stops);
+        }
+        Assert.Equal(2, released);
+    }
+
+    private sealed class Released(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
     }
 
     // ------------------------------------------------------------------ support

@@ -604,18 +604,36 @@ internal sealed record AgentServeHost(
             : new FileStream(new SafeFileHandle(1, ownsHandle: false), FileAccess.Write, 1)) { AutoFlush = true },
         Detach: () => ProcessDetach.Detach(), // nowhere left to report a failed step: stdio is gone
         Harden: ProcessHardening.HardenHolder,
-        HandleSignals: StopOnSignals);
+        HandleSignals: stop => StopOnSignals(stop, OperatingSystem.IsWindows(), PosixSignalRegistration.Create, HookCtrlC));
 
-    private static IDisposable StopOnSignals(Action stop)
+    /// <summary>
+    /// What stops the agent besides <c>agent stop</c> and its deadline. Unix: SIGTERM and SIGINT. Windows: no
+    /// POSIX signal is registered (review T17 p3 B1: the detached agent has no console, and a registration
+    /// failure there would end it right after <c>ready</c>); Ctrl+C stops <c>serve --foreground</c>, and a
+    /// hook that can't be installed is skipped, never fatal.
+    /// </summary>
+    internal static IDisposable StopOnSignals(Action stop, bool isWindows,
+        Func<PosixSignal, Action<PosixSignalContext>, IDisposable> register, Func<Action, IDisposable> hookCtrlC)
     {
-        var registrations = new List<PosixSignalRegistration>
+        if (isWindows)
         {
-            PosixSignalRegistration.Create(PosixSignal.SIGTERM, s =>
+            try
+            {
+                return hookCtrlC(stop);
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or PlatformNotSupportedException)
+            {
+                return new Registrations([]);
+            }
+        }
+        var registrations = new List<IDisposable>
+        {
+            register(PosixSignal.SIGTERM, s =>
             {
                 s.Cancel = true;
                 stop();
             }),
-            PosixSignalRegistration.Create(PosixSignal.SIGINT, s =>
+            register(PosixSignal.SIGINT, s =>
             {
                 s.Cancel = true;
                 stop();
@@ -624,7 +642,23 @@ internal sealed record AgentServeHost(
         return new Registrations(registrations);
     }
 
-    private sealed class Registrations(List<PosixSignalRegistration> registrations) : IDisposable
+    private static IDisposable HookCtrlC(Action stop)
+    {
+        ConsoleCancelEventHandler handler = (_, e) =>
+        {
+            e.Cancel = true;
+            stop();
+        };
+        Console.CancelKeyPress += handler;
+        return new CtrlCHook(handler);
+    }
+
+    private sealed class CtrlCHook(ConsoleCancelEventHandler handler) : IDisposable
+    {
+        public void Dispose() => Console.CancelKeyPress -= handler;
+    }
+
+    private sealed class Registrations(List<IDisposable> registrations) : IDisposable
     {
         public void Dispose()
         {
