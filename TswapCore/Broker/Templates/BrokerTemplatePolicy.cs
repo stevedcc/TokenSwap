@@ -8,9 +8,12 @@ namespace TswapCore.Broker.Templates;
 /// (<see cref="Protected"/>: the vault folder, <c>broker.json</c>'s folder; the socket folder and
 /// sudo's configuration are always added), and the paths it may never be or contain but may be
 /// inside (<see cref="ProtectedAtOrAbove"/>: the vault user's home). Paths are compared by
-/// <c>st_dev:st_ino</c>, not by name.
+/// <c>st_dev:st_ino</c>, not by name. <see cref="RunFolders"/> (brief I224 D7 H1) are the candidate
+/// folders of the broker's <c>control.sock</c>: a bind may not be, contain or be inside one, whether or
+/// not it exists yet, so they are compared by name too (after resolving the nearest existing ancestor).
 /// </summary>
-public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Protected, IReadOnlyList<string> ProtectedAtOrAbove)
+public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Protected, IReadOnlyList<string> ProtectedAtOrAbove,
+    IReadOnlyList<string>? RunFolders = null)
 {
     /// <summary>sudo's configuration: never bound, nor anything above or below it.</summary>
     public static readonly IReadOnlyList<string> SudoPaths = ["/etc/sudoers", "/etc/sudo.conf", "/etc/sudoers.d"];
@@ -19,7 +22,7 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
     public static BrokerHostContext ForCurrentUser()
     {
         var uid = new UnixOwnership().EffectiveUid;
-        return new BrokerHostContext(uid, [], HomeList(uid));
+        return new BrokerHostContext(uid, [], HomeList(uid), RunFolderCandidates(uid));
     }
 
     /// <summary>
@@ -47,11 +50,24 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
         var protectedPaths = new List<string> { full };
         if (vaultDir is not null)
             protectedPaths.Add(Path.GetFullPath(vaultDir));
-        return new BrokerHostContext(uid, protectedPaths, HomeList(uid));
+        return new BrokerHostContext(uid, protectedPaths, HomeList(uid), RunFolderCandidates(uid));
     }
 
     private static List<string> HomeList(uint uid) =>
         BrokerNative.HomeOf(uid) is { Length: > 0 } home ? [home] : [];
+
+    /// <summary>
+    /// Brief I224 D7 H1: both folders <c>AgentSocketPath.Folder</c> may pick for the broker's control
+    /// socket (which one can change between load and serve): <c>/run/user/&lt;uid&gt;/tswap</c> and
+    /// <c>&lt;home&gt;/.cache/tswap/run</c>, built as it builds them (templates are Linux only).
+    /// </summary>
+    private static List<string> RunFolderCandidates(uint uid)
+    {
+        List<string> folders = [Path.Combine("/run/user", uid.ToString(System.Globalization.CultureInfo.InvariantCulture), "tswap")];
+        if (BrokerNative.HomeOf(uid) is { Length: > 0 } home)
+            folders.Add(Path.Combine(home, ".cache", "tswap", "run"));
+        return folders;
+    }
 }
 
 /// <summary>Whether a template's child shares the host's network (<see cref="Host"/>) or has none of its own (the default).</summary>
@@ -505,7 +521,62 @@ public static class BrokerTemplateValidator
             if (BrokerNative.RealPath(home) is { } real && ContainsIdentity(real, self))
                 throw Ex($"is the vault user's home folder ({home}) or contains it; bind a folder inside it instead.");
         }
+        foreach (var runFolder in host.RunFolders ?? [])
+        {
+            if (RunFolderRelation([normalized, resolved], self, ancestors, runFolder) is { } relation)
+                throw Ex($"{relation} the broker's run folder {runFolder} (a template could delete or use the control socket).");
+        }
         return resolved;
+    }
+
+    /// <summary>
+    /// Brief I224 D7 H1: how a bind (its names <paramref name="bindNames"/>, its identity
+    /// <paramref name="self"/> and the folders above it, <paramref name="ancestors"/>, itself first)
+    /// relates to <paramref name="runFolder"/>: <c>is</c>, <c>contains</c>, <c>is inside</c>, or null.
+    /// By name always (the folder as given and through its nearest existing ancestor, resolved), so a
+    /// run folder that doesn't exist yet is protected; by <c>st_dev:st_ino</c> as well when it exists.
+    /// </summary>
+    private static string? RunFolderRelation(IEnumerable<string> bindNames, BrokerNative.FileIdentity self,
+        IReadOnlyList<BrokerNative.FileIdentity> ancestors, string runFolder)
+    {
+        var folderNames = new[] { Path.GetFullPath(runFolder), ResolveNearestExisting(runFolder) }.OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        foreach (var bind in bindNames)
+            foreach (var folder in folderNames)
+            {
+                if (bind == folder)
+                    return "is";
+                if (IsAtOrUnder(folder, bind))
+                    return "contains";
+                if (IsAtOrUnder(bind, folder))
+                    return "is inside";
+            }
+        if (BrokerNative.RealPath(runFolder) is { } real && BrokerNative.Identify(real, follow: false) is { } target)
+        {
+            if (self.Dev == target.Dev && self.Ino == target.Ino)
+                return "is";
+            if (ContainsIdentity(real, self))
+                return "contains";
+            if (ancestors.Any(a => a.Dev == target.Dev && a.Ino == target.Ino))
+                return "is inside";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> with its nearest existing ancestor resolved (symlinks followed) and the
+    /// missing rest appended by name; the real path when it exists; null when nothing above it resolves.
+    /// </summary>
+    internal static string? ResolveNearestExisting(string path)
+    {
+        var full = Path.GetFullPath(path);
+        for (var p = full; p is not null; p = Path.GetDirectoryName(p))
+        {
+            if (BrokerNative.RealPath(p) is not { } real)
+                continue;
+            var rest = Path.GetRelativePath(p, full);
+            return rest == "." ? real : Path.GetFullPath(Path.Combine(real, rest));
+        }
+        return null;
     }
 
     /// <summary>True when <paramref name="candidate"/> is <paramref name="resolvedPath"/> or one of the folders above it.</summary>
