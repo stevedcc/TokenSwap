@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
 using TswapCore.VaultPassword;
 
@@ -44,11 +45,12 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     /// </summary>
     public HardwareEnrollment Enroll(StretchedPassword? password)
     {
-        // Brief T17 task 9 adds the TPM usage auth (PCP_USAGEAUTH) for password slots.
-        if (password is not null)
-            throw new NotImplementedException("Windows TPM password slots arrive with brief T17 task 9.");
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+        // Brief T17 task 9: a password slot's key carries the stretched password as its PCP_USAGEAUTH,
+        // and its blob the TSTP header (ruling 3).
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password)));
     }
 
     /// <summary>
@@ -61,5 +63,5 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     public byte[] Unwrap(byte[] wrapped) => PlatformCryptoProviderInterop.Unwrap(wrapped);
 
     protected override byte[] RecoverKey(byte[] wrapped, StretchedPassword? password) =>
-        password is null ? Unwrap(wrapped) : throw new NotImplementedException("Windows TPM password slots arrive with brief T17 task 9.");
+        password is null ? Unwrap(wrapped) : PlatformCryptoProviderInterop.Unwrap(wrapped, password);
 }
