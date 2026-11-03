@@ -389,6 +389,13 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
     [InlineData("TERMINFO_DIRS")]
     [InlineData("MAVEN_OPTS")]
     [InlineData("GRADLE_OPTS")]
+    // I224 fix round 1 (MiMo p2 M3, the code-execution ones): hooks of a repo the template's git is pointed
+    // at, less's input filter and the browser a tool starts
+    [InlineData("GIT_DIR")]
+    [InlineData("GIT_WORK_TREE")]
+    [InlineData("LESSOPEN")]
+    [InlineData("LESSCLOSE")]
+    [InlineData("BROWSER")]
     // one name per new prefix
     [InlineData("PYTHONUNBUFFERED")]
     [InlineData("PERL_MM_OPT")]

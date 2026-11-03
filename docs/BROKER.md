@@ -166,7 +166,9 @@ Every other outcome refuses: no pidfd, a hidden or unreadable `/proc` entry, a p
 during the check, a cgroup path that can't be parsed, a mismatch. The connection is closed before
 anything is parsed, unanswered, and logged as `refused-connection` with the reason
 (`no-pidfd`, `proc-hidden`, `identity-unreadable`, `peer-exited`, `cgroup-mismatch`,
-`label-mismatch`) and the observed `cgroup=` and `label=` (escaped, at most 256 characters). The
+`label-mismatch`) and the observed `cgroup="..."` and `label="..."` (quoted, escaped, at most 256
+characters), for example
+`refused-connection socket=lane1 uid=100999 pid=4242 reason=cgroup-mismatch cgroup="/user.slice/.../other.service"`. The
 facts read at accept are kept for the connection: every request and every ssh-agent message is
 checked again against the current `broker.json`, so a reload that rebinds a socket refuses the next
 request or message of a connection that was already open.
@@ -809,7 +811,7 @@ Rules (checked on every load, not only on `add`):
   print `still to bind before serve starts: <names>`, so a v0.1 file can be fixed one socket at a
   time. `container.cgroup` is an absolute cgroup v2 path of printable ASCII, at most 1024 bytes,
   ending in a `.service` or `.scope` unit that is not a user manager (`user@<uid>.service`,
-  `init.scope`), a login session (`session-*.scope`) or the root scope (`-.scope`);
+  `init.scope`, `manager.scope`), a login session (`session-*.scope`) or the root scope (`-.scope`);
 - unknown fields are refused, and `version` must be 1.
 
 A hand edit is allowed but gets the same checks: `serve` refuses an invalid file at start, and on
@@ -1064,9 +1066,9 @@ any route. `sudo tswap broker socket add <name> --uids ... --templates deploy,si
 | Field | Meaning |
 |---|---|
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
-| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a placeholder, and never at or under one of the template's binds (read-only ones too), as configured or resolved (a program not installed yet through its nearest existing folder; it still loads, and its calls fail until it is installed): a container that can write a bound folder (through another mount) could replace the program. Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the image. `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
+| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a placeholder, and never at or under one of the template's binds (read-only ones too), as configured or resolved (symlinks followed, a dangling one too; a program not installed yet through its nearest existing folder; it still loads, and its calls fail until it is installed), checked at load and again before every call: a container that can write a bound folder (through another mount) could replace the program. Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the image. `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or load, trust or write files, they name: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. The list catches mistakes; it isn't complete, so choose tools you know |
+| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or load, trust or write files, they name: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, `GIT_DIR`, `GIT_WORK_TREE` (a repo whose hooks would run), `LESSOPEN`, `LESSCLOSE`, `BROWSER`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. The list catches mistakes; it isn't complete, so choose tools you know |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
@@ -1217,10 +1219,12 @@ the connection is closed without the last frame. Its one log line has
   user without `/run/user/<uid>`), existing or not.
 - More env names are refused, among them every name with one of the new prefixes (`PYTHON`, `PERL`,
   `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_`,
-  `CURL_`) and `HOME`, `TMPDIR`.
+  `CURL_`) and `HOME`, `TMPDIR`, `GIT_DIR`, `GIT_WORK_TREE`, `LESSOPEN`, `LESSCLOSE`, `BROWSER`.
 
 A `broker.json` that breaks one of these rules no longer loads: `serve` refuses to start, and a
-reload keeps the old config and logs why.
+reload keeps the old config and logs why. That includes a template that sets one of the newly
+refused env names, even a harmless one such as `JAVA_HOME`: remove it (or set it in a wrapper
+script under `/usr`) before upgrading.
 
 ## Platforms
 

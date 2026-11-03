@@ -206,6 +206,8 @@ public static class BrokerTemplateValidator
         "GCONV_PATH", "LOCPATH", "NLSPATH", "REQUESTS_CA_BUNDLE", "NETRC", "HOSTALIASES", "LOCALDOMAIN",
         "RES_OPTIONS", "TMPDIR", "HOME", "CLASSPATH", "SSLKEYLOGFILE", "INPUTRC", "TERMINFO", "TERMINFO_DIRS",
         "MAVEN_OPTS", "GRADLE_OPTS",
+        // I224 fix round 1 (MiMo p2 M3, the code-execution ones): a repo with hooks, less's input filters, a browser.
+        "GIT_DIR", "GIT_WORK_TREE", "LESSOPEN", "LESSCLOSE", "BROWSER",
     };
 
     /// <summary>
