@@ -1,3 +1,5 @@
+using TswapCore.VaultPassword;
+
 namespace TswapCore.Vault;
 
 /// <summary>
@@ -20,7 +22,9 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
     public HardwareBackend Backend => HardwareBackend.YubiKey;
     public bool IsSimulated => yubiKeys.IsSimulated;
 
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    /// <remarks>Brief T17: a legacy pair slot or classic vault never has the vault password, so
+    /// <paramref name="password"/> is never called.</remarks>
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
         => Unlock(config, YubiKeySelection.FromChooser(chooseSerial));
 
     /// <summary>

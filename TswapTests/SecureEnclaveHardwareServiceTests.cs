@@ -43,12 +43,12 @@ public class SecureEnclaveHardwareServiceTests
         // Enrollment seam (issue #151): Enroll generates KEK_slot itself and returns the blob;
         // the unlock seam must recover exactly that KEK_slot from the blob on this machine.
         IHardwareEnrollmentService enrollment = new SecureEnclaveHardwareService();
-        var (kekSlot, hwBlob) = enrollment.Enroll();
+        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
-        var recovered = new SecureEnclaveHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for Secure Enclave"));
+        var recovered = new SecureEnclaveHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for Secure Enclave"), password: null);
 
         Assert.Equal(32, kekSlot.Length);
         Assert.Equal(kekSlot, recovered);
@@ -61,7 +61,7 @@ public class SecureEnclaveHardwareServiceTests
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new SecureEnclaveHardwareService();
-        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll();
+        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
         var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 
@@ -82,7 +82,7 @@ public class SecureEnclaveHardwareServiceTests
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
 
-        var recovered = svc.Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for Secure Enclave"));
+        var recovered = svc.Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for Secure Enclave"), password: null);
 
         Assert.Equal(vaultKey, recovered);
     }
@@ -93,7 +93,7 @@ public class SecureEnclaveHardwareServiceTests
         var svc = new SecureEnclaveHardwareService();
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("secure-enclave", ex.Message);
     }
 
@@ -105,7 +105,7 @@ public class SecureEnclaveHardwareServiceTests
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: "not valid base64!!");
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("base64", ex.Message);
     }
 
@@ -121,7 +121,7 @@ public class SecureEnclaveHardwareServiceTests
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("32-byte", ex.Message);
     }
 

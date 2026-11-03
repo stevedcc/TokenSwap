@@ -222,7 +222,7 @@ public sealed class SlotCommand : ICliCommand
 
         var slotKeyPair = SlotKeyPair.Generate();
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (kekSlot, sealedBlob) = enrollment.Enroll();
+        var (kekSlot, sealedBlob) = enrollment.Enroll(password: null);
         // Not kept: 'slot accept' recovers KEK_slot from the blob with this machine's hardware.
         CryptographicOperations.ZeroMemory(kekSlot);
 

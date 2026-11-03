@@ -45,17 +45,32 @@ public static class SlotPassword
         "a password header without the password flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.";
 
     /// <summary>The slot's password standing; never throws.</summary>
-    public static SlotPasswordKind Classify(Slot slot)
+    public static SlotPasswordKind Classify(Slot slot) => Describe(slot).Kind;
+
+    /// <summary>
+    /// <see cref="Classify"/> plus, for <see cref="SlotPasswordKind.NeedsNewerTswap"/> and
+    /// <see cref="SlotPasswordKind.Corrupt"/>, the text the slot's parser throws (no slot id).
+    /// </summary>
+    internal static (SlotPasswordKind Kind, string? Error) Describe(Slot slot)
     {
         if (slot.Kind != SlotKind.Machine || slot.HwBlob is not { } hwBlob)
-            return SlotPasswordKind.None;
+            return (SlotPasswordKind.None, null);
         if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
-            return YubiKeySlotBlob.Parse(hwBlob).Kind;
+        {
+            var (_, kind, error) = YubiKeySlotBlob.Parse(hwBlob);
+            return (kind, error);
+        }
         if (TpmSlotBlob.HasHeader(hwBlob))
-            return PasswordBlobHeader.Parse(hwBlob, "TPM").Kind;
+        {
+            var (kind, _, error) = PasswordBlobHeader.Parse(hwBlob, "TPM");
+            return (kind, error);
+        }
         if (SecureEnclaveSlotBlob.HasHeader(hwBlob))
-            return PasswordBlobHeader.Parse(hwBlob, "Secure Enclave").Kind;
-        return SlotPasswordKind.None;
+        {
+            var (kind, _, error) = PasswordBlobHeader.Parse(hwBlob, "Secure Enclave");
+            return (kind, error);
+        }
+        return (SlotPasswordKind.None, null);
     }
 
     /// <summary>True when the slot needs the vault password: <see cref="Classify"/> is <see cref="SlotPasswordKind.Password"/>.</summary>

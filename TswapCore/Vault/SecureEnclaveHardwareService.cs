@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
@@ -41,8 +43,11 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
     /// new Secure Enclave key via <see cref="Wrap"/>. The returned blob is useless off this Mac.
     /// </summary>
-    public HardwareEnrollment Enroll()
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
+        // Brief T17 task 13 adds the Enclave-enforced password (.applicationPassword).
+        if (password is not null)
+            throw new NotImplementedException("Secure Enclave password slots arrive with brief T17 task 13.");
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
     }
@@ -60,13 +65,21 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
     /// <paramref name="chooseSerial"/> is unused — the Secure Enclave is a single,
     /// non-removable device.
     /// </summary>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
     {
         // A keyring vault's blob is in this machine's slot (issue #154); a single-slot vault's
         // in SecureEnclaveWrappedKey. Same "Config is corrupted" errors as before for the latter.
         var wrapped = HardwareBlobLocator.Read(config, HardwareBackend.SecureEnclave);
 
-        var key = Unwrap(wrapped);
+        // Brief T17: a password slot's blob carries the TSSE header (task 13 implements its unwrap).
+        var (needsPassword, package) = SecureEnclaveSlotBlob.Split(wrapped);
+        if (needsPassword)
+        {
+            if (password is null)
+                throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+            throw new NotImplementedException("Secure Enclave password slots arrive with brief T17 task 13.");
+        }
+        var key = Unwrap(package);
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
         // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or

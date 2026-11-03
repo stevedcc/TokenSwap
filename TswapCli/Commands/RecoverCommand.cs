@@ -89,7 +89,7 @@ public sealed class RecoverCommand : ICliCommand
             {
                 deviceName = hardware == HardwareBackend.Tpm ? "this machine's TPM" : "this machine's Secure Enclave";
                 c.Out.WriteLine($"Recovery key accepted. Enrolling {deviceName} as a new slot.");
-                (kekSlot, hwBlob) = enrollment.Enroll();
+                (kekSlot, hwBlob) = enrollment.Enroll(password: null);
             }
             try
             {

@@ -392,7 +392,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
     [Fact]
     public void Enrollment_WithoutTheParameter_RequiresPresence() =>
-        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll().HwBlob));
+        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll(password: null).HwBlob));
 
     [Theory]
     [InlineData(true)]
@@ -401,13 +401,13 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key, requirePresence: false);
-        var (kekSlot, blob) = service.Enroll();
+        var (kekSlot, blob) = service.Enroll(password: null);
         if (!withFlag)
             blob = blob[..^1]; // a blob made before the flag byte existed
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
-        Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.SecureEnclave, key).Unlock(config, _ => 0));
+        Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.SecureEnclave, key).Unlock(config, _ => 0, password: null));
     }
 
     [Fact]
@@ -415,12 +415,12 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key);
-        var blob = service.Enroll().HwBlob;
+        var blob = service.Enroll(password: null).HwBlob;
         blob[^1] = 2;
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
-        Assert.Throws<TswapException>(() => service.Unlock(config, _ => 0));
+        Assert.Throws<TswapException>(() => service.Unlock(config, _ => 0, password: null));
     }
 
     // --- the native signature (decision 3); resolved by name: the type is macOS-only ---

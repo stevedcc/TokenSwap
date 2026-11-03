@@ -148,9 +148,24 @@ internal static class Tpm2ToolsInterop
         }
     }
 
-    /// <summary>Unlock: reconstitutes the TPM-bound primary and unseals a payload produced by <see cref="Seal"/>.</summary>
+    /// <summary>
+    /// Brief T17: sealing with the vault password as the sealed object's auth value. Task 8 implements it;
+    /// until then a password slot can't be sealed on Linux.
+    /// </summary>
+    public static byte[] Seal(byte[] plaintextKey, TswapCore.VaultPassword.StretchedPassword password) =>
+        throw new NotImplementedException("Linux TPM password slots arrive with brief T17 task 8.");
+
+    /// <summary>Brief T17: unsealing a password slot's package with its auth value (task 8).</summary>
+    public static byte[] Unseal(byte[] wrapped, TswapCore.VaultPassword.StretchedPassword password) =>
+        throw new NotImplementedException("Linux TPM password slots arrive with brief T17 task 8.");
+
+    /// <summary>Unlock: reconstitutes the TPM-bound primary and unseals a payload produced by <see cref="Seal(byte[])"/>.</summary>
     public static byte[] Unseal(byte[] wrapped)
     {
+        // Brief T17: an unsplit password blob (TSTP header) is task 8's; refuse it before touching tpm2-tools.
+        if (TswapCore.Keyring.TpmSlotBlob.HasHeader(wrapped))
+            throw new NotImplementedException("Linux TPM password slots (a TSTP blob) arrive with brief T17 task 8.");
+
         RequireAvailable();
 
         if (wrapped.Length < 4)

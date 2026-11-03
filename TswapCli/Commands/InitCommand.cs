@@ -499,7 +499,7 @@ public sealed class InitCommand : ICliCommand
                 ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
                 : "Creating a Secure Enclave key with no presence requirement (--no-touch)...");
 
-        var (kekSlot, hwBlob) = enrollment.Enroll();
+        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
         // The backend's own fields. YubiKeySerials = [] and RedundancyXor = "" as every
         // non-YubiKey vault has always written (issue #151's note: no on-disk change). The blob

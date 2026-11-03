@@ -190,7 +190,7 @@ public class YubiKeySlotTests
     [Fact]
     public void IsYubiKeyBlob_IsFalseForOtherBackendsBlobsAndNoBlob()
     {
-        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, new byte[32]).Enroll();
+        var (_, tpmBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, new byte[32]).Enroll(password: null);
 
         Assert.False(YubiKeySlotBlob.IsYubiKeyBlob(tpmBlob));
         Assert.False(YubiKeySlotBlob.IsYubiKeyBlob(null));

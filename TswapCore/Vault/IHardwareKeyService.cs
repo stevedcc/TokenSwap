@@ -1,3 +1,5 @@
+using TswapCore.VaultPassword;
+
 namespace TswapCore.Vault;
 
 /// <summary>
@@ -39,7 +41,12 @@ public interface IHardwareKeyService
     /// <paramref name="chooseSerial"/> is consulted only by multi-token backends
     /// (YubiKey) when more than one device is connected; single-device backends
     /// (TPM, Secure Enclave) ignore it.
+    ///
+    /// <para><b>Brief T17:</b> <paramref name="password"/> supplies the stretched vault password for a
+    /// password slot. A backend calls it only when its blob says the slot has the password, at most
+    /// once, and disposes what it returned in a <c>finally</c>; a password slot without a provider is
+    /// <see cref="VaultPasswordUnavailableException"/>. No default value, so no call site can miss it.</para>
     /// </summary>
-    byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial);
+    byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password);
 }
 

@@ -1,3 +1,5 @@
+using TswapCore.VaultPassword;
+
 namespace TswapCore.Vault;
 
 /// <summary>
@@ -35,6 +37,11 @@ public interface IHardwareEnrollmentService
     /// <summary>
     /// Generates a random 32-byte <c>KEK_slot</c>, wraps or seals it to this machine's hardware,
     /// and returns both. The blob is useless off this machine.
+    ///
+    /// <para><b>Brief T17:</b> with <paramref name="password"/>, the slot is a password slot: the hardware
+    /// object needs the stretched password, and the blob carries the backend's password header
+    /// (<see cref="Keyring.TpmSlotBlob"/>, <see cref="Keyring.SecureEnclaveSlotBlob"/>). The caller keeps
+    /// ownership of <paramref name="password"/>. Null makes a password-free slot, exactly as before.</para>
     /// </summary>
-    HardwareEnrollment Enroll();
+    HardwareEnrollment Enroll(StretchedPassword? password);
 }

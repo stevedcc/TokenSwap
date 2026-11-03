@@ -36,8 +36,8 @@ public class SimulatedHardwareServiceTests
     {
         var machine = new SimulatedHardwareService(backend, MachineA);
 
-        var (kekSlot, hwBlob) = machine.Enroll();
-        var recovered = machine.Unlock(SingleSlotConfig(backend, hwBlob), NoSelection);
+        var (kekSlot, hwBlob) = machine.Enroll(password: null);
+        var recovered = machine.Unlock(SingleSlotConfig(backend, hwBlob), NoSelection, password: null);
 
         Assert.Equal(32, kekSlot.Length);
         Assert.Equal(kekSlot, recovered);
@@ -49,7 +49,7 @@ public class SimulatedHardwareServiceTests
     {
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
-        Assert.NotEqual(machine.Enroll().KekSlot, machine.Enroll().KekSlot);
+        Assert.NotEqual(machine.Enroll(password: null).KekSlot, machine.Enroll(password: null).KekSlot);
     }
 
     [Theory]
@@ -57,13 +57,13 @@ public class SimulatedHardwareServiceTests
     [InlineData(HardwareBackend.SecureEnclave, "secure-enclave")]
     public void BlobFromAnotherMachine_FailsWithTheBackendsNormalError(HardwareBackend backend, string name)
     {
-        var (_, hwBlob) = new SimulatedHardwareService(backend, MachineA).Enroll();
+        var (_, hwBlob) = new SimulatedHardwareService(backend, MachineA).Enroll(password: null);
         var otherMachine = new SimulatedHardwareService(backend, MachineB);
 
         // Exactly TswapException, the error type the real backends raise for a failed
         // unseal/unwrap, never an AuthenticationTagMismatchException/CryptographicException
         // escaping from AES.
-        var ex = Assert.Throws<TswapException>(() => otherMachine.Unlock(SingleSlotConfig(backend, hwBlob), NoSelection));
+        var ex = Assert.Throws<TswapException>(() => otherMachine.Unlock(SingleSlotConfig(backend, hwBlob), NoSelection, password: null));
         Assert.Contains($"'{name}' operation failed", ex.Message);
         Assert.Contains("different machine", ex.Message);
     }
@@ -74,7 +74,7 @@ public class SimulatedHardwareServiceTests
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
         var ex = Assert.Throws<TswapException>(
-            () => machine.Unlock(new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm), NoSelection));
+            () => machine.Unlock(new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm), NoSelection, password: null));
         Assert.Contains("Config is corrupted", ex.Message);
     }
 
@@ -84,7 +84,7 @@ public class SimulatedHardwareServiceTests
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
         var ex = Assert.Throws<TswapException>(
-            () => machine.Unlock(SingleSlotConfig(HardwareBackend.Tpm, [1, 2, 3]), NoSelection));
+            () => machine.Unlock(SingleSlotConfig(HardwareBackend.Tpm, [1, 2, 3]), NoSelection, password: null));
         Assert.Contains("Config is corrupted", ex.Message);
     }
 
@@ -127,14 +127,14 @@ public class SimulatedHardwareServiceTests
     public void Enrollment_WithTestKey_IsSimulatedAndKeyedByTheTestKey()
     {
         var enrollment = HardwareServices.Enrollment(HardwareBackend.Tpm, MachineA, SecureEnclaveOwnerScopeTests.NoSwitchScope());
-        var (kekSlot, hwBlob) = enrollment.Enroll();
+        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
         Assert.True(enrollment.IsSimulated);
         // Keyed by the test key: the same machine key unlocks it, another does not.
         Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.Tpm, MachineA)
-            .Unlock(SingleSlotConfig(HardwareBackend.Tpm, hwBlob), NoSelection));
+            .Unlock(SingleSlotConfig(HardwareBackend.Tpm, hwBlob), NoSelection, password: null));
         Assert.Throws<TswapException>(() => new SimulatedHardwareService(HardwareBackend.Tpm, MachineB)
-            .Unlock(SingleSlotConfig(HardwareBackend.Tpm, hwBlob), NoSelection));
+            .Unlock(SingleSlotConfig(HardwareBackend.Tpm, hwBlob), NoSelection, password: null));
     }
 
     [Fact]

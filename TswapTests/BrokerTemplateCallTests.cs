@@ -442,10 +442,10 @@ public class BrokerTemplateVaultReadTests : IDisposable
     {
         public HardwareBackend Backend => inner.Backend;
         public bool IsSimulated => inner.IsSimulated;
-        public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+        public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, TswapCore.VaultPassword.VaultPasswordProvider? password)
         {
             onUnlock();
-            return inner.Unlock(config, chooseSerial);
+            return inner.Unlock(config, chooseSerial, password);
         }
     }
 }

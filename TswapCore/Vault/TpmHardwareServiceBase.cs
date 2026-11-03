@@ -1,3 +1,6 @@
+using TswapCore.Keyring;
+using TswapCore.VaultPassword;
+
 namespace TswapCore.Vault;
 
 /// <summary>
@@ -29,7 +32,7 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
     /// <see cref="HardwareBlobLocator"/>.
     /// <paramref name="chooseSerial"/> is unused — a TPM is a single, non-removable device.
     /// </summary>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
     {
         _ = chooseSerial; // intentionally unused — a TPM is a single, non-removable device
 
@@ -37,7 +40,20 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
         // in TpmSealedKey. Same "Config is corrupted" errors as before for the latter.
         var sealedBlob = HardwareBlobLocator.Read(config, HardwareBackend.Tpm);
 
-        var key = RecoverKey(sealedBlob);
+        // Brief T17: a password slot's blob carries the TSTP header; the provider is called only then.
+        var (needsPassword, package) = TpmSlotBlob.Split(sealedBlob);
+        byte[] key;
+        if (needsPassword)
+        {
+            if (password is null)
+                throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+            using var stretched = password();
+            key = RecoverKey(package, stretched);
+        }
+        else
+        {
+            key = RecoverKey(package, null);
+        }
         // RecoverKey is a generic primitive (Phase 6 will use it for Shamir shares of varying
         // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or
@@ -56,5 +72,7 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
     /// since the two platforms don't share a verb for it (see each subclass's header comment for
     /// why: TPM2 sealed-object seal/unseal on Linux vs. RSA-OAEP wrap/unwrap on Windows).
     /// </summary>
-    protected abstract byte[] RecoverKey(byte[] wrapped);
+    /// <remarks>Brief T17: <paramref name="password"/> is the stretched vault password of a password slot
+    /// (the <c>TSTP</c> header already removed from <paramref name="wrapped"/>), null for a password-free one.</remarks>
+    protected abstract byte[] RecoverKey(byte[] wrapped, StretchedPassword? password);
 }

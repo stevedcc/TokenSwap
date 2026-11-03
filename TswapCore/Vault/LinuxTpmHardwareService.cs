@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
@@ -40,10 +42,12 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
     /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine.
     /// </summary>
-    public HardwareEnrollment Enroll()
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Seal(kekSlot));
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Seal(kekSlot))
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password)));
     }
 
     /// <summary>
@@ -55,5 +59,6 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
     /// <summary>Unlock side: unseals a payload produced by <see cref="Seal"/> using this TPM's regenerated primary key.</summary>
     public byte[] Unseal(byte[] wrapped) => Tpm2ToolsInterop.Unseal(wrapped);
 
-    protected override byte[] RecoverKey(byte[] wrapped) => Unseal(wrapped);
+    protected override byte[] RecoverKey(byte[] wrapped, StretchedPassword? password) =>
+        password is null ? Unseal(wrapped) : Tpm2ToolsInterop.Unseal(wrapped, password);
 }

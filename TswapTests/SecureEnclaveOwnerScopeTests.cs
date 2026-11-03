@@ -513,7 +513,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         _ = se.IsSimulated;
         Assert.Equal(0, opened);
 
-        ((IHardwareEnrollmentService)se).Enroll();
+        ((IHardwareEnrollmentService)se).Enroll(password: null);
         Assert.Equal(1, opened);
     }
 

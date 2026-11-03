@@ -42,7 +42,7 @@ public class YubiKeySlotUnlockTests
 
         public byte[] AddTpmSlot(byte[] machineKey)
         {
-            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enroll();
+            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enroll(password: null);
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
             AddMachineSlot(slotId, kek, hwBlob);
             return slotId;
