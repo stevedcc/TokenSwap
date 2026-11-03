@@ -321,7 +321,9 @@ sudo -iu vault tswap broker lock
   slot only** (never a password-free slot, never an agent), then the `vault-password` verifier, and
   holds a copy of the stretched password. Every later unlock (a route's secret, an ssh key, a
   template) uses that copy; `serve` never asks a tswap agent, so its behaviour doesn't depend on one.
-- **Wrong passwords** answer with ruling 18's text and the broker stays locked. They count towards the
+- **Wrong passwords** answer with the backend's wrong-password text (for a password the `vault-password`
+  file refuses, `Wrong vault password (it doesn't match this vault's vault-password file).`) and the
+  broker stays locked. They count towards the
   unlock guard under the key `control`: after 3 in a row, `broker unlock` is refused for a few minutes
   (`Too many wrong vault passwords for this broker; wait a few minutes and try again.`) before the
   password is even read. On a TPM each wrong password also counts towards the TPM's

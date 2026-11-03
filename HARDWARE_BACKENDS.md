@@ -757,7 +757,7 @@ its backend the 32-byte **stretched password**. Where the hardware can, the hard
   or a log line (unit tests check every tpm2 call's argv through the process seam).
 - **Errors:** `0x98E` (`TPM_RC_AUTH_FAIL` for the object's session, "the authorization HMAC check
   failed and DA counter incremented" on swtpm) is the wrong-password text above when a password was
-  supplied, and ruling 3's stripped-header text when none was. `0x921` (`TPM_RC_LOCKOUT`) is
+  supplied, and `This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.` (a stripped header) when none was. `0x921` (`TPM_RC_LOCKOUT`) is
   `The TPM is in dictionary-attack lockout after failed password attempts; wait and try again.`
 - **The lockout warning.** At each TPM password enrolment (`init`, `slot request`, `recover`,
   `slot accept`) tswap reads `lockoutAuthSet` from `tpm2_getcap properties-variable`; when it is 0
@@ -823,7 +823,7 @@ its backend the 32-byte **stretched password**. Where the hardware can, the hard
   A password-only key never shows a dialog; a presence key costs one extra non-interactive attempt.
 - **A stripped `TSSE` header** makes the slot look password-free, so it goes through a password-free
   unwrap, which refuses with that path's generic "Could not unlock with the Secure Enclave…" text
-  instead of ruling 3's stripped-header text (it can't tell the case apart). The password still
+  instead of the TPM's stripped-header text (it can't tell the case apart). The password still
   protects the slot. Which unwrap depends on the presence choice recorded in `config.json`
   (`RequiresTouch`, brief T11): a `--no-touch` slot uses `tswap_se_unwrap_no_interaction` (the old
   unwrap with the key restored under `interactionNotAllowed`, no credential), so a stripped password

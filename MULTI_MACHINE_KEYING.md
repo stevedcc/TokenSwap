@@ -658,7 +658,7 @@ password slots get new blob bytes, so a vault without a password stays byte-iden
   says the config is corrupted.
 - **Classic vaults** (no keyring) can't carry a password: migrate first, then add a password slot.
 
-**Unlock order** (`VaultUnlocker`, ruling 13 of the brief): pass 1 tries every password-free
+**Unlock order** (`VaultUnlocker`): pass 1 tries every password-free
 candidate in the usual order (the own backend's slot if it has no password, then the password-free
 YubiKey slots); pass 2, only if nothing opened and a password slot is reachable here, asks the agent;
 pass 3 prompts once and tries the password slots with clones of that one password. A password-free

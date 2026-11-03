@@ -384,6 +384,8 @@ tswap init --password                        # a YubiKey slot
 sudo tswap slot add --yubikey --password     # a later password slot: asks once, checked against the vault
 tswap slot request --tpm --password [--vault-dir <shared folder>] request.json
 printf '%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" | sudo tswap recover --tpm --password
+# the vault's first password slot asks for the password twice, so give it on two lines:
+printf '%s\n%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" "$PASSWORD" | sudo tswap recover --tpm --password
 ```
 
 - **The choice.** `init`, `slot add --yubikey`, `slot request` and `recover` take `--password` or
@@ -444,8 +446,9 @@ tswap agent stop
   `tswap agent serve` running in the background and prints its socket path. Until the agent is
   ready, its messages (a touch prompt, a warning) appear in your terminal; then it detaches: its
   stdin, stdout and stderr go to `/dev/null` and it starts its own session (`setsid`), so closing the
-  terminal or Ctrl+C there doesn't stop it. (Windows has no `setsid`: there a Ctrl+C in that console
-  can still reach it.) Ctrl+C **before** it is ready stops both.
+  terminal or Ctrl+C there doesn't stop it; Ctrl+C **before** it is ready stops both. (On Windows the
+  agent is started without a console, so a Ctrl+C in yours never reaches it, before or after it is
+  ready: `tswap agent stop` ends it.)
 - It refuses when there is nothing to hold (`No slot of this vault on this machine needs the vault
   password; the agent has nothing to hold.`), when the password YubiKey isn't plugged in, and when an
   agent for this vault already runs.
