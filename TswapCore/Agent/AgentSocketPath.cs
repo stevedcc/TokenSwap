@@ -73,13 +73,13 @@ public static class AgentSocketPath
 
     internal static string BrokerControlFor(uint ownerUid, byte[] vaultId, Inputs inputs)
     {
-        var path = Path.Combine(Folder(ownerUid, inputs), $"broker-{Prefix(vaultId)}", "control.sock");
-        CheckLength(path);
+        var path = Path.Combine(Folder(ownerUid, inputs, forBroker: true), $"broker-{Prefix(vaultId)}", "control.sock");
+        CheckControlLength(path);
         return path;
     }
 
     /// <summary>The default socket folder of <paramref name="ownerUid"/> (ruling 6), whether or not it exists.</summary>
-    internal static string Folder(uint ownerUid, Inputs inputs)
+    internal static string Folder(uint ownerUid, Inputs inputs, bool forBroker = false)
     {
         if (!inputs.MacOs)
         {
@@ -90,7 +90,10 @@ public static class AgentSocketPath
         }
         var home = inputs.HomeOf(ownerUid);
         if (string.IsNullOrEmpty(home))
-            throw new TswapException($"uid {ownerUid} has no home folder for the agent's socket; set {Variable}.");
+            throw new TswapException(forBroker
+                ? $"uid {ownerUid} has no home folder for the broker's control socket" +
+                  (inputs.MacOs ? "." : $" (and no {inputs.RunUserRoot}/{ownerUid} folder of its own).")
+                : $"uid {ownerUid} has no home folder for the agent's socket; set {Variable}.");
         return inputs.MacOs
             ? Path.Combine(home, "Library", "Caches", "tswap", "run")
             : Path.Combine(home, ".cache", "tswap", "run");
@@ -103,6 +106,19 @@ public static class AgentSocketPath
         if (bytes > MaxUtf8Bytes)
             throw new TswapException(
                 $"The agent socket path {path} is {bytes} bytes, over the {MaxUtf8Bytes}-byte limit for a socket; set {Variable} to a shorter path.");
+    }
+
+    /// <summary>
+    /// <see cref="CheckLength"/> for the broker's control socket, whose path <see cref="Variable"/> doesn't move:
+    /// the text names the folder it comes from instead.
+    /// </summary>
+    public static void CheckControlLength(string path)
+    {
+        var bytes = Encoding.UTF8.GetByteCount(path);
+        if (bytes > MaxUtf8Bytes)
+            throw new TswapException(
+                $"The broker's control socket path {path} is {bytes} bytes, over the {MaxUtf8Bytes}-byte limit for a socket; " +
+                "it is made under /run/user/<uid> when that exists, else under the vault user's home folder, which is too deep here.");
     }
 
     /// <summary>The client's text for an agent that answered "other vault" (ruling 6: two vaults share a 16-hex prefix).</summary>

@@ -834,6 +834,40 @@ public class AgentServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StaleSocket_ProbeFailsOtherwise_RefusedNamingThePath_LeftInPlace()
+    {
+        // Review T17 p2 MiMo minor 8: a probe failure other than "refused" (here EACCES on a socket of mode
+        // 000) is a refusal naming the path, not a raw SocketException, and the file is left alone.
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // root connects through mode 000
+        Directory.CreateDirectory(_h.Folder);
+        File.SetUnixFileMode(_h.Folder, (UnixFileMode)0b111_000_000);
+        var elsewhere = Path.Combine(_h.Root.FullName, "dead.sock");
+        using (Listen(elsewhere))
+            File.Move(elsewhere, _h.SocketPath);
+        File.SetUnixFileMode(_h.SocketPath, 0);
+
+        var ex = await Assert.ThrowsAsync<TswapException>(() => AgentServer.StartAsync(_h.Options()));
+
+        Assert.Contains(_h.SocketPath, ex.Message);
+        Assert.Equal(BrokerNative.EntryType.Socket, BrokerNative.LStat(_h.SocketPath)!.Value.Type);
+    }
+
+    [Fact]
+    public async Task Start_AnotherVaultsAgentAtThePath_SaysSo()
+    {
+        // Review T17 p2 GLM M-3: a 16-hex prefix collision (or TSWAP_AGENT_SOCK pointing at another vault's
+        // agent) is not "an agent for this vault is already running".
+        if (OperatingSystem.IsWindows())
+            return;
+        await _h.StartAsync(_h.Options() with { VaultId = RandomNumberGenerator.GetBytes(16) });
+
+        var ex = await Assert.ThrowsAsync<TswapException>(() => AgentServer.StartAsync(_h.Options()));
+
+        Assert.Equal(AgentSocketPath.OtherVaultMessage(_h.SocketPath), ex.Message);
+    }
+
+    [Fact]
     public async Task TwoConcurrentStarts_ExactlyOneReady_OtherAlreadyRunning()
     {
         if (OperatingSystem.IsWindows())

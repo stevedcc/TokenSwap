@@ -146,7 +146,7 @@ public sealed class BrokerControlServer : IAsyncDisposable
             throw new TswapException("'tswap broker serve' must run as the vault's own user, never as root (run it from the vault user's systemd user unit).");
 
         var path = Path.GetFullPath(options.SocketPath);
-        AgentSocketPath.CheckLength(path);
+        AgentSocketPath.CheckControlLength(path);
         var folder = Path.GetDirectoryName(path) ?? throw new TswapException($"{path} has no folder.");
         AgentSocketPath.EnsureFolder(folder, options.OwnUid, options.Ownership);
 

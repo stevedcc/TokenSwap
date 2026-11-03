@@ -277,6 +277,25 @@ public class AgentProtocolTests : IDisposable
     }
 
     [Fact]
+    public void BrokerControlFor_TooLongOrNoHome_NeverAdvisesTheAgentsVariable()
+    {
+        // Review T17 p2 GLM M-5 / MiMo minor 3: TSWAP_AGENT_SOCK doesn't move the control socket, so its
+        // refusals must not recommend it.
+        if (OperatingSystem.IsWindows())
+            return;
+        var deepHome = "/" + new string('ä', 60);
+        var tooLong = Assert.Throws<TswapException>(() => AgentSocketPath.BrokerControlFor(MyUid, VaultId, Inputs(home: deepHome)));
+        Assert.DoesNotContain(AgentSocketPath.Variable, tooLong.Message);
+        Assert.Contains("103", tooLong.Message);
+        Assert.Contains("broker's control socket", tooLong.Message);
+
+        var noHome = Assert.Throws<TswapException>(() =>
+            AgentSocketPath.BrokerControlFor(MyUid, VaultId, Inputs() with { HomeOf = _ => null }));
+        Assert.DoesNotContain(AgentSocketPath.Variable, noHome.Message);
+        Assert.Contains("broker's control socket", noHome.Message);
+    }
+
+    [Fact]
     public void PrefixCollision_Message_NamesThePathAndTheVariable() =>
         Assert.Equal("Another vault's agent holds /x/agent.sock; set TSWAP_AGENT_SOCK to a different path for this vault.",
             AgentSocketPath.OtherVaultMessage("/x/agent.sock"));

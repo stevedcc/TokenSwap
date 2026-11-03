@@ -123,7 +123,7 @@ public sealed partial class AgentServer : IAsyncDisposable
         AgentSocketPath.EnsureFolder(folder, options.OwnUid, options.Ownership);
 
         var lockFile = UnixLockFile.TryTake(Path.ChangeExtension(path, ".lock"), out _)
-            ?? throw new TswapException(AlreadyRunning(path));
+            ?? throw new TswapException(await RunningTextAsync(path, options).ConfigureAwait(false));
         Socket? listener = null;
         try
         {
@@ -168,6 +168,11 @@ public sealed partial class AgentServer : IAsyncDisposable
                 File.Delete(path); // stale: nothing listens
                 return;
             }
+            catch (SocketException ex)
+            {
+                // Anything else (permission denied, ...): not provably stale, so left alone.
+                throw new TswapException($"{path} can't be probed ({ex.SocketErrorCode}); if no agent runs, remove it by hand.");
+            }
             catch (OperationCanceledException)
             {
                 throw new TswapException(InUse(path));
@@ -179,15 +184,63 @@ public sealed partial class AgentServer : IAsyncDisposable
             await using var stream = new NetworkStream(probe, ownsSocket: false);
             await stream.WriteAsync(AgentProtocol.EncodeRequest((byte)AgentOp.Status, options.VaultId), answerDeadline.Token)
                 .ConfigureAwait(false);
-            var first = new byte[1];
-            if (await stream.ReadAsync(first, answerDeadline.Token).ConfigureAwait(false) > 0)
-                throw new TswapException(AlreadyRunning(path));
+            var prefix = new byte[AgentProtocol.LengthPrefixSize];
+            if (await stream.ReadAtLeastAsync(prefix, 1, throwOnEndOfStream: false, answerDeadline.Token).ConfigureAwait(false) > 0)
+                throw new TswapException(await AnswerTextAsync(stream, prefix, path, answerDeadline.Token).ConfigureAwait(false));
         }
         catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
         {
             // No answer in time, or closed unanswered.
         }
         throw new TswapException(InUse(path));
+    }
+
+    /// <summary>
+    /// The lock is held, so an agent runs at <paramref name="path"/>: asks it (status, this vault's id) whether it
+    /// is this vault's, so a prefix collision (or <c>TSWAP_AGENT_SOCK</c> at another vault's agent) is named as
+    /// such (review T17 p2 M-3). Any failure to ask says "already running", as before.
+    /// </summary>
+    private static async Task<string> RunningTextAsync(string path, AgentServerOptions options)
+    {
+        try
+        {
+            using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            using var deadline = new CancellationTokenSource(options.ProbeTimeout, options.Time);
+            await probe.ConnectAsync(new UnixDomainSocketEndPoint(path), deadline.Token).ConfigureAwait(false);
+            await using var stream = new NetworkStream(probe, ownsSocket: false);
+            await stream.WriteAsync(AgentProtocol.EncodeRequest((byte)AgentOp.Status, options.VaultId), deadline.Token).ConfigureAwait(false);
+            return await AnswerTextAsync(stream, new byte[AgentProtocol.LengthPrefixSize], path, deadline.Token, alreadyRead: 0)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException or SocketException)
+        {
+            return AlreadyRunning(path);
+        }
+    }
+
+    /// <summary>
+    /// Something answered the probe (the first <paramref name="alreadyRead"/> bytes of its length prefix are in
+    /// <paramref name="prefix"/>): another vault's agent, or an agent taken as this vault's.
+    /// </summary>
+    private static async Task<string> AnswerTextAsync(Stream stream, byte[] prefix, string path, CancellationToken token, int alreadyRead = 1)
+    {
+        try
+        {
+            var rest = prefix.Length - alreadyRead;
+            if (rest > 0 && await stream.ReadAtLeastAsync(prefix.AsMemory(alreadyRead), rest, throwOnEndOfStream: false, token)
+                    .ConfigureAwait(false) < rest)
+                return AlreadyRunning(path);
+            var body = new byte[AgentProtocol.DecodeLength(prefix)];
+            if (await stream.ReadAtLeastAsync(body, body.Length, throwOnEndOfStream: false, token).ConfigureAwait(false) < body.Length)
+                return AlreadyRunning(path);
+            return AgentProtocol.DecodeResponse(body).Status == AgentStatus.OtherVault
+                ? AgentSocketPath.OtherVaultMessage(path)
+                : AlreadyRunning(path);
+        }
+        catch (Exception ex) when (ex is AgentProtocolException or OperationCanceledException or IOException or SocketException)
+        {
+            return AlreadyRunning(path);
+        }
     }
 
     private static string InUse(string path) =>
