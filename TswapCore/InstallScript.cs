@@ -18,19 +18,27 @@ public static class InstallScript
 
         BINARY="TSWAP_BINARY_PATH_PLACEHOLDER"
 
+        # install_binary SRC DEST [sudo]: copies next to DEST, then renames over it. A running tswap (an unlock
+        # agent, a broker) keeps its old file and the new one appears at once; never an in-place overwrite, which
+        # on macOS rewrites the pages of a running signed binary.
+        install_binary() {
+          local src="$1" dest="$2" run="${3:-}"
+          $run mkdir -p "$(dirname "$dest")"
+          $run cp -f "$src" "$dest.new.$$"
+          $run chmod 0755 "$dest.new.$$"
+          $run mv -f "$dest.new.$$" "$dest"
+        }
+
         echo "==> Installing tswap binary..."
 
         # User-local install (no sudo required; used for non-sudo commands)
-        mkdir -p "$HOME/.local/bin"
-        cp -f "$BINARY" "$HOME/.local/bin/tswap"
-        chmod +x "$HOME/.local/bin/tswap"
+        install_binary "$BINARY" "$HOME/.local/bin/tswap"
         echo "    Installed to ~/.local/bin/tswap"
 
         # System-wide install (required for 'sudo tswap' commands)
-        sudo cp -f "$BINARY" /usr/local/bin/tswap
-        sudo chmod +x /usr/local/bin/tswap
+        install_binary "$BINARY" /usr/local/bin/tswap sudo
         echo "    Installed to /usr/local/bin/tswap"
-
+        TSWAP_BROKER_STEP_PLACEHOLDER
         echo "==> Installing tswap skill (SKILL.md)..."
         mkdir -p "$HOME/.agents/skills/tswap"
         "$HOME/.local/bin/tswap" prompt > "$HOME/.agents/skills/tswap/SKILL.md"
@@ -65,6 +73,8 @@ public static class InstallScript
         fi
         echo "    Restart your shell to enable completion."
 
+        TSWAP_RUNNING_PLACEHOLDER
+
         echo ""
         echo "✅ tswap installed successfully."
         echo "   If ~/.local/bin is not on your PATH, add it:"
@@ -80,9 +90,19 @@ public static class InstallScript
 
         BINARY="TSWAP_BINARY_PATH_PLACEHOLDER"
 
+        # install_binary SRC DEST [sudo]: copies next to DEST, then renames over it. A running tswap (an unlock
+        # agent, a broker) keeps its old file and the new one appears at once; never an in-place overwrite, which
+        # on macOS rewrites the pages of a running signed binary.
+        install_binary() {
+          local src="$1" dest="$2" run="${3:-}"
+          $run mkdir -p "$(dirname "$dest")"
+          $run cp -f "$src" "$dest.new.$$"
+          $run chmod 0755 "$dest.new.$$"
+          $run mv -f "$dest.new.$$" "$dest"
+        }
+
         echo "==> Installing tswap binary..."
-        sudo cp -f "$BINARY" /usr/local/bin/tswap
-        sudo chmod +x /usr/local/bin/tswap
+        install_binary "$BINARY" /usr/local/bin/tswap sudo
         echo "    Installed to /usr/local/bin/tswap"
 
         TSWAP_SE_DYLIB_INSTALL_STEP_PLACEHOLDER
@@ -122,6 +142,8 @@ public static class InstallScript
         fi
         echo "    Restart your shell to enable completion."
 
+        TSWAP_RUNNING_PLACEHOLDER
+
         echo ""
         echo "✅ tswap installed successfully."
         """;
@@ -134,6 +156,15 @@ public static class InstallScript
         $ErrorActionPreference = 'Stop'
 
         $Binary = "TSWAP_BINARY_PATH_PLACEHOLDER"
+
+        # A running unlock agent (tswap agent serve) locks tswap.exe, so the copy below would fail halfway.
+        $RunningAgents = @(Get-CimInstance Win32_Process -Filter "Name = 'tswap.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -match '\bagent\s+serve\b' })
+        if ($RunningAgents.Count -gt 0) {
+            Write-Host "A tswap unlock agent is running (pid $($RunningAgents.ProcessId -join ', ')) from the binary this would replace."
+            Write-Host "Stop it first: tswap agent stop   (then run this script again, and unlock again afterwards)"
+            exit 1
+        }
 
         Write-Host "==> Installing tswap binary..."
 
@@ -176,8 +207,78 @@ public static class InstallScript
     /// Generates a bash install script for Linux.
     /// Installs to ~/.local/bin (user) and /usr/local/bin (system/sudo).
     /// </summary>
-    public static string GetBashScript(string binaryPath)
-        => BashLinuxTemplate.Replace(BinaryPathPlaceholder, binaryPath);
+    public static string GetBashScript(string binaryPath, string? brokerSelinuxModule = null)
+        => BashLinuxTemplate
+            .Replace(BinaryPathPlaceholder, binaryPath)
+            .Replace(BrokerStepPlaceholder, BrokerStep(brokerSelinuxModule))
+            .Replace(RunningPlaceholder, RunningReminder(broker: true));
+
+    /// <summary>The broker's SELinux module (<c>contrib/selinux/tswap-broker.cil</c>) embedded in this binary, or null.</summary>
+    public static string? BrokerSelinuxModule()
+    {
+        using var stream = typeof(InstallScript).Assembly.GetManifestResourceStream(BrokerModuleResource);
+        if (stream is null)
+            return null;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private const string BrokerModuleResource = "tswap-broker.cil";
+    private const string BrokerStepPlaceholder = "TSWAP_BROKER_STEP_PLACEHOLDER";
+    private const string RunningPlaceholder = "TSWAP_RUNNING_PLACEHOLDER";
+
+    /// <summary>
+    /// Linux only: a broker set up per docs/BROKER.md runs a labelled copy of the binary,
+    /// <c>/usr/local/libexec/tswap-broker</c>, and the <c>tswap-broker</c> SELinux module. Both must follow the
+    /// binary (a copy left behind runs the old version; a fresh copy without restorecon is <c>bin_t</c> and runs
+    /// unconfined; the module and the binary must match). Each step runs only where that piece is already set up.
+    /// The module goes first: it carries the file context restorecon applies to the copy.
+    /// </summary>
+    private static string BrokerStep(string? module)
+    {
+        var moduleStep = module is null
+            ? ""
+            : $"""
+               if command -v semodule >/dev/null 2>&1 && sudo semodule -l 2>/dev/null | awk '{"{print $1}"}' | grep -qx tswap-broker; then
+                 echo "==> Updating the tswap-broker SELinux module..."
+                 CIL_DIR="$(mktemp -d)"
+                 # semodule names a module after its file, so the file is tswap-broker.cil.
+                 echo "{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(module))}" | base64 -d > "$CIL_DIR/tswap-broker.cil"
+                 sudo semodule -i "$CIL_DIR/tswap-broker.cil"
+                 rm -rf "$CIL_DIR"
+                 echo "    Installed the tswap-broker module"
+               fi
+
+               """;
+        return moduleStep + """
+            if [ -e /usr/local/libexec/tswap-broker ]; then
+              echo "==> Updating the broker's labelled copy..."
+              install_binary "$BINARY" /usr/local/libexec/tswap-broker sudo
+              if command -v restorecon >/dev/null 2>&1; then sudo restorecon -v /usr/local/libexec/tswap-broker; fi
+              echo "    Installed to /usr/local/libexec/tswap-broker"
+            fi
+            """;
+    }
+
+    /// <summary>Names a running agent (and, on Linux, broker): they keep running the old binary. Restarts nothing.</summary>
+    private static string RunningReminder(bool broker)
+    {
+        var brokerCheck = broker
+            ? """
+              if pgrep -f 'tswap[^ ]* broker serve' >/dev/null 2>&1; then
+                echo "    A tswap broker is running and still runs the old version. Restart it as its vault user:"
+                echo "      systemctl --user restart tswap-broker"
+              fi
+
+              """
+            : "";
+        return brokerCheck + """
+            if pgrep -u "$(id -u)" -f 'tswap[^ ]* agent serve' >/dev/null 2>&1; then
+              echo "    A tswap unlock agent is running and still runs the old version until you run:"
+              echo "      tswap agent stop     (then unlock again)"
+            fi
+            """;
+    }
 
     /// <summary>
     /// Generates a bash install script for macOS. Installs to /usr/local/bin (requires sudo).
@@ -194,13 +295,16 @@ public static class InstallScript
             ? ""
             : $"""
                echo "==> Installing Secure Enclave support library..."
-               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -D | sudo tee /usr/local/bin/libtswapse.dylib > /dev/null
-               sudo chmod +x /usr/local/bin/libtswapse.dylib
+               DYLIB_TMP="$(mktemp)"
+               echo "{Convert.ToBase64String(secureEnclaveDylib)}" | base64 -D > "$DYLIB_TMP"
+               install_binary "$DYLIB_TMP" /usr/local/bin/libtswapse.dylib sudo
+               rm -f "$DYLIB_TMP"
                echo "    Installed to /usr/local/bin/libtswapse.dylib"
                """;
         return BashMacOSTemplate
             .Replace(BinaryPathPlaceholder, binaryPath)
-            .Replace(SecureEnclaveDylibStepPlaceholder, dylibStep);
+            .Replace(SecureEnclaveDylibStepPlaceholder, dylibStep)
+            .Replace(RunningPlaceholder, RunningReminder(broker: false));
     }
 
     /// <summary>
@@ -217,6 +321,6 @@ public static class InstallScript
     {
         if (OperatingSystem.IsWindows()) return GetPowerShellScript(binaryPath);
         if (OperatingSystem.IsMacOS())  return GetMacOSScript(binaryPath, secureEnclaveDylib);
-        return GetBashScript(binaryPath);
+        return GetBashScript(binaryPath, BrokerSelinuxModule());
     }
 }

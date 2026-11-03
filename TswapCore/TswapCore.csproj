@@ -102,4 +102,10 @@
     <EmbeddedResource Include="$(SecureEnclaveShimOutput)" LogicalName="libtswapse.dylib" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The broker's SELinux module, so `tswap installscript` on Linux can reinstall the matching module with
+         the binary (InstallScript.BrokerSelinuxModule). Text; tiny. -->
+    <EmbeddedResource Include="../contrib/selinux/tswap-broker.cil" LogicalName="tswap-broker.cil" />
+  </ItemGroup>
+
 </Project>
