@@ -13,6 +13,7 @@ namespace TswapTests;
 /// Brief T17 task 6, ruling 15: choosing the vault password when a slot is made (<c>init</c>,
 /// <c>slot add --yubikey</c>, <c>recover</c>) and showing it in <c>slots</c>. Simulated TPM and YubiKeys.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class VaultPasswordEnrolmentTests : IDisposable
 {
     private const int SerialA = RecordVaultTestSupport.SerialA;

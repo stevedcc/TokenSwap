@@ -14,6 +14,7 @@ namespace TswapTests;
 /// <see cref="SlotPassword.Classify"/>. Version 1 YubiKey blobs and legacy TPM / Secure Enclave blobs
 /// stay byte-identical (Goal 4).
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class PasswordSlotBlobTests
 {
     private const int Serial = 11111111;

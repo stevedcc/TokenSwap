@@ -16,6 +16,7 @@ namespace TswapTests;
 /// with the simulated hardware (<c>TSWAP_TEST_KEY</c>) and the fake <see cref="IUnixOwnership"/>;
 /// the simulated services report each call with the identity the fake is switched to at that moment.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 {
     private const uint UserUid = 1000;

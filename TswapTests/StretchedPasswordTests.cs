@@ -10,6 +10,7 @@ namespace TswapTests;
 /// Brief T17 task 1: the stretched vault password (rulings 1 and 5). Argon2id stretching
 /// (<see cref="VaultPasswordKdf"/>) and the native, locked holder (<see cref="StretchedPassword"/>).
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class StretchedPasswordTests(ITestOutputHelper output)
 {
     private static readonly byte[] Salt = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();

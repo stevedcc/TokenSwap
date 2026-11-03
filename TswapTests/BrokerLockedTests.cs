@@ -23,6 +23,7 @@ namespace TswapTests;
 /// <c>broker lock</c> or its timeout; the process is dumpable only while it holds nothing; both ends of
 /// the control socket check each other.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class BrokerLockedTests : IAsyncLifetime
 {
     private readonly ControlHarness _c = new();

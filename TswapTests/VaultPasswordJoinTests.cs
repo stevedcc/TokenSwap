@@ -13,6 +13,7 @@ namespace TswapTests;
 /// <c>slot approve</c> and <c>slot accept</c>. Two <see cref="FleetMachine"/>s: the approver (a TPM vault with
 /// the vault password) and the new machine.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class VaultPasswordJoinTests : IDisposable
 {
     private const int SerialB = RecordVaultTestSupport.SerialB;

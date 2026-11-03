@@ -14,6 +14,7 @@ namespace TswapTests;
 /// 8, 11, 20 and 21), with the peer checks' seams standing in for other uids, user namespaces,
 /// SELinux labels and dead pidfds.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class AgentServerTests : IAsyncLifetime
 {
     private readonly AgentHarness _h = new();

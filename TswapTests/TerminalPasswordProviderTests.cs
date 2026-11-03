@@ -10,6 +10,7 @@ namespace TswapTests;
 /// vault folder's <c>vault-password</c> file, prompts <c>Vault password: </c> once on stderr, and stretches
 /// the answer. A password-free vault never reaches it.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class TerminalPasswordProviderTests
 {
     private const string Password = "correct horse battery staple";

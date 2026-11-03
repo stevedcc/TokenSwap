@@ -23,6 +23,7 @@ namespace TswapTests;
 /// <see cref="AgentEndToEndTests"/> runs the real binary. Unix sockets only (the agent's Windows pipe is
 /// task 10's and Windows CI's).
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public sealed class AgentCommandTests : IDisposable
 {
     private const string Password = "correct horse battery staple";

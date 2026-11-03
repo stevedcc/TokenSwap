@@ -14,6 +14,7 @@ namespace TswapTests;
 /// once and tries the password candidates. Slots that need a newer tswap or are corrupt are set aside
 /// before any pass (ruling 3). Simulated TPM, simulated Secure Enclave and simulated YubiKeys.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class VaultUnlockerPasswordTests
 {
     private const int SerialA = 11111111;

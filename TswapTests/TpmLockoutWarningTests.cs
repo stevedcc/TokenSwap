@@ -14,6 +14,7 @@ namespace TswapTests;
 /// The probe runs through <see cref="VaultPasswordChoice.ProbeLockout"/> (the simulated TPM of these tests
 /// has no lockout of its own).
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public class TpmLockoutWarningTests : IDisposable
 {
     private const string Password = "correct horse battery staple";
