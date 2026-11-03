@@ -37,6 +37,65 @@ Read `AGENTS.md`, the spec, `MULTI_MACHINE_KEYING.md` (slots and the two-layer w
   with `TPM2TOOLS_TCTI=swtpm:port=2321`. swtpm and tpm2-tools 5.7 are installed on the build machine. Never the
   machine's real TPM.
 
+## Implementation rulings (made by the controller during implementation; they override the text below)
+
+The tasks were built in five lanes; these calls were made while building them. Where a ruling, a task
+or a global constraint below says otherwise, this section wins. Evidence is in the implementation
+reports (`t17-impl-report*.md`) and in the docs Task 14 wrote.
+
+1. **Linux TPM: an inherited memfd holding `hex:<64 lowercase hex>`, not a FIFO** (overrides Task 8's
+   FIFO, `UnixFifo.cs`, `AuthPath_IsAFifo` and the Global constraints' FIFO bullet). Evidence on swtpm
+   with tpm2-tools 5.7:
+   - `tpm2_create ... -p file:a.fifo` with a writer on the FIFO fails: `Error getting current file
+     offset for file "a.fifo" error: Illegal seek`, then `Invalid key authorization`. tpm2-tools seeks
+     every `file:` path except `-`; `-i` on a FIFO fails the same way, and `tpm2_create` needs stdin for
+     the sealed data.
+   - tpm2-tools reads `file:` content as a password **string, cut at the first NUL**: a file whose
+     first byte is 0x00 sealed an empty auth (a plain `tpm2_unseal` opened it), and `ab\0cd` became
+     `ab`. Raw bytes would weaken about 1 slot in 8 and leave 1 in 256 with no auth. So the content is
+     `hex:<64 hex>`, which is the raw 32 bytes (`-p hex:<S>` unseals it).
+   - `-p file:/proc/self/fd/<N>` of an inherited memfd (no `MFD_CLOEXEC`) works for `tpm2_create`; the
+     parent closes its copy right after the child starts and on every failure path. Unseal uses
+     `-p file:-` with the `hex:` text on stdin. The text lives only in byte arrays that are zeroed.
+     Tests: `AuthPath_IsAMemfd_NotAFile`, `AuthContent_IsHexPrefixed64LowercaseHex_InTheMemfdAndOnStdin`,
+     `Memfd_IsClosedAfterTheChildStarted`, `Memfd_IsClosedAfterAFailedStart`, `AuthValue_IsTheRaw32Bytes`.
+2. **A stripped Secure Enclave header gets the generic text** (narrows ruling 3's stripped-header
+   message). Without its `TSSE` header the slot classifies as password-free and goes through the old
+   `tswap_se_unwrap`, which Goal 4 keeps byte for byte; it refuses with that path's generic "Could not
+   unlock with the Secure Enclave…" text, not ruling 3's stripped-header text. The password still
+   protects the slot. The TPM and YubiKey stripped cases keep ruling 3's texts.
+3. **The agent's status payload is 12 bytes, and `status`/`stop` wait at most 2 s** (overrides ruling
+   8's 8-byte payload and "the response deadline doesn't apply"). The payload is
+   `expiresUnixSeconds 8 LE | refusedPeers 4 LE`, because ruling 20's `agent status` reports
+   `refused peers: <n>`, which only the server knows; the decoder accepts 8 or 12 bytes. Without any
+   deadline a squatter that never answers would hang `agent status`, so `status` and `stop` have a 2 s
+   answer deadline (`AgentClient.ControlResponseTimeout`). The broker's control status payload is
+   likewise `unlocked 1 | expires 8 LE | refusedPeers 4 LE`.
+4. **No `user_runtime_t` transition in the CIL** (overrides ruling 14's five named transitions and the
+   `Cil_DeclaresControlTypeAndNoContainerRule` test's list). Fedora 44's targeted policy has no such
+   type: `selinux.security_check_context('system_u:object_r:user_runtime_t:s0')` fails with `EINVAL`
+   on the build machine (enforcing), while `user_tmp_t`, `cache_home_t`, `user_home_t` and
+   `data_home_t` check, and `ls -Zd /run/user/1000` shows `user_tmp_t`. A CIL rule naming an unknown
+   type stops the whole module from loading, so the module carries the other four, and `user_tmp_t`
+   covers `/run/user/<uid>/tswap`. If the router's policy has `user_runtime_t`, add it back inside an
+   `optional` block (with the `BrokerContribTests` allow-list change that needs).
+5. **The proof of `agent start` (ruling 10) and of `broker unlock` (ruling 14) uses only this machine's
+   password slots** (`VaultUnlocker.UnlockWithPasswordSlots(config, selection, StretchedPassword)`: the
+   own TPM / Secure Enclave slot if it has the password, then the plugged-in password YubiKey slots; no
+   password-free slot, no agent, no prompt), followed by the verifier as before. Through the normal
+   three-pass unlock, pass 1 opened a mixed vault through a password-free slot and the password slot's
+   hardware was never exercised. Tests: `PasswordSlotsOnly_*` in `VaultUnlockerPasswordTests`,
+   `Start_MixedVault_*` in `AgentCommandTests`, `Prove_MixedVault_*` in `BrokerLockedTests`.
+6. **`agent start` relays the child's stderr until the `ready`/`error` line**, instead of letting
+   `agent serve` inherit it (refines ruling 10). On Unix .NET's `Console.Out` and `Console.Error` are
+   `dup()`s of fds 1 and 2, so reopening the fds on `/dev/null` left the parent's pipes open through
+   them, and a caller reading `agent start`'s stderr to end of file (a harness, `$(tswap agent start)`)
+   hung until the agent exited. Now the child writes its reply on fd 1 itself, the parent redirects the
+   child's stderr and relays it (touch prompts, warnings) until the reply, stops reading there, and the
+   child then reopens fds 0 to 2 on `/dev/null` and calls `setsid()` as ruling 10 says. `agent start`
+   without a terminal refuses (`agent start reads the vault password from a terminal; there is none.
+   Run 'tswap agent start' from your session.`), mirroring ruling 10's foreground text.
+
 ## Rulings (the controller's calls in this brief; the owner may overrule)
 
 1. **Stretching.** Argon2id with **m = 65536 KiB (64 MiB), t = 3, p = 1**, and a 32-byte random salt per vault, giving a
