@@ -252,9 +252,9 @@ public static class BrokerTemplateValidator
     /// <summary>
     /// Validates one template against <paramref name="host"/>; <paramref name="socketDir"/> is protected too.
     /// <paramref name="bwrapPath"/> (the effective one, after the default) may not be inside any of its binds
-    /// (brief I224 D7 H3).
+    /// (brief I224 D7 H3); it is required, so no caller can skip that check (I224 fix round 1, MiMo p2 M2).
     /// </summary>
-    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir, string? bwrapPath = null)
+    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir, string bwrapPath)
     {
         BrokerPolicy.ValidateName(t.Name, "template");
         var name = t.Name;
@@ -415,8 +415,7 @@ public static class BrokerTemplateValidator
         CheckProgramOutsideBinds(name, program, binds);
         if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal)))
             throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or /lib64 (since v0.2 a program may no longer live in a bind).");
-        if (bwrapPath is not null)
-            CheckBwrapOutsideBinds(name, bwrapPath, binds);
+        CheckBwrapOutsideBinds(name, bwrapPath, binds);
 
         // Network, limits, timeout, output, rate.
         var network = t.Network switch
