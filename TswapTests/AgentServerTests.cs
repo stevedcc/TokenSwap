@@ -447,6 +447,16 @@ public class AgentServerTests : IAsyncLifetime
         var answer = await Task.Run(() => ClientUnlock());
 
         Assert.Equal(_h.Key, Assert.IsType<AgentAnswer.Unlocked>(answer).VaultKey);
+        // The server zeroes its frame, calls the observer and then zeroes K_v only after the write
+        // returns, so the client can hold its answer first (seen on macOS CI): wait for both facts.
+        Assert.True(SpinWait.SpinUntil(() =>
+        {
+            lock (observed)
+                if (observed.Count == 0)
+                    return false;
+            lock (_h.HandedOut)
+                return _h.HandedOut.Count == 1 && _h.HandedOut[0].All(b => b == 0);
+        }, TimeSpan.FromSeconds(5)), "the server never zeroed its copies");
         // The server's frame (length, header, K_v) is all zeros after the send...
         var frame = Assert.Single(observed);
         Assert.Equal(4 + 8 + 32, frame.Length);
@@ -707,8 +717,18 @@ public class AgentServerTests : IAsyncLifetime
             for (var i = 0; i < 16; i++)
                 idle.Add(await AgentHarness.ConnectAsync(_h.SocketPath)); // send nothing: each holds a connection
 
-            // The 17th is closed unanswered...
-            Assert.Null(await _h.RawAsync(AgentOp.Status));
+            // The 17th is closed unanswered. On macOS connect() itself may be refused when the listen
+            // backlog (16) is still full of the 16 the server hasn't accepted yet (seen on CI): no answer too.
+            AgentResponse? seventeenth;
+            try
+            {
+                seventeenth = await _h.RawAsync(AgentOp.Status);
+            }
+            catch (SocketException ex) when (OperatingSystem.IsMacOS() && ex.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                seventeenth = null;
+            }
+            Assert.Null(seventeenth);
             Assert.Equal(0, _h.UnlockCalls);
 
             // ...while each of the 16 is still served.
