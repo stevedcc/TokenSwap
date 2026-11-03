@@ -84,6 +84,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void Container_WithCgroupAndLabel_IsCompiledOntoTheSocket()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var policy = BrokerPolicy.Parse(WithSocket(Container(Unit, Label)));
         var container = policy.Sockets["lane1"].Container;
         Assert.NotNull(container);
@@ -94,6 +96,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void Container_WithoutLabel_HasANullLabel()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var container = BrokerPolicy.Parse(WithSocket(Container("/system.slice/lane1.service"))).Sockets["lane1"].Container;
         Assert.NotNull(container);
         Assert.Equal("/system.slice/lane1.service", container.Cgroup);
@@ -103,6 +107,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void UidOnly_True_LeavesTheSocketUnbound()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var policy = BrokerPolicy.Parse(WithSocket("\"uid_only\": true"));
         Assert.Null(policy.Sockets["lane1"].Container);
         Assert.True(policy.Sockets["lane1"].AllowsUid(100999));
@@ -156,6 +162,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void Cgroup_Of1025Bytes_IsRefused_And1024BytesIsAccepted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var ok = "/" + new string('a', 1024 - 1 - ".service".Length) + ".service";
         Assert.Equal(1024, ok.Length);
         Assert.Equal(ok, BrokerPolicy.Parse(WithSocket(Container(ok))).Sockets["lane1"].Container!.Cgroup);
@@ -219,6 +227,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void Label_Of257Bytes_IsRefused_And256IsAccepted()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var prefix = "system_u:system_r:container_t:s0:c";
         var ok = prefix + new string('1', 256 - prefix.Length);
         Assert.Equal(ok, BrokerPolicy.Parse(WithSocket(Container(Unit, ok))).Sockets["lane1"].Container!.SelinuxLabel);
@@ -239,6 +249,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void RequireBindingFalse_AcceptsASocketWithNeither_ButEveryOtherRuleStillApplies()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var policy = BrokerPolicy.Validate(BrokerPolicy.Deserialize(V01Json), requireBinding: false);
         Assert.Null(policy.Sockets["lane1"].Container);
 
@@ -271,13 +283,19 @@ public class BrokerContainerConfigTests
     [InlineData("\"100999\", \"0-5\"")]
     public void Uids_ThatIncludeZero_AreAccepted_WithTheWarning(string uids)
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var policy = BrokerPolicy.Parse(WithSocket("\"uid_only\": true", uids));
         Assert.Equal(["socket lane1 admits uid 0: every root process and rootful container on this host has it"], policy.Warnings);
     }
 
     [Fact]
-    public void Uids_WithoutZero_GiveNoWarning() =>
+    public void Uids_WithoutZero_GiveNoWarning()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Empty(BrokerPolicy.Parse(WithSocket("\"uid_only\": true", "\"1-65535\"")).Warnings);
+    }
 
     // ------------------------------------------------------------------ D2: serve's start checks (seams)
 
@@ -303,50 +321,80 @@ public class BrokerContainerConfigTests
         """);
 
     [Fact]
-    public void StartRefusal_OnAGoodHost_IsNull() =>
+    public void StartRefusal_OnAGoodHost_IsNull()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Null(GoodHost.StartRefusal(ServePolicy("/s", Container(Unit, Label))));
+    }
 
     [Fact]
-    public void StartRefusal_NotLinux_NamesTheSocket() =>
+    public void StartRefusal_NotLinux_NamesTheSocket()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Equal("socket lane1: \"container\" needs Linux (the broker reads the client's cgroup from /proc); use \"uid_only\": true on this platform",
             (GoodHost with { IsLinux = () => false }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Fact]
-    public void StartRefusal_NoPeerPidfd_NamesTheSocket() =>
+    public void StartRefusal_NoPeerPidfd_NamesTheSocket()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Equal("socket lane1: \"container\" needs SO_PEERPIDFD (Linux 6.5 or later), which this kernel doesn't give",
             (GoodHost with { PeerPidfdAvailable = () => false }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Theory]
     [InlineData("12:pids:/user.slice\n0::/user.slice/a.service\n")] // hybrid
     [InlineData("1:name=systemd:/user.slice/a.service\n")]          // v1
     [InlineData("0::user.slice/a.service\n")]                       // not absolute
     [InlineData("")]
-    public void StartRefusal_NotPureCgroupV2_NamesTheSocket(string ownCgroup) =>
+    public void StartRefusal_NotPureCgroupV2_NamesTheSocket(string ownCgroup)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Equal("socket lane1: \"container\" needs a cgroup v2 host (/proc/self/cgroup must be one \"0::/...\" line)",
             (GoodHost with { ReadOwnCgroup = () => Encoding.UTF8.GetBytes(ownCgroup) }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Fact]
-    public void StartRefusal_OwnCgroupUnreadable_NamesTheSocket() =>
+    public void StartRefusal_OwnCgroupUnreadable_NamesTheSocket()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Equal("socket lane1: \"container\" needs a cgroup v2 host (/proc/self/cgroup must be one \"0::/...\" line)",
             (GoodHost with { ReadOwnCgroup = () => null }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Theory]
     [InlineData("0::/../../user.slice/a.service\n")]
     [InlineData("0::/..")]
-    public void StartRefusal_OwnCgroupWithDotDot_NamesTheSocket(string ownCgroup) =>
+    public void StartRefusal_OwnCgroupWithDotDot_NamesTheSocket(string ownCgroup)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Equal("socket lane1: \"container\" needs serve in the host's root cgroup namespace (/proc/self/cgroup has a \"..\" segment)",
             (GoodHost with { ReadOwnCgroup = () => Encoding.UTF8.GetBytes(ownCgroup) }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Theory]
     [InlineData("0::/user.slice/a.service")]   // no trailing newline
     [InlineData("0::/user.slice/a.service\n")]
     [InlineData("0::/\n")]                     // the root cgroup itself
-    public void StartRefusal_OwnCgroupV2Line_Passes(string ownCgroup) =>
+    public void StartRefusal_OwnCgroupV2Line_Passes(string ownCgroup)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         Assert.Null((GoodHost with { ReadOwnCgroup = () => Encoding.UTF8.GetBytes(ownCgroup) }).StartRefusal(ServePolicy("/s", Container(Unit))));
+    }
 
     [Fact]
     public void StartRefusal_LabelWithoutSelinux_NamesTheSocket()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var host = GoodHost with { SelinuxEnabled = () => false };
         Assert.Equal("socket lane1: container.selinux_label needs SELinux, which is not enabled (no /sys/fs/selinux/enforce)",
             host.StartRefusal(ServePolicy("/s", Container(Unit, Label))));
@@ -356,6 +404,8 @@ public class BrokerContainerConfigTests
     [Fact]
     public void StartRefusal_UidOnlySockets_NeverConsultTheHost()
     {
+        if (OperatingSystem.IsWindows())
+            return; // socket_dir must be a POSIX absolute path; the broker refuses Windows
         var host = new BrokerContainerHost
         {
             IsLinux = () => throw new InvalidOperationException("consulted"),
