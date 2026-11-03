@@ -43,7 +43,7 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
 
     private static string J(string s) => JsonSerializer.Serialize(s);
 
-    private static BrokerHostContext Host() => new(BrokerHarness.MyUid, [], []);
+    private static BrokerHostContext Host() => new(BrokerHarness.MyUid, [], [], []);
 
     private static string Config(string program, string? bind = null, bool rw = false, string? bwrapPath = null, string env = "{}") => $$"""
         {

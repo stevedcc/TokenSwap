@@ -1,4 +1,6 @@
 using System.Text.Json;
+using TswapCore;
+using TswapCore.Agent;
 using TswapCore.Broker;
 using TswapCore.Broker.Templates;
 using Xunit;
@@ -170,6 +172,29 @@ public class BrokerTemplateRunFolderTests : IDisposable
 
         Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var problem));
         Assert.Contains($"contains the broker's run folder {RunFolder}", problem);
+    }
+
+    [Fact]
+    public void TheRunFolderCandidates_AreTheFoldersAgentSocketPathPicks()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        // I224 fix round 1 (MiMo p2 I2, GLM p2 F3): the expected folders come from AgentSocketPath.Folder
+        // itself, with synthetic inputs, so the two builders can't drift apart.
+        var uid = BrokerHarness.MyUid;
+        var runUserRoot = Path.Combine(_root, "run-user");
+        MakeFolder(runUserRoot);
+        var inputs = new AgentSocketPath.Inputs(runUserRoot, u => u == uid ? Home : null, new UnixOwnership(), MacOs: false);
+
+        var host = BrokerHostContext.ForVault(_root, null, inputs);
+        var homeCandidate = AgentSocketPath.Folder(uid, inputs); // no <run-user>/<uid>: the home path
+        MakeFolder(Path.Combine(runUserRoot, uid.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        var runCandidate = AgentSocketPath.Folder(uid, inputs); // <run-user>/<uid> is there and ours: the run path
+
+        Assert.Equal(Path.Combine(Home, ".cache", "tswap", "run"), homeCandidate);
+        Assert.Equal(Path.Combine(runUserRoot, uid.ToString(System.Globalization.CultureInfo.InvariantCulture), "tswap"), runCandidate);
+        Assert.Contains(homeCandidate, host.RunFolders);
+        Assert.Contains(runCandidate, host.RunFolders);
     }
 
     [Fact]

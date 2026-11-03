@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using TswapCore.Agent;
 
 namespace TswapCore.Broker.Templates;
 
@@ -13,7 +14,7 @@ namespace TswapCore.Broker.Templates;
 /// not it exists yet, so they are compared by name too (after resolving the nearest existing ancestor).
 /// </summary>
 public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Protected, IReadOnlyList<string> ProtectedAtOrAbove,
-    IReadOnlyList<string>? RunFolders = null)
+    IReadOnlyList<string> RunFolders)
 {
     /// <summary>sudo's configuration: never bound, nor anything above or below it.</summary>
     public static readonly IReadOnlyList<string> SudoPaths = ["/etc/sudoers", "/etc/sudo.conf", "/etc/sudoers.d"];
@@ -22,14 +23,17 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
     public static BrokerHostContext ForCurrentUser()
     {
         var uid = new UnixOwnership().EffectiveUid;
-        return new BrokerHostContext(uid, [], HomeList(uid), RunFolderCandidates(uid));
+        return new BrokerHostContext(uid, [], HomeList(uid), RunFolderCandidates(uid, AgentSocketPath.Inputs.Machine));
     }
 
     /// <summary>
     /// The vault's own context: the vault user is <paramref name="configDir"/>'s owner (so it is the
     /// same under sudo), and the config folder, the vault folder and that user's home are protected.
     /// </summary>
-    public static BrokerHostContext ForVault(string configDir, string? vaultDir)
+    public static BrokerHostContext ForVault(string configDir, string? vaultDir) => ForVault(configDir, vaultDir, AgentSocketPath.Inputs.Machine);
+
+    /// <inheritdoc cref="ForVault(string, string?)"/>
+    internal static BrokerHostContext ForVault(string configDir, string? vaultDir, AgentSocketPath.Inputs inputs)
     {
         var full = Path.GetFullPath(configDir);
         var uid = BrokerNative.Identify(full, follow: true)?.Uid ?? new UnixOwnership().EffectiveUid;
@@ -50,7 +54,7 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
         var protectedPaths = new List<string> { full };
         if (vaultDir is not null)
             protectedPaths.Add(Path.GetFullPath(vaultDir));
-        return new BrokerHostContext(uid, protectedPaths, HomeList(uid), RunFolderCandidates(uid));
+        return new BrokerHostContext(uid, protectedPaths, HomeList(uid), RunFolderCandidates(uid, inputs));
     }
 
     private static List<string> HomeList(uint uid) =>
@@ -59,12 +63,13 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
     /// <summary>
     /// Brief I224 D7 H1: both folders <c>AgentSocketPath.Folder</c> may pick for the broker's control
     /// socket (which one can change between load and serve): <c>/run/user/&lt;uid&gt;/tswap</c> and
-    /// <c>&lt;home&gt;/.cache/tswap/run</c>, built as it builds them (templates are Linux only).
+    /// <c>&lt;home&gt;/.cache/tswap/run</c>, built as it builds them from the same <paramref name="inputs"/>
+    /// (templates are Linux only). A test compares them with what <c>Folder</c> returns for both states.
     /// </summary>
-    private static List<string> RunFolderCandidates(uint uid)
+    private static List<string> RunFolderCandidates(uint uid, AgentSocketPath.Inputs inputs)
     {
-        List<string> folders = [Path.Combine("/run/user", uid.ToString(System.Globalization.CultureInfo.InvariantCulture), "tswap")];
-        if (BrokerNative.HomeOf(uid) is { Length: > 0 } home)
+        List<string> folders = [Path.Combine(inputs.RunUserRoot, uid.ToString(System.Globalization.CultureInfo.InvariantCulture), "tswap")];
+        if (inputs.HomeOf(uid) is { Length: > 0 } home)
             folders.Add(Path.Combine(home, ".cache", "tswap", "run"));
         return folders;
     }
@@ -607,7 +612,7 @@ public static class BrokerTemplateValidator
             if (BrokerNative.RealPath(home) is { } real && ContainsIdentity(real, self))
                 throw Ex($"is the vault user's home folder ({home}) or contains it; bind a folder inside it instead.");
         }
-        foreach (var runFolder in host.RunFolders ?? [])
+        foreach (var runFolder in host.RunFolders)
         {
             if (RunFolderRelation([normalized, resolved], self, ancestors, runFolder) is { } relation)
                 throw Ex($"{relation} the broker's run folder {runFolder} (a template could delete or use the control socket).");

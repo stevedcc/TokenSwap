@@ -42,7 +42,7 @@ public class BrokerTemplateConfigTests : IDisposable
 
     /// <summary>A host context for this uid with no protected folders of its own.</summary>
     private static BrokerHostContext Host(uint? vaultUid = null, params string[] protectedPaths) =>
-        new(vaultUid ?? BrokerHarness.MyUid, protectedPaths, []);
+        new(vaultUid ?? BrokerHarness.MyUid, protectedPaths, [], []);
 
     /// <summary>A whole broker.json with one template (as JSON) and a socket that may call it.</summary>
     private static string WithTemplate(string templateJson, string socketTemplates = "\"deploy\"") => $$"""
@@ -514,7 +514,7 @@ public class BrokerTemplateConfigTests : IDisposable
     {
         if (!OperatingSystem.IsLinux())
             return; // templates are Linux only (bwrap)
-        var host = new BrokerHostContext(BrokerHarness.MyUid, [], [Work]); // Work plays the home folder
+        var host = new BrokerHostContext(BrokerHarness.MyUid, [], [Work], []); // Work plays the home folder
         var inside = Path.Combine(Work, "deploy");
         Directory.CreateDirectory(inside);
         File.SetUnixFileMode(inside, (UnixFileMode)0b111_101_101);
