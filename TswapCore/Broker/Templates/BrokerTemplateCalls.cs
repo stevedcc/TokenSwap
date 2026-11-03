@@ -173,7 +173,7 @@ namespace TswapCore.Broker
                 // Brief I224 D7 H2: no host context means the binds can't be re-checked; fail closed for
                 // every call, with or without binds (Validate always sets it when there are templates).
                 string? bindProblem = "no host context to re-check the binds against";
-                if (policy.Host is not { } host || !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, out bindProblem))
+                if (policy.Host is not { } host || !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, policy.BwrapPath, out bindProblem))
                 {
                     log.Event($"template '{name}' refused: {bindProblem}");
                     await Refuse(503, "binds").ConfigureAwait(false);

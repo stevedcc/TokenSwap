@@ -166,9 +166,9 @@ public class BrokerTemplateRunFolderTests : IDisposable
         // Valid at load against a host whose run folder is elsewhere; the same template against the
         // real host context is refused by the per-run re-check.
         var template = BrokerPolicy.Parse(Config(Cache, rw: true), Host(Path.Combine(_root, "not-here", "run"))).Templates["t"];
-        Assert.True(BrokerTemplateValidator.RecheckBinds(template, Host(Path.Combine(_root, "not-here", "run")), null, out _));
+        Assert.True(BrokerTemplateValidator.RecheckBinds(template, Host(Path.Combine(_root, "not-here", "run")), null, BrokerPolicy.DefaultBwrapPath, out _));
 
-        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, out var problem));
+        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var problem));
         Assert.Contains($"contains the broker's run folder {RunFolder}", problem);
     }
 

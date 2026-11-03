@@ -239,6 +239,136 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal(missing, policy.BwrapPath);
     }
 
+    // ------------------------------------------------------------------ H3: dangling symlinks (I224 fix round 1, MiMo p2 B1)
+
+    /// <summary>
+    /// The reviewer's layout: the container can write <see cref="Work"/> (a rw bind); a host symlink
+    /// outside every bind points at <c>Work/v2</c>, which doesn't exist yet. A path below the link
+    /// would run what the container plants in <c>Work/v2</c>.
+    /// </summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private string DanglingLinkIntoTheBind()
+    {
+        var link = Path.Combine(_root, "tool-link");
+        File.CreateSymbolicLink(link, Path.Combine(Work, "v2"));
+        Assert.Null(BrokerNative.RealPath(link)); // dangling: realpath fails on it
+        return link;
+    }
+
+    [Fact]
+    public void AProgramBelowADanglingSymlinkIntoABind_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var program = Path.Combine(DanglingLinkIntoTheBind(), "deploy");
+
+        Assert.StartsWith($"template t: program {program} (resolves to {Path.Combine(Work, "v2", "deploy")}) is inside bind {Work}; a program may no longer live in a bind",
+            Refused(Config(program, Work, rw: true)));
+    }
+
+    [Fact]
+    public void ABwrapPathBelowADanglingSymlinkIntoABind_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var bwrap = Path.Combine(DanglingLinkIntoTheBind(), "bwrap");
+
+        Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
+    }
+
+    [Fact]
+    public void ARelativeDanglingSymlinkIntoABind_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var link = Path.Combine(_root, "rel-link");
+        File.CreateSymbolicLink(link, "work/v2"); // relative: against the link's own folder
+        var bwrap = Path.Combine(link, "bwrap");
+
+        Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
+    }
+
+    [Fact]
+    public void ADanglingSymlinkOutsideEveryBind_StillLoads()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var link = Path.Combine(_root, "elsewhere-link");
+        File.CreateSymbolicLink(link, Path.Combine(_root, "elsewhere", "v2")); // dangling, and not into a bind
+        var bwrap = Path.Combine(link, "bwrap");
+
+        var policy = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap), Host());
+
+        Assert.Equal(bwrap, policy.BwrapPath);
+        // A program there is judged outside the binds too: only the system-roots rule refuses it.
+        Assert.StartsWith($"Template 't': argv[0] {Path.Combine(link, "deploy")} must be inside the sandbox",
+            Refused(Config(Path.Combine(link, "deploy"), Work, rw: true)));
+    }
+
+    [Fact]
+    public void ASymlinkLoopOnTheProgramPath_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var a = Path.Combine(_root, "loop-a");
+        var b = Path.Combine(_root, "loop-b");
+        File.CreateSymbolicLink(a, b);
+        File.CreateSymbolicLink(b, a);
+        var program = Path.Combine(a, "deploy");
+        var bwrap = Path.Combine(a, "bwrap");
+
+        Assert.Equal($"template t: program {program} can't be resolved (more than 40 symbolic links), so it can't be checked against the binds",
+            Refused(Config(program, Work, rw: true)));
+        Assert.Equal($"bwrap_path {bwrap} can't be resolved (more than 40 symbolic links), so it can't be checked against template t's binds",
+            Refused(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap)));
+    }
+
+    [Fact]
+    public void AProgramThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        // Validate never produces a program outside the system roots, and a test can't plant a link
+        // under /usr, so the template is built directly: a program below a link that resolves outside
+        // the binds now and into one later (the per-run re-check is the same check as at load).
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var link = Path.Combine(_root, "tool-link");
+        File.CreateSymbolicLink(link, elsewhere);
+        var program = Path.Combine(link, "deploy");
+        var loaded = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true), Host()).Templates["t"];
+        var template = new BrokerTemplatePolicy("t", program, [new[] { (program, false) }], loaded.Args, loaded.Env, loaded.Files,
+            loaded.Binds, loaded.Cwd, loaded.Network, loaded.Limits, loaded.Timeout, loaded.MaxOutputBytes, loaded.Rate);
+        Assert.True(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var before), before);
+
+        File.Delete(link);
+        File.CreateSymbolicLink(link, Path.Combine(Work, "v2"));
+
+        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var problem));
+        Assert.StartsWith($"template t: program {program} (resolves to {Path.Combine(Work, "v2", "deploy")}) is inside bind {Work}", problem);
+    }
+
+    [Fact]
+    public void ABwrapPathThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var link = Path.Combine(_root, "bwrap-link");
+        File.CreateSymbolicLink(link, elsewhere);
+        var bwrap = Path.Combine(link, "bwrap");
+        var policy = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true, bwrapPath: bwrap), Host());
+        var template = policy.Templates["t"];
+        Assert.True(BrokerTemplateValidator.RecheckBinds(template, Host(), null, policy.BwrapPath, out var before), before);
+
+        File.Delete(link);
+        File.CreateSymbolicLink(link, Work);
+
+        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, policy.BwrapPath, out var problem));
+        Assert.Equal($"bwrap_path {bwrap} is inside template t's bind {Work}", problem);
+    }
+
     // ------------------------------------------------------------------ H4: the env denylist
 
     [Theory]

@@ -462,7 +462,13 @@ public static class BrokerTemplateValidator
     /// </summary>
     private static void CheckProgramOutsideBinds(string name, string program, IReadOnlyList<BrokerTemplateBind> binds)
     {
-        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program);
+        if (binds.Count == 0)
+            return;
+        var tooManyLinks = false;
+        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program, out tooManyLinks);
+        if (tooManyLinks)
+            throw new BrokerConfigException(
+                $"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved (more than {MaxSymlinks} symbolic links), so it can't be checked against the binds");
         foreach (var bind in binds)
         {
             if (!new[] { program, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
@@ -481,7 +487,13 @@ public static class BrokerTemplateValidator
     /// </summary>
     private static void CheckBwrapOutsideBinds(string name, string bwrapPath, IReadOnlyList<BrokerTemplateBind> binds)
     {
-        var names = new[] { Path.GetFullPath(bwrapPath), ResolveNearestExisting(bwrapPath) }.OfType<string>().ToList();
+        if (binds.Count == 0)
+            return;
+        var resolved = ResolveNearestExisting(bwrapPath, out var tooManyLinks);
+        if (tooManyLinks)
+            throw new BrokerConfigException(
+                $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} can't be resolved (more than {MaxSymlinks} symbolic links), so it can't be checked against template {name}'s binds");
+        var names = new[] { Path.GetFullPath(bwrapPath), resolved }.OfType<string>().ToList();
         foreach (var bind in binds)
             if (names.Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
                 throw new BrokerConfigException(
@@ -511,14 +523,20 @@ public static class BrokerTemplateValidator
     public static bool IsAtOrUnder(string path, string folder) =>
         path == folder || folder == "/" || path.StartsWith(folder.TrimEnd('/') + "/", StringComparison.Ordinal);
 
-    /// <summary>Re-checks every bind of <paramref name="template"/> (before a run): true when all still pass, else false and why.</summary>
-    public static bool RecheckBinds(BrokerTemplatePolicy template, BrokerHostContext host, string? socketDir, out string? problem)
+    /// <summary>
+    /// Re-checks every bind of <paramref name="template"/> (before a run), and that its program and
+    /// <paramref name="bwrapPath"/> (the effective one) still lie outside them (I224 fix round 1, MiMo p2 B1:
+    /// a path that started resolving into a bind after load): true when all still pass, else false and why.
+    /// </summary>
+    public static bool RecheckBinds(BrokerTemplatePolicy template, BrokerHostContext host, string? socketDir, string bwrapPath, out string? problem)
     {
         try
         {
             foreach (var bind in template.Binds)
                 if (CheckBind(template.Name, bind.Configured, host, socketDir) != bind.Path)
                     throw new BrokerConfigException($"Template '{template.Name}': bind {bind.Configured} now resolves elsewhere.");
+            CheckProgramOutsideBinds(template.Name, template.Program, template.Binds);
+            CheckBwrapOutsideBinds(template.Name, bwrapPath, template.Binds);
             problem = null;
             return true;
         }
@@ -630,21 +648,87 @@ public static class BrokerTemplateValidator
         return null;
     }
 
+    /// <summary>Linux's own limit on symbolic links followed in one lookup (<c>MAXSYMLINKS</c>).</summary>
+    private const int MaxSymlinks = 40;
+
+    /// <inheritdoc cref="ResolveNearestExisting(string, out bool)"/>
+    internal static string? ResolveNearestExisting(string path) => ResolveNearestExisting(path, out _);
+
     /// <summary>
-    /// <paramref name="path"/> with its nearest existing ancestor resolved (symlinks followed) and the
-    /// missing rest appended by name; the real path when it exists; null when nothing above it resolves.
+    /// <paramref name="path"/> resolved one component at a time as the kernel would reach it: every
+    /// symbolic link is followed, its target read with <c>readlink</c> (a relative target taken against
+    /// the link's folder), so a <b>dangling</b> link is followed too instead of being walked past (I224
+    /// fix round 1, MiMo p2 B1: <c>/usr/lib/tool-link/deploy</c> with <c>tool-link -&gt; /srv/tools/v2</c>
+    /// missing is <c>/srv/tools/v2/deploy</c>); from the first missing (or unreadable) entry on, the
+    /// rest is appended by name. For a path that exists this is its real path. Null, with
+    /// <paramref name="tooManyLinks"/> set, after more than <see cref="MaxSymlinks"/> links (a loop): the
+    /// path can't be checked, and the callers refuse it.
     /// </summary>
-    internal static string? ResolveNearestExisting(string path)
+    internal static string? ResolveNearestExisting(string path, out bool tooManyLinks)
     {
-        var full = Path.GetFullPath(path);
-        for (var p = full; p is not null; p = Path.GetDirectoryName(p))
+        tooManyLinks = false;
+        var pending = new Stack<string>(); // the components still to walk, the next one on top
+        Push(pending, Path.GetFullPath(path));
+        var resolved = "/";
+        var links = 0;
+        var missing = false;
+        while (pending.TryPop(out var part))
         {
-            if (BrokerNative.RealPath(p) is not { } real)
+            if (part is "" or ".")
                 continue;
-            var rest = Path.GetRelativePath(p, full);
-            return rest == "." ? real : Path.GetFullPath(Path.Combine(real, rest));
+            if (part == "..")
+            {
+                resolved = Path.GetDirectoryName(resolved) ?? "/";
+                continue;
+            }
+            var candidate = Path.Join(resolved, part);
+            if (!missing)
+            {
+                var entry = BrokerNative.LStat(candidate);
+                if (entry is { Type: BrokerNative.EntryType.Symlink })
+                {
+                    if (++links > MaxSymlinks)
+                    {
+                        tooManyLinks = true;
+                        return null;
+                    }
+                    if (ReadLink(candidate) is { } target)
+                    {
+                        Push(pending, target);
+                        if (target.StartsWith('/'))
+                            resolved = "/";
+                    }
+                    else
+                    {
+                        pending.Push(part); // replaced since the lstat: look at it again (counted)
+                    }
+                    continue;
+                }
+                missing = entry is null or { Type: BrokerNative.EntryType.Missing };
+            }
+            resolved = candidate;
         }
-        return null;
+        return resolved;
+
+        static void Push(Stack<string> pending, string components)
+        {
+            var parts = components.Split('/');
+            for (var i = parts.Length - 1; i >= 0; i--)
+                pending.Push(parts[i]);
+        }
+    }
+
+    /// <summary><c>readlink</c> of <paramref name="link"/>, or null when it is no longer a link or can't be read.</summary>
+    private static string? ReadLink(string link)
+    {
+        try
+        {
+            return new FileInfo(link).LinkTarget;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>True when <paramref name="candidate"/> is <paramref name="resolvedPath"/> or one of the folders above it.</summary>
