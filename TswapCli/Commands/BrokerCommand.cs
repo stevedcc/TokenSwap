@@ -287,10 +287,18 @@ public sealed class BrokerCommand : ICliCommand
             _ => throw new TswapException(Usage),
         };
         var (config, vaultId, uid, path) = ControlTarget(ctx, "unlock");
+        // A broker that doesn't answer is said before the password is typed (the unlock itself still decides).
+        if (BrokerControlClient.Status(path, vaultId, uid) is not BrokerControlAnswer.State and var absent)
+            throw Failure(absent, path);
+        // The disclosure comes before the password is read: it is what the user decides on. Without a
+        // terminal the provider refuses next, so there is nothing to disclose.
+        if (!ctx.Console.IsInputRedirected)
+        {
+            ctx.Console.Error.WriteLine(RamDisclosure);
+            if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave)
+                ctx.Console.Error.WriteLine(SecureEnclaveCopyLine);
+        }
         using var password = TerminalPasswordProvider.For(ctx, config)();
-        ctx.Console.Error.WriteLine(RamDisclosure);
-        if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave)
-            ctx.Console.Error.WriteLine(SecureEnclaveCopyLine);
         var expiresAt = timeout is { } t ? ctx.Time.GetUtcNow() + t : (DateTimeOffset?)null;
         switch (BrokerControlClient.Unlock(path, vaultId, uid, password, expiresAt))
         {

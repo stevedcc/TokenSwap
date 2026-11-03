@@ -164,6 +164,22 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     [Fact]
+    public void Start_RamDisclosureOnStderr_OnceBeforeThePrompt()
+    {
+        // Review T17 p3 GLM M3: on stderr, next to the prompt, as 'broker unlock' does.
+        var (m, _) = TpmPasswordVault("disclosure-stderr");
+
+        var (exit, stdout, stderr) = Start(m);
+
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain(RamDisclosure, stdout);
+        var at = stderr.IndexOf(RamDisclosure + Environment.NewLine, StringComparison.Ordinal);
+        Assert.True(at >= 0, stderr);
+        Assert.Equal(at, stderr.LastIndexOf(RamDisclosure, StringComparison.Ordinal));
+        Assert.True(at < stderr.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal), stderr);
+    }
+
+    [Fact]
     public void Start_WrongPassword_ExitsOne_NoAgentLeft()
     {
         var (m, _) = TpmPasswordVault("start-wrong");

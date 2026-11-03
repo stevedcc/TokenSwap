@@ -562,9 +562,10 @@ public sealed class AgentCommand : ICliCommand
 
     private static void PrintDisclosure(IConsole c, Config config)
     {
-        c.Out.WriteLine(RamDisclosure);
+        // On stderr, next to the prompt (stdout stays the command's own output), as 'broker unlock' does.
+        c.Error.WriteLine(RamDisclosure);
         if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave && VaultUnlocker.CouldNeedPassword(config, []))
-            c.Out.WriteLine(SecureEnclaveRamLine);
+            c.Error.WriteLine(SecureEnclaveRamLine);
     }
 }
 

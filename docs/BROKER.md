@@ -309,9 +309,11 @@ sudo -iu vault tswap broker lock
   On a broker whose slot has no password they say `This broker's slot has no vault password; it is
   never locked.` and connect to nothing.
 - **`broker unlock` needs a terminal.** Without one it gives the general "needs the vault password"
-  text, which suggests the agent; for a broker, run `broker unlock` from a terminal instead. It prints
-  the RAM disclosure with "The broker keeps" for its first words (and, on a Mac with a Secure Enclave
-  slot, the line about the Secure Enclave library's copy). `--timeout` takes the agent's durations
+  text, which suggests the agent; for a broker, run `broker unlock` from a terminal instead. Before it
+  asks for the password it checks that the broker answers (`No 'tswap broker serve' answers at <path>;
+  is it running?` otherwise) and prints, on stderr, the RAM disclosure with "The broker keeps" for its
+  first words (and, on a Mac with a Secure Enclave slot, the line about the Secure Enclave library's
+  copy). `--timeout` takes the agent's durations
   (60 s to 30 d, absolute); without it the broker stays unlocked until `broker lock` or a restart.
 - **The proof.** `serve` checks the password with one real unlock through **this machine's password
   slot only** (never a password-free slot, never an agent), then the `vault-password` verifier, and

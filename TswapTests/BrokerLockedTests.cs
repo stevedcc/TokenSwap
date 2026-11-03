@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using TswapCli;
 using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Agent;
@@ -212,6 +213,43 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Contains("The broker is locked.", m.Ok("", "broker", "lock"));
         Assert.True(fleet.State.IsLocked);
         Assert.Contains("The broker is locked.", m.Ok("", "broker", "status"));
+    }
+
+    [Fact]
+    public async Task BrokerUnlock_RamDisclosureOnStderr_BeforeThePrompt()
+    {
+        // Review T17 p3 GLM I1/M3: the disclosure is said before the user types the password, on stderr.
+        if (OperatingSystem.IsWindows())
+            return;
+        using var m = new FleetMachine("bk-disclose") { Tpm = RandomNumberGenerator.GetBytes(32) };
+        await RealVaultBrokerAsync(m);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal(Password + "\n", "broker", "unlock");
+
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain(BrokerCommand.RamDisclosure, stdout);
+        var disclosure = stderr.IndexOf(BrokerCommand.RamDisclosure, StringComparison.Ordinal);
+        Assert.True(disclosure >= 0, stderr);
+        Assert.Equal(disclosure, stderr.LastIndexOf(BrokerCommand.RamDisclosure, StringComparison.Ordinal));
+        Assert.True(disclosure < stderr.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal), stderr);
+    }
+
+    [Fact]
+    public void BrokerUnlock_NoBrokerRunning_SaysSoBeforeThePrompt()
+    {
+        // Review T17 p3 GLM I1 (second half): a broker that doesn't answer is found before the password is typed.
+        if (OperatingSystem.IsWindows())
+            return;
+        using var m = new FleetMachine("bk-absent") { Tpm = RandomNumberGenerator.GetBytes(32) };
+        PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
+        var path = Path.Combine(_c.Root.FullName, "absent", "control.sock");
+        BrokerCommand.ControlPathOverride = (_, _) => path;
+
+        var (exit, _, stderr) = m.RunOnTerminal(Password + "\n", "broker", "unlock");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"No 'tswap broker serve' answers at {path}; is it running?", stderr);
+        Assert.DoesNotContain(TerminalPasswordProvider.PromptText, stderr);
     }
 
     private const string Password = "correct horse battery staple";

@@ -438,7 +438,7 @@ tswap agent stop
 ```
 
 - **`agent start` needs a terminal** (it refuses otherwise) and runs as the vault user, never with
-  sudo (it refuses root). It prints the RAM disclosure below, asks once, proves the password with one
+  sudo (it refuses root). It prints the RAM disclosure below (on stderr), asks once, proves the password with one
   real unlock through a **password slot of this machine** (a slot without the password doesn't
   count, even if it would open the vault) and the `vault-password` verifier, then leaves
   `tswap agent serve` running in the background and prints its socket path. Until the agent is
