@@ -696,8 +696,9 @@ ARM64 with Parallels' own virtual TPM** — not a physical TPM. Concretely still
   unhealthy: `tpmtool getdeviceinformation` (a different, lower-level tool) reports it present,
   initialized, and `Ready For Storage: True` on the same machine. Worth knowing if `Get-Tpm`
   throws during any future diagnostic work on a Parallels VM — it doesn't mean the TPM is broken.
-- **No PIN or attestation policy support** — only the unconditional wrap/unwrap case is
-  implemented, matching Linux's current scope.
+- **No attestation policy support.** Since brief T17 a slot can carry the vault password as the
+  key's usage auth ([below](#windows-tpm-pcp_usageauth-at-creation-and-at-use)); otherwise the
+  unconditional wrap/unwrap case is the only one, matching Linux's scope.
 - **The wrapped blob is versioned by the keyring (issue #154)**, as for the other two backends;
   the legacy single-slot `Config.TpmSealedKey` is unversioned and not migrated.
 - `tswap init --tpm` makes a keyring vault (machine slot + recovery slot), as on Linux.
@@ -717,6 +718,145 @@ fix: `curl.exe -C - --retry N --retry-delay N --retry-all-errors`, which resumes
 the connection dropped instead of restarting the whole file, then pointing NuGet at a local
 folder source (`dotnet nuget add source <folder>`) containing the resulting `.nupkg` files so
 `dotnet build`/`publish` never needs the flaky path again for those specific packages.
+
+## The vault password per backend (brief T17)
+
+A slot with a vault password (README, "The vault password and the agent"; the file and blob formats
+are in [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md#the-vault-password-brief-t17-v020)) hands
+its backend the 32-byte **stretched password**. Where the hardware can, the hardware checks it.
+
+| Backend | Bound as | Checked by | Wrong password |
+|---|---|---|---|
+| Linux TPM | the sealed object's auth value | the TPM, under dictionary-attack protection | `Wrong vault password. The TPM counts failed attempts and locks out for a while after several.` |
+| Windows TPM | the PCP key's usage auth (`PCP_USAGEAUTH`) | the TPM, under Windows' lockout | the same text |
+| Secure Enclave | the key's application password (`.applicationPassword`) | the Enclave (no rate limit shown) | `Wrong vault password (or this slot was made on another Mac).` |
+| YubiKey | mixed into `KEK_slot`'s HKDF input | the KDF only: whoever holds the key can guess offline at one Argon2id per guess | `Wrong vault password (or this slot's key changed).` |
+
+**One prompt is one hardware attempt:** a wrong password is never retried silently, on any backend.
+
+### Linux TPM: the auth value through tpm2-tools
+
+- **Seal:** `tpm2_create -C <primary> -u <pub> -r <priv> -i - -a fixedtpm|fixedparent|userwithauth -p file:/proc/self/fd/<N>`.
+  The data to seal stays on stdin; the auth comes from an inherited **memfd** (fd `N`, made without
+  `MFD_CLOEXEC`). The parent closes its copy as soon as the child has started, and on every failure
+  path. The object keeps dictionary-attack protection (no `noda`; a swtpm test reads the attributes
+  back with `tpm2_print`).
+- **Unseal:** `tpm2_load` (no auth), then `tpm2_unseal -c <loaded> -p file:-` with the auth on stdin.
+- **The content is `hex:<64 lowercase hex>`**, which tpm2-tools turns back into the raw 32 bytes.
+  tpm2-tools reads a `file:` auth as a **password string and cuts it at the first NUL byte**, verified
+  on swtpm with tpm2-tools 5.7: a file whose first byte is 0x00 sealed an **empty** auth (a plain
+  `tpm2_unseal` without `-p` opened it), and `ab\0cd` became `ab`. Raw stretched bytes would have
+  weakened about 1 slot in 8 and sealed 1 in 256 with no auth at all. A swtpm test pins that the auth
+  really is the raw 32 bytes (`-p hex:<S>` unseals it; an empty auth gets `0x98E`).
+- **Why a memfd, not a FIFO** (the brief's first plan): tpm2-tools seeks every `file:` path except
+  `-`, and on a FIFO that fails (`Error getting current file offset for file "a.fifo" error: Illegal
+  seek`, then `Invalid key authorization`), for `-p` and for `-i` alike. `tpm2_create` needs stdin for
+  the sealed data, so its auth can't use `file:-`; `/proc/self/fd/<N>` of an inherited memfd is
+  seekable and is never a file on disk. The `hex:` text lives only in byte arrays that are zeroed
+  after use; neither it nor the stretched password ever appears in argv, the environment, a temp file
+  or a log line (unit tests check every tpm2 call's argv through the process seam).
+- **Errors:** `0x98E` (`TPM_RC_AUTH_FAIL` for the object's session, "the authorization HMAC check
+  failed and DA counter incremented" on swtpm) is the wrong-password text above when a password was
+  supplied, and ruling 3's stripped-header text when none was. `0x921` (`TPM_RC_LOCKOUT`) is
+  `The TPM is in dictionary-attack lockout after failed password attempts; wait and try again.`
+- **The lockout warning.** At each TPM password enrolment (`init`, `slot request`, `recover`,
+  `slot accept`) tswap reads `lockoutAuthSet` from `tpm2_getcap properties-variable`; when it is 0
+  it prints, once, on stderr: `Warning: this TPM's lockout password is empty, so anyone who can use
+  the TPM can reset its failed-password counter and keep guessing the vault password. Setting one (as
+  root: tpm2_changeauth -c lockout) affects every program that uses this TPM.` tswap never sets it
+  (machine-wide). **A failed probe is silent**: no warning and no error.
+- **Tests:** `Tpm2ArgvTests` (unit, a fake tpm2-tools that enforces the auth) and
+  `LinuxTpmPasswordTests` (`Category=Tpm`, `./runtests.sh --tpm` against swtpm; the lockout test
+  drives swtpm into lockout and runs only on swtpm, and the class clears swtpm's DA counter, never a
+  real TPM's).
+
+### Windows TPM: `PCP_USAGEAUTH` at creation and at use
+
+- A password key is created with `PCP_USAGEAUTH` set to the 32 stretched bytes. **Every** open, of a
+  password or password-free key, is `CngKeyOpenOptions.Silent`; a password key then gets the same
+  `PCP_USAGEAUTH` bytes and exactly one `Decrypt`, with no retry. No `NCRYPT_PCP_*` exemption flag is
+  set, so the key stays under Windows' dictionary-attack protection. (The spec's
+  `NCRYPT_PIN_PROPERTY` at use was replaced by `PCP_USAGEAUTH` at creation and at use, as the owner's
+  spike of 2026-11-02 confirmed.)
+- **Error codes** (the owner's spike): `0x80090010` (`NTE_PERM`, "Access denied") with a password
+  supplied is the wrong-password text; `0x80090031` (the provider ignored the authorisation because
+  dictionary-attack mitigation triggered) and `0x80290409` (the Platform Crypto Device ignored it;
+  this one also blocks key **creation**) are
+  `Windows has locked TPM use for this user after too many wrong passwords (by default for up to 8 hours, or until an administrator resets the TPM lockout). Slots on this machine without a vault password may be blocked meanwhile too.`;
+  `0x80090022` (`NTE_SILENT_CONTEXT`) on a password slot is a tswap bug (`tswap opened a
+  password-protected TPM key without its password (a tswap bug; please report it).`), and on a legacy
+  blob the stripped-header text.
+- **The lockout, and a denial of service:** Windows counts wrong passwords per Windows user and across
+  all standard users of the machine. About 4 wrong passwords for one user, or 9 across all standard
+  users, lock TPM use for up to 480 minutes. The lock is not tswap's: it covers every TPM use of the
+  machine, blocks key creation, and may block password-free slots. Another local standard user can
+  therefore lock **everyone's** TPM use for hours with wrong passwords against their own keys (they
+  still can't open the vault). A Windows TPM password enrolment prints
+  `Windows locks TPM use after about 4 wrong passwords, for up to 8 hours; run 'tswap agent start' to avoid retyping it.`
+  Windows manages the lockout authorisation itself, so there is no lockout-password warning.
+- **Tests:** `WindowsTpmPasswordUnitTests` (every OS, through the `IPcpKeyStore` seam) and
+  `WindowsTpmPasswordTests` (`Category=TpmWindows`, real hardware; `WrongPassword_RightMessage` spends
+  one of the user's failed-password attempts). The hardware tests are the owner's step before release.
+
+### Secure Enclave: the Enclave checks the password
+
+- **The owner's spike** (2026-11-02, macOS 27.2, M4 Pro): a CryptoKit
+  `SecureEnclave.P256.KeyAgreement.PrivateKey` created with `[.privateKeyUsage, .applicationPassword]`
+  (or with `.userPresence` too) under an `LAContext` carrying `setCredential(<32 bytes>,
+  .applicationPassword)`, then reopened from its `dataRepresentation` in a fresh context: the right
+  credential works; a wrong one, or one with a flipped bit, fails at key agreement (CryptoTokenKit
+  `-3`, AKSError `-536362989`); no credential with `interactionNotAllowed` fails with `LAError -1004`;
+  the right credential still works after two failures. **No Enclave rate limit was shown**, so tswap
+  says the Enclave enforces the password and the slot is useless off this Mac and without it, never
+  that the chip rate-limits guesses.
+- **New shim entry points** (`tswap_se_wrap_v3`, `tswap_se_unwrap_v2`, each taking the 32-byte
+  credential): an older `libtswapse.dylib` beside a newer tswap fails closed at the first call
+  (`EntryPointNotFoundException`, mapped to "update libtswapse.dylib"), never falling back to the old
+  entry points. The old three entry points are unchanged byte for byte.
+- **Return codes:** `-6` a credential that isn't 32 bytes (checked before the Enclave is touched);
+  `-7` a failed key agreement with a credential (a wrong password, or a blob from another Mac); `-8` an
+  `LAError` (Touch ID or the login password was cancelled, failed or couldn't be asked). `-1` to `-5`
+  keep their meanings.
+- **No dialog without presence:** `interactionNotAllowed` is set whenever presence isn't required. The
+  unwrap's signature carries no presence flag, so it first tries non-interactively and retries once,
+  with a fresh context that may show Touch ID, only after `LAError -1004` (what a presence key gives).
+  A password-only key never shows a dialog; a presence key costs one extra non-interactive attempt.
+- **A stripped `TSSE` header** makes the slot look password-free, so it goes through the old
+  `tswap_se_unwrap`, which refuses with that path's generic "Could not unlock with the Secure
+  Enclave…" text instead of ruling 3's stripped-header text (the old entry point can't tell the case
+  apart). The password still protects the slot.
+- **Copies tswap can't wipe:** the shim's Swift `Data(bytes:count:)` copy of the credential and the
+  `LAContext`'s copy live until Swift and the system release them; with the interactive retry, a
+  presence key has up to two of each during one unwrap. `agent start` and `broker unlock` say so on a
+  Mac with a password Secure Enclave slot. tswap's own copy is zeroed after each call.
+- **Tests:** `SecureEnclavePasswordTests` (every OS, through a fake shim) and
+  `SecureEnclaveShimPasswordSourceTests` (the Swift source: flags, the `-6` check before the Enclave,
+  no `evaluatePolicy`). `SecureEnclavePasswordRoundTripTests` run in the default and `--unit` runs:
+  on **CI's macOS runner**, which has a Secure Enclave, they build the shim and run against the real
+  Enclave (round trip, wrong password, flipped bit, empty credential, stripped header), and with
+  `CI_REQUIRE_SE=1` they fail instead of skipping; elsewhere they return early with a "SKIPPED" line.
+  `SecureEnclavePasswordHardwareTests` (`Category=SecureEnclave`, with Touch ID) is the owner's manual
+  check on the Mac.
+
+### YubiKey: the KDF only
+
+A YubiKey password slot (blob version 2) derives
+`KEK_slot = HKDF-SHA256(ikm = response ‖ stretched, salt, info = "tswap/yubikey-slot/v2" ‖ slotId)`.
+The YubiKey never sees the password, so nothing rate-limits guesses by someone who holds the key:
+each guess costs one Argon2id (64 MiB, t = 3). `init` says so, and the password's length is the
+defence.
+
+### Dev/test: swtpm on the build machine
+
+Besides the container setup above, the brief T17 TPM tests ran against a local swtpm (swtpm and
+tpm2-tools 5.7 installed from Fedora's packages):
+
+```
+swtpm socket --tpm2 --tpmstate dir=<temp folder> --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear
+TPM2TOOLS_TCTI=swtpm:port=2321 ./runtests.sh --tpm
+```
+
+Never point these tests at the machine's real TPM: the lockout test locks the TPM it runs on.
 
 ## Adding a backend
 

@@ -17,6 +17,10 @@ from Sealed Secrets, SOPS, age or Vault, which protect a secret at rest; use bot
    (`slot request` → `slot approve` → `slot accept` → `slot merge`), and the **record store** keeps
    one encrypted file per secret in a folder that a sync tool can carry.
 
+4. **An optional vault password** (0.2) on any slot, against other users of the same machine:
+   typed per command, or held by `tswap agent` like `ssh-agent`. See
+   [The vault password and the agent](#the-vault-password-and-the-agent-v02).
+
 Further reading: [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md) (the backends, their status and
 what has and hasn't been verified) and [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md) (the
 keyring, slots, enrolment and the record store).
@@ -275,8 +279,10 @@ a hand-rolled ECIES equivalent. In the words of [HARDWARE_BACKENDS.md](HARDWARE_
 it has "been verified for correctness (round-trips, fails cleanly on denial), not reviewed by
 anyone with cryptography expertise for subtler issues". It has not had an independent
 cryptographic review; `init --secure-enclave` says so too. Tested on Apple Silicon only.
-**TPM:** the TPM key has no PIN or PCR policy yet, so any process running as you can unseal it
-(no presence check, unlike a touch-required YubiKey or a `--with-touch` Secure Enclave slot).
+**TPM:** the TPM key has no PCR policy, and without a vault password (`--password`, see
+[The vault password and the agent](#the-vault-password-and-the-agent-v02)) any process running as
+you can unseal it (no presence check, unlike a touch-required YubiKey or a `--with-touch` Secure
+Enclave slot).
 
 To let your YubiKeys open this vault too, plug each one into **this** machine and run
 `sudo tswap slot add --yubikey`: each key becomes its own slot, which opens the vault on its own
@@ -359,6 +365,176 @@ refused with one message and nothing is written; the recovery slot always stays.
 **Vaults made by `tswap init --tpm` or `--secure-enclave` before keyring vaults** (one sealed key,
 no keyring) keep working unchanged, but are not migrated automatically. To move one to a keyring
 vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add your secrets.
+
+## The vault password and the agent (v0.2)
+
+Any hardware slot (TPM, Secure Enclave or YubiKey) can carry an optional **vault password**, a
+second factor against other users of the same machine: someone with an account on your machine, a
+copy of the vault folder and access to the TPM (or a plugged-in no-touch YubiKey) still can't open
+a password slot. There is one password per vault; every slot with a password uses the same one,
+and slots without it keep working as before (a vault can mix both). A vault without a password
+behaves exactly as before: no prompt, no agent.
+
+### Setup with a password
+
+```bash
+tswap init --tpm --password                  # asks for the password twice and creates vault-password
+tswap init --secure-enclave --with-touch --password
+tswap init --password                        # a YubiKey slot
+sudo tswap slot add --yubikey --password     # a later password slot: asks once, checked against the vault
+tswap slot request --tpm --password [--vault-dir <shared folder>] request.json
+printf '%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" | sudo tswap recover --tpm --password
+```
+
+- **The choice.** `init`, `slot add --yubikey`, `slot request` and `recover` take `--password` or
+  `--no-password`. With neither, on a terminal, tswap explains the choice and asks
+  (`Add a vault password? (yes/no, default no)`); without a terminal it adds no password and says so
+  in one line, so scripts keep working. The first password slot of a vault asks twice and creates
+  the `vault-password` file in the vault folder; every later one asks once and refuses a password
+  that isn't the vault's. A password under 12 characters gets a warning; an empty one is a usage
+  error (use `--no-password`).
+- **`recover --password`** reads the recovery key from stdin's **first line** and the vault password
+  from the next line (twice, on two lines, when this is the vault's first password slot). Without
+  `--password` the recovery key is read as before.
+- **Joining** with `slot request --password` needs the shared folder's `vault-password` file
+  (`--vault-dir <folder>`, or the folder of this machine's existing config). A TPM or Secure
+  Enclave request asks for the password then and seals with it; `slot accept` asks again, checks it
+  against the vault, and refuses if the files differ between request, approve file and folder. If
+  the TPM refuses at accept a password that the vault accepts, the password typed at request time
+  was different: run `slot request` again. Without the folder, enrol without the password and
+  re-enrol the slot later.
+- **`tswap slots`** marks each machine slot `vault password` or `no password`, and warns when slots
+  without the password sit beside password slots (`<n> slot(s) open without the password: keep them
+  away from shared machines.`).
+- **Every machine that opens a password slot, or rewrites a keyring that holds one, needs tswap
+  0.2.0 or newer.** A 0.1.x build reads a password slot's blob as damage ("config is corrupted").
+- **Classic vaults can't carry a password.** Convert first (`sudo tswap migrate --to-records`), then
+  add a password slot.
+- The password is never changed in place: re-enrol a slot instead (`vault password change` is later
+  work).
+
+**How each backend enforces it:** the TPM checks it as the sealed object's authorisation (Linux)
+or the key's usage auth (Windows) and counts failures towards its lockout; the Secure Enclave
+checks it as the key's application password (it doesn't rate-limit guesses as a TPM does); a
+YubiKey slot mixes it into the slot key's derivation, so whoever holds the plugged-in key can guess
+it offline at one Argon2id per guess. Details: [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#the-vault-password-per-backend-brief-t17)
+and [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md#the-vault-password-brief-t17-v020).
+
+### Typing it, or the agent
+
+A command that needs a password slot asks in this order: every slot that has **no** password (a
+plugged-in YubiKey slot without the password opens the vault silently, without asking anyone),
+then a running **tswap agent**, then a prompt on the terminal (`Vault password: `, once per
+command). With no agent and no terminal (scripts, AI agents) it fails at once:
+`This vault's slot on this machine needs the vault password. Start the agent ('tswap agent start') or run this command in a terminal.`
+
+The agent is like `ssh-agent`: it holds the stretched password in memory and performs the unlocks
+itself, so commands need no prompt.
+
+```bash
+tswap agent start [--timeout 8h]   # asks for the password once, proves it, starts the agent in the background
+tswap agent status                 # expires: <time> (or never), refused peers: <n>
+tswap agent stop
+```
+
+- **`agent start` needs a terminal** (it refuses otherwise) and runs as the vault user, never with
+  sudo (it refuses root). It prints the RAM disclosure below, asks once, proves the password with one
+  real unlock through a **password slot of this machine** (a slot without the password doesn't
+  count, even if it would open the vault) and the `vault-password` verifier, then leaves
+  `tswap agent serve` running in the background and prints its socket path. Until the agent is
+  ready, its messages (a touch prompt, a warning) appear in your terminal; then it detaches: its
+  stdin, stdout and stderr go to `/dev/null` and it starts its own session (`setsid`), so closing the
+  terminal or Ctrl+C there doesn't stop it. (Windows has no `setsid`: there a Ctrl+C in that console
+  can still reach it.) Ctrl+C **before** it is ready stops both.
+- It refuses when there is nothing to hold (`No slot of this vault on this machine needs the vault
+  password; the agent has nothing to hold.`), when the password YubiKey isn't plugged in, and when an
+  agent for this vault already runs.
+- **`--timeout`** takes seconds (`5400`, as in `ssh-add -t`) or `<n>d<n>h<n>m<n>s` in that order
+  (`90m`, `8h`, `1d12h30m`), from 60 s to 30 days. It is absolute: at the deadline the agent zeroes
+  the password and exits, however busy it is. Without it the agent runs until `agent stop`.
+- **`agent stop` / `agent status`** exit 1 with `No tswap agent is running for this vault (<path>).`
+  when none answers. Under sudo they reach the vault owner's agent and say `(as root, for <name>'s
+  agent)`.
+- **`agent serve --foreground`** runs the agent in a terminal (or tmux) and reads the password there;
+  it refuses without a terminal. There are no systemd or launchd units on purpose: holding the vault
+  password needs a human to type it.
+- **Which agent:** one per vault. Its socket is `agent-<first 16 hex of the vault id>.sock` in the
+  vault user's run folder: on Linux `/run/user/<uid>/tswap` (else `~/.cache/tswap/run`), on macOS
+  `~/Library/Caches/tswap/run`; on Windows a named pipe for your user SID. `TSWAP_AGENT_SOCK`
+  overrides the path (Unix only), like `SSH_AUTH_SOCK`; it chooses a path, never a trust level.
+  `sudo tswap get` finds your agent through the vault folder's owner (sudo drops the variable).
+- **When the agent is asked**, a command prints `Asking the tswap agent to unlock...` (with
+  `(touch your YubiKey if it flashes)` or `(Touch ID may ask)` where that applies). A vault without
+  password slots never contacts an agent.
+- Each answer is checked: the vault key the agent returns must match the `vault-password` file's
+  key check, or the command refuses it.
+
+A broker whose slot has the password starts **locked** and is unlocked once with
+`tswap broker unlock`: see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password-brief-t17).
+
+### What the password does and doesn't protect
+
+- **It stops** another local user without root (including one in group `tss`, or one who can use
+  a plugged-in no-touch YubiKey) who has a copy of the vault folder, and anyone with a stolen disk or
+  copied folder who later gets the hardware.
+- **It doesn't stop** root, a kernel-level attacker, or someone at your unlocked session while the
+  agent holds the password (the agent answers your uid; a person at your keyboard *is* your uid).
+- **A vault is only as strong as the weakest slot usable on that machine.** A password TPM slot next
+  to a plugged-in no-touch YubiKey slot without the password protects nothing against another user of
+  that machine. A YubiKey kept in a drawer, or the recovery key, is fine. `tswap slots` warns.
+- **Don't reuse the vault password anywhere else.** Two consequences make it worth guessing:
+  whoever can open a mixed vault through a slot **without** the password can read the
+  `vault-password` file's verifier and test fleet-password guesses offline, at one Argon2id
+  (64 MiB, t = 3) per guess; and whoever holds a YubiKey with a password slot can guess that slot's
+  password offline the same way. A long password is the defence in both cases.
+- **RAM.** `agent start` and `broker unlock` say it once, verbatim:
+  *"The agent keeps your stretched vault password in memory until you stop it or it times out. Root,
+  or anything that can read this process's memory, can take it while it runs; it still needs this
+  machine's TPM/YubiKey/Secure Enclave to open the vault."* The held copy is in locked memory (never
+  swapped; a failed lock is a warning) and the agent makes itself non-dumpable (Linux), denies
+  debugger attachment (macOS) or denies other processes' memory access through its DACL (Windows: a
+  speed bump, the process's owner can change it back). On a Mac with a password Secure Enclave slot
+  one more line follows: the Secure Enclave library's copies of the password during each unlock (a
+  Swift `Data` copy and the `LAContext`'s copy) can't be wiped by tswap.
+- **The derivation is best effort.** The typed password is a .NET string, which can't be zeroed, and
+  Argon2id's 64 MiB working memory and output array live on the managed heap, which may be swapped and
+  can't be zeroed reliably. tswap zeroes its own UTF-8 bytes and output buffer. "Locked, never swapped"
+  applies to the held stretched password only.
+- **The tswap CLI stays dumpable** while it holds the vault key during a command, as before.
+- **The agent's answers are authenticated by the vault folder.** The key check proves an answer is
+  this vault's key given a `vault-password` file only the vault's machines can write: someone who can
+  write your vault folder could plant a file and a fake agent of their own. Keep the folder's owner
+  and mode as tswap sets them (as for the keyring).
+- **Windows TPM lockout is a denial of service.** Windows counts wrong TPM passwords per Windows
+  user, and across all standard users of the machine: about 4 wrong passwords for one user, or 9
+  across all of them, lock TPM use for up to 8 hours (480 minutes). That lock covers **everyone's**
+  TPM use, not only tswap's: it also blocks creating TPM keys, and may block slots without a
+  password. So another local standard user can lock you out of your TPM for hours with wrong
+  passwords against their own keys. They still can't open your vault. Run `tswap agent start` to
+  avoid retyping the password.
+- **Linux TPM lockout.** When the TPM's lockout password is empty, anyone who can use the TPM can
+  reset its failed-password counter and keep guessing; tswap warns at each TPM password enrolment
+  (`tpm2_changeauth -c lockout`, as root, sets one, and affects every program that uses the TPM).
+
+### The agent's socket and containers
+
+**Never mount the agent's run folder (`/run/user/<uid>/tswap`) or `~/.cache` into a container.**
+That is the primary rule. The agent (and a password broker's control socket) also refuse a peer of
+another uid (root is allowed, the agent's own clients check the server's uid in turn), a peer in
+another user namespace (every rootless Podman container, `--userns=host` and `keep-id` included),
+and with SELinux a peer labelled `container_t`, `spc_t` or `container_runtime_t`. Without SELinux
+the user-namespace check is the second wall, and it can't tell apart tswap itself run inside the
+containers' namespace (`podman unshare`, or tswap in a rootless container) from the containers.
+`agent status` counts refused peers. **On macOS** there are no user namespaces: never mounting the
+run folder into a VM or container is all there is.
+
+**Kernels older than 6.3** (no `SO_PEERPIDFD`): the peer check reads the peer's `/proc/<pid>`
+by the pid the socket reported at connect time, so a peer that exits and has its pid reused at that
+moment could be judged by the new process. Winning that race needs a same-uid process in the host's
+user namespace to take the recycled pid, and such a process is already trusted.
+
+**No `/proc`:** the checks can't run, so the agent then answers only root, and a password broker
+can't be unlocked, locked or queried; each says so once.
 
 ## Containers: credentials they never hold
 
@@ -632,7 +808,8 @@ tswap prevents **accidental leaks and casual exfiltration** — it does not atte
 | Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
-| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot (no PIN/PCR policy yet) unlock for any process running as you while the key is plugged in / on that machine |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
+| Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [The vault password and the agent](#the-vault-password-and-the-agent-v02) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
 
 ### What tswap does NOT protect against
@@ -674,8 +851,13 @@ These commands are safe for AI agents and automation. They never expose secret v
 | `apply <file>` | Substitute markers with values | Output contains plaintext — send to stdout/process substitution only |
 | `rotate <name>` / `ingest --rotate <name>` of a **burned** secret | Replace a compromised value | None — the new value is never displayed; a secret that isn't burned needs sudo |
 | `slots` | List slots and what protects each | None — reads metadata only |
+| `agent status` / `agent stop` | The tswap agent's state; stop it | None — never returns a value |
 | `prompt` / `prompt-hash` | Self-documentation | None |
 | `init` / `migrate` / `slot request` / `slot accept` | Setup, migration, joining a vault | Requires physical hardware interaction |
+
+`agent start` and `broker unlock` need no sudo either, but they read the **vault password** at a
+terminal: they are for the human. An AI agent whose command fails with "needs the vault password"
+asks the user to run `tswap agent start` and never handles the password itself.
 
 ### Operator role (requires sudo)
 
@@ -882,7 +1064,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 
 | Command | Sudo | Description |
 |---------|------|-------------|
-| `init [--keyring] [--tpm\|--secure-enclave --with-touch\|--no-touch] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)); `--secure-enclave` needs `--with-touch` or `--no-touch` |
+| `init [--keyring] [--tpm\|--secure-enclave --with-touch\|--no-touch] [--password\|--no-password] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)); `--secure-enclave` needs `--with-touch` or `--no-touch` |
 | `init --vault-dir <folder>` | No | Join a shared record-store vault folder (see [Sharing a vault between machines](#sharing-a-vault-between-machines)) |
 | `migrate` | No | Review a classic vault's touch/entropy settings; guide to touch-required slots |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |
@@ -897,12 +1079,15 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `redact <file>` | No | Print file with secret values replaced by `[REDACTED]` labels |
 | `tocomment <file> [--dry-run]` | No | Replace inline secret values with `# tswap:` markers |
 | `apply <file>` | No | Read file with `# tswap:` markers and output with actual secret values substituted |
-| `slot request [--tpm\|--secure-enclave --with-touch\|--no-touch] <file>` | No | On a new machine: enroll its hardware and write a request file |
+| `slot request [--tpm\|--secure-enclave --with-touch\|--no-touch] [--password\|--no-password] [--vault-dir <folder>] <file>` | No | On a new machine: enroll its hardware and write a request file (`--password` reads the shared folder's `vault-password`) |
 | `slot accept <file> [--receipt <file>]` | No | On the new machine: finish enrolment with the approve file |
+| `agent start [--timeout <d>]`, `agent serve --foreground [--timeout <d>]` | No (refuses root) | Hold the vault password in memory, like ssh-agent; needs a terminal (see [The vault password and the agent](#the-vault-password-and-the-agent-v02)) |
+| `agent stop`, `agent status` | No (also under sudo) | Stop the agent; show its expiry and refused peers (exit 1 when none runs) |
 | `prompt` | No | Show AI agent instructions (the skill file) |
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `completion <bash\|zsh\|fish\|powershell>`, `installscript` | No | Shell completion script; platform install script |
 | `broker serve` | No (runs as the vault's user, refuses root) | Run the broker for containers (see [Containers](#containers-credentials-they-never-hold)) |
+| `broker unlock [--timeout <d>]`, `broker lock`, `broker status` | No (refuses sudo) | Unlock, lock or query a broker whose slot has the vault password (see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password-brief-t17)) |
 | `broker forward --listen 127.0.0.1:<port> [--socket <path>]`, `broker call <template> [name=value ...] [--socket <path>]` | No (in the container) | Use the broker's HTTP routes; call a command template (`call` exits 125 when the broker refused or failed, 124 when the template timed out) |
 | `add <name>` | Yes | Store a user-provided secret value |
 | `get <name>` | Yes | Display a secret value |
@@ -911,9 +1096,9 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `restore <name>` | Yes | Put back the value the last rotation replaced |
 | `export <path>`, `import <path>` | Yes | Encrypted backup and restore |
 | `slot approve <request-file> <approve-file>` | Yes | On an enrolled machine: approve a new machine's slot |
-| `slot add --yubikey` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
+| `slot add --yubikey [--password\|--no-password]` | Yes | Add a plugged-in YubiKey to this machine's keyring vault as its own slot |
 | `slot merge <receipt-or-config.json> [--yes]` | Yes | Add a receipt's slot, or another copy's slots, to this machine's keyring (see [Remote enrolment](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)) |
-| `recover --yubikey\|--tpm\|--secure-enclave --with-touch\|--no-touch` | Yes | Open the vault with the recovery key (stdin only) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
+| `recover --yubikey\|--tpm\|--secure-enclave --with-touch\|--no-touch [--password\|--no-password]` | Yes | Open the vault with the recovery key (stdin only; with `--password` its first line, the vault password on the next) and enroll this machine's hardware as a new slot (see [The recovery key](#the-recovery-key)) |
 | `migrate --to-records [--vault-dir <dir>]` | Yes | Convert to the record store (one file per secret) |
 | `vault merge <folder>` | Yes | Fold another copy of the vault folder into this one |
 | `broker route\|socket\|template add\|remove ...` | Yes | Configure the broker's routes, sockets (who may connect, what they may use) and command templates. Route and template changes and changes to an existing socket's uids, routes or templates load on SIGHUP (`systemctl --user reload tswap-broker`); a new or removed socket, or a new `socket_dir`, needs a restart |
@@ -1137,8 +1322,20 @@ shareable part in the vault folder:
 ```
 <vault folder>/          # default <config directory>/vault; --vault-dir puts it anywhere
 ├── keyring              # the vault key, wrapped once per slot
+├── vault-password       # only with a vault password: Argon2id salt and parameters, verifier, key check
 └── records/<hash>       # one encrypted record per secret; the file name is a keyed hash of the name
 ```
+
+`vault-password` holds nothing usable without the vault key. If a sync tool leaves two different
+copies, every password operation refuses until you keep one (`The vault folder has two different
+vault-password files (...)`); a byte-identical copy is deleted on the next password write (only a
+file matching the sync tools' conflict-copy names, never `vault-password` itself; a sync tool that
+propagates that deletion does no harm).
+
+The tswap agent's socket lives in the vault user's run folder, never in the config or vault
+folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tswap/run/`),
+`~/Library/Caches/tswap/run/` on macOS, a named pipe on Windows; a password broker's control socket
+is `broker-<16 hex>/control.sock` in the same folder.
 
 On Linux and macOS the folders are created 0700 and the files 0600; an existing vault with wider
 permissions is narrowed on the next write, with a notice (reads change nothing). Windows: the
@@ -1151,6 +1348,7 @@ profile folder's permissions apply.
 | `TSWAP_CONFIG_DIR` | The config directory to use; overrides everything else, including the `sudo` home lookup |
 | `TSWAP_YUBIKEY_SERIAL` | The YubiKey to unlock with when several are plugged in (see [Two YubiKeys plugged in](#two-yubikeys-plugged-in)); `sudo` drops it unless kept |
 | `XDG_CONFIG_HOME` | Linux: the config base, when it is an absolute path (a relative one is ignored) |
+| `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner |
 
 Commands that need no vault (`--help`, `<command> --help`, `prompt`, `prompt-hash`, `completion`,
 `installscript`) work without a home folder; the others say "Cannot determine the config folder"

@@ -187,3 +187,28 @@ usual, plus a security review of the agent protocol.
 - The agent's wire protocol, socket paths, and how a command finds the agent (an environment variable like
   `SSH_AUTH_SOCK` plus a default path).
 - How `--timeout` durations are written, and the Windows memory-hardening equivalents.
+
+## Owner amendments (recorded at implementation, brief T17)
+
+The brief (`docs/briefs/t17-vault-password-agent.md`) settled these points against the text above;
+the brief's rulings are the detail.
+
+- **The verifier's input** is the whole `vault-password` header followed by the stretched password
+  (magic, version, vault id, KDF id, parameters and salt, then `stretched`), not `salt ‖ params ‖
+  stretched`. Strictly stronger: it also binds the magic, the version, the vault id and the KDF id.
+- **Where the salt and parameters live:** in the `vault-password` file in the vault folder, as this
+  spec's second bullet under "The password and its stretched form" says, not "in the keyring" as its
+  first bullet says. The file also carries a `keyCheck` (HMAC under a key derived from `K_v` over the
+  header), so a client can confirm an agent's answer is this vault's key without the password.
+- **"Asks the agent first"** is read as: before any **prompt**. An unlock first tries every slot
+  without the password, then the agent, then one terminal prompt. A vault without password slots never
+  contacts an agent.
+- **Windows:** the password is the PCP key's usage auth, `PCP_USAGEAUTH`, set at creation **and** at
+  use (the spec's `NCRYPT_PIN_PROPERTY` at use is replaced; confirmed by the owner's spike of
+  2026-11-02), and every open is silent (`CngKeyOpenOptions.Silent`).
+- **Windows lockout facts** (the owner's spike): about 4 wrong passwords for one user, and 9 across
+  all standard users of the machine, lock TPM use for up to 480 minutes. The lock also blocks key
+  creation and may block password-free slots, and another local standard user can trigger it.
+- **Secure Enclave:** the spike succeeded (macOS 27.2, M4 Pro), so the Enclave enforces the password
+  through `.applicationPassword` and `LAContext.setCredential`; no Enclave rate limit was shown, and
+  tswap doesn't claim one. The YubiKey-derivation fallback in the table above is not used.

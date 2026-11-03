@@ -115,8 +115,8 @@ secret's length.
 
 ### Timing
 
-- Every refusal (route, method, path, rate, lockout) is byte-identical for its status and is
-  answered before any unlock.
+- Every refusal (route, method, path, rate, lockout, and a locked password broker) is byte-identical
+  for its status and is answered before any unlock.
 - An allowed request takes an unlock longer (about 2 s on a TPM). That tells a caller only what its
   own allow-list already says: this route or template is allowed here.
 - There is no minimum-duration decryption: no caller supplies ciphertext, and AES-GCM leaks nothing
@@ -214,6 +214,8 @@ containers (other uids), **not** against the vault user. So the vault user must 
 
 `serve` refuses to run as root, and makes itself non-dumpable at start
 (`prctl(PR_SET_DUMPABLE, 0)` on Linux): no same-uid `ptrace`, and no core dumps holding secrets.
+A broker whose slot has the vault password is the exception while it is locked and holds nothing
+(see [Memory and dumpability of a password broker](#memory-and-dumpability-of-a-password-broker)).
 
 ### The load-bearing assumption: no container runs with the vault user's uid
 
@@ -239,8 +241,9 @@ Every request unlocks the vault afresh. On the router's TPM that does not move t
 counter: the TPM's dictionary-attack protection counts only **failed authorisations**
 (TCG, *TPM 2.0 Library, Part 1: Architecture*, "Dictionary Attack Protection"), and the
 router's sealed key has no authValue (it unseals unattended), so an unseal can't fail an
-authorisation. **This stops being true if a PIN (authValue) is ever added to the sealed key:**
-then every failed unlock counts towards a TPM lockout.
+authorisation. **A slot with a vault password (brief T17) has an authValue:** there a wrong
+`broker unlock` password counts towards the TPM lockout; the requests of an unlocked broker use the
+proven password, so they don't.
 
 **A hung unlock** (a wedged TPM or `tpm2-tools` call) is abandoned after 30 s: that request gets
 `503` and a log line (`reason=unlock-timeout`), and the next unlock may start. After 3 such
@@ -286,6 +289,132 @@ anyway. (The byte buffers around them, such as a basic route's `user:secret` byt
 This needs a **record-store vault** (one file per secret). `serve` refuses a classic single-file
 vault, since that would be decrypted whole for every request; convert it with
 `sudo tswap migrate --to-records`.
+
+## A broker with a vault password (brief T17)
+
+When the vault user's slot on this machine has the vault password (README, "The vault password and
+the agent"), `serve` starts **locked**: after a reboot, a restart, or with the disk copied, the
+broker opens nothing until a human unlocks it. A broker whose slot has no password behaves exactly as
+before. A slot that needs a newer tswap, or whose blob is corrupt, stops `serve` with that slot's id
+and text.
+
+```bash
+sudo -iu vault tswap broker unlock [--timeout 8h]   # asks for the vault password at the terminal
+sudo -iu vault tswap broker status                  # locked, or unlocked until <time>; refused peers: <n>
+sudo -iu vault tswap broker lock
+```
+
+- **As the vault user, never as root.** All three refuse euid 0 before connecting
+  (`Run 'tswap broker unlock' as the vault user (<name>), without sudo.`); `sudo -iu vault` is fine.
+  On a broker whose slot has no password they say `This broker's slot has no vault password; it is
+  never locked.` and connect to nothing.
+- **`broker unlock` needs a terminal.** Without one it gives the general "needs the vault password"
+  text, which suggests the agent; for a broker, run `broker unlock` from a terminal instead. It prints
+  the RAM disclosure with "The broker keeps" for its first words (and, on a Mac with a Secure Enclave
+  slot, the line about the Secure Enclave library's copy). `--timeout` takes the agent's durations
+  (60 s to 30 d, absolute); without it the broker stays unlocked until `broker lock` or a restart.
+- **The proof.** `serve` checks the password with one real unlock through **this machine's password
+  slot only** (never a password-free slot, never an agent), then the `vault-password` verifier, and
+  holds a copy of the stretched password. Every later unlock (a route's secret, an ssh key, a
+  template) uses that copy; `serve` never asks a tswap agent, so its behaviour doesn't depend on one.
+- **Wrong passwords** answer with ruling 18's text and the broker stays locked. They count towards the
+  unlock guard under the key `control`: after 3 in a row, `broker unlock` is refused for a few minutes
+  (`Too many wrong vault passwords for this broker; wait a few minutes and try again.`) before the
+  password is even read. On a TPM each wrong password also counts towards the TPM's
+  dictionary-attack lockout (below).
+- **While locked** every request gets the refusal a busy or rate-limited request gets: HTTP `503`,
+  `SSH_AGENT_FAILURE` for every ssh-agent message (the identities list too), and `broker call` exit
+  125, with `reason=locked` in the log only. A locked request is not an unlock failure and never counts
+  towards any guard. It is refused at once, like a busy one; the timing difference from a served
+  request is the one that already separates busy from served (see [Timing](#timing)).
+- **ssh keys load after the first unlock.** `serve` checks what it can without an unlock at start; the
+  keys themselves load on the first successful `broker unlock`. A key that can't load fails that
+  unlock (`ssh key '<name>' can't be loaded: <reason>`) and the broker locks again: no half-working
+  broker. That failure doesn't count towards the guard (the password was right); fix the key and
+  unlock again.
+- **Back to locked** (`broker lock`, the timeout, or a failed ssh-key load): the broker stops taking
+  new unlocks, waits for every unlock in flight to finish and drop its copy, zeroes the held password,
+  unloads the ssh keys, and only then becomes dumpable again (below). An unlock caught by it gets
+  `The broker was locked while unlocking; run 'tswap broker unlock' again.` A second `broker unlock`
+  of an unlocked broker is refused before its password is read (`The broker is already unlocked.`).
+  A hung unlock (a wedged TPM) holds `broker lock` until it returns or the client's 120 s deadline
+  passes; `serve`'s exit after repeated unlock timeouts is the backstop.
+
+### The control socket and its trust model
+
+`broker unlock|lock|status` reach `serve` through its own control socket,
+`<run folder>/broker-<first 16 hex of the vault id>/control.sock`. The run folder is the agent's:
+`/run/user/<uid>/tswap` on Linux when `/run/user/<uid>` exists and belongs to the vault user (with
+`loginctl enable-linger` it does), else `~/.cache/tswap/run`; `~/Library/Caches/tswap/run` on macOS.
+`serve` creates the folders 0700 and refuses a folder that is a symlink, isn't the vault user's, isn't
+0700, or has a parent writable by others. It holds `control.lock` for its lifetime and replaces a
+stale socket only under that lock, so a second `serve` gets the usual "already running" refusal. The
+container sockets are not used for this: they refuse the broker's own uid by design.
+
+- **The server** accepts the vault user's uid only (**root is refused**, unlike the agent), plus, on
+  Linux, the peer must be in the broker's own user namespace, and with SELinux its label must not be
+  `container_t`, `spc_t` or `container_runtime_t`. Refusals close the connection, touch no hardware
+  and are logged (`peer in another user namespace`, `peer label <type>`); `broker status` counts them.
+  Without `/proc` the checks can't run, nothing may connect, and `serve` says so once.
+- **The `broker unlock` client** checks the server in turn before it sends the password: the vault
+  user's uid and, on Linux, the server's SELinux label and user namespace. A locked broker is dumpable
+  (below), so its namespace link is readable; an **unreadable** link means it is already unlocked (a
+  non-dumpable process) or isn't the real broker, and nothing is sent:
+  `The broker is already unlocked or is not the real broker; run 'tswap broker status'.` So a
+  container squatting `control.sock` never receives the password. `broker lock` and `broker status`
+  send no secret and check the uid and, on Linux, the label.
+- **What it doesn't stop:** anything that runs **as the vault user on the host itself**, outside a
+  container, can bind a fake control socket first and capture the stretched password, exactly as with
+  `ssh-agent`. That is why the vault user runs nothing but the broker (above).
+- **macOS:** the client checks the server's uid only (no user namespaces, no labels). Anything running
+  as the vault user, including a VM or container that can see the run folder, can capture the
+  password there. Never mount the run folder into a VM or container: on macOS that rule is all there
+  is. (On macOS, `broker unlock` at an already-unlocked broker sends its payload and gets the server's
+  `The broker is already unlocked.`)
+- **Container isolation** of the control socket is SELinux plus user namespaces: the SELinux module
+  gives the socket its own type and no container rule (next section), and the user-namespace check
+  refuses every rootless container even without SELinux. The primary rule stays: never mount the run
+  folder or `~/.cache` into a container.
+
+### Memory and dumpability of a password broker
+
+- **Dumpable while locked (Linux).** A same-uid unprivileged process gets `EACCES` from
+  `readlink /proc/<pid>/ns/user` of a non-dumpable process (verified on kernel 7.2), and the
+  `broker unlock` client must read that link, so a password broker that were non-dumpable from the
+  start could never be unlocked. While locked it holds no secret (no vault key, no password, no ssh
+  keys), so a core dump holds nothing.
+- **Non-dumpable whenever any secret is in memory:** the unlock request sets `PR_SET_DUMPABLE 0`
+  before it reads the password from the socket (until then the bytes sit in the kernel's socket
+  buffer), and the broker becomes dumpable again only after a failed proof has zeroed the candidate,
+  or after a return to locked has drained, zeroed and unloaded everything. Unlock requests are handled
+  one at a time.
+- **macOS:** `serve` sets `RLIMIT_CORE` to 0 at start (password or not), and applies `PT_DENY_ATTACH`
+  before it reads the first unlock request's password, for the rest of its life (it can't be undone;
+  nothing on macOS needs to read the process).
+- The held copy is in locked memory (`mlock`, `MADV_DONTDUMP`); a failed lock is a warning.
+- **The TPM's dictionary-attack counter:** a password slot's sealed object has an auth value, so a
+  wrong `broker unlock` password is a failed authorisation and counts towards the TPM's lockout. Only
+  `broker unlock` supplies a password the broker doesn't already hold: once unlocked, every request
+  uses the proven copy.
+
+### SELinux for the control socket
+
+The module (`contrib/selinux/tswap-broker.cil`) adds the type `tswap_broker_control_t`
+(`file_type`, `non_security_file_type`, `non_auth_file_type`), named type transitions
+`(typetransition tswap_broker_t <dir type> sock_file "control.sock" tswap_broker_control_t)` for
+`user_tmp_t`, `cache_home_t`, `user_home_t` and `data_home_t`, and explicit allows for the broker on
+its own socket (`sock_file` create, write, getattr, setattr, unlink, open, read; `unix_stream_socket`
+on `self`). It adds **no** rule that lets `container_t` write or connect through a
+`tswap_broker_control_t` socket.
+
+**No `user_runtime_t` rule.** The brief named a sixth transition for `user_runtime_t`, but Fedora 44's
+targeted policy has no such type: `security_check_context("system_u:object_r:user_runtime_t:s0")`
+fails with `EINVAL` there, while the other four types check, and `/run/user/<uid>` itself is labelled
+`user_tmp_t` (`ls -Zd /run/user/1000`). A CIL rule naming an unknown type stops the whole module from
+loading, so the `user_tmp_t` rule covers `/run/user/<uid>/tswap`. On a policy that does have
+`user_runtime_t`, add its transition (inside an `optional` block). The owner checks the module on the
+router (CoreOS, enforcing) before release: a rootless container given the run folder must fail to
+connect to `control.sock` (an AVC denial), and `broker unlock` from the vault user's shell must work.
 
 ## SSH: an agent that signs with vault keys (brief T10)
 
