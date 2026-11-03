@@ -202,10 +202,10 @@ public class YubiKeySlotTests
     public void Decode_UnknownVersion_IsRejected()
     {
         var bytes = Blob().Encode();
-        bytes[4] = 2;
+        bytes[4] = 3;
 
         var ex = Assert.Throws<TswapException>(() => YubiKeySlotBlob.Decode(bytes));
-        Assert.Contains("version 2", ex.Message);
+        Assert.Contains("version 3", ex.Message);
         Assert.Contains("newer tswap", ex.Message);
     }
 

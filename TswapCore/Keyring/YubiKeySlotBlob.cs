@@ -27,6 +27,12 @@ public enum YubiKeyTouchPolicy : byte
 /// strict: wrong magic, an unknown version, a short blob, trailing bytes, an unknown touch policy
 /// or a non-positive serial give a <see cref="TswapException"/>.</para>
 ///
+/// <para><b>Version 2</b> (brief T17 ruling 3, 75 bytes) is version 1 plus a trailing <c>flags</c> byte
+/// (bit 0 = password; other bits must be 0). It is written only for password slots, whose
+/// <c>KEK_slot</c> mixes in the stretched vault password (<see cref="YubiKeySlotKek.DeriveV2"/>), so a
+/// password-free slot stays byte-identical to version 1. Flags <c>0x00</c> is damage, any other bit
+/// needs a newer tswap (<see cref="SlotPassword"/>).</para>
+///
 /// <para>A YubiKey machine slot <em>without</em> such a blob is a <b>legacy pair slot</b>: its
 /// <c>KEK_slot</c> still comes from the two-key XOR scheme and the per-machine config fields
 /// (<c>YubiKeySerials</c>, <c>RedundancyXor</c>, <c>UnlockChallenge</c>, <c>MasterKeySalt</c>).
@@ -35,6 +41,9 @@ public enum YubiKeyTouchPolicy : byte
 public sealed record YubiKeySlotBlob
 {
     public const byte CurrentVersion = 1;
+
+    /// <summary>Brief T17: the version of a password slot's blob (version 1 plus a flags byte).</summary>
+    public const byte PasswordVersion = 2;
     public const int ChallengeSize = 32;
     public const int SaltSize = 32;
 
@@ -42,10 +51,13 @@ public sealed record YubiKeySlotBlob
     private const int HeaderSize = MagicSize + 1; // magic + version
     public const int EncodedSize = HeaderSize + 4 + ChallengeSize + SaltSize + 1;
 
+    /// <summary>The size of a version 2 (password) blob: <see cref="EncodedSize"/> plus the flags byte.</summary>
+    public const int PasswordEncodedSize = EncodedSize + 1;
+
     /// <summary>"TSYK": TokenSwap YubiKey slot.</summary>
     public static ReadOnlySpan<byte> Magic => "TSYK"u8;
 
-    public YubiKeySlotBlob(int serial, byte[] challenge, byte[] salt, YubiKeyTouchPolicy touch)
+    public YubiKeySlotBlob(int serial, byte[] challenge, byte[] salt, YubiKeyTouchPolicy touch, bool requiresPassword = false)
     {
         if (challenge.Length != ChallengeSize)
             throw new ArgumentException($"The challenge must be {ChallengeSize} bytes", nameof(challenge));
@@ -55,7 +67,14 @@ public sealed record YubiKeySlotBlob
         Challenge = (byte[])challenge.Clone();
         Salt = (byte[])salt.Clone();
         Touch = touch;
+        RequiresPassword = requiresPassword;
     }
+
+    /// <summary>
+    /// Brief T17: the slot's <c>KEK_slot</c> mixes in the stretched vault password
+    /// (<see cref="YubiKeySlotKek.DeriveV2"/>); encoded as version 2.
+    /// </summary>
+    public bool RequiresPassword { get; }
 
     /// <summary>The enrolled YubiKey's serial number.</summary>
     public int Serial { get; }
@@ -94,7 +113,11 @@ public sealed record YubiKeySlotBlob
     /// This blob with its touch policy set (brief T7 item 5: the posture is known only after the
     /// first challenge, which uses this blob's challenge).
     /// </summary>
-    public YubiKeySlotBlob WithRequiresTouch(bool? requiresTouch) => new(Serial, Challenge, Salt, ToPolicy(requiresTouch));
+    public YubiKeySlotBlob WithRequiresTouch(bool? requiresTouch) =>
+        new(Serial, Challenge, Salt, ToPolicy(requiresTouch), RequiresPassword);
+
+    /// <summary>This blob as a password slot's (version 2), same serial, challenge, salt and touch policy.</summary>
+    public YubiKeySlotBlob WithPassword() => new(Serial, Challenge, Salt, Touch, requiresPassword: true);
 
     private static YubiKeyTouchPolicy ToPolicy(bool? requiresTouch) => requiresTouch switch
     {
@@ -107,54 +130,87 @@ public sealed record YubiKeySlotBlob
     public static bool IsYubiKeyBlob(byte[]? hwBlob) =>
         hwBlob is { Length: >= MagicSize } && hwBlob.AsSpan(0, MagicSize).SequenceEqual(Magic);
 
+    /// <summary>Version 1 (74 bytes) unless <see cref="RequiresPassword"/>, then version 2 (75 bytes, flags <c>0x01</c>).</summary>
     public byte[] Encode()
     {
-        var bytes = new byte[EncodedSize];
+        var bytes = new byte[RequiresPassword ? PasswordEncodedSize : EncodedSize];
         var span = bytes.AsSpan();
         Magic.CopyTo(span);
-        span[MagicSize] = CurrentVersion;
+        span[MagicSize] = RequiresPassword ? PasswordVersion : CurrentVersion;
         BinaryPrimitives.WriteInt32LittleEndian(span.Slice(HeaderSize, 4), Serial);
         Challenge.CopyTo(span.Slice(HeaderSize + 4, ChallengeSize));
         Salt.CopyTo(span.Slice(HeaderSize + 4 + ChallengeSize, SaltSize));
         span[EncodedSize - 1] = (byte)Touch;
+        if (RequiresPassword)
+            span[PasswordEncodedSize - 1] = SlotPassword.PasswordFlag;
         return bytes;
     }
 
+    /// <summary>
+    /// Decodes a version 1 or version 2 blob. A newer version or unknown flag bits throw
+    /// <see cref="SlotPassword.NeedsNewerTswapText"/>, flags <c>0x00</c> throws
+    /// <see cref="SlotPassword.CorruptText"/>, and every other defect a "Malformed YubiKey slot blob: …"
+    /// text (brief T17 ruling 3; <see cref="SlotPassword.Classify"/> agrees).
+    /// </summary>
     public static YubiKeySlotBlob Decode(byte[] bytes)
     {
+        var (blob, _, error) = Parse(bytes);
+        return blob ?? throw new TswapException(error!);
+    }
+
+    /// <summary>
+    /// Never throws: the blob and its <see cref="SlotPasswordKind"/> (None or Password), or null with the
+    /// kind (NeedsNewerTswap or Corrupt) and the error text <see cref="Decode"/> throws.
+    /// </summary>
+    internal static (YubiKeySlotBlob? Blob, SlotPasswordKind Kind, string? Error) Parse(byte[] bytes)
+    {
         if (bytes.Length < HeaderSize)
-            throw Corrupt($"truncated ({bytes.Length} bytes)");
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"truncated ({bytes.Length} bytes)"));
         if (!IsYubiKeyBlob(bytes))
-            throw Corrupt("wrong magic");
+            return Fail(SlotPasswordKind.Corrupt, Malformed("wrong magic"));
 
         var version = bytes[MagicSize];
-        if (version > CurrentVersion)
-            throw new TswapException(
-                $"Unsupported YubiKey slot blob version {version}: this slot was enrolled by a newer tswap " +
-                $"(this build reads version {CurrentVersion}); upgrade tswap to use it.");
-        if (version != CurrentVersion)
-            throw Corrupt($"unknown version {version}");
+        if (version > PasswordVersion)
+            return Fail(SlotPasswordKind.NeedsNewerTswap, SlotPassword.NeedsNewerTswapText(version));
+        if (version is not (CurrentVersion or PasswordVersion))
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"unknown version {version}"));
 
-        if (bytes.Length < EncodedSize)
-            throw Corrupt($"truncated ({bytes.Length} of {EncodedSize} bytes)");
-        if (bytes.Length > EncodedSize)
-            throw Corrupt($"{bytes.Length - EncodedSize} trailing bytes");
+        var size = version == PasswordVersion ? PasswordEncodedSize : EncodedSize;
+        if (bytes.Length < size)
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"truncated ({bytes.Length} of {size} bytes)"));
+        if (bytes.Length > size)
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"{bytes.Length - size} trailing bytes"));
+
+        var requiresPassword = false;
+        if (version == PasswordVersion)
+        {
+            var flags = bytes[PasswordEncodedSize - 1];
+            if ((flags & ~SlotPassword.PasswordFlag) != 0)
+                return Fail(SlotPasswordKind.NeedsNewerTswap, SlotPassword.NeedsNewerTswapText(version));
+            if (flags != SlotPassword.PasswordFlag)
+                return Fail(SlotPasswordKind.Corrupt, SlotPassword.CorruptText);
+            requiresPassword = true;
+        }
 
         var serial = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(HeaderSize, 4));
         if (serial <= 0)
-            throw Corrupt($"invalid serial {serial}");
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"invalid serial {serial}"));
 
         var touch = bytes[EncodedSize - 1];
         if (touch > (byte)YubiKeyTouchPolicy.Required)
-            throw Corrupt($"unknown touch policy {touch}");
+            return Fail(SlotPasswordKind.Corrupt, Malformed($"unknown touch policy {touch}"));
 
-        return new YubiKeySlotBlob(
+        var blob = new YubiKeySlotBlob(
             serial,
             bytes.AsSpan(HeaderSize + 4, ChallengeSize).ToArray(),
             bytes.AsSpan(HeaderSize + 4 + ChallengeSize, SaltSize).ToArray(),
-            (YubiKeyTouchPolicy)touch);
+            (YubiKeyTouchPolicy)touch,
+            requiresPassword);
+        return (blob, requiresPassword ? SlotPasswordKind.Password : SlotPasswordKind.None, null);
+
+        static (YubiKeySlotBlob?, SlotPasswordKind, string?) Fail(SlotPasswordKind kind, string error) => (null, kind, error);
     }
 
-    private static TswapException Corrupt(string what) => new(
-        $"Malformed YubiKey slot blob: {what}. Restore config.json from backup.");
+    private static string Malformed(string what) =>
+        $"Malformed YubiKey slot blob: {what}. Restore config.json from backup.";
 }

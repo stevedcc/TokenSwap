@@ -248,7 +248,7 @@ public sealed class VaultUnlocker
         if (order.Count == 1)
             throw new TswapException(
                 $"YubiKey {order[0]} did not open any of its slots in this vault: its response did not authenticate " +
-                "(the key's HMAC secret was reprogrammed, or config.json is damaged). Restore config.json from backup " +
+                "(the key's HMAC secret was reprogrammed, its slot's password flag was removed, or config.json is damaged). Restore config.json from backup " +
                 "or use another enrolled key." + ownFailure);
         throw new TswapException(
             $"None of the plugged-in YubiKeys with a slot in this vault ({string.Join(", ", order)}) opened it: " +
