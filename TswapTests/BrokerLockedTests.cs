@@ -140,7 +140,7 @@ public class BrokerLockedTests : IAsyncLifetime
             new MemoryStream(), new MemoryStream(), errors);
         Assert.Equal(BrokerTemplateClient.BrokerError, exit);
         Assert.Contains("503", errors.ToString());
-        Assert.Contains("reason=locked", h.LogText.ToString());
+        await h.WaitForLogAsync("reason=locked"); // logged after the answer is written
         Assert.Equal(0, h.Secrets.Unlocks);
     }
 
