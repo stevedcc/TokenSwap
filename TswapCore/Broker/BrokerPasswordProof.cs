@@ -16,22 +16,23 @@ public static class BrokerPasswordProof
         "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
 
     /// <summary>
-    /// The sources of every unlock <c>serve</c> makes (the proof, a route's secret, an ssh key): no agent
+    /// The sources of every unlock <c>serve</c> makes for a request (a route's secret, an ssh key): no agent
     /// (ruling 13: a broker's behaviour never depends on whether an agent runs), and
     /// <paramref name="password"/> as the password, or none for a password-free broker.
     /// </summary>
     public static UnlockSources SourcesFor(VaultPasswordProvider? password) => new(AskAgent: null, Prompt: password);
 
     /// <summary>
-    /// <c>broker unlock</c>'s proof (ruling 14): one real unlock through this machine's password slot with
-    /// <paramref name="candidate"/>, then the vault's <c>vault-password</c> verifier, which needs both the
-    /// key and the password. Returns <c>K_v</c>; the caller zeroes it. A wrong password fails at the
+    /// <c>broker unlock</c>'s proof (ruling 14): one real unlock through this machine's password slots only
+    /// (<see cref="VaultUnlocker.UnlockWithPasswordSlots"/>: never a password-free slot, an agent or a prompt)
+    /// with <paramref name="candidate"/>, then the vault's <c>vault-password</c> verifier, which needs both
+    /// the key and the password. Returns <c>K_v</c>; the caller zeroes it. A wrong password fails at the
     /// hardware (ruling 18's texts) or at the verifier.
     /// </summary>
     public static byte[] Prove(RecordVaultStore store, VaultUnlocker unlocker, StretchedPassword candidate)
     {
         var config = store.LoadConfig();
-        var key = unlocker.Unlock(config, NoChoice, SourcesFor(candidate.Clone));
+        var key = unlocker.UnlockWithPasswordSlots(config, NoChoice, candidate);
         try
         {
             var vaultId = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring

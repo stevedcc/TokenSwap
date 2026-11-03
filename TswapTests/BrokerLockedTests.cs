@@ -1142,6 +1142,70 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.StartsWith("Wrong vault password", ex.Message);
     }
 
+    /// <summary>
+    /// A mixed vault on <paramref name="m"/>: its TPM slot has the password, and a plugged-in YubiKey slot has none.
+    /// The YubiKey's challenge log is cleared.
+    /// </summary>
+    private static void MixedVault(FleetMachine m)
+    {
+        PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
+        var (added, _, addErr) = m.RunOnTerminal(Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        Assert.True(added == 0, addErr);
+        m.Keys.Challenges.Clear();
+    }
+
+    [Fact]
+    public void Prove_MixedVault_UsesThePasswordSlot()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        // Task 12 (fix after the merge): 'broker unlock' proves the password on a password slot of this
+        // machine, even when a password-free slot here would open the vault without it.
+        using var m = new FleetMachine("bk-mixed", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA))
+            { Tpm = RandomNumberGenerator.GetBytes(32) };
+        MixedVault(m);
+        var store = new RecordVaultStore(m.Dir);
+        var unlocker = new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, m.Tpm!)]);
+        var file = store.ReadVaultPassword(m.Keyring.VaultId)!;
+        using var candidate = VaultPasswordKdf.Stretch(Password, file.Salt, file.Params);
+        var tpmUnlocks = 0;
+
+        byte[] key;
+        using (SimulatedHardwareService.ObserveCalls((backend, call) =>
+               {
+                   if (backend == HardwareBackend.Tpm && call == "Unlock")
+                       tpmUnlocks++;
+               }))
+            key = BrokerPasswordProof.Prove(store, unlocker, candidate);
+
+        Assert.True(file.KeyMatches(key));
+        CryptographicOperations.ZeroMemory(key);
+        Assert.Equal(1, tpmUnlocks);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
+    [Fact]
+    public void Prove_MixedVault_WrongPassword_RefusedByThePasswordSlot()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        // The password-free YubiKey slot would open the vault; the wrong password is refused by the password
+        // slot's hardware (ruling 18's text), not only by the verifier.
+        using var m = new FleetMachine("bk-mixed-wrong", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA))
+            { Tpm = RandomNumberGenerator.GetBytes(32) };
+        MixedVault(m);
+        var store = new RecordVaultStore(m.Dir);
+        var unlocker = new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, m.Tpm!)]);
+        var file = store.ReadVaultPassword(m.Keyring.VaultId)!;
+        using var candidate = VaultPasswordKdf.Stretch("not the password", file.Salt, file.Params);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => BrokerPasswordProof.Prove(store, unlocker, candidate));
+
+        Assert.Contains(VaultPasswordMessages.WrongPasswordKdf, ex.Message);
+        Assert.DoesNotContain(BrokerPasswordProof.WrongPasswordVerifierText, ex.Message);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
     // ================================================================== ssh keys load after the first unlock
 
     [Fact]

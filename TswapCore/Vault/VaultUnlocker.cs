@@ -207,34 +207,9 @@ public sealed class VaultUnlocker
             throw new VaultPasswordUnavailableException(ex.Message + " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure));
         }
         using var original = prompted;
-        VaultPasswordProvider provider = original.Clone;
-
-        TswapException? pass3Error = null;
-        if (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
-        {
-            try
-            {
-                return OwnBackend(config, selection, provider);
-            }
-            catch (TswapException ex) when (ex is not OwnerSwitchException)
-            {
-                pass3Error = ex;
-            }
-        }
-        if (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains))
-        {
-            try
-            {
-                var key = UnlockWithYubiKeySlot(keyring, plan.YubiKeyCandidates, selection, pass3Error, "",
-                    passwordPass: true, provider, plugged);
-                if (key is not null)
-                    return key;
-            }
-            catch (TswapException ex) when (ex is not OwnerSwitchException)
-            {
-                pass3Error = ex;
-            }
-        }
+        var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, original.Clone, out var pass3Error);
+        if (opened is not null)
+            return opened;
 
         // A pass 1 failure is shown only now, when the later passes failed too.
         if (pass1Error is null && agentFailure is null && plan.SetAsideSuffix.Length == 0 && pass3Error is not null)
@@ -250,6 +225,72 @@ public sealed class VaultUnlocker
             parts.Add("No slot of this vault opened with the vault password on this machine.");
         throw new TswapException(string.Join(" ", parts) + plan.SetAsideSuffix, pass3Error?.ExitCode ?? 1);
     }
+
+    /// <summary>
+    /// Pass 3's candidates (ruling 13): the own backend's slot if it has the password, then the password
+    /// YubiKey slots whose key is plugged in, each with <paramref name="provider"/>. The vault key, or null
+    /// with the last failure in <paramref name="error"/>.
+    /// </summary>
+    private byte[]? TryPasswordCandidates(Config config, YubiKeySelection selection, Keyring.Keyring keyring,
+        UnlockPlan plan, PluggedInKeys plugged, VaultPasswordProvider provider, out TswapException? error)
+    {
+        error = null;
+        if (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
+        {
+            try
+            {
+                return OwnBackend(config, selection, provider);
+            }
+            catch (TswapException ex) when (ex is not OwnerSwitchException)
+            {
+                error = ex;
+            }
+        }
+        if (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains))
+        {
+            try
+            {
+                var key = UnlockWithYubiKeySlot(keyring, plan.YubiKeyCandidates, selection, error, "",
+                    passwordPass: true, provider, plugged);
+                if (key is not null)
+                    return key;
+            }
+            catch (TswapException ex) when (ex is not OwnerSwitchException)
+            {
+                error = ex;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The proof of <c>agent start</c> (ruling 10) and of <c>broker unlock</c> (ruling 14): opens the vault
+    /// only through this machine's <b>password</b> slots (the own TPM / Secure Enclave slot if it has the
+    /// password, then the password YubiKey slots whose key is plugged in), with <paramref name="password"/>.
+    /// No password-free slot is tried, no agent is asked and nothing is prompted, so the hardware itself
+    /// checks the password even on a mixed vault whose password-free slot would open it. Each candidate gets
+    /// a clone of <paramref name="password"/>, which stays the caller's. The caller still checks the
+    /// <c>vault-password</c> verifier.
+    /// </summary>
+    public byte[] UnlockWithPasswordSlots(Config config, YubiKeySelection selection, StretchedPassword password)
+    {
+        if (config.Keyring is null)
+            throw new TswapException(NoPasswordSlotHereText);
+        var keyring = DecodeKeyring(config);
+        var plan = Classify(config, keyring);
+        var plugged = new PluggedInKeys(_yubiKeys);
+        var reachable = (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
+            || (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains));
+        if (!reachable)
+            throw WithSuffix(new TswapException(NoPasswordSlotHereText), plan.SetAsideSuffix);
+
+        var key = TryPasswordCandidates(config, selection, keyring, plan, plugged, password.Clone, out var error);
+        return key ?? throw WithSuffix(error ?? new TswapException(NoPasswordSlotHereText), plan.SetAsideSuffix);
+    }
+
+    /// <summary><see cref="UnlockWithPasswordSlots"/> found no password slot of this vault usable on this machine.</summary>
+    public const string NoPasswordSlotHereText =
+        "No slot of this vault on this machine that needs the vault password can be used right now, so the password can't be proven here.";
 
     private static TswapException WithSuffix(TswapException ex, string suffix) =>
         suffix.Length == 0 || ex.Message.EndsWith(suffix, StringComparison.Ordinal)

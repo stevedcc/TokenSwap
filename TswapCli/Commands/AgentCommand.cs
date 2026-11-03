@@ -392,12 +392,13 @@ public sealed class AgentCommand : ICliCommand
     }
 
     /// <summary>
-    /// Ruling 10: one real unlock with the held password (through the unlocker's passes, never an agent), and
+    /// Ruling 10: one real unlock with the held password through a <b>password slot of this machine</b>
+    /// (<see cref="VaultUnlocker.UnlockWithPasswordSlots"/>: no password-free slot, no agent, no prompt), and
     /// the unlocked <c>K_v</c> with the held bytes checked against the file's verifier. <c>K_v</c> is zeroed.
     /// </summary>
     private static void Prove(CommandContext ctx, Config config, VaultPasswordFile file, StretchedPassword held)
     {
-        var vaultKey = Unlock(ctx, config, held);
+        var vaultKey = ctx.Unlocker.UnlockWithPasswordSlots(config, ctx.UnlockSelection() with { Ask = null }, held);
         try
         {
             if (!file.Verifies(vaultKey, held))

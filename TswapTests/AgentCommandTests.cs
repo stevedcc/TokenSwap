@@ -314,6 +314,56 @@ public sealed class AgentCommandTests : IDisposable
         Assert.DoesNotContain(VaultPasswordMessages.WrongPasswordKdf, stderr);
     }
 
+    /// <summary>
+    /// A mixed vault: this machine's TPM slot has the password, and a plugged-in YubiKey slot has none.
+    /// Returns the machine with the YubiKey's challenge log cleared.
+    /// </summary>
+    private FleetMachine MixedVault(string name)
+    {
+        var (m, _) = TpmPasswordVault(name, RecordVaultTestSupport.SerialA);
+        var (addExit, _, addErr) = m.RunOnTerminal(Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        Assert.True(addExit == 0, addErr);
+        m.Keys.Challenges.Clear();
+        return m;
+    }
+
+    [Fact]
+    public void Start_MixedVault_ProvesThroughThePasswordSlot()
+    {
+        // Ruling 10 (fix after the merge): the proof exercises a password slot of this machine, even when a
+        // password-free slot here would open the vault without the password.
+        var m = MixedVault("mixed-proof");
+        var tpmUnlocks = 0;
+
+        (int Exit, string Out, string Err) started;
+        using (SimulatedHardwareService.ObserveCalls((backend, call) =>
+               {
+                   if (backend == HardwareBackend.Tpm && call == "Unlock")
+                       Interlocked.Increment(ref tpmUnlocks);
+               }))
+            started = Start(m);
+
+        Assert.True(started.Exit == 0, started.Err);
+        Assert.Equal(1, tpmUnlocks);
+        Assert.Empty(m.Keys.Challenges); // the password-free YubiKey slot was not what proved it
+    }
+
+    [Fact]
+    public void Start_MixedVault_WrongPassword_RefusedByThePasswordSlot()
+    {
+        // The password-free YubiKey slot would open the vault; the wrong password is still refused, by the
+        // password slot's hardware (ruling 18's text), not only by the verifier.
+        var m = MixedVault("mixed-wrong");
+
+        var (exit, _, stderr) = Start(m, "not the password");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(VaultPasswordMessages.WrongPasswordKdf, stderr);
+        Assert.DoesNotContain(AgentCommand.VerifierMismatchText, stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.False(File.Exists(m.AgentSocket!));
+    }
+
     [Fact]
     public void ChildErrorLine_AndVerifierMismatchText_HoldNoSecret()
     {

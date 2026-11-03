@@ -284,6 +284,97 @@ public class VaultUnlockerPasswordTests
         Assert.Equal(["agent", "prompt"], calls);
     }
 
+    // ------------------------------------------------------------------ the proof: password slots only
+
+    [Fact]
+    public void PasswordSlotsOnly_MixedVault_OpensThroughThePasswordSlot()
+    {
+        // The proof of 'agent start' and 'broker unlock': the password-free YubiKey slot would open the vault,
+        // but only this machine's password slot may be used.
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var vault = new VaultBuilder();
+        var own = vault.AddTpmSlot(MachineKey, password: true);
+        vault.AddYubiKeySlot(keys, SerialA, password: false);
+        keys.Challenges.Clear();
+        var hardwareCalls = new List<string>();
+        using var stretched = StretchedPassword.FromBytes(Password);
+
+        byte[] key;
+        using (SimulatedHardwareService.ObserveCalls((backend, call) => hardwareCalls.Add($"{backend.DisplayName} {call}")))
+            key = Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, stretched);
+
+        Assert.Equal(vault.VaultKey, key);
+        Assert.Equal([$"{HardwareBackend.Tpm.DisplayName} Unlock"], hardwareCalls);
+        Assert.Empty(keys.Challenges);
+        // The caller's password is still usable: the unlocker only disposed its clones.
+        var copy = new byte[StretchedPassword.Size];
+        stretched.CopyTo(copy);
+        Assert.Equal(Password, copy);
+    }
+
+    [Fact]
+    public void PasswordSlotsOnly_MixedVault_WrongPassword_Refused()
+    {
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var vault = new VaultBuilder();
+        var own = vault.AddTpmSlot(MachineKey, password: true);
+        vault.AddYubiKeySlot(keys, SerialA, password: false);
+        keys.Challenges.Clear();
+        using var wrong = StretchedPassword.FromBytes(WrongPassword);
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, wrong));
+
+        Assert.Contains(WrongPasswordText, ex.Message);
+        Assert.Empty(keys.Challenges);
+    }
+
+    [Fact]
+    public void PasswordSlotsOnly_PasswordYubiKeyBesideAPasswordFreeTpm_UsesTheYubiKey()
+    {
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var vault = new VaultBuilder();
+        var own = vault.AddTpmSlot(MachineKey, password: false);
+        vault.AddYubiKeySlot(keys, SerialA, password: true);
+        keys.Challenges.Clear();
+        var hardwareCalls = new List<string>();
+        using var stretched = StretchedPassword.FromBytes(Password);
+
+        byte[] key;
+        using (SimulatedHardwareService.ObserveCalls((_, call) => hardwareCalls.Add(call)))
+            key = Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, stretched);
+
+        Assert.Equal(vault.VaultKey, key);
+        Assert.Empty(hardwareCalls); // the password-free TPM slot was never tried
+        Assert.Equal([SerialA], keys.Challenges.Select(c => c.Serial));
+
+        using var wrong = StretchedPassword.FromBytes(WrongPassword);
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, wrong));
+        Assert.Contains(WrongPasswordText, ex.Message);
+    }
+
+    [Fact]
+    public void PasswordSlotsOnly_NoPasswordSlotHere_Refuses_TouchingNothing()
+    {
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var vault = new VaultBuilder();
+        var own = vault.AddTpmSlot(MachineKey, password: false);
+        vault.AddYubiKeySlot(keys, SerialA, password: false);
+        keys.Challenges.Clear();
+        var hardwareCalls = new List<string>();
+        using var stretched = StretchedPassword.FromBytes(Password);
+
+        TswapException ex;
+        using (SimulatedHardwareService.ObserveCalls((_, call) => hardwareCalls.Add(call)))
+            ex = Assert.ThrowsAny<TswapException>(() =>
+                Unlocker(keys).UnlockWithPasswordSlots(vault.Config(HardwareBackend.Tpm, own), YubiKeySelection.Unattended, stretched));
+
+        Assert.Equal(VaultUnlocker.NoPasswordSlotHereText, ex.Message);
+        Assert.Empty(hardwareCalls);
+        Assert.Empty(keys.Challenges);
+    }
+
     [Fact]
     public void AgentKey_UsedWithoutTouchingPasswordSlots()
     {
