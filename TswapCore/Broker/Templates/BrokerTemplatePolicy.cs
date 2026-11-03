@@ -184,20 +184,37 @@ public static class BrokerTemplateValidator
     public const int MaxArgvTotalBytes = 1024 * 1024;
 
     /// <summary>
-    /// Environment variables that make a shell, an interpreter or git run code they name (fix round
-    /// 1, GLM 6 / MiMo M7): refused, like PATH and LD_*. The operator's tool, not the caller, would
-    /// run it, but with the secret in reach.
+    /// Environment variables that make a shell, an interpreter, a library or a tool run code they name,
+    /// or load, trust or write files they name (fix round 1, GLM 6 / MiMo M7; brief I224 D7 H4):
+    /// refused, like PATH and LD_*. The operator's tool, not the caller, would run it, but with the
+    /// secret in reach. <c>HOME</c> is here because the sandbox doesn't set it: a template's
+    /// <c>HOME</c> would redirect <c>~/.gitconfig</c>, <c>~/.netrc</c> and <c>~/.curlrc</c>.
+    /// Names a prefix in <see cref="CodeEnvPrefixes"/> covers are not repeated here.
     /// </summary>
     private static readonly HashSet<string> CodeEnvNames = new(StringComparer.Ordinal)
     {
         "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH",
-        "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PERL5OPT", "PERL5LIB", "PERLLIB", "PERL5DB",
-        "RUBYOPT", "RUBYLIB", "NODE_OPTIONS", "NODE_PATH", "GLIBC_TUNABLES", "MALLOC_CHECK_",
+        "GLIBC_TUNABLES", "MALLOC_CHECK_",
         "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH",
         "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_EDITOR", "EDITOR", "VISUAL", "PAGER", "GIT_PAGER",
+        // Brief I224 D7 H4.
+        "GCONV_PATH", "LOCPATH", "NLSPATH", "REQUESTS_CA_BUNDLE", "NETRC", "HOSTALIASES", "LOCALDOMAIN",
+        "RES_OPTIONS", "TMPDIR", "HOME", "CLASSPATH", "SSLKEYLOGFILE", "INPUTRC", "TERMINFO", "TERMINFO_DIRS",
+        "MAVEN_OPTS", "GRADLE_OPTS",
     };
 
-    private static readonly string[] CodeEnvPrefixes = ["GIT_CONFIG", "BASH_FUNC_"];
+    /// <summary>
+    /// Prefixes refused for the same reason (brief I224 D7 H4 added all but the first two). They
+    /// knowingly also refuse harmless names (<c>JAVA_HOME</c>, <c>NODE_ENV</c>, <c>PYTHONUNBUFFERED</c>,
+    /// <c>DOTNET_CLI_TELEMETRY_OPTOUT</c>): a template that needs one sets it in a wrapper script under
+    /// <c>/usr</c> or in the image instead.
+    /// </summary>
+    private static readonly string[] CodeEnvPrefixes =
+    [
+        "GIT_CONFIG", "BASH_FUNC_",
+        "PYTHON", "PERL", "RUBY", "GEM_", "NODE_", "DOTNET_", "JAVA", "_JAVA_", "JDK_JAVA_", "OPENSSL_", "LUA_",
+        "XDG_", "SSL_", "CURL_",
+    ];
 
     /// <summary>How long an argument's pattern may take on one value.</summary>
     public static readonly TimeSpan ArgMatchTimeout = TimeSpan.FromMilliseconds(100);
@@ -227,8 +244,12 @@ public static class BrokerTemplateValidator
 
     private static bool HasSecretRef(string s) => s.Contains("{{", StringComparison.Ordinal) || s.Contains("}}", StringComparison.Ordinal);
 
-    /// <summary>Validates one template against <paramref name="host"/>; <paramref name="socketDir"/> is protected too.</summary>
-    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir)
+    /// <summary>
+    /// Validates one template against <paramref name="host"/>; <paramref name="socketDir"/> is protected too.
+    /// <paramref name="bwrapPath"/> (the effective one, after the default) may not be inside any of its binds
+    /// (brief I224 D7 H3).
+    /// </summary>
+    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir, string? bwrapPath = null)
     {
         BrokerPolicy.ValidateName(t.Name, "template");
         var name = t.Name;
@@ -328,7 +349,7 @@ public static class BrokerTemplateValidator
             if (envName.StartsWith("LD_", StringComparison.Ordinal))
                 throw Ex($"env may not set {envName} (LD_* changes how every program in the sandbox loads).");
             if (CodeEnvNames.Contains(envName) || CodeEnvPrefixes.Any(prefix => envName.StartsWith(prefix, StringComparison.Ordinal)))
-                throw Ex($"env may not set {envName}: it makes a shell, interpreter or git run extra code (fix round 1).");
+                throw Ex($"env may not set {envName}: it can make a shell, interpreter, library or tool run extra code, or load, trust or write files it names.");
             if (value is null)
                 throw Ex($"env '{envName}' has no value.");
             var secret = BrokerPolicy.SecretRefRegex.Match(value!);
@@ -386,9 +407,13 @@ public static class BrokerTemplateValidator
             if (!binds.Any(b => IsAtOrUnder(cwd, b.Path)))
                 throw Ex($"cwd {BrokerPolicy.Printable(t.Cwd)} must be inside one of the binds.");
         }
-        if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal))
-            && !binds.Any(b => IsAtOrUnder(program, b.Path) || IsAtOrUnder(program, b.Configured)))
-            throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or one of the binds.");
+        CheckProgramOutsideBinds(name, program, binds);
+        if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal)))
+            throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or /lib64 (since v0.2 a program may no longer live in a bind).");
+        if (BrokerNative.RealPath(program) is null)
+            throw new BrokerConfigException($"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved (it must exist on this host, under /usr, /bin, /sbin, /lib or /lib64)");
+        if (bwrapPath is not null)
+            CheckBwrapOutsideBinds(name, bwrapPath, binds);
 
         // Network, limits, timeout, output, rate.
         var network = t.Network switch
@@ -418,6 +443,48 @@ public static class BrokerTemplateValidator
 
         return new BrokerTemplatePolicy(name, program, parts, args, env, files, binds, cwd, network, limits,
             TimeSpan.FromSeconds(timeout), maxOutput, rate);
+    }
+
+    /// <summary>Folders whose bind would hold the host's system programs (brief I224 D7 H3's "narrower folder" hint).</summary>
+    private static readonly string[] SystemProgramFolders = ["/usr", "/opt", "/bin", "/sbin", "/lib", "/lib64"];
+
+    /// <summary>The H3 hint for a bind that is or contains a system program folder, else empty.</summary>
+    private static string Narrower(BrokerTemplateBind bind) =>
+        SystemProgramFolders.Any(f => IsAtOrUnder(f, bind.Path) || IsAtOrUnder(f, bind.Configured))
+            ? $"; bind {BrokerPolicy.Printable(bind.Configured)} covers system programs; bind a narrower folder"
+            : "";
+
+    /// <summary>
+    /// Brief I224 D7 H3: the program may not be at or under any bind of its template, read-only or
+    /// not (a container may write the folder through another mount), compared as configured and
+    /// resolved (symlinks followed) against each bind's configured and resolved path.
+    /// </summary>
+    private static void CheckProgramOutsideBinds(string name, string program, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        var resolved = BrokerNative.RealPath(program);
+        foreach (var bind in binds)
+        {
+            if (!new[] { program, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                continue;
+            var shown = BrokerPolicy.Printable(program) + (resolved is not null && resolved != program ? $" (resolves to {BrokerPolicy.Printable(resolved)})" : "");
+            throw new BrokerConfigException(
+                $"template {name}: program {shown} is inside bind {BrokerPolicy.Printable(bind.Configured)}; a program may no longer live in a bind: " +
+                "install it under /usr or ship it in the image" + Narrower(bind));
+        }
+    }
+
+    /// <summary>
+    /// Brief I224 D7 H3: <c>bwrap_path</c> (the effective one) may not be at or under any bind: a replaced
+    /// bwrap runs outside the sandbox. A missing bwrap is not a load error (calls are refused at run
+    /// time), so it is compared as configured and through its nearest existing ancestor, resolved.
+    /// </summary>
+    private static void CheckBwrapOutsideBinds(string name, string bwrapPath, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        var names = new[] { Path.GetFullPath(bwrapPath), ResolveNearestExisting(bwrapPath) }.OfType<string>().ToList();
+        foreach (var bind in binds)
+            if (names.Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                throw new BrokerConfigException(
+                    $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} is inside template {name}'s bind {BrokerPolicy.Printable(bind.Configured)}" + Narrower(bind));
     }
 
     /// <summary>

@@ -162,7 +162,7 @@ public sealed class BrokerPolicy
             {
                 if (template is null)
                     throw new BrokerConfigException("broker.json has a null template.");
-                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds);
+                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds, bwrap ?? DefaultBwrapPath);
                 if (!templates.TryAdd(compiled.Name, compiled))
                     throw new BrokerConfigException($"Template '{compiled.Name}' is defined twice.");
             }
