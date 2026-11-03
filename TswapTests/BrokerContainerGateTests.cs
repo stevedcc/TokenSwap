@@ -310,13 +310,44 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
         {
             await client.DisposeAsync(); // the relay leaves the child cgroup empty, so it can go
             _clients.Remove(client);
+            RemoveEmptiedChildCgroup(sibling);
+        }
+    }
+
+    /// <summary>
+    /// Removes a child cgroup once its last process is gone (I224 round 2, G4): rmdir fails with EBUSY
+    /// (an IOException) while <c>cgroup.procs</c> still lists a process the kernel hasn't finished moving out,
+    /// so it waits for that file to read empty (bounded) and tries again. Gone already (systemd removed the
+    /// emptied scope with its child) is fine.
+    /// </summary>
+    private static void RemoveEmptiedChildCgroup(string dir)
+    {
+        bool Emptied()
+        {
             try
             {
-                Directory.Delete(sibling);
+                return File.ReadAllText(Path.Combine(dir, "cgroup.procs")).Trim().Length == 0;
+            }
+            catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
+            {
+                return true; // gone with its scope
+            }
+        }
+        for (var attempt = 0; ; attempt++)
+        {
+            Assert.True(SpinWait.SpinUntil(Emptied, TimeSpan.FromSeconds(10)), $"{dir} still has processes after 10 s");
+            try
+            {
+                Directory.Delete(dir);
+                return;
             }
             catch (DirectoryNotFoundException)
             {
-                // systemd already removed the emptied transient scope, with its child
+                return; // systemd already removed the emptied transient scope, with its child
+            }
+            catch (IOException) when (attempt < 3)
+            {
+                // EBUSY: a process was still being moved out when rmdir ran; wait for cgroup.procs again
             }
         }
     }
