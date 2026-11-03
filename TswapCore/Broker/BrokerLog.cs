@@ -121,6 +121,8 @@ public sealed class BrokerLog : IDisposable
             .Append(" ms=").Append(((long)r.Duration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
         if (r.Reason is not null)
             line.Append(" reason=").Append(Escape(r.Reason, 64));
+        if (r.ErrorType is not null)
+            line.Append(" type=").Append(Escape(r.ErrorType, 128));
         Write(line.ToString());
     }
 

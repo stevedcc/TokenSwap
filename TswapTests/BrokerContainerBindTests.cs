@@ -127,7 +127,8 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
               "routes": [] }
             """;
         File.WriteAllText(BrokerJson, json);
-        File.SetUnixFileMode(BrokerJson, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (!OperatingSystem.IsWindows()) // the callers return early on Windows; this keeps CA1416 satisfied
+            File.SetUnixFileMode(BrokerJson, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     private BrokerSocketConfig RawSocket(string name) => BrokerConfigFile.ReadRaw(DirectoryOwnerMatcher.Default, _m.Dir)!.Sockets.Single(s => s.Name == name);

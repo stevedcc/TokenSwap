@@ -78,6 +78,9 @@ namespace TswapCore.Broker.Templates
         public int Unlocks { get; init; }
         public TimeSpan Duration { get; init; }
         public string? Reason { get; init; }
+
+        /// <summary>Brief I224 H5: the type name of an exception that escaped the handler (<c>internal-error</c>); never its message.</summary>
+        public string? ErrorType { get; init; }
     }
 }
 
@@ -310,7 +313,7 @@ namespace TswapCore.Broker
                 {
                     http.Abort(); // the 502 couldn't be written either: close unanswered
                 }
-                log.Template(record with { Status = status, Reason = $"internal-error type={ex.GetType().Name}", Duration = time.GetElapsedTime(started) });
+                log.Template(record with { Status = status, Reason = "internal-error", ErrorType = ex.GetType().Name, Duration = time.GetElapsedTime(started) });
             }
         }
 
