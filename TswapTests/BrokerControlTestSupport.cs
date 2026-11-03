@@ -26,8 +26,8 @@ internal sealed class ControlHarness : IAsyncDisposable
     public ControlHarness(byte[]? vaultId = null)
     {
         // macOS's per-user temp folder is long: <root>/run/broker-<16 hex>/control.sock would pass the
-        // 103-byte socket limit there, so the root goes under /tmp instead.
-        Root = OperatingSystem.IsMacOS()
+        // 103-byte socket limit there (as under any long TMPDIR), so on Unix the root goes under /tmp instead.
+        Root = !OperatingSystem.IsWindows()
             ? Directory.CreateDirectory(Path.Combine("/tmp", "tswap-ctl-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4))),
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)
             : Directory.CreateTempSubdirectory("tswap-ctl-");

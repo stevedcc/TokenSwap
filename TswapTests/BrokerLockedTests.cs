@@ -120,7 +120,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, source.Reads);
         Assert.Contains("reason=locked", ssh.Broker.LogText.ToString());
 
-        // broker call: the 503 every refused template call gets, so the client exits 125.
+        // broker call: the 503 every refused template call gets, so the client exits 125. Templates need Linux (they
+        // run under bwrap; BrokerPolicy refuses a config with templates elsewhere, CI run 41619549912 on macOS).
+        if (!OperatingSystem.IsLinux())
+            return;
         using var bed = new SandboxBed();
         var h = new BrokerHarness();
         _more.Add(h);

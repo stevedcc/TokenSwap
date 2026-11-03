@@ -22,6 +22,9 @@ public sealed class FleetMachine : IDisposable
         Dir = Path.Combine(Path.GetTempPath(), $"tswap-fleet-{name}-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Dir);
         Keys = keys ?? SimulatedYubiKeyService.WithKeys();
+        DefaultAgentSocket = OperatingSystem.IsWindows()
+            ? Path.Combine(Dir, "run", "agent.sock")
+            : Path.Combine("/tmp", "tswap-fa-" + Guid.NewGuid().ToString("N")[..8], "agent.sock");
         AgentSocket = DefaultAgentSocket;
     }
 
@@ -107,8 +110,13 @@ public sealed class FleetMachine : IDisposable
     /// </summary>
     public string? AgentSocket { get; set; }
 
-    /// <summary>The default <see cref="AgentSocket"/>: <c>&lt;Dir&gt;/run/agent.sock</c> (the agent makes <c>run</c> 0700).</summary>
-    public string DefaultAgentSocket => Path.Combine(Dir, "run", "agent.sock");
+    /// <summary>
+    /// The default <see cref="AgentSocket"/>. On Unix <c>/tmp/tswap-fa-&lt;8 hex&gt;/agent.sock</c>, its folder made by the
+    /// agent (0700) and removed with this machine: not under <see cref="Dir"/>, because a long temp folder (macOS's
+    /// <c>/var/folders/…/T</c>, or any long <c>TMPDIR</c>) pushes that path past the 103-byte socket limit (CI run
+    /// 41619549912). On Windows <c>&lt;Dir&gt;/run/agent.sock</c>, which the agent never uses (its pipe has its own name).
+    /// </summary>
+    public string DefaultAgentSocket { get; }
 
     private (int Exit, string Out, string Err) Run(FakeConsole console, string[] args)
     {
@@ -184,5 +192,8 @@ public sealed class FleetMachine : IDisposable
     {
         if (Directory.Exists(Dir))
             Directory.Delete(Dir, true);
+        // Unix: the agent's folder is outside Dir.
+        if (!OperatingSystem.IsWindows() && Path.GetDirectoryName(DefaultAgentSocket) is { } agentDir && Directory.Exists(agentDir))
+            Directory.Delete(agentDir, true);
     }
 }

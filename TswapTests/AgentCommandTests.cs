@@ -34,6 +34,7 @@ public sealed class AgentCommandTests : IDisposable
     private const string AskingLine = "Asking the tswap agent to unlock...";
 
     private readonly List<FleetMachine> _machines = [];
+    private readonly List<string> _shortFolders = [];
     private readonly List<AgentServer> _fakeAgents = [];
     private readonly InProcessChildren _children = new();
 
@@ -55,6 +56,8 @@ public sealed class AgentCommandTests : IDisposable
         AgentClient.ResetSeamsForTests();
         foreach (var m in _machines)
             m.Dispose();
+        foreach (var dir in _shortFolders.Where(Directory.Exists))
+            Directory.Delete(dir, recursive: true);
     }
 
     // ------------------------------------------------------------------ helpers
@@ -92,10 +95,31 @@ public sealed class AgentCommandTests : IDisposable
     private static (int Exit, string Out, string Err) Start(FleetMachine m, string password = Password, params string[] extra) =>
         m.RunOnTerminal(password + "\n", ["agent", "start", .. extra]);
 
+    /// <summary>
+    /// Where this machine's agent listens, as the CLI names it. On Unix the socket <see cref="FleetMachine.AgentSocket"/>
+    /// (<c>TSWAP_AGENT_SOCK</c>). On Windows that variable is ignored (it is Unix only, ruling 6): the agent is the named
+    /// pipe of this user and this vault, unique per test because every test's vault id is random (CI run 41619549912
+    /// failed these tests on Windows by expecting the socket path there).
+    /// </summary>
+    private static string Address(FleetMachine m) =>
+        OperatingSystem.IsWindows() ? AgentSocketPath.For(0, VaultId(m), _ => null) : m.AgentSocket!;
+
+    /// <summary>
+    /// A new empty folder under <c>/tmp</c> (removed after the test) for a home that holds a socket: under the temp
+    /// folder, a long one (macOS's <c>/var/folders/…/T</c>, CI run 41619549912) pushes the socket path past 103 bytes.
+    /// </summary>
+    private string ShortFolder(string name)
+    {
+        var dir = Path.Combine("/tmp", $"tswap-{name}-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4)));
+        Directory.CreateDirectory(dir);
+        _shortFolders.Add(dir);
+        return dir;
+    }
+
     /// <summary>An agent server that answers this vault with what <paramref name="unlock"/> returns, at the machine's socket.</summary>
     private AgentServer FakeAgent(FleetMachine m, Func<byte[]> unlock)
     {
-        var options = new AgentServerOptions(m.AgentSocket!, VaultId(m), unlock, null, TimeProvider.System, AgentHarness.MyUid);
+        var options = new AgentServerOptions(Address(m), VaultId(m), unlock, null, TimeProvider.System, AgentHarness.MyUid);
         var server = AgentServer.StartAsync(options).GetAwaiter().GetResult();
         _fakeAgents.Add(server);
         return server;
@@ -134,7 +158,7 @@ public sealed class AgentCommandTests : IDisposable
 
         var (exit, stdout, stderr) = Start(m);
         Assert.True(exit == 0, stderr);
-        Assert.Contains(m.AgentSocket!, stdout);
+        Assert.Contains(Address(m), stdout);
 
         // No terminal: the agent answers, twice (the held password survives an unlock, ruling 4).
         var first = m.Run("", "get", "db");
@@ -226,6 +250,10 @@ public sealed class AgentCommandTests : IDisposable
     [Fact]
     public void Start_AsRoot_Refuses_LeavesNothing()
     {
+        // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
+        // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
+        if (OperatingSystem.IsWindows())
+            return;
         var (m, _) = TpmPasswordVault("start-root");
         var before = Directory.EnumerateFileSystemEntries(m.Dir, "*", SearchOption.AllDirectories).Order().ToList();
         m.Ownership = new DirectoryOwnerMatcher(new FakeRoot());
@@ -261,7 +289,7 @@ public sealed class AgentCommandTests : IDisposable
         var (exit, _, stderr) = Start(m);
 
         Assert.Equal(1, exit);
-        Assert.Contains($"An agent for this vault is already running ({m.AgentSocket}).", stderr);
+        Assert.Contains($"An agent for this vault is already running ({Address(m)}).", stderr);
         Assert.Equal(0, m.LastConsole!.Reads);
     }
 
@@ -275,7 +303,7 @@ public sealed class AgentCommandTests : IDisposable
         var (exit, stdout, stderr) = Start(m);
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains(m.AgentSocket!, stdout);
+        Assert.Contains(Address(m), stdout);
         Assert.DoesNotContain("/tmp/not the", stdout + stderr);
         Assert.DoesNotContain("agent path.sock", stdout + stderr);
         Assert.Contains("2030-01-02T03:04:05Z", stdout); // the expiry is relayed
@@ -500,13 +528,17 @@ public sealed class AgentCommandTests : IDisposable
 
         Assert.Equal(1, statusExit);
         Assert.Equal(1, stopExit);
-        Assert.Contains($"No tswap agent is running for this vault ({m.AgentSocket}).", statusErr);
-        Assert.Contains($"No tswap agent is running for this vault ({m.AgentSocket}).", stopErr);
+        Assert.Contains($"No tswap agent is running for this vault ({Address(m)}).", statusErr);
+        Assert.Contains($"No tswap agent is running for this vault ({Address(m)}).", stopErr);
     }
 
     [Fact]
     public void StopAndStatus_UnderSudo_SayForWhom()
     {
+        // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
+        // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
+        if (OperatingSystem.IsWindows())
+            return;
         var (m, _) = TpmPasswordVault("sudo-status");
         Assert.Equal(0, Start(m).Exit);
         m.Ownership = new DirectoryOwnerMatcher(new FakeRoot());
@@ -560,7 +592,7 @@ public sealed class AgentCommandTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Equal("", stdout);
-        Assert.Contains($"The tswap agent at {m.AgentSocket} returned a key that doesn't open this vault; not using it.", stderr);
+        Assert.Contains($"The tswap agent at {Address(m)} returned a key that doesn't open this vault; not using it.", stderr);
     }
 
     [Fact]
@@ -652,7 +684,7 @@ public sealed class AgentCommandTests : IDisposable
         var (exit, _, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
 
         Assert.Equal(1, exit);
-        Assert.Contains($"The tswap agent at {m.AgentSocket} returned a key that doesn't open this vault; not using it.", stderr);
+        Assert.Contains($"The tswap agent at {Address(m)} returned a key that doesn't open this vault; not using it.", stderr);
         Assert.DoesNotContain(TerminalPasswordProvider.PromptText, stderr);
     }
 
@@ -740,9 +772,12 @@ public sealed class AgentCommandTests : IDisposable
     {
         // Review focus 5: under sudo the environment is gone (no TSWAP_AGENT_SOCK); the client finds the
         // agent through the vault owner's uid. The run folder's root is a temp folder here (seam).
+        // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
+        // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
+        if (OperatingSystem.IsWindows())
+            return;
         var (m, _) = TpmPasswordVault("sudo-get");
-        var home = Path.Combine(m.Dir, "home");
-        Directory.CreateDirectory(home);
+        var home = ShortFolder("home");
         AgentUnlock.PathInputs = new AgentSocketPath.Inputs(Path.Combine(m.Dir, "no-run-user"), _ => home, new UnixOwnership(), MacOs: false);
         m.AgentSocket = null;
         Assert.Equal(0, Start(m).Exit);
@@ -776,14 +811,14 @@ public sealed class AgentCommandTests : IDisposable
     public async Task Client_OtherVaultsAgent_SaysSo_AndFallsBack()
     {
         var (m, _) = TpmPasswordVault("other-vault");
-        var options = new AgentServerOptions(m.AgentSocket!, RandomNumberGenerator.GetBytes(16),
+        var options = new AgentServerOptions(Address(m), RandomNumberGenerator.GetBytes(16),
             () => throw new InvalidOperationException("never"), null, TimeProvider.System, AgentHarness.MyUid);
         _fakeAgents.Add(await AgentServer.StartAsync(options));
 
         var (exit, _, stderr) = m.Run("", "get", "db");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(AgentSocketPath.OtherVaultMessage(m.AgentSocket!), stderr);
+        Assert.Contains(AgentSocketPath.OtherVaultMessage(Address(m)), stderr);
         Assert.Contains(VaultPasswordMessages.NoTerminal, stderr);
     }
 

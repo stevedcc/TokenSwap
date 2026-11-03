@@ -15,7 +15,22 @@ namespace TswapTests;
 public class AgentProtocolTests : IDisposable
 {
     private static readonly byte[] VaultId = Convert.FromHexString("00112233445566778899aabbccddeeff");
-    private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("tswap-agent-path-");
+    private readonly DirectoryInfo _root = ShortRealRoot();
+
+    /// <summary>
+    /// CI run 41619549912 (macOS): the temp folder there (<c>/var/folders/…/T</c>) is long enough that the socket
+    /// paths under it pass the 103-byte limit, and it is reached through a symlink (<c>/var</c>), while the folder
+    /// checks answer with the real path. So on Unix the root goes under <c>/tmp</c> whatever <c>TMPDIR</c> says, and
+    /// every path the tests build is the real one.
+    /// </summary>
+    private static DirectoryInfo ShortRealRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return Directory.CreateTempSubdirectory("tswap-agent-path-");
+        var dir = Directory.CreateDirectory(Path.Combine("/tmp", "tswap-ap-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4))),
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return new DirectoryInfo(BrokerNative.RealPath(dir.FullName) ?? dir.FullName);
+    }
 
     public void Dispose()
     {
@@ -223,6 +238,10 @@ public class AgentProtocolTests : IDisposable
     [Fact]
     public void MacOs_UsesLibraryCaches()
     {
+        // The Unix layout only: on Windows the agent is a named pipe (CI run 41619549912 built this path from
+        // Windows' long temp folder and hit the socket limit).
+        if (OperatingSystem.IsWindows())
+            return;
         var home = Path.Combine(_root.FullName, "home");
         Assert.Equal(Path.Combine(home, "Library", "Caches", "tswap", "run", "agent-0011223344556677.sock"),
             AgentSocketPath.For(MyUid, VaultId, _ => null, Inputs(macOs: true)));
