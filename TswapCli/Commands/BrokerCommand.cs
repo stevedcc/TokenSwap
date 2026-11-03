@@ -38,6 +38,8 @@ public sealed class BrokerCommand : ICliCommand
         "        [--user <basic-user>] [--header <header-name>] --path <regex> [--methods GET,HEAD,POST] [--idle-timeout <sec>]\n" +
         "  sudo tswap broker route remove <name>\n" +
         "  sudo tswap broker socket add <name> --uids <uid|N-M>[,...] [--routes <route>[,...]] [--templates <template>[,...]] [--socket-dir <dir>]\n" +
+        "        (--pid <pid> [--with-label] | --cgroup <path> | --uid-only)\n" +
+        "  sudo tswap broker socket bind <name> (--pid <pid> [--with-label] | --cgroup <path> | --uid-only)\n" +
         "  sudo tswap broker socket remove <name>\n" +
         "  sudo tswap broker template add <file.json|->\n" +
         "  sudo tswap broker template remove <name>";
@@ -58,6 +60,7 @@ public sealed class BrokerCommand : ICliCommand
             ["route", "remove", ..] => RouteRemove(ctx, args[2..]),
             ["socket", "add", ..] => SocketAdd(ctx, args[2..]),
             ["socket", "remove", ..] => SocketRemove(ctx, args[2..]),
+            ["socket", "bind", ..] => SocketBind(ctx, args[2..]),
             ["template", "add", ..] => TemplateAdd(ctx, args[2..]),
             ["template", "remove", ..] => TemplateRemove(ctx, args[2..]),
             _ => throw new TswapException(Usage),
@@ -226,10 +229,30 @@ public sealed class BrokerCommand : ICliCommand
     /// <summary>Test seam: the control socket's path for (owner uid, vault id); null: <see cref="AgentSocketPath.BrokerControlFor(uint, byte[])"/>.</summary>
     internal static Func<uint, byte[], string>? ControlPathOverride;
 
+    /// <summary>Test seam (brief I224 D6): reads a <c>/proc</c> file, or null when it can't be read.</summary>
+    internal static Func<string, byte[]?> ReadProcFile = DefaultReadProcFile;
+
+    /// <summary>Test seam (brief I224 D6): whether this is Linux (binding a socket to a container needs it).</summary>
+    internal static Func<bool> IsLinux = OperatingSystem.IsLinux;
+
     internal static void ResetSeamsForTests()
     {
         Ownership = new UnixOwnership();
         ControlPathOverride = null;
+        ReadProcFile = DefaultReadProcFile;
+        IsLinux = OperatingSystem.IsLinux;
+    }
+
+    private static byte[]? DefaultReadProcFile(string path)
+    {
+        try
+        {
+            return File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static string ControlPath(CommandContext ctx, uint uid, byte[] vaultId)
@@ -469,8 +492,16 @@ public sealed class BrokerCommand : ICliCommand
         BrokerConfigFile.ReadRaw(Owner(ctx), ctx.Env.ConfigDir)
         ?? new BrokerConfig { Version = BrokerConfig.CurrentVersion };
 
-    private static void Save(CommandContext ctx, BrokerConfig config) =>
-        BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config, Host(ctx));
+    /// <summary>
+    /// Writes broker.json for an editing command. Brief I224 D1: a file whose sockets aren't all bound still
+    /// writes (so a v0.1 file can be fixed one socket at a time); the sockets still to bind are named on stderr.
+    /// </summary>
+    private static void Save(CommandContext ctx, BrokerConfig config)
+    {
+        var unbound = BrokerConfigFile.Save(Owner(ctx), ctx.Env.ConfigDir, config, Host(ctx));
+        if (unbound.Count > 0)
+            ctx.Console.Error.WriteLine($"still to bind before serve starts: {string.Join(", ", unbound)}");
+    }
 
     /// <summary>
     /// The host context templates are checked against (brief T9 decision 2): the vault user is the
@@ -555,16 +586,19 @@ public sealed class BrokerCommand : ICliCommand
     private static int SocketAdd(CommandContext ctx, string[] args)
     {
         ctx.RequireSudo("broker socket add", "Changing broker.json needs sudo: it decides which credentials containers can use.");
-        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--templates", "--socket-dir"]);
+        var (positional, options) = ParseOptions(args, ["--uids", "--routes", "--templates", "--socket-dir", .. BindingOptions], flags: BindingFlags);
         if (positional.Count != 1)
             throw new TswapException(Usage);
         var name = positional[0];
+        var binding = ResolveBinding(name, options);
         var socket = new BrokerSocketConfig
         {
             Name = name,
             Uids = SplitList(Required(options, "--uids")),
             Routes = options.TryGetValue("--routes", out var r) ? SplitList(r) : [],
             Templates = options.TryGetValue("--templates", out var t) ? SplitList(t) : null,
+            Container = binding.Container,
+            UidOnly = binding.Container is null ? true : null,
         };
         using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
         var config = ReadOrNew(ctx);
@@ -575,7 +609,110 @@ public sealed class BrokerCommand : ICliCommand
             ?? throw new TswapException("No socket folder yet: pass --socket-dir <dir> (a folder owned by the vault user, mode 0711).");
         Save(ctx, config with { SocketDir = socketDir, Sockets = [.. config.Sockets, socket] });
         ctx.Console.Out.WriteLine($"Added socket '{name}' ({Path.Combine(socketDir, name + ".sock")}). Restart 'tswap broker serve' to listen on a new socket.");
+        Report(ctx, name, binding);
         return 0;
+    }
+
+    // ------------------------------------------------------------------ socket bind (brief I224 D6)
+
+    private static readonly string[] BindingOptions = ["--pid", "--cgroup"];
+    private static readonly string[] BindingFlags = ["--uid-only", "--with-label"];
+
+    /// <summary>What a socket is bound to (null: uid-only) and what to tell the operator about it.</summary>
+    private sealed record SocketBinding(BrokerContainerConfig? Container, bool PerInstance);
+
+    /// <summary>
+    /// <c>sudo tswap broker socket bind &lt;name&gt; (--pid &lt;pid&gt; [--with-label] | --cgroup &lt;path&gt; | --uid-only)</c>
+    /// (brief I224 D6): sets the socket's container binding, or makes it uid-only, through the same write path as
+    /// the other socket commands. A v0.1 file loads here with the "every socket bound" rule suspended, so its
+    /// sockets can be bound one at a time.
+    /// </summary>
+    private static int SocketBind(CommandContext ctx, string[] args)
+    {
+        ctx.RequireSudo("broker socket bind", "Changing broker.json needs sudo: it decides which credentials containers can use.");
+        var (positional, options) = ParseOptions(args, BindingOptions, flags: BindingFlags);
+        if (positional.Count != 1)
+            throw new TswapException(Usage);
+        var name = positional[0];
+        var binding = ResolveBinding(name, options);
+        using var editLock = BrokerConfigFile.LockForEdit(Owner(ctx), ctx.Env.ConfigDir);
+        var config = ReadOrNew(ctx);
+        if (config.Sockets.All(s => s.Name != name))
+            throw new TswapException($"No socket named '{BrokerPolicy.Printable(name)}'.");
+        Save(ctx, config with
+        {
+            Sockets = [.. config.Sockets.Select(s => s.Name == name
+                ? s with { Container = binding.Container, UidOnly = binding.Container is null ? true : null }
+                : s)],
+        });
+        Report(ctx, name, binding);
+        ctx.Console.Out.WriteLine("A running 'tswap broker serve' picks it up on SIGHUP (systemctl --user reload tswap-broker).");
+        return 0;
+    }
+
+    /// <summary>
+    /// D6: exactly one of <c>--pid</c>, <c>--cgroup</c>, <c>--uid-only</c>; <c>--with-label</c> only with
+    /// <c>--pid</c>; the container options need Linux. Reads <c>/proc/&lt;pid&gt;</c> for <c>--pid</c>. The result
+    /// is validated with the whole file when it is saved (D1).
+    /// </summary>
+    private static SocketBinding ResolveBinding(string name, Dictionary<string, string> options)
+    {
+        var pid = options.GetValueOrDefault("--pid");
+        var cgroup = options.GetValueOrDefault("--cgroup");
+        var uidOnly = options.ContainsKey("--uid-only");
+        var withLabel = options.ContainsKey("--with-label");
+        if ((pid is null ? 0 : 1) + (cgroup is null ? 0 : 1) + (uidOnly ? 1 : 0) != 1)
+            throw new TswapException($"Say how socket '{BrokerPolicy.Printable(name)}' admits its clients: exactly one of --pid <pid>, --cgroup <path> or --uid-only.\n{Usage}");
+        if (withLabel && pid is null)
+            throw new TswapException("--with-label goes with --pid only (it reads that process's label).");
+        if (!uidOnly && !IsLinux())
+            throw new TswapException("binding a socket to a container needs Linux; use --uid-only");
+        if (uidOnly)
+            return new SocketBinding(null, false);
+        if (cgroup is not null)
+            return new SocketBinding(new BrokerContainerConfig { Cgroup = cgroup }, false);
+
+        if (!int.TryParse(pid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) || id <= 0)
+            throw new TswapException($"--pid must be a process id (got '{BrokerPolicy.Printable(pid!)}').");
+        var refused = $"socket {name}: can't bind to process {id}";
+        var cgroupFile = $"/proc/{id}/cgroup";
+        var raw = ReadProcFile(cgroupFile) ?? throw new TswapException($"{refused}: {cgroupFile} can't be read (is the process running?)");
+        // The shared shape check (one absolute "0::/..." line); Derive then names a ".." segment with the path read (D6).
+        var path = PeerIdentity.CgroupV2Path(raw)
+            ?? throw new TswapException($"{refused}: {cgroupFile} is not one cgroup v2 line (0::/...): {BrokerLog.Escape(System.Text.Encoding.UTF8.GetString(raw), 512)}");
+        var derived = BrokerContainerUnit.Derive(path);
+        if (derived.Unit is not { } unit)
+            throw new TswapException($"{refused}: {derived.Refusal}; its cgroup is {BrokerLog.Escape(path, 1024)}");
+
+        string? label = null;
+        if (withLabel)
+        {
+            var labelFile = $"/proc/{id}/attr/current";
+            var labelRaw = ReadProcFile(labelFile) ?? throw new TswapException($"{refused}: {labelFile} can't be read (is SELinux enabled?)");
+            label = System.Text.Encoding.UTF8.GetString(labelRaw).TrimEnd('\0', '\n');
+            if (!BrokerContainerIdentity.IsWholeLabel(label))
+                throw new TswapException($"socket {name}: process {id}'s label {BrokerContainerIdentity.Shown(label)} is not a whole SELinux label (user:role:type:level).");
+        }
+        return new SocketBinding(new BrokerContainerConfig { Cgroup = unit, SelinuxLabel = label }, derived.PerInstance);
+    }
+
+    /// <summary>D6's lines after a binding is written.</summary>
+    private static void Report(CommandContext ctx, string name, SocketBinding binding)
+    {
+        if (binding.Container is not { } container)
+        {
+            ctx.Console.Out.WriteLine($"socket {name} is uid-only: any process with a listed uid is admitted.");
+            return;
+        }
+        ctx.Console.Out.WriteLine($"socket {name} bound to {container.Cgroup}");
+        if (binding.PerInstance)
+            ctx.Console.Error.WriteLine("warning: this binds one container instance; it changes when the container is recreated (re-run socket bind then). A Quadlet unit gives a stable name.");
+        if (container.SelinuxLabel is { } label)
+        {
+            ctx.Console.Out.WriteLine($"socket {name} also checks the label {label}");
+            ctx.Console.Out.WriteLine("The label changes on each container start unless the unit pins SecurityLabelLevel=; the broker compares it " +
+                "with SO_PEERSEC, which reports this same label for the container's sockets.");
+        }
     }
 
     private static int SocketRemove(CommandContext ctx, string[] args)
@@ -651,14 +788,20 @@ public sealed class BrokerCommand : ICliCommand
 
     // ------------------------------------------------------------------ argument parsing
 
-    private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known)
+    /// <summary>Splits <paramref name="args"/>: options in <paramref name="known"/> take a value; <paramref name="flags"/> take none (stored as "").</summary>
+    private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known, string[]? flags = null)
     {
         List<string> positional = [];
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            if (arg.StartsWith("--", StringComparison.Ordinal))
+            if (flags?.Contains(arg) == true)
+            {
+                if (!options.TryAdd(arg, ""))
+                    throw new TswapException($"{arg} given twice.");
+            }
+            else if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 if (!known.Contains(arg))
                     throw new TswapException($"Unknown option '{BrokerPolicy.Printable(arg)}'.\n{Usage}");

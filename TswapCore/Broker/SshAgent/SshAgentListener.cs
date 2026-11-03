@@ -132,28 +132,15 @@ public sealed class SshAgentListener
         int? pid = null;
         try
         {
-            var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
-            var peer = socket is null ? null : BrokerNative.TryGetPeerCredentials(socket);
-            if (peer is not { } creds)
-            {
-                log.Connection(logName, null, null, "no-peer-credentials");
-                return;
-            }
-            (uid, pid) = (creds.Uid, creds.Pid);
-            // As brief T9 decides for the HTTP sockets, with the same switch: no client shares the
-            // broker's (the vault user's) uid.
-            if (creds.Uid == _server.Ownership.EffectiveUid && !_server.AllowOwnUidForTests)
-            {
-                log.Connection(logName, creds.Uid, creds.Pid, "own-uid");
-                return;
-            }
-            if (Refusal(socketName, creds.Uid) is { } refused)
-            {
-                log.Connection(logName, creds.Uid, creds.Pid, refused);
-                return;
-            }
+            // Brief I224 D4: the same gate as the HTTP sockets (credentials, own uid, uids, container), before
+            // the first frame is read. <name>.ssh.sock uses <name>'s binding.
+            var peer = _http.Gate.Admit(connection.Features.Get<IConnectionSocketFeature>()?.Socket, socketName, logName);
+            if (peer is null)
+                return; // closed, unanswered
+            (uid, pid) = (peer.Uid, peer.Pid);
+            var creds = peer;
 
-            var session = new SshAgentSession(this, new BrokerPeer(socketName, creds.Uid, creds.Pid));
+            var session = new SshAgentSession(this, peer);
             var input = connection.Transport.Input;
             var output = connection.Transport.Output;
             while (true)
@@ -166,9 +153,9 @@ public sealed class SshAgentListener
                     return;
                 }
                 // The config may have changed since the connection was accepted (SIGHUP): re-check per message.
-                if (Refusal(socketName, creds.Uid) is { } now)
+                if (Refusal(peer) is { } now)
                 {
-                    log.Connection(logName, creds.Uid, creds.Pid, now);
+                    log.Connection(logName, creds.Uid, creds.Pid, now, peer.Cgroup, peer.Label);
                     return;
                 }
                 var reply = await session.HandleAsync(message, connection.ConnectionClosed).ConfigureAwait(false);
@@ -195,14 +182,11 @@ public sealed class SshAgentListener
         }
     }
 
-    /// <summary>Why this uid may not use this socket's agent now (<c>socket-removed</c>, <c>uid-not-allowed</c>), or null.</summary>
-    private string? Refusal(string socketName, uint uid)
-    {
-        var policy = _server.Policy.Current;
-        if (!policy.Sockets.TryGetValue(socketName, out var socket))
-            return "socket-removed";
-        return socket.AllowsUid(uid) ? null : "uid-not-allowed";
-    }
+    /// <summary>
+    /// Why this connection may not use this socket's agent now (<c>socket-removed</c>, <c>uid-not-allowed</c>, or
+    /// brief I224's identity reasons against the identity stored at accept), or null.
+    /// </summary>
+    internal string? Refusal(BrokerPeer peer) => BrokerContainerGate.Recheck(_server.Policy.Current, peer);
 
     /// <summary>
     /// One frame's body (type and contents), or null with the reason the connection ends: a clean end

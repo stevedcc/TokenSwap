@@ -162,7 +162,7 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         Ok("tok-value\ntok-value\n", "add", "tok");
         // An upstream nothing listens on: the request unlocks, then fails upstream (502).
         Ok("", "broker", "route", "add", "api", "--upstream", "https://127.0.0.1:1/v1", "--auth", "bearer", "--secret", "tok", "--path", "");
-        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir);
+        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir, "--uid-only");
 
         var (serve, serveLines) = Start(true, "broker", "serve");
         await WaitForLineAsync(serveLines, "event started");
@@ -231,7 +231,7 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         var (added, _, addErr) = RunOnTerminal("tok-value\ntok-value\n" + password + "\n", "add", "tok");
         Assert.True(added == 0, addErr);
         Ok("", "broker", "route", "add", "api", "--upstream", "https://127.0.0.1:1/v1", "--auth", "bearer", "--secret", "tok", "--path", "");
-        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir);
+        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir, "--uid-only");
 
         var (serve, serveLines) = Start(true, "broker", "serve");
         await WaitForLineAsync(serveLines, "locked: this broker's slot has the vault password");

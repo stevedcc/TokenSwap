@@ -132,7 +132,7 @@ public class BrokerLockedTests : IAsyncLifetime
             {
               "version": 1,
               "socket_dir": {{JsonSerializer.Serialize(h.SocketDir)}},
-              "sockets": [ { "name": "lane1", "uids": ["{{MyUid}}"], "routes": [], "templates": ["t"] } ],
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{MyUid}}"], "routes": [], "templates": ["t"] } ],
               "routes": [],
               "templates": [ { "name": "t", "argv": ["/bin/bash", {{JsonSerializer.Serialize(script)}}], "args": {},
                                "env": { "S": {{TokRef}} }, "binds": [ { "path": {{JsonSerializer.Serialize(bed.Work)}} } ] } ]
@@ -1540,7 +1540,7 @@ public class BrokerLockedTests : IAsyncLifetime
             {
               "version": 1,
               "socket_dir": "/tmp",
-              "sockets": [ { "name": "lane1", "uids": ["{{MyUid}}"], "routes": [], "ssh_keys": ["deploy"] } ],
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{MyUid}}"], "routes": [], "ssh_keys": ["deploy"] } ],
               "routes": [],
               "ssh_keys": [ { "name": "deploy", "secret": "deploy-key", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] } ]
             }

@@ -23,6 +23,9 @@ public sealed record BrokerRequestRecord
 
     /// <summary>Why the broker refused or failed (a fixed word such as <c>path</c>, <c>route</c>, <c>compressed</c>), or null.</summary>
     public string? Reason { get; init; }
+
+    /// <summary>Brief I224 H5: the type name of an exception that escaped the handler (<c>internal-error</c>); never its message.</summary>
+    public string? ErrorType { get; init; }
 }
 
 /// <summary>
@@ -81,6 +84,8 @@ public sealed class BrokerLog : IDisposable
             .Append(" unlock_ms=").Append(((long)r.UnlockDuration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
         if (r.Reason is not null)
             line.Append(" reason=").Append(Escape(r.Reason, 64));
+        if (r.ErrorType is not null)
+            line.Append(" type=").Append(Escape(r.ErrorType, 128));
         Write(line.ToString());
     }
 
@@ -116,13 +121,47 @@ public sealed class BrokerLog : IDisposable
             .Append(" ms=").Append(((long)r.Duration.TotalMilliseconds).ToString(CultureInfo.InvariantCulture));
         if (r.Reason is not null)
             line.Append(" reason=").Append(Escape(r.Reason, 64));
+        if (r.ErrorType is not null)
+            line.Append(" type=").Append(Escape(r.ErrorType, 128));
         Write(line.ToString());
     }
 
-    /// <summary>A connection closed before anything was parsed (wrong uid, unreadable credentials).</summary>
-    public void Connection(string socket, uint? uid, int? pid, string reason) =>
-        Write($"refused-connection socket={Escape(socket, 64)} uid={(uid?.ToString(CultureInfo.InvariantCulture) ?? "?")} " +
-              $"pid={(pid?.ToString(CultureInfo.InvariantCulture) ?? "?")} reason={Escape(reason, 64)}");
+    /// <summary>
+    /// A connection closed before anything was parsed (wrong uid, unreadable credentials, brief I224's identity
+    /// refusals), or refused by a later re-check. <paramref name="cgroup"/> and <paramref name="label"/> are the
+    /// observed identity, when one was read: attacker-influenced, so escaped, then capped at
+    /// <see cref="MaxObservedLength"/> characters.
+    /// </summary>
+    public void Connection(string socket, uint? uid, int? pid, string reason, string? cgroup = null, string? label = null)
+    {
+        var line = new StringBuilder()
+            .Append("refused-connection socket=").Append(Escape(socket, 64))
+            .Append(" uid=").Append(uid?.ToString(CultureInfo.InvariantCulture) ?? "?")
+            .Append(" pid=").Append(pid?.ToString(CultureInfo.InvariantCulture) ?? "?")
+            .Append(" reason=").Append(Escape(reason, 64));
+        if (cgroup is not null)
+            line.Append(" cgroup=\"").Append(Observed(cgroup)).Append('"');
+        if (label is not null)
+            line.Append(" label=\"").Append(Observed(label)).Append('"');
+        Write(line.ToString());
+    }
+
+    /// <summary>Brief I224 D5: the longest observed cgroup or label written, after escaping.</summary>
+    public const int MaxObservedLength = 256;
+
+    /// <summary>Escaped character by character and cut before the escape that would pass the cap, so no escape is split.</summary>
+    private static string Observed(string value)
+    {
+        var sb = new StringBuilder(Math.Min(value.Length, MaxObservedLength));
+        foreach (var c in value)
+        {
+            var escaped = Escape(c.ToString(), 16);
+            if (sb.Length + escaped.Length > MaxObservedLength)
+                break;
+            sb.Append(escaped);
+        }
+        return sb.ToString();
+    }
 
     /// <summary>A server event (start, stop, reload, lockout).</summary>
     public void Event(string message) => Write("event " + Escape(message, 1024));

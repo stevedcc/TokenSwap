@@ -136,6 +136,50 @@ public static partial class BrokerNative
     [LibraryImport("libc", SetLastError = true)]
     private static partial int prctl(int option, nuint arg2, nuint arg3, nuint arg4, nuint arg5);
 
+    // ------------------------------------------------------------------ SO_PEERPIDFD probe (brief I224 D2)
+
+    private const int AfUnix = 1, SockStream = 1, SockCloexec = 0x80000, SoPeerPidfd = 77;
+
+    /// <summary>
+    /// Linux: whether the kernel gives a connected Unix socket's peer as a pidfd (<c>SO_PEERPIDFD</c>,
+    /// Linux 6.5 and later). Probed on a <c>socketpair()</c>: a listening socket has no peer, so the option
+    /// would fail there on any kernel. The answer comes from the call, not a version number. False
+    /// elsewhere and on any failure.
+    /// </summary>
+    public static unsafe bool PeerPidfdAvailable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return false;
+        var fds = stackalloc int[2];
+        if (socketpair(AfUnix, SockStream | SockCloexec, 0, fds) != 0)
+            return false;
+        try
+        {
+            int pidfd = -1;
+            uint length = sizeof(int);
+            var got = getsockopt(fds[0], SolSocket, SoPeerPidfd, &pidfd, &length) == 0;
+            // I224 fix round 1 (MiMo p1 M2, GLM p1 m7): close the probed pidfd on every path. A short write
+            // leaves the high bytes of -1 in place, so a partial value is negative and never closed by mistake.
+            if (got && pidfd >= 0)
+                close(pidfd);
+            return got && length == sizeof(int) && pidfd >= 0;
+        }
+        finally
+        {
+            close(fds[0]);
+            close(fds[1]);
+        }
+    }
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int socketpair(int domain, int type, int protocol, int* fds);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int getsockopt(int fd, int level, int name, void* value, uint* length);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int close(int fd);
+
     // ------------------------------------------------------------------ realpath
 
     /// <summary><c>realpath(3)</c>: <paramref name="path"/> with every symlink and dot segment resolved, or null.</summary>

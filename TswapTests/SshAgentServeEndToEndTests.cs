@@ -93,7 +93,7 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
         {
             Version = 1,
             SocketDir = SocketDir,
-            Sockets = [new BrokerSocketConfig { Name = "lane1", Uids = [BrokerHarness.MyUid.ToString()], Routes = [], SshKeys = ["deploy"] }],
+            Sockets = [new BrokerSocketConfig { Name = "lane1", Uids = [BrokerHarness.MyUid.ToString()], Routes = [], SshKeys = ["deploy"], UidOnly = true }],
             SshKeys = [new BrokerSshKeyConfig { Name = "deploy", Secret = "deploy-key", AllowedHostKeys = [SshAgentHarness.SomeHostFingerprint] }],
         };
         var path = Path.Combine(ConfigDir, "broker.json");

@@ -34,7 +34,7 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         {
           "version": 1,
           "socket_dir": {{JsonSerializer.Serialize(_h.Broker.SocketDir)}},
-          "sockets": [ { "name": "lane1", "uids": ["{{BrokerHarness.MyUid}}"], "routes": ["echo"], "ssh_keys": ["a"] } ],
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": ["echo"], "ssh_keys": ["a"] } ],
           "routes": [ { "name": "echo", "upstream": "https://upstream.example/base", "auth": { "type": "bearer", "secret": "{{TokRef}}" }, "path": "" } ],
           "ssh_keys": [ { "name": "a", "secret": "sa", "allowed_host_keys": ["{{X.Fingerprint}}"] } ]
         }
@@ -121,7 +121,7 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
             return;
         var server = await _h.StartAsync(_h.Config(), Agent);
         var without = _h.Config().Replace(
-            $$"""{ "name": "other", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["k2"] },""", "");
+            $$"""{ "name": "other", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["k2"] },""", "");
         Assert.DoesNotContain("\"other\"", without);
 
         Assert.True(server.Reload(() => BrokerPolicy.Parse(without)));
@@ -220,7 +220,7 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         {
           "version": 1,
           "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(Path.GetTempPath())}},
-          "sockets": [ { "name": "lane1", "uids": ["1"], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(socketKeys ?? [])}} } ],
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["1"], "routes": [], "ssh_keys": {{JsonSerializer.Serialize(socketKeys ?? [])}} } ],
           "routes": [],
           "ssh_keys": [ {{string.Join(",", keys.Select(k => $$"""{ "name": "{{k.Name}}", "secret": "{{k.Secret}}", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] }"""))}} ]
         }

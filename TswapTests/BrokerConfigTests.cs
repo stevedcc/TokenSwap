@@ -25,7 +25,7 @@ public class BrokerConfigTests : IDisposable
           "version": 1,
           "socket_dir": "/run/tswap-broker",
           "sockets": [
-            { "name": "lane1", "uids": ["100999", "200000-265535"], "routes": ["github", "registry"] }
+            { "name": "lane1", "uid_only": true, "uids": ["100999", "200000-265535"], "routes": ["github", "registry"] }
           ],
           "routes": [
             {
@@ -206,7 +206,7 @@ public class BrokerConfigTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
             return; // the broker is Unix only
-        var json = """{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "_x", "uids": ["1"], "routes": [] } ], "routes": [] }""";
+        var json = """{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "_x", "uid_only": true, "uids": ["1"], "routes": [] } ], "routes": [] }""";
         var ex = Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json));
         Assert.Contains("reserved", ex.Message);
     }
@@ -250,7 +250,7 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""{ "version": 1, "sockets": [], "routes": [], "extra": true }""")]
     [InlineData("""{ "version": 1, "sockets": [], "routes": [ { "name": "r", "upstream": "https://a.example", "auth": { "type": "bearer", "secret": "{{k}}" }, "path": "", "follow_redirects": true } ] }""")]
     [InlineData("""{ "version": 1, "sockets": [], "routes": [ { "name": "r", "upstream": "https://a.example", "auth": { "type": "bearer", "secret": "{{k}}", "scheme": "x" }, "path": "" } ] }""")]
-    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": ["1"], "routes": [], "mode": "0777" } ], "routes": [] }""")]
+    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uid_only": true, "uids": ["1"], "routes": [], "mode": "0777" } ], "routes": [] }""")]
     public void UnknownFields_Refused(string json)
     {
         if (OperatingSystem.IsWindows())
@@ -264,11 +264,11 @@ public class BrokerConfigTests : IDisposable
     [InlineData("""{ "sockets": [], "routes": [] }""", "can't be read")]
     [InlineData("""{ "version": 1, "version": 1, "sockets": [], "routes": [] }""", "can't be read")]
     [InlineData("""{ "version": 1, "socket_dir": "relative", "sockets": [], "routes": [] }""", "absolute")]
-    [InlineData("""{ "version": 1, "sockets": [ { "name": "s", "uids": ["1"], "routes": [] } ], "routes": [] }""", "no socket_dir")]
-    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": ["1"], "routes": ["nope"] } ], "routes": [] }""", "not defined")]
-    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": ["5-1"], "routes": [] } ], "routes": [] }""", "uid entry")]
-    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": ["-1"], "routes": [] } ], "routes": [] }""", "uid entry")]
-    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uids": [], "routes": [] } ], "routes": [] }""", "no uids")]
+    [InlineData("""{ "version": 1, "sockets": [ { "name": "s", "uid_only": true, "uids": ["1"], "routes": [] } ], "routes": [] }""", "no socket_dir")]
+    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uid_only": true, "uids": ["1"], "routes": ["nope"] } ], "routes": [] }""", "not defined")]
+    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uid_only": true, "uids": ["5-1"], "routes": [] } ], "routes": [] }""", "uid entry")]
+    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uid_only": true, "uids": ["-1"], "routes": [] } ], "routes": [] }""", "uid entry")]
+    [InlineData("""{ "version": 1, "socket_dir": "/s", "sockets": [ { "name": "s", "uid_only": true, "uids": [], "routes": [] } ], "routes": [] }""", "no uids")]
     public void OtherInvalidConfigs_Refused(string json, string expected)
     {
         if (OperatingSystem.IsWindows())

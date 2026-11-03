@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using TswapCore.Agent;
 
 namespace TswapCore.Broker.Templates;
 
@@ -8,9 +9,12 @@ namespace TswapCore.Broker.Templates;
 /// (<see cref="Protected"/>: the vault folder, <c>broker.json</c>'s folder; the socket folder and
 /// sudo's configuration are always added), and the paths it may never be or contain but may be
 /// inside (<see cref="ProtectedAtOrAbove"/>: the vault user's home). Paths are compared by
-/// <c>st_dev:st_ino</c>, not by name.
+/// <c>st_dev:st_ino</c>, not by name. <see cref="RunFolders"/> (brief I224 D7 H1) are the candidate
+/// folders of the broker's <c>control.sock</c>: a bind may not be, contain or be inside one, whether or
+/// not it exists yet, so they are compared by name too (after resolving the nearest existing ancestor).
 /// </summary>
-public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Protected, IReadOnlyList<string> ProtectedAtOrAbove)
+public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Protected, IReadOnlyList<string> ProtectedAtOrAbove,
+    IReadOnlyList<string> RunFolders)
 {
     /// <summary>sudo's configuration: never bound, nor anything above or below it.</summary>
     public static readonly IReadOnlyList<string> SudoPaths = ["/etc/sudoers", "/etc/sudo.conf", "/etc/sudoers.d"];
@@ -19,14 +23,17 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
     public static BrokerHostContext ForCurrentUser()
     {
         var uid = new UnixOwnership().EffectiveUid;
-        return new BrokerHostContext(uid, [], HomeList(uid));
+        return new BrokerHostContext(uid, [], HomeList(uid), RunFolderCandidates(uid, AgentSocketPath.Inputs.Machine));
     }
 
     /// <summary>
     /// The vault's own context: the vault user is <paramref name="configDir"/>'s owner (so it is the
     /// same under sudo), and the config folder, the vault folder and that user's home are protected.
     /// </summary>
-    public static BrokerHostContext ForVault(string configDir, string? vaultDir)
+    public static BrokerHostContext ForVault(string configDir, string? vaultDir) => ForVault(configDir, vaultDir, AgentSocketPath.Inputs.Machine);
+
+    /// <inheritdoc cref="ForVault(string, string?)"/>
+    internal static BrokerHostContext ForVault(string configDir, string? vaultDir, AgentSocketPath.Inputs inputs)
     {
         var full = Path.GetFullPath(configDir);
         var uid = BrokerNative.Identify(full, follow: true)?.Uid ?? new UnixOwnership().EffectiveUid;
@@ -47,11 +54,25 @@ public sealed record BrokerHostContext(uint VaultUid, IReadOnlyList<string> Prot
         var protectedPaths = new List<string> { full };
         if (vaultDir is not null)
             protectedPaths.Add(Path.GetFullPath(vaultDir));
-        return new BrokerHostContext(uid, protectedPaths, HomeList(uid));
+        return new BrokerHostContext(uid, protectedPaths, HomeList(uid), RunFolderCandidates(uid, inputs));
     }
 
     private static List<string> HomeList(uint uid) =>
         BrokerNative.HomeOf(uid) is { Length: > 0 } home ? [home] : [];
+
+    /// <summary>
+    /// Brief I224 D7 H1: both folders <c>AgentSocketPath.Folder</c> may pick for the broker's control
+    /// socket (which one can change between load and serve): <c>/run/user/&lt;uid&gt;/tswap</c> and
+    /// <c>&lt;home&gt;/.cache/tswap/run</c>, built as it builds them from the same <paramref name="inputs"/>
+    /// (templates are Linux only). A test compares them with what <c>Folder</c> returns for both states.
+    /// </summary>
+    private static List<string> RunFolderCandidates(uint uid, AgentSocketPath.Inputs inputs)
+    {
+        List<string> folders = [Path.Combine(inputs.RunUserRoot, uid.ToString(System.Globalization.CultureInfo.InvariantCulture), "tswap")];
+        if (inputs.HomeOf(uid) is { Length: > 0 } home)
+            folders.Add(Path.Combine(home, ".cache", "tswap", "run"));
+        return folders;
+    }
 }
 
 /// <summary>Whether a template's child shares the host's network (<see cref="Host"/>) or has none of its own (the default).</summary>
@@ -168,20 +189,39 @@ public static class BrokerTemplateValidator
     public const int MaxArgvTotalBytes = 1024 * 1024;
 
     /// <summary>
-    /// Environment variables that make a shell, an interpreter or git run code they name (fix round
-    /// 1, GLM 6 / MiMo M7): refused, like PATH and LD_*. The operator's tool, not the caller, would
-    /// run it, but with the secret in reach.
+    /// Environment variables that make a shell, an interpreter, a library or a tool run code they name,
+    /// or load, trust or write files they name (fix round 1, GLM 6 / MiMo M7; brief I224 D7 H4):
+    /// refused, like PATH and LD_*. The operator's tool, not the caller, would run it, but with the
+    /// secret in reach. <c>HOME</c> is here because the sandbox doesn't set it: a template's
+    /// <c>HOME</c> would redirect <c>~/.gitconfig</c>, <c>~/.netrc</c> and <c>~/.curlrc</c>.
+    /// Names a prefix in <see cref="CodeEnvPrefixes"/> covers are not repeated here.
     /// </summary>
     private static readonly HashSet<string> CodeEnvNames = new(StringComparer.Ordinal)
     {
         "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH",
-        "PYTHONSTARTUP", "PYTHONPATH", "PYTHONHOME", "PYTHONINSPECT", "PERL5OPT", "PERL5LIB", "PERLLIB", "PERL5DB",
-        "RUBYOPT", "RUBYLIB", "NODE_OPTIONS", "NODE_PATH", "GLIBC_TUNABLES", "MALLOC_CHECK_",
+        "GLIBC_TUNABLES", "MALLOC_CHECK_",
         "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH",
         "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_EDITOR", "EDITOR", "VISUAL", "PAGER", "GIT_PAGER",
+        // Brief I224 D7 H4.
+        "GCONV_PATH", "LOCPATH", "NLSPATH", "REQUESTS_CA_BUNDLE", "NETRC", "HOSTALIASES", "LOCALDOMAIN",
+        "RES_OPTIONS", "TMPDIR", "HOME", "CLASSPATH", "SSLKEYLOGFILE", "INPUTRC", "TERMINFO", "TERMINFO_DIRS",
+        "MAVEN_OPTS", "GRADLE_OPTS",
+        // I224 fix round 1 (MiMo p2 M3, the code-execution ones): a repo with hooks, less's input filters, a browser.
+        "GIT_DIR", "GIT_WORK_TREE", "LESSOPEN", "LESSCLOSE", "BROWSER",
     };
 
-    private static readonly string[] CodeEnvPrefixes = ["GIT_CONFIG", "BASH_FUNC_"];
+    /// <summary>
+    /// Prefixes refused for the same reason (brief I224 D7 H4 added all but the first two). They
+    /// knowingly also refuse harmless names (<c>JAVA_HOME</c>, <c>NODE_ENV</c>, <c>PYTHONUNBUFFERED</c>,
+    /// <c>DOTNET_CLI_TELEMETRY_OPTOUT</c>): a template that needs one sets it in a wrapper script under
+    /// <c>/usr</c> or in the image instead.
+    /// </summary>
+    private static readonly string[] CodeEnvPrefixes =
+    [
+        "GIT_CONFIG", "BASH_FUNC_",
+        "PYTHON", "PERL", "RUBY", "GEM_", "NODE_", "DOTNET_", "JAVA", "_JAVA_", "JDK_JAVA_", "OPENSSL_", "LUA_",
+        "XDG_", "SSL_", "CURL_",
+    ];
 
     /// <summary>How long an argument's pattern may take on one value.</summary>
     public static readonly TimeSpan ArgMatchTimeout = TimeSpan.FromMilliseconds(100);
@@ -206,13 +246,20 @@ public static class BrokerTemplateValidator
     /// <summary>Checks a secret name as tswap names them (plain, not <c>{{...}}</c>).</summary>
     public static bool IsSecretName(string? name) => name is not null && SecretNameRegex.IsMatch(name);
 
+    /// <summary>True when <paramref name="path"/> has a <c>.</c> or <c>..</c> segment (brief I224 round 2, G1).</summary>
+    public static bool HasDotSegment(string path) => path.Split('/').Any(s => s is "." or "..");
+
     /// <summary>True when <paramref name="s"/> has a NUL or another control character (C0, DEL or C1).</summary>
     public static bool HasControl(string s) => s.Any(c => c < 0x20 || c is >= '\x7f' and <= '\x9f');
 
     private static bool HasSecretRef(string s) => s.Contains("{{", StringComparison.Ordinal) || s.Contains("}}", StringComparison.Ordinal);
 
-    /// <summary>Validates one template against <paramref name="host"/>; <paramref name="socketDir"/> is protected too.</summary>
-    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir)
+    /// <summary>
+    /// Validates one template against <paramref name="host"/>; <paramref name="socketDir"/> is protected too.
+    /// <paramref name="bwrapPath"/> (the effective one, after the default) may not be inside any of its binds
+    /// (brief I224 D7 H3); it is required, so no caller can skip that check (I224 fix round 1, MiMo p2 M2).
+    /// </summary>
+    public static BrokerTemplatePolicy Validate(BrokerTemplateConfig t, BrokerHostContext host, string? socketDir, string bwrapPath)
     {
         BrokerPolicy.ValidateName(t.Name, "template");
         var name = t.Name;
@@ -226,8 +273,12 @@ public static class BrokerTemplateValidator
         var program = t.Argv[0];
         if (program.Contains('{') || program.Contains('}'))
             throw Ex("argv[0] must be a literal path: no {arg} placeholder or {{secret}} (the caller may never choose the program).");
-        if (!program.StartsWith('/') || HasControl(program) || program.Split('/').Any(s => s is "." or ".."))
+        if (!program.StartsWith('/') || HasControl(program))
             throw Ex($"argv[0] must be an absolute path with no '.' or '..' segments (got '{BrokerPolicy.Printable(program)}').");
+        // I224 round 2 (G1): the kernel takes "link/.." through the link, a lexical comparison doesn't.
+        if (HasDotSegment(program))
+            throw new BrokerConfigException(
+                $"template {name}: program {BrokerPolicy.Printable(program)} has a \".\" or \"..\" segment; give the literal absolute path (argv[0])");
 
         // Secrets never in argv, cwd, binds or a files path (decision 3).
         for (var i = 1; i < t.Argv.Count; i++)
@@ -312,7 +363,7 @@ public static class BrokerTemplateValidator
             if (envName.StartsWith("LD_", StringComparison.Ordinal))
                 throw Ex($"env may not set {envName} (LD_* changes how every program in the sandbox loads).");
             if (CodeEnvNames.Contains(envName) || CodeEnvPrefixes.Any(prefix => envName.StartsWith(prefix, StringComparison.Ordinal)))
-                throw Ex($"env may not set {envName}: it makes a shell, interpreter or git run extra code (fix round 1).");
+                throw Ex($"env may not set {envName}: it can make a shell, interpreter, library or tool run extra code, or load, trust or write files it names.");
             if (value is null)
                 throw Ex($"env '{envName}' has no value.");
             var secret = BrokerPolicy.SecretRefRegex.Match(value!);
@@ -370,9 +421,11 @@ public static class BrokerTemplateValidator
             if (!binds.Any(b => IsAtOrUnder(cwd, b.Path)))
                 throw Ex($"cwd {BrokerPolicy.Printable(t.Cwd)} must be inside one of the binds.");
         }
-        if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal))
-            && !binds.Any(b => IsAtOrUnder(program, b.Path) || IsAtOrUnder(program, b.Configured)))
-            throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or one of the binds.");
+        CheckProgramOutsideBinds(name, program, binds);
+        CheckConfigPointersOutsideBinds(name, env, cwd, binds);
+        if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal)))
+            throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or /lib64 (since v0.2 a program may no longer live in a bind).");
+        CheckBwrapOutsideBinds(name, bwrapPath, binds);
 
         // Network, limits, timeout, output, rate.
         var network = t.Network switch
@@ -404,6 +457,108 @@ public static class BrokerTemplateValidator
             TimeSpan.FromSeconds(timeout), maxOutput, rate);
     }
 
+    /// <summary>Folders whose bind would hold the host's system programs (brief I224 D7 H3's "narrower folder" hint).</summary>
+    private static readonly string[] SystemProgramFolders = ["/usr", "/opt", "/bin", "/sbin", "/lib", "/lib64"];
+
+    /// <summary>The H3 hint for a bind that is or contains a system program folder, else empty.</summary>
+    private static string Narrower(BrokerTemplateBind bind) =>
+        SystemProgramFolders.Any(f => IsAtOrUnder(f, bind.Path) || IsAtOrUnder(f, bind.Configured))
+            ? $"; bind {BrokerPolicy.Printable(bind.Configured)} covers system programs; bind a narrower folder"
+            : "";
+
+    /// <summary>
+    /// Brief I224 D7 H3: the program may not be at or under any bind of its template, read-only or
+    /// not (a container may write the folder through another mount), compared as configured and
+    /// resolved (symlinks followed) against each bind's configured and resolved path. A program that
+    /// doesn't exist is not a load error (controller ruling: one missing tool must not take every
+    /// socket offline; the call fails at run time); it is resolved through its nearest existing
+    /// ancestor instead, as <c>bwrap_path</c> is.
+    /// </summary>
+    private static void CheckProgramOutsideBinds(string name, string program, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        if (binds.Count == 0)
+            return;
+        string? unresolvable = null;
+        var resolved = BrokerNative.RealPath(program) ?? ResolveNearestExisting(program, out unresolvable);
+        if (unresolvable is not null)
+            throw new BrokerConfigException(
+                $"template {name}: program {BrokerPolicy.Printable(program)} can't be resolved ({unresolvable}), so it can't be checked against the binds");
+        foreach (var bind in binds)
+        {
+            if (!new[] { program, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                continue;
+            var shown = BrokerPolicy.Printable(program) + (resolved is not null && resolved != program ? $" (resolves to {BrokerPolicy.Printable(resolved)})" : "");
+            throw new BrokerConfigException(
+                $"template {name}: program {shown} is inside bind {BrokerPolicy.Printable(bind.Configured)}; a program may no longer live in a bind: " +
+                "install it under /usr or ship it in the image" + Narrower(bind));
+        }
+    }
+
+    /// <summary>
+    /// I224 round 2 (G2, MiMo r2 Important 2): env names that point a tool at a config file or folder that can
+    /// name a command to run (kubeconfig <c>exec</c>, AWS <c>credential_process</c>, GnuPG's <c>pinentry-program</c>,
+    /// Gradle's <c>init.d</c>). They aren't refused outright (a kubeconfig under <c>/run/secrets/</c> is the normal
+    /// use); a literal value at or under one of the template's binds is.
+    /// </summary>
+    private static readonly HashSet<string> ConfigPointerEnvNames = new(StringComparer.Ordinal)
+    {
+        "KUBECONFIG", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "GNUPGHOME", "GRADLE_USER_HOME",
+    };
+
+    /// <summary>
+    /// Refuses a <see cref="ConfigPointerEnvNames"/> value that is, as configured or resolved (the same resolver
+    /// as the program's), at or under any of <paramref name="binds"/>, read-only ones too. A relative value is
+    /// taken against the sandbox's <paramref name="cwd"/>; <c>KUBECONFIG</c> is a <c>:</c>-separated list, each
+    /// entry checked; a value under <c>/run/secrets/</c> (the template's own secret files) is fine. A
+    /// <c>{{secret}}</c> value is not a literal path (<see cref="BrokerTemplateEnv.Literal"/> is null) and isn't checked.
+    /// </summary>
+    private static void CheckConfigPointersOutsideBinds(string name, IReadOnlyList<BrokerTemplateEnv> env, string cwd, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        if (binds.Count == 0)
+            return;
+        foreach (var variable in env)
+        {
+            if (variable.Literal is not { } value || !ConfigPointerEnvNames.Contains(variable.Name))
+                continue;
+            foreach (var entry in variable.Name == "KUBECONFIG" ? value.Split(':') : [value])
+            {
+                if (entry.Length == 0)
+                    continue;
+                var path = entry.StartsWith('/') ? entry : cwd.TrimEnd('/') + "/" + entry;
+                if (path.StartsWith(SecretsDir, StringComparison.Ordinal) && !HasDotSegment(path))
+                    continue;
+                var resolved = ResolveNearestExisting(path, out var unresolvable);
+                if (unresolvable is not null)
+                    throw new BrokerConfigException(
+                        $"template {name}: env {variable.Name} can't be resolved ({unresolvable}), so it can't be checked against the binds");
+                foreach (var bind in binds)
+                    if (new[] { path, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                        throw new BrokerConfigException(
+                            $"template {name}: env {variable.Name} points inside bind {BrokerPolicy.Printable(bind.Configured)}; a container could plant a file there that runs a command");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief I224 D7 H3: <c>bwrap_path</c> (the effective one) may not be at or under any bind: a replaced
+    /// bwrap runs outside the sandbox. A missing bwrap is not a load error (calls are refused at run
+    /// time), so it is compared as configured and through its nearest existing ancestor, resolved.
+    /// </summary>
+    private static void CheckBwrapOutsideBinds(string name, string bwrapPath, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        if (binds.Count == 0)
+            return;
+        var resolved = ResolveNearestExisting(bwrapPath, out var unresolvable);
+        if (unresolvable is not null)
+            throw new BrokerConfigException(
+                $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} can't be resolved ({unresolvable}), so it can't be checked against template {name}'s binds");
+        var names = new[] { bwrapPath, resolved }.OfType<string>().ToList(); // as configured: no lexical ".." collapse
+        foreach (var bind in binds)
+            if (names.Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                throw new BrokerConfigException(
+                    $"bwrap_path {BrokerPolicy.Printable(bwrapPath)} is inside template {name}'s bind {BrokerPolicy.Printable(bind.Configured)}" + Narrower(bind));
+    }
+
     /// <summary>
     /// Compiles an argument's pattern: valid on its own, no inline option group, wrapped as
     /// <c>\A(?:pattern)\z</c>, culture-invariant, never multiline, with a 100 ms match timeout.
@@ -427,14 +582,21 @@ public static class BrokerTemplateValidator
     public static bool IsAtOrUnder(string path, string folder) =>
         path == folder || folder == "/" || path.StartsWith(folder.TrimEnd('/') + "/", StringComparison.Ordinal);
 
-    /// <summary>Re-checks every bind of <paramref name="template"/> (before a run): true when all still pass, else false and why.</summary>
-    public static bool RecheckBinds(BrokerTemplatePolicy template, BrokerHostContext host, string? socketDir, out string? problem)
+    /// <summary>
+    /// Re-checks every bind of <paramref name="template"/> (before a run), and that its program and
+    /// <paramref name="bwrapPath"/> (the effective one) still lie outside them (I224 fix round 1, MiMo p2 B1:
+    /// a path that started resolving into a bind after load): true when all still pass, else false and why.
+    /// </summary>
+    public static bool RecheckBinds(BrokerTemplatePolicy template, BrokerHostContext host, string? socketDir, string bwrapPath, out string? problem)
     {
         try
         {
             foreach (var bind in template.Binds)
                 if (CheckBind(template.Name, bind.Configured, host, socketDir) != bind.Path)
                     throw new BrokerConfigException($"Template '{template.Name}': bind {bind.Configured} now resolves elsewhere.");
+            CheckProgramOutsideBinds(template.Name, template.Program, template.Binds);
+            CheckConfigPointersOutsideBinds(template.Name, template.Env, template.Cwd, template.Binds);
+            CheckBwrapOutsideBinds(template.Name, bwrapPath, template.Binds);
             problem = null;
             return true;
         }
@@ -505,7 +667,142 @@ public static class BrokerTemplateValidator
             if (BrokerNative.RealPath(home) is { } real && ContainsIdentity(real, self))
                 throw Ex($"is the vault user's home folder ({home}) or contains it; bind a folder inside it instead.");
         }
+        foreach (var runFolder in host.RunFolders)
+        {
+            if (RunFolderRelation([normalized, resolved], self, ancestors, runFolder) is { } relation)
+                throw Ex($"{relation} the broker's run folder {runFolder} (a template could delete or use the control socket).");
+        }
         return resolved;
+    }
+
+    /// <summary>
+    /// Brief I224 D7 H1: how a bind (its names <paramref name="bindNames"/>, its identity
+    /// <paramref name="self"/> and the folders above it, <paramref name="ancestors"/>, itself first)
+    /// relates to <paramref name="runFolder"/>: <c>is</c>, <c>contains</c>, <c>is inside</c>, or null.
+    /// By name always (the folder as given and through its nearest existing ancestor, resolved), so a
+    /// run folder that doesn't exist yet is protected; by <c>st_dev:st_ino</c> as well when it exists.
+    /// </summary>
+    private static string? RunFolderRelation(IEnumerable<string> bindNames, BrokerNative.FileIdentity self,
+        IReadOnlyList<BrokerNative.FileIdentity> ancestors, string runFolder)
+    {
+        var folderNames = new[] { Path.GetFullPath(runFolder), ResolveNearestExisting(runFolder) }.OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        foreach (var bind in bindNames)
+            foreach (var folder in folderNames)
+            {
+                if (bind == folder)
+                    return "is";
+                if (IsAtOrUnder(folder, bind))
+                    return "contains";
+                if (IsAtOrUnder(bind, folder))
+                    return "is inside";
+            }
+        if (BrokerNative.RealPath(runFolder) is { } real && BrokerNative.Identify(real, follow: false) is { } target)
+        {
+            if (self.Dev == target.Dev && self.Ino == target.Ino)
+                return "is";
+            if (ContainsIdentity(real, self))
+                return "contains";
+            if (ancestors.Any(a => a.Dev == target.Dev && a.Ino == target.Ino))
+                return "is inside";
+        }
+        return null;
+    }
+
+    /// <summary>Linux's own limit on symbolic links followed in one lookup (<c>MAXSYMLINKS</c>).</summary>
+    private const int MaxSymlinks = 40;
+
+    /// <inheritdoc cref="ResolveNearestExisting(string, out string?)"/>
+    internal static string? ResolveNearestExisting(string path) => ResolveNearestExisting(path, out _);
+
+    /// <summary>
+    /// <paramref name="path"/> resolved one component at a time as the kernel would reach it: every
+    /// symbolic link is followed, its target read with <c>readlink</c> (a relative target taken against
+    /// the link's folder), so a <b>dangling</b> link is followed too instead of being walked past (I224
+    /// fix round 1, MiMo p2 B1: <c>/usr/lib/tool-link/deploy</c> with <c>tool-link -&gt; /srv/tools/v2</c>
+    /// missing is <c>/srv/tools/v2/deploy</c>); from the first missing (or unreadable) entry on, the
+    /// rest is appended by name. For a path that exists this is its real path. Null, with
+    /// <paramref name="unresolvable"/> saying why, after more than <see cref="MaxSymlinks"/> links (a loop) or
+    /// at a link that can't be read (I224 round 2, G5): the path can't be checked, and the callers refuse it.
+    /// </summary>
+    internal static string? ResolveNearestExisting(string path, out string? unresolvable)
+    {
+        unresolvable = null;
+        var pending = new Stack<string>(); // the components still to walk, the next one on top
+        // I224 round 2 (G1): an absolute path is walked as given, never through Path.GetFullPath, which would
+        // collapse "link/.." lexically; the ".." branch below takes it against the real folder, as the kernel does.
+        Push(pending, Path.IsPathRooted(path) ? path : Path.GetFullPath(path));
+        var resolved = "/";
+        var links = 0;
+        var missing = false;
+        while (pending.TryPop(out var part))
+        {
+            if (part is "" or ".")
+                continue;
+            if (part == "..")
+            {
+                resolved = Path.GetDirectoryName(resolved) ?? "/";
+                missing = false; // back in a folder that may exist: look at what follows again
+                continue;
+            }
+            var candidate = Path.Join(resolved, part);
+            if (!missing)
+            {
+                var entry = BrokerNative.LStat(candidate);
+                if (entry is { Type: BrokerNative.EntryType.Symlink })
+                {
+                    if (++links > MaxSymlinks)
+                    {
+                        unresolvable = $"more than {MaxSymlinks} symbolic links";
+                        return null;
+                    }
+                    if (ReadLink(candidate) is { } target)
+                    {
+                        Push(pending, target);
+                        if (target.StartsWith('/'))
+                            resolved = "/";
+                    }
+                    else if (BrokerNative.LStat(candidate) is { Type: BrokerNative.EntryType.Symlink })
+                    {
+                        unresolvable = $"can't read symbolic link {BrokerPolicy.Printable(candidate)}";
+                        return null;
+                    }
+                    else
+                    {
+                        pending.Push(part); // replaced since the lstat: look at it again (counted)
+                    }
+                    continue;
+                }
+                missing = entry is null or { Type: BrokerNative.EntryType.Missing };
+            }
+            resolved = candidate;
+        }
+        return resolved;
+
+        static void Push(Stack<string> pending, string components)
+        {
+            var parts = components.Split('/');
+            for (var i = parts.Length - 1; i >= 0; i--)
+                pending.Push(parts[i]);
+        }
+    }
+
+    /// <summary>Test seam (I224 round 2, G5): <c>readlink</c>, see <see cref="DefaultReadLink"/>.</summary>
+    internal static Func<string, string?> ReadLink { get; set; } = DefaultReadLink;
+
+    /// <summary>The real <see cref="ReadLink"/>, for tests to restore it.</summary>
+    internal static readonly Func<string, string?> DefaultReadLinkForTests = DefaultReadLink;
+
+    /// <summary><c>readlink</c> of <paramref name="link"/>, or null when it is no longer a link or can't be read.</summary>
+    private static string? DefaultReadLink(string link)
+    {
+        try
+        {
+            return new FileInfo(link).LinkTarget;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>True when <paramref name="candidate"/> is <paramref name="resolvedPath"/> or one of the folders above it.</summary>

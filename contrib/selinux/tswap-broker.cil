@@ -86,6 +86,26 @@
 ; file itself is container_file_t, from socket_dir's label, which containers may already write.)
 (allow container_t tswap_broker_t (unix_stream_socket (connectto)))
 
+; ---- brief I224 D3: the broker reads the identity of a client on a socket bound to a container. These rules
+; let tswap_broker_t look at container_t processes; they give containers nothing (container_t is only the
+; target). /proc/<pid>/ entries carry the task's own label, so the target is container_t, not proc_t. No
+; lnk_file rule: the broker never reads /proc/<pid>/ns/* of a client (readlink of another uid's namespace link
+; is ptrace-gated).
+; D3.5: pidfd_send_signal(pidfd, 0) after the reads is checked as signull; without it every container is
+; refused as peer-exited.
+(allow tswap_broker_t container_t (process (signull)))
+; D3.2: opening /proc/<pid> as a directory fd.
+(allow tswap_broker_t container_t (dir (open read search getattr)))
+; D3.3: reading status and cgroup through that directory fd.
+(allow tswap_broker_t container_t (file (open read getattr)))
+; The second thing the router check must look for: the broker runs at s0 and containers at s0:cX,cY, so an MCS
+; constraint could deny these reads. Fedora's container policy marks container_t MCS-constrained
+; (container.if: mcs_constrained($1_t)), and the loaded policy names the attribute mcs_constrained_type. Those
+; constraints limit subjects in that attribute, and tswap_broker_t is not one (it already has mcssetcats), so
+; they are not expected to apply. If the router shows an MCS denial for these reads, the candidate exemptions are
+; refpolicy's mcsreadall (file reads) and mcskillall (signull). Unverified: they could not be checked on the build
+; machine (no setools, the policy module store is root-only, and its devel headers have no mcs.if).
+
 ; ---- brief T17: a password broker's control socket, <run folder>/broker-<16 hex>/control.sock
 ; (`tswap broker unlock|lock|status`). It gets its own type, so no container rule ever reaches it:
 ; containers may connect to tswap_broker_t's sockets only through container_file_t sock_files

@@ -56,8 +56,8 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
           "socket_dir": {{J(_h.SocketDir)}},
           {{top}}
           "sockets": [
-            { "name": "lane1", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "templates": [{{lane1Templates}}] },
-            { "name": "other", "uids": ["{{BrokerHarness.MyUid}}"], "routes": [] }
+            { "name": "lane1", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "templates": [{{lane1Templates}}] },
+            { "name": "other", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [] }
           ],
           "routes": [],
           "templates": [ {{templatesJson}} ]

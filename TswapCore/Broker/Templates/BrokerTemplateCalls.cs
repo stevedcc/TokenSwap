@@ -32,6 +32,14 @@ namespace TswapCore.Broker.Templates
                 return _sandboxes.TryAdd(bwrapPath, entry) ? entry : _sandboxes[bwrapPath];
         }
 
+        /// <summary>Tests only: replaces the sandbox's run (null: <see cref="BrokerSandbox.RunAsync"/>).</summary>
+        internal Func<BrokerSandboxLaunch, Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask>, CancellationToken, Task<BrokerSandboxResult>>? RunForTests { get; set; }
+
+        /// <summary>Runs <paramref name="launch"/> in <paramref name="sandbox"/> (or through <see cref="RunForTests"/>).</summary>
+        internal Task<BrokerSandboxResult> RunAsync(BrokerSandbox sandbox, BrokerSandboxLaunch launch,
+            Func<BrokerOutputKind, ReadOnlyMemory<byte>, ValueTask> output, CancellationToken cancellationToken) =>
+            RunForTests is { } run ? run(launch, output, cancellationToken) : sandbox.RunAsync(launch, output, cancellationToken);
+
         /// <summary>Takes one of <paramref name="perMinute"/> calls a minute for this socket and template; false when none is left (429).</summary>
         public bool TryTakeRate(string socket, string template, int perMinute)
         {
@@ -70,6 +78,9 @@ namespace TswapCore.Broker.Templates
         public int Unlocks { get; init; }
         public TimeSpan Duration { get; init; }
         public string? Reason { get; init; }
+
+        /// <summary>Brief I224 H5: the type name of an exception that escaped the handler (<c>internal-error</c>); never its message.</summary>
+        public string? ErrorType { get; init; }
     }
 }
 
@@ -101,185 +112,201 @@ namespace TswapCore.Broker
             var name = rawTarget[TemplatePrefix.Length..];
             var record = new BrokerTemplateRecord { Socket = peer.Socket, Uid = peer.Uid, Pid = peer.Pid, Template = name };
 
-            async Task Refuse(int status, string reason, string? message = null)
-            {
-                if (message is null)
-                {
-                    await WriteUniformAsync(http, status).ConfigureAwait(false);
-                }
-                else
-                {
-                    var body = Encoding.UTF8.GetBytes(message + "\n");
-                    http.Response.StatusCode = status;
-                    http.Response.Headers.ContentType = "text/plain; charset=utf-8";
-                    http.Response.Headers.CacheControl = "no-store";
-                    http.Response.ContentLength = body.Length;
-                    await http.Response.Body.WriteAsync(body).ConfigureAwait(false);
-                }
-                log.Template(record with { Status = status, Reason = reason, Duration = time.GetElapsedTime(started) });
-            }
-
-            // Unknown, not allowed, wrong method or a malformed name: the same uniform 404.
-            if (!HttpMethods.IsPost(http.Request.Method) || !BrokerPolicy.NameRegex.IsMatch(name)
-                || !policy.Templates.TryGetValue(name, out var template) || !socket.Templates.Contains(name) || Templates is null)
-            {
-                await Refuse(404, "template").ConfigureAwait(false);
-                return;
-            }
-
-            // The body: {"args": {"name": "value", ...}}, at most 64 KiB.
-            Dictionary<string, string> args;
             try
             {
-                args = await ReadTemplateArgsAsync(http).ConfigureAwait(false);
-            }
-            catch (BrokerTemplateCallException ex)
-            {
-                await Refuse(400, "body", ex.Message).ConfigureAwait(false);
-                return;
-            }
-            record = record with { Args = [.. args] };
-            if (CheckTemplateArgs(template, args) is { } argProblem)
-            {
-                await Refuse(400, "argument", argProblem).ConfigureAwait(false);
-                return;
-            }
-            // Brief T17: a locked broker refuses every call at once, as a busy one; never counted.
-            if (IsLocked)
-            {
-                await Refuse(503, "locked").ConfigureAwait(false);
-                return;
-            }
-            var (sandbox, problem) = Templates.Sandbox(policy.BwrapPath);
-            if (problem is not null)
-            {
-                log.Event($"template '{name}' refused: the sandbox can't run: {problem}");
-                await Refuse(503, "sandbox-unavailable").ConfigureAwait(false);
-                return;
-            }
-            if (policy.Host is { } host && !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, out var bindProblem))
-            {
-                log.Event($"template '{name}' refused: {bindProblem}");
-                await Refuse(503, "binds").ConfigureAwait(false);
-                return;
-            }
-            // Fix round 1 (GLM 5): the rate is taken only by a call that could run, so calls refused
-            // for the sandbox or the binds don't use it up.
-            if (!Templates.TryTakeRate(peer.Socket, name, template.Rate))
-            {
-                await Refuse(429, "rate").ConfigureAwait(false);
-                return;
-            }
-            if (template.SecretNames.Count > 0 && unlockGuard.Refusal(peer.Socket) is { } refused)
-            {
-                await Refuse(503, refused).ConfigureAwait(false);
-                return;
-            }
-
-            // A request slot for the whole call (T8's limits).
-            IDisposable? slot;
-            try
-            {
-                slot = await limiter.TryAcquireAsync(peer.Socket, http.RequestAborted).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
-            {
-                log.Template(record with { Status = 499, Reason = "client-closed", Duration = time.GetElapsedTime(started) });
-                return;
-            }
-            using var slotLease = slot;
-            if (slot is null)
-            {
-                await Refuse(503, "busy").ConfigureAwait(false);
-                return;
-            }
-
-            // Decision 7: one unlock, only this template's records.
-            IReadOnlyDictionary<string, BrokerSecret> secretValues = new Dictionary<string, BrokerSecret>();
-            if (template.SecretNames.Count > 0)
-            {
-                var unlocked = await UnlockAsync(http, peer.Socket, () => secrets.ReadMany([.. template.SecretNames]),
-                    values =>
+                async Task Refuse(int status, string reason, string? message = null)
+                {
+                    if (message is null)
                     {
-                        foreach (var v in values.Values)
-                            v.Dispose();
-                    }).ConfigureAwait(false);
-                record = record with { Unlocks = unlocked.Unlocks };
-                if (unlocked.Value is null)
+                        await WriteUniformAsync(http, status).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var body = Encoding.UTF8.GetBytes(message + "\n");
+                        http.Response.StatusCode = status;
+                        http.Response.Headers.ContentType = "text/plain; charset=utf-8";
+                        http.Response.Headers.CacheControl = "no-store";
+                        http.Response.ContentLength = body.Length;
+                        await http.Response.Body.WriteAsync(body).ConfigureAwait(false);
+                    }
+                    log.Template(record with { Status = status, Reason = reason, Duration = time.GetElapsedTime(started) });
+                }
+
+                // Unknown, not allowed, wrong method or a malformed name: the same uniform 404.
+                if (!HttpMethods.IsPost(http.Request.Method) || !BrokerPolicy.NameRegex.IsMatch(name)
+                    || !policy.Templates.TryGetValue(name, out var template) || !socket.Templates.Contains(name) || Templates is null)
                 {
-                    if (unlocked.Status != 499)
-                        await WriteUniformAsync(http, unlocked.Status).ConfigureAwait(false);
-                    log.Template(record with { Status = unlocked.Status, Reason = unlocked.Reason, Duration = time.GetElapsedTime(started) });
-                    ReportFatal(unlocked.FatalReason);
+                    await Refuse(404, "template").ConfigureAwait(false);
                     return;
                 }
-                secretValues = unlocked.Value;
-                foreach (var (secretName, value) in secretValues)
-                    ShortSecretWarnings?.Check(secretName, value.Value, log); // as soon as they arrive (T13)
-            }
 
-            BrokerTemplateOutput output;
-            BrokerSandboxLaunch launch;
-            try
-            {
-                // An env value can't hold NUL (it would cut the C string); a file can hold anything.
-                foreach (var env in template.Env)
-                    if (env.SecretName is { } s && secretValues[s].Value.IndexOf((byte)0) >= 0)
+                // The body: {"args": {"name": "value", ...}}, at most 64 KiB.
+                Dictionary<string, string> args;
+                try
+                {
+                    args = await ReadTemplateArgsAsync(http).ConfigureAwait(false);
+                }
+                catch (BrokerTemplateCallException ex)
+                {
+                    await Refuse(400, "body", ex.Message).ConfigureAwait(false);
+                    return;
+                }
+                record = record with { Args = [.. args] };
+                if (CheckTemplateArgs(template, args) is { } argProblem)
+                {
+                    await Refuse(400, "argument", argProblem).ConfigureAwait(false);
+                    return;
+                }
+                // Brief T17: a locked broker refuses every call at once, as a busy one; never counted.
+                if (IsLocked)
+                {
+                    await Refuse(503, "locked").ConfigureAwait(false);
+                    return;
+                }
+                var (sandbox, problem) = Templates.Sandbox(policy.BwrapPath);
+                if (problem is not null)
+                {
+                    log.Event($"template '{name}' refused: the sandbox can't run: {problem}");
+                    await Refuse(503, "sandbox-unavailable").ConfigureAwait(false);
+                    return;
+                }
+                // Brief I224 D7 H2: no host context means the binds can't be re-checked; fail closed for
+                // every call, with or without binds (Validate always sets it when there are templates).
+                string? bindProblem = "no host context to re-check the binds against";
+                if (policy.Host is not { } host || !BrokerTemplateValidator.RecheckBinds(template, host, policy.SocketDir, policy.BwrapPath, out bindProblem))
+                {
+                    log.Event($"template '{name}' refused: {bindProblem}");
+                    await Refuse(503, "binds").ConfigureAwait(false);
+                    return;
+                }
+                // Fix round 1 (GLM 5): the rate is taken only by a call that could run, so calls refused
+                // for the sandbox or the binds don't use it up.
+                if (!Templates.TryTakeRate(peer.Socket, name, template.Rate))
+                {
+                    await Refuse(429, "rate").ConfigureAwait(false);
+                    return;
+                }
+                if (template.SecretNames.Count > 0 && unlockGuard.Refusal(peer.Socket) is { } refused)
+                {
+                    await Refuse(503, refused).ConfigureAwait(false);
+                    return;
+                }
+
+                // A request slot for the whole call (T8's limits).
+                IDisposable? slot;
+                try
+                {
+                    slot = await limiter.TryAcquireAsync(peer.Socket, http.RequestAborted).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+                {
+                    log.Template(record with { Status = 499, Reason = "client-closed", Duration = time.GetElapsedTime(started) });
+                    return;
+                }
+                using var slotLease = slot;
+                if (slot is null)
+                {
+                    await Refuse(503, "busy").ConfigureAwait(false);
+                    return;
+                }
+
+                // Decision 7: one unlock, only this template's records.
+                IReadOnlyDictionary<string, BrokerSecret> secretValues = new Dictionary<string, BrokerSecret>();
+                if (template.SecretNames.Count > 0)
+                {
+                    var unlocked = await UnlockAsync(http, peer.Socket, () => secrets.ReadMany([.. template.SecretNames]),
+                        values =>
+                        {
+                            foreach (var v in values.Values)
+                                v.Dispose();
+                        }).ConfigureAwait(false);
+                    record = record with { Unlocks = unlocked.Unlocks };
+                    if (unlocked.Value is null)
                     {
-                        await WriteUniformAsync(http, 502).ConfigureAwait(false);
-                        log.Template(record with { Status = 502, Reason = "secret-unusable", Duration = time.GetElapsedTime(started) });
+                        if (unlocked.Status != 499)
+                            await WriteUniformAsync(http, unlocked.Status).ConfigureAwait(false);
+                        log.Template(record with { Status = unlocked.Status, Reason = unlocked.Reason, Duration = time.GetElapsedTime(started) });
+                        ReportFatal(unlocked.FatalReason);
                         return;
                     }
-                launch = new BrokerSandboxLaunch(template, template.BuildArgv(args),
-                    [.. template.Env.Select(e => new BrokerSandboxEnv(e.Name,
-                        e.SecretName is { } s ? secretValues[s].Value.ToArray() : Encoding.UTF8.GetBytes(e.Literal!)))],
-                    [.. template.Files.Select(f => new BrokerSandboxFile(f.Path, secretValues[f.SecretName].Value.ToArray()))]);
-                output = new BrokerTemplateOutput(secretValues.Values.Select(v => v.Value.ToArray()), template.MaxOutputBytes,
-                    (kind, data) => WriteFrameAsync(http, kind, data));
-            }
-            finally
-            {
-                foreach (var v in secretValues.Values)
-                    v.Dispose();
-            }
+                    secretValues = unlocked.Value;
+                    foreach (var (secretName, value) in secretValues)
+                        ShortSecretWarnings?.Check(secretName, value.Value, log); // as soon as they arrive (T13)
+                }
 
-            http.Response.StatusCode = 200;
-            http.Response.Headers.ContentType = "application/x-ndjson";
-            http.Response.Headers.CacheControl = "no-store";
-            BrokerSandboxResult result;
-            try
-            {
-                result = await sandbox.RunAsync(launch, output.WriteAsync, http.RequestAborted).ConfigureAwait(false);
-                await output.CompleteAsync().ConfigureAwait(false);
-                var ended = result.Ended.ToString().ToLowerInvariant();
-                var last = Encoding.UTF8.GetBytes(
-                    $"{{\"ended\":\"{ended}\",\"exit_code\":{result.ExitCode.ToString(CultureInfo.InvariantCulture)},\"truncated\":{(output.Truncated ? "true" : "false")}}}\n");
-                await http.Response.Body.WriteAsync(last).ConfigureAwait(false);
+                BrokerTemplateOutput output;
+                BrokerSandboxLaunch launch;
+                try
+                {
+                    // An env value can't hold NUL (it would cut the C string); a file can hold anything.
+                    foreach (var env in template.Env)
+                        if (env.SecretName is { } s && secretValues[s].Value.IndexOf((byte)0) >= 0)
+                        {
+                            await WriteUniformAsync(http, 502).ConfigureAwait(false);
+                            log.Template(record with { Status = 502, Reason = "secret-unusable", Duration = time.GetElapsedTime(started) });
+                            return;
+                        }
+                    launch = new BrokerSandboxLaunch(template, template.BuildArgv(args),
+                        [.. template.Env.Select(e => new BrokerSandboxEnv(e.Name,
+                            e.SecretName is { } s ? secretValues[s].Value.ToArray() : Encoding.UTF8.GetBytes(e.Literal!)))],
+                        [.. template.Files.Select(f => new BrokerSandboxFile(f.Path, secretValues[f.SecretName].Value.ToArray()))]);
+                    output = new BrokerTemplateOutput(secretValues.Values.Select(v => v.Value.ToArray()), template.MaxOutputBytes,
+                        (kind, data) => WriteFrameAsync(http, kind, data));
+                }
+                finally
+                {
+                    foreach (var v in secretValues.Values)
+                        v.Dispose();
+                }
+
+                http.Response.StatusCode = 200;
+                http.Response.Headers.ContentType = "application/x-ndjson";
+                http.Response.Headers.CacheControl = "no-store";
+                BrokerSandboxResult result;
+                try
+                {
+                    result = await Templates.RunAsync(sandbox, launch, output.WriteAsync, http.RequestAborted).ConfigureAwait(false);
+                    await output.CompleteAsync().ConfigureAwait(false);
+                    var ended = result.Ended.ToString().ToLowerInvariant();
+                    var last = Encoding.UTF8.GetBytes(
+                        $"{{\"ended\":\"{ended}\",\"exit_code\":{result.ExitCode.ToString(CultureInfo.InvariantCulture)},\"truncated\":{(output.Truncated ? "true" : "false")}}}\n");
+                    await http.Response.Body.WriteAsync(last).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException)
+                {
+                    // The client went away: the run was killed with it (RunAsync kills on every way out).
+                    log.Template(record with { Status = 499, Reason = "client-closed", BytesIn = output.BytesIn, BytesOut = output.BytesOut, Duration = time.GetElapsedTime(started) });
+                    return;
+                }
+                finally
+                {
+                    // Fix round 1 (MiMo M5): the forms and the window are zeroed on every path.
+                    output.Clear();
+                }
+                if (result.Ended == BrokerSandboxEnded.Refused)
+                    log.Event($"template '{name}' refused: the sandbox could not run it: {result.Reason}");
+                log.Template(record with
+                {
+                    Status = 200,
+                    Exit = result.ExitCode,
+                    Ended = result.Ended.ToString().ToLowerInvariant(),
+                    BytesIn = output.BytesIn,
+                    BytesOut = output.BytesOut,
+                    Truncated = output.Truncated,
+                    Duration = time.GetElapsedTime(started),
+                    Reason = result.Ended == BrokerSandboxEnded.Refused ? "sandbox-failed" : null,
+                });
             }
-            catch (Exception ex) when (ex is IOException or OperationCanceledException)
+            // Brief I224 D7 H5: anything else that escapes (a bug, a failed write) gets the uniform 502 if
+            // nothing was sent yet, or an aborted connection after the first frame; never Kestrel's 500.
+            // Logged once, here, with the exception's type and never its message (it may hold a value).
+            // Not caught, as elsewhere: an aborted request's cancellation and OutOfMemoryException.
+            catch (Exception ex) when (ex is not OutOfMemoryException
+                                       && !(ex is OperationCanceledException && http.RequestAborted.IsCancellationRequested))
             {
-                // The client went away: the run was killed with it (RunAsync kills on every way out).
-                log.Template(record with { Status = 499, Reason = "client-closed", BytesIn = output.BytesIn, BytesOut = output.BytesOut, Duration = time.GetElapsedTime(started) });
-                return;
+                var status = await AnswerInternalErrorAsync(http).ConfigureAwait(false);
+                log.Template(record with { Status = status, Reason = "internal-error", ErrorType = ex.GetType().Name, Duration = time.GetElapsedTime(started) });
             }
-            finally
-            {
-                // Fix round 1 (MiMo M5): the forms and the window are zeroed on every path.
-                output.Clear();
-            }
-            if (result.Ended == BrokerSandboxEnded.Refused)
-                log.Event($"template '{name}' refused: the sandbox could not run it: {result.Reason}");
-            log.Template(record with
-            {
-                Status = 200,
-                Exit = result.ExitCode,
-                Ended = result.Ended.ToString().ToLowerInvariant(),
-                BytesIn = output.BytesIn,
-                BytesOut = output.BytesOut,
-                Truncated = output.Truncated,
-                Duration = time.GetElapsedTime(started),
-                Reason = result.Ended == BrokerSandboxEnded.Refused ? "sandbox-failed" : null,
-            });
         }
 
         private static async ValueTask WriteFrameAsync(HttpContext http, BrokerOutputKind kind, ReadOnlyMemory<byte> data)
