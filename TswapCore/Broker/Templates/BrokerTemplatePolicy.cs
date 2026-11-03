@@ -422,6 +422,7 @@ public static class BrokerTemplateValidator
                 throw Ex($"cwd {BrokerPolicy.Printable(t.Cwd)} must be inside one of the binds.");
         }
         CheckProgramOutsideBinds(name, program, binds);
+        CheckConfigPointersOutsideBinds(name, env, cwd, binds);
         if (!SystemRoots.Any(r => program.StartsWith(r, StringComparison.Ordinal)))
             throw Ex($"argv[0] {BrokerPolicy.Printable(program)} must be inside the sandbox: under /usr, /bin, /sbin, /lib or /lib64 (since v0.2 a program may no longer live in a bind).");
         CheckBwrapOutsideBinds(name, bwrapPath, binds);
@@ -494,6 +495,51 @@ public static class BrokerTemplateValidator
     }
 
     /// <summary>
+    /// I224 round 2 (G2, MiMo r2 Important 2): env names that point a tool at a config file or folder that can
+    /// name a command to run (kubeconfig <c>exec</c>, AWS <c>credential_process</c>, GnuPG's <c>pinentry-program</c>,
+    /// Gradle's <c>init.d</c>). They aren't refused outright (a kubeconfig under <c>/run/secrets/</c> is the normal
+    /// use); a literal value at or under one of the template's binds is.
+    /// </summary>
+    private static readonly HashSet<string> ConfigPointerEnvNames = new(StringComparer.Ordinal)
+    {
+        "KUBECONFIG", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "GNUPGHOME", "GRADLE_USER_HOME",
+    };
+
+    /// <summary>
+    /// Refuses a <see cref="ConfigPointerEnvNames"/> value that is, as configured or resolved (the same resolver
+    /// as the program's), at or under any of <paramref name="binds"/>, read-only ones too. A relative value is
+    /// taken against the sandbox's <paramref name="cwd"/>; <c>KUBECONFIG</c> is a <c>:</c>-separated list, each
+    /// entry checked; a value under <c>/run/secrets/</c> (the template's own secret files) is fine. A
+    /// <c>{{secret}}</c> value is not a literal path (<see cref="BrokerTemplateEnv.Literal"/> is null) and isn't checked.
+    /// </summary>
+    private static void CheckConfigPointersOutsideBinds(string name, IReadOnlyList<BrokerTemplateEnv> env, string cwd, IReadOnlyList<BrokerTemplateBind> binds)
+    {
+        if (binds.Count == 0)
+            return;
+        foreach (var variable in env)
+        {
+            if (variable.Literal is not { } value || !ConfigPointerEnvNames.Contains(variable.Name))
+                continue;
+            foreach (var entry in variable.Name == "KUBECONFIG" ? value.Split(':') : [value])
+            {
+                if (entry.Length == 0)
+                    continue;
+                var path = entry.StartsWith('/') ? entry : cwd.TrimEnd('/') + "/" + entry;
+                if (path.StartsWith(SecretsDir, StringComparison.Ordinal) && !HasDotSegment(path))
+                    continue;
+                var resolved = ResolveNearestExisting(path, out var unresolvable);
+                if (unresolvable is not null)
+                    throw new BrokerConfigException(
+                        $"template {name}: env {variable.Name} can't be resolved ({unresolvable}), so it can't be checked against the binds");
+                foreach (var bind in binds)
+                    if (new[] { path, resolved }.OfType<string>().Any(p => IsAtOrUnder(p, bind.Path) || IsAtOrUnder(p, bind.Configured)))
+                        throw new BrokerConfigException(
+                            $"template {name}: env {variable.Name} points inside bind {BrokerPolicy.Printable(bind.Configured)}; a container could plant a file there that runs a command");
+            }
+        }
+    }
+
+    /// <summary>
     /// Brief I224 D7 H3: <c>bwrap_path</c> (the effective one) may not be at or under any bind: a replaced
     /// bwrap runs outside the sandbox. A missing bwrap is not a load error (calls are refused at run
     /// time), so it is compared as configured and through its nearest existing ancestor, resolved.
@@ -549,6 +595,7 @@ public static class BrokerTemplateValidator
                 if (CheckBind(template.Name, bind.Configured, host, socketDir) != bind.Path)
                     throw new BrokerConfigException($"Template '{template.Name}': bind {bind.Configured} now resolves elsewhere.");
             CheckProgramOutsideBinds(template.Name, template.Program, template.Binds);
+            CheckConfigPointersOutsideBinds(template.Name, template.Env, template.Cwd, template.Binds);
             CheckBwrapOutsideBinds(template.Name, bwrapPath, template.Binds);
             problem = null;
             return true;

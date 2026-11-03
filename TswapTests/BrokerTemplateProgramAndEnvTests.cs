@@ -428,6 +428,82 @@ public class BrokerTemplateProgramAndEnvTests : IDisposable
         Assert.Equal($"bwrap_path {link}/../bwrap is inside template t's bind {Work}", bwrapProblem);
     }
 
+    // ------------------------------------------------------------------ env names that point at a config (I224 round 2, G2)
+
+    private static string PointsInside(string name, string bind) =>
+        $"template t: env {name} points inside bind {bind}; a container could plant a file there that runs a command";
+
+    private static string Env(string name, string value) => $"{{ {J(name)}: {J(value)} }}";
+
+    [Theory]
+    [InlineData("KUBECONFIG", true)]
+    [InlineData("AWS_CONFIG_FILE", true)]
+    [InlineData("AWS_SHARED_CREDENTIALS_FILE", true)]
+    [InlineData("GNUPGHOME", true)]
+    [InlineData("GRADLE_USER_HOME", true)]
+    [InlineData("KUBECONFIG", false)]
+    [InlineData("AWS_CONFIG_FILE", false)]
+    [InlineData("AWS_SHARED_CREDENTIALS_FILE", false)]
+    [InlineData("GNUPGHOME", false)]
+    [InlineData("GRADLE_USER_HOME", false)]
+    public void AConfigPointerInsideABind_IsRefused_RwOrReadOnly(string name, bool rw)
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        Assert.Equal(PointsInside(name, Work), Refused(Config("/usr/bin/true", Work, rw, env: Env(name, Path.Combine(Work, "cfg")))));
+    }
+
+    [Theory]
+    [InlineData("KUBECONFIG")]
+    [InlineData("AWS_CONFIG_FILE")]
+    [InlineData("AWS_SHARED_CREDENTIALS_FILE")]
+    [InlineData("GNUPGHOME")]
+    [InlineData("GRADLE_USER_HOME")]
+    public void AConfigPointerUnderRunSecretsOrOutsideTheBinds_OrASecret_IsAccepted(string name)
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        foreach (var value in new[] { "/run/secrets/x", Path.Combine(_root, "elsewhere", "cfg"), "{{kube}}" })
+        {
+            var t = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true, env: Env(name, value)), Host()).Templates["t"];
+            Assert.Equal(name, Assert.Single(t.Env).Name);
+        }
+    }
+
+    [Fact]
+    public void AConfigPointerReachedThroughASymlink_ARelativeOne_OrOneKubeconfigListEntry_IsRefused()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var link = DanglingLinkIntoTheBind();
+        Assert.Equal(PointsInside("GNUPGHOME", Work), Refused(Config("/usr/bin/true", Work, rw: true, env: Env("GNUPGHOME", link + "/gnupg"))));
+        Assert.Equal(PointsInside("KUBECONFIG", Work),
+            Refused(Config("/usr/bin/true", Work, rw: true, env: Env("KUBECONFIG", "/run/secrets/kube:" + Path.Combine(Work, "kube")))));
+        // relative: against the template's cwd, here inside the bind
+        var json = Config("/usr/bin/true", Work, rw: true, env: Env("AWS_CONFIG_FILE", "aws/config"))
+            .Replace("\"binds\":", $"\"cwd\": {J(Work)}, \"binds\":");
+        Assert.Equal(PointsInside("AWS_CONFIG_FILE", Work), Refused(json));
+    }
+
+    [Fact]
+    public void AConfigPointerThatStartsResolvingIntoABindAfterLoad_IsRefusedBeforeTheNextRun()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var link = Path.Combine(_root, "kube-link");
+        File.CreateSymbolicLink(link, elsewhere);
+        var template = BrokerPolicy.Parse(Config("/usr/bin/true", Work, rw: true, env: Env("KUBECONFIG", link + "/config")), Host()).Templates["t"];
+        Assert.True(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var before), before);
+
+        File.Delete(link);
+        File.CreateSymbolicLink(link, Work);
+
+        Assert.False(BrokerTemplateValidator.RecheckBinds(template, Host(), null, BrokerPolicy.DefaultBwrapPath, out var problem));
+        Assert.Equal(PointsInside("KUBECONFIG", Work), problem);
+    }
+
     // ------------------------------------------------------------------ H4: the env denylist
 
     [Theory]
