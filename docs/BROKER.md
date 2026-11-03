@@ -387,7 +387,8 @@ container sockets are not used for this: they refuse the broker's own uid by des
   before it reads the password from the socket (until then the bytes sit in the kernel's socket
   buffer), and the broker becomes dumpable again only after a failed proof has zeroed the candidate,
   or after a return to locked has drained, zeroed and unloaded everything. Unlock requests are handled
-  one at a time.
+  one at a time. A failed `PR_SET_DUMPABLE` at any of these transitions (0 before the read, 1 on the
+  way back to locked) stops `serve`: a broker that stayed non-dumpable could never be unlocked again.
 - **macOS:** `serve` sets `RLIMIT_CORE` to 0 at start (password or not), and applies `PT_DENY_ATTACH`
   before it reads the first unlock request's password, for the rest of its life (it can't be undone;
   nothing on macOS needs to read the process).

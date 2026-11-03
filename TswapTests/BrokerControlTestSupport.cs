@@ -77,6 +77,9 @@ internal sealed class ControlHarness : IAsyncDisposable
 
     public List<string> FatalReasons { get; } = [];
 
+    /// <summary>When set, the fake <c>PR_SET_DUMPABLE 1</c> fails (0 still works).</summary>
+    public bool DumpableOneFails { get; set; }
+
     public static uint MyUid => new UnixOwnership().EffectiveUid;
 
     public string RunDir => Path.Combine(Root.FullName, "run");
@@ -117,7 +120,7 @@ internal sealed class ControlHarness : IAsyncDisposable
         d =>
         {
             Add($"set-dumpable:{d}");
-            return dumpableWorks;
+            return dumpableWorks && !(d && DumpableOneFails);
         },
         () =>
         {

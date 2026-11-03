@@ -389,6 +389,43 @@ public class BrokerLockedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DumpableTransitions_LockCantMakeDumpableAgain_StopsServe()
+    {
+        // Ruling 12 (controller ruling, review T17 p2 MiMo I3): a failed PR_SET_DUMPABLE 1 on the way
+        // back to locked is fatal for serve, like the other transitions.
+        if (OperatingSystem.IsWindows())
+            return;
+        await _c.StartAsync();
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
+        Assert.Empty(_c.FatalReasons);
+        _c.DumpableOneFails = true;
+
+        await _c.LockAsync();
+
+        var reason = Assert.Single(_c.FatalReasons);
+        Assert.Contains("PR_SET_DUMPABLE", reason);
+        Assert.True(_c.State.IsLocked);
+        Assert.Throws<BrokerLockedException>(() => _c.State.CloneHeld());
+    }
+
+    [Fact]
+    public async Task DumpableTransitions_FailedProofCantMakeDumpableAgain_StopsServe()
+    {
+        // Review T17 p2 GLM M-1 / MiMo I3: the failed proof's way back to locked is a transition too.
+        if (OperatingSystem.IsWindows())
+            return;
+        await _c.StartAsync();
+        _c.DumpableOneFails = true;
+
+        var answer = await _c.UnlockAsync(right: false);
+
+        Assert.Equal(VaultPasswordMessages.WrongPasswordTpm, ControlHarness.Refusal(answer));
+        var reason = Assert.Single(_c.FatalReasons);
+        Assert.Contains("PR_SET_DUMPABLE", reason);
+        Assert.True(_c.State.IsLocked);
+    }
+
+    [Fact]
     public async Task Unlock_SshKeyCantLoad_StaysLocked_NamesTheKey_NotCountedByTheGuard()
     {
         if (OperatingSystem.IsWindows())

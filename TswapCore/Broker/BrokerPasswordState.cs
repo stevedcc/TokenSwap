@@ -262,7 +262,17 @@ public sealed class BrokerPasswordState : IDisposable
             EndProofLocked();
         }
         if (dumpable)
-            SetDumpable(true);
+            MakeDumpableAgainOrStop();
+    }
+
+    /// <summary>
+    /// The way back to locked ends with <c>PR_SET_DUMPABLE 1</c>; like every transition of a password
+    /// broker (ruling 12), a failure there stops <c>serve</c> (it would refuse every <c>broker unlock</c>).
+    /// </summary>
+    private void MakeDumpableAgainOrStop()
+    {
+        if (!SetDumpable(true))
+            _onFatal($"Could not make this process dumpable again after locking (prctl PR_SET_DUMPABLE, errno {Marshal.GetLastPInvokeError()}); 'tswap broker unlock' could not check it, so stopping.");
     }
 
     /// <summary>
@@ -367,8 +377,7 @@ public sealed class BrokerPasswordState : IDisposable
             {
                 SshKeysUnloadedObserver?.Invoke();
             }
-            if (!SetDumpable(true))
-                _log("warning: could not make serve dumpable again (prctl PR_SET_DUMPABLE); 'tswap broker unlock' will refuse it until serve restarts");
+            MakeDumpableAgainOrStop();
             if (wasUnlocked)
                 _log($"locked ({reason})");
         }
