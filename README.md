@@ -1330,7 +1330,8 @@ shareable part in the vault folder:
 copies, every password operation refuses until you keep one (`The vault folder has two different
 vault-password files (...)`); a byte-identical copy is deleted on the next password write (only a
 file matching the sync tools' conflict-copy names, never `vault-password` itself; a sync tool that
-propagates that deletion does no harm).
+propagates that deletion does no harm). A lone conflict copy with no `vault-password` file refuses
+too, and asks you to rename it to `vault-password` if it holds this vault's password.
 
 The tswap agent's socket lives in the vault user's run folder, never in the config or vault
 folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tswap/run/`),

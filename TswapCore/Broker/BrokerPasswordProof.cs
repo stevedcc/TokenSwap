@@ -37,8 +37,18 @@ public static class BrokerPasswordProof
         {
             var vaultId = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring
                 ?? throw new TswapException("This vault has no keyring; a broker with a vault password needs one."))).VaultId;
-            var file = store.ReadVaultPassword(vaultId)
-                ?? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+            VaultPasswordFile? read;
+            try
+            {
+                read = store.ReadVaultPassword(vaultId);
+            }
+            catch (TswapException ex) when (ex is not VaultPasswordUnavailableException)
+            {
+                // Conflicting copies, a file of another vault, a malformed file: the configuration, never a
+                // wrong password (the control server doesn't count it).
+                throw new VaultPasswordUnavailableException(ex.Message);
+            }
+            var file = read ?? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
             if (!file.Verifies(key, candidate))
                 throw new VaultPasswordRefusedException(WrongPasswordVerifierText);
             return key;

@@ -615,7 +615,12 @@ keyCheck = HMAC-SHA256(HKDF-SHA256(K_v, 32, info = "tswap-vault-key-check-v1"), 
   Password-free unlocks keep working. A byte-identical copy is not a conflict: the store deletes it
   on its next password write, and only a file matching the conflict-copy pattern, never
   `vault-password` itself. A sync tool that propagates that deletion does no harm, since the copy was
-  redundant. `vault merge` refuses before writing anything when both folders have different files,
+  redundant. The files are compared by content: the refusal comes only when there are at least two
+  different contents (an unreadable copy counts as one). A lone conflict copy with no
+  `vault-password` file refuses with `The vault folder has a conflict copy of the vault-password file
+  (<name>) but no vault-password file. If it holds this vault's password, rename it to
+  vault-password; otherwise delete it.` `broker unlock` never counts either refusal as a wrong
+  password. `vault merge` refuses before writing anything when both folders have different files,
   and copies the file into this folder when only the other copy has one.
 
 **Where the flag lives: the slot's own hardware blob.** The keyring format does not change (its

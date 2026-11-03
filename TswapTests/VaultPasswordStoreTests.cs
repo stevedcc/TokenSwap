@@ -150,6 +150,75 @@ public sealed class VaultPasswordStoreTests : IDisposable
         Assert.Equal(file.Encode(), File.ReadAllBytes(HomeFile));
     }
 
+    // Review T17 p1 MiMo I1 / p3 GLM I3 (controller ruling): the canonical file and its conflict copies are
+    // grouped by content; only diverging contents refuse with the "two different" text.
+
+    private const string CopyA = "vault-password (conflicted copy 2026-11-03)";
+    private const string CopyB = "vault-password.sync-conflict-20261103-101010-ABCDEFG";
+
+    [Fact]
+    public void LoneConflictCopy_NoCanonical_SaysRenameIt_ReadAndWrite()
+    {
+        Directory.CreateDirectory(_home.VaultDir!);
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyA), NewFile().Encode());
+        var expected = string.Format(RecordVaultStore.LoneConflictCopyText, CopyA);
+
+        var store = Store(_home);
+        Assert.Equal(expected, Assert.Throws<TswapException>(() => store.ReadVaultPassword(_vaultId)).Message);
+        Assert.Equal(expected, Assert.Throws<TswapException>(() => store.ReadVaultPasswordBytes()).Message);
+        var before = FolderBytes(_home.VaultDir!);
+        Assert.Equal(expected, Assert.Throws<TswapException>(() => store.WriteVaultPassword(NewFile())).Message);
+        Assert.Equal(before, FolderBytes(_home.VaultDir!));
+        Assert.DoesNotContain("two different", expected);
+    }
+
+    [Fact]
+    public void IdenticalConflictCopies_NoCanonical_ReadUsesOne_WriteOfTheSameMakesTheFile()
+    {
+        var file = NewFile();
+        Directory.CreateDirectory(_home.VaultDir!);
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyA), file.Encode());
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyB), file.Encode());
+
+        Assert.Equal(file.Encode(), Store(_home).ReadVaultPasswordBytes());
+        Assert.Equal(file.Encode(), Store(_home).ReadVaultPassword(_vaultId)!.Encode());
+
+        Store(_home).WriteVaultPassword(file);
+
+        Assert.Equal(file.Encode(), File.ReadAllBytes(HomeFile));
+        Assert.False(File.Exists(Path.Combine(_home.VaultDir!, CopyA)));
+        Assert.False(File.Exists(Path.Combine(_home.VaultDir!, CopyB)));
+    }
+
+    [Fact]
+    public void DifferentConflictCopies_NoCanonical_TwoDifferentText()
+    {
+        Directory.CreateDirectory(_home.VaultDir!);
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyA), NewFile().Encode());
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyB), NewFile().Encode());
+
+        var ex = Assert.Throws<TswapException>(() => Store(_home).ReadVaultPasswordBytes());
+
+        Assert.StartsWith("The vault folder has two different vault-password files (", ex.Message);
+        Assert.Contains(CopyA, ex.Message);
+        Assert.Contains(CopyB, ex.Message);
+        Assert.DoesNotContain("vault-password, ", ex.Message); // no canonical file to name
+    }
+
+    [Fact]
+    public void CanonicalWithAnIdenticalAndADifferentCopy_TwoDifferentText_NamesAll()
+    {
+        var file = NewFile();
+        Store(_home).WriteVaultPassword(file);
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyA), file.Encode());
+        File.WriteAllBytes(Path.Combine(_home.VaultDir!, CopyB), NewFile().Encode());
+
+        var ex = Assert.Throws<TswapException>(() => Store(_home).ReadVaultPasswordBytes());
+
+        var names = new[] { RecordVaultStore.VaultPasswordFileName, CopyA, CopyB }.Order(StringComparer.Ordinal);
+        Assert.Equal(string.Format(ConflictText, string.Join(", ", names)), ex.Message);
+    }
+
     [Fact]
     public void Write_OverADifferentFile_Refuses()
     {

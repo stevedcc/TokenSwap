@@ -1260,6 +1260,28 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.StartsWith("Wrong vault password", ex.Message);
     }
 
+    [Fact]
+    public void Prove_ConflictingVaultPasswordCopies_IsUnavailable_NotAWrongPassword()
+    {
+        // Review T17 fix round 1: a conflict in the vault-password files is a configuration problem the
+        // control server must not count as a wrong password (MissingVaultPasswordFile_IsNotCountedByTheGuard).
+        if (OperatingSystem.IsWindows())
+            return;
+        using var m = new FleetMachine("bk-conflict") { Tpm = RandomNumberGenerator.GetBytes(32) };
+        var vaultKey = PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
+        var store = new RecordVaultStore(m.Dir);
+        var file = store.ReadVaultPassword(m.Keyring.VaultId)!;
+        using (var other = VaultPasswordKdf.Stretch("another password entirely", file.Salt, file.Params))
+            File.WriteAllBytes(PasswordVaultTestSupport.VaultPasswordPath(m) + ".sync-conflict-20261103-101010-ABCDEFG",
+                VaultPasswordFile.Create(vaultKey, m.Keyring.VaultId, other, file.Salt, file.Params).Encode());
+        var unlocker = new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, m.Tpm!)]);
+        using var candidate = VaultPasswordKdf.Stretch(Password, file.Salt, file.Params);
+
+        var ex = Assert.Throws<VaultPasswordUnavailableException>(() => BrokerPasswordProof.Prove(store, unlocker, candidate));
+
+        Assert.StartsWith("The vault folder has two different vault-password files", ex.Message);
+    }
+
     /// <summary>
     /// A mixed vault on <paramref name="m"/>: its TPM slot has the password, and a plugged-in YubiKey slot has none.
     /// The YubiKey's challenge log is cleared.
