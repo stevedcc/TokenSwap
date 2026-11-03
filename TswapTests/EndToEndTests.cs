@@ -374,8 +374,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         psi.Environment["TSWAP_TEST_SUDO_BYPASS"]    = "1";
         psi.Environment["TSWAP_CONFIG_DIR"]          = _tempDir;
 
-        // Read from the outer PTY master until EIO (all slave fds closed after child exits).
-        // poll() with a 500 ms timeout bounds each read attempt so the test can never hang
+        // Read from the outer PTY master until the child has exited and the master is drained (the parent holds a
+        // slave fd, so EOF/EIO is not the normal end, #234). poll() with a 500 ms timeout bounds each read attempt so the test can never hang
         // indefinitely if tswap or dotnet stalls; the 60 s deadline kills the child process.
         // try/finally ensures masterFd and slaveFd are closed on all exit paths (assertion
         // failure, exception from PtyRead, etc.) so the test never leaks file descriptors.
@@ -390,11 +390,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         using var process = Process.Start(psi)!;
         try
         {
-            // The parent keeps its copy of the slave open until it is done (#234): the child is a bash wrapper that
-            // opens the slave by path a moment after it starts, and with no slave open at all macOS reports EOF on
-            // the master (revents POLLIN|POLLHUP), which ended the read loop before tswap had started. Holding the
-            // slave means the master never sees EOF, so the loop ends when the child has exited and the master is
-            // drained.
+            // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
+            // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
+            // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
+            // reports a hang-up only when no slave fd is open, so holding one rules out any early EOF; the slave is
+            // held only as that anchor (the parent never reads or writes it). The loop therefore ends when the
+            // child has exited, after a last drain of the master.
             while (DateTime.UtcNow < deadline)
             {
                 var pfd = new TestPollFd { fd = masterFd, events = POLLIN_FLAG };
@@ -402,7 +403,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 if (pr == 0)
                 {
                     if (process.HasExited)
-                        break; // exited and nothing left to read
+                    {
+                        DrainMaster(masterFd, sb, buf); // whatever it wrote after this poll timed out
+                        break;
+                    }
                     continue; // timeout — check deadline and loop
                 }
                 if (pr < 0)
@@ -545,6 +549,21 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     // --- PTY P/Invoke helpers (used by Run_FirstLineOfStdoutNotDropped_UnixPty) ---
 
+    /// <summary>Reads what is left in <paramref name="masterFd"/> without waiting (the child has exited).</summary>
+    private static void DrainMaster(int masterFd, StringBuilder sb, byte[] buf)
+    {
+        while (true)
+        {
+            var pfd = new TestPollFd { fd = masterFd, events = 1 }; // POLLIN
+            if (PtyPoll(ref pfd, 1, 0) <= 0)
+                return;
+            int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
+            if (n <= 0)
+                return;
+            sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+        }
+    }
+
     // openpty: try libc first (glibc 2.34+ / Fedora 35+ / Ubuntu 22.04+), then libutil.
     [DllImport("libc",    EntryPoint = "openpty", SetLastError = true)]
     private static extern int openpty_libc(ref int amaster, ref int aslave, [Out] byte[] name, IntPtr termp, IntPtr winp);
@@ -644,11 +663,12 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         try
         {
             using var process = Process.Start(psi)!;
-            // The parent keeps its copy of the slave open until it is done (#234): the child is a bash wrapper that
-            // opens the slave by path a moment after it starts, and with no slave open at all macOS reports EOF on
-            // the master (revents POLLIN|POLLHUP), which ended the read loop before tswap had started. Holding the
-            // slave means the master never sees EOF, so the loop ends when the child has exited and the master is
-            // drained.
+            // The parent keeps its copy of the slave open until it is done (#234). On macOS CI the master reported
+            // EOF (revents POLLIN|POLLHUP) tens of ms after start, before tswap printed anything; why is not proven
+            // (#210 found that a 1 s delay before the child opens the slave does not reproduce it). The master
+            // reports a hang-up only when no slave fd is open, so holding one rules out any early EOF; the slave is
+            // held only as that anchor (the parent never reads or writes it). The loop therefore ends when the
+            // child has exited, after a last drain of the master.
             while (DateTime.UtcNow < deadline)
             {
                 var pfd = new TestPollFd { fd = masterFd, events = 1 }; // POLLIN
@@ -657,6 +677,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                 {
                     if (process.HasExited)
                     {
+                        DrainMaster(masterFd, sb, buf); // whatever it wrote after this poll timed out
                         loopEnd = "child exited, master drained";
                         break;
                     }
