@@ -130,6 +130,8 @@ internal sealed class AgentHarness : IAsyncDisposable
         AgentServer.UnlockQueuedObserver = null;
         AgentServer.ReadStartedObserver = null;
         AgentClient.ResetSeamsForTests();
+        // Review T17 p5 MiMo M4: a Windows test that fails before restoring this seam must not poison the next.
+        WindowsPipeIdentity.ReadServerSid = WindowsPipeIdentity.DefaultReadServerSid;
         if (!OperatingSystem.IsWindows())
             foreach (var dir in Directory.EnumerateDirectories(Root.FullName, "*", SearchOption.AllDirectories)
                          .Where(d => BrokerNative.LStat(d) is { Type: BrokerNative.EntryType.Directory }))

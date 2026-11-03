@@ -397,6 +397,37 @@ public class AgentProtocolTests : IDisposable
     }
 
     /// <summary>Real ownership, except one path reports another owner.</summary>
+    [Fact]
+    public void SocketFolder_StickyParent_OnlyRootsIsExempt_AndASymlinkedParentIsCheckedAtItsRealPath()
+    {
+        // Review T17 p5 MiMo I5: where ruling 6's parent walk draws its line (as BrokerServer's socket_dir does).
+        if (OperatingSystem.IsWindows())
+            return;
+        var ownership = new UnixOwnership();
+        var sticky = Path.Combine(_root.FullName, "sticky");
+        var child = Path.Combine(sticky, "run");
+        Directory.CreateDirectory(child);
+        File.SetUnixFileMode(child, (UnixFileMode)0b111_000_000);
+        File.SetUnixFileMode(sticky, (UnixFileMode)0b111_111_111 | UnixFileMode.StickyBit);
+
+        // 1777 and root's (like /tmp): the sticky bit keeps others from replacing the uid's 0700 folder.
+        Assert.Equal(child, AgentSocketPath.CheckFolder(child, MyUid, new OwnerOverride(ownership, sticky, 0)));
+        // 1777 but the uid's own (or anyone's but root): refused, the exemption is root's only.
+        Assert.Contains(sticky, Assert.Throws<TswapException>(() => AgentSocketPath.CheckFolder(child, MyUid, ownership)).Message);
+
+        // A symlinked parent: the walk runs over the real path, so the link's target is what is checked.
+        var real = Path.Combine(_root.FullName, "real");
+        var realChild = Path.Combine(real, "run");
+        Directory.CreateDirectory(realChild);
+        File.SetUnixFileMode(realChild, (UnixFileMode)0b111_000_000);
+        File.SetUnixFileMode(real, (UnixFileMode)0b111_101_101);
+        var linked = Path.Combine(_root.FullName, "linked");
+        File.CreateSymbolicLink(linked, real);
+        Assert.Equal(realChild, AgentSocketPath.CheckFolder(Path.Combine(linked, "run"), MyUid, ownership));
+        File.SetUnixFileMode(real, (UnixFileMode)0b111_111_111);
+        Assert.Contains(real, Assert.Throws<TswapException>(() => AgentSocketPath.CheckFolder(Path.Combine(linked, "run"), MyUid, ownership)).Message);
+    }
+
     private sealed class OwnerOverride(IUnixOwnership inner, string path, uint uid) : IUnixOwnership
     {
         public bool IsPrivileged => inner.IsPrivileged;

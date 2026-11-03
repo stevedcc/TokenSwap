@@ -347,7 +347,11 @@ public sealed class AgentCommandTests : IDisposable
             Assert.True(exit == 0, stderr);
             var copy = Assert.Single(frees);
             Assert.All(copy, b => Assert.Equal(0, b));
-            Assert.Equal(32, _children.ChildInputs.Single().Length);
+            // The child got exactly the stretched password (review T17 p5 MiMo M1: not only its length).
+            using var stretched = Stretched(m, Password);
+            var expected = new byte[StretchedPassword.Size];
+            stretched.CopyTo(expected);
+            Assert.Equal(expected, _children.ChildInputs.Single());
         }
         finally
         {
@@ -948,9 +952,11 @@ public sealed class AgentCommandTests : IDisposable
                 {
                     if (Script is { } script)
                     {
-                        var input = new byte[32];
-                        childIn.ReadExactly(input);
-                        ChildInputs.Add(input);
+                        // Everything up to end of file (the parent closes its end after writing), so a parent that
+                        // wrote too few or too many bytes shows in ChildInputs instead of hanging a fixed-size read.
+                        using var input = new MemoryStream();
+                        childIn.CopyTo(input);
+                        ChildInputs.Add(input.ToArray());
                         BeforeReply?.Invoke();
                         tee.Write(script);
                         return 0;

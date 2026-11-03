@@ -81,6 +81,12 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
         return credentials.Value.Pid;
     }
 
+    /// <summary>
+    /// Every real agent these tests start ends by itself within this, even if a run dies before Dispose stops it
+    /// (review T17 p5 MiMo M3: no immortal test agent holding a stretched password).
+    /// </summary>
+    private const string SafetyTimeout = "30m";
+
     [Fact]
     public void Start_Get_Get_Stop()
     {
@@ -88,7 +94,7 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
             return;
         InitAndCreate();
 
-        var start = Run(Password + "\n", terminal: true, "agent", "start");
+        var start = Run(Password + "\n", terminal: true, "agent", "start", "--timeout", SafetyTimeout);
         Assert.True(start.Exit == 0, start.Err);
         Assert.Contains(Socket, start.Out);
 
@@ -120,7 +126,7 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
 
         // Run returns only after 'agent start' exited and both its pipes reached their end: the child holds
         // none of them any more. The agent still answers.
-        var start = Run(Password + "\n", terminal: true, "agent", "start");
+        var start = Run(Password + "\n", terminal: true, "agent", "start", "--timeout", SafetyTimeout);
         Assert.True(start.Exit == 0, start.Err);
 
         var status = Run("", terminal: false, "agent", "status");
@@ -134,7 +140,7 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
         if (!OperatingSystem.IsLinux())
             return;
         InitAndCreate();
-        var start = Run(Password + "\n", terminal: true, "agent", "start");
+        var start = Run(Password + "\n", terminal: true, "agent", "start", "--timeout", SafetyTimeout);
         Assert.True(start.Exit == 0, start.Err);
 
         var pid = AgentPid();

@@ -148,6 +148,23 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal(0, h.Secrets.Unlocks);
     }
 
+    [Fact]
+    public void BrokerTexts_AreTheBriefsWords()
+    {
+        // Review T17 p5 MiMo I6: the constants the tests compare output with, pinned once to the brief's literal words.
+        Assert.Equal(
+            "The broker keeps your stretched vault password in memory until you stop it or it times out. Root, or anything " +
+            "that can read this process's memory, can take it while it runs; it still needs this machine's TPM/YubiKey/Secure " +
+            "Enclave to open the vault.", BrokerCommand.RamDisclosure);
+        Assert.Equal("The broker is already unlocked or is not the real broker; run 'tswap broker status'.",
+            BrokerControlClient.UnreadableServerLinkText);
+        Assert.Equal("The broker is already unlocked.", BrokerPasswordState.AlreadyUnlockedText);
+        Assert.Equal("The broker was locked while unlocking; run 'tswap broker unlock' again.", BrokerPasswordState.LockedWhileUnlockingText);
+        Assert.Equal("This broker's slot has no vault password; it is never locked.", BrokerCommand.NeverLockedText);
+        Assert.Equal("a password header without the password flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.",
+            SlotPassword.CorruptText);
+    }
+
     [Theory]
     [InlineData("th-TH")] // the Buddhist calendar: year 2569
     [InlineData("fi-FI")] // '.' as the time separator
@@ -1030,6 +1047,28 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.DoesNotContain("dumpable:False", _c.Events);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(31)]
+    [InlineData(33)]
+    [InlineData(39)]
+    [InlineData(41)]
+    [InlineData(72)]
+    public async Task ControlSocket_UnlockPayloadNot32Or40Bytes_IsMalformed_NeverProves(int length)
+    {
+        // Review T17 p5 MiMo M5: ruling 14's unlock payload is the 32 stretched bytes, or those plus 8 for an expiry.
+        if (OperatingSystem.IsWindows())
+            return;
+        await _c.StartAsync();
+
+        var answer = await AgentHarness.RawAsync(_c.SocketPath, _c.UnlockFrame(new byte[length]));
+
+        Assert.Equal(AgentStatus.Malformed, answer?.Status);
+        Assert.Equal(0, _c.ProveCalls);
+        Assert.True(_c.State.IsLocked);
+    }
+
     // ================================================================== folders, locks, stale sockets (rulings 6 and 21)
 
     [Fact]
@@ -1509,6 +1548,10 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Contains("(allow tswap_broker_t self (unix_stream_socket (create bind listen accept read write getattr setattr setopt getopt shutdown)))", text);
         Assert.DoesNotMatch(@"\(allow container_t tswap_broker_control_t", text);
         Assert.DoesNotMatch(@"\(allow [a-z_]*container[a-z_]* tswap_broker_control_t", text);
+        // Review T17 p5 MiMo M6: no other source at all (spc_t, svirt_*, an attribute) may use the control socket.
+        var sources = System.Text.RegularExpressions.Regex.Matches(text, @"\(allow (\S+) tswap_broker_control_t\b")
+            .Select(m => m.Groups[1].Value).Distinct().ToList();
+        Assert.Equal(["tswap_broker_t"], sources);
         // Brackets balance (a CIL file that doesn't parse loads nothing).
         Assert.Equal(rules.Count(c => c == '('), rules.Count(c => c == ')'));
     }
