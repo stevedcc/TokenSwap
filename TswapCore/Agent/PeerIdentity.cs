@@ -8,7 +8,8 @@ namespace TswapCore.Agent;
 
 /// <summary>
 /// The peer process of a connected Unix socket, opened for ruling 20's checks: its pidfd (when the
-/// kernel gives one, Linux ≥ 6.3) and a directory fd on <c>/proc/&lt;pid&gt;</c>. Reading through the
+/// kernel gives one: <c>SO_PEERPIDFD</c> arrived in Linux 6.5, but the code goes by whether the call succeeds,
+/// never by the version number) and a directory fd on <c>/proc/&lt;pid&gt;</c>. Reading through the
 /// directory fd, then finding the pidfd still alive, proves the reads were of that same process.
 /// </summary>
 public sealed class PeerProcess(int pid, SafeFileHandle? pidfd, SafeFileHandle? directory) : IDisposable
@@ -92,7 +93,7 @@ public readonly record struct PeerVerdict(bool Allowed, uint? Uid, int Pid, stri
 /// take the peer's pidfd (<c>SO_PEERPIDFD</c>), open <c>/proc/&lt;pid&gt;</c> as a directory fd, read
 /// <c>ns/user</c> and <c>status</c>'s <c>Uid:</c> line through it (the uid must be the credential's), then
 /// check the pidfd is still alive (<c>pidfd_send_signal(pidfd, 0)</c>). Without <c>SO_PEERPIDFD</c>
-/// (kernel &lt; 6.3) the directory fd and status uid alone. An unreadable namespace is refused. Without
+/// (kernels before 6.5; the error decides, not the number) the directory fd and status uid alone. An unreadable namespace is refused. Without
 /// <c>/proc</c> every such peer is refused with the policy's message.</item>
 /// </list>
 /// macOS has no user namespaces or labels: the uid is all there is. The seams let tests stand in for a
@@ -271,7 +272,7 @@ public static partial class PeerIdentity
             }
             catch (SocketException)
             {
-                // ENOPROTOOPT: a kernel older than 6.3. The fallback is the directory fd alone.
+                // ENOPROTOOPT: a kernel older than 6.5 (the error decides, not the number). The fallback is the directory fd alone.
             }
         }
         var dirfd = open($"/proc/{creds.Pid}", ORdonly | ODirectory | OCloexec);
