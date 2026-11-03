@@ -257,7 +257,10 @@ public sealed class SshAgentListener
 
     internal BrokerPolicy Policy => _server.Policy.Current;
 
-    internal IReadOnlyDictionary<string, SshAgentKey> Keys => _agent.Keys;
+    internal IReadOnlyDictionary<string, SshAgentKey> Keys => _agent.CurrentKeys?.Invoke() ?? _agent.Keys;
+
+    /// <summary>Brief T17: a password broker that is locked; every request then gets <c>SSH_AGENT_FAILURE</c>.</summary>
+    internal bool IsLocked => _server.Password?.IsLocked == true;
 
     internal BrokerLog Log => _server.Log;
 
@@ -275,6 +278,8 @@ public sealed class SshAgentListener
         string socket, SshAgentKey key, byte[] data, uint flags, CancellationToken cancellationToken)
     {
         var guard = _http.UnlockGuard;
+        if (IsLocked)
+            return (null, "locked", false); // brief T17: never counted
         if (!_signRate.Allows(socket))
             return (null, "sign-rate", false);
         if (guard.Refusal(socket) is { } refused)
@@ -296,8 +301,14 @@ public sealed class SshAgentListener
                 return (null, "sign-rate", false);
             if (guard.Refusal(socket) is { } refusedNow)
                 return (null, refusedNow, false);
+            // Brief T17: a password broker's unlock holds a lease, so a return to locked waits for it.
+            IDisposable? lease = null;
+            if (_server.Password is { } password && (lease = password.TryEnter()) is null)
+                return (null, "locked", false);
             guard.RecordAttempt(socket);
             var sign = Task.Run(() => SshKeySigner.Sign(_agent.KeySource, key, data, flags));
+            if (lease is not null)
+                _ = sign.ContinueWith(_ => lease.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             byte[] signature;
             try
             {

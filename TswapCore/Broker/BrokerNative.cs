@@ -119,6 +119,17 @@ public static partial class BrokerNative
         return prctl(PrSetDumpable, 0, 0, 0, 0) == 0;
     }
 
+    /// <summary>
+    /// Linux: <c>prctl(PR_SET_DUMPABLE, dumpable ? 1 : 0)</c> (brief T17 ruling 12: a password broker is
+    /// dumpable only while it holds nothing). Returns false when it failed; a no-op returning true elsewhere.
+    /// </summary>
+    public static bool SetDumpable(bool dumpable)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+        return prctl(PrSetDumpable, dumpable ? 1u : 0u, 0, 0, 0) == 0;
+    }
+
     /// <summary>Linux: <c>prctl(PR_GET_DUMPABLE)</c> (1 dumpable, 0 not); -1 elsewhere.</summary>
     public static int GetDumpable() => OperatingSystem.IsLinux() ? prctl(PrGetDumpable, 0, 0, 0, 0) : -1;
 

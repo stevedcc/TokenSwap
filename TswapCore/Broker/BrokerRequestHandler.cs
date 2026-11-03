@@ -58,6 +58,12 @@ public sealed partial class BrokerRequestHandler(
     /// </summary>
     public BrokerShortSecretWarnings? ShortSecretWarnings { get; init; }
 
+    /// <summary>Brief T17 ruling 14: a password broker's lock state; null for a password-free broker.</summary>
+    public BrokerPasswordState? Password { get; init; }
+
+    /// <summary>True while a password broker is locked: requests get the busy refusal, logged <c>locked</c>, never counted.</summary>
+    internal bool IsLocked => Password?.IsLocked == true;
+
     public async Task HandleAsync(HttpContext http)
     {
         var items = http.Features.Get<IConnectionItemsFeature>()?.Items;
@@ -132,6 +138,13 @@ public sealed partial class BrokerRequestHandler(
         }
         record = record with { Path = built.DecodedPath! };
 
+        // Brief T17: a locked broker refuses at once, exactly as a busy one; never an unlock failure.
+        if (IsLocked)
+        {
+            await WriteUniformAsync(http, StatusCodes.Status503ServiceUnavailable).ConfigureAwait(false);
+            log.Request(record with { Status = 503, Reason = "locked" });
+            return;
+        }
         if (unlockGuard.Refusal(peer.Socket) is { } refused)
         {
             await WriteUniformAsync(http, StatusCodes.Status503ServiceUnavailable).ConfigureAwait(false);
@@ -213,8 +226,15 @@ public sealed partial class BrokerRequestHandler(
         {
             if (unlockGuard.Refusal(socket) is { } refusedNow)
                 return new UnlockOutcome<T>(null, 503, refusedNow, TimeSpan.Zero, 0);
+            // Brief T17: a password broker's unlock holds a lease on the held password until it ends
+            // (an abandoned one too), so a return to locked waits for it; locked meanwhile: not counted.
+            IDisposable? lease = null;
+            if (Password is { } password && (lease = password.TryEnter()) is null)
+                return new UnlockOutcome<T>(null, 503, "locked", TimeSpan.Zero, 0);
             unlockGuard.RecordAttempt(socket);
             var task = Task.Run(read);
+            if (lease is not null)
+                _ = task.ContinueWith(_ => lease.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             try
             {
                 // Fix round 1: an unlock that hangs (a wedged TPM) is abandoned, never waited on forever.
@@ -256,6 +276,10 @@ public sealed partial class BrokerRequestHandler(
         catch (BrokerSecretException)
         {
             return new UnlockOutcome<T>(null, 502, "secret-unusable", time.GetElapsedTime(started), 1);
+        }
+        catch (BrokerLockedException)
+        {
+            return new UnlockOutcome<T>(null, 503, "locked", time.GetElapsedTime(started), 1);
         }
         catch (Exception)
         {

@@ -277,6 +277,32 @@ public sealed class VaultUnlocker
         }
     }
 
+    /// <summary>
+    /// Brief T17 ruling 14: how this machine's own slot of the vault (by <see cref="Config.KeyringSlotId"/>,
+    /// or the first machine slot) classifies, for <c>broker serve</c> (locked at start on
+    /// <see cref="SlotPasswordKind.Password"/>) and <c>broker unlock|lock|status</c> (refused before
+    /// connecting otherwise). <see cref="OwnSlotStanding.Error"/> is ruling 3's text for
+    /// <see cref="SlotPasswordKind.NeedsNewerTswap"/> and <see cref="SlotPasswordKind.Corrupt"/>, without the
+    /// slot id. Never throws: no keyring, or no own slot, is <see cref="SlotPasswordKind.None"/>.
+    /// </summary>
+    public static OwnSlotStanding OwnSlotPassword(Config config)
+    {
+        if (config.Keyring is null)
+            return new(SlotPasswordKind.None, null, null);
+        try
+        {
+            var own = FindOwnMachineSlot(config, DecodeKeyring(config));
+            if (own is null)
+                return new(SlotPasswordKind.None, null, null);
+            var (kind, error) = SlotPassword.Describe(own);
+            return new(kind, Id8(own), kind == SlotPasswordKind.Corrupt ? SlotPassword.CorruptText : error);
+        }
+        catch (TswapException)
+        {
+            return new(SlotPasswordKind.None, null, null); // the unlock reports a damaged config itself
+        }
+    }
+
     /// <summary>The candidates of one unlock, classified before any pass runs (brief T17 ruling 3).</summary>
     private sealed record UnlockPlan(
         bool OwnPath,

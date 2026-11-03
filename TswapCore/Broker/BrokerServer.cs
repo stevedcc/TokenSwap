@@ -35,6 +35,12 @@ public sealed record BrokerServerOptions
     /// <c>TSWAP_TEST_KEY</c> (never in Release).
     /// </summary>
     public bool AllowOwnUidForTests { get; init; }
+
+    /// <summary>
+    /// Brief T17 ruling 14: a password broker's lock state (null: password-free). While it is locked every
+    /// request gets the uniform busy refusal, logged as <c>locked</c> and never counted as an unlock failure.
+    /// </summary>
+    public BrokerPasswordState? Password { get; init; }
 }
 
 /// <summary>
@@ -76,6 +82,9 @@ public sealed class BrokerServer : IAsyncDisposable
 
     /// <summary>The request slots (tests watch its queue).</summary>
     internal BrokerLimiter Limiter { get; private init; } = null!;
+
+    /// <summary>The unlock-failure limits shared by every socket (brief T17: the control socket's proofs count here too).</summary>
+    public BrokerUnlockGuard UnlockGuard => Handler.UnlockGuard;
 
     /// <summary>The request handler (tests watch its unlock queue).</summary>
     internal BrokerRequestHandler Handler { get; private init; } = null!;
@@ -133,6 +142,7 @@ public sealed class BrokerServer : IAsyncDisposable
                 limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time,
                 options.Limits, reason => fatal.TrySetResult(reason))
             {
+                Password = options.Password,
                 Templates = new Templates.BrokerTemplateRuntime(options.Time),
                 ShortSecretWarnings = new BrokerShortSecretWarnings(), // one per serve process; a reload keeps it
             };

@@ -16,7 +16,18 @@ internal sealed class SshAgentSession(SshAgentListener agent, BrokerPeer peer)
 
     public BrokerPeer Peer => peer;
 
-    public async Task<SshAgentReply> HandleAsync(byte[] message, CancellationToken cancellationToken) => message[0] switch
+    public async Task<SshAgentReply> HandleAsync(byte[] message, CancellationToken cancellationToken)
+    {
+        // Brief T17 ruling 14: a locked password broker answers every request with its uniform refusal.
+        if (agent.IsLocked)
+        {
+            agent.Log.Event($"ssh-request {PeerFields()} type={message[0].ToString(CultureInfo.InvariantCulture)} result=refused reason=locked");
+            return SshAgentReply.Failure;
+        }
+        return await HandleUnlockedAsync(message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SshAgentReply> HandleUnlockedAsync(byte[] message, CancellationToken cancellationToken) => message[0] switch
     {
         SshAgentProtocol.RequestIdentities => Identities(message),
         SshAgentProtocol.SignRequest => await SignAsync(message, cancellationToken).ConfigureAwait(false),

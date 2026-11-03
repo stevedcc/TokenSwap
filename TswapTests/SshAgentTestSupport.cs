@@ -49,11 +49,11 @@ public sealed class SshAgentHarness : IAsyncDisposable
     /// default) sets the one test switch, <see cref="BrokerServerOptions.AllowOwnUidForTests"/>.
     /// </param>
     public async Task<BrokerServer> StartAsync(string configJson, Func<BrokerPolicy, SshAgentOptions> agent, BrokerLimits? limits = null,
-        bool allowOwnUid = true)
+        bool allowOwnUid = true, BrokerPasswordState? password = null)
     {
         var policy = BrokerPolicy.Parse(configJson);
         Holder = new BrokerPolicyHolder(policy);
-        var options = Broker.Options(limits: limits) with { Policy = Holder, SshAgent = agent(policy), AllowOwnUidForTests = allowOwnUid };
+        var options = Broker.Options(limits: limits) with { Policy = Holder, SshAgent = agent(policy), AllowOwnUidForTests = allowOwnUid, Password = password };
         Server = await BrokerServer.StartAsync(options);
         return Server;
     }

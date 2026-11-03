@@ -1,8 +1,12 @@
 using System.Runtime.InteropServices;
 using TswapCore;
+using TswapCore.Agent;
 using TswapCore.Broker;
 using TswapCore.Broker.SshAgent;
 using TswapCore.Broker.Templates;
+using TswapCore.Keyring;
+using TswapCore.Vault;
+using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
 
@@ -15,9 +19,9 @@ namespace TswapCli.Commands;
 public sealed class BrokerCommand : ICliCommand
 {
     public string Name => "broker";
-    public string HelpUsage => "broker <serve|forward|call|route|socket|template> ...";
+    public string HelpUsage => "broker <serve|unlock|lock|status|forward|call|route|socket|template> ...";
     public string Description =>
-        "Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve as the vault user; forward/call in the container; sudo for route|socket|template add|remove)";
+        "Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve, and unlock|lock|status for a broker whose slot has the vault password, as the vault user; forward/call in the container; sudo for route|socket|template add|remove)";
 
     // serve, forward and call never need sudo (serve refuses root); only config changes do, checked inside.
     public bool RequiresSudo => false;
@@ -25,6 +29,9 @@ public sealed class BrokerCommand : ICliCommand
     private const string Usage =
         "Usage:\n" +
         "  tswap broker serve\n" +
+        "  tswap broker unlock [--timeout <90m|8h|1d12h|seconds>]   (a broker whose slot has the vault password starts locked)\n" +
+        "  tswap broker lock\n" +
+        "  tswap broker status\n" +
         "  tswap broker forward --listen 127.0.0.1:<port> [--socket /run/tswap.sock]\n" +
         "  tswap broker call <template> [name=value ...] [--socket /run/tswap.sock]   (exit 125: the broker refused or failed)\n" +
         "  sudo tswap broker route add <name> --upstream https://host[/base] --auth bearer|basic|header --secret <secret-name>\n" +
@@ -42,6 +49,9 @@ public sealed class BrokerCommand : ICliCommand
         return args switch
         {
             ["serve"] => Serve(ctx),
+            ["unlock", ..] => Unlock(ctx, args[1..]),
+            ["lock"] => Lock(ctx),
+            ["status"] => Status(ctx),
             ["forward", ..] => Forward(ctx, args[1..]),
             ["call", ..] => Call(ctx, args[1..]),
             ["route", "add", ..] => RouteAdd(ctx, args[2..]),
@@ -68,9 +78,21 @@ public sealed class BrokerCommand : ICliCommand
                 "'tswap broker serve' needs a record-store vault, so each request decrypts only its route's secret " +
                 "(a classic vault would be decrypted whole for every request). Convert it first: sudo tswap migrate --to-records");
 
-        // Decision 1: no same-uid ptrace, no core dumps holding secrets.
-        if (!BrokerNative.MakeNonDumpable())
-            throw new TswapException($"Could not make this process non-dumpable (prctl PR_SET_DUMPABLE, errno {Marshal.GetLastPInvokeError()}); not serving.");
+        // Brief T17 (ruling 6): refused before anything is created, with BrokerServer's own words.
+        if (Ownership.IsPrivileged)
+            throw new TswapException("'tswap broker serve' must run as the vault's own user, never as root (run it from the vault user's systemd user unit).");
+
+        // Brief T17 ruling 14: this machine's slot decides. A password slot starts locked; a slot this
+        // build can't use (newer tswap, corrupt) refuses to start.
+        var vaultConfig = records.LoadConfig();
+        var own = VaultUnlocker.OwnSlotPassword(vaultConfig);
+        if (own.Kind is SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt)
+            throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
+        var withPassword = own.Kind == SlotPasswordKind.Password;
+
+        // Decision 1: no same-uid ptrace, no core dumps holding secrets. Brief T17 ruling 12: a password
+        // broker is dumpable only while locked with nothing held (so 'broker unlock' can check it).
+        BrokerPasswordState.HardenAtStart(BrokerHardening.Native, withPassword, ctx.Console.Error.WriteLine);
 
         var owner = Owner(ctx);
         var configDir = ctx.Env.ConfigDir;
@@ -78,14 +100,20 @@ public sealed class BrokerCommand : ICliCommand
         var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(owner, configDir, host: host));
         using var log = new BrokerLog(ctx.Console.Error, Path.Combine(configDir, BrokerLog.FileName));
         using var forwarder = new HttpBrokerForwarder(TimeProvider.System);
-        var sshAgent = SshAgentFor(ctx, records, holder.Current);
+        var fatalHardening = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var state = withPassword
+            ? new BrokerPasswordState(BrokerHardening.Native, TimeProvider.System, log.Event, reason => fatalHardening.TrySetResult(reason))
+            : null;
+        var deferredKeys = state is null ? null : new DeferredSshKeys();
+        var sshAgent = SshAgentFor(ctx, records, holder.Current, state, deferredKeys);
         var options = new BrokerServerOptions
         {
             SshAgent = sshAgent,
             Policy = holder,
-            Secrets = new VaultBrokerSecretSource(records, ctx.Unlocker),
+            Secrets = new VaultBrokerSecretSource(records, ctx.Unlocker, state?.Provider),
             Forwarder = forwarder,
             Log = log,
+            Password = state,
         };
 #if DEBUG
         // The end-to-end tests connect as their own uid, which serve otherwise refuses, on the HTTP
@@ -110,18 +138,39 @@ public sealed class BrokerCommand : ICliCommand
         });
 
         server = BrokerServer.StartAsync(options).GetAwaiter().GetResult();
+        BrokerControlServer? control = null;
         Task finished;
         try
         {
-            finished = Task.WhenAny(stop.Task, server.Fatal).GetAwaiter().GetResult();
+            if (state is not null)
+            {
+                // Brief T17 ruling 14: the control socket, after BrokerServer took the socket folder's lock.
+                var vaultId = VaultIdOf(vaultConfig);
+                var uid = Ownership.EffectiveUid;
+                if (sshAgent is not null)
+                    state.UnloadSshKeys = deferredKeys!.Unload;
+                var keySource = sshAgent?.KeySource;
+                control = BrokerControlServer.StartAsync(new BrokerControlOptions(ControlPath(ctx, uid, vaultId), vaultId, uid, state,
+                    candidate => BrokerPasswordProof.Prove(records, ctx.Unlocker, candidate), server.UnlockGuard, TimeProvider.System)
+                {
+                    Ownership = Ownership,
+                    Log = log.Event,
+                    LoadSshKeys = keySource is null ? null : () => deferredKeys!.Load(holder.Current, keySource),
+                }).GetAwaiter().GetResult();
+                log.Event($"locked: this broker's slot has the vault password; run 'tswap broker unlock' as the vault user ({control.SocketPath})");
+            }
+            finished = Task.WhenAny(stop.Task, server.Fatal, fatalHardening.Task).GetAwaiter().GetResult();
         }
         finally
         {
+            control?.StopAsync().GetAwaiter().GetResult();
             server.StopAsync().GetAwaiter().GetResult();
         }
         // Unlocks hanging again and again: exit non-zero so systemd (Restart=on-failure) restarts serve.
         if (finished == server.Fatal)
             throw new TswapException($"tswap broker serve stopped: {server.Fatal.Result}");
+        if (finished == fatalHardening.Task)
+            throw new TswapException($"tswap broker serve stopped: {fatalHardening.Task.Result}");
         return 0;
     }
 
@@ -130,17 +179,171 @@ public sealed class BrokerCommand : ICliCommand
     /// (one unlock, one record) to derive its public key; a key that can't be loaded stops serve,
     /// naming it. New keys need a restart (a reload never unlocks).
     /// </summary>
-    private static SshAgentOptions? SshAgentFor(CommandContext ctx, RecordVaultStore records, BrokerPolicy policy)
+    private static SshAgentOptions? SshAgentFor(CommandContext ctx, RecordVaultStore records, BrokerPolicy policy,
+        BrokerPasswordState? state, DeferredSshKeys? deferred)
     {
         if (policy.SshKeys.Count == 0)
             return null;
-        var source = new VaultSshKeySource(records, ctx.Unlocker);
+        var source = new VaultSshKeySource(records, ctx.Unlocker, state?.Provider);
+        if (state is null)
+            return new SshAgentOptions
+            {
+                Keys = SshAgentKeyLoader.Load(policy, source),
+                KeySource = source,
+            };
+        // Brief T17 ruling 14: a locked broker can't unlock, so the keys load after the first
+        // 'broker unlock'; the checks that need no unlock still stop serve now.
+        SshAgentKeyLoader.Validate(policy);
         return new SshAgentOptions
         {
-            Keys = SshAgentKeyLoader.Load(policy, source),
+            Keys = new Dictionary<string, SshAgentKey>(),
+            CurrentKeys = () => deferred!.Current,
             KeySource = source,
         };
     }
+
+    // ------------------------------------------------------------------ unlock, lock, status (brief T17 ruling 14)
+
+    /// <summary>Ruling 14: <c>broker unlock|lock|status</c> on a vault whose slot here has no vault password.</summary>
+    public const string NeverLockedText = "This broker's slot has no vault password; it is never locked.";
+
+    /// <summary>The RAM disclosure (Global constraints), with "The broker keeps" for its first words.</summary>
+    public const string RamDisclosure =
+        "The broker keeps your stretched vault password in memory until you stop it or it times out. Root, or anything that can read this process's memory, can take it while it runs; it still needs this machine's TPM/YubiKey/Secure Enclave to open the vault.";
+
+    /// <summary>Ruling 19's extra line on a Mac whose password slot is a Secure Enclave one.</summary>
+    public const string SecureEnclaveCopyLine =
+        "On this Mac the Secure Enclave library also holds a copy during each unlock, which tswap can't wipe.";
+
+    /// <summary>Test seam: the euid (root refusals) and owner lookups.</summary>
+    internal static IUnixOwnership Ownership = new UnixOwnership();
+
+    /// <summary>Test seam: the control socket's path for (owner uid, vault id); null: <see cref="AgentSocketPath.BrokerControlFor(uint, byte[])"/>.</summary>
+    internal static Func<uint, byte[], string>? ControlPathOverride;
+
+    internal static void ResetSeamsForTests()
+    {
+        Ownership = new UnixOwnership();
+        ControlPathOverride = null;
+    }
+
+    private static string ControlPath(CommandContext ctx, uint uid, byte[] vaultId)
+    {
+        if (ControlPathOverride is { } seam)
+            return seam(uid, vaultId);
+#if DEBUG
+        // Debug builds with a test key only: the end-to-end tests keep the run folder in a temp folder.
+        if (ctx.TestKey is not null && Environment.GetEnvironmentVariable("TSWAP_TEST_BROKER_RUN_DIR") is { Length: > 0 } runDir)
+            return Path.Combine(Path.GetFullPath(runDir), $"broker-{AgentSocketPath.Prefix(vaultId)}", "control.sock");
+#else
+        _ = ctx;
+#endif
+        return AgentSocketPath.BrokerControlFor(uid, vaultId);
+    }
+
+    private static byte[] VaultIdOf(Config config) =>
+        KeyringCodec.Decode(Convert.FromBase64String(config.Keyring
+            ?? throw new TswapException("This vault has no keyring; only a keyring vault's slot can carry a vault password."))).VaultId;
+
+    /// <summary>
+    /// Everything <c>broker unlock|lock|status</c> check before connecting (ruling 14): not as root, a
+    /// record vault, and this machine's slot has the vault password. Returns the vault's config, its id,
+    /// the vault user's uid and the control socket's path.
+    /// </summary>
+    private static (Config Config, byte[] VaultId, uint Uid, string Path) ControlTarget(CommandContext ctx, string op)
+    {
+        if (Ownership.IsPrivileged)
+        {
+            var configOwner = Ownership.GetOwner(ctx.Env.ConfigDir)?.Uid;
+            var name = configOwner is { } u ? BrokerNative.NameOf(u) ?? $"uid {u}" : "the vault's owner";
+            throw new TswapException($"Run 'tswap broker {op}' as the vault user ({name}), without sudo.");
+        }
+        if (ctx.Storage is not RecordVaultStore records)
+            throw new TswapException($"'tswap broker {op}' needs a record-store vault.");
+        var config = records.LoadConfig();
+        var own = VaultUnlocker.OwnSlotPassword(config);
+        switch (own.Kind)
+        {
+            case SlotPasswordKind.None:
+                throw new TswapException(NeverLockedText);
+            case SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt:
+                throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
+        }
+        var vaultId = VaultIdOf(config);
+        var uid = Ownership.EffectiveUid;
+        return (config, vaultId, uid, ControlPath(ctx, uid, vaultId));
+    }
+
+    /// <summary>
+    /// <c>tswap broker unlock [--timeout d]</c>: reads the vault password at the terminal, stretches it with
+    /// the vault's <c>vault-password</c> file, and hands the 32 bytes to the broker (ruling 14).
+    /// </summary>
+    private static int Unlock(CommandContext ctx, string[] args)
+    {
+        TimeSpan? timeout = args switch
+        {
+            [] => null,
+            ["--timeout", var text] => AgentDuration.Parse(text),
+            _ => throw new TswapException(Usage),
+        };
+        var (config, vaultId, uid, path) = ControlTarget(ctx, "unlock");
+        using var password = TerminalPasswordProvider.For(ctx, config)();
+        ctx.Console.Error.WriteLine(RamDisclosure);
+        if (OperatingSystem.IsMacOS() && config.Backend == HardwareBackend.SecureEnclave)
+            ctx.Console.Error.WriteLine(SecureEnclaveCopyLine);
+        var expiresAt = timeout is { } t ? ctx.Time.GetUtcNow() + t : (DateTimeOffset?)null;
+        switch (BrokerControlClient.Unlock(path, vaultId, uid, password, expiresAt))
+        {
+            case BrokerControlAnswer.Done:
+                ctx.Console.Out.WriteLine(expiresAt is { } e
+                    ? $"The broker is unlocked; it locks again at {e.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z."
+                    : "The broker is unlocked.");
+                return 0;
+            case var other:
+                throw Failure(other, path);
+        }
+    }
+
+    private static int Lock(CommandContext ctx)
+    {
+        var (_, vaultId, uid, path) = ControlTarget(ctx, "lock");
+        switch (BrokerControlClient.Lock(path, vaultId, uid))
+        {
+            case BrokerControlAnswer.Done:
+                ctx.Console.Out.WriteLine("The broker is locked.");
+                return 0;
+            case var other:
+                throw Failure(other, path);
+        }
+    }
+
+    private static int Status(CommandContext ctx)
+    {
+        var (_, vaultId, uid, path) = ControlTarget(ctx, "status");
+        switch (BrokerControlClient.Status(path, vaultId, uid))
+        {
+            case BrokerControlAnswer.State { Unlocked: false } locked:
+                ctx.Console.Out.WriteLine("The broker is locked.");
+                ctx.Console.Out.WriteLine($"refused peers: {locked.RefusedPeers}");
+                return 0;
+            case BrokerControlAnswer.State unlocked:
+                ctx.Console.Out.WriteLine(unlocked.ExpiresAt is { } e
+                    ? $"The broker is unlocked until {e.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z."
+                    : "The broker is unlocked (no timeout).");
+                ctx.Console.Out.WriteLine($"refused peers: {unlocked.RefusedPeers}");
+                return 0;
+            case var other:
+                throw Failure(other, path);
+        }
+    }
+
+    private static TswapException Failure(BrokerControlAnswer answer, string path) => answer switch
+    {
+        BrokerControlAnswer.Refused refused => new TswapException(refused.Message),
+        BrokerControlAnswer.NotRunning => new TswapException($"No 'tswap broker serve' answers at {path}; is it running?"),
+        BrokerControlAnswer.OtherVault => new TswapException($"Another vault's broker answers at {path}."),
+        _ => new TswapException($"The broker at {path} gave an answer tswap can't read."),
+    };
 
     // ------------------------------------------------------------------ forward
 

@@ -26,3 +26,10 @@ public sealed record UnlockSources(Func<byte[]?>? AskAgent, VaultPasswordProvide
 /// if that fails too, adds <c>The tswap agent could not unlock either: &lt;message&gt;.</c>
 /// </summary>
 public sealed class AgentUnlockFailedException(string message) : TswapException(message);
+
+/// <summary>
+/// How this machine's own slot of a vault classifies (brief T17 ruling 3), with its id8 and, for
+/// <see cref="Keyring.SlotPasswordKind.NeedsNewerTswap"/> and <see cref="Keyring.SlotPasswordKind.Corrupt"/>,
+/// ruling 3's text without the slot id (<see cref="VaultUnlocker.OwnSlotPassword"/>).
+/// </summary>
+public sealed record OwnSlotStanding(Keyring.SlotPasswordKind Kind, string? SlotId8, string? Error);

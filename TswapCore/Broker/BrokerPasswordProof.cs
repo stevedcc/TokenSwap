@@ -1,0 +1,54 @@
+using System.Security.Cryptography;
+using TswapCore.Keyring;
+using TswapCore.Vault;
+using TswapCore.VaultPassword;
+
+namespace TswapCore.Broker;
+
+/// <summary>
+/// How a broker unlocks (brief T17 rulings 13 and 14): never through an agent, always with the hardware
+/// and, for a password slot, with the password it holds or is being handed.
+/// </summary>
+public static class BrokerPasswordProof
+{
+    /// <summary>An unlock selection that never asks (serve has no terminal).</summary>
+    public static YubiKeySelection NoChoice { get; } = YubiKeySelection.FromChooser(_ => throw new TswapException(
+        "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
+
+    /// <summary>
+    /// The sources of every unlock <c>serve</c> makes (the proof, a route's secret, an ssh key): no agent
+    /// (ruling 13: a broker's behaviour never depends on whether an agent runs), and
+    /// <paramref name="password"/> as the password, or none for a password-free broker.
+    /// </summary>
+    public static UnlockSources SourcesFor(VaultPasswordProvider? password) => new(AskAgent: null, Prompt: password);
+
+    /// <summary>
+    /// <c>broker unlock</c>'s proof (ruling 14): one real unlock through this machine's password slot with
+    /// <paramref name="candidate"/>, then the vault's <c>vault-password</c> verifier, which needs both the
+    /// key and the password. Returns <c>K_v</c>; the caller zeroes it. A wrong password fails at the
+    /// hardware (ruling 18's texts) or at the verifier.
+    /// </summary>
+    public static byte[] Prove(RecordVaultStore store, VaultUnlocker unlocker, StretchedPassword candidate)
+    {
+        var config = store.LoadConfig();
+        var key = unlocker.Unlock(config, NoChoice, SourcesFor(candidate.Clone));
+        try
+        {
+            var vaultId = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring
+                ?? throw new TswapException("This vault has no keyring; a broker with a vault password needs one."))).VaultId;
+            var file = store.ReadVaultPassword(vaultId)
+                ?? throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+            if (!file.Verifies(key, candidate))
+                throw new VaultPasswordRefusedException(WrongPasswordVerifierText);
+            return key;
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(key);
+            throw;
+        }
+    }
+
+    /// <summary>The hardware opened, but the password doesn't match the vault's <c>vault-password</c> verifier.</summary>
+    public const string WrongPasswordVerifierText = "Wrong vault password (it doesn't match this vault's vault-password file).";
+}
