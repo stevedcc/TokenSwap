@@ -529,24 +529,28 @@ public class BrokerContainerCommandTests : IDisposable
     ];
 
     [Fact]
-    public void SocketAdd_WithoutABinding_Writes_AndNamesTheSocketStillToBind()
+    public void AnEditingCommand_OnAV01File_Writes_AndNamesTheSocketStillToBind()
     {
         if (OperatingSystem.IsWindows())
             return; // the broker is Unix only
-        _m.Ok("", AddGithub);
-        var (exit, _, err) = _m.Run("", "broker", "socket", "add", "lane1", "--uids", "100999", "--routes", "github", "--socket-dir", "/run/tswap-broker");
-        Assert.Equal(0, exit);
-        Assert.Contains("still to bind before serve starts: lane1", err);
-        var raw = BrokerConfigFile.ReadRaw(DirectoryOwnerMatcher.Default, _m.Dir)!;
-        Assert.Equal("lane1", Assert.Single(raw.Sockets).Name);
+        // Task 4 made socket add require a binding, so the unbound socket comes from a v0.1 file.
+        var path = BrokerConfigFile.PathIn(_m.Dir);
+        File.WriteAllText(path, """
+            { "version": 1, "socket_dir": "/run/tswap-broker", "routes": [],
+              "sockets": [ { "name": "lane1", "uids": ["100999"], "routes": [] } ] }
+            """);
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         // serve (every other load) applies the rule.
         Assert.Contains("socket lane1 names no container",
             Assert.Throws<BrokerConfigException>(() => BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _m.Dir)).Message);
 
-        // Another editing command still writes, and still says so.
-        (exit, _, err) = _m.Run("", "broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
+        // An editing command still writes, and says so.
+        var (exit, _, err) = _m.Run("", AddGithub);
         Assert.Equal(0, exit);
         Assert.Contains("still to bind before serve starts: lane1", err);
+        var raw = BrokerConfigFile.ReadRaw(DirectoryOwnerMatcher.Default, _m.Dir)!;
+        Assert.Equal("lane1", Assert.Single(raw.Sockets).Name);
+        Assert.Equal("github", Assert.Single(raw.Routes).Name);
     }
 
     [Fact]
