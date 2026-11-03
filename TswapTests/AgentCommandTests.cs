@@ -796,6 +796,40 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     [Fact]
+    public void Client_TooLongAgentSockVariable_SaysSo_ThenPrompts()
+    {
+        // Review T17 p3 MiMo M-11: a TSWAP_AGENT_SOCK the client can't use is reported, not silently skipped.
+        if (OperatingSystem.IsWindows())
+            return; // the variable is Unix only
+        var (m, _) = TpmPasswordVault("long-sock");
+        m.AgentSocket = "/" + new string('a', 120) + "/agent.sock";
+
+        var (exit, stdout, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.False(string.IsNullOrWhiteSpace(stdout));
+        Assert.Contains($"The agent socket path {m.AgentSocket} is 132 bytes, over the 103-byte limit for a socket; set TSWAP_AGENT_SOCK to a shorter path.", stderr);
+        Assert.True(stderr.IndexOf("103-byte", StringComparison.Ordinal) < stderr.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal), stderr);
+    }
+
+    [Fact]
+    public void Client_NoAgentSockVariable_NoHomeFolder_StaysSilent()
+    {
+        // ...while an unset variable with no owner home folder to find an agent by stays silent (none can be asked).
+        if (OperatingSystem.IsWindows())
+            return;
+        var (m, _) = TpmPasswordVault("no-home");
+        m.AgentSocket = null;
+        AgentUnlock.PathInputs = new AgentSocketPath.Inputs(Path.Combine(m.Dir, "no-run-user"), _ => null, new UnixOwnership(), MacOs: false);
+
+        var (exit, _, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain("home folder", stderr);
+        Assert.DoesNotContain(AskingLine, stderr);
+    }
+
+    [Fact]
     public void Client_ZeroesTheKeyAfterUse()
     {
         var (m, vaultKey) = TpmPasswordVault("zeroes");

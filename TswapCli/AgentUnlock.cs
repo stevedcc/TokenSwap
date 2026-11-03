@@ -56,9 +56,14 @@ internal static class AgentUnlock
         {
             location = Resolve(ctx, vaultId);
         }
-        catch (TswapException)
+        catch (TswapException ex)
         {
-            return null; // no owner or home folder to find an agent by: none can be asked
+            // No owner or home folder to find an agent by: none can be asked, nothing to say. But a
+            // TSWAP_AGENT_SOCK the user set and this client can't use (too long) is said, then the prompt
+            // follows (review T17 p3 MiMo M-11).
+            if (ctx.Env.AgentSocketVariable is { Length: > 0 } && !OperatingSystem.IsWindows())
+                ctx.Console.Error.WriteLine(ex.Message);
+            return null;
         }
         if (!MayBeListening(location.Path))
             return null;
