@@ -278,7 +278,14 @@ public sealed class BrokerHarness : IAsyncDisposable
     public string SocketPath(string name) => BrokerServer.SocketPath(SocketDir, name);
 
     /// <summary>Sends raw bytes on a socket and reads until the broker closes the connection.</summary>
-    public async Task<byte[]> SendRawAsync(string socketName, string request)
+    public Task<byte[]> SendRawAsync(string socketName, string request) => SendRawAsync(socketName, request, null, null);
+
+    /// <summary>
+    /// As <see cref="SendRawAsync(string, string)"/>, and calls <paramref name="onMarker"/> once the bytes received so far
+    /// contain <paramref name="marker"/>: a server stub can wait for it to know the client really read that far (an abort
+    /// right after a write can otherwise overtake the write; #234 and the macOS/Ubuntu flakes of 2026-11-03).
+    /// </summary>
+    public async Task<byte[]> SendRawAsync(string socketName, string request, string? marker, Action? onMarker)
     {
         using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await client.ConnectAsync(new UnixDomainSocketEndPoint(SocketPath(socketName)));
@@ -309,6 +316,11 @@ public sealed class BrokerHarness : IAsyncDisposable
             if (n == 0)
                 break;
             received.Write(buffer, 0, n);
+            if (marker is not null && onMarker is not null && Encoding.Latin1.GetString(received.ToArray()).Contains(marker, StringComparison.Ordinal))
+            {
+                onMarker();
+                onMarker = null;
+            }
         }
         return received.ToArray();
     }

@@ -76,13 +76,19 @@ public class BrokerTemplateInternalErrorTests(ITestOutputHelper output) : IAsync
     {
         if (!SandboxBed.CanRun(output))
             return;
-        await StartAsync(async (_, write, _) =>
+        // The stub throws only once the client has read the first frame: thrown at once, the abort could overtake
+        // the frame (Ubuntu CI read nothing, status -1, PR #235 run 41710484003).
+        var frameRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await StartAsync(async (_, write, cancel) =>
         {
             await write(BrokerOutputKind.Stdout, Encoding.ASCII.GetBytes("first frame\n"));
+            await frameRead.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
             throw new InvalidOperationException(Message);
         });
 
-        var response = await CallAsync();
+        var response = Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", "POST /_template/t HTTP/1.1\r\nHost: broker\r\n" +
+            "Content-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            Convert.ToBase64String(Encoding.ASCII.GetBytes("first frame\n")), frameRead.SetResult));
         await _h.WaitForLogAsync("internal-error");
 
         Assert.Equal(200, BrokerHarness.StatusOf(response)); // the stream had started
