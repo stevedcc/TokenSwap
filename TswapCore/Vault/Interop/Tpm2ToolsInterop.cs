@@ -2,6 +2,11 @@ using System.Buffers.Binary;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using TswapCore.Keyring;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault.Interop;
 
@@ -62,7 +67,7 @@ namespace TswapCore.Vault.Interop;
 /// wire format) against swtpm, not that the real hardware root-of-trust property holds.</para>
 /// </summary>
 [SupportedOSPlatform("linux")]
-internal static class Tpm2ToolsInterop
+internal static partial class Tpm2ToolsInterop
 {
     // tpm2-tools' current default template already produces this (verified against swtpm), but
     // pinning it explicitly means a future tpm2-tools/tpm2-tss default change can't silently
@@ -101,7 +106,19 @@ internal static class Tpm2ToolsInterop
     }
 
     /// <summary>Enrollment: seals <paramref name="plaintextKey"/> to a freshly (re)created TPM-bound primary key.</summary>
-    public static byte[] Seal(byte[] plaintextKey)
+    public static byte[] Seal(byte[] plaintextKey) => SealCore(plaintextKey, null);
+
+    /// <summary>
+    /// Brief T17 task 8: seals <paramref name="plaintextKey"/> as an object whose auth value is the stretched
+    /// vault password, with explicit attributes <c>fixedtpm|fixedparent|userwithauth</c> (no <c>noda</c>: the
+    /// object stays under the TPM's dictionary-attack protection). The auth reaches <c>tpm2_create</c> through
+    /// an inherited memfd (<see cref="UnixMemfd"/>, <c>-p file:/proc/self/fd/&lt;n&gt;</c>) as
+    /// <c>hex:&lt;64 hex&gt;</c>; the sealed data stays on stdin. The package layout is unchanged; the caller adds
+    /// the <c>TSTP</c> header.
+    /// </summary>
+    public static byte[] Seal(byte[] plaintextKey, StretchedPassword password) => SealCore(plaintextKey, password);
+
+    private static byte[] SealCore(byte[] plaintextKey, StretchedPassword? password)
     {
         RequireAvailable();
 
@@ -120,10 +137,34 @@ internal static class Tpm2ToolsInterop
             // "-i -": pipe the plaintext vault key over stdin rather than writing it to a temp
             // file first — verified directly against swtpm that tpm2_create reads and seals it
             // correctly this way. See the class doc comment.
-            var (createExit, _, createErr) = RunWithStdin("tpm2_create", plaintextKey,
-                "-C", primaryPath, "-u", pubPath, "-r", privPath, "-i", "-");
-            if (createExit != 0)
-                throw new TswapException($"TPM operation failed while sealing the key to the TPM: {createErr.Trim()}");
+            List<string> args = ["-C", primaryPath, "-u", pubPath, "-r", privPath, "-i", "-"];
+            TpmToolRun create;
+            if (password is null)
+            {
+                create = Runner("tpm2_create", args, plaintextKey, started: null);
+            }
+            else
+            {
+                var authText = AuthText(password);
+                UnixMemfd memfd;
+                try
+                {
+                    memfd = UnixMemfd.Create(AuthMemfdName, authText);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(authText);
+                }
+                // The memfd is open only around this one start; the started callback closes tswap's copy as
+                // soon as the child has inherited it, and the using closes it on every failure path.
+                using (memfd)
+                {
+                    args.AddRange(["-a", PasswordObjectAttributes, "-p", "file:" + memfd.ChildPath]);
+                    create = Runner("tpm2_create", args, plaintextKey, started: memfd.Dispose);
+                }
+            }
+            if (create.ExitCode != 0)
+                throw new TswapException($"TPM operation failed while sealing the key to the TPM: {create.Stderr.Trim()}");
 
             if (!File.Exists(pubPath) || !File.Exists(privPath))
                 throw new TpmOperationException(
@@ -148,23 +189,22 @@ internal static class Tpm2ToolsInterop
         }
     }
 
-    /// <summary>
-    /// Brief T17: sealing with the vault password as the sealed object's auth value. Task 8 implements it;
-    /// until then a password slot can't be sealed on Linux.
-    /// </summary>
-    public static byte[] Seal(byte[] plaintextKey, TswapCore.VaultPassword.StretchedPassword password) =>
-        throw new NotImplementedException("Linux TPM password slots arrive with brief T17 task 8.");
-
-    /// <summary>Brief T17: unsealing a password slot's package with its auth value (task 8).</summary>
-    public static byte[] Unseal(byte[] wrapped, TswapCore.VaultPassword.StretchedPassword password) =>
-        throw new NotImplementedException("Linux TPM password slots arrive with brief T17 task 8.");
-
     /// <summary>Unlock: reconstitutes the TPM-bound primary and unseals a payload produced by <see cref="Seal(byte[])"/>.</summary>
-    public static byte[] Unseal(byte[] wrapped)
+    public static byte[] Unseal(byte[] wrapped) => UnsealCore(wrapped, null);
+
+    /// <summary>
+    /// Brief T17 task 8: unseals a password slot's package (its <c>TSTP</c> header removed) with the stretched
+    /// vault password as the object's auth: <c>tpm2_unseal -p file:-</c> with <c>hex:&lt;64 hex&gt;</c> on stdin.
+    /// One prompt means one TPM attempt: a refused auth is never retried.
+    /// </summary>
+    public static byte[] Unseal(byte[] wrapped, StretchedPassword password) => UnsealCore(wrapped, password);
+
+    private static byte[] UnsealCore(byte[] wrapped, StretchedPassword? password)
     {
-        // Brief T17: an unsplit password blob (TSTP header) is task 8's; refuse it before touching tpm2-tools.
-        if (TswapCore.Keyring.TpmSlotBlob.HasHeader(wrapped))
-            throw new NotImplementedException("Linux TPM password slots (a TSTP blob) arrive with brief T17 task 8.");
+        // Ruling 3: an unsplit password blob ("TSTP" read as a length is 0x50545354) is refused before
+        // tpm2-tools is touched, with the legacy parser's text, not "corrupted".
+        if (TpmSlotBlob.HasHeader(wrapped))
+            throw new TswapException(VaultPasswordMessages.LegacyParserNeedsNewerTswap(wrapped.Length > 4 ? wrapped[4] : 0));
 
         RequireAvailable();
 
@@ -195,19 +235,36 @@ internal static class Tpm2ToolsInterop
                 "-C", "o", "-G", PrimaryAlgorithm, "-c", primaryPath);
 
             FlushTransient();
+            // tpm2_load takes no auth: the parent (the owner hierarchy's primary) has none.
             var (loadExit, _, loadErr) = Run("tpm2_load", "-C", primaryPath, "-u", pubPath, "-r", privPath, "-c", loadedPath);
             if (loadExit != 0)
-                throw UnlockFailed(loadErr);
+                throw UnlockFailed(loadErr, passwordSupplied: password is not null);
 
             FlushTransient();
             // No "-o file": capture tpm2_unseal's stdout directly as raw bytes so the recovered
             // vault key never touches disk — verified byte-for-byte against swtpm that this
             // matches what "-o file" would have written, with no text-encoding round-trip risk.
-            var (unsealExit, plaintext, unsealErr) = RunCapturingBinaryStdout("tpm2_unseal", "-c", loadedPath);
-            if (unsealExit != 0)
-                throw UnlockFailed(unsealErr);
+            TpmToolRun unseal;
+            if (password is null)
+            {
+                unseal = Runner("tpm2_unseal", ["-c", loadedPath], null, started: null);
+            }
+            else
+            {
+                var authText = AuthText(password);
+                try
+                {
+                    unseal = Runner("tpm2_unseal", ["-c", loadedPath, "-p", "file:-"], authText, started: null);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(authText);
+                }
+            }
+            if (unseal.ExitCode != 0)
+                throw UnlockFailed(unseal.Stderr, passwordSupplied: password is not null);
 
-            return plaintext;
+            return unseal.Stdout;
         }
         finally
         {
@@ -215,17 +272,70 @@ internal static class Tpm2ToolsInterop
         }
     }
 
+    /// <summary>The attributes of a password slot's sealed object: explicit, and without <c>noda</c>.</summary>
+    internal const string PasswordObjectAttributes = "fixedtpm|fixedparent|userwithauth";
+
+    private const string AuthMemfdName = "tswap-tpm-auth";
+
+    /// <summary>
+    /// The auth value as tpm2-tools reads it: <c>hex:</c> and 64 lowercase hex digits, in a byte array the
+    /// caller zeroes. Never raw bytes: tpm2-tools 5.7 reads <c>file:</c> content as a password string and cuts
+    /// it at the first NUL (checked on swtpm: a leading 0x00 sealed with an empty auth). Never a
+    /// <see cref="string"/>, which can't be zeroed.
+    /// </summary>
+    private static byte[] AuthText(StretchedPassword password)
+    {
+        var raw = new byte[StretchedPassword.Size];
+        var text = new byte[4 + 2 * StretchedPassword.Size];
+        try
+        {
+            password.CopyTo(raw);
+            "hex:"u8.CopyTo(text);
+            for (var i = 0; i < raw.Length; i++)
+            {
+                text[4 + 2 * i] = HexDigit(raw[i] >> 4);
+                text[5 + 2 * i] = HexDigit(raw[i] & 0xF);
+            }
+            return text;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(raw);
+        }
+    }
+
+    private static byte HexDigit(int nibble) => (byte)(nibble < 10 ? '0' + nibble : 'a' + nibble - 10);
+
+    // TPM_RC_AUTH_FAIL for the object's session (0x98E) and TPM_RC_LOCKOUT (0x921), as tpm2-tools prints them
+    // ("Esys_Unseal(0x98E)", "ErrorCode (0x0000098e)"); pinned against swtpm by LinuxTpmPasswordTests.
+    [GeneratedRegex(@"\b0x0*98e\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AuthFailCode();
+
+    [GeneratedRegex(@"\b0x0*921\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex LockoutCode();
+
     // tpm2_load/tpm2_unseal fail this way both when the blob was sealed on a different TPM
     // (integrity check failure) and when the blob is otherwise corrupted — both are genuinely
     // "this vault can't be unlocked here," so they collapse into one high-level message rather
     // than string-matching tpm2-tools' log output to distinguish them (not a stable contract to
     // parse). The raw stderr is still appended, though: a genuine operational failure (TCTI
     // misconfigured, auth/policy issue) would otherwise look identical to "wrong machine," and
-    // the stderr is exactly what tells the two apart when debugging.
-    private static TswapException UnlockFailed(string stderr) => new(
-        "Could not unlock with the TPM. The sealed key may have been created on a different " +
-        "machine, the TPM may have been cleared since enrollment, or config.json may be " +
-        $"corrupted. tpm2-tools reported: {stderr.Trim()}");
+    // the stderr is exactly what tells the two apart when debugging. Brief T17 (rulings 3 and 18) singles out
+    // the two TPM response codes that mean the password: a refused auth is a wrong password when one was
+    // supplied, and a stripped header when none was; a lockout is a lockout either way.
+    private static TswapException UnlockFailed(string stderr, bool passwordSupplied)
+    {
+        if (LockoutCode().IsMatch(stderr))
+            return new VaultPasswordRefusedException(VaultPasswordMessages.TpmLockoutLinux);
+        if (AuthFailCode().IsMatch(stderr))
+            return new VaultPasswordRefusedException(passwordSupplied
+                ? VaultPasswordMessages.WrongPasswordTpm
+                : VaultPasswordMessages.StrippedHeader);
+        return new TswapException(
+            "Could not unlock with the TPM. The sealed key may have been created on a different " +
+            "machine, the TPM may have been cleared since enrollment, or config.json may be " +
+            $"corrupted. tpm2-tools reported: {stderr.Trim()}");
+    }
 
     private static void FlushTransient()
     {
@@ -260,38 +370,60 @@ internal static class Tpm2ToolsInterop
             throw new TswapException($"TPM operation failed while {stepDescription}: {stderr.Trim()}");
     }
 
-    private static (int ExitCode, string Stdout, string Stderr) Run(string command, params string[] args)
+    /// <summary>A tpm2-tools call without stdin, its stdout as text (for <see cref="TpmLockoutProbe"/> too).</summary>
+    internal static (int ExitCode, string Stdout, string Stderr) Run(string command, params string[] args)
     {
-        using var process = Start(command, args, redirectStdin: false);
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdout, stderr);
+        var run = Runner(command, args, null, started: null);
+        return (run.ExitCode, Encoding.UTF8.GetString(run.Stdout), run.Stderr);
     }
 
-    private static (int ExitCode, string Stdout, string Stderr) RunWithStdin(string command, byte[] stdin, params string[] args)
+    private static readonly AsyncLocal<TpmToolRunner?> RunnerOverride = new();
+
+    /// <summary>
+    /// Test seam (brief T17 task 8): until the result is disposed, every tpm2-tools call made in the caller's
+    /// async flow goes to <paramref name="runner"/> instead of a real process, so tests see the argv, stdin
+    /// and the memfd. Flow-local, so parallel tests don't see each other.
+    /// </summary>
+    internal static IDisposable UseRunner(TpmToolRunner runner)
     {
-        using var process = Start(command, args, redirectStdin: true);
-        process.StandardInput.BaseStream.Write(stdin);
-        process.StandardInput.BaseStream.Flush();
-        process.StandardInput.Close(); // signal EOF so the command proceeds
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdout, stderr);
+        var previous = RunnerOverride.Value;
+        RunnerOverride.Value = runner;
+        return new RunnerScope(previous);
     }
 
-    private static (int ExitCode, byte[] Stdout, string Stderr) RunCapturingBinaryStdout(string command, params string[] args)
+    private sealed class RunnerScope(TpmToolRunner? previous) : IDisposable
     {
-        using var process = Start(command, args, redirectStdin: false);
+        public void Dispose() => RunnerOverride.Value = previous;
+    }
+
+    private static TpmToolRun Runner(string command, IReadOnlyList<string> args, byte[]? stdin, Action? started) =>
+        (RunnerOverride.Value ?? RunProcess)(command, args, stdin, started);
+
+    /// <summary>
+    /// The real runner: starts <paramref name="command"/>, calls <paramref name="started"/> at once, writes
+    /// <paramref name="stdin"/> (if any) and closes it, and collects stdout as bytes and stderr as text.
+    /// </summary>
+    internal static TpmToolRun RunProcess(string command, IReadOnlyList<string> args, byte[]? stdin, Action? started)
+    {
+        using var process = Start(command, args, redirectStdin: stdin is not null);
+        started?.Invoke();
+        // Both outputs are read concurrently, so neither pipe can fill up while the other is drained.
         var stdoutBuffer = new MemoryStream();
-        process.StandardOutput.BaseStream.CopyTo(stdoutBuffer);
-        var stderr = process.StandardError.ReadToEnd();
+        var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(stdoutBuffer);
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        if (stdin is not null)
+        {
+            process.StandardInput.BaseStream.Write(stdin);
+            process.StandardInput.BaseStream.Flush();
+            process.StandardInput.Close(); // signal EOF so the command proceeds
+        }
+        stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         process.WaitForExit();
-        return (process.ExitCode, stdoutBuffer.ToArray(), stderr);
+        return new TpmToolRun(process.ExitCode, stdoutBuffer.ToArray(), stderr);
     }
 
-    private static Process Start(string command, string[] args, bool redirectStdin)
+    private static Process Start(string command, IReadOnlyList<string> args, bool redirectStdin)
     {
         var psi = new ProcessStartInfo
         {
@@ -319,6 +451,15 @@ internal static class Tpm2ToolsInterop
         }
     }
 }
+
+/// <summary>One tpm2-tools call's result: exit code, stdout as raw bytes, stderr as text (brief T17 task 8's seam).</summary>
+internal readonly record struct TpmToolRun(int ExitCode, byte[] Stdout, string Stderr);
+
+/// <summary>
+/// Runs one tpm2-tools command (brief T17 task 8's seam). <paramref name="started"/>, when given, is called as
+/// soon as the child has started (the memfd's close); <paramref name="stdin"/> is written whole, then closed.
+/// </summary>
+internal delegate TpmToolRun TpmToolRunner(string command, IReadOnlyList<string> args, byte[]? stdin, Action? started);
 
 /// <summary>A tpm2-tools call failed in a way that isn't a normal user-facing <see cref="TswapException"/> — an assertion that this codebase's own argument construction is wrong, not a hardware/config problem.</summary>
 [SupportedOSPlatform("linux")]
