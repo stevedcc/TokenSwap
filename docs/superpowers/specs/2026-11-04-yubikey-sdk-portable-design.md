@@ -1,6 +1,6 @@
 # Design: YubiKey through Yubico's .NET SDK (no ykman), FIDO2 slots, portable tswap
 
-Date: 2026-11-04. Owner conversation in the Croft session; decisions marked **(owner)** are the owner's, **(my call)**
+Date: 2026-11-04. **Approved by the owner 2026-11-04.** Owner conversation in the Croft session; decisions marked **(owner)** are the owner's, **(my call)**
 mine, open to change.
 
 ## Why
@@ -88,7 +88,10 @@ Stages 1 and 2 below are the design they are planned from.
 The owner has no key whose slot 2 may be reprogrammed. So stage 0 and stage 1's checks on real hardware use only
 operations that change nothing on the key (list, challenge-response, touch detection, `setup`'s refusal of an
 occupied slot). Programming a slot (`setup` on an empty slot, `--replace`) is tested on a spare key before release;
-until one exists it is covered by tests against a fake device only, and the release notes say so.
+until one exists it is covered by tests against a fake device only, and the release notes say so. The owner's plan
+(2026-11-04): after v0.2.0, migrate the main vault to the record format and add Mac, Windows and recovery slots;
+then the wallet key's slot 2 is no longer the vault's only way in and becomes the key for real programming tests
+(ideally `tswap yubikey setup --replace --touch` itself).
 
 ### Stage 0: spike (throwaway)
 A small console app, NativeAOT-published per platform, run by the owner on each of: Linux (oort, and once without the
