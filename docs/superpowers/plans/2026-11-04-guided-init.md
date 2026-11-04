@@ -254,6 +254,10 @@ line.
   password: `EnrollSerial(..., null)`, `Enroll(null)`). `--password` → all; `--no-password` → none, no question.
   At least one slot must need it when the password was chosen (else re-ask: a password nothing uses is a mistake).
   The summary marks each slot `password` or `no password`.
+  `K_v` and the vault id are random in every case (`NewVaultPassword` draws them with `RandomNumberGenerator` too);
+  the password only changes each password slot's `KEK_slot` input, so every slot, with or without the password,
+  wraps the same `K_v`. The recovery slot never involves the password (`RecoverySlotWrap` wraps `K_v` directly), so
+  a forgotten password can't lock the owner out of it.
 - Recovery: `noRecoveryFlag` given → no recovery slot; else `Add a recovery slot (recommended)? (Y/n): `.
 - Machine slot: the chip if picked (via `HardwareServices.Enrollment(...).Enroll(password)`, `Backend` set,
   `RequiresTouch` as `ExecuteHardwareKeyring` sets it), else the first picked YubiKey (via `EnrollSerial`, as
@@ -266,7 +270,10 @@ line.
 - A YubiKey enrolment throwing `TswapException`: print `YubiKeyAccess.ExplainBlocked(msg, serial, <this OS>)` or the message itself, then `Carry on without YubiKey {serial}? (y/N): `. "y" →
   drop that key and **continue** with the next pick, keeping `K_v`, the vault id and every slot already built in
   memory (no slot is re-enrolled, no key is touched again; the failed key's partial state is discarded). If the
-  dropped key was to be the machine slot, the next picked YubiKey takes its place. If no pick remains → exit 1.
+  dropped key was to be the machine slot, the next picked YubiKey takes its place. Each slot keeps its own
+  password choice (the replacement machine slot keeps the one it was given; it doesn't inherit the dropped key's).
+  If the dropped key was the last slot that needed the password, the vault is made without one: no
+  `vault-password` file is written, and the summary says `Vault password: dropped (no remaining slot needed it)`. If no pick remains → exit 1.
   Anything but "y" → exit 1. Nothing is written in either case before success. On every exit path (success,
   refusal, abort, exception) `K_v`, every `KEK_slot` and the stretched password are zeroed (`try`/`finally`, as
   `ExecuteKeyring` does).
@@ -301,7 +308,7 @@ line.
     YubiKeyAccess.OtpBlockedLine`, Secure Enclave present; pick both, "y" to carry on: vault opens with the
     Secure Enclave; output contains `YubiKeyAccess.ExplainBlocked(…, <this OS>)`'s text. The
     macOS wording is asserted end to end only where the suite runs on macOS (CI's macOS leg); Task 2's unit test
-    covers both wordings everywhere.
+    covers all three wordings everywhere.
   - `Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn` — key 12 removed from `PluggedIn` after listing (use
     `FailWith[12] = "ykman failed: device 12 not found"`); "n" → exit 1, nothing written.
   - `Guided_CarryOnWithoutAKey_EnrolsTheRestOnce` — keys 11, 12, 13, no chip, 12 fails, "y": `Challenges` holds
@@ -313,6 +320,13 @@ line.
     `names` with only key 12 plugged in and no password input succeeds; with only key 11 and no password it fails
     asking for the password; with key 11 and the right password it succeeds. Break-it-once: enrol every slot with
     the password regardless of the answer → this test fails.
+  - `Guided_WhichSlots_InvalidAnswer_AsksAgain` — keys 11, 12, a password; "Which slots" answers `0`, then `3`
+    (neither picks a slot: Enter means all, so an answer that selects no slot can only be an invalid one), then
+    `2`: asked three times; only key 12's slot needs the password.
+  - `Guided_PasswordFlags_SkipTheWhichSlotsQuestion` — `--password` with keys 11, 12: no `Which slots` line and both
+    slots need it; `--no-password`: no password question and neither slot needs it.
+  - `Guided_DroppingTheOnlyPasswordSlot_MakesNoPassword` — keys 11, 12, a password on slot 1 only, key 11 fails,
+    "y": no `vault-password` file; key 12 opens the vault with no password input.
   - `Guided_NeverAsksRngMode` — stdout lacks `Password generation entropy source`; config `RngMode` is System.
   - `Guided_OtherMachinesYes_PrintsTheGuide` — contains `slot request --tpm request.json` and the config dir.
   - `Guided_StrayOtpLine_IsSkippedAtThePick` — stdin with an OTP line before `1`.
