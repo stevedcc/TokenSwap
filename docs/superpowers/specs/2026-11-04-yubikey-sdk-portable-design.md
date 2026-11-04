@@ -21,8 +21,8 @@ mine, open to change.
 - **G2.** `tswap yubikey setup` programs slot 2 for HMAC-SHA1 challenge-response itself (owner), with or without a
   touch requirement.
 - **G3.** A new slot type, **FIDO2 hmac-secret**, as an option on all three platforms (owner). It always requires a
-  touch (CTAP 2.1: hmac-secret always asks for user presence); users who want no touch use an OTP slot, a TPM or a
-  Secure Enclave slot.
+  touch (CTAP 2.1: hmac-secret always asks for user presence) and the key's FIDO2 PIN (owner, after the spike: the
+  same on every OS); users who want neither use an OTP slot, a TPM or a Secure Enclave slot.
 - **G4.** tswap runs **portably**: from any folder, not installed, without admin rights, with the vault wherever
   `TSWAP_CONFIG_DIR` points (owner: "where the user decides, set an env var"; synced folder, USB stick or elsewhere).
   Without sudo, the sudo-only commands refuse with a clear reason; everything else works.
@@ -136,15 +136,18 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
 - Unlock: Linux and macOS through the SDK's FIDO2 path; Windows through `webauthn.dll` (its dialog appears).
 - **A FIDO2 slot opens on every OS (owner).** Enrolled on Linux, it must open on Windows and macOS, and the other way
   round, so the hmac-secret output must be identical on every path:
-  - **user presence only, everywhere (owner):** no user verification (PIN) on any unlock. CTAP 2.1 keeps separate
-    secrets for UP-only and UV unlocks, so a slot unlocked with a PIN on one OS and without on another would not
-    open. A key or platform that forces UV for this credential is refused at enrolment with a clear message;
+  - **PIN and touch (user verification), everywhere (owner, 2026-11-04, after the spike; replaces "user presence
+    only"):** every FIDO2 enrolment and unlock asks for the key's FIDO2 PIN and a touch, on every OS. CTAP 2.1 keeps
+    separate secrets for UP-only and UV unlocks, and Windows' WebAuthn dialog always verifies the PIN for this key
+    (spike: `uv_flag=True` though UV was "discouraged"), so only UV gives the same output on every OS. The spike
+    proved it: the same credential's UV output was identical on Linux (SDK) and Windows (`webauthn.dll`). A key with
+    no FIDO2 PIN is asked to set one at enrolment;
   - **the salt is transformed the same way everywhere:** Windows' WebAuthn API takes PRF inputs and hashes them
     (believed SHA-256("WebAuthn PRF" || 0x00 || input); the spike confirms the exact form), and a normal user can't
     pass raw salts there. So the SDK path on Linux and macOS applies the same transform from the first enrolment on.
     The blob records the transform version; it can't change later without migrating slots;
-  - make-credential may still need the key's FIDO PIN if one is set (CTAP); that is a one-time prompt at enrolment.
-    The spike confirms whether get-assertion stays PIN-free on each platform.
+  - the PIN is asked at enrolment and at every unlock (above). On Windows the unlock is Windows' own dialog, three
+    steps (choose the security key, PIN, touch); on Linux and macOS tswap asks for the PIN itself.
 - Not usable for the broker: `broker serve` refuses a FIDO2 slot at start with a clear reason (its touch can't happen
   unattended).
 
@@ -160,6 +163,24 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
   Portable use docs say what may block it and how to get past it where policy allows; Authenticode signing and Apple
   notarisation are a later decision (they cost money). The spike's runs record whether the binary was quarantined,
   so they show what a downloaded copy meets.
+
+## Spike findings (stage 0, 2026-11-04: Linux, macOS 27.2 arm64, Windows 11 x64; key 5.7.4)
+
+| | OTP slot (HMAC-SHA1) | FIDO2 hmac-secret | Notes |
+|---|---|---|---|
+| Linux (NativeAOT) | works; needs hidraw access (the ykpers udev rule) | SDK; UP-only and UV both work | links `-lpcsclite` (needs pcsc-lite-libs at run time); libudev loaded by a resolver; the SDK's default crypto creators fail under AOT (set them explicitly) |
+| macOS (NativeAOT) | works only with Input Monitoring for the terminal (admin approval likely); ykman needs the same | SDK, no permission | the release archive needed the dylib (#238, fixed); browser downloads are quarantined (documented) |
+| Windows (JIT, no C++ tools) | works as a normal user (keyboard interface) | only via `webauthn.dll` (the SDK's FIDO HID needs admin); the dialog forces the PIN | no download prompt seen (scp copy) |
+
+- **No smart-card (CCID) fallback for OTP over USB:** the key refuses HMAC challenge-response there ("Conditions of
+  use not satisfied"), on Linux and macOS, with ykman too.
+- **The SDK exposes no touch flag** for a configured OTP slot; touch is still learned from the challenge.
+- **The PRF transform** SHA-256("WebAuthn PRF" || 0x00 || input) is confirmed: Windows' output equals the SDK's for
+  the same credential and salt.
+- **Same responses everywhere:** OTP `response_h` identical on all three OSes; FIDO2 UV output identical on Linux and
+  Windows; UP-only output identical on Linux and macOS.
+- **Consequence for guided init (v0.3.0):** on Windows, FIDO2 is the least convenient method (three-step dialog), so it
+  is offered after the TPM and the OTP slot; on macOS, FIDO2 is the portable route (no permission).
 
 ## Left to the builder
 - The SDK version pin and how it's referenced (central package version, exact pin like BouncyCastle's).
