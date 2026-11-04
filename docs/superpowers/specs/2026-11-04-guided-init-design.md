@@ -126,7 +126,10 @@ today (several methods at once is the guided flow's job in v0.2.0).
 
 Scripts and docs that run a plain `init` for a YubiKey vault without a terminal, or `init --keyring`, now get
 a refusal that names the replacement; the release notes say so. Goal 4 ("scripts keep working") holds for
-the backend flags; these two break on purpose, loudly. Tests, `HelpUsage`, the README, AGENTS.md and the skill's command list change with
+the backend flags; these two break on purpose, loudly. `--keyring` today appears in README.md (six places,
+including the command table), MULTI_MACHINE_KEYING.md, HARDWARE_BACKENDS.md and 17 test files as an input
+flag: the docs are rewritten, and the tests change their input to `--yubikey` (or drop it next to `--tpm` /
+`--secure-enclave`), assertions unchanged, said in the commit. Tests, `HelpUsage`, the README, AGENTS.md and the skill's command list change with
 it.
 
 ## What exists to build on
