@@ -918,7 +918,6 @@ public sealed class SlotCommand : ICliCommand
             .Concat(config.YubiKeySerials) // a legacy pair slot's keys already open this vault
             .ToHashSet();
 
-        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
         VaultPasswordChoice.Resolved? password = null;
         YubiKeySlotBlob blob;
         Slot newSlot;
@@ -927,18 +926,8 @@ public sealed class SlotCommand : ICliCommand
             // Brief T17 ruling 15: a later password slot is checked against the verifier with K_v.
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
                 vaultKey, keyring.VaultId, "slot add --yubikey");
-            (blob, var kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, enrolled, password?.Stretched);
-            try
-            {
-                var slotKeyPair = SlotKeyPair.Generate();
-                newSlot = MachineSlotWrap.Wrap(
-                    vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
-                    keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(kekSlot);
-            }
+            var serial = YubiKeySlotEnrollment.ChooseEligibleSerial(ctx, enrolled);
+            (newSlot, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, password?.Stretched);
         }
         finally
         {
@@ -950,7 +939,7 @@ public sealed class SlotCommand : ICliCommand
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
         // Brief T7 item 5: the new slot's posture is explained below, so it is acknowledged; the
         // other slots keep what was acknowledged before.
-        newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
+        newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(newSlot.SlotId)]);
 
         // Back up config.json before writing, the way init backs up a vault it replaces.
         if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))

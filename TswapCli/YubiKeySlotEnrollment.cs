@@ -29,7 +29,15 @@ internal static class YubiKeySlotEnrollment
     public static (YubiKeySlotBlob Blob, byte[] KekSlot) Enroll(
         CommandContext ctx, byte[] slotId, IReadOnlyCollection<int>? alreadyEnrolled = null, StretchedPassword? password = null)
     {
-        var c = ctx.Console;
+        return EnrollSerial(ctx, slotId, ChooseEligibleSerial(ctx, alreadyEnrolled), password);
+    }
+
+    /// <summary>
+    /// The serial <see cref="Enroll"/> would enroll: the plugged-in keys not in
+    /// <paramref name="alreadyEnrolled"/>, with the usual serial prompt when several remain.
+    /// </summary>
+    public static int ChooseEligibleSerial(CommandContext ctx, IReadOnlyCollection<int>? alreadyEnrolled)
+    {
         var pluggedIn = ctx.YubiKeys.ListSerials();
         if (pluggedIn.Count == 0)
             throw new TswapException("No YubiKey detected. Please insert YubiKey.");
@@ -40,7 +48,32 @@ internal static class YubiKeySlotEnrollment
                 $"Every plugged-in YubiKey ({string.Join(", ", pluggedIn)}) already has a slot in this vault. " +
                 "Plug in a YubiKey that has no slot yet; each key needs only one slot.");
 
-        return EnrollSerial(ctx, slotId, ctx.ChooseSerialAmong(eligible), password);
+        return ctx.ChooseSerialAmong(eligible);
+    }
+
+    /// <summary>
+    /// Builds a new one-key YubiKey slot for the keyring in memory (shared by <c>slot add
+    /// --yubikey</c> and the guided init): draws the slot id, enrolls <paramref name="serial"/>, wraps
+    /// <paramref name="vaultKey"/> (K_v, the secret being wrapped) for it and zeroes <c>KEK_slot</c>.
+    /// <c>keyring.K</c> is the keyring's threshold k, a format field passed to the wrap, not a key.
+    /// </summary>
+    public static (Slot Slot, YubiKeySlotBlob Blob) EnrollAsSlot(
+        CommandContext ctx, int serial, byte[] vaultKey, Keyring keyring, StretchedPassword? password)
+    {
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = EnrollSerial(ctx, slotId, serial, password);
+        try
+        {
+            var slotKeyPair = SlotKeyPair.Generate();
+            var slot = MachineSlotWrap.Wrap(
+                vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
+                keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = blob.Encode() };
+            return (slot, blob);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
     }
 
     /// <summary>
