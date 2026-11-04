@@ -20,7 +20,7 @@ public static class ChipProbe
             if (OperatingSystem.IsMacOS())
                 return Probe(HardwareBackend.SecureEnclave, ProbeSecureEnclave);
             if (OperatingSystem.IsLinux())
-                return Probe(HardwareBackend.Tpm, ProbeLinuxTpm);
+                return FromProbe(HardwareBackend.Tpm, ProbeLinuxTpm());
             if (OperatingSystem.IsWindows())
                 return Probe(HardwareBackend.Tpm, ProbeWindowsTpm);
             return new MachineChip(null, null);
@@ -32,6 +32,10 @@ public static class ChipProbe
         }
     }
 
+    /// <summary>A probe that can say why not: usable, or unavailable with its reason.</summary>
+    internal static MachineChip FromProbe(HardwareBackend backend, (bool Available, string? Reason) probe)
+        => probe.Available ? new MachineChip(backend, null) : new MachineChip(null, probe.Reason);
+
     private static MachineChip Probe(HardwareBackend backend, Func<bool> isAvailable)
         => isAvailable() ? new MachineChip(backend, null) : new MachineChip(null, null);
 
@@ -39,7 +43,7 @@ public static class ChipProbe
     private static bool ProbeSecureEnclave() => HardwareServices.SecureEnclaveAvailable();
 
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    private static bool ProbeLinuxTpm() => HardwareServices.LinuxTpmAvailable();
+    private static (bool Available, string? Reason) ProbeLinuxTpm() => HardwareServices.LinuxTpmProbe();
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private static bool ProbeWindowsTpm() => HardwareServices.WindowsTpmAvailable();

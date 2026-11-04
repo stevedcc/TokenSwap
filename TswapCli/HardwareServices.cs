@@ -113,8 +113,9 @@ internal static class HardwareServices
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public static bool SecureEnclaveAvailable() => SecureEnclaveHardwareService.IsAvailable();
 
+    /// <summary>On Linux the probe also says why the TPM isn't usable (tpm2-tools missing, no TPM, no access).</summary>
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-    public static bool LinuxTpmAvailable() => LinuxTpmHardwareService.IsAvailable();
+    public static (bool Available, string? Reason) LinuxTpmProbe() => LinuxTpmHardwareService.Probe();
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public static bool WindowsTpmAvailable() => WindowsTpmHardwareService.IsAvailable();
