@@ -74,7 +74,10 @@ their questions.
    carry on without that key or stop. Nothing is written in either case.
 3. **Pick.** Any combination, at least one (e.g. `1 3`). For the Secure Enclave, the existing touch
    choice follows (Touch ID or password on every unlock, or none, with the existing `--no-touch` warning).
-4. **Vault password.** The existing question (brief T17), asked once.
+4. **Vault password.** The existing question (brief T17), asked once: one vault password. If yes, "Which slots
+   need it?" lists the picked slots, default all. A slot left out opens the vault without the password: a backup
+   key kept somewhere safe, so a forgotten password doesn't lock the owner out (owner, 2026-11-04). With one
+   slot picked there is nothing to choose. `--password` means every picked slot needs it; `--no-password`, none.
 5. **Recovery slot.** Recommended, on by default (`Y/n`); `--no-recovery` answers it.
 6. **Create.** All chosen slots and the recovery slot are built in memory, then written in one step.
    Touches happen here, each announced before it is needed. A YubiKey is challenged twice as in every
@@ -144,8 +147,6 @@ it.
 ## Left to the builder
 
 - The order slots are created in, and which slot is the config's `KeyringSlotId` when several are made.
-- How the password applies when several slots are made (my call: asked once, applied to each slot that
-  supports one, as `--password` does for a single slot today).
 - Exact wording, and how terminal detection is done (`Console.IsInputRedirected` /
   `IsOutputRedirected` or the existing helpers).
 

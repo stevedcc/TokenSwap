@@ -231,9 +231,14 @@ prompt in tswap keys on `IsInputRedirected`.
 - Pick prompt: `Pick one or more, separated by spaces (e.g. 1 3): `, read with `GuidedPrompts.ReadAnswer`.
 - Secure Enclave picked: ask `Touch ID (or password) on every unlock? (Y/n): ` (default yes = `--with-touch`); a
   "n" prints `SecureEnclaveTouchChoice.WarnIfNoTouch`'s warning.
-- Password: `VaultPasswordChoice.Decide(ctx, passwordFlag, <first slot's backend>)` once; with a password,
-  `NewVaultPassword` draws `K_v` and the vault id; without, draw them here (`RandomNumberGenerator`) so every
-  slot wraps the same `K_v`.
+- Password: `VaultPasswordChoice.Decide(ctx, passwordFlag, <first slot's backend>)` once (one vault password);
+  with a password, `NewVaultPassword` draws `K_v` and the vault id; without, draw them here
+  (`RandomNumberGenerator`) so every slot wraps the same `K_v`. Then, with a password, more than one slot picked
+  and no `--password` flag: `Which slots need the password? (e.g. 1 3; Enter = all): `, listing the picked slots
+  numbered 1.. in pick order; a slot left out is enrolled with `password: null` (its blob/KEK without the
+  password: `EnrollSerial(..., null)`, `Enroll(null)`). `--password` → all; `--no-password` → none, no question.
+  At least one slot must need it when the password was chosen (else re-ask: a password nothing uses is a mistake).
+  The summary marks each slot `password` or `no password`.
 - Recovery: `noRecoveryFlag` given → no recovery slot; else `Add a recovery slot (recommended)? (Y/n): `.
 - Machine slot: the chip if picked (via `HardwareServices.Enrollment(...).Enroll(password)`, `Backend` set,
   `RequiresTouch` as `ExecuteHardwareKeyring` sets it), else the first picked YubiKey (via `EnrollSerial`, as
@@ -277,6 +282,10 @@ prompt in tswap keys on `IsInputRedirected`.
     `FailWith[12] = "ykman failed: device 12 not found"`); "n" → exit 1, nothing written.
   - `Guided_CarryOnWithoutAKey_EnrolsTheRestOnce` — keys 11, 12, 13, 12 fails, "y": `Challenges` holds exactly
     two per serial 11 and 13, none after the failure for 12.
+  - `Guided_PasswordOnSomeSlots_TheBackupKeyOpensWithoutIt` — keys 11, 12, a password, "Which slots" answer `1`:
+    `names` with only key 12 plugged in and no password input succeeds; with only key 11 and no password it fails
+    asking for the password; with key 11 and the right password it succeeds. Break-it-once: enrol every slot with
+    the password regardless of the answer → this test fails.
   - `Guided_NeverAsksRngMode` — stdout lacks `Password generation entropy source`; config `RngMode` is System.
   - `Guided_OtherMachinesYes_PrintsTheGuide` — contains `slot request --tpm request.json` and the config dir.
   - `Guided_StrayOtpLine_IsSkippedAtThePick` — stdin with an OTP line before `1`.
