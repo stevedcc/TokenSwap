@@ -1,0 +1,6 @@
+yubikey-sdk/out/
+yubikey-sdk/linklib/
+yubikey-sdk/bin/
+yubikey-sdk/obj/
+yubikey-sdk.Tests/bin/
+yubikey-sdk.Tests/obj/

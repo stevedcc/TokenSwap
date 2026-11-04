@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Throwaway spike for docs/superpowers/plans/2026-11-04-yubikey-sdk-spike.md; not part of TokenSwap.slnx. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>yk-spike</AssemblyName>
+    <RootNamespace>YkSpike</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <LinkerArg Include="-L$(MSBuildThisFileDirectory)linklib" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Yubico.YubiKey" Version="[1.18.1]" />
+  </ItemGroup>
+</Project>
