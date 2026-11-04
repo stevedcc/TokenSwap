@@ -330,7 +330,7 @@ public sealed class BrokerServer : IAsyncDisposable
             {
                 Mode = FileMode.OpenOrCreate,
                 Access = FileAccess.ReadWrite,
-                // FileShare.None: .NET then takes the exclusive flock at open (one atomic step); FileShare.ReadWrite took a shared flock that the explicit exclusive flock below had to convert, and a conversion isn't atomic, so two takers could both give up (#236).
+                // FileShare.None: .NET takes the exclusive flock at open, in one request. FileShare.ReadWrite took a shared flock that the explicit exclusive flock below then had to upgrade, and upgrade semantics differ by platform (Linux drops the shared lock first, so one taker always wins; where a failed upgrade keeps it, two takers can both lose, which macOS CI hit, #236). Never upgrade.
                 Share = FileShare.None,
             };
             if (!OperatingSystem.IsWindows())

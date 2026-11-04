@@ -16,6 +16,9 @@ public static class UnixLockFile
     /// </summary>
     public static FileStream? TryTake(string path, out bool heldElsewhere)
     {
+        // flock is Unix; the Windows agent uses a named pipe and never reaches this.
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Lock files are Unix-only.");
         heldElsewhere = false;
         if (BrokerNative.LStat(path) is { Type: not (BrokerNative.EntryType.Missing or BrokerNative.EntryType.Regular) })
             throw new TswapException($"{path} is not a regular file; remove it.");
@@ -26,7 +29,7 @@ public static class UnixLockFile
             {
                 Mode = FileMode.OpenOrCreate,
                 Access = FileAccess.ReadWrite,
-                // FileShare.None: .NET then takes the exclusive flock at open (one atomic step); FileShare.ReadWrite took a shared flock that the explicit exclusive flock below had to convert, and a conversion isn't atomic, so two takers could both give up (#236).
+                // FileShare.None: .NET takes the exclusive flock at open, in one request. FileShare.ReadWrite took a shared flock that the explicit exclusive flock below then had to upgrade, and upgrade semantics differ by platform (Linux drops the shared lock first, so one taker always wins; where a failed upgrade keeps it, two takers can both lose, which macOS CI hit, #236). Never upgrade.
                 Share = FileShare.None,
             };
             if (!OperatingSystem.IsWindows())
