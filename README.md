@@ -185,24 +185,29 @@ Run `tswap init` in a terminal and it asks, in order:
 2. **Pick what to use.** It lists the YubiKeys it finds (by serial number) and this machine's
    chip (the Secure Enclave on a Mac, the TPM on Windows and Linux), and you type the numbers you
    want, for example `1 3`. Any mix works: two YubiKeys and the chip, only keys, only the chip.
-   tswap never picks hardware for you. A key or chip it can't use is listed with the reason (a Mac
-   that blocks a YubiKey's OTP interface says so and tells you what to allow in System Settings).
+   tswap never picks hardware for you. A chip it can't use is listed with the reason. A YubiKey is
+   listed by serial; if it turns out to be blocked (a Mac that blocks its OTP interface, say), tswap
+   explains why when its challenge fails at step 5 and tells you what to allow in System Settings.
    For the Secure Enclave you also choose whether every unlock asks for Touch ID or your login
    password, or none.
-3. **Vault password (optional).** One password for the vault. If you add it, you choose which of
-   your slots need it. A slot left out opens the vault without the password, for example a backup
-   key you keep somewhere safe, so a forgotten password doesn't lock you out.
+3. **Vault password (optional).** One password for the vault. If you add it and picked more than
+   one slot (without `--password`), you choose which of them need it. A slot left out opens the
+   vault without the password, for example a backup key you keep somewhere safe, so a forgotten
+   password doesn't lock you out.
 4. **Recovery slot.** Added by default; its private key is shown once, so store it offline.
-5. **Create.** tswap builds every slot, then writes the vault in one step. If a
-   key can't be used, it says why and asks whether to carry on without it; nothing is written
-   before you answer, and answering no writes nothing. If the chip fails, nothing is written. A YubiKey flashes when it wants a touch, and the prompt names the key
-   (with several plugged in, touch the flashing one).
+5. **Create.** tswap builds every slot, then writes the vault in one step. If a key can't be
+   used, it says why and asks whether to carry on without it; nothing is written before you
+   answer, and answering no writes nothing. If the chip fails, nothing is written. A YubiKey
+   flashes when it wants a touch, and the prompt names the key (with several plugged in, touch the
+   flashing one).
 6. **Other machines?** Answer yes and tswap prints a step-by-step guide, with this vault's real
    folder and commands, for adding your other machines.
 
-`init` never overwrites a vault: it refuses a config folder that holds a classic vault, or a
-vault folder that isn't empty, before it asks anything. `--folder <dir>`, `--no-recovery` and
-`--password` / `--no-password` may be given and answer their question up front.
+`init` never overwrites a vault. It refuses a config folder that holds a classic vault, a
+`config.json` that belongs to a record vault (wherever its folder is), and a vault folder that
+isn't empty, before it asks anything, and checks all three again just before the write.
+`--folder <dir>` sets where the vault goes (there is no question for it); `--no-recovery` and
+`--password` / `--no-password` answer their question up front.
 
 Scripts and agents have no terminal to answer questions, so they name the slot instead (see the
 flags in [Commands](#commands)):
