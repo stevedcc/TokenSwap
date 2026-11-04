@@ -320,6 +320,8 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
     /// so it waits for that file to read empty (bounded) and tries again. Gone already (systemd removed the
     /// emptied scope with its child) is fine.
     /// </summary>
+    private const int Enodev = 19; // .NET on Unix reports the errno as the IOException's HResult
+
     private static void RemoveEmptiedChildCgroup(string dir)
     {
         bool Emptied()
@@ -331,6 +333,10 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
             catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
             {
                 return true; // gone with its scope
+            }
+            catch (IOException ex) when (ex.HResult == Enodev)
+            {
+                return true; // being destroyed with its scope (Ubuntu CI, PR #237 run 41788148771)
             }
         }
         for (var attempt = 0; ; attempt++)
