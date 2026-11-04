@@ -466,6 +466,51 @@ public sealed class GuidedInitTests : IDisposable
             stdout);
         Assert.Contains("TPM: no password", stdout);
         Assert.Contains("YubiKey 11: password", stdout);
+        var (tpmExit, _, tpmErr) = NamesWith(m); // no key plugged in, no password input: the TPM alone
+        Assert.True(tpmExit == 0, tpmErr);
+    }
+
+    [Fact]
+    public void Guided_PasswordOnTheChipOnly_TheKeyIsTheBackup()
+    {
+        var m = Machine(11);
+        var tpm = RandomNumberGenerator.GetBytes(32);
+        m.Tpm = tpm;
+
+        // Key 11 (1) and the TPM (2); the password on the TPM only.
+        var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\nyes\n{Password}\n{Password}\n2\n\nn\n", "init");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains("TPM: password", stdout);
+        Assert.Contains("YubiKey 11: no password", stdout);
+        Assert.DoesNotContain("the password adds nothing", stdout);
+        var (noPasswordExit, _, noPasswordErr) = NamesWith(m); // no key: the TPM alone
+        Assert.NotEqual(0, noPasswordExit);
+        Assert.Contains(VaultPasswordMessages.NoTerminal, noPasswordErr);
+        var (passwordExit, _, passwordErr) = NamesWith(m, Password + "\n", terminal: true);
+        Assert.True(passwordExit == 0, passwordErr);
+        m.Tpm = null;
+        var (keyExit, _, keyErr) = NamesWith(m, serials: 11);
+        Assert.True(keyExit == 0, keyErr);
+    }
+
+    [Fact]
+    public void Guided_WhichSlots_UsesThePickNumbers()
+    {
+        var m = Machine(11, 12, 13);
+
+        // Pick 2 and 3 (keys 12 and 13); "1" was not picked, so it asks again; "3" is key 13.
+        var (exit, stdout, stderr) = m.RunOnTerminal($"\n2 3\nyes\n{Password}\n{Password}\n1\n3\n\nn\n", "init");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(2, Count(stdout, WhichSlotsPrompt));
+        var listing = stdout[stdout.IndexOf("A slot left out", StringComparison.Ordinal)..stdout.IndexOf(WhichSlotsPrompt, StringComparison.Ordinal)];
+        Assert.Contains("  2. YubiKey 12", listing);
+        Assert.Contains("  3. YubiKey 13", listing);
+        Assert.DoesNotContain("YubiKey 11", listing);
+        Assert.False(BlobOf(m, 12).RequiresPassword);
+        Assert.True(BlobOf(m, 13).RequiresPassword);
+        Assert.Equal([12, 13], YubiKeySerials(m));
     }
 
     [Fact]

@@ -42,9 +42,12 @@ internal static class GuidedInit
     }
 
     /// <summary>A picked device, its password choice, and what its enrolment gave.</summary>
-    private sealed class PlannedSlot(Device device)
+    private sealed class PlannedSlot(Device device, int number)
     {
         public Device Device { get; } = device;
+
+        /// <summary>Its number in the pick list; the which-slots question uses the same numbers.</summary>
+        public int Number { get; } = number;
         public bool NeedsPassword { get; set; }
         public bool Enrolled { get; set; }
         public YubiKeySlotBlob? Blob { get; set; }
@@ -106,8 +109,8 @@ internal static class GuidedInit
                 "No config or vault was written.");
 
         // Step 3: pick. Kept in list order (YubiKeys in ListSerials order, then the chip): the order typed never matters.
-        var picked = AskNumbers(c, PickPrompt, devices.Count, emptyMeansAll: false)!
-            .Select(i => new PlannedSlot(devices[i])).ToList();
+        var picked = AskNumbers(c, PickPrompt, [.. Enumerable.Range(1, devices.Count)], emptyMeansAll: false)!
+            .Select(n => new PlannedSlot(devices[n - 1], n)).ToList();
         var chipSlot = picked.SingleOrDefault(p => p.Device.Chip is not null);
         var chipBackend = chipSlot?.Device.Chip;
 
@@ -143,11 +146,12 @@ internal static class GuidedInit
                     c.Out.WriteLine();
                     c.Out.WriteLine("A slot left out opens the vault without the password: a backup key kept somewhere safe, so a forgotten");
                     c.Out.WriteLine("password doesn't lock you out. Slots:");
-                    for (var i = 0; i < picked.Count; i++)
-                        c.Out.WriteLine($"  {i + 1}. {picked[i].Device.Label}");
-                    var needing = AskNumbers(c, WhichSlotsPrompt, picked.Count, emptyMeansAll: true);
-                    for (var i = 0; i < picked.Count; i++)
-                        picked[i].NeedsPassword = needing is null || needing.Contains(i);
+                    // The pick list's own numbers, so "2" means the same device in both questions.
+                    foreach (var slot in picked)
+                        c.Out.WriteLine($"  {slot.Number}. {slot.Device.Label}");
+                    var needing = AskNumbers(c, WhichSlotsPrompt, [.. picked.Select(p => p.Number)], emptyMeansAll: true);
+                    foreach (var slot in picked)
+                        slot.NeedsPassword = needing is null || needing.Contains(slot.Number);
                     // The chip opens the vault on this machine with no password, so a password on the other
                     // slots protects nothing here: worth it only for a key kept elsewhere.
                     if (chipSlot is { NeedsPassword: false } && picked.Any(p => p.NeedsPassword))
@@ -210,39 +214,20 @@ internal static class GuidedInit
                 c.Out.WriteLine($"Checking YubiKey {serial}…");
                 // tswap learns whether the slot needs a touch only from the answer, so the line is conditional.
                 c.Out.WriteLine($"YubiKey {serial}: if it flashes, touch it (that one, not another key).");
+                if (config is not null)
+                    keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+                var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+                YubiKeySlotBlob blob;
+                byte[]? kekSlot = null;
+                Slot? added = null;
+                // Only the key's own enrolment may be carried on without: any other failure (the keyring,
+                // the wrap) propagates, exit 1, nothing written.
                 try
                 {
-                    if (config is null)
-                    {
-                        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-                        var (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial, stretched);
-                        try
-                        {
-                            var backendConfig = new Config(
-                                YubiKeySerials: [],
-                                RedundancyXor: "",
-                                Created: created,
-                                RequiresTouch: blob.RequiresTouch,
-                                RngMode: RngMode.System);
-                            (config, assembledKey, recoveryPrivateKey) = InitCommand.AssembleKeyring(
-                                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, vaultKey, vaultId);
-                        }
-                        finally
-                        {
-                            CryptographicOperations.ZeroMemory(kekSlot);
-                        }
-                        slot.Blob = blob;
-                        newSlotIds.Add(Convert.ToBase64String(slotId));
-                    }
+                    if (keyring is null)
+                        (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial, stretched);
                     else
-                    {
-                        keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
-                        var (added, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, stretched);
-                        addedSlots.Add(added);
-                        slot.Blob = blob;
-                        newSlotIds.Add(Convert.ToBase64String(added.SlotId));
-                    }
-                    slot.Enrolled = true;
+                        (added, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, stretched);
                 }
                 catch (TswapException ex)
                 {
@@ -252,10 +237,37 @@ internal static class GuidedInit
                     c.Out.WriteLine(YubiKeyAccess.ExplainBlocked(ex.Message, serial, ThisOs()) ?? ex.Message);
                     if (!AskYesNo(c, $"Carry on without YubiKey {serial}? (y/N): ", defaultAnswer: false))
                         throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
+                    continue;
                 }
-                // Outside the try: a key already added is never offered for dropping.
-                if (slot.Enrolled)
-                    YubiKeySlotEnrollment.PrintTouchPolicy(c, slot.Blob!); // explained here, acknowledged below
+
+                if (kekSlot is not null)
+                {
+                    // The first slot built: the machine slot, with the recovery slot.
+                    try
+                    {
+                        var backendConfig = new Config(
+                            YubiKeySerials: [],
+                            RedundancyXor: "",
+                            Created: created,
+                            RequiresTouch: blob.RequiresTouch,
+                            RngMode: RngMode.System);
+                        (config, assembledKey, recoveryPrivateKey) = InitCommand.AssembleKeyring(
+                            kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, vaultKey, vaultId);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(kekSlot);
+                    }
+                    newSlotIds.Add(Convert.ToBase64String(slotId));
+                }
+                else
+                {
+                    addedSlots.Add(added!);
+                    newSlotIds.Add(Convert.ToBase64String(added!.SlotId));
+                }
+                slot.Blob = blob;
+                slot.Enrolled = true;
+                YubiKeySlotEnrollment.PrintTouchPolicy(c, blob); // explained here, acknowledged below
             }
 
             if (config is null)
@@ -333,11 +345,10 @@ internal static class GuidedInit
         new("No answer (end of input). No config or vault was written.");
 
     /// <summary>
-    /// Asks for distinct numbers from 1 to <paramref name="count"/>, until the answer is valid; returns
-    /// their 0-based indices in ascending order. An empty answer asks again, or with
-    /// <paramref name="emptyMeansAll"/> returns null (all).
+    /// Asks for distinct numbers out of <paramref name="allowed"/>, until the answer is valid; returns them in
+    /// ascending order. An empty answer asks again, or with <paramref name="emptyMeansAll"/> returns null (all).
     /// </summary>
-    private static SortedSet<int>? AskNumbers(IConsole c, string prompt, int count, bool emptyMeansAll)
+    private static SortedSet<int>? AskNumbers(IConsole c, string prompt, IReadOnlyList<int> allowed, bool emptyMeansAll)
     {
         while (true)
         {
@@ -351,9 +362,15 @@ internal static class GuidedInit
                 continue;
             }
             var numbers = parts.Select(p => int.TryParse(p, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0).ToList();
-            if (numbers.All(n => n >= 1 && n <= count) && numbers.Distinct().Count() == numbers.Count)
-                return [.. numbers.Select(n => n - 1)];
-            c.Out.WriteLine(count == 1 ? "Pick 1." : $"Pick numbers from 1-{count}, each at most once.");
+            if (numbers.All(allowed.Contains) && numbers.Distinct().Count() == numbers.Count)
+                return [.. numbers];
+            c.Out.WriteLine(allowed switch
+            {
+                [var only] => $"Pick {only}.",
+                _ when allowed.SequenceEqual(Enumerable.Range(allowed[0], allowed.Count)) =>
+                    $"Pick numbers from {allowed[0]}-{allowed[^1]}, each at most once.",
+                _ => $"Pick from {string.Join(" ", allowed)}, each at most once.",
+            });
         }
     }
 
