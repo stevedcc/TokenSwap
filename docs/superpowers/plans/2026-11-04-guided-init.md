@@ -22,8 +22,13 @@ over this plan.
 
 - `init` stays a no-sudo command; nothing in the guided flow calls `ctx.RequireSudo`.
 - Never overwrite a vault: the three existing refusals (classic vault, a record-vault config, a non-empty vault
-  folder) run before the guided flow prints anything or touches hardware. Their existing tests pass unchanged.
+  folder) run before the guided flow prints anything or touches hardware. Their existing tests keep their
+  assertions (inputs may change, see below), and the guided flow gets its own test of each.
 - Nothing is written unless every chosen slot enrolled: build all slots in memory, then one `CreateRecordVault`.
+  The one exception is today's: a config holding only a pending `slot request` is backed up (`BackupConfig`)
+  after its "Reinitialize?" is answered yes, before step 1, exactly as `init` does now.
+- `RequireAbsentOrEmpty(vaultDir)` runs again immediately before that single write: the guided flow waits
+  minutes for keys and answers, and a second `init` into the same (synced) folder may have filled it meanwhile.
 - Existing flags behave as today: `--tpm`, `--secure-enclave --with-touch|--no-touch`, `--password`,
   `--no-password`, `--no-recovery`, `--folder <dir>`, `--vault-dir <folder>`.
 - `--yubikey` is today's plain-`init` YubiKey vault, byte for byte in behaviour (including the RngMode question).
@@ -181,6 +186,8 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
 
 **Interfaces:**
 - Produces: `public static (Slot Slot, YubiKeySlotBlob Blob) EnrollAsSlot(CommandContext ctx, int serial, byte[] vaultKey, Keyring keyring, StretchedPassword? password)`
+  (`vaultKey` is `K_v`, the secret being wrapped; `keyring.K` is the keyring's threshold `k`, a format field
+  passed through to `MachineSlotWrap.Wrap`, unrelated to the key)
   in `YubiKeySlotEnrollment`: draws the slot id, calls `EnrollSerial`, wraps with `MachineSlotWrap.Wrap(...)
   with { HwBlob = blob.Encode() }` using `keyring.FormatVersion`, `keyring.VaultId`, `keyring.K`, zeroes
   `KEK_slot`. `ExecuteAdd` calls it (after its own serial choice via `ctx.ChooseSerialAmong(eligible)`); its
@@ -198,7 +205,7 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
 - Create: `TswapCli/Commands/GuidedInit.cs`
 - Modify: the "re-run 'tswap init --keyring'" hints → "re-run 'tswap init'" in `TswapCore/Vault/VaultUnlocker.cs`,
   `TswapCore/Keyring/Keyring.cs`; `SlotCommand.ExecuteAdd`'s "('tswap init --keyring', '--tpm' or
-  '--secure-enclave')" → "('tswap init')"; the comments in `TswapCore/Models.cs` and `MachineSlotWrap.cs`
+  '--secure-enclave')" → "('tswap init', or 'tswap init --yubikey', '--tpm' or '--secure-enclave')"; the comments in `TswapCore/Models.cs` and `MachineSlotWrap.cs`
 - Modify (inputs only): the 17 test files passing `"--keyring"` (`InitKeyringOneKeyTests`, `RecoveryKeyTests`,
   `InitRecordVaultTests`, `MigrateToRecordsTests`, `CommandTests`, `PreviousValueTests`,
   `RecordStoreFileLayerTests`, `RecordStoreTests`, `VaultMergeTests`, `SecureEnclaveTouchChoiceTests`,
@@ -215,18 +222,33 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
   `SecureEnclaveTouchChoice`, `VaultPasswordChoice.Decide`, `HardwareServices.Enrollment`,
   `SecurityWarnings.Acknowledge`.
 - Produces: `internal static int GuidedInit.Execute(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, string? newFolder, bool? noRecoveryFlag, bool? passwordFlag)`;
-  `noRecoveryFlag` is true when `--no-recovery` was given, null when not (then asked).
+  `noRecoveryFlag` is true when `--no-recovery` was given, null when not (then asked). `vaultDir` is the full path
+  the vault will be created in (`--folder`'s, or `<config dir>/vault`), already checked by `RequireAbsentOrEmpty`;
+  `newFolder` is `--folder`'s raw value or null (the guide uses it to tell a sync folder from the default).
+  Ruling (design left it to the builder): the config's `KeyringSlotId` is the machine slot's id (the chip's if
+  picked, else the first enrolled YubiKey's), as `AssembleKeyring` sets it today.
+- Test harness members used (they exist): `FakeConsole { IsInputRedirected = false }`, `FleetMachine.RunOnTerminal`,
+  `.Run`, `.Ok`, `.Keys` (`SimulatedYubiKeyService.WithKeys(...)`, settable `PluggedIn`, `Challenges`),
+  settable `.SecureEnclave` / `.Tpm` (null = absent), `.Config`, `.ConfigPath`, `.Dir`.
 
 **Routing in `InitCommand.Execute`, in this order:**
+0. `--vault-dir` → `ExecuteJoin`, exactly as today: it is the first thing `Execute` does now (joining a shared
+   folder needs no backend flag and no terminal), and the guide's `init --vault-dir <folder>` relies on it.
 1. `--keyring` anywhere in the arguments → the `--keyring` refusal (Global Constraints), first, with #177's flag
    check: before any refusal, prompt or hardware.
 2. #177's flag check (now with `--yubikey`); `--yubikey` with `--tpm` or `--secure-enclave` → usage.
 3. No backend flag and `ctx.Console.IsInputRedirected` → the no-terminal refusal (no hardware touched).
-4. The three existing vault refusals, unchanged, before anything is printed.
+4. The three existing vault refusals, unchanged, before anything is printed; then today's "Already initialized.
+   Reinitialize? (yes/no)" for a config that is only a pending `slot request` (any answer but "yes" exits 0 with
+   nothing changed; "yes" backs the config up as today). This holds for the guided flow and the flag paths alike.
 5. `--yubikey` → today's `ExecuteKeyring`; `--tpm`/`--secure-enclave` → as today; no backend flag →
    `GuidedInit.Execute`.
 
-Rulings recorded here: "terminal" is input only, because `IConsole` exposes no output check and every existing
+Rulings recorded here: the blocked-OTP explanation also covers Linux and Windows with their own wording (the design
+said macOS only; the same ykman line elsewhere has a different, still useful cause). "Checking YubiKey {serial}…"
+is printed before each per-key ykman call (the challenges), not before `ListSerials`, which is one call. A chip
+that is present but unusable (`MachineChip.Backend` null, `UnavailableReason` set) is listed as an unnumbered line
+`(not available: <reason>)` and can't be picked. "Terminal" is input only, because `IConsole` exposes no output check and every existing
 prompt in tswap keys on `IsInputRedirected`. The no-terminal refusal is a `TswapException`, not a
 `UsageException`: both exit 1 in tswap (a `UsageException` is a `TswapException`), so the design's "exit as a
 usage error" holds for the exit status; only the `Usage: ` prefix is left out, because the message isn't a usage
@@ -240,7 +262,10 @@ line.
   (`EnrollSerial`'s message says to configure slot 2). The YubiKey SDK in v0.3.0 reads it directly.
   Entries numbered from 1: YubiKeys in `ListSerials` order, then the chip. A `ListSerials` failure is shown as one
   line `YubiKeys: <message>` and the chip stays offered.
-- Pick prompt: `Pick one or more, separated by spaces (e.g. 1 3): `, read with `GuidedPrompts.ReadAnswer`.
+- **Every** guided prompt reads through `GuidedPrompts.ReadAnswer` (pick, touch, which slots, recovery, carry on,
+  other machines), so a stray Yubico OTP line is skipped wherever it lands. EOF at any of them → exit 1, nothing
+  written.
+- Pick prompt: `Pick one or more, separated by spaces (e.g. 1 3): `. An empty line re-asks.
 - Secure Enclave picked: print `SecureEnclaveTouchChoice`'s "what each does" text (make `WhatEachDoes` internal
   or add a method returning it), then ask `Touch ID (or your login password) on every unlock? (y/n): ` with **no
   default**: an empty or other answer re-asks. Ruling: brief T11 made the choice explicit (`--secure-enclave`
@@ -277,10 +302,14 @@ line.
   Anything but "y" → exit 1. Nothing is written in either case before success. On every exit path (success,
   refusal, abort, exception) `K_v`, every `KEK_slot` and the stretched password are zeroed (`try`/`finally`, as
   `ExecuteKeyring` does).
-- After `CreateRecordVault`: summary lines (one per slot: `YubiKey {serial}`, `Secure Enclave (touch|no touch)`,
-  `TPM`, plus `password` when set), `PrintVaultFolder`, `PrintRecoveryKeyBackupWarning`, then
-  `Will other machines use this vault? (y/N): ` and on "y" `OtherMachinesGuide.Print(c.Out, ctx.Prefix,
-  fileStore.ConfigDir, vaultDir, newFolder is not null)`.
+- After `CreateRecordVault`: `Will other machines use this vault? (y/N): ` and on "y" `OtherMachinesGuide.Print(c.Out,
+  ctx.Prefix, fileStore.ConfigDir, vaultDir, newFolder is not null)`; then the summary lines (one per slot:
+  `YubiKey {serial}`, `Secure Enclave (touch|no touch)`, `TPM`, each `password`/`no password`), `PrintVaultFolder`,
+  and **last** `PrintRecoveryKeyBackupWarning`, so the recovery key's warning is the last thing on screen.
+- A chip enrolment that throws: no carry-on offer (the chip is one device); the exception propagates, exit 1,
+  nothing written, key material zeroed.
+- `SecurityWarnings.Acknowledge(config, <every new slot id>)` runs once, on the in-memory config, just before the
+  single write.
 
 - [ ] **Step 1: Failing tests (`InitFlagsTests`)**
   - `Keyring_IsRefused_WithTheReplacement` — `m.Run("", "init", "--keyring")` and `m.RunOnTerminal("", "init",
@@ -315,7 +344,8 @@ line.
     exactly two per serial 11 and 13 (11 is not challenged again after 12 fails), and the vault opens with 11
     alone and with 13 alone.
   - `Guided_SecureEnclaveTouch_HasNoDefault` — Secure Enclave picked, answers `""` then `"x"` then `"y"`: asked
-    three times; the slot requires presence.
+    three times; `m.Config.RequiresTouch` is true and the simulated Secure Enclave was enrolled with presence
+    required (the `SimulatedHardwareService` records it).
   - `Guided_PasswordOnSomeSlots_TheBackupKeyOpensWithoutIt` — keys 11, 12, a password, "Which slots" answer `1`:
     `names` with only key 12 plugged in and no password input succeeds; with only key 11 and no password it fails
     asking for the password; with key 11 and the right password it succeeds. Break-it-once: enrol every slot with
@@ -323,19 +353,34 @@ line.
   - `Guided_WhichSlots_InvalidAnswer_AsksAgain` — keys 11, 12, a password; "Which slots" answers `0`, then `3`
     (neither picks a slot: Enter means all, so an answer that selects no slot can only be an invalid one), then
     `2`: asked three times; only key 12's slot needs the password.
-  - `Guided_PasswordFlags_SkipTheWhichSlotsQuestion` — `--password` with keys 11, 12: no `Which slots` line and both
-    slots need it; `--no-password`: no password question and neither slot needs it.
+  - `Guided_PasswordFlags_SkipTheWhichSlotsQuestion` — `--password` with keys 11, 12: no `Which slots` line; with
+    only key 11 or only key 12 plugged in, `names` without the password fails and with it succeeds. `--no-password`:
+    no password question; each key alone opens the vault with no password input.
   - `Guided_DroppingTheOnlyPasswordSlot_MakesNoPassword` — keys 11, 12, a password on slot 1 only, key 11 fails,
     "y": no `vault-password` file; key 12 opens the vault with no password input.
   - `Guided_NeverAsksRngMode` — stdout lacks `Password generation entropy source`; config `RngMode` is System.
   - `Guided_OtherMachinesYes_PrintsTheGuide` — contains `slot request --tpm request.json` and the config dir.
-  - `Guided_StrayOtpLine_IsSkippedAtThePick` — stdin with an OTP line before `1`.
+  - `Guided_StrayOtpLine_IsSkippedAtThePick` — stdin with an OTP line before `1`: the pick is `1` (only key 11's
+    slot exists afterwards), the run succeeds, and the OTP message is printed.
+  - `Guided_StrayOtpLine_AtTheCarryOnPrompt_IsSkipped` — key 12 fails, then an OTP line, then `y`: the run carries
+    on and succeeds (the OTP neither aborts nor answers).
+  - `Guided_EmptyPick_AsksAgain` — an empty line at the pick prompt re-asks.
+  - `VaultDir_JoinStillWorks_WithoutATerminal` — `init --vault-dir <shared folder>` with redirected input joins as
+    today (the existing join tests stay green; this one pins that the no-terminal refusal doesn't catch it).
+  - `Guided_PendingSlotRequest_AsksReinitialize_NoChangesNothing_YesBacksUp` — after `slot request`: "no" → exit 0,
+    config unchanged, no vault; "yes" → a `config.json.bak-*` exists and the guided flow continues to step 1.
+  - `Guided_FolderFilledWhileWaiting_IsRefusedAtTheWrite` — `--folder <empty dir>`; a file is created in it from the
+    simulated key's challenge callback (or between prompts via a test seam), then the write is refused with the
+    not-empty message and nothing is written.
 - [ ] **Step 3: Run** — Expected: the new tests FAIL (missing types / old behaviour); note which existing tests now
   fail only because they pass `--keyring` or a plain `init`.
 - [ ] **Step 4: Implement** the routing, `GuidedInit`, the hint texts, `SimulatedYubiKeyService.FailWith`.
-- [ ] **Step 5: Update inputs** of the existing tests (Global Constraints rule); no assertion changes except the
-  "re-run 'tswap init --keyring'" texts and assertions on `init`'s help/usage text (`HelpUsage`, `Description`,
-  the usage line), which change because the spec changed the flags.
+- [ ] **Step 5: Update inputs** of the existing tests (Global Constraints rule). Allowed assertion changes, each
+  named in the commit: the "re-run 'tswap init --keyring'" texts; `init`'s help/usage text (`HelpUsage`,
+  `Description`, the usage line); and messages that quote the flags the test passed (#177's usage error), which
+  change because the input changed. Tests that run a plain `init` to reach a refusal get `--yubikey` (or run on a
+  terminal) so they still reach it. Gate: `grep -rn -- '--keyring' TswapTests TswapCli TswapCore` lists only the
+  refusal, its test and comments explaining the removal.
 - [ ] **Step 6: Run** `./runtests.sh` — Expected: all pass. Break-it-once: make `GuidedInit` write the config
   before the last enrolment; `Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn` must fail. Revert.
 - [ ] **Step 7: Commits:** (a) tests' input changes (message says: inputs only, `--keyring` removed by the spec),
@@ -353,4 +398,7 @@ of the guided flow), `MULTI_MACHINE_KEYING.md` (lines ~262, 283, 297), `HARDWARE
 - [ ] **Step 2:** If `tswap prompt`'s text changed, `prompt-hash` tests are updated to the new hash (input change,
   said in the commit).
 - [ ] **Step 3:** `./runtests.sh` — Expected: all pass.
+- [ ] **Step 3b:** The PR description carries a "Release notes" section for v0.2.0 (tswap's release notes are
+  written from PR descriptions at tag time): plain `init` without a terminal and `init --keyring` now refuse and name
+  the replacement (`--yubikey`, `--tpm`, `--secure-enclave`); plain `init` at a terminal is the guided setup.
 - [ ] **Step 4: Commit** `Docs: guided init, --yubikey, --keyring removed (task 6)`.
