@@ -135,7 +135,7 @@ public sealed class PreviousValueClassicStoreTests : IDisposable
 
     public PreviousValueClassicStoreTests()
     {
-        (_vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring");
+        (_vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--yubikey");
         new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("new", DateTime.UtcNow, DateTime.UtcNow) }), _vaultKey);
     }
 

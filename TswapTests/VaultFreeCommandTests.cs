@@ -138,7 +138,7 @@ public class VaultFreeCommandTests
         try
         {
             var env = new Dictionary<string, string?> { ["TSWAP_CONFIG_DIR"] = dir };
-            Assert.Equal(0, Run(env, "init").Exit);
+            Assert.Equal(0, Run(env, "init", "--yubikey").Exit);
             Assert.Equal(0, Run(env, "create", "host-secret").Exit);
 
             var (exit, stdout, stderr) = Run(env, "names");

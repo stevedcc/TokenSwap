@@ -77,7 +77,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Init_WritesCreated_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
 
         AssertUtc(T0, _m.Config.Created);
     }
@@ -85,7 +85,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Create_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("", "create", "db-pw");
@@ -98,7 +98,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Add_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("typed-value\ntyped-value\n", "add", "api-key");
@@ -112,7 +112,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Ingest_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("piped-value", "ingest", "token");
@@ -125,7 +125,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Burn_WritesBurnedAt_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
 
@@ -139,7 +139,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Rotate_WritesModified_FromTheTimeProvider_AndKeepsCreated()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
 
@@ -153,7 +153,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Export_WritesItsCreatedTimestamp_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
         var exportPath = _m.PathOf("export.json");
@@ -167,7 +167,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void SlotRequestApproveAccept_WriteTheirTimes_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         using var requester = new FleetMachine("time-requester", SimulatedYubiKeyService.WithKeys(SerialB)) { Time = _clock };
         var requestFile = requester.PathOf("request.json");
         var approveFile = _m.PathOf("approve.json");
@@ -301,12 +301,12 @@ public sealed class TimeProviderTests : IDisposable
             return (exit, console.OutText, console.ErrorText);
         }
 
-        var init = Run(dir, "init", "--keyring");
+        var init = Run(dir, "init", "--yubikey");
         Assert.True(init.Exit == 0, init.Err);
         var created = Later(TimeSpan.FromHours(1));
         var create = Run(dir, "create", "db-pw");
         Assert.True(create.Exit == 0, create.Err);
-        var classicInit = Run(classicDir, "init", "--keyring");
+        var classicInit = Run(classicDir, "init", "--yubikey");
         Assert.True(classicInit.Exit == 0, classicInit.Err);
         ClassicVaultTestSupport.FoldIntoClassicKeyringVault(classicDir, classicInit.Out);
         var migrated = Later(TimeSpan.FromHours(1));

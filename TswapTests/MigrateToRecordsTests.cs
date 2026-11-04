@@ -306,7 +306,7 @@ public sealed class MigrateToRecordsTests : IDisposable
     {
         // Fix round 4, item 6: the confident wording only where the vault id matches.
         _keys.PluggedIn = [SerialA];
-        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring"); // brief T16-S1: as 0.1's init --keyring made it
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--yubikey"); // brief T16-S1: as 0.1's init --keyring made it
         new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }), vaultKey);
         _m.MigrationSeams = new RecordMigrationSeams { AfterStep = s => { if (s == 3) throw new IOException("simulated crash after step 3"); } };
         Assert.NotEqual(0, _m.Run("", "migrate", "--to-records").Exit);
@@ -599,7 +599,7 @@ public sealed class JoinSharedVaultFolderTests : IDisposable
         _home = new FleetMachine("join-home", _keys);
         _laptop = new FleetMachine("join-laptop", _keys);
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
+        _home.Ok("", "init", "--yubikey", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
     }
 
@@ -676,7 +676,7 @@ public sealed class JoinSharedVaultFolderWithTpmTests : IDisposable
         _home = new FleetMachine("jointpm-home", _keys);
         _router = new FleetMachine("jointpm-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
+        _home.Ok("", "init", "--yubikey", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
         _home.Ok("second-value", "ingest", "t"); // two secrets: an empty save would hit the store's guard
     }
@@ -735,7 +735,7 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
         _home = new FleetMachine("acceptdir-home", _keys);
         _laptop = new FleetMachine("acceptdir-laptop", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
+        _home.Ok("", "init", "--yubikey", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("shared-value", "ingest", "s");
 
         // The laptop asks to join the shared one. (Brief T16-S1: with a classic vault of its own it
@@ -765,7 +765,7 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
     {
         using var stranger = new FleetMachine("acceptdir-stranger", _keys);
         var foreign = Path.Combine(stranger.Dir, "shared");
-        stranger.Ok("", "init", "--folder", foreign);
+        stranger.Ok("", "init", "--yubikey", "--folder", foreign);
         var foreignBefore = Directory.GetFiles(foreign, "*", SearchOption.AllDirectories).ToDictionary(f => f, File.ReadAllBytes);
         var before = Directory.GetFileSystemEntries(_laptop.Dir).ToHashSet();
         var configBefore = File.ReadAllText(_laptop.ConfigPath);
@@ -816,7 +816,7 @@ public sealed class SlotAddedBetweenApproveAndAcceptTests : IDisposable
         _home = new FleetMachine("between-home", _keys);
         _router = new FleetMachine("between-router", _keys) { Tpm = RandomNumberGenerator.GetBytes(32) };
         _shared = Path.Combine(_home.Dir, "Sync", "tswap");
-        _home.Ok("", "init", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
+        _home.Ok("", "init", "--yubikey", "--folder", _shared); // brief T16-S1: init makes the shared record vault directly
         _home.Ok("v", "ingest", "s");
     }
 

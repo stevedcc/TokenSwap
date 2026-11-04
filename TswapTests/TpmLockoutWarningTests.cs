@@ -116,7 +116,7 @@ public class TpmLockoutWarningTests : IDisposable
         var yubiKey = Machine("yk", tpm: false, RecordVaultTestSupport.SerialA);
 
         var (freeExit, freeOut, freeErr) = free.Run("", "init", "--tpm", "--no-password", "--no-recovery");
-        var (ykExit, ykOut, ykErr) = yubiKey.Run(Twice(Password), "init", "--password", "--no-recovery");
+        var (ykExit, ykOut, ykErr) = yubiKey.Run(Twice(Password), "init", "--yubikey", "--password", "--no-recovery");
 
         Assert.True(freeExit == 0, freeErr);
         Assert.True(ykExit == 0, ykErr);

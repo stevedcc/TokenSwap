@@ -35,7 +35,7 @@ public class TouchNoticeTests : IDisposable
     {
         _m.Keys.SetTouch(serial, touch);
         _m.Keys.PluggedIn = [serial];
-        var result = _m.Run("", "init", "--keyring", "--no-recovery");
+        var result = _m.Run("", "init", "--yubikey", "--no-recovery");
         Assert.True(result.Exit == 0, result.Err);
         return result;
     }
@@ -163,7 +163,7 @@ public class TouchNoticeTests : IDisposable
         Assert.Contains("no touch", stderr);
 
         using var touchVault = new FleetMachine("touch-only", SimulatedYubiKeyService.WithKeys(SerialA));
-        touchVault.Ok("", "init", "--keyring", "--no-recovery");
+        touchVault.Ok("", "init", "--yubikey", "--no-recovery");
         ForgetAcknowledgements(touchVault);
         Assert.Equal("", touchVault.Run("", "create", "touch-only-secret").Err);
     }

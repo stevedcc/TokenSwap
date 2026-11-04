@@ -170,7 +170,7 @@ public class KeyringV2FixtureTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", console.ErrorText);
-        Assert.Contains("tswap init --keyring", console.ErrorText);
+        Assert.Contains("create a new vault with 'tswap init'", console.ErrorText);
         Assert.False(File.Exists(approveFile));
         Assert.Equal(configAfterMigration, File.ReadAllText(Path.Combine(_dir, "config.json")));
         Assert.Equal(keyringAfterMigration, File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring")));

@@ -72,7 +72,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        var (initExit, _, _) = Run(dirA, _keyA, "", "init", "--keyring");
+        var (initExit, _, _) = Run(dirA, _keyA, "", "init", "--yubikey");
         Assert.Equal(0, initExit);
         var vaultKeyA = UnlockDirectly(dirA, _keyA);
 
@@ -99,7 +99,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
         var apprFile = Path.Combine(dirA, "approve.json");
@@ -121,7 +121,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         Run(dirA, _keyA, "hunter1\nhunter1\n", "add", "already-here");
         var vaultKeyBefore = UnlockDirectly(dirA, _keyA);
 
@@ -148,7 +148,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring"); // default-on recovery slot
+        Run(dirA, _keyA, "", "init", "--yubikey"); // default-on recovery slot
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
         var apprFile = Path.Combine(dirA, "approve.json");
@@ -169,7 +169,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         var (_, reqStdout, _) = Run(dirB, _keyB, "", "slot", "request", reqFile);
 
@@ -212,8 +212,8 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
-        Run(dirB, _keyB, "", "init"); // B never ran 'slot request'
+        Run(dirA, _keyA, "", "init", "--yubikey");
+        Run(dirB, _keyB, "", "init", "--yubikey"); // B never ran 'slot request'
 
         var reqFile = Path.Combine(dirA, "unused-request.json"); // never used by B
         var apprFile = Path.Combine(dirA, "approve.json");
@@ -261,7 +261,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
         var apprFile = Path.Combine(dirA, "approve.json");
@@ -288,7 +288,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile);
         var apprFile = Path.Combine(dirA, "approve.json");
@@ -325,7 +325,7 @@ public class SlotCommandTests : IDisposable
     public void Approve_MissingRequestFile_FailsCleanly()
     {
         var dirA = NewTempDir();
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
 
         var (exit, _, stderr) = Run(dirA, _keyA, "", "slot", "approve",
             Path.Combine(dirA, "does-not-exist.json"), Path.Combine(dirA, "approve.json"));
@@ -391,7 +391,7 @@ public class SlotCommandTests : IDisposable
             return; // see file header note: only meaningful when this process is unprivileged.
 
         var dirA = NewTempDir();
-        Run(dirA, _keyA, "", "init", "--keyring"); // a real, existing vault to (not) unlock
+        Run(dirA, _keyA, "", "init", "--yubikey"); // a real, existing vault to (not) unlock
 
         // Deliberately a request file that doesn't exist: if RequireSudo ran *after* the
         // file-existence check (or not at all, as in the pre-fix bug), this would instead fail
@@ -422,7 +422,7 @@ public class SlotCommandTests : IDisposable
         var dirA = NewTempDir();
         var dirB = NewTempDir();
 
-        Run(dirA, _keyA, "", "init", "--keyring");
+        Run(dirA, _keyA, "", "init", "--yubikey");
         var reqFile = Path.Combine(dirB, "request.json");
         Run(dirB, _keyB, "", "slot", "request", reqFile); // fine: request never touches an existing vault
 

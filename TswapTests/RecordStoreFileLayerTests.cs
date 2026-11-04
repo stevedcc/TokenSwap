@@ -159,7 +159,7 @@ public sealed class RecordStoreFileLayerTests : IDisposable
             return;
         _keys.PluggedIn = [SerialA];
         // Brief T16-S1: a classic keyring vault as 0.1's init --keyring made it, holding "s".
-        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--keyring");
+        var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--yubikey");
         new Storage(_m.Dir).SaveSecrets(new SecretsDb(new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }), vaultKey);
         var old = SetUmask(0);
         try

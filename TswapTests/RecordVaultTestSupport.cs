@@ -38,7 +38,7 @@ internal static class RecordVaultTestSupport
     /// </summary>
     public static string InitRecordVault(FleetMachine machine, string? vaultDir = null)
     {
-        var output = vaultDir is null ? machine.Ok("", "init") : machine.Ok("", "init", "--folder", vaultDir);
+        var output = vaultDir is null ? machine.Ok("", "init", "--yubikey") : machine.Ok("", "init", "--yubikey", "--folder", vaultDir);
         File.Delete(Path.Combine(machine.VaultDir!, RecordVaultStore.RecordFormatMarkerFileName));
         return RecoveryKeyFrom(output);
     }

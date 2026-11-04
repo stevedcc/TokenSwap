@@ -235,7 +235,7 @@ public class KeyringCodecTests
         // this pre-#120 blob fell through to the subtraction-based bounds check for the missing
         // trailing byte and threw "Malformed keyring: truncated slot kind" instead — a safe
         // failure, but a misleading diagnostic: the real cause is a format-version mismatch, not
-        // truncation/corruption, and the fix is "re-run tswap init --keyring", not "restore
+        // truncation/corruption, and the fix is "re-run tswap init", not "restore
         // config.json from backup" (which would not help, since the backup is in the same old,
         // now-unreadable format). This test proves Decode now names the real cause instead.
         var preIssue120Bytes = BuildPreIssue120Bytes(formatVersion: 1);
