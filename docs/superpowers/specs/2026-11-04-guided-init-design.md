@@ -1,6 +1,6 @@
 # Guided `tswap init` (v0.2.0)
 
-Status: draft, 2026-11-04. Branch `design/guided-init`.
+Status: approved by the owner 2026-11-04. Branch `design/guided-init`.
 
 ## Why
 
