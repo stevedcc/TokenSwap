@@ -92,6 +92,25 @@ jobs:
           TSWAP_E2E_BINARY="$BINARY" \
             dotnet test TswapTests/TswapTests.csproj --no-build --filter "Category=E2E"
 
+      # TEMPORARY (#236, removed before merge): what does a failed flock upgrade do to the shared lock on this kernel?
+      - name: flock upgrade semantics probe (temporary)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import fcntl, os, tempfile
+          p = os.path.join(tempfile.mkdtemp(), "probe.lock")
+          a = open(p, "w"); b = open(p, "w")
+          fcntl.flock(a, fcntl.LOCK_SH); fcntl.flock(b, fcntl.LOCK_SH)
+          def try_ex(f):
+              try:
+                  fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); return "granted"
+              except BlockingIOError as e:
+                  return "refused (errno %d)" % e.errno
+          print("B upgrade while A holds shared:", try_ex(b))
+          print("then A upgrade:", try_ex(a), "-> granted means B's failed upgrade dropped its shared lock; refused means it kept it")
+          PY
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
