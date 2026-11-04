@@ -30,6 +30,9 @@ public static class Otp
     {
         var device = Devices.Pick(serial);
         Report.Line("challenge_hex", Convert.ToHexStringLower(ChallengeBytes()));
+        // Which transport the SDK picks for OTP (KeyboardConnection = HID keyboard, SmartCardConnection = CCID).
+        using (var probe = device.Connect(Yubico.YubiKey.YubiKeyApplication.Otp))
+            Report.Line("otp_connection", probe.GetType().Name);
         var touched = false;
         var watch = Stopwatch.StartNew();
         using var otp = new OtpSession(device);
