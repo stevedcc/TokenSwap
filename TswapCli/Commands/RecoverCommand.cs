@@ -62,7 +62,7 @@ public sealed class RecoverCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring is null)
             throw new TswapException(
-                "This vault has no keyring, so it has no recovery slot. Only keyring vaults ('tswap init --keyring', " +
+                "This vault has no keyring, so it has no recovery slot. Only keyring vaults ('tswap init', or 'tswap init --yubikey', " +
                 "'--tpm' or '--secure-enclave') have a recovery key.");
         var keyring = SlotCommand.DecodeKeyringOrCorrupt(config);
         SlotCommand.RequireKeyringThatTakesYubiKeySlots(keyring);

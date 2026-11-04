@@ -71,7 +71,7 @@ public sealed class SlotsCommand : ICliCommand
         if (config.Keyring is null)
         {
             return "This vault has no keyring — it's a single derived-key or hardware-wrapped\n" +
-                   "vault with no multi-slot concept (see 'tswap init --keyring' to create a\n" +
+                   "vault with no multi-slot concept (see 'tswap init' to create a\n" +
                    "keyring vault instead)." + DescribeClassicPosture(config);
         }
 
@@ -90,7 +90,7 @@ public sealed class SlotsCommand : ICliCommand
 
         if (keyring.Slots.Count == 0)
             return "This vault has a keyring but no enrolled slots — it is not usable as-is; " +
-                   "restore config.json from backup or re-run 'tswap init --keyring'.";
+                   "restore config.json from backup or re-run 'tswap init'.";
 
         var machineSlotCount = keyring.Slots.Count(s => s.Kind == SlotKind.Machine);
 

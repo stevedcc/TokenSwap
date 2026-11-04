@@ -18,7 +18,7 @@ internal static class SecureEnclaveTouchChoice
     /// <summary>For usage strings: <c>--secure-enclave --with-touch|--no-touch</c>.</summary>
     public const string Flags = $"{SecureEnclave} {WithTouch}|{NoTouch}";
 
-    private const string WhatEachDoes =
+    internal const string WhatEachDoes =
         $"{SecureEnclave} needs exactly one of {WithTouch} (every unlock asks for Touch ID or the login password) " +
         $"or {NoTouch} (unlocks with no prompt at all; read the warning it prints). " +
         $"Neither goes without {SecureEnclave}.";

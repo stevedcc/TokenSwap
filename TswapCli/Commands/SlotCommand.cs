@@ -18,14 +18,14 @@ namespace TswapCli.Commands;
 /// <para><b>One command, not three (judgement call #1).</b> <see cref="CommandRegistry"/>
 /// dispatches on a single top-level token (<c>args[0]</c>) with no multi-word/hyphenated-
 /// subcommand precedent elsewhere in this codebase — <c>InitCommand</c> already inspects its own
-/// <c>args</c> internally to choose between <c>--secure-enclave</c>/<c>--tpm</c>/<c>--keyring</c>,
+/// <c>args</c> internally to choose between <c>--secure-enclave</c>/<c>--tpm</c>/<c>--yubikey</c>,
 /// which is the same shape this type follows, keyed on a subcommand word
 /// (<c>request</c>/<c>approve</c>/<c>accept</c>) instead of a flag.</para>
 ///
 /// <para><b><c>approve</c> is sudo-gated; <c>request</c>/<c>accept</c> are not (corrected after
 /// security review).</b> The original judgement call here reasoned that <c>slot approve</c>'s
 /// output carries a wrapped <c>K_v</c>, not any named secret's plaintext, and so didn't need
-/// sudo — that was wrong: unlike <c>init --keyring</c>'s XOR share/recovery private key (which are
+/// sudo — that was wrong: unlike a keyring <c>init</c>'s XOR share/recovery private key (which are
 /// only ever useful together with hardware nobody but this machine's operator possesses),
 /// <c>approve</c>'s output file, given only an attacker-suppliable request file, is a
 /// self-contained artifact that decrypts the *existing* vault's <c>K_v</c> for whoever holds the
@@ -425,7 +425,7 @@ public sealed class SlotCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring is null)
             throw new TswapException(
-                "This machine has no keyring vault to approve from. Run 'tswap init --keyring' here first " +
+                "This machine has no keyring vault to approve from. Run 'tswap init' here first " +
                 "(a classic, non-keyring vault has no K_v to share — see MULTI_MACHINE_KEYING.md).");
 
         var keyring = DecodeKeyringOrCorrupt(config);
@@ -531,7 +531,7 @@ public sealed class SlotCommand : ICliCommand
     /// mirroring <see cref="ExecuteApprove"/>'s wrap), then builds this machine's own real
     /// <see cref="SlotKind.Machine"/> slot exactly the way <c>InitCommand.BuildKeyringConfig</c>
     /// does for a fresh vault (via <see cref="MachineSlotWrap"/>) — this is functionally "the
-    /// enrollment half of <c>init --keyring</c>," not a new primitive. The finalized
+    /// enrollment half of a keyring <c>init</c>," not a new primitive. The finalized
     /// <see cref="Keyring"/> is the approve file's <see cref="SlotApproveFile.ExistingSlots"/>
     /// plus this new slot (design decision #3), and <see cref="Config.PendingSlotId"/>/
     /// <see cref="Config.PendingSlotPublicKey"/>/<see cref="Config.PendingSlotPrivateKey"/> are
@@ -894,7 +894,7 @@ public sealed class SlotCommand : ICliCommand
         if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
-                "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+                "('tswap init', or 'tswap init --yubikey', '--tpm' or '--secure-enclave') take extra slots.");
         byte[] keyringBytes;
         try
         {
@@ -1002,7 +1002,7 @@ public sealed class SlotCommand : ICliCommand
         if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to merge into. Only keyring vaults " +
-                "('tswap init --keyring', '--tpm' or '--secure-enclave') take extra slots.");
+                "('tswap init', or 'tswap init --yubikey', '--tpm' or '--secure-enclave') take extra slots.");
         var keyring = DecodeKeyringOrCorrupt(config);
         RequireKeyringThatTakesYubiKeySlots(keyring);
 
@@ -1276,7 +1276,7 @@ public sealed class SlotCommand : ICliCommand
             throw new TswapException(
                 $"This vault's keyring is format version {keyring.FormatVersion}, made before keyring slots could carry " +
                 "a YubiKey's own parameters, so it cannot take a one-key YubiKey slot. It keeps working with its " +
-                "existing slots; to give each YubiKey its own slot, create a new vault with 'tswap init --keyring' " +
+                "existing slots; to give each YubiKey its own slot, create a new vault with 'tswap init' " +
                 "and move the secrets across.");
     }
 

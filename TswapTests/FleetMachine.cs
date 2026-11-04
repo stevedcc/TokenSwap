@@ -40,6 +40,12 @@ public sealed class FleetMachine : IDisposable
 
     public bool Sudo { get; set; } = true;
 
+    /// <summary>
+    /// Guided init: the chip this machine's <c>init</c> sees, instead of the one <see cref="SecureEnclave"/> /
+    /// <see cref="Tpm"/> give (null: those), e.g. a chip that is present but unusable.
+    /// </summary>
+    public Func<MachineChip>? ChipOverride { get; set; }
+
     /// <summary>Brief T7 item 4: the TSWAP_YUBIKEY_SERIAL value this machine's commands see (null: unset).</summary>
     public string? YubiKeySerialVariable { get; set; }
 
@@ -147,7 +153,7 @@ public sealed class FleetMachine : IDisposable
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
-            ChipProbe = () => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null),
+            ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
         };
     }
 

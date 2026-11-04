@@ -9,7 +9,7 @@ namespace TswapCli;
 /// Enrolls one plugged-in YubiKey as a one-key keyring slot (brief T4 decisions 1 and 2): picks
 /// the key, records its touch policy, draws a fresh challenge and salt
 /// (<see cref="YubiKeySlotBlob.Create"/>) and derives the slot's <c>KEK_slot</c> from the key's
-/// response (<see cref="YubiKeySlotKek"/>). Shared by <c>init --keyring</c>, <c>slot add
+/// response (<see cref="YubiKeySlotKek"/>). Shared by <c>init</c> (<c>--yubikey</c> and the guided flow), <c>slot add
 /// --yubikey</c> and <c>slot request</c>, so all three build the same slot.
 /// </summary>
 internal static class YubiKeySlotEnrollment

@@ -1,0 +1,383 @@
+using System.ComponentModel;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using TswapCore;
+using TswapCore.Keyring;
+
+namespace TswapCli.Commands;
+
+/// <summary>
+/// The guided <c>tswap init</c> (v0.2.0): a plain <c>init</c> at a terminal offers this machine's
+/// YubiKeys and chip (TPM or Secure Enclave), never picking one on its own, and makes one slot for each
+/// picked device around one vault key, plus a recovery slot. Every slot is built in memory and the vault
+/// is written once, at the end, so a key that fails or an answer that stops the run leaves nothing
+/// behind; the existing-vault refusals run again right before that write. Every prompt reads through
+/// <see cref="GuidedPrompts.ReadAnswer"/>: a touch on the wrong key types a Yubico OTP into the
+/// terminal, which must neither answer nor abort a question.
+/// </summary>
+internal static class GuidedInit
+{
+    internal const string PlugInText =
+        "Plug in the security keys you want to use with this vault on this machine, then press Enter. (No touch yet: tswap asks when it needs one.)";
+
+    internal const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
+    internal const string TouchPrompt = "Touch ID (or your login password) on every unlock? (y/n): ";
+    internal const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
+    internal const string RecoveryPrompt = "Add a recovery slot (recommended)? (Y/n): ";
+    internal const string OtherMachinesPrompt = "Will other machines use this vault? (y/N): ";
+    internal const string PasswordDroppedLine = "Vault password: dropped (no remaining slot needed it)";
+
+    /// <summary>One device the guided flow can make a slot for: a YubiKey (by serial) or this machine's chip.</summary>
+    private sealed record Device(int? Serial, HardwareBackend? Chip)
+    {
+        public string Label => Serial is { } serial ? $"YubiKey {serial}" : VaultPasswordChoice.HardwareName(Chip!.Value);
+    }
+
+    /// <summary>A picked device, its password choice, and what its enrolment gave.</summary>
+    private sealed class PlannedSlot(Device device)
+    {
+        public Device Device { get; } = device;
+        public bool NeedsPassword { get; set; }
+        public bool Enrolled { get; set; }
+        public YubiKeySlotBlob? Blob { get; set; }
+    }
+
+    /// <param name="vaultDir">The full path the vault is created in, already checked by <see cref="InitCommand.RefuseExistingVault"/>.</param>
+    /// <param name="newFolder"><c>--folder</c>'s raw value, or null for the default folder (the guide tells a folder of the user's choosing from it).</param>
+    /// <param name="noRecovery">True when <c>--no-recovery</c> was given; otherwise the question is asked.</param>
+    /// <param name="passwordFlag"><c>--password</c> true, <c>--no-password</c> false, neither null (asked).</param>
+    internal static int Execute(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, string? newFolder, bool noRecovery, bool? passwordFlag)
+    {
+        var c = ctx.Console;
+        // The config this run may replace: as it is now (after any "Reinitialize?" backup). Anything
+        // written meanwhile (a 'slot request', a sync tool) is refused at the write, never overwritten.
+        var configAtStart = ReadConfig(fileStore);
+
+        // Step 1: keys first, and no touch yet (a touch during a silent wait types an OTP into the shell).
+        c.Out.WriteLine();
+        c.Out.WriteLine(PlugInText);
+        if (GuidedPrompts.ReadAnswer(c) is null)
+            throw EndOfInput();
+
+        // Step 2: what this machine has. One ykman call lists the keys; each key's own calls come at
+        // enrolment, each announced first, so ykman's retries never make a silent wait.
+        IReadOnlyList<int> serials = [];
+        string? yubiKeyProblem = null;
+        try
+        {
+            serials = ctx.YubiKeys.ListSerials();
+        }
+        catch (Exception ex) when (ex is TswapException or Win32Exception or FormatException)
+        {
+            // Listed as a line, not left out silently: the chip stays offered (a Mac without ykman).
+            yubiKeyProblem = ex is Win32Exception ? $"ykman can't be run ({ex.Message})" : ex.Message;
+        }
+        var chip = ctx.ChipProbe();
+        var chipName = chip.Backend is { } usable ? VaultPasswordChoice.HardwareName(usable) : ThisOsChipName();
+        List<Device> devices = [.. serials.Select(s => new Device(s, null))];
+        if (chip.Backend is { } backend)
+            devices.Add(new Device(null, backend));
+
+        c.Out.WriteLine();
+        c.Out.WriteLine("This machine has:");
+        for (var i = 0; i < devices.Count; i++)
+            c.Out.WriteLine($"  {i + 1}. {devices[i].Label}");
+        if (yubiKeyProblem is not null)
+            c.Out.WriteLine($"  YubiKeys: {yubiKeyProblem}");
+        else if (serials.Count == 0)
+            c.Out.WriteLine("  (no YubiKey plugged in)");
+        var chipReason = chip.UnavailableReason ?? "reason unknown";
+        if (chip.Backend is null)
+            c.Out.WriteLine($"  {chipName} (not available: {chipReason})");
+
+        if (devices.Count == 0)
+            throw new TswapException(
+                $"Nothing here can hold a slot of a new vault. Looked for YubiKeys ({yubiKeyProblem ?? "none plugged in"}) and this " +
+                $"machine's {chipName} (not available: {chipReason}). Plug in a YubiKey and run '{ctx.Prefix} init' again. " +
+                "No config or vault was written.");
+
+        // Step 3: pick. Kept in list order (YubiKeys in ListSerials order, then the chip): the order typed never matters.
+        var picked = AskNumbers(c, PickPrompt, devices.Count, emptyMeansAll: false)!
+            .Select(i => new PlannedSlot(devices[i])).ToList();
+        var chipSlot = picked.SingleOrDefault(p => p.Device.Chip is not null);
+        var chipBackend = chipSlot?.Device.Chip;
+
+        // The Secure Enclave's touch choice: explicit, no default (brief T11 made the flag explicit too).
+        var requirePresence = true;
+        if (chipBackend == HardwareBackend.SecureEnclave)
+        {
+            c.Out.WriteLine();
+            c.Out.WriteLine(SecureEnclaveTouchChoice.WhatEachDoes);
+            requirePresence = AskYesNo(c, TouchPrompt, defaultAnswer: null);
+            SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
+        }
+
+        // Step 4: one vault password, for the slots that need it. K_v and the vault id are random either
+        // way (NewVaultPassword draws them for the vault-password file), so every slot wraps the same K_v.
+        using var password = InitCommand.NewVaultPassword(ctx, passwordFlag, chipBackend ?? HardwareBackend.YubiKey);
+        var vaultKey = password?.VaultKey ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var vaultId = password?.VaultId ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
+        byte[]? assembledKey = null;
+        byte[]? recoveryPrivateKey = null;
+        try
+        {
+            if (password is not null)
+            {
+                if (picked.Count > 1 && passwordFlag != true)
+                {
+                    c.Out.WriteLine();
+                    c.Out.WriteLine("A slot left out opens the vault without the password: a backup key kept somewhere safe, so a forgotten");
+                    c.Out.WriteLine("password doesn't lock you out. Slots:");
+                    for (var i = 0; i < picked.Count; i++)
+                        c.Out.WriteLine($"  {i + 1}. {picked[i].Device.Label}");
+                    var needing = AskNumbers(c, WhichSlotsPrompt, picked.Count, emptyMeansAll: true);
+                    for (var i = 0; i < picked.Count; i++)
+                        picked[i].NeedsPassword = needing is null || needing.Contains(i);
+                }
+                else
+                {
+                    picked.ForEach(p => p.NeedsPassword = true);
+                }
+            }
+
+            // Step 5: the recovery slot, recommended (the recovery slot never involves the password).
+            var includeRecovery = !noRecovery && AskYesNo(c, RecoveryPrompt, defaultAnswer: true);
+
+            // Step 6: create, in memory. The chip first, then the YubiKeys in ListSerials order; the first
+            // slot built is the machine slot (the config's KeyringSlotId).
+            Config? config = null;
+            Keyring? keyring = null;
+            List<Slot> addedSlots = [];
+            List<string> newSlotIds = [];
+            var created = ctx.Time.GetUtcNow().UtcDateTime;
+
+            if (chipSlot is not null)
+            {
+                // No carry-on offer: the chip is one device. Its TswapException goes to CliRunner's handler.
+                var enrollment = HardwareServices.Enrollment(chipBackend!.Value, ctx.TestKey, ctx.OwnerScope, requirePresence);
+                c.Out.WriteLine();
+                c.Out.WriteLine(chipBackend == HardwareBackend.Tpm
+                    ? "Sealing a new key to this machine's TPM..."
+                    : requirePresence
+                        ? "Creating a Secure Enclave key (unlocking later will prompt for Touch ID / presence)..."
+                        : "Creating a Secure Enclave key with no presence requirement...");
+                var (kekSlot, hwBlob) = enrollment.Enroll(chipSlot.NeedsPassword ? password!.Stretched : null);
+                try
+                {
+                    var backendConfig = new Config(
+                        YubiKeySerials: [],
+                        RedundancyXor: "",
+                        Created: created,
+                        RequiresTouch: chipBackend == HardwareBackend.SecureEnclave && requirePresence,
+                        RngMode: RngMode.System,
+                        Backend: chipBackend);
+                    (config, assembledKey, recoveryPrivateKey) = InitCommand.AssembleKeyring(
+                        kekSlot, backendConfig, includeRecovery, hwBlob, vaultKey: vaultKey, vaultId: vaultId);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(kekSlot);
+                }
+                chipSlot.Enrolled = true;
+                newSlotIds.Add(config.KeyringSlotId!);
+            }
+
+            foreach (var slot in picked.Where(p => p.Device.Serial is not null))
+            {
+                var serial = slot.Device.Serial!.Value;
+                var stretched = slot.NeedsPassword ? password!.Stretched : null;
+                c.Out.WriteLine();
+                c.Out.WriteLine($"Checking YubiKey {serial}…");
+                // tswap learns whether the slot needs a touch only from the answer, so the line is conditional.
+                c.Out.WriteLine($"YubiKey {serial}: if it flashes, touch it (that one, not another key).");
+                try
+                {
+                    if (config is null)
+                    {
+                        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+                        var (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial, stretched);
+                        try
+                        {
+                            var backendConfig = new Config(
+                                YubiKeySerials: [],
+                                RedundancyXor: "",
+                                Created: created,
+                                RequiresTouch: blob.RequiresTouch,
+                                RngMode: RngMode.System);
+                            (config, assembledKey, recoveryPrivateKey) = InitCommand.AssembleKeyring(
+                                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, vaultKey, vaultId);
+                        }
+                        finally
+                        {
+                            CryptographicOperations.ZeroMemory(kekSlot);
+                        }
+                        slot.Blob = blob;
+                        newSlotIds.Add(Convert.ToBase64String(slotId));
+                    }
+                    else
+                    {
+                        keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+                        var (added, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, stretched);
+                        addedSlots.Add(added);
+                        slot.Blob = blob;
+                        newSlotIds.Add(Convert.ToBase64String(added.SlotId));
+                    }
+                    slot.Enrolled = true;
+                    YubiKeySlotEnrollment.PrintTouchPolicy(c, slot.Blob); // explained here, acknowledged below
+                }
+                catch (TswapException ex)
+                {
+                    // A key ykman can't reach (macOS blocking its OTP interface, unplugged, slot 2 not
+                    // configured): explain, then carry on without it or stop. Nothing is written either way;
+                    // K_v, the vault id and every slot built so far stay in memory, and no key is asked again.
+                    c.Out.WriteLine(YubiKeyAccess.ExplainBlocked(ex.Message, serial, ThisOs()) ?? ex.Message);
+                    if (!AskYesNo(c, $"Carry on without YubiKey {serial}? (y/N): ", defaultAnswer: false))
+                        throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
+                }
+            }
+
+            if (config is null)
+                throw new TswapException("Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.");
+            if (addedSlots.Count > 0)
+            {
+                keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+                config = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring with { Slots = [.. keyring.Slots, .. addedSlots] })) };
+            }
+            var enrolled = picked.Where(p => p.Enrolled).ToList();
+            // A password whose last slot was left out protects nothing: the vault is made without one.
+            var passwordDropped = password is not null && !enrolled.Any(p => p.NeedsPassword);
+
+            config = SecurityWarnings.Acknowledge(config, newSlotIds);
+
+            // The flow waited minutes for keys and answers: refuse whatever appeared meanwhile. What remains
+            // is a check-then-write gap of milliseconds, the same as every init's (accepted).
+            InitCommand.RefuseExistingVault(ctx, fileStore, vaultDir);
+            if (!SameBytes(configAtStart, ReadConfig(fileStore)))
+                throw new TswapException(
+                    $"config.json changed while init was waiting ({fileStore.ConfigFile}); no config or vault was written. Run init again.");
+            InitCommand.CreateRecordVault(ctx, fileStore, config, vaultDir, password is not null && !passwordDropped ? password.File : null);
+
+            // Step 7: other machines. After the write, so an end of input here counts as "no".
+            c.Out.WriteLine();
+            c.Out.Write(OtherMachinesPrompt);
+            var others = GuidedPrompts.ReadAnswer(c);
+            if (others is null)
+                c.Out.WriteLine();
+            else if (others.Trim().ToLowerInvariant() is "y" or "yes")
+            {
+                c.Out.WriteLine();
+                OtherMachinesGuide.Print(c.Out, ctx.Prefix, fileStore.ConfigDir, vaultDir, newFolder is not null);
+            }
+
+            // Step 8: the summary, the vault folder, and last the recovery key's warning.
+            c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+            c.Out.WriteLine("Slots (each opens the vault on its own):");
+            foreach (var slot in enrolled)
+                c.Out.WriteLine($"  {SummaryLabel(slot.Device, requirePresence)}: {(slot.NeedsPassword && !passwordDropped ? "password" : "no password")}");
+            if (includeRecovery)
+                c.Out.WriteLine("  Recovery key (shown below)");
+            if (passwordDropped)
+                c.Out.WriteLine(PasswordDroppedLine);
+            else if (password is not null)
+                c.Out.WriteLine("Vault password: the slots marked 'password' need it (or a running 'tswap agent') for every unlock");
+            if (chipBackend == HardwareBackend.SecureEnclave)
+            {
+                // Brief T7 item 8 (#159), as init --secure-enclave says it.
+                c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
+                c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
+                c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+            }
+            InitCommand.PrintVaultFolder(c, fileStore, vaultDir);
+            InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, JoinAnd(enrolled.Select(p => p.Device.Chip is { } b
+                ? $"this machine's {VaultPasswordChoice.HardwareName(b)}"
+                : p.Device.Label)));
+            return 0;
+        }
+        finally
+        {
+            // On every exit path: K_v (also zeroed by the password's Dispose), the copy AssembleKeyring
+            // returned, and the recovery private key, which lives only in memory until it is shown.
+            CryptographicOperations.ZeroMemory(vaultKey);
+            if (assembledKey is not null)
+                CryptographicOperations.ZeroMemory(assembledKey);
+            if (recoveryPrivateKey is not null)
+                CryptographicOperations.ZeroMemory(recoveryPrivateKey);
+        }
+    }
+
+    private static TswapException EndOfInput() =>
+        new("No answer (end of input). No config or vault was written.");
+
+    /// <summary>
+    /// Asks for distinct numbers from 1 to <paramref name="count"/>, until the answer is valid; returns
+    /// their 0-based indices in ascending order. An empty answer asks again, or with
+    /// <paramref name="emptyMeansAll"/> returns null (all).
+    /// </summary>
+    private static SortedSet<int>? AskNumbers(IConsole c, string prompt, int count, bool emptyMeansAll)
+    {
+        while (true)
+        {
+            c.Out.Write(prompt);
+            var answer = GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput();
+            var parts = answer.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                if (emptyMeansAll)
+                    return null;
+                continue;
+            }
+            var numbers = parts.Select(p => int.TryParse(p, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0).ToList();
+            if (numbers.All(n => n >= 1 && n <= count) && numbers.Distinct().Count() == numbers.Count)
+                return [.. numbers.Select(n => n - 1)];
+            c.Out.WriteLine($"Pick numbers from 1-{count}, each at most once.");
+        }
+    }
+
+    /// <summary>A y/n question; <paramref name="defaultAnswer"/> answers an empty line, or null to ask again. Any other answer asks again.</summary>
+    private static bool AskYesNo(IConsole c, string prompt, bool? defaultAnswer)
+    {
+        while (true)
+        {
+            c.Out.Write(prompt);
+            var answer = (GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput()).Trim().ToLowerInvariant();
+            switch (answer)
+            {
+                case "y" or "yes":
+                    return true;
+                case "n" or "no":
+                    return false;
+                case "" when defaultAnswer is { } given:
+                    return given;
+            }
+        }
+    }
+
+    private static string SummaryLabel(Device device, bool requirePresence) => device.Chip == HardwareBackend.SecureEnclave
+        ? $"Secure Enclave ({(requirePresence ? "touch" : "no touch")})"
+        : device.Label;
+
+    private static string JoinAnd(IEnumerable<string> parts)
+    {
+        var list = parts.ToList();
+        return list.Count <= 1 ? string.Concat(list) : $"{string.Join(", ", list[..^1])} and {list[^1]}";
+    }
+
+    private static byte[]? ReadConfig(IFileVaultStore fileStore) =>
+        fileStore.Owner.FileExists(fileStore.ConfigFile) ? fileStore.Owner.ReadAllBytes(fileStore.ConfigFile) : null;
+
+    private static bool SameBytes(byte[]? a, byte[]? b) =>
+        a is null ? b is null : b is not null && a.AsSpan().SequenceEqual(b);
+
+    /// <summary>The chip this OS would offer, for naming it when it isn't usable.</summary>
+    private static string ThisOsChipName() => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
+
+    /// <summary>This OS, for <see cref="YubiKeyAccess.ExplainBlocked"/> (any other OS gets its generic wording).</summary>
+    private static OSPlatform ThisOs() =>
+        OperatingSystem.IsMacOS() ? OSPlatform.OSX
+        : OperatingSystem.IsLinux() ? OSPlatform.Linux
+        : OperatingSystem.IsWindows() ? OSPlatform.Windows
+        : OSPlatform.FreeBSD;
+}
