@@ -117,15 +117,16 @@ step without changing the rest of the flow.
 | `init` at a terminal | the guided flow |
 | `init` without a terminal | refuses: names `--yubikey`, `--tpm`, `--secure-enclave` (exit as a usage error) |
 | `init --yubikey` | **new**: today's plain-`init` YubiKey vault, unchanged |
-| `init --keyring` | an alias of `--yubikey` (my call): it used to mean "YubiKey keyring vault", and old scripts run it without a terminal, so they keep working (goal 4) |
+| `init --keyring` | **removed** (owner): refused with its own message, "--keyring is gone: run plain `tswap init` for the guided setup, or name the slot with `--yubikey`, `--tpm` or `--secure-enclave`", before any prompt or hardware (as #177's flag check) |
 | `init --tpm`, `init --secure-enclave --with-touch\|--no-touch` | unchanged |
 | `--password`, `--no-password`, `--no-recovery`, `--folder <dir>`, `--vault-dir` | unchanged; with the guided flow they pre-answer their question |
 
 `--yubikey` with `--tpm` or `--secure-enclave` is a usage error, as `--tpm` with `--secure-enclave` is
 today (several methods at once is the guided flow's job in v0.2.0).
 
-Scripts and docs that run a plain `init` for a YubiKey vault without a terminal now get the refusal; the
-release notes say so. Tests, `HelpUsage`, the README, AGENTS.md and the skill's command list change with
+Scripts and docs that run a plain `init` for a YubiKey vault without a terminal, or `init --keyring`, now get
+a refusal that names the replacement; the release notes say so. Goal 4 ("scripts keep working") holds for
+the backend flags; these two break on purpose, loudly. Tests, `HelpUsage`, the README, AGENTS.md and the skill's command list change with
 it.
 
 ## What exists to build on
