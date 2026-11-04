@@ -50,10 +50,11 @@ public class ReleasePackagingTests : IDisposable
         Run("bash", [RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"), .. extra]);
 
     /// <summary>A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with <paramref name="exitCode"/>.</summary>
-    private string PublishFakeBinary(int exitCode)
+    private string PublishFakeBinary(int exitCode, params string[] extraFiles)
     {
-        var publish = Publish("tswap");
-        File.WriteAllText(Path.Combine(publish, "tswap"), $"#!/bin/sh\necho \"ran from $(dirname \"$0\") with: $*\"\nexit {exitCode}\n");
+        var publish = Publish(["tswap", .. extraFiles]);
+        File.WriteAllText(Path.Combine(publish, "tswap"),
+            $"#!/bin/sh\necho \"ran from $(dirname \"$0\") with: $* (config: ${{TSWAP_CONFIG_DIR:-unset}})\"\nexit {exitCode}\n");
         return publish;
     }
 
@@ -131,8 +132,31 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         var ran = Assert.Single(output.Split('\n'), line => line.StartsWith("ran from "));
-        Assert.EndsWith(" with: prompt-hash", ran);
+        Assert.EndsWith(" with: prompt-hash (config: unset)", ran);
         Assert.DoesNotContain(publish, ran);
+    }
+
+    /// <summary>
+    /// The macOS smoke's commands, pinned here so a flag typo fails in the suite, not after a timeout on the macOS CI
+    /// leg: a no-prompt Secure Enclave init and an unlock, both in a throwaway config folder inside the unpacked archive.
+    /// </summary>
+    [Fact]
+    public void MacOsSmoke_MakesAndUnlocksASecureEnclaveVaultInAThrowawayConfig()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var publish = PublishFakeBinary(exitCode: 0, "libtswapse.dylib");
+        var (exitCode, output) = Package("osx-arm64", publish, "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        var runs = output.Split('\n').Where(line => line.StartsWith("ran from ")).ToList();
+        Assert.Equal(3, runs.Count);
+        var folder = runs[0]["ran from ".Length..runs[0].IndexOf(" with: ", StringComparison.Ordinal)];
+        Assert.DoesNotContain(publish, folder);
+        Assert.Equal($"ran from {folder} with: prompt-hash (config: unset)", runs[0]);
+        Assert.Equal($"ran from {folder} with: init --secure-enclave --no-touch --no-password --no-recovery (config: {folder}/config)", runs[1]);
+        Assert.Equal($"ran from {folder} with: names (config: {folder}/config)", runs[2]);
     }
 
     /// <summary>A binary that fails its smoke run fails the packaging.</summary>
