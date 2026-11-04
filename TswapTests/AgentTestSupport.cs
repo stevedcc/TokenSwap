@@ -98,6 +98,9 @@ internal sealed class AgentHarness : IAsyncDisposable
     /// Sends <paramref name="frame"/> and reads one response; null when the server closed the
     /// connection unanswered. Linux resets (<c>ECONNRESET</c>) a Unix socket whose peer closed with
     /// bytes unread, which is how a refused request that was already sent ends, so a reset is a close too.
+    /// macOS fails the send with <c>ENOTCONN</c> when the server closed the accepted connection before the
+    /// client wrote (CI run 41841651506, SeventeenthConnection_ClosedAtAccept): after a successful connect
+    /// that is the same close.
     /// </summary>
     public static async Task<AgentResponse?> SendOnAsync(Socket socket, byte[] frame)
     {
@@ -109,7 +112,7 @@ internal sealed class AgentHarness : IAsyncDisposable
             if (await stream.ReadAtLeastAsync(prefix, 4, throwOnEndOfStream: false) < 4)
                 return null;
         }
-        catch (Exception ex) when (ex is IOException or SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.Shutdown })
+        catch (Exception ex) when (ex is IOException or SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.Shutdown or SocketError.NotConnected })
         {
             return null;
         }
