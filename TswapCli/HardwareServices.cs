@@ -117,6 +117,7 @@ internal static class HardwareServices
     [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     public static (bool Available, string? Reason) LinuxTpmProbe() => LinuxTpmHardwareService.Probe();
 
+    /// <summary>On Windows too: why the Platform Crypto Provider can't be used.</summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    public static bool WindowsTpmAvailable() => WindowsTpmHardwareService.IsAvailable();
+    public static (bool Available, string? Reason) WindowsTpmProbe() => WindowsTpmHardwareService.Probe();
 }

@@ -415,7 +415,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\n{Otp}\nyes\n{Password}\n{Password}\n\n\nn\n", "init");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Contains("That was another YubiKey's one-time code", stdout);
+        Assert.Contains("That was a YubiKey's one-time code; it was ignored.", stdout);
         Assert.True(File.Exists(PasswordVaultTestSupport.VaultPasswordPath(m)));
         foreach (var serial in new[] { 11, 12 })
         {
@@ -535,7 +535,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n{Otp}\n1\n\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Contains("That was another YubiKey's one-time code", stdout);
+        Assert.Contains("That was a YubiKey's one-time code; it was ignored.", stdout);
         Assert.Equal([11], YubiKeySerials(m));
     }
 
@@ -548,7 +548,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\n\n{Otp}\ny\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Contains("That was another YubiKey's one-time code", stdout);
+        Assert.Contains("That was a YubiKey's one-time code; it was ignored.", stdout);
         Assert.Equal([11], YubiKeySerials(m));
     }
 
@@ -562,9 +562,47 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains("YubiKey 11: no password", stdout);
         Assert.Contains("Vault folder:", stdout);
-        Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", stdout);
-        Assert.EndsWith("[ ] Git repository", stdout.TrimEnd());
+        // The output ends with exactly the recovery key's warning, for this vault's key and hardware.
+        var warning = new FakeConsole();
+        TswapCli.Commands.InitCommand.PrintRecoveryKeyBackupWarning(
+            warning, "tswap", Convert.FromBase64String(RecoveryKeyFrom(stdout)), "YubiKey 11");
+        Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", warning.OutText);
+        Assert.EndsWith(warning.OutText.TrimEnd(), stdout.TrimEnd());
         m.Ok("", "names");
+    }
+
+    [Fact]
+    public void PlainInit_WithStdoutRedirected_IsRefused_NothingTouched()
+    {
+        var m = Machine(11);
+        var console = new FakeConsole("\n1\n\nn\n") { IsInputRedirected = false, IsOutputRedirected = true };
+        string[] args = ["init", "--no-password"];
+
+        var exit = CliRunner.Run(m.Context(console, args), args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(TswapCli.Commands.InitCommand.NoTerminalRefusal, console.ErrorText);
+        Assert.DoesNotContain(PlugIn, console.OutText);
+        Assert.Empty(m.Keys.Challenges);
+        AssertNothingWritten(m);
+    }
+
+    [Fact]
+    public void Guided_AnnouncesTheYubiKeyListing()
+    {
+        var m = Machine(11);
+        string? seenAtListing = null;
+        var console = new FakeConsole("\n1\n\nn\n") { IsInputRedirected = false };
+        m.Keys.OnListSerials = () => seenAtListing ??= console.OutText;
+        string[] args = ["init", "--no-password"];
+
+        var exit = CliRunner.Run(m.Context(console, args), args);
+
+        Assert.True(exit == 0, console.ErrorText + console.OutText);
+        Assert.NotNull(seenAtListing);
+        Assert.EndsWith("Looking for YubiKeys…", seenAtListing!.TrimEnd());
+        Assert.True(console.OutText.IndexOf("Looking for YubiKeys…", StringComparison.Ordinal)
+            < console.OutText.IndexOf("This machine has:", StringComparison.Ordinal));
     }
 
     [Fact]

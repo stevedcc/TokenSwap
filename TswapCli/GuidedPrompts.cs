@@ -19,7 +19,8 @@ public static class GuidedPrompts
         {
             if (!LooksLikeYubicoOtp(line))
                 return line;
-            c.Out.WriteLine("That was another YubiKey's one-time code; touch the flashing key, or answer the question.");
+            // Neutral: it can land at any prompt, also where no key is flashing.
+            c.Out.WriteLine("That was a YubiKey's one-time code; it was ignored.");
         }
         return null;
     }

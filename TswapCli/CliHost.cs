@@ -100,6 +100,7 @@ internal static class CliHost
         public TextWriter Error => inner.Error;
         public TextReader In => inner.In;
         public bool IsInputRedirected => false;
+        public bool IsOutputRedirected => false;
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo);
         public void SetForeground(ConsoleColor color) => inner.SetForeground(color);

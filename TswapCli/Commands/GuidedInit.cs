@@ -71,6 +71,7 @@ internal static class GuidedInit
         // enrolment, each announced first, so ykman's retries never make a silent wait.
         IReadOnlyList<int> serials = [];
         string? yubiKeyProblem = null;
+        c.Out.WriteLine("Looking for YubiKeys…");
         try
         {
             serials = ctx.YubiKeys.ListSerials();

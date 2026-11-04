@@ -22,7 +22,7 @@ public static class ChipProbe
             if (OperatingSystem.IsLinux())
                 return FromProbe(HardwareBackend.Tpm, ProbeLinuxTpm());
             if (OperatingSystem.IsWindows())
-                return Probe(HardwareBackend.Tpm, ProbeWindowsTpm);
+                return FromProbe(HardwareBackend.Tpm, ProbeWindowsTpm());
             return new MachineChip(null, null);
         }
         catch (Exception ex)
@@ -46,5 +46,5 @@ public static class ChipProbe
     private static (bool Available, string? Reason) ProbeLinuxTpm() => HardwareServices.LinuxTpmProbe();
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static bool ProbeWindowsTpm() => HardwareServices.WindowsTpmAvailable();
+    private static (bool Available, string? Reason) ProbeWindowsTpm() => HardwareServices.WindowsTpmProbe();
 }

@@ -79,6 +79,28 @@ internal static class PlatformCryptoProviderInterop
     /// <summary>Cheap, side-effect-free presence check — does not create or touch any key.</summary>
     public static bool IsAvailable() => Store.IsAvailable();
 
+    internal const string ProviderUnavailableReason =
+        "the Microsoft Platform Crypto Provider isn't available (no TPM, or it is disabled)";
+
+    /// <summary>
+    /// <see cref="IsAvailable"/> with the reason when it isn't (guided init lists it): the real store's
+    /// <see cref="CngPcpKeyStore.TryProbe"/>, or the test store's answer.
+    /// </summary>
+    public static (bool Available, string? Reason) Probe()
+    {
+        if (StoreOverride is { } fake)
+            return ProbeOutcome(fake.IsAvailable(), null);
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("The Windows TPM backend runs only on Windows.");
+        var failure = CngPcpKeyStore.Instance.TryProbe();
+        return ProbeOutcome(failure is null, failure);
+    }
+
+    /// <summary>The probe's answer: usable, or why not (CNG's message when it gave one).</summary>
+    internal static (bool Available, string? Reason) ProbeOutcome(bool available, CryptographicException? failure) =>
+        available ? (true, null)
+        : (false, failure?.Message is { } message && !string.IsNullOrWhiteSpace(message) ? message : ProviderUnavailableReason);
+
     private static void RequireAvailable()
     {
         if (!IsAvailable())
@@ -312,7 +334,10 @@ internal sealed class CngPcpKeyStore : IPcpKeyStore
 
     private readonly CngProvider _provider = new(ProviderName);
 
-    public bool IsAvailable()
+    public bool IsAvailable() => TryProbe() is null;
+
+    /// <summary>The provider's failure, or null when it can be used (guided init shows the reason).</summary>
+    public CryptographicException? TryProbe()
     {
         try
         {
@@ -321,11 +346,11 @@ internal sealed class CngPcpKeyStore : IPcpKeyStore
             // can't be loaded at all; returns false (not an exception) for a normal "no such
             // key" answer either way, so this only tests provider availability.
             _ = CngKey.Exists(AvailabilityProbeName, _provider);
-            return true;
+            return null;
         }
-        catch (CryptographicException)
+        catch (CryptographicException ex)
         {
-            return false;
+            return ex;
         }
     }
 

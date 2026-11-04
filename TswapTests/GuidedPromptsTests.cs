@@ -19,7 +19,8 @@ public class GuidedPromptsTests
     {
         var c = new FakeConsole("cccccbvjiflgrtrrkvuvdvnhlfrngkbckfbtveuftrgt\n1 3\n") { IsInputRedirected = false };
         Assert.Equal("1 3", GuidedPrompts.ReadAnswer(c));
-        Assert.Contains("That was another YubiKey's one-time code", c.OutText);
+        Assert.Contains("That was a YubiKey's one-time code; it was ignored.", c.OutText);
+        Assert.DoesNotContain("flashing", c.OutText);
     }
 
     [Fact]

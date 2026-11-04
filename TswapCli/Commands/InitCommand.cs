@@ -92,9 +92,10 @@ public sealed class InitCommand : ICliCommand
         SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
 
         // Guided init: with no slot named, init asks; without a terminal it can't, so it says which
-        // flags to use, before any store, refusal or hardware.
+        // flags to use, before any store, refusal or hardware. Both ends: 'tswap init | tee log' would
+        // run the interview into the pipe.
         var guided = !yubiKey && !tpm && !secureEnclave;
-        if (guided && c.IsInputRedirected)
+        if (guided && (c.IsInputRedirected || c.IsOutputRedirected))
             throw new TswapException(NoTerminalRefusal);
 
         var fileStore = ctx.Storage as IFileVaultStore

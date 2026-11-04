@@ -64,7 +64,14 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
 
     public void SetTouch(int serial, bool? requiresTouch) => _touch[serial] = requiresTouch;
 
-    public IReadOnlyList<int> ListSerials() => PluggedIn.ToList();
+    /// <summary>Guided init: called at the start of every <see cref="ListSerials"/> (what was on screen by then).</summary>
+    public Action? OnListSerials { get; set; }
+
+    public IReadOnlyList<int> ListSerials()
+    {
+        OnListSerials?.Invoke();
+        return PluggedIn.ToList();
+    }
 
     public byte[] Challenge(int serial, string challenge)
     {
