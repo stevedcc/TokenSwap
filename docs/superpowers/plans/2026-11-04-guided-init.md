@@ -32,7 +32,7 @@ over this plan.
   may have put a config in place or filled the folder. Extract them from `InitCommand.Execute` into
   `internal static void InitCommand.RefuseExistingVault(CommandContext ctx, IFileVaultStore fileStore, string vaultDir)`
   (same messages, same order) and call it in both places. At the second call, also refuse if `config.json` now
-  differs from what it was when the flow started (absent then and present now, or its bytes changed): a pending
+  differs from what it was when the flow started (absent then and present now, present then and gone now, or its bytes changed): a pending
   `slot request` or anything else written meanwhile is not overwritten. The message: `config.json changed while
   init was waiting ({path}); nothing was written. Run init again.` The config as it was at the start (after any
   "Reinitialize?" backup) is the one that may be replaced. What remains is a check-then-write gap of milliseconds,
@@ -244,7 +244,8 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
   `SimulatedYubiKeyService.FailWith` (above) and `public Action<int>? OnChallenge { get; set; }`, called at the start
   of `Challenge` (the folder-fill test uses it; no production seam); `public Func<MachineChip>? ChipOverride { get;
   set; }` on `FleetMachine`, used by `Context` instead of the `Tpm`/`SecureEnclave` mapping when set (the
-  unusable-chip tests). Whether the simulated Secure Enclave was
+  unusable-chip tests return `new MachineChip(null, "test reason")` or `new MachineChip(null, null)`: Task 1's record
+  carries the reason). Whether the simulated Secure Enclave was
   enrolled with presence is read from `m.Config.RequiresTouch` and the slot's blob, not from a new recorder.
 
 **Routing in `InitCommand.Execute`, in this order:**
@@ -334,11 +335,12 @@ line.
   and **last** `PrintRecoveryKeyBackupWarning`, so the recovery key's warning is the last thing on screen.
 - A chip enrolment that throws: no carry-on offer (the chip is one device). The `TswapException` propagates to
   `CliRunner`'s existing handler, which prints it and returns 1, as for every command today; `K_v`, any
-  `KEK_slot` and the stretched password are zeroed in `GuidedInit`'s `finally`. Nothing is written (the single
-  write hasn't happened). Ruling: no dedicated test, since it would need a production seam to make the chip fail;
-  the nothing-written guarantee is the single write, pinned by the other abort tests.
-- Order at the end, exactly: `SecurityWarnings.Acknowledge(config, <every new slot id>)` (no prompt; it only marks
-  the config) → `RefuseExistingVault` again → `CreateRecordVault` → other-machines question and guide → summary →
+  `KEK_slot`, the stretched password and the recovery private key (`AssembleKeyring` creates it in memory, before
+  the write) are zeroed in `GuidedInit`'s `finally`. Nothing is written (the single write hasn't happened). Tested
+  with the existing T12 seam `SimulatedHardwareService.ObserveCalls`: an observer that throws on `"Enroll"` makes
+  the simulated chip fail, with no new production seam.
+- Order at the end, exactly: `SecurityWarnings.Acknowledge(config, <every new slot id>)` (no prompt, no disk write:
+  it returns a changed in-memory `Config`) → `RefuseExistingVault` again → `CreateRecordVault` → other-machines question and guide → summary →
   `PrintVaultFolder` → `PrintRecoveryKeyBackupWarning` → zero the recovery private key.
 
 - [ ] **Step 1: Failing tests (`InitFlagsTests`)**
@@ -404,11 +406,21 @@ line.
     pick prompt, exit 1, and the message names YubiKeys and the chip as what was looked for.
   - `Guided_ChecksEachKeyBeforeItsChallenge` — keys 11, 12 picked: `Checking YubiKey 11…` precedes key 11's
     challenge in the output, likewise 12.
+  - `Guided_ChipEnrolmentFailure_WritesNothing` — Secure Enclave and key 11 picked; inside
+    `using (SimulatedHardwareService.ObserveCalls((_, call) => { if (call == "Enroll") throw new TswapException("simulated chip failure"); }))`:
+    exit 1, stderr contains `simulated chip failure`, no `config.json`, no `vault` folder, and key 11 was never
+    challenged (the chip is enrolled first).
   - `Guided_PendingRequestAppearedWhileWaiting_IsRefusedAtTheWrite` — no config at the start; `OnChallenge` runs
     `slot request` into the same config dir: the write is refused with the `config.json changed while init was
     waiting` message, and the pending-request config is unchanged.
   - `Guided_EofAtOtherMachines_StillPrintsTheRecoveryWarning` — stdin ends at the other-machines question: exit 0,
-    the vault opens, and the output ends with the recovery key backup warning.
+    the vault opens, the per-slot summary lines and the `Vault folder:` line are printed, and the output ends with the
+    recovery key backup warning.
+  - `Guided_PendingRequestChangedWhileWaiting_IsRefusedAtTheWrite` — a pending `slot request` config at the start,
+    "yes" to Reinitialize; `OnChallenge` runs another `slot request` (new bytes): the write is refused with the
+    `config.json changed while init was waiting` message, the new config is unchanged.
+  - `Guided_PicksTypedOutOfOrder_EnrolInListSerialsOrder` — keys 11, 12, picks typed `2 1`: key 11 is challenged
+    first (`Challenges` order) and the config's `KeyringSlotId` is key 11's slot.
   - `Guided_PendingSlotRequest_AsksReinitialize_NoChangesNothing_YesBacksUp` — after `slot request`: "no" → exit 0,
     config unchanged, no vault; "yes" → a `config.json.bak-*` whose content equals the pre-run config, and the
     guided flow continues to step 1; an EOF there afterwards leaves `config.json` unchanged (the backup stays, a
