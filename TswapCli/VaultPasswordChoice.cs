@@ -84,11 +84,13 @@ internal static class VaultPasswordChoice
     /// <see cref="NoPasswordLine"/> without one. Test mode (<c>TSWAP_TEST_KEY</c>) asks nothing, as its
     /// enrolments never have (a test's stdin may never close). With a password, the backend's own line
     /// and the version line are printed when the explanation wasn't, and the Windows TPM lockout line.
-    /// <para>Guided init: <paramref name="ask"/>, when given, asks the question instead of the one-line read
-    /// (it prints its own prompt, skips stray OTP lines, re-asks and ends the run at end of input); every
-    /// other caller passes nothing and keeps today's read.</para>
+    /// <para>Guided init: <paramref name="guided"/>, when given, words the question for the picked slots
+    /// (several, or one; every picked kind of hardware) and asks it with its own reader (its own prompt,
+    /// stray OTP lines skipped, re-asked, end of input ends the run). The guided flow runs only at a
+    /// terminal with its answers given, so it asks in test mode too. Every other caller passes nothing and
+    /// keeps today's text and read.</para>
     /// </summary>
-    public static bool Decide(CommandContext ctx, bool? flag, HardwareBackend backend, Func<bool>? ask = null)
+    public static bool Decide(CommandContext ctx, bool? flag, HardwareBackend backend, GuidedPasswordQuestion? guided = null)
     {
         var c = ctx.Console;
         bool chosen;
@@ -96,21 +98,27 @@ internal static class VaultPasswordChoice
         {
             chosen = given;
             if (chosen)
-                PrintBackendLines(c, backend);
+                PrintBackendLines(c, guided?.Kinds ?? [backend]);
+        }
+        else if (guided is not null && !c.IsInputRedirected)
+        {
+            c.Out.WriteLine();
+            c.Out.WriteLine(guided.SeveralSlots
+                ? "Add a vault password? You choose next which of the slots need it."
+                : "Add a vault password to this slot?");
+            c.Out.WriteLine($"Then every unlock {(guided.SeveralSlots ? "with a slot that needs it " : "")}needs it, or a running agent that holds it in memory.");
+            c.Out.WriteLine($"Without one, anyone who can use this machine's {string.Join(" or ", guided.Kinds.Select(HardwareName))} as you can open the vault.");
+            PrintBackendLines(c, guided.Kinds);
+            chosen = guided.Ask();
         }
         else if (!c.IsInputRedirected && ctx.TestKey is null)
         {
             c.Out.WriteLine();
             c.Out.WriteLine("Add a vault password to this slot? Then every unlock needs it, or a running agent that holds it in memory.");
             c.Out.WriteLine($"Without one, anyone who can use this machine's {HardwareName(backend)} as you can open the vault.");
-            PrintBackendLines(c, backend);
-            if (ask is not null)
-                chosen = ask();
-            else
-            {
-                c.Out.Write(Question);
-                chosen = c.ReadLine()?.Trim().ToLowerInvariant() is "yes" or "y";
-            }
+            PrintBackendLines(c, [backend]);
+            c.Out.Write(Question);
+            chosen = c.ReadLine()?.Trim().ToLowerInvariant() is "yes" or "y";
         }
         else
         {
@@ -147,14 +155,21 @@ internal static class VaultPasswordChoice
 #pragma warning restore CA1416
     }
 
-    private static void PrintBackendLines(IConsole c, HardwareBackend backend)
+    /// <summary>The backend lines for every kind of hardware that may take the password, then the version line once.</summary>
+    private static void PrintBackendLines(IConsole c, IReadOnlyCollection<HardwareBackend> backends)
     {
-        if (backend == HardwareBackend.YubiKey)
+        if (backends.Contains(HardwareBackend.YubiKey))
             c.Out.WriteLine(YubiKeyLine);
-        else if (backend == HardwareBackend.SecureEnclave)
+        if (backends.Contains(HardwareBackend.SecureEnclave))
             c.Out.WriteLine(SecureEnclaveLine);
         c.Out.WriteLine(VersionLine);
     }
+
+    /// <summary>
+    /// Guided init's vault-password question: whether several slots were picked (the next question chooses
+    /// which need it), every picked kind of hardware, and the reader that asks (see <see cref="Decide"/>).
+    /// </summary>
+    internal sealed record GuidedPasswordQuestion(bool SeveralSlots, IReadOnlyList<HardwareBackend> Kinds, Func<bool> Ask);
 
     internal static string HardwareName(HardwareBackend backend) => backend switch
     {

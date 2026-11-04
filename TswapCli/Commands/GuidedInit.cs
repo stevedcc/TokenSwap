@@ -28,6 +28,11 @@ internal static class GuidedInit
     internal const string PasswordPrompt = "Add a vault password? (yes/no): ";
     internal const string RecoveryPrompt = "Add a recovery slot (recommended)? (Y/n): ";
     internal const string OtherMachinesPrompt = "Will other machines use this vault? (y/N): ";
+    /// <summary>What the Secure Enclave touch question decides, in the guided flow's terms (not the flags').</summary>
+    internal const string TouchExplanation =
+        "With touch: every unlock asks for Touch ID or your login password. Without: the Secure Enclave opens the vault " +
+        "with no prompt at all (anyone using this Mac as you can open it).";
+
     internal const string PasswordDroppedLine = "Vault password: dropped (no remaining slot needed it)";
 
     /// <summary>One device the guided flow can make a slot for: a YubiKey (by serial) or this machine's chip.</summary>
@@ -110,7 +115,7 @@ internal static class GuidedInit
         if (chipBackend == HardwareBackend.SecureEnclave)
         {
             c.Out.WriteLine();
-            c.Out.WriteLine(SecureEnclaveTouchChoice.WhatEachDoes);
+            c.Out.WriteLine(TouchExplanation);
             requirePresence = AskYesNo(c, TouchPrompt, defaultAnswer: null);
             SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
         }
@@ -120,7 +125,10 @@ internal static class GuidedInit
         // Asked through ReadAnswer like every guided prompt: a stray OTP line is skipped, an unclear answer
         // re-asks, and end of input stops the run (exit 1, nothing written) instead of meaning "no".
         using var password = InitCommand.NewVaultPassword(ctx, passwordFlag, chipBackend ?? HardwareBackend.YubiKey,
-            () => AskYesNo(c, PasswordPrompt, defaultAnswer: null));
+            new VaultPasswordChoice.GuidedPasswordQuestion(
+                SeveralSlots: picked.Count > 1,
+                Kinds: [.. picked.Select(p => p.Device.Chip ?? HardwareBackend.YubiKey).Distinct()],
+                Ask: () => AskYesNo(c, PasswordPrompt, defaultAnswer: null)));
         var vaultKey = password?.VaultKey ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = password?.VaultId ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         byte[]? assembledKey = null;
@@ -139,6 +147,11 @@ internal static class GuidedInit
                     var needing = AskNumbers(c, WhichSlotsPrompt, picked.Count, emptyMeansAll: true);
                     for (var i = 0; i < picked.Count; i++)
                         picked[i].NeedsPassword = needing is null || needing.Contains(i);
+                    // The chip opens the vault on this machine with no password, so a password on the other
+                    // slots protects nothing here: worth it only for a key kept elsewhere.
+                    if (chipSlot is { NeedsPassword: false } && picked.Any(p => p.NeedsPassword))
+                        c.Out.WriteLine($"Note: the {chipSlot.Device.Label} slot opens without the password, so on this machine the password " +
+                                        "adds nothing; leave a slot out only for a backup key kept elsewhere.");
                 }
                 else
                 {
@@ -229,7 +242,6 @@ internal static class GuidedInit
                         newSlotIds.Add(Convert.ToBase64String(added.SlotId));
                     }
                     slot.Enrolled = true;
-                    YubiKeySlotEnrollment.PrintTouchPolicy(c, slot.Blob); // explained here, acknowledged below
                 }
                 catch (TswapException ex)
                 {
@@ -240,6 +252,9 @@ internal static class GuidedInit
                     if (!AskYesNo(c, $"Carry on without YubiKey {serial}? (y/N): ", defaultAnswer: false))
                         throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
                 }
+                // Outside the try: a key already added is never offered for dropping.
+                if (slot.Enrolled)
+                    YubiKeySlotEnrollment.PrintTouchPolicy(c, slot.Blob!); // explained here, acknowledged below
             }
 
             if (config is null)
@@ -337,7 +352,7 @@ internal static class GuidedInit
             var numbers = parts.Select(p => int.TryParse(p, NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0).ToList();
             if (numbers.All(n => n >= 1 && n <= count) && numbers.Distinct().Count() == numbers.Count)
                 return [.. numbers.Select(n => n - 1)];
-            c.Out.WriteLine($"Pick numbers from 1-{count}, each at most once.");
+            c.Out.WriteLine(count == 1 ? "Pick 1." : $"Pick numbers from 1-{count}, each at most once.");
         }
     }
 

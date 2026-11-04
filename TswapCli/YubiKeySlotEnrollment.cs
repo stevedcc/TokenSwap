@@ -89,25 +89,32 @@ internal static class YubiKeySlotEnrollment
         // read a slot's touch setting); a service that can't tell falls back to its own detection.
         var probe = YubiKeySlotBlob.Create(serial, requiresTouch: null);
         var answer = ctx.YubiKeys.ChallengeReportingTouch(serial, probe.ChallengeString);
-        var blob = probe.WithRequiresTouch(answer.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial));
-        if (password is not null)
-            blob = blob.WithPassword();
         var first = answer.Response;
-        var second = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
+        // The first response is zeroed on every path from here, also when the second challenge fails.
         try
         {
-            if (!CryptographicOperations.FixedTimeEquals(first, second))
-                throw new TswapException(
-                    $"YubiKey {serial} answered the same challenge differently; it can't be used as a slot. " +
-                    "Check that its slot 2 is configured for HMAC-SHA1 challenge-response, or use another key.");
-            return (blob, password is null
-                ? YubiKeySlotKek.Derive(first, blob.Salt, slotId)
-                : YubiKeySlotKek.DeriveV2(first, password, blob.Salt, slotId));
+            var blob = probe.WithRequiresTouch(answer.AskedForTouch ?? ctx.YubiKeys.DetectTouchRequirement(serial));
+            if (password is not null)
+                blob = blob.WithPassword();
+            var second = ctx.YubiKeys.Challenge(serial, blob.ChallengeString);
+            try
+            {
+                if (!CryptographicOperations.FixedTimeEquals(first, second))
+                    throw new TswapException(
+                        $"YubiKey {serial} answered the same challenge differently; it can't be used as a slot. " +
+                        "Check that its slot 2 is configured for HMAC-SHA1 challenge-response, or use another key.");
+                return (blob, password is null
+                    ? YubiKeySlotKek.Derive(first, blob.Salt, slotId)
+                    : YubiKeySlotKek.DeriveV2(first, password, blob.Salt, slotId));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(second);
+            }
         }
         finally
         {
             CryptographicOperations.ZeroMemory(first);
-            CryptographicOperations.ZeroMemory(second);
         }
     }
 

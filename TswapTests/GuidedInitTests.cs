@@ -293,6 +293,8 @@ public sealed class GuidedInitTests : IDisposable
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(3, Count(stdout, TouchPrompt));
+        Assert.Contains("With touch: every unlock asks for Touch ID or your login password. Without: the Secure Enclave opens the vault with no prompt at all (anyone using this Mac as you can open it).", stdout);
+        Assert.DoesNotContain("--secure-enclave needs exactly one", stdout);
         Assert.True(m.Config.RequiresTouch);
         // The simulated Secure Enclave records the presence choice in the blob's last byte (1: required).
         var machine = m.Keyring.Slots.Single(s => s.Kind == SlotKind.Machine);
@@ -325,6 +327,10 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\nyes\n{Password}\n{Password}\n1\n\nn\n", "init");
 
         Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains("Add a vault password? You choose next which of the slots need it.", stdout);
+        Assert.DoesNotContain("Add a vault password to this slot?", stdout);
+        Assert.Contains(VaultPasswordChoice.YubiKeyLine, stdout);
+        Assert.DoesNotContain("the password adds nothing", stdout); // no chip left out
         Assert.Contains(WhichSlotsPrompt, stdout);
         Assert.Contains("YubiKey 11: password", stdout);
         Assert.Contains("YubiKey 12: no password", stdout);
@@ -441,7 +447,58 @@ public sealed class GuidedInitTests : IDisposable
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(2, Count(stdout, GuidedPasswordQuestion));
+        Assert.Contains("Add a vault password to this slot?", stdout); // one slot picked
         Assert.True(BlobOf(m, 11).RequiresPassword);
+    }
+
+    [Fact]
+    public void Guided_ChipLeftOutOfThePassword_IsNoted()
+    {
+        var m = Machine(11);
+        m.Tpm = RandomNumberGenerator.GetBytes(32);
+
+        // Key 11 and the TPM; a password on slot 1 (key 11) only: the TPM opens the vault without it.
+        var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\nyes\n{Password}\n{Password}\n1\n\nn\n", "init");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains(
+            "Note: the TPM slot opens without the password, so on this machine the password adds nothing; leave a slot out only for a backup key kept elsewhere.",
+            stdout);
+        Assert.Contains("TPM: no password", stdout);
+        Assert.Contains("YubiKey 11: password", stdout);
+    }
+
+    [Fact]
+    public void Guided_KeyAndTpm_EachOpensTheVault()
+    {
+        var m = Machine(11);
+        var tpm = RandomNumberGenerator.GetBytes(32);
+        m.Tpm = tpm;
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\n\nn\n", "init", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(HardwareBackend.Tpm, m.Config.Backend);
+        Assert.False(m.Config.RequiresTouch);
+        Assert.Contains("TPM: no password", stdout);
+        Assert.Equal([11], YubiKeySerials(m));
+        var (tpmExit, _, tpmErr) = NamesWith(m); // no key plugged in: the TPM alone
+        Assert.True(tpmExit == 0, tpmErr);
+        m.Tpm = null;
+        var (keyExit, _, keyErr) = NamesWith(m, serials: 11);
+        Assert.True(keyExit == 0, keyErr);
+    }
+
+    [Fact]
+    public void Guided_BadPick_WithOneEntry_SaysPick1()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, _) = m.RunOnTerminal("\n2\n", "init");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Pick 1", stdout);
+        Assert.DoesNotContain("1-1", stdout);
     }
 
     [Fact]
