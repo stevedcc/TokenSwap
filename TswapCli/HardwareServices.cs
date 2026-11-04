@@ -105,4 +105,17 @@ internal static class HardwareServices
             throw new TswapException("--secure-enclave is only supported on macOS.");
         return OwnerScopedHardwareService.Wrap(new SecureEnclaveHardwareService(requirePresence), ownerScope);
     }
+
+    /// <summary>
+    /// <see cref="ChipProbe"/>'s presence checks, here because the Secure Enclave service may be named
+    /// in code only in this file (<c>SecureEnclaveFactoryScanTests</c>). They create no key.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    public static bool SecureEnclaveAvailable() => SecureEnclaveHardwareService.IsAvailable();
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public static bool LinuxTpmAvailable() => LinuxTpmHardwareService.IsAvailable();
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static bool WindowsTpmAvailable() => WindowsTpmHardwareService.IsAvailable();
 }

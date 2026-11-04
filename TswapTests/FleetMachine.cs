@@ -147,6 +147,7 @@ public sealed class FleetMachine : IDisposable
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
+            ChipProbe = () => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null),
         };
     }
 

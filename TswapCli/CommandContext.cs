@@ -122,6 +122,11 @@ public sealed record CommandContext(
     /// </summary>
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// Which chip this machine can offer (guided init); tests substitute their simulated one.
+    /// </summary>
+    public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

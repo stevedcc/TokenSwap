@@ -42,6 +42,9 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
     /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine.
     /// </summary>
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => Tpm2ToolsInterop.IsAvailable();
+
     public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
