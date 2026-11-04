@@ -3,9 +3,11 @@
 #   package.sh <rid> <publish-dir> <dist-dir> [--smoke]
 # macOS: libtswapse.dylib (the Secure Enclave shim) goes next to tswap, where the shim's resolver looks for it
 # (AppContext.BaseDirectory), so the archive works unpacked in place, without the install script (issue #238).
-# A missing dylib fails the packaging rather than shipping an archive without the Secure Enclave.
+# A missing dylib, or a rid this script doesn't know, fails the packaging rather than shipping a wrong archive.
 # --smoke: unpack the archive into an empty folder and run what is in it (the shipped bytes and permissions):
-# `tswap prompt-hash` (needs no vault) and, on macOS, load the shipped dylib and resolve the shim's entry point.
+# `tswap prompt-hash` (needs no vault) and, on macOS, a Secure Enclave vault in a throwaway config folder (init with
+# no touch, password or recovery prompt, then `names` to unlock it): that loads the shipped dylib through tswap's own
+# resolver. Needs a Mac with a Secure Enclave (GitHub's macOS runners have one, see ci.yml's probe).
 # Make the archive on the binary's own platform: upload-artifact doesn't keep the execute bit.
 set -euo pipefail
 
@@ -15,9 +17,13 @@ if [ $# -lt 3 ] || [ $# -gt 4 ] || { [ $# -eq 4 ] && [ "$4" != --smoke ]; }; the
 fi
 rid=$1 publish=$2 dist=$3 smoke=${4:-}
 
-files=(tswap)
 case "$rid" in
-  osx-*) files+=(libtswapse.dylib) ;;
+  linux-x64 | linux-arm64) files=(tswap) ;;
+  osx-arm64 | osx-x64) files=(tswap libtswapse.dylib) ;;
+  *)
+    echo "package.sh: unknown rid '$rid' (expected linux-x64, linux-arm64, osx-arm64 or osx-x64)" >&2
+    exit 2
+    ;;
 esac
 for f in "${files[@]}"; do
   if [ ! -f "$publish/$f" ]; then
@@ -26,10 +32,12 @@ for f in "${files[@]}"; do
   fi
 done
 
-mkdir -p "$dist"
+mkdir -p -- "$dist"
 archive="$dist/tswap-$rid.tar.gz"
 chmod +x "$publish/tswap"
-tar czf "$archive" -C "$publish" "${files[@]}"
+# Written under a temporary name and renamed, so an interrupted run never leaves a partial archive under the real name.
+tar czf "$archive.partial" -C "$publish" "${files[@]}"
+mv -f "$archive.partial" "$archive"
 echo "packed $archive: ${files[*]}"
 
 if [ "$smoke" = --smoke ]; then
@@ -39,9 +47,10 @@ if [ "$smoke" = --smoke ]; then
   "$check/tswap" prompt-hash
   case "$rid" in
     osx-*)
-      # dlopen + dlsym of the shipped dylib: a missing, unsigned or wrong-architecture library fails here.
-      python3 -c 'import ctypes, sys; ctypes.CDLL(sys.argv[1]).tswap_se_available' "$check/libtswapse.dylib"
-      echo "loaded $check/libtswapse.dylib (tswap_se_available resolved)"
+      mkdir -m 700 "$check/config"
+      TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery
+      TSWAP_CONFIG_DIR="$check/config" "$check/tswap" names
+      echo "Secure Enclave vault made and unlocked by the unpacked tswap (libtswapse.dylib loaded from the archive)"
       ;;
   esac
 fi

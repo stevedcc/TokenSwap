@@ -104,7 +104,8 @@ Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive pe
 Unpack it into a folder of your own and run `tswap` from there, or install it with `installscript` (below).
 
 On macOS the archive holds two files, `tswap` and `libtswapse.dylib` (the Secure Enclave support). Keep them in
-the same folder: tswap loads the library from next to itself.
+the same folder: tswap loads the library from next to itself. A symlink to `tswap` (say from `~/bin`) works, since
+the folder is the real file's. tswap runs code from that folder, so keep it writable only by you.
 
 The binaries are not signed. macOS refuses a browser download ("Apple cannot verify…"); clear the quarantine
 mark on the unpacked folder, as yourself (no admin needed):

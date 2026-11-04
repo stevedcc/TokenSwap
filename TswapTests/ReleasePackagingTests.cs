@@ -37,13 +37,25 @@ public class ReleasePackagingTests : IDisposable
             psi.ArgumentList.Add(arg);
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdout.Result + stderr);
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(1)))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail($"{fileName} {string.Join(' ', args)} did not finish within a minute");
+        }
+        return (process.ExitCode, stdout.Result + stderr.Result);
     }
 
-    private (int ExitCode, string Output) Package(string rid, string publish) =>
-        Run("bash", RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"));
+    private (int ExitCode, string Output) Package(string rid, string publish, params string[] extra) =>
+        Run("bash", [RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"), .. extra]);
+
+    /// <summary>A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with <paramref name="exitCode"/>.</summary>
+    private string PublishFakeBinary(int exitCode)
+    {
+        var publish = Publish("tswap");
+        File.WriteAllText(Path.Combine(publish, "tswap"), $"#!/bin/sh\necho \"ran from $(dirname \"$0\") with: $*\"\nexit {exitCode}\n");
+        return publish;
+    }
 
     private List<string> ArchiveEntries(string rid)
     {
@@ -87,5 +99,52 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         Assert.Equal(["tswap"], ArchiveEntries("linux-x64"));
+    }
+
+    /// <summary>
+    /// Review of #239: CI derives the rid from a folder name, so a wrong folder (say <c>net10.0/publish</c>) must fail
+    /// the packaging, not pack a Linux-style archive for a macOS job and smoke-test nothing about the dylib.
+    /// </summary>
+    [Fact]
+    public void UnknownRid_FailsWithoutAnArchive()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = Package("net10.0", Publish("tswap", "libtswapse.dylib"));
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("unknown rid 'net10.0'", output);
+        Assert.False(Directory.Exists(Path.Combine(_dir, "dist")) && Directory.EnumerateFiles(Path.Combine(_dir, "dist")).Any(),
+            "no archive may be left behind");
+    }
+
+    /// <summary>--smoke runs the binary unpacked from the archive (not the one in the publish folder), with prompt-hash.</summary>
+    [Fact]
+    public void Smoke_RunsTheBinaryUnpackedFromTheArchive()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var publish = PublishFakeBinary(exitCode: 0);
+        var (exitCode, output) = Package("linux-x64", publish, "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        var ran = Assert.Single(output.Split('\n'), line => line.StartsWith("ran from "));
+        Assert.EndsWith(" with: prompt-hash", ran);
+        Assert.DoesNotContain(publish, ran);
+    }
+
+    /// <summary>A binary that fails its smoke run fails the packaging.</summary>
+    [Fact]
+    public void Smoke_WithABinaryThatFails_FailsThePackaging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 3), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("ran from ", output);
     }
 }
