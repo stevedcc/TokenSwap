@@ -31,7 +31,11 @@ over this plan.
   guided flow waits minutes for keys and answers, and meanwhile another `init`, a `slot request` or a sync tool
   may have put a config in place or filled the folder. Extract them from `InitCommand.Execute` into
   `internal static void InitCommand.RefuseExistingVault(CommandContext ctx, IFileVaultStore fileStore, string vaultDir)`
-  (same messages, same order) and call it in both places. What remains is a check-then-write gap of milliseconds,
+  (same messages, same order) and call it in both places. At the second call, also refuse if `config.json` now
+  differs from what it was when the flow started (absent then and present now, or its bytes changed): a pending
+  `slot request` or anything else written meanwhile is not overwritten. The message: `config.json changed while
+  init was waiting ({path}); nothing was written. Run init again.` The config as it was at the start (after any
+  "Reinitialize?" backup) is the one that may be replaced. What remains is a check-then-write gap of milliseconds,
   the same as every `init` today; accepted and noted in a comment.
 - Existing flags behave as today: `--tpm`, `--secure-enclave --with-touch|--no-touch`, `--password`,
   `--no-password`, `--no-recovery`, `--folder <dir>`, `--vault-dir <folder>`.
@@ -231,13 +235,16 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
   the vault will be created in (`--folder`'s, or `<config dir>/vault`), already checked by `RequireAbsentOrEmpty`;
   `newFolder` is `--folder`'s raw value or null (the guide uses it to tell a folder of the user's choosing, e.g. a sync folder or an external drive, from the default).
   Ruling (design left it to the builder): the config's `KeyringSlotId` is the id of the slot built first through
-  `AssembleKeyring` (the chip's if picked, else the first YubiKey enrolled, in `ListSerials` order), as
+  `AssembleKeyring` (the chip's if picked, else the first picked YubiKey in `ListSerials` order; YubiKeys are
+  enrolled in `ListSerials` order whatever order the picks were typed in), as
   `AssembleKeyring` sets it today; "machine slot" in this plan means that slot.
 - Test harness members used (they exist): `FakeConsole { IsInputRedirected = false }`, `FleetMachine.RunOnTerminal`,
   `.Run`, `.Ok`, `.Keys` (`SimulatedYubiKeyService.WithKeys(...)`, settable `PluggedIn`, `Challenges`),
   settable `.SecureEnclave` / `.Tpm` (null = absent), `.Config`, `.ConfigPath`, `.Dir`. To build in this task:
   `SimulatedYubiKeyService.FailWith` (above) and `public Action<int>? OnChallenge { get; set; }`, called at the start
-  of `Challenge` (the folder-fill test uses it; no production seam). Whether the simulated Secure Enclave was
+  of `Challenge` (the folder-fill test uses it; no production seam); `public Func<MachineChip>? ChipOverride { get;
+  set; }` on `FleetMachine`, used by `Context` instead of the `Tpm`/`SecureEnclave` mapping when set (the
+  unusable-chip tests). Whether the simulated Secure Enclave was
   enrolled with presence is read from `m.Config.RequiresTouch` and the slot's blob, not from a new recorder.
 
 **Routing in `InitCommand.Execute`, in this order:**
@@ -277,8 +284,10 @@ line.
   Entries numbered from 1: YubiKeys in `ListSerials` order, then the chip. A `ListSerials` failure is shown as one
   line `YubiKeys: <message>` and the chip stays offered.
 - **Every** guided prompt reads through `GuidedPrompts.ReadAnswer` (pick, touch, which slots, recovery, carry on,
-  other machines), so a stray Yubico OTP line is skipped wherever it lands. EOF at any of them → exit 1, nothing
-  written.
+  other machines), so a stray Yubico OTP line is skipped wherever it lands. EOF at any prompt **before the write**
+  → exit 1, nothing written. The other-machines question comes after the write: EOF there counts as "no", and the
+  summary, `PrintVaultFolder` and `PrintRecoveryKeyBackupWarning` always print once `CreateRecordVault` has
+  succeeded (exit 0). EOF at routing step 4's "Reinitialize?" is like any answer but "yes": exit 0, nothing changed.
 - No pickable entry (no YubiKey listed and no usable chip) → before any pick prompt, a message naming what was
   looked for and why each wasn't usable, exit 1, nothing written. An unusable chip with no reason is listed as
   `(not available: reason unknown)`.
@@ -323,8 +332,11 @@ line.
   ctx.Prefix, fileStore.ConfigDir, vaultDir, newFolder is not null)`; then the summary lines (one per slot:
   `YubiKey {serial}`, `Secure Enclave (touch|no touch)`, `TPM`, each `password`/`no password`), `PrintVaultFolder`,
   and **last** `PrintRecoveryKeyBackupWarning`, so the recovery key's warning is the last thing on screen.
-- A chip enrolment that throws: no carry-on offer (the chip is one device); the exception propagates, exit 1,
-  nothing written, key material zeroed.
+- A chip enrolment that throws: no carry-on offer (the chip is one device). The `TswapException` propagates to
+  `CliRunner`'s existing handler, which prints it and returns 1, as for every command today; `K_v`, any
+  `KEK_slot` and the stretched password are zeroed in `GuidedInit`'s `finally`. Nothing is written (the single
+  write hasn't happened). Ruling: no dedicated test, since it would need a production seam to make the chip fail;
+  the nothing-written guarantee is the single write, pinned by the other abort tests.
 - Order at the end, exactly: `SecurityWarnings.Acknowledge(config, <every new slot id>)` (no prompt; it only marks
   the config) → `RefuseExistingVault` again → `CreateRecordVault` → other-machines question and guide → summary →
   `PrintVaultFolder` → `PrintRecoveryKeyBackupWarning` → zero the recovery private key.
@@ -387,12 +399,16 @@ line.
     `config.json` names the shared folder, and `names` opens the vault (the no-terminal refusal doesn't catch it).
   - `VaultDir_WithKeyring_IsTodaysUsageError` — `init --vault-dir <folder> --keyring`: exit 1, `Usage:` text, no
     `--keyring` message, nothing written.
-  - `Guided_UnusableChip_IsListedUnnumbered` — no keys, a chip probe returning `(null, "test reason")`: the line
-    `(not available: test reason)`, no pick prompt, exit 1 (the no-pickable-entry message).
+  - `Guided_UnusableChip_IsListedUnnumbered` (theory: reason `"test reason"` → `(not available: test reason)`; reason
+    null → `(not available: reason unknown)`) — no keys, `ChipOverride` returning `(null, reason)`: that line, no
+    pick prompt, exit 1, and the message names YubiKeys and the chip as what was looked for.
   - `Guided_ChecksEachKeyBeforeItsChallenge` — keys 11, 12 picked: `Checking YubiKey 11…` precedes key 11's
     challenge in the output, likewise 12.
-  - `Guided_ChipEnrolmentFailure_WritesNothing` — the chip's simulated enrolment throws: exit 1, no `config.json`,
-    no `vault`, the message shown.
+  - `Guided_PendingRequestAppearedWhileWaiting_IsRefusedAtTheWrite` — no config at the start; `OnChallenge` runs
+    `slot request` into the same config dir: the write is refused with the `config.json changed while init was
+    waiting` message, and the pending-request config is unchanged.
+  - `Guided_EofAtOtherMachines_StillPrintsTheRecoveryWarning` — stdin ends at the other-machines question: exit 0,
+    the vault opens, and the output ends with the recovery key backup warning.
   - `Guided_PendingSlotRequest_AsksReinitialize_NoChangesNothing_YesBacksUp` — after `slot request`: "no" → exit 0,
     config unchanged, no vault; "yes" → a `config.json.bak-*` whose content equals the pre-run config, and the
     guided flow continues to step 1; an EOF there afterwards leaves `config.json` unchanged (the backup stays, a
@@ -411,8 +427,9 @@ line.
   terminal) so they still reach it. **Stop rule:** if a listed test's assertions can't hold after an input-only change
   (its `--keyring` input created what it asserts, and `--yubikey` creates something different), stop and report the
   test and why; don't change its assertions. Gate: `grep -rn -- '--keyring' .` (repo-wide, excluding `bin/`, `obj/`
-  and `docs/superpowers/`) lists only the refusal, its tests and comments explaining the removal; the docs are
-  Task 6's.
+  and `docs/superpowers/`, and at this step also README.md, MULTI_MACHINE_KEYING.md and HARDWARE_BACKENDS.md,
+  which Task 6 rewrites) lists only the refusal, its tests and comments explaining the removal. Task 6 re-runs the
+  same gate without the three doc exclusions.
 - [ ] **Step 6: Run** `./runtests.sh` — Expected: all pass. Break-it-once: make `GuidedInit` write the config
   before the last enrolment; `Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn` must fail. Revert.
 - [ ] **Step 7: Commits:** (a) tests' input changes (message says: inputs only, `--keyring` removed by the spec),
@@ -425,8 +442,10 @@ of the guided flow), `MULTI_MACHINE_KEYING.md` (lines ~262, 283, 297), `HARDWARE
 (the `init` line in "No sudo"), and `tswap prompt`'s command text if it lists `init` flags
 (`grep -rn "init" TswapCore/AgentPrompt*`).
 
-- [ ] **Step 1:** `grep -rn -- "--keyring" --include=*.md --include=*.cs .` returns only the refusal in
-  `InitCommand.cs`, its test, and the design/plan documents.
+- [ ] **Step 1:** Task 5's gate, without its three doc exclusions, passes: `--keyring` appears only in the refusal,
+  its tests, comments explaining the removal, and `docs/superpowers/`. (Note, not a change: `VaultPasswordChoice`'s
+  "Nothing was changed." stays as today's text even when a "Reinitialize?" backup was taken earlier; the backup is
+  a copy.)
 - [ ] **Step 2:** If `tswap prompt`'s text changed, `prompt-hash` tests are updated to the new hash (input change,
   said in the commit).
 - [ ] **Step 3:** `./runtests.sh` — Expected: all pass.
