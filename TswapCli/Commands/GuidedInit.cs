@@ -24,6 +24,8 @@ internal static class GuidedInit
     internal const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
     internal const string TouchPrompt = "Touch ID (or your login password) on every unlock? (y/n): ";
     internal const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
+    /// <summary>The vault-password question on the guided path: no default, like every guided yes/no question that matters.</summary>
+    internal const string PasswordPrompt = "Add a vault password? (yes/no): ";
     internal const string RecoveryPrompt = "Add a recovery slot (recommended)? (Y/n): ";
     internal const string OtherMachinesPrompt = "Will other machines use this vault? (y/N): ";
     internal const string PasswordDroppedLine = "Vault password: dropped (no remaining slot needed it)";
@@ -115,7 +117,10 @@ internal static class GuidedInit
 
         // Step 4: one vault password, for the slots that need it. K_v and the vault id are random either
         // way (NewVaultPassword draws them for the vault-password file), so every slot wraps the same K_v.
-        using var password = InitCommand.NewVaultPassword(ctx, passwordFlag, chipBackend ?? HardwareBackend.YubiKey);
+        // Asked through ReadAnswer like every guided prompt: a stray OTP line is skipped, an unclear answer
+        // re-asks, and end of input stops the run (exit 1, nothing written) instead of meaning "no".
+        using var password = InitCommand.NewVaultPassword(ctx, passwordFlag, chipBackend ?? HardwareBackend.YubiKey,
+            () => AskYesNo(c, PasswordPrompt, defaultAnswer: null));
         var vaultKey = password?.VaultKey ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = password?.VaultId ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         byte[]? assembledKey = null;

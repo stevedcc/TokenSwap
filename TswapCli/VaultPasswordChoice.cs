@@ -84,8 +84,11 @@ internal static class VaultPasswordChoice
     /// <see cref="NoPasswordLine"/> without one. Test mode (<c>TSWAP_TEST_KEY</c>) asks nothing, as its
     /// enrolments never have (a test's stdin may never close). With a password, the backend's own line
     /// and the version line are printed when the explanation wasn't, and the Windows TPM lockout line.
+    /// <para>Guided init: <paramref name="ask"/>, when given, asks the question instead of the one-line read
+    /// (it prints its own prompt, skips stray OTP lines, re-asks and ends the run at end of input); every
+    /// other caller passes nothing and keeps today's read.</para>
     /// </summary>
-    public static bool Decide(CommandContext ctx, bool? flag, HardwareBackend backend)
+    public static bool Decide(CommandContext ctx, bool? flag, HardwareBackend backend, Func<bool>? ask = null)
     {
         var c = ctx.Console;
         bool chosen;
@@ -101,8 +104,13 @@ internal static class VaultPasswordChoice
             c.Out.WriteLine("Add a vault password to this slot? Then every unlock needs it, or a running agent that holds it in memory.");
             c.Out.WriteLine($"Without one, anyone who can use this machine's {HardwareName(backend)} as you can open the vault.");
             PrintBackendLines(c, backend);
-            c.Out.Write(Question);
-            chosen = c.ReadLine()?.Trim().ToLowerInvariant() is "yes" or "y";
+            if (ask is not null)
+                chosen = ask();
+            else
+            {
+                c.Out.Write(Question);
+                chosen = c.ReadLine()?.Trim().ToLowerInvariant() is "yes" or "y";
+            }
         }
         else
         {

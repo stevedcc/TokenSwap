@@ -619,9 +619,10 @@ public sealed class InitCommand : ICliCommand
     /// <c>K_v</c> and the vault id are drawn here, before enrolment, because the <c>vault-password</c> file is
     /// keyed to both; the password is asked for twice. Null without a password.
     /// </summary>
-    internal static NewPassword? NewVaultPassword(CommandContext ctx, bool? flag, HardwareBackend backend)
+    /// <param name="ask">Guided init's own read of the question (see <see cref="VaultPasswordChoice.Decide"/>); null elsewhere.</param>
+    internal static NewPassword? NewVaultPassword(CommandContext ctx, bool? flag, HardwareBackend backend, Func<bool>? ask = null)
     {
-        if (!VaultPasswordChoice.Decide(ctx, flag, backend))
+        if (!VaultPasswordChoice.Decide(ctx, flag, backend, ask))
             return null;
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);

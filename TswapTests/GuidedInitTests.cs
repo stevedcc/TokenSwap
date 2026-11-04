@@ -398,6 +398,52 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(openExit == 0, openErr);
     }
 
+    private const string GuidedPasswordQuestion = "Add a vault password? (yes/no): ";
+
+    [Fact]
+    public void Guided_StrayOtpLine_AtThePasswordQuestion_IsSkipped()
+    {
+        var m = Machine(11, 12);
+
+        // The OTP line neither answers nor aborts; "yes", the password twice, Enter = all slots.
+        var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\n{Otp}\nyes\n{Password}\n{Password}\n\n\nn\n", "init");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains("That was another YubiKey's one-time code", stdout);
+        Assert.True(File.Exists(PasswordVaultTestSupport.VaultPasswordPath(m)));
+        foreach (var serial in new[] { 11, 12 })
+        {
+            Assert.NotEqual(0, NamesWith(m, serials: serial).Exit);
+            var (okExit, _, okErr) = NamesWith(m, Password + "\n", terminal: true, serial);
+            Assert.True(okExit == 0, okErr);
+        }
+    }
+
+    [Fact]
+    public void Guided_EofAtThePasswordQuestion_WritesNothing()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, _) = m.RunOnTerminal("\n1\n", "init", "--no-recovery");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(GuidedPasswordQuestion, stdout);
+        AssertNothingWritten(m);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
+    [Fact]
+    public void Guided_PasswordQuestion_UnrecognisedAnswer_AsksAgain()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal($"\n1\nmaybe\nyes\n{Password}\n{Password}\n\nn\n", "init");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(2, Count(stdout, GuidedPasswordQuestion));
+        Assert.True(BlobOf(m, 11).RequiresPassword);
+    }
+
     [Fact]
     public void Guided_NeverAsksRngMode()
     {
