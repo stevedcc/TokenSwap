@@ -52,24 +52,42 @@ public static class Fido2
             return;
         }
         var device = Devices.Pick(serial);
-        var first = AssertOnce(device, cred);
-        var second = AssertOnce(device, cred);
+        var first = AssertOnce(device, cred, out var uv1);
+        var second = AssertOnce(device, cred, out var uv2);
         Report.Line("pin_asked", _pinAsked);
-        Report.Line("up_only", true);
+        Report.Line("uv_flag", $"{uv1},{uv2} (the key's own user-verified flag; False = touch only)");
         Report.Line("output_bytes", first.Length);
         Report.Line("output_h", Report.Hash16(first));
         Report.Line("deterministic", first.AsSpan().SequenceEqual(second));
     }
 
-    private static byte[] AssertOnce(IYubiKeyDevice device, Cred cred)
+    /// <summary>
+    /// One assertion with user presence only: sent as a raw GetAssertion command, so the SDK's session doesn't fetch a
+    /// PIN token first (Fido2Session.GetAssertions does when the key has a PIN, which turns it into a UV assertion and
+    /// a different hmac-secret output).
+    /// </summary>
+    private static byte[] AssertOnce(IYubiKeyDevice device, Cred cred, out bool userVerified)
     {
-        using var fido = new Fido2Session(device) { KeyCollector = Collect };
-        var parameters = new GetAssertionParameters(new RelyingParty(cred.rp_id), SHA256.HashData("yk-spike-ga"u8));
-        parameters.AllowCredential(new CredentialId { Id = FromBase64Url(cred.credential_id) });
-        parameters.RequestHmacSecretExtension(Prf.Salt(System.Text.Encoding.UTF8.GetBytes(PrfInput)));
-        Console.Error.WriteLine("(touch your YubiKey)");
-        var assertions = fido.GetAssertions(parameters);
-        return assertions[0].AuthenticatorData.GetHmacSecretExtension(fido.AuthProtocol);
+        var connection = device.Connect(YubiKeyApplication.Fido2);
+        try
+        {
+            var protocol = new Yubico.YubiKey.Fido2.PinProtocols.PinUvAuthProtocolTwo();
+            var keyAgreement = connection.SendCommand(
+                new Yubico.YubiKey.Fido2.Commands.GetKeyAgreementCommand(Yubico.YubiKey.Fido2.PinProtocols.PinUvAuthProtocol.ProtocolTwo)).GetData();
+            protocol.Encapsulate(keyAgreement);
+            var parameters = new GetAssertionParameters(new RelyingParty(cred.rp_id), SHA256.HashData("yk-spike-ga"u8));
+            parameters.AllowCredential(new CredentialId { Id = FromBase64Url(cred.credential_id) });
+            parameters.RequestHmacSecretExtension(Prf.Salt(System.Text.Encoding.UTF8.GetBytes(PrfInput)));
+            parameters.EncodeHmacSecretExtension(protocol);
+            Console.Error.WriteLine("(touch your YubiKey)");
+            var data = connection.SendCommand(new Yubico.YubiKey.Fido2.Commands.GetAssertionCommand(parameters)).GetData();
+            userVerified = data.AuthenticatorData.UserVerification;
+            return data.AuthenticatorData.GetHmacSecretExtension(protocol);
+        }
+        finally
+        {
+            connection.Dispose();
+        }
     }
 
     /// <summary>The SDK's callback for PINs and touch prompts: records that a PIN was asked, reads it masked.</summary>

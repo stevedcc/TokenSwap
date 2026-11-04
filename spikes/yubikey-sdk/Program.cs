@@ -43,6 +43,7 @@ public static class Program
         {
             var noResolver = args.Contains("--no-resolver");
             Native.Setup(noResolver);
+            Native.SetupCrypto(args.Contains("--default-crypto"));
             var serial = Arg(args, "--serial") is { } s ? int.Parse(s) : (int?)null;
             switch (args.FirstOrDefault())
             {
@@ -67,6 +68,7 @@ public static class Program
         catch (Exception ex)
         {
             Report.Line("error", $"{ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine(ex.ToString()); // the stack, for diagnosing (no secret values reach exception text here)
             return 1;
         }
         finally

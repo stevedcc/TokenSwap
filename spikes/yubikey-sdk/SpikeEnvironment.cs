@@ -16,6 +16,7 @@ public static partial class SpikeEnvironment
         Report.Line("elevated", Elevated());
         Report.Line("quarantine", Quarantine());
         Report.Line("libudev", Native.LibudevMode);
+        Report.Line("crypto", Native.CryptoMode);
         var warnings = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "aot-warnings.txt");
         Report.Line("aot_warnings", File.Exists(warnings) ? File.ReadAllLines(warnings).Length : "unknown (no aot-warnings.txt)");
     }
@@ -48,6 +49,32 @@ public static partial class SpikeEnvironment
 public static class Native
 {
     public static string LibudevMode { get; private set; } = "n/a";
+
+    /// <summary>
+    /// Under NativeAOT the SDK's default crypto creators, which look algorithms up by name, may come back null (the FIDO2
+    /// PIN protocol crashed in DeriveKeys on 2026-11-04). --default-crypto keeps the SDK's defaults to show that.
+    /// </summary>
+    public static string CryptoMode { get; private set; } = "explicit";
+
+    public static void SetupCrypto(bool keepDefaults)
+    {
+        if (keepDefaults)
+        {
+            CryptoMode = "sdk defaults";
+            return;
+        }
+        Yubico.YubiKey.Cryptography.CryptographyProviders.HmacCreator = name => name switch
+        {
+            "HMACSHA256" => new System.Security.Cryptography.HMACSHA256(),
+            "HMACSHA1" => new System.Security.Cryptography.HMACSHA1(),
+            "HMACSHA384" => new System.Security.Cryptography.HMACSHA384(),
+            "HMACSHA512" => new System.Security.Cryptography.HMACSHA512(),
+            _ => throw new NotSupportedException($"yk-spike: no HMAC for {name}"),
+        };
+        Yubico.YubiKey.Cryptography.CryptographyProviders.Sha256Creator = System.Security.Cryptography.SHA256.Create;
+        Yubico.YubiKey.Cryptography.CryptographyProviders.Sha1Creator = System.Security.Cryptography.SHA1.Create;
+        Yubico.YubiKey.Cryptography.CryptographyProviders.AesCreator = System.Security.Cryptography.Aes.Create;
+    }
 
     public static void Setup(bool noResolver)
     {
