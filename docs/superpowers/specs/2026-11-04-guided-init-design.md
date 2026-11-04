@@ -35,6 +35,15 @@ Enclave and the TPM first-class, so its `init` must not assume a YubiKey.
 - Prompting when no one is at a terminal (a script, an AI agent): that must fail with the flags to use.
 - Needing sudo: `init` makes a new vault and stays a no-sudo command.
 - A half-made vault: if any chosen method fails to enrol, nothing is written.
+- **Overwriting an existing vault, in any mode (owner, hard rule).** Today's refusals stay exactly as they
+  are, and the guided flow runs them before step 1, before any key is asked for:
+  - a classic vault in the config folder is refused (`migrate`);
+  - a config belonging to a record vault, wherever its folder is, is refused (another `TSWAP_CONFIG_DIR`);
+  - a vault folder (default or `--folder`) that isn't empty is refused (`init --vault-dir` to join).
+  The only "Reinitialize?" left is for a config holding just a pending `slot request`, which is not a vault.
+  It backs that file up first, and a vault can still only be created in an empty folder. The existing tests
+  for each refusal (`InitRecordVaultTests`, `CommandTests`, `MigrateToRecordsTests` and others) pass
+  unchanged, and the guided flow gets the same three refusal tests of its own.
 
 ## The guided flow
 
@@ -72,6 +81,12 @@ their questions.
    enrolment today (`YubiKeySlotEnrollment`'s two-answer check from the T4 review stays; my call: "touch"
    in this document means a touch whenever the slot asks, not one per key). A Secure Enclave slot with
    touch asks for Touch ID.
+   **Several keys plugged in:** ykman addresses one key by serial (`--device`), and only that key waits and
+   flashes, so the prompt names it: "Touch the YubiKey that is flashing (serial 33060005)". A key whose
+   slot answers without touch gets no prompt. Touching the other key fires its short-press slot, which
+   types a Yubico OTP (a line of `c`, `b`, … modhex characters ending in Enter) into tswap's input. `init`
+   recognises such a line while it waits, says "that was another key; touch the flashing one", and keeps
+   waiting. It neither fails nor treats the line as an answer.
    The password-generation entropy question (`RngMode`, System RNG or YubiKey) is not asked: guided vaults
    use the system RNG, as TPM and Secure Enclave vaults do today. With mixed slots, a YubiKey RNG would
    make every `create` need a YubiKey even when the vault was opened with the chip. `init --yubikey` keeps
