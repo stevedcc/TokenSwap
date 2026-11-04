@@ -193,8 +193,9 @@ Run `tswap init` in a terminal and it asks, in order:
    your slots need it. A slot left out opens the vault without the password, for example a backup
    key you keep somewhere safe, so a forgotten password doesn't lock you out.
 4. **Recovery slot.** Added by default; its private key is shown once, so store it offline.
-5. **Create.** tswap builds every slot, then writes the vault in one step; if any slot fails,
-   nothing is written. A YubiKey flashes when it wants a touch, and the prompt names the key
+5. **Create.** tswap builds every slot, then writes the vault in one step. If a
+   key can't be used, it says why and asks whether to carry on without it; nothing is written
+   before you answer, and answering no writes nothing. If the chip fails, nothing is written. A YubiKey flashes when it wants a touch, and the prompt names the key
    (with several plugged in, touch the flashing one).
 6. **Other machines?** Answer yes and tswap prints a step-by-step guide, with this vault's real
    folder and commands, for adding your other machines.
