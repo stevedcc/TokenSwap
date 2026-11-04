@@ -56,6 +56,14 @@ public class ChipProbeTests
     }
 
     [Fact]
+    public void SecureEnclaveProbe_HasAFallbackReason()
+    {
+        Assert.Equal(new MachineChip(HardwareBackend.SecureEnclave, null), ChipProbe.FromSecureEnclaveProbe(true));
+        Assert.Equal(new MachineChip(null, "the Secure Enclave isn't available on this Mac (Intel Macs without a T2 chip have none)"),
+            ChipProbe.FromSecureEnclaveProbe(false));
+    }
+
+    [Fact]
     public void ChipProbe_CarriesTheProbesReason()
     {
         Assert.Equal(new MachineChip(HardwareBackend.Tpm, null), ChipProbe.FromProbe(HardwareBackend.Tpm, (true, null)));

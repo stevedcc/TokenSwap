@@ -18,7 +18,7 @@ public static class ChipProbe
         try
         {
             if (OperatingSystem.IsMacOS())
-                return Probe(HardwareBackend.SecureEnclave, ProbeSecureEnclave);
+                return FromSecureEnclaveProbe(ProbeSecureEnclave());
             if (OperatingSystem.IsLinux())
                 return FromProbe(HardwareBackend.Tpm, ProbeLinuxTpm());
             if (OperatingSystem.IsWindows())
@@ -36,8 +36,12 @@ public static class ChipProbe
     internal static MachineChip FromProbe(HardwareBackend backend, (bool Available, string? Reason) probe)
         => probe.Available ? new MachineChip(backend, null) : new MachineChip(null, probe.Reason);
 
-    private static MachineChip Probe(HardwareBackend backend, Func<bool> isAvailable)
-        => isAvailable() ? new MachineChip(backend, null) : new MachineChip(null, null);
+    internal const string SecureEnclaveUnavailableReason =
+        "the Secure Enclave isn't available on this Mac (Intel Macs without a T2 chip have none)";
+
+    /// <summary>The Secure Enclave's probe answers only yes or no, so a no gets the likely reason.</summary>
+    internal static MachineChip FromSecureEnclaveProbe(bool available)
+        => FromProbe(HardwareBackend.SecureEnclave, (available, available ? null : SecureEnclaveUnavailableReason));
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     private static bool ProbeSecureEnclave() => HardwareServices.SecureEnclaveAvailable();

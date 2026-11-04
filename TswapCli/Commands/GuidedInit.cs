@@ -220,8 +220,11 @@ internal static class GuidedInit
                 YubiKeySlotBlob blob;
                 byte[]? kekSlot = null;
                 Slot? added = null;
-                // Only the key's own enrolment may be carried on without: any other failure (the keyring,
-                // the wrap) propagates, exit 1, nothing written.
+                // The carry-on offer covers only this key's enrolment (EnrollSerial / EnrollAsSlot: its
+                // ykman calls, the double challenge, the slot's own wrap), the failures leaving out a key can
+                // fix. Decoding the keyring and AssembleKeyring are outside it: they work on what this run
+                // built in memory, so a failure there is a bug, not a key problem, and propagates (exit 1,
+                // nothing written) instead of being offered as "carry on without this key".
                 try
                 {
                     if (keyring is null)

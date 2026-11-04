@@ -607,12 +607,16 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains("YubiKey 11: no password", stdout);
         Assert.Contains("Vault folder:", stdout);
-        // The output ends with exactly the recovery key's warning, for this vault's key and hardware.
-        var warning = new FakeConsole();
-        TswapCli.Commands.InitCommand.PrintRecoveryKeyBackupWarning(
-            warning, "tswap", Convert.FromBase64String(RecoveryKeyFrom(stdout)), "YubiKey 11");
-        Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", warning.OutText);
-        Assert.EndsWith(warning.OutText.TrimEnd(), stdout.TrimEnd());
+        // The recovery key's warning is the last block: nothing of the summary or the folder lines after it.
+        var warning = stdout.LastIndexOf("⚠️  CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", StringComparison.Ordinal);
+        Assert.True(warning >= 0, stdout);
+        var tail = stdout[warning..];
+        Assert.Contains("This is a break-glass credential for total hardware loss (YubiKey 11", tail);
+        Assert.Contains("lost or destroyed). tswap never stores it anywhere — display here is", tail);
+        Assert.Contains("Recovery Private Key (base64):\n" + RecoveryKeyFrom(stdout), tail.ReplaceLineEndings("\n"));
+        Assert.DoesNotContain("Vault folder:", tail);
+        Assert.DoesNotContain("Config saved to:", tail);
+        Assert.DoesNotContain("YubiKey 11: no password", tail);
         m.Ok("", "names");
     }
 
