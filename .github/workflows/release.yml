@@ -103,18 +103,14 @@ jobs:
       # Package here, on the binary's own platform, then extract the archive into an empty folder
       # and run what is in it: the smoke test runs the shipped bytes with the shipped permissions
       # (upload-artifact doesn't keep the execute bit, so the archive is made before the upload).
-      # `prompt-hash` needs no vault.
+      # `prompt-hash` needs no vault. contrib/packaging/package.sh also packs the macOS Secure Enclave
+      # dylib next to the binary, and on macOS makes and unlocks a throwaway Secure Enclave vault with
+      # the unpacked tswap, which loads the dylib from the archive (issue #238); CI runs the same script.
       - name: Package and smoke-test the archive (Linux, macOS)
         if: runner.os != 'Windows'
+        timeout-minutes: 10
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          chmod +x ./publish/${{ matrix.rid }}/tswap
-          tar czf "dist/tswap-${{ matrix.rid }}.tar.gz" -C ./publish/${{ matrix.rid }} tswap
-          check="$(mktemp -d)"
-          tar xzf "dist/tswap-${{ matrix.rid }}.tar.gz" -C "$check"
-          "$check/tswap" prompt-hash
+        run: bash contrib/packaging/package.sh "${{ matrix.rid }}" "./publish/${{ matrix.rid }}" dist --smoke
 
       - name: Package and smoke-test the archive (Windows)
         if: runner.os == 'Windows'

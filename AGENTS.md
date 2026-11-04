@@ -17,7 +17,8 @@ C# application with a single entry point:
 # Build
 dotnet publish TswapCli/TswapCli.csproj -c Release
 # Linux:   cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
+#          (the Secure Enclave library stays next to the binary; the release archive packs both, contrib/packaging/package.sh)
 # Windows: copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary

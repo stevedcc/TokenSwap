@@ -36,9 +36,9 @@ internal static partial class AppleSecureEnclaveInterop
             if (!File.Exists(dylibPath))
                 throw new TswapException(
                     $"tswap's Secure Enclave support library is missing ({dylibPath} not found). " +
-                    "This usually means tswap was run from a raw download rather than installed — " +
-                    "run 'tswap installscript', review it, then run the generated script, which " +
-                    "installs this file alongside the binary.");
+                    "Keep libtswapse.dylib in the same folder as tswap: the macOS release archive has both, " +
+                    "so unpack all of it. Or run 'tswap installscript', review it, then run the generated " +
+                    "script, which installs this file alongside the binary.");
 
             return NativeLibrary.Load(dylibPath);
         });

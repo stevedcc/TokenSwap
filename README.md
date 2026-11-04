@@ -97,6 +97,25 @@ Both produce the same master key. This means:
 
 ## Quick Start
 
+### Download a release
+
+Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive per platform
+(`tswap-linux-x64.tar.gz`, `tswap-linux-arm64.tar.gz`, `tswap-osx-arm64.tar.gz`, `tswap-win-x64.zip`).
+Unpack it into a folder of your own and run `tswap` from there, or install it with `installscript` (below).
+
+On macOS the archive holds two files, `tswap` and `libtswapse.dylib` (the Secure Enclave support). Keep them in
+the same folder: tswap loads the library from next to itself. A symlink to `tswap` (say from `~/bin`) works, since
+the folder is the real file's. tswap runs code from that folder, so keep it writable only by you.
+
+The binaries are not signed. macOS refuses a browser download ("Apple cannot verify…"); clear the quarantine
+mark on the unpacked folder, as yourself (no admin needed):
+
+```bash
+xattr -dr com.apple.quarantine <folder>
+```
+
+`curl -LO <archive URL>` downloads carry no quarantine mark.
+
 ### Install (compiled binary — recommended)
 
 The compiled binary is a native executable with ~20ms startup. No .NET runtime needed at run time.
@@ -111,7 +130,8 @@ sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 **macOS (Apple Silicon)**
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
-sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
+# tswap and its Secure Enclave library (libtswapse.dylib) go in the same folder
+sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 ```
 
 **macOS (Intel, build from source)**
@@ -120,7 +140,7 @@ sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/tswap /usr/local/bin/
 
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-x64
-sudo cp TswapCli/bin/Release/net10.0/osx-x64/publish/tswap /usr/local/bin/
+sudo cp TswapCli/bin/Release/net10.0/osx-x64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 ```
 
 **Windows (x64)**
