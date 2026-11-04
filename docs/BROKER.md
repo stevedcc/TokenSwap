@@ -749,10 +749,16 @@ sudo restorecon -v /usr/local/libexec/tswap-broker
 sudo restorecon -Rv /srv/tswap-broker
 ```
 
-**After every tswap upgrade** run both lines for the copy again (`install -D …` and
-`restorecon -v /usr/local/libexec/tswap-broker`). A new copy without `restorecon` is labelled
-`bin_t`: `serve` then starts as `unconfined_t` without any error, and containers can no longer
-connect (the AVC log shows `connectto` denied). `ps -eZ | grep tswap-broker` tells.
+**After every tswap upgrade** the copy and the module must follow the binary. The script `tswap installscript`
+generates does both on Linux: where `/usr/local/libexec/tswap-broker` exists it replaces it and runs `restorecon` on
+it, and where the `tswap-broker` module is loaded it reinstalls the module embedded in the binary; then restart the
+broker (`systemctl --user restart tswap-broker` as the vault user; the script names a running broker but restarts
+nothing). It warns when it can't list the SELinux modules or can't find `restorecon` (the new copy would be
+`bin_t`), and if it stops between the module and the copy it says so: run it again, since the two must match. By hand: the module first (`sudo semodule -i contrib/selinux/tswap-broker.cil`; the file must be named
+`tswap-broker.cil`, since semodule names a module after its file), then both lines for the copy (`install -D …` and
+`restorecon -v /usr/local/libexec/tswap-broker`). A new copy without `restorecon` is labelled `bin_t`: `serve` then
+starts as `unconfined_t` without any error, and containers can no longer connect (the AVC log shows `connectto`
+denied). `ps -eZ | grep tswap-broker` tells.
 
 A `socket_dir` other than `/srv/tswap-broker` isn't covered by the module's file contexts: label it
 with `sudo chcon -R -t container_file_t <socket_dir>` (a later `restorecon` on it would undo that),

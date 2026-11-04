@@ -629,8 +629,8 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
         }
     }
 
-    /// <summary>Starts a 200 answer, then throws (I224 fix round 1, F2: the log shows the status that was sent).</summary>
     /// <summary>
+    /// Starts a 200 answer, then throws (I224 fix round 1, F2: the log shows the status that was sent).
     /// Sends the 200 headers, then throws once the client has read them (<see cref="HeadersRead"/>). Without that
     /// wait the throw could abort the connection before Kestrel had written the headers to the socket (FlushAsync
     /// doesn't promise that); macOS CI then read nothing (PR #232, run 41697297718).
@@ -706,6 +706,7 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
         var response = Encoding.ASCII.GetString(received.ToArray());
 
         Assert.StartsWith("HTTP/1.1 200", response);
+        Assert.Contains("\r\n\r\n", response); // the whole header block arrived, so the forwarder threw its own exception
         Assert.DoesNotContain("502", response);
         Assert.DoesNotContain("\r\n0\r\n\r\n", response); // aborted: the chunked body never ends
         await _h.WaitForLogAsync("reason=internal-error");
