@@ -258,7 +258,7 @@ migration step that never actually happens.
 
 ### YubiKey slots: one key per slot (brief T4, issue #184)
 
-Until brief T4 a YubiKey keyring slot still took its `KEK_slot` from **two** keys: `init
+Until brief T4 a YubiKey keyring slot still took its `KEK_slot` from **two** keys: 0.1's `init
 --keyring` and `slot request` challenged both, XORed the responses into a share, and kept the
 serials, share, challenge and salt as per-machine config fields. That contradicted "one machine,
 one device, unlock alone" and "Do not use XOR here" above. Since T4:
@@ -280,8 +280,8 @@ one device, unlock alone" and "Do not use XOR here" above. Since T4:
    YubiKey blob whose serial is plugged in (the serial prompt when several match), and the first
    slot that authenticates wins. A YubiKey slot therefore works on any machine that has the
    vault files and that key, without `KeyringSlotId`.
-4. **`init --keyring`** enrolls one plugged-in key: one YubiKey slot plus the recovery slot,
-   with no pair fields in config. Plain `init` (the original XOR vault) is unchanged.
+4. **`init --yubikey`** (until v0.2.0 `init --keyring`; the guided `init` makes the same slot) enrolls one plugged-in key: one YubiKey slot plus the recovery slot,
+   with no pair fields in config. The original XOR vault can no longer be created.
 5. **`slot add --yubikey`** (sudo) adds another plugged-in key to **this machine's** keyring as
    its own slot. This is how the router's TPM vault gets the owner's keys: plug each key into the
    router and run it. Several keys are several slots, any one of which opens the vault.
@@ -294,7 +294,7 @@ one device, unlock alone" and "Do not use XOR here" above. Since T4:
    command makes new pair enrollments. A **version 2** keyring cannot take a one-key slot: it has
    no `hwBlob` column, and its slots' AEAD binds version 2, so moving it to version 3 would mean
    re-wrapping every slot with every device present. Such a vault keeps working with the slots it
-   has; to give each key its own slot, create a new vault with `init --keyring`.
+   has; to give each key its own slot, create a new vault with `init --yubikey` (or the guided `init`).
 
 ## The recovery slot: a bare keypair, not a CA-issued certificate (a path not taken)
 
