@@ -70,6 +70,21 @@ jobs:
       - name: AOT publish
         run: dotnet publish TswapCli/TswapCli.csproj -c Release
 
+      # The release archive, packed and smoke-tested by the script release.yml uses, so a PR that breaks
+      # packaging (issue #238: the macOS archive lacked libtswapse.dylib) fails here, not at tag time.
+      - name: Package and smoke-test the release archive (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish=$(find "$PWD/TswapCli/bin/Release" -type d -path '*/publish' -print -quit)
+          if [ -z "$publish" ]; then
+            echo "::error::no Release publish folder under TswapCli/bin/Release" >&2
+            exit 1
+          fi
+          rid=$(basename "$(dirname "$publish")")
+          bash contrib/packaging/package.sh "$rid" "$publish" "$RUNNER_TEMP/dist" --smoke
+
       # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
       # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
       # the binary — this step tests NativeAOT-compiled behaviour on every OS. On macOS

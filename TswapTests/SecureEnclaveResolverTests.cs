@@ -31,4 +31,22 @@ public class SecureEnclaveResolverTests
         Assert.Contains($"tswap's Secure Enclave support library is missing ({dylib} not found)", ex.Message);
         Assert.Contains("run 'tswap installscript'", ex.Message);
     }
+
+    /// <summary>
+    /// Issue #238: the macOS release archive now carries the dylib next to <c>tswap</c>, so a portable copy (no
+    /// install, no sudo) works when the whole archive is unpacked; the hint names that route before the install script.
+    /// </summary>
+    [Fact]
+    public void WithNoDylibBesideTheBinary_TheHintSaysToKeepItNextToTswap()
+    {
+        var dylib = Path.Combine(AppContext.BaseDirectory, "libtswapse.dylib");
+        if (File.Exists(dylib))
+            return;
+
+#pragma warning disable CA1416
+        var ex = Assert.Throws<TswapException>(() => AppleSecureEnclaveInterop.IsAvailable());
+#pragma warning restore CA1416
+
+        Assert.Contains("Keep libtswapse.dylib in the same folder as tswap: the macOS release archive has both, so unpack all of it.", ex.Message);
+    }
 }
