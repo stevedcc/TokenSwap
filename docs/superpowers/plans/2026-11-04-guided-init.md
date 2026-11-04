@@ -29,7 +29,7 @@ over this plan.
 - `--yubikey` is today's plain-`init` YubiKey vault, byte for byte in behaviour (including the RngMode question).
 - `--keyring` is refused with exactly: `--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey, --tpm or --secure-enclave.`
   (a `TswapException`, exit 1, before any prompt or hardware; not a `UsageException`, whose message gets a `Usage: ` prefix).
-- A plain `init` with redirected input is refused with exactly: `'tswap init' without a terminal needs the slot named: --yubikey, --tpm or --secure-enclave (--with-touch|--no-touch).`
+- A plain `init` with redirected input is refused with exactly: `'tswap init' without a terminal needs the slot named: --yubikey, --tpm, or --secure-enclave with --with-touch or --no-touch.`
   (a `TswapException`, exit 1, nothing written, no hardware touched). "Terminal" means `!ctx.Console.IsInputRedirected`
   (`IConsole` has no output check; ruling, see Task 5).
 - The guided flow never asks the RngMode question; guided vaults use `RngMode.System`.
@@ -88,7 +88,7 @@ over this plan.
 }
 [Fact] public void FleetMachine_WithATpm_OffersIt() { /* Tpm set → new MachineChip(HardwareBackend.Tpm, null) */ }
 [Fact] public void FleetMachine_WithNoChip_OffersNone() { /* neither → new MachineChip(null, null) */ }
-[Fact] public void Detect_OnLinuxWithoutTpmTools_IsNoneOrTpm_NeverSecureEnclave()
+[Fact] public void Detect_OnLinux_NeverOffersASecureEnclave()
 {
     if (!OperatingSystem.IsLinux()) return;
     Assert.NotEqual(HardwareBackend.SecureEnclave, ChipProbe.Detect().Backend);
@@ -112,9 +112,10 @@ over this plan.
 
 **Interfaces:**
 - Produces:
-  - `public static class YubiKeyAccess { public const string OtpBlockedLine = "The connection type required for this command is not supported/enabled on the YubiKey."; public static string? ExplainBlocked(string errorMessage, int serial, bool isMacOS); }`.
+  - `public static class YubiKeyAccess { public const string OtpBlockedLine = "The connection type required for this command is not supported/enabled on the YubiKey."; public static string? ExplainBlocked(string errorMessage, int serial, OSPlatform os); }`.
     Returns null unless `errorMessage` contains `OtpBlockedLine`. macOS text: `YubiKey {serial}: macOS is blocking access to this key's OTP interface (Input Monitoring for the app running tswap). Use the Secure Enclave or another key, or allow it in System Settings → Privacy & Security → Input Monitoring.`
-    Other OS: `YubiKey {serial}: its OTP interface can't be reached (on Linux, check the YubiKey udev rule gives you access to its hidraw device).`
+    Linux: `YubiKey {serial}: its OTP interface can't be reached (check that the YubiKey udev rule gives you access to its hidraw device).`
+    Windows: `YubiKey {serial}: its OTP interface can't be reached.` (signature becomes `ExplainBlocked(string errorMessage, int serial, OSPlatform os)`; tests pass `OSPlatform.OSX`, `OSPlatform.Linux`, `OSPlatform.Windows`).
   - `public static class GuidedPrompts { public static bool LooksLikeYubicoOtp(string line); public static string? ReadAnswer(IConsole c); }`.
     `LooksLikeYubicoOtp`: 32–48 characters, all from modhex `cbdefghijklnrtuv`. `ReadAnswer` reads lines until
     one is not an OTP; for each OTP line it writes `That was another YubiKey's one-time code; touch the flashing key, or answer the question.`
@@ -124,11 +125,11 @@ over this plan.
 
 ```csharp
 [Fact] public void ExplainBlocked_OnMacOS_NamesInputMonitoring() =>
-    Assert.Contains("Input Monitoring", YubiKeyAccess.ExplainBlocked("ykman failed: WARNING: Failed opening device\nERROR: " + YubiKeyAccess.OtpBlockedLine, 33060005, isMacOS: true));
+    Assert.Contains("Input Monitoring", YubiKeyAccess.ExplainBlocked("ykman failed: WARNING: Failed opening device\nERROR: " + YubiKeyAccess.OtpBlockedLine, 33060005, OSPlatform.OSX));
 [Fact] public void ExplainBlocked_OnLinux_NamesTheUdevRule() =>
-    Assert.Contains("udev rule", YubiKeyAccess.ExplainBlocked("ERROR: " + YubiKeyAccess.OtpBlockedLine, 1, isMacOS: false));
+    Assert.Contains("udev rule", YubiKeyAccess.ExplainBlocked("ERROR: " + YubiKeyAccess.OtpBlockedLine, 1, OSPlatform.Linux));
 [Fact] public void ExplainBlocked_OtherErrors_AreNotExplained() =>
-    Assert.Null(YubiKeyAccess.ExplainBlocked("ykman failed: device 1 not found", 1, isMacOS: true));
+    Assert.Null(YubiKeyAccess.ExplainBlocked("ykman failed: device 1 not found", 1, OSPlatform.OSX));
 [Theory, InlineData("cccccbvjiflgrtrrkvuvdvnhlfrngkbckfbtveuftrgt", true), InlineData("1 3", false), InlineData("yes", false), InlineData("", false)]
 public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expected, GuidedPrompts.LooksLikeYubicoOtp(line));
 [Fact] public void ReadAnswer_SkipsAnOtpLine_AndSaysSo()
@@ -216,22 +217,36 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
 - Produces: `internal static int GuidedInit.Execute(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, string? newFolder, bool? noRecoveryFlag, bool? passwordFlag)`;
   `noRecoveryFlag` is true when `--no-recovery` was given, null when not (then asked).
 
-**Routing in `InitCommand.Execute`:** after the flag split and the three existing refusals (unchanged, still
-before anything is printed): `--keyring` → the Global Constraints refusal (checked with #177's flag check, before
-the refusals); `--yubikey` → today's `ExecuteKeyring`; `--tpm`/`--secure-enclave` → as today; none of the three
-and `ctx.Console.IsInputRedirected` → the no-terminal refusal (before the vault refusals is fine too, but no
-hardware); none and a terminal → `GuidedInit.Execute`. `--yubikey` with `--tpm` or `--secure-enclave` → usage.
-Ruling recorded here: "terminal" is input only, because `IConsole` exposes no output check and every existing
-prompt in tswap keys on `IsInputRedirected`.
+**Routing in `InitCommand.Execute`, in this order:**
+1. `--keyring` anywhere in the arguments → the `--keyring` refusal (Global Constraints), first, with #177's flag
+   check: before any refusal, prompt or hardware.
+2. #177's flag check (now with `--yubikey`); `--yubikey` with `--tpm` or `--secure-enclave` → usage.
+3. No backend flag and `ctx.Console.IsInputRedirected` → the no-terminal refusal (no hardware touched).
+4. The three existing vault refusals, unchanged, before anything is printed.
+5. `--yubikey` → today's `ExecuteKeyring`; `--tpm`/`--secure-enclave` → as today; no backend flag →
+   `GuidedInit.Execute`.
+
+Rulings recorded here: "terminal" is input only, because `IConsole` exposes no output check and every existing
+prompt in tswap keys on `IsInputRedirected`. The no-terminal refusal is a `TswapException`, not a
+`UsageException`: both exit 1 in tswap (a `UsageException` is a `TswapException`), so the design's "exit as a
+usage error" holds for the exit status; only the `Usage: ` prefix is left out, because the message isn't a usage
+line.
 
 **The flow (`GuidedInit.Execute`)**, in the spec's order; decisions the spec left to the builder, made here:
+- Step 1 text, exact: `Plug in the security keys you want to use with this vault on this machine, then press Enter. (No touch yet: tswap asks when it needs one.)`
 - Listing: `ctx.YubiKeys.ListSerials()` (each announced: `Checking YubiKey {serial}…`), then `ctx.ChipProbe()`.
+  Ruling: the design's "whether its slot 2 is configured" is dropped from the list: `IYubiKeyService` has no such
+  call, ykman's `otp info` output would be a new parse, and an unconfigured slot shows up at enrolment anyway
+  (`EnrollSerial`'s message says to configure slot 2). The YubiKey SDK in v0.3.0 reads it directly.
   Entries numbered from 1: YubiKeys in `ListSerials` order, then the chip. A `ListSerials` failure is shown as one
   line `YubiKeys: <message>` and the chip stays offered.
 - Pick prompt: `Pick one or more, separated by spaces (e.g. 1 3): `, read with `GuidedPrompts.ReadAnswer`.
-- Secure Enclave picked: ask `Touch ID (or password) on every unlock? (Y/n): ` (default yes = `--with-touch`); a
-  "n" prints `SecureEnclaveTouchChoice.WarnIfNoTouch`'s warning.
-- Password: `VaultPasswordChoice.Decide(ctx, passwordFlag, <first slot's backend>)` once (one vault password);
+- Secure Enclave picked: print `SecureEnclaveTouchChoice`'s "what each does" text (make `WhatEachDoes` internal
+  or add a method returning it), then ask `Touch ID (or your login password) on every unlock? (y/n): ` with **no
+  default**: an empty or other answer re-asks. Ruling: brief T11 made the choice explicit (`--secure-enclave`
+  needs `--with-touch` or `--no-touch`, no default), so the guided question keeps it explicit too. "n" prints
+  `SecureEnclaveTouchChoice.WarnIfNoTouch(c, false)`.
+- Password: `VaultPasswordChoice.Decide(ctx, passwordFlag, <the machine slot's backend: the chip if picked, else HardwareBackend.YubiKey>)` once (one vault password);
   with a password, `NewVaultPassword` draws `K_v` and the vault id; without, draw them here
   (`RandomNumberGenerator`) so every slot wraps the same `K_v`. Then, with a password, more than one slot picked
   and no `--password` flag: `Which slots need the password? (e.g. 1 3; Enter = all): `, listing the picked slots
@@ -245,20 +260,25 @@ prompt in tswap keys on `IsInputRedirected`.
   `ExecuteKeyring`). `AssembleKeyring(kekSlot, backendConfig, includeRecovery, hwBlob, slotId, vaultKey, vaultId)`
   with `RngMode.System`. Every further YubiKey: decode the keyring, `EnrollAsSlot`, append, re-encode;
   `SecurityWarnings.Acknowledge(config, <all new slot ids>)`.
-- Each YubiKey enrolment announces `Touch the YubiKey that is flashing (serial {serial}) when it asks.` before
-  `EnrollSerial` (which keeps its own two-challenge line).
-- A YubiKey enrolment throwing `TswapException`: print `YubiKeyAccess.ExplainBlocked(msg, serial,
-  OperatingSystem.IsMacOS())` or the message itself, then `Carry on without YubiKey {serial}? (y/N): `. "y" →
-  restart step 6 without that key (fresh `K_v`/slot ids only if no password was drawn; with a password keep them),
-  if at least one pick remains; anything else → exit 1. Nothing is written in either case before success.
+- Each YubiKey enrolment announces `YubiKey {serial}: if it flashes, touch it (that one, not another key).` before
+  `EnrollSerial` (which keeps its own two-challenge line). tswap can't know before the challenge whether the slot
+  needs a touch (`AskedForTouch` comes back with the answer), so the line is conditional rather than omitted.
+- A YubiKey enrolment throwing `TswapException`: print `YubiKeyAccess.ExplainBlocked(msg, serial, <this OS>)` or the message itself, then `Carry on without YubiKey {serial}? (y/N): `. "y" →
+  drop that key and **continue** with the next pick, keeping `K_v`, the vault id and every slot already built in
+  memory (no slot is re-enrolled, no key is touched again; the failed key's partial state is discarded). If the
+  dropped key was to be the machine slot, the next picked YubiKey takes its place. If no pick remains → exit 1.
+  Anything but "y" → exit 1. Nothing is written in either case before success. On every exit path (success,
+  refusal, abort, exception) `K_v`, every `KEK_slot` and the stretched password are zeroed (`try`/`finally`, as
+  `ExecuteKeyring` does).
 - After `CreateRecordVault`: summary lines (one per slot: `YubiKey {serial}`, `Secure Enclave (touch|no touch)`,
   `TPM`, plus `password` when set), `PrintVaultFolder`, `PrintRecoveryKeyBackupWarning`, then
   `Will other machines use this vault? (y/N): ` and on "y" `OtherMachinesGuide.Print(c.Out, ctx.Prefix,
   fileStore.ConfigDir, vaultDir, newFolder is not null)`.
 
 - [ ] **Step 1: Failing tests (`InitFlagsTests`)**
-  - `Keyring_IsRefused_WithTheReplacement` — `m.Run("", "init", "--keyring")`: exit 1, stderr contains the
-    Global Constraints text, no `config.json`.
+  - `Keyring_IsRefused_WithTheReplacement` — `m.Run("", "init", "--keyring")` and `m.RunOnTerminal("", "init",
+    "--keyring", "--tpm")`: exit 1, stderr contains the Global Constraints text, no `config.json`,
+    `m.Keys.Challenges` empty.
   - `PlainInit_WithoutATerminal_IsRefused_NothingTouched` — `m.Run("", "init")`: exit 1, stderr contains the exact text,
     `m.Keys.Challenges` empty, no `config.json`, no `vault` folder.
   - `YubiKey_MakesTodaysVault` — `m.Ok("", "init", "--yubikey")`, then `m.Ok("", "names")` opens it; config
@@ -273,15 +293,22 @@ prompt in tswap keys on `IsInputRedirected`.
     `--folder`) — the existing refusal text, and stdout lacks `Plug in the security keys`.
   - `Guided_NothingFound_SaysWhatWasLookedFor` — no keys, no chip: exit 1, the message names YubiKeys and this
     OS's chip, nothing written.
-  - `Guided_BadPicks_AskAgain_EofAbortsWithNothingWritten` — stdin `"\n0\n9\na\n1 1\n"` then EOF: four re-asks
-    naming `1-2`, exit 1, no `config.json`.
-  - `Guided_BlockedKeyOnMacOS_IsExplained_AndCanBeLeftOut` — key 11 `FailWith[11] = "ykman failed: ERROR: " +
+  - `Guided_BadPicks_AskAgain_EofAbortsWithNothingWritten` — keys 11 and 12, no chip (so the range is 1-2); stdin
+    `"\n0\n9\na\n1 1\n"`: the first `\n` answers step 1, then four bad picks (`0`, `9`, `a`, `1 1`), then EOF:
+    the pick prompt shows four times after the first with a line naming `1-2`, exit 1, no `config.json`, no
+    `vault` folder, `Challenges` empty.
+  - `Guided_BlockedKey_IsExplained_AndCanBeLeftOut` — key 11 `FailWith[11] = "ykman failed: ERROR: " +
     YubiKeyAccess.OtpBlockedLine`, Secure Enclave present; pick both, "y" to carry on: vault opens with the
-    Secure Enclave; output contains the explanation for this OS (`isMacOS` is the host's).
+    Secure Enclave; output contains `YubiKeyAccess.ExplainBlocked(…, <this OS>)`'s text. The
+    macOS wording is asserted end to end only where the suite runs on macOS (CI's macOS leg); Task 2's unit test
+    covers both wordings everywhere.
   - `Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn` — key 12 removed from `PluggedIn` after listing (use
     `FailWith[12] = "ykman failed: device 12 not found"`); "n" → exit 1, nothing written.
-  - `Guided_CarryOnWithoutAKey_EnrolsTheRestOnce` — keys 11, 12, 13, 12 fails, "y": `Challenges` holds exactly
-    two per serial 11 and 13, none after the failure for 12.
+  - `Guided_CarryOnWithoutAKey_EnrolsTheRestOnce` — keys 11, 12, 13, no chip, 12 fails, "y": `Challenges` holds
+    exactly two per serial 11 and 13 (11 is not challenged again after 12 fails), and the vault opens with 11
+    alone and with 13 alone.
+  - `Guided_SecureEnclaveTouch_HasNoDefault` — Secure Enclave picked, answers `""` then `"x"` then `"y"`: asked
+    three times; the slot requires presence.
   - `Guided_PasswordOnSomeSlots_TheBackupKeyOpensWithoutIt` — keys 11, 12, a password, "Which slots" answer `1`:
     `names` with only key 12 plugged in and no password input succeeds; with only key 11 and no password it fails
     asking for the password; with key 11 and the right password it succeeds. Break-it-once: enrol every slot with
@@ -293,7 +320,8 @@ prompt in tswap keys on `IsInputRedirected`.
   fail only because they pass `--keyring` or a plain `init`.
 - [ ] **Step 4: Implement** the routing, `GuidedInit`, the hint texts, `SimulatedYubiKeyService.FailWith`.
 - [ ] **Step 5: Update inputs** of the existing tests (Global Constraints rule); no assertion changes except the
-  "re-run 'tswap init --keyring'" texts.
+  "re-run 'tswap init --keyring'" texts and assertions on `init`'s help/usage text (`HelpUsage`, `Description`,
+  the usage line), which change because the spec changed the flags.
 - [ ] **Step 6: Run** `./runtests.sh` — Expected: all pass. Break-it-once: make `GuidedInit` write the config
   before the last enrolment; `Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn` must fail. Revert.
 - [ ] **Step 7: Commits:** (a) tests' input changes (message says: inputs only, `--keyring` removed by the spec),

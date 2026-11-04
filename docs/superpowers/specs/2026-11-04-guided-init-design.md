@@ -55,7 +55,8 @@ their questions.
    Enter." No touch is asked for here, and the text says so (on 2026-11-04 the owner touched the key
    during a silent wait and it typed a Yubico OTP into the shell).
 2. **What this machine has.** A numbered list:
-   - each YubiKey found, by serial, with whether its slot 2 is configured (`ykman`, as today);
+   - each YubiKey found, by serial (whether its slot 2 is configured is left to enrolment, which says so;
+     the YubiKey SDK in v0.3.0 can read it up front);
    - this machine's Secure Enclave (macOS) or TPM (Windows, Linux), when available.
    A source that can't be read is listed as a line saying why, not left out silently: on macOS, a
    YubiKey whose OTP interface is blocked gets "macOS is blocking access to this key (Input Monitoring
@@ -85,8 +86,8 @@ their questions.
    in this document means a touch whenever the slot asks, not one per key). A Secure Enclave slot with
    touch asks for Touch ID.
    **Several keys plugged in:** ykman addresses one key by serial (`--device`), and only that key waits and
-   flashes, so the prompt names it: "Touch the YubiKey that is flashing (serial 33060005)". A key whose
-   slot answers without touch gets no prompt. Touching the other key fires its short-press slot, which
+   flashes, so the prompt names it: "YubiKey 33060005: if it flashes, touch it (that one, not another key)."
+   tswap only learns whether a slot needs a touch from the challenge itself, so the line is conditional. Touching the other key fires its short-press slot, which
    types a Yubico OTP (a line of `c`, `b`, … modhex characters ending in Enter) into tswap's input. `init`
    recognises such a line while it waits, says "that was another key; touch the flashing one", and keeps
    waiting. It neither fails nor treats the line as an answer.
@@ -118,9 +119,9 @@ step without changing the rest of the flow.
 | Invocation | Behaviour |
 |---|---|
 | `init` at a terminal | the guided flow |
-| `init` without a terminal | refuses: names `--yubikey`, `--tpm`, `--secure-enclave` (exit as a usage error) |
+| `init` without a terminal | refuses: "'tswap init' without a terminal needs the slot named: --yubikey, --tpm, or --secure-enclave with --with-touch or --no-touch." (exit 1) |
 | `init --yubikey` | **new**: today's plain-`init` YubiKey vault, unchanged |
-| `init --keyring` | **removed** (owner): refused with its own message, "--keyring is gone: run plain `tswap init` for the guided setup, or name the slot with `--yubikey`, `--tpm` or `--secure-enclave`", before any prompt or hardware (as #177's flag check) |
+| `init --keyring` | **removed** (owner): refused with its own message, "--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey, --tpm or --secure-enclave.", before any prompt or hardware (as #177's flag check) |
 | `init --tpm`, `init --secure-enclave --with-touch\|--no-touch` | unchanged |
 | `--password`, `--no-password`, `--no-recovery`, `--folder <dir>`, `--vault-dir` | unchanged; with the guided flow they pre-answer their question |
 
