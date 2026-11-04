@@ -34,7 +34,8 @@ over this plan.
   (same messages, same order) and call it in both places. At the second call, also refuse if `config.json` now
   differs from what it was when the flow started (absent then and present now, present then and gone now, or its bytes changed): a pending
   `slot request` or anything else written meanwhile is not overwritten. The message: `config.json changed while
-  init was waiting ({path}); nothing was written. Run init again.` The config as it was at the start (after any
+  init was waiting ({path}); no config or vault was written. Run init again.` (a consented "Reinitialize?"
+  backup from routing step 4 stays: it is a copy) The config as it was at the start (after any
   "Reinitialize?" backup) is the one that may be replaced. What remains is a check-then-write gap of milliseconds,
   the same as every `init` today; accepted and noted in a comment.
 - Existing flags behave as today: `--tpm`, `--secure-enclave --with-touch|--no-touch`, `--password`,
@@ -236,7 +237,8 @@ public void LooksLikeYubicoOtp(string line, bool expected) => Assert.Equal(expec
   `newFolder` is `--folder`'s raw value or null (the guide uses it to tell a folder of the user's choosing, e.g. a sync folder or an external drive, from the default).
   Ruling (design left it to the builder): the config's `KeyringSlotId` is the id of the slot built first through
   `AssembleKeyring` (the chip's if picked, else the first picked YubiKey in `ListSerials` order; YubiKeys are
-  enrolled in `ListSerials` order whatever order the picks were typed in), as
+  enrolled in `ListSerials` order whatever order the picks were typed in). **Enrolment order, exactly:** the chip
+  first (if picked), then the picked YubiKeys in `ListSerials` order; typed order never matters. As
   `AssembleKeyring` sets it today; "machine slot" in this plan means that slot.
 - Test harness members used (they exist): `FakeConsole { IsInputRedirected = false }`, `FleetMachine.RunOnTerminal`,
   `.Run`, `.Ok`, `.Keys` (`SimulatedYubiKeyService.WithKeys(...)`, settable `PluggedIn`, `Challenges`),
@@ -406,19 +408,21 @@ line.
     pick prompt, exit 1, and the message names YubiKeys and the chip as what was looked for.
   - `Guided_ChecksEachKeyBeforeItsChallenge` — keys 11, 12 picked: `Checking YubiKey 11…` precedes key 11's
     challenge in the output, likewise 12.
-  - `Guided_ChipEnrolmentFailure_WritesNothing` — Secure Enclave and key 11 picked; inside
+  - `Guided_ChipEnrolmentFailure_WritesNothing` — key 11 and the Secure Enclave picked, typed key first (`1 2`); inside
     `using (SimulatedHardwareService.ObserveCalls((_, call) => { if (call == "Enroll") throw new TswapException("simulated chip failure"); }))`:
     exit 1, stderr contains `simulated chip failure`, no `config.json`, no `vault` folder, and key 11 was never
     challenged (the chip is enrolled first).
   - `Guided_PendingRequestAppearedWhileWaiting_IsRefusedAtTheWrite` — no config at the start; `OnChallenge` runs
     `slot request` into the same config dir: the write is refused with the `config.json changed while init was
-    waiting` message, and the pending-request config is unchanged.
+    waiting` message, the pending-request config is unchanged, and there is no `vault` folder.
   - `Guided_EofAtOtherMachines_StillPrintsTheRecoveryWarning` — stdin ends at the other-machines question: exit 0,
     the vault opens, the per-slot summary lines and the `Vault folder:` line are printed, and the output ends with the
     recovery key backup warning.
   - `Guided_PendingRequestChangedWhileWaiting_IsRefusedAtTheWrite` — a pending `slot request` config at the start,
-    "yes" to Reinitialize; `OnChallenge` runs another `slot request` (new bytes): the write is refused with the
-    `config.json changed while init was waiting` message, the new config is unchanged.
+    "yes" to Reinitialize; `OnChallenge` copies a second machine's pending-request `config.json` (a fresh
+    `FleetMachine` that ran `slot request`, so different bytes) over this one: the write is refused with the
+    `config.json changed while init was waiting` message, the copied config is unchanged, no `vault` folder, and the
+    Reinitialize backup still exists.
   - `Guided_PicksTypedOutOfOrder_EnrolInListSerialsOrder` — keys 11, 12, picks typed `2 1`: key 11 is challenged
     first (`Challenges` order) and the config's `KeyringSlotId` is key 11's slot.
   - `Guided_PendingSlotRequest_AsksReinitialize_NoChangesNothing_YesBacksUp` — after `slot request`: "no" → exit 0,
