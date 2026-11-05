@@ -70,7 +70,60 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     public IReadOnlyList<int> ListSerials()
     {
         OnListSerials?.Invoke();
-        return PluggedIn.ToList();
+        return PluggedIn.Where(s => !Hidden.Contains(s)).ToList();
+    }
+
+    /// <summary>
+    /// YubiKey SDK stage 1: serials the OS hides from the keyboard interface (seen over FIDO only). They are left out
+    /// of <see cref="ListSerials"/> and reported by <see cref="FindKeys"/> as not reachable, plugged in or not.
+    /// </summary>
+    public HashSet<int> Hidden { get; set; } = [];
+
+    /// <summary>Stage 1: a serial's transports as <see cref="FindKeys"/> reports them (default by reachability).</summary>
+    public Dictionary<int, string> Transports { get; } = [];
+
+    /// <summary>Stage 1: slot 2's state per serial (default <see cref="Slot2State.Configured"/>).</summary>
+    public Dictionary<int, Slot2State> Slot2States { get; } = [];
+
+    /// <summary>Stage 1: per serial, the kind <see cref="ProgramSlot2"/> fails with (absent: success).</summary>
+    public Dictionary<int, OtpFailure> ProgramOutcome { get; } = [];
+
+    /// <summary>Stage 1: every <see cref="ProgramSlot2"/> call, also failed ones: (serial, touch asked for).</summary>
+    public List<(int Serial, bool RequireTouch)> Programmed { get; } = [];
+
+    /// <summary>Plugged-in keys (reachable unless hidden), then hidden keys that aren't plugged in.</summary>
+    public IReadOnlyList<YubiKeyInfo> FindKeys()
+    {
+        OnListSerials?.Invoke();
+        var keys = PluggedIn.Select(s => Info(s, !Hidden.Contains(s))).ToList();
+        keys.AddRange(Hidden.Where(s => !PluggedIn.Contains(s)).Select(s => Info(s, false)));
+        return keys;
+    }
+
+    private YubiKeyInfo Info(int serial, bool reachable) =>
+        new(serial, reachable, Transports.GetValueOrDefault(serial) ?? (reachable ? "HidKeyboard, HidFido" : "HidFido"));
+
+    public Slot2State GetSlot2State(int serial)
+    {
+        if (!PluggedIn.Contains(serial))
+            throw new TswapCore.TswapException($"YubiKey {serial} is not plugged in.");
+        return Slot2States.GetValueOrDefault(serial, Slot2State.Configured);
+    }
+
+    /// <summary>
+    /// Records the call; with a <see cref="ProgramOutcome"/> for the serial, fails with that kind; otherwise slot 2
+    /// gets a fresh secret and the touch flag.
+    /// </summary>
+    public void ProgramSlot2(int serial, bool requireTouch)
+    {
+        if (!PluggedIn.Contains(serial))
+            throw new TswapCore.TswapException($"YubiKey {serial} is not plugged in.");
+        Programmed.Add((serial, requireTouch));
+        if (ProgramOutcome.TryGetValue(serial, out var kind))
+            throw new YubiKeyProgramException(kind, serial);
+        _secrets[serial] = RandomNumberGenerator.GetBytes(20);
+        _touch[serial] = requireTouch;
+        Slot2States[serial] = Slot2State.Configured;
     }
 
     public byte[] Challenge(int serial, string challenge)
@@ -80,6 +133,9 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
             throw new TswapCore.TswapException(failure);
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
             throw new TswapCore.TswapException($"ykman failed: device {serial} not found");
+
+        if (Slot2States.GetValueOrDefault(serial, Slot2State.Configured) == Slot2State.Empty)
+            throw new TswapCore.TswapException($"Slot 2 of YubiKey {serial} isn't set up for challenge-response; run `tswap yubikey setup`.");
 
         Challenges.Add((serial, challenge)); // asked, even when it doesn't answer
         if (NotAnswering.Contains(serial))

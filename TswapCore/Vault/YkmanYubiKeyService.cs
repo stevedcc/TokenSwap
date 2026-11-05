@@ -88,6 +88,11 @@ public sealed class YkmanYubiKeyService(TextWriter? verboseOut = null) : IYubiKe
         }
     }
 
+    // Stage 1 task 3 deletes this service; until then the members it never had throw.
+    public IReadOnlyList<YubiKeyInfo> FindKeys() => throw new NotSupportedException("ykman service is being removed");
+    public Slot2State GetSlot2State(int serial) => throw new NotSupportedException("ykman service is being removed");
+    public void ProgramSlot2(int serial, bool requireTouch) => throw new NotSupportedException("ykman service is being removed");
+
     private static (int ExitCode, string Stdout, string Stderr) RunYkman(string arguments)
     {
         var psi = new ProcessStartInfo
