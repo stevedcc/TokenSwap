@@ -9,7 +9,7 @@ namespace TswapCore.Vault;
 
 /// <summary>
 /// What <see cref="YubicoOtpKeys.ProgramSlot2WithKey"/> sends for slot 2: HMAC-SHA1 challenge-response with
-/// HMAC_LT64 on (<c>UseSmallChallenge</c>), touch per flag (<c>UseButton</c>), a 20-byte key: the settings of
+/// HMAC_LT64 on, touch per flag, a 20-byte key (as flag bytes: <see cref="YubicoOtpKeys.Slot2Flags"/>): the settings of
 /// a slot programmed with Yubico's challenge-response tooling (sources in the stage 1 plan, Task 4).
 /// </summary>
 internal sealed record Slot2Programming(bool HmacSha1, bool SmallChallenge, bool Touch, int KeyLength);
@@ -177,9 +177,12 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             throw new InvalidOperationException("tswap programs slot 2 for HMAC-SHA1 only");
 
         OtpSession otp;
+        FirmwareVersion firmware;
         try
         {
-            otp = new OtpSession(KeyboardDevice(serial));
+            var device = KeyboardDevice(serial);
+            firmware = device.FirmwareVersion;
+            otp = new OtpSession(device);
         }
         catch (Exception e) when (e is not OtpKeysException)
         {
@@ -188,14 +191,12 @@ internal sealed class YubicoOtpKeys : IOtpKeys
 
         using (otp)
         {
+            if (firmware < MinimumFirmware)
+                throw new OtpKeysException(OtpFailure.Other, serial,
+                    $"its firmware {firmware} is older than {MinimumFirmware}, which HMAC-SHA1 challenge-response with these settings needs");
             try
             {
-                otp.ConfigureChallengeResponse(Slot.LongPress)
-                    .UseHmacSha1()
-                    .UseKey(key20)
-                    .UseSmallChallenge(settings.SmallChallenge)
-                    .UseButton(settings.Touch)
-                    .Execute();
+                Configure(otp, key20, settings);
             }
             catch (Exception e)
             {
@@ -245,10 +246,86 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     private static readonly TimeSpan TouchReportGrace = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// The settings <see cref="ProgramSlot2WithKey"/> follows. Each maps to one SDK call:
-    /// <c>UseHmacSha1</c> (CHAL_HMAC + CHAL_RESP), <c>UseSmallChallenge</c> (HMAC_LT64), <c>UseButton</c>
-    /// (CHAL_BTN_TRIG), <c>UseKey</c> (20 bytes). The SDK's operations also set SERIAL_API_VISIBLE and ALLOW_UPDATE by
-    /// default (<c>OperationBase</c>), as Yubico's own configuration code does.
+    /// The oldest firmware whose flags these settings use: HMAC-SHA1, HMAC_LT64 and the button trigger need 2.2.0,
+    /// ALLOW_UPDATE 2.3.0 (SDK 1.18.1 <c>OtpSettings._flagDefinitions</c>, which the SDK's own operation checks).
+    /// </summary>
+    private static readonly FirmwareVersion MinimumFirmware = new(2, 3, 0);
+
+    /// <summary>
+    /// Writes slot 2 with the SDK's <c>ConfigureSlotCommand</c>, built here exactly as the SDK's
+    /// <c>ConfigureChallengeResponse</c> operation builds it (SDK 1.18.1 <c>ExecuteOperation</c>: the flag bytes, the key
+    /// as AES key + uid, empty current and new access codes, sent over the session's connection). The operation itself
+    /// isn't used: its flag builder (<c>OtpSettings&lt;T&gt;.YubiKeyFlags</c> → <c>FlagsSet</c>) calls
+    /// <c>Enum.GetValues(Type)</c>, which NativeAOT flags as needing dynamic code (IL3050), and tswap's publish must be
+    /// free of such warnings. The command's buffer, which holds the key, is cleared afterwards.
+    /// </summary>
+    private static void Configure(OtpSession otp, byte[] key20, Slot2Programming settings)
+    {
+        var (extended, ticket, configuration) = Slot2Flags(settings);
+        var (aesKey, uid) = Slot2KeyLayout(key20);
+        var cmd = new Yubico.YubiKey.Otp.Commands.ConfigureSlotCommand
+        {
+            YubiKeyFlags = new YubiKeyFlags { Extended = extended, Ticket = ticket, Configuration = configuration },
+            OtpSlot = Slot.LongPress,
+        };
+        try
+        {
+            cmd.SetAesKey(aesKey);
+            cmd.SetUid(uid);
+            cmd.ApplyCurrentAccessCode(new byte[Yubico.YubiKey.Otp.Commands.SlotConfigureBase.AccessCodeLength]);
+            cmd.SetAccessCode(new byte[Yubico.YubiKey.Otp.Commands.SlotConfigureBase.AccessCodeLength]);
+            var response = otp.Connection.SendCommand(cmd);
+            if (response.Status != ResponseStatus.Success)
+                throw new InvalidOperationException($"the key refused the configuration: {response.StatusMessage}");
+        }
+        finally
+        {
+            cmd.Clear();
+            CryptographicOperations.ZeroMemory(aesKey);
+            CryptographicOperations.ZeroMemory(uid);
+        }
+    }
+
+    /// <summary>
+    /// The three flag bytes of <paramref name="settings"/>, as yubikey-manager's <c>HmacSha1SlotConfiguration</c> and the
+    /// SDK's flag table give them: extended SERIAL_API_VISIBLE 0x04 | ALLOW_UPDATE 0x20 (both tools' defaults); ticket
+    /// CHAL_RESP 0x40; configuration CHAL_HMAC 0x22, HMAC_LT64 0x04 (small challenge), CHAL_BTN_TRIG 0x08 (touch).
+    /// </summary>
+    internal static (byte Extended, byte Ticket, byte Configuration) Slot2Flags(Slot2Programming settings)
+    {
+        if (!settings.HmacSha1)
+            throw new InvalidOperationException("tswap programs slot 2 for HMAC-SHA1 only");
+        byte configuration = ChallengeResponseHmacSha1Bits;
+        if (settings.SmallChallenge)
+            configuration |= Yubico.YubiKey.Otp.ConfigurationFlags.HmacLessThan64Bytes;
+        if (settings.Touch)
+            configuration |= Yubico.YubiKey.Otp.ConfigurationFlags.UseButtonTrigger;
+        return (
+            Extended: (byte)(Yubico.YubiKey.Otp.ExtendedFlags.SerialNumberApiVisible | Yubico.YubiKey.Otp.ExtendedFlags.AllowUpdate),
+            Ticket: Yubico.YubiKey.Otp.TicketFlags.ChallengeResponse,
+            Configuration: configuration);
+    }
+
+    /// <summary>The configuration's CHAL_HMAC bits (yubikey-manager <c>CFGFLAG.CHAL_HMAC = 0x22</c>; SDK flag table <c>(1&lt;&lt;5)|(1&lt;&lt;1)</c>).</summary>
+    private const byte ChallengeResponseHmacSha1Bits = 0x22;
+
+    /// <summary>
+    /// The 20-byte key as the SDK's operation lays it out: the first 16 bytes are the AES key field, the remaining 4,
+    /// zero-padded to 6, the uid field. The caller zeroes both.
+    /// </summary>
+    internal static (byte[] AesKey, byte[] Uid) Slot2KeyLayout(byte[] key20)
+    {
+        if (key20.Length != ConfigureChallengeResponseKeySize)
+            throw new ArgumentException($"The slot key is {ConfigureChallengeResponseKeySize} bytes", nameof(key20));
+        var uid = new byte[6];
+        key20.AsSpan(16).CopyTo(uid);
+        return (key20[..16], uid);
+    }
+
+    /// <summary>
+    /// The settings <see cref="ProgramSlot2WithKey"/> follows, written as the flag bytes of <see cref="Slot2Flags"/>
+    /// (CHAL_HMAC + CHAL_RESP, HMAC_LT64, CHAL_BTN_TRIG per touch, plus SERIAL_API_VISIBLE and ALLOW_UPDATE as Yubico's
+    /// own tools set them) and a 20-byte key (<see cref="Slot2KeyLayout"/>).
     /// </summary>
     internal static Slot2Programming Slot2Settings(bool requireTouch) =>
         new(HmacSha1: true, SmallChallenge: true, Touch: requireTouch, KeyLength: ConfigureChallengeResponseKeySize);

@@ -171,6 +171,31 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.Equal(YubicoOtpKeys.Slot2Settings(true) with { Touch = false }, YubicoOtpKeys.Slot2Settings(false));
     }
 
+    /// <summary>
+    /// The bytes the slot is configured with (task 4 AOT fix: tswap builds the SDK's <c>ConfigureSlotCommand</c> itself,
+    /// so the SDK's flag builder, which needs dynamic code under NativeAOT, is never reached). They equal yubikey-manager
+    /// 5.9.2's <c>HmacSha1SlotConfiguration(key).require_touch(touch)</c>: EXTFLAG SERIAL_API_VISIBLE 0x04 | ALLOW_UPDATE
+    /// 0x20; TKTFLAG CHAL_RESP 0x40; CFGFLAG CHAL_HMAC 0x22 | HMAC_LT64 0x04, plus CHAL_BTN_TRIG 0x08 with touch.
+    /// </summary>
+    [Fact]
+    public void Setup_SlotFlagsMatchYkman()
+    {
+        Assert.Equal((Extended: (byte)0x24, Ticket: (byte)0x40, Configuration: (byte)0x2E), YubicoOtpKeys.Slot2Flags(YubicoOtpKeys.Slot2Settings(true)));
+        Assert.Equal((Extended: (byte)0x24, Ticket: (byte)0x40, Configuration: (byte)0x26), YubicoOtpKeys.Slot2Flags(YubicoOtpKeys.Slot2Settings(false)));
+    }
+
+    /// <summary>The 20-byte key goes into the configuration as the SDK's operation puts it: 16 bytes AES key, then 4 + 2 zero bytes of uid.</summary>
+    [Fact]
+    public void Setup_SlotKeyLayoutMatchesTheSdk()
+    {
+        var key = Enumerable.Range(1, 20).Select(i => (byte)i).ToArray();
+
+        var (aesKey, uid) = YubicoOtpKeys.Slot2KeyLayout(key);
+
+        Assert.Equal(key[..16], aesKey);
+        Assert.Equal([17, 18, 19, 20, 0, 0], uid);
+    }
+
     // ── a configured slot ─────────────────────────────────────────────────────
 
     [Fact]
