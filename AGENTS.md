@@ -132,8 +132,10 @@ to enroll. Tests: `TwoYubiKeysTests` (FleetMachine `RunOnTerminal` plays a termi
 **The touch posture** is explained once where it is chosen (enrolment, `migrate`) on stderr and
 acknowledged in `config.json` (`AcknowledgedTouch`); everyday commands print one line only for a
 posture that changed since (`SecurityWarnings.NoticeIfChanged`); `tswap slots --ack` acknowledges.
-It is detected from whether `ykman otp calculate` asked for a touch
-(`IYubiKeyService.ChallengeReportingTouch`). Every notice goes to stderr.
+It is detected from whether the key asked for a touch while it answered the challenge, which Yubico's
+.NET SDK reports through its touch notifier (`YubicoOtpKeys.Calculate`, `UseTouchNotifier`;
+`IYubiKeyService.ChallengeReportingTouch`). A configured slot's touch setting can't be read from the key
+(`SdkYubiKeyService.DetectTouchRequirement` returns null). Every notice goes to stderr.
 
 ### YubiKey XOR Redundancy (classic vaults, migration only)
 
@@ -143,7 +145,7 @@ Classic vaults made by `init` before v0.2 work like this (v0.2 only migrates or 
 
 - **Encryption**: AES-256-GCM (random nonce per operation)
 - **Key derivation**: PBKDF2-SHA256, 100k iterations
-- **YubiKey challenge-response**: HMAC-SHA1 via `ykman` CLI (`ykman list --serials` for enumeration, `ykman --device <serial> otp calculate 2` for challenge-response)
+- **YubiKey challenge-response**: HMAC-SHA1 on slot 2 through Yubico's .NET SDK (`Yubico.YubiKey` 1.18.1, `TswapCore.csproj`), over the key's OTP (keyboard HID) interface; the challenge string is UTF-8, zero-padded or truncated to a 64-byte frame (`SdkYubiKeyService.ChallengeReportingTouch`). Slot 2 is programmed by `tswap yubikey setup` (`YubicoOtpKeys.ProgramSlot2`: HMAC-SHA1, HMAC_LT64, touch per flag, a host-RNG secret, verified by one challenge).
 
 ### Stdin Ingestion (`ingest` command)
 
@@ -209,7 +211,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
 6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion)
 
-YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`SdkYubiKeyService` implements it over `IOtpKeys`: `YubicoOtpKeys` makes the SDK calls, and `YubicoSdk.EnsureInitialized` sets the SDK's crypto creators, the Linux `libudev.so.1` resolver and silent logging; on Linux the SDK's PC/SC calls go through tswap's own loader, `TswapCli/Native/pcsc-loader.c`, which forwards to `libpcsclite.so.1` when it is present and otherwise uses a stand-in that answers `SCARD_E_NO_SERVICE` (`PcscStrategy.Describe()`); `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
@@ -236,7 +238,7 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 
 ### Prerequisites
 
-- `ykman` CLI (YubiKey Manager)
+- On Linux, Yubico's udev rule (access to the key's hidraw device); no ykman and no `libpcsclite` needed
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
   setting; a key without touch (less secure: no button press) is for CI/automation only.
