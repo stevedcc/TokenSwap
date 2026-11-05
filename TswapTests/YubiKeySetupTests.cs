@@ -351,9 +351,58 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
 
         Assert.NotEqual(0, r.Exit);
-        Assert.Contains($"YubiKey {SerialB} is plugged in, but its slot doesn't open the vault", r.Err);
-        Assert.Contains("leave this key as it is", r.Err);
+        Assert.Contains(DeadText(SerialB), r.Err);
         Assert.Empty(m.Keys.Programmed);
+    }
+
+    private static string DeadText(int other) =>
+        $"YubiKey {other}'s slot didn't open (it may have been reprogrammed); this key may be the vault's only working YubiKey, so it's left as it is";
+
+    private static string PlugInText(int other) => $"plug in YubiKey {other} so its slot can be checked, or leave this key as it is";
+
+    [Fact]
+    public void Setup_Replace_OtherKeyNoAnswer_Refused()
+    {
+        var m = VaultOnAAndB();
+        m.Keys.NotAnswering.Add(SerialB); // a touch that timed out
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains($"YubiKey {SerialB} didn't answer; plug it in and touch it when it flashes", r.Err);
+        Assert.Empty(m.Keys.Programmed);
+    }
+
+    /// <summary>Amended 2026-11-05: the rule applies only when this key has a slot in the keyring.</summary>
+    [Fact]
+    public void Setup_Replace_KeyNotInKeyring_Proceeds()
+    {
+        var dir = WriteKeyringVault([YubiKeySlot(SerialB)]); // B not plugged in: no check is needed
+
+        var keys = Keys(SerialA);
+        var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialA}\n", terminal: true);
+
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialA, true)], keys.Programmed);
+        Assert.Empty(keys.Challenges);
+        Assert.DoesNotContain(NotSetUpWarning, r.All);
+    }
+
+    /// <summary>
+    /// Another machine's legacy pair slot (its pair serials are in that machine's config, not here) may be on this
+    /// key: fail closed, it counts as this key's slot.
+    /// </summary>
+    [Fact]
+    public void Setup_Replace_ForeignLegacyPairSlot_CountsAsThisKeys()
+    {
+        var dir = WriteKeyringVault([YubiKeySlot(SerialB), MachineSlot(null)]); // own slot: B's; then a pair slot
+
+        var keys = Keys(SerialA); // B not plugged in
+        var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains(PlugInText(SerialB), r.Err);
+        Assert.Empty(keys.Programmed);
     }
 
     [Fact]
@@ -365,7 +414,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialA}\n", terminal: true);
 
         Assert.NotEqual(0, r.Exit);
-        Assert.Contains($"Plug in YubiKey {SerialB} so its slot can be checked, or leave this key as it is", r.Err);
+        Assert.Contains(PlugInText(SerialB), r.Err);
         Assert.Empty(keys.Programmed);
     }
 
@@ -378,7 +427,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
 
         Assert.NotEqual(0, r.Exit);
-        Assert.Contains($"Plug in YubiKey {SerialB} so its slot can be checked", r.Err);
+        Assert.Contains(PlugInText(SerialB), r.Err);
         Assert.Empty(m.Keys.Programmed);
     }
 
@@ -392,6 +441,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
 
         Assert.NotEqual(0, r.Exit);
         Assert.Contains($"YubiKey {SerialB} is busy (another tswap or app is using it); try again.", r.Err);
+        Assert.DoesNotContain("didn't answer", r.Err); // busy is its own case, not a missed touch
         Assert.Empty(m.Keys.Programmed);
     }
 
@@ -417,7 +467,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\nwrong password\n", terminal: true);
 
         Assert.NotEqual(0, r.Exit);
-        Assert.Contains($"YubiKey {SerialB} is plugged in, but its slot doesn't open the vault", r.Err);
+        Assert.Contains(DeadText(SerialB), r.Err);
         Assert.Empty(m.Keys.Programmed);
     }
 
@@ -507,18 +557,21 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.Empty(keys.Programmed);
     }
 
-    /// <summary>Amended 2026-11-05: a legacy pair slot needs both keys, so it never opens the vault by itself.</summary>
+    /// <summary>
+    /// Amended 2026-11-05 (second review): a key outside this vault's own pair has no slot in the keyring, so nothing
+    /// on it is at risk and setup proceeds (before that amendment this was refused: a pair slot is no way in).
+    /// </summary>
     [Fact]
-    public void Setup_Replace_LegacyPairSlotsOnly_RefusedForAKeyOutsideThePair()
+    public void Setup_Replace_LegacyPairOfOtherKeys_KeyNotInKeyring_Proceeds()
     {
         var dir = WriteLegacyPairVaultWithoutRecovery();
 
         var keys = Keys(SerialC);
         var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialC}\n", terminal: true);
 
-        Assert.NotEqual(0, r.Exit);
-        Assert.Contains("only way", r.Err);
-        Assert.Empty(keys.Programmed);
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialC, true)], keys.Programmed);
+        Assert.DoesNotContain(NotSetUpWarning, r.All);
     }
 
     [Fact]

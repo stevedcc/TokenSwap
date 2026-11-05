@@ -222,6 +222,10 @@ public sealed class YubiKeyCommand : ICliCommand
             return;
         }
 
+        // The rule applies only when this key has a slot here: otherwise nothing on the key is at risk.
+        if (!keyring.Slots.Any(s => MayBeThisKeys(config, keyring, s, serial)))
+            return;
+
         List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys = [];
         foreach (var slot in keyring.Slots)
         {
@@ -243,6 +247,36 @@ public sealed class YubiKeyCommand : ICliCommand
     }
 
     private enum WayIn { No, ByItself, OtherYubiKey }
+
+    /// <summary>
+    /// Whether <paramref name="slot"/> may be a slot on YubiKey <paramref name="serial"/>: a one-key YubiKey slot of this
+    /// serial, or one whose serial can't be read (fail closed); this machine's legacy pair slot when its pair (the
+    /// config's pair serials) includes this key; another machine's legacy pair slot, whose pair isn't known here (fail
+    /// closed). Recovery, TPM and Secure Enclave slots and other keys' slots are not.
+    /// </summary>
+    private static bool MayBeThisKeys(Config config, Keyring keyring, Slot slot, int serial)
+    {
+        if (slot.Kind == SlotKind.Recovery)
+            return false;
+        if (slot.HwBlob is not { Length: > 0 })
+            return IsOwnSlot(config, keyring, slot) ? config.YubiKeySerials?.Contains(serial) == true : true;
+        if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
+            return false;
+        try
+        {
+            return YubiKeySlotBlob.Decode(slot.HwBlob).Serial == serial;
+        }
+        catch (TswapException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>This machine's own slot: by <see cref="Config.KeyringSlotId"/>, or the first machine slot when that is null (as the unlocker finds it).</summary>
+    private static bool IsOwnSlot(Config config, Keyring keyring, Slot slot) =>
+        config.KeyringSlotId is { } id
+            ? Convert.ToBase64String(slot.SlotId) == id
+            : ReferenceEquals(keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine), slot);
 
     /// <summary>
     /// What a slot is for <c>--replace</c> on YubiKey <paramref name="serial"/>: a recovery slot, or a machine slot
@@ -285,14 +319,13 @@ public sealed class YubiKeyCommand : ICliCommand
         if (candidates.Count == 0)
             throw new TswapException(
                 $"Refusing: apart from YubiKey {serial}, only {names} can open the vault in {ctx.Env.ConfigDir}, and none of " +
-                $"them is plugged in. Plug in {names} so its slot can be checked, or leave this key as it is. Nothing was changed.");
+                $"them can be checked here: plug in {names} so its slot can be checked, or leave this key as it is. Nothing was changed.");
 
         // The vault password is asked at most once (only a password slot asks), and dropped at the end.
         StretchedPasswordCache password = new(TerminalPasswordProvider.For(ctx, config));
         try
         {
-            List<int> wrong = [];
-            TswapException? failed = null;
+            string? refusal = null;
             foreach (var (slot, blob) in candidates)
             {
                 ctx.Console.Error.WriteLine($"Checking that YubiKey {blob.Serial}'s slot still opens the vault (touch it if it flashes)...");
@@ -300,30 +333,35 @@ public sealed class YubiKeyCommand : ICliCommand
                 {
                     if (ctx.Unlocker.YubiKeySlotOpens(keyring, slot, blob, password.Provide))
                         return;
-                    wrong.Add(blob.Serial);
-                }
-                catch (TswapException e) when (e is not TswapCore.VaultPassword.VaultPasswordUnavailableException)
-                {
-                    failed ??= e;
+                    refusal ??= $"YubiKey {blob.Serial}'s slot didn't open (it may have been reprogrammed); this key may be " +
+                        "the vault's only working YubiKey, so it's left as it is.";
                 }
                 catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
                 {
                     throw new TswapException($"Refusing: YubiKey {blob.Serial}'s slot needs the vault password to be checked: {e.Message} Nothing was changed.");
                 }
+                catch (TswapException e)
+                {
+                    // The device's busy text as it is (Task 2's wording); anything else (a touch that timed out, the key
+                    // pulled mid-check, no answer) is "didn't answer", with the device's message after it.
+                    refusal ??= IsBusy(e)
+                        ? e.Message
+                        : $"YubiKey {blob.Serial} didn't answer; plug it in and touch it when it flashes. ({e.Message})";
+                }
             }
-            if (failed is not null)
-                throw new TswapException($"Refusing: no other YubiKey's slot could be checked. {failed.Message} Nothing was changed.");
-            var wrongNames = string.Join(", ", wrong.Distinct().Select(s => $"YubiKey {s}"));
-            throw new TswapException(
-                $"Refusing: {wrongNames} is plugged in, but its slot doesn't open the vault in {ctx.Env.ConfigDir} (its answer " +
-                $"doesn't authenticate), so YubiKey {serial} may be the vault's only working way in. Plug in {names} so its " +
-                "slot can be checked, or leave this key as it is. Nothing was changed.");
+            throw new TswapException($"Refusing: {refusal} Nothing was changed.");
         }
         finally
         {
             password.Dispose();
         }
     }
+
+    /// <summary>
+    /// The busy texts of <see cref="SdkYubiKeyService"/> (and its test double) share this wording: "is busy (another tswap
+    /// or app is using it)" and "is busy (another tswap or app is waiting for a touch)".
+    /// </summary>
+    private static bool IsBusy(TswapException e) => e.Message.Contains("busy (another tswap or app", StringComparison.Ordinal);
 
     /// <summary>A password provider that asks its source once and hands out clones.</summary>
     private sealed class StretchedPasswordCache(TswapCore.VaultPassword.VaultPasswordProvider source) : IDisposable
