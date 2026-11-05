@@ -539,7 +539,7 @@ tswap agent stop
   key check, or the command refuses it.
 
 A broker whose slot has the password starts **locked** and is unlocked once with
-`tswap broker unlock`: see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password-brief-t17).
+`tswap broker unlock`: see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password).
 
 ### What the password does and doesn't protect
 
@@ -1159,7 +1159,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 | `prompt-hash` | No | SHA-256 hash of agent instructions |
 | `completion <bash\|zsh\|fish\|powershell>`, `installscript` | No | Shell completion script; platform install script |
 | `broker serve` | No (runs as the vault's user, refuses root) | Run the broker for containers (see [Containers](#containers-credentials-they-never-hold)) |
-| `broker unlock [--timeout <d>]`, `broker lock`, `broker status` | No (refuses sudo) | Unlock, lock or query a broker whose slot has the vault password (see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password-brief-t17)) |
+| `broker unlock [--timeout <d>]`, `broker lock`, `broker status` | No (refuses sudo) | Unlock, lock or query a broker whose slot has the vault password (see [docs/BROKER.md](docs/BROKER.md#a-broker-with-a-vault-password)) |
 | `broker forward --listen 127.0.0.1:<port> [--socket <path>]`, `broker call <template> [name=value ...] [--socket <path>]` | No (in the container) | Use the broker's HTTP routes; call a command template (`call` exits 125 when the broker refused or failed, 124 when the template timed out) |
 | `add <name>` | Yes | Store a user-provided secret value |
 | `get <name>` | Yes | Display a secret value |
