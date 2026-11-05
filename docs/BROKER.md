@@ -89,7 +89,8 @@ sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 
 Run as root on the vault user's folder, tswap does every file write in that
 folder **as the folder's owner** (it switches to the owner's effective uid and gid, with no
-supplementary groups), so the keyring, the records and `config.json` come out owned by `vault`,
+supplementary groups), so the keyring, the records and `config.json` (the vault's files:
+[Files](commands.md#files)) come out owned by `vault`,
 mode 0600, and a symlink that `vault` planted in its own folder gets no further than `vault`'s own
 rights.
 The test suite checks this. The `sudo VAR=value` note above applies here too.
@@ -239,7 +240,8 @@ sudo -iu vault systemctl --user enable --now tswap-broker
 After a `route` change or a change to a socket's uids, routes or binding:
 `systemctl --user reload tswap-broker` (SIGHUP; the new file is validated completely, then
 swapped in; a request keeps the config it started with). A new or removed socket, or a new
-`socket_dir`, needs `systemctl --user restart tswap-broker`.
+`socket_dir`, needs `systemctl --user restart tswap-broker` (a reload stops serving a removed
+socket, but only a restart releases its listener: see step 4 of the SSH setup).
 
 Logs: one line per request in the journal and in `broker.log` (mode `0600`) next to
 `broker.json`: time, socket, peer uid and pid, route, method, decoded path (escaped,
@@ -684,15 +686,64 @@ any route. `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap broker socket 
 | Field | Meaning |
 |---|---|
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
-| `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a placeholder, and never at or under one of the template's binds (read-only ones too), as configured or resolved (symlinks followed, a dangling one too; a program not installed yet through its nearest existing folder; it still loads, and its calls fail until it is installed), checked at load and again before every call; no `.` or `..` segment; on a template with binds, a program (or `bwrap_path`) whose path can't be resolved (a symlink loop, more than 40 links, a link that can't be read) is refused at load: a container that can write a bound folder (through another mount) could replace the program. Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the image. `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
+| `argv` | the command, run directly (no shell): see [The `argv` rules](#the-argv-rules) below |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or that name files it loads, trusts or writes: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, `GIT_DIR`, `GIT_WORK_TREE` (a repo whose hooks would run), `LESSOPEN`, `LESSCLOSE`, `BROWSER`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. `KUBECONFIG`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `GNUPGHOME` and `GRADLE_USER_HOME` name a config file or folder that can name a command to run (a kubeconfig `exec`, AWS `credential_process`, GnuPG's `pinentry-program`, Gradle's `init.d`): they are allowed, but a literal value at or under one of the template's binds (read-only ones too; as configured and resolved, a relative value against `cwd`, each `KUBECONFIG` list entry) is refused, at load and again before every call, because a container could plant such a file there. Point them under `/run/secrets/` (a `files` entry) or outside every bind. The list catches mistakes; it isn't complete, so choose tools you know |
+| `env`, `files` | the secrets, as above; some environment names are refused: see [Refused environment names](#refused-environment-names) below |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
 | `timeout_sec` | 1 to 3600, default 120 |
 | `max_output_bytes` | 1 byte to 64 MiB, default 1 MiB |
 | `rate` | calls a minute for each socket that may call the template (counted per socket and template, so a socket listing two templates may make both rates of calls), 1 to 60, default 6; over it `429` and nothing runs or unlocks (each call is a TPM unlock and has real side effects). A call refused before it could run (bad arguments, the sandbox or a bind) doesn't count |
+
+#### The `argv` rules
+
+- `argv[0]` is a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a
+  placeholder. No `.` or `..` segment.
+- It is never at or under one of the template's binds (read-only ones too), as configured or
+  resolved: symlinks followed, a dangling one too; a program not installed yet through its nearest
+  existing folder (it still loads, and its calls fail until it is installed). This is checked at
+  load and again before every call.
+- On a template with binds, a program (or `bwrap_path`) whose path can't be resolved (a symlink
+  loop, more than 40 links, a link that can't be read) is refused at load: a container that can
+  write a bound folder (through another mount) could replace the program.
+- Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the
+  image.
+- `{arg}` placeholders are allowed in `argv[1..]` only.
+- Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105).
+
+#### Refused environment names
+
+- The baseline: `PATH`, `LC_ALL`, `PWD`, and `LD_*`.
+- Names that make a shell, an interpreter, a library or a tool run code, or that name files it
+  loads, trusts or writes:
+
+  ```
+  BASH_ENV ENV SHELLOPTS BASHOPTS PS4 PROMPT_COMMAND IFS CDPATH GLIBC_TUNABLES MALLOC_CHECK_
+  GIT_SSH GIT_SSH_COMMAND GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS GIT_EXEC_PATH
+  GIT_PROXY_COMMAND GIT_TEMPLATE_DIR GIT_EDITOR EDITOR VISUAL PAGER GIT_PAGER GCONV_PATH LOCPATH
+  NLSPATH REQUESTS_CA_BUNDLE NETRC HOSTALIASES LOCALDOMAIN RES_OPTIONS TMPDIR HOME CLASSPATH
+  SSLKEYLOGFILE INPUTRC TERMINFO TERMINFO_DIRS MAVEN_OPTS GRADLE_OPTS GIT_DIR GIT_WORK_TREE
+  LESSOPEN LESSCLOSE BROWSER
+  ```
+
+  `HOME` is refused because the sandbox sets none, so a template's `HOME` would choose the
+  `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads. `GIT_DIR` and `GIT_WORK_TREE` name a
+  repo whose hooks would run.
+- Every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`,
+  `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The
+  prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`,
+  `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr`
+  or from the image.
+- `KUBECONFIG`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `GNUPGHOME` and
+  `GRADLE_USER_HOME` name a config file or folder that can name a command to run (a kubeconfig
+  `exec`, AWS `credential_process`, GnuPG's `pinentry-program`, Gradle's `init.d`). They are
+  allowed, but a literal value at or under one of the template's binds (read-only ones too; as
+  configured and resolved, a relative value against `cwd`, each `KUBECONFIG` list entry) is
+  refused, at load and again before every call, because a container could plant such a file
+  there. Point them under `/run/secrets/` (a `files` entry) or outside every bind.
+
+The list catches mistakes; it isn't complete, so choose tools you know.
 
 **`allow_leading_dash` with a loose pattern is flag injection:** a value like
 `--checkpoint-action=exec=sh` handed to `tar`, or `--upload-pack=...` to `git`, turns an argument
@@ -759,7 +810,8 @@ Signing with a key held in the vault, handed over as a read-only file:
 
 A call takes one of its socket's request slots for its whole duration (the broker's connection limits), then **one
 unlock**, and decrypts only the records of the secrets the template names, each on its own
-(`records/HMAC(K_names, name)`), never the whole vault; a template with no secrets doesn't unlock
+(the record file named by a keyed hash of the secret's name, `records/HMAC(K_names, name)`: see
+[Files](commands.md#files)), never the whole vault; a template with no secrets doesn't unlock
 at all. The vault key is zeroed straight after, the secret bytes once they are in the environment
 block or the pipe. The unlock-failure limits and the unlock timeout are the routes' (see [The TPM's
 dictionary-attack counter](broker-threat-model.md#the-tpms-dictionary-attack-counter)).
