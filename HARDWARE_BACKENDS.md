@@ -6,8 +6,9 @@ For the review status and posture of each backend, see [docs/security-model.md](
 
 For setting tswap up, see [docs/setup.md](docs/setup.md).
 
-<details>
-<summary>Moved sections</summary>
+## Moved sections
+
+Old links to these sections land here.
 
 <a id="the-seam"></a> [the-seam](docs/design/hardware-backends.md#the-seam)
 
@@ -74,5 +75,3 @@ For setting tswap up, see [docs/setup.md](docs/setup.md).
 <a id="adding-a-backend"></a> [adding-a-backend](docs/design/hardware-backends.md#adding-a-backend)
 
 <a id="redundancy-and-phase-6"></a> [redundancy-and-phase-6](docs/design/hardware-backends.md#redundancy-and-phase-6)
-
-</details>

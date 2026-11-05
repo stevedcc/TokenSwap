@@ -6,8 +6,9 @@ For setting tswap up, see [docs/setup.md](docs/setup.md).
 
 For using a vault on several machines, see [docs/multi-machine.md](docs/multi-machine.md).
 
-<details>
-<summary>Moved sections</summary>
+## Moved sections
+
+Old links to these sections land here.
 
 <a id="scope-v0--v1--v2"></a> [scope-v0--v1--v2](docs/design/multi-machine-keying.md#scope-v0--v1--v2)
 
@@ -58,5 +59,3 @@ For using a vault on several machines, see [docs/multi-machine.md](docs/multi-ma
 <a id="open-questions"></a> [open-questions](docs/design/multi-machine-keying.md#open-questions)
 
 <a id="deferred-to-v1"></a> [deferred-to-v1](docs/design/multi-machine-keying.md#deferred-to-v1)
-
-</details>

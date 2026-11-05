@@ -8,7 +8,7 @@ namespace TswapTests.Docs;
 /// <summary>Where an anchor comes from: a heading, or an explicit <c>&lt;a id&gt;</c> / <c>&lt;a name&gt;</c>.</summary>
 internal enum AnchorKind { Heading, Explicit }
 
-/// <summary>One anchor of a Markdown file. <see cref="InMovedSections"/> marks one inside a "Moved sections" <c>&lt;details&gt;</c> block (a redirect).</summary>
+/// <summary>One anchor of a Markdown file. <see cref="InMovedSections"/> marks one under a "Moved sections" heading (a redirect).</summary>
 internal sealed record Anchor(string Id, AnchorKind Kind, bool InMovedSections, int Line);
 
 /// <summary>
@@ -212,9 +212,6 @@ internal static partial class MarkdownLinks
     private static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.NonSpacingMark
         or System.Globalization.UnicodeCategory.SpacingCombiningMark or System.Globalization.UnicodeCategory.EnclosingMark;
 
-    [GeneratedRegex(@"<details\b|</details\s*>|<summary\b[^>]*>.*?</summary\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
-    private static partial Regex DetailsTags();
-
     /// <summary>Every anchor of the file in document order: heading slugs and explicit ids.</summary>
     public static IReadOnlyList<Anchor> AnchorsDetailed(string markdown)
     {
@@ -228,25 +225,18 @@ internal static partial class MarkdownLinks
             return (idx >= 0 ? idx : ~idx - 1) + 1;
         }
 
-        // "Moved sections" blocks as offset intervals; a <summary> may span lines.
+        // A "Moved sections" heading starts the redirects; they run to the next heading of the same
+        // or a higher level (or the end of the file). The heading itself is a live anchor.
         var moved = new List<(int Start, int End)>();
-        var stack = new Stack<(int Start, bool Moved)>();
-        foreach (Match tag in DetailsTags().Matches(masked))
+        for (var i = 0; i < live.Length; i++)
         {
-            if (tag.Value.StartsWith("</details", StringComparison.OrdinalIgnoreCase))
-            {
-                if (stack.Count == 0) continue;
-                var top = stack.Pop();
-                if (top.Moved) moved.Add((top.Start, tag.Index));
-            }
-            else if (tag.Value.StartsWith("<details", StringComparison.OrdinalIgnoreCase)) stack.Push((tag.Index, false));
-            else if (stack.Count > 0 && Regex.IsMatch(tag.Value, @"Moved\s+sections", RegexOptions.IgnoreCase))
-            {
-                var top = stack.Pop();
-                stack.Push((top.Start, true));
-            }
+            var h = AtxHeading().Match(live[i]);
+            if (!h.Success || !Regex.IsMatch(ClosingHashes().Replace(h.Groups[2].Value, "").Trim(), @"^Moved\s+sections$", RegexOptions.IgnoreCase)) continue;
+            var level = h.Groups[1].Length;
+            var j = i + 1;
+            while (j < live.Length && !(AtxHeading().Match(live[j]) is { Success: true } next && next.Groups[1].Length <= level)) j++;
+            moved.Add((i + 1 < live.Length ? lineStarts[i + 1] : masked.Length, j < live.Length ? lineStarts[j] : masked.Length));
         }
-        foreach (var open in stack.Where(o => o.Moved)) moved.Add((open.Start, masked.Length));
         bool InMoved(int offset) => moved.Any(r => offset >= r.Start && offset < r.End);
 
         var found = new List<(int Offset, Anchor Anchor)>();
@@ -275,6 +265,13 @@ internal static partial class MarkdownLinks
 
         return found.OrderBy(f => f.Offset).Select(f => f.Anchor).ToList();
     }
+
+    /// <summary>True when a "Moved sections" summary sits in a &lt;details&gt; block outside code and comments.</summary>
+    public static bool HasCollapsedMovedSections(string markdown) =>
+        CollapsedMovedSections().IsMatch(MaskCodeSpans(string.Join('\n', LiveLines(markdown))));
+
+    [GeneratedRegex(@"<summary\b[^>]*>(?:(?!</summary).)*?Moved\s+sections", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex CollapsedMovedSections();
 
     /// <summary>Heading slugs and explicit ids, in document order.</summary>
     public static IReadOnlyList<string> Anchors(string markdown) => AnchorsDetailed(markdown).Select(a => a.Id).ToList();
