@@ -135,15 +135,6 @@ public class DocLinkTests
         Assert.All(anchors.Skip(1), a => Assert.Equal(AnchorKind.Explicit, a.Kind));
     }
 
-    [Fact]
-    public void Anchors_EqualIndependentLists()
-    {
-        // Task 1 only: later tasks change these files by design and delete the matching half (Task 7 README);
-        // the subset guards below stay. The design files' half went in Task 3 and the BROKER half in Task 4:
-        // those files changed by design, and OldReadmeAnchorsStillResolve's stub and BROKER guards supersede them.
-        Assert.Equal(ReadList("old-readme-anchors.txt"), AnchorsOf("README.md"));
-    }
-
     /// <summary>Broken links of the checked files as <c>file:line → target</c>.</summary>
     private static List<string> BrokenLinks()
     {
@@ -272,7 +263,7 @@ public class DocLinkTests
         Assert.Empty(DuplicateIds("## Setup\n\n<a id=\"setup-old\"></a>\n"));
     }
 
-    [Fact(Skip = "Task 7 un-skips it")]
+    [Fact]
     public void ReadmeStaysShort()
     {
         var lines = Read("README.md").Split('\n');
