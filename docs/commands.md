@@ -299,7 +299,7 @@ Credentials for containers that never hold them: HTTP routes, command templates 
 | `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner (see [Which agent a command asks](vault-password-and-agent.md#which-agent-a-command-asks)) |
 
 Commands that need no vault (`--help`, `<command> --help`, `prompt`, `prompt-hash`, `completion`,
-`installscript`) work without a home folder; the others say "Cannot determine the config folder"
+`installscript`, `broker forward`, `broker call`) work without a home folder; the others say "Cannot determine the config folder"
 if there is none and `TSWAP_CONFIG_DIR` isn't set.
 
 > **macOS and sudo:** tswap releases before 0.1.0 used `~/.config/tswap/` under `sudo` (and
@@ -359,6 +359,9 @@ The tswap agent's socket lives in the vault user's run folder, never in the conf
 folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tswap/run/`),
 `~/Library/Caches/tswap/run/` on macOS, a named pipe on Windows; a password broker's control socket
 is `broker-<16 hex>/control.sock` in the same folder.
+
+A command that backs up `config.json` before it writes (`slot add`, `slot merge` and others) copies
+it to `config.json.bak-<UTC timestamp>` beside it, never overwriting an earlier backup.
 
 On Linux and macOS the folders are created 0700 and the files 0600; an existing vault with wider
 permissions is narrowed on the next write, with a notice (reads change nothing). Windows: the

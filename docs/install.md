@@ -93,7 +93,7 @@ In a command prompt (`cmd`):
 
 ```bat
 dotnet publish TswapCli/TswapCli.csproj -c Release -r win-x64
-# Copy tswap.exe to a directory on your PATH, e.g.:
+REM Copy tswap.exe to a directory on your PATH, e.g.:
 copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
 ```
 

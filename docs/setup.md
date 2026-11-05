@@ -80,7 +80,9 @@ question up front; they are listed in [commands.md](commands.md#init).
 
 ### Without a terminal
 
-Scripts and agents have no terminal to answer questions, so they name the slot instead:
+Scripts have no terminal to answer questions, so they name the slot instead. (An AI agent doesn't
+run `init`: it prints the recovery key, see
+[agent-integration.md](agent-integration.md#agent-role-no-sudo).)
 
 ```bash
 tswap init --yubikey                                   # one plugged-in YubiKey
@@ -223,9 +225,14 @@ sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo
 sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
 ```
 
+If the vault you recover isn't in the default config folder, set `TSWAP_CONFIG_DIR` on the
+`recover` (or `slot add`) side too, to that vault's config folder: a different value from the
+`get` side's.
+
 tswap's own messages show the short form `sudo tswap get recovery-key | sudo tswap recover
---yubikey`, where both sides use the same vault: that works only when the key is kept in a vault
-other than the one being recovered.
+--yubikey`, with no `TSWAP_CONFIG_DIR`. That form works only when the `get` side can still open the
+vault it reads. When that vault's hardware is lost, point the `get` side at another vault, as the
+examples do.
 
 `slot approve` and `slot merge` take `--recovery-key-stdin` too. A wrong or malformed key is
 refused with one message and nothing is written; the recovery slot always stays.
@@ -249,7 +256,8 @@ This is a test procedure, not a setup step: the checks behind the `--no-touch` w
 recorded results. Its design context is in
 [hardware-backends.md](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11).
 Claims (a), (b) and (c) below are points 1, 2 and 3 of the `--no-touch` warning, as listed in
-[security-model.md](security-model.md#secure-enclave-touch-or-no-touch).
+[security-model.md](security-model.md#secure-enclave-touch-or-no-touch). Steps 1 and 2 check claim
+(a) (no prompt), step 5 checks (b), and no step checks (c).
 
 Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
 **Release gate (v0.1.0):** steps 1-3, 5 (both halves: claim (b)) and 8 had to be recorded before
@@ -285,8 +293,8 @@ sysadminctl -screenLock status 2>&1                         # record: "require p
    then `sudo -u other env TSWAP_CONFIG_DIR=/Users/Shared/t11/vault /Users/Shared/t11/tswap names`
    — does it unlock? Then as root, with a root-owned copy:
    `sudo cp -R "$TSWAP_CONFIG_DIR" /var/root/t11-vault && sudo env TSWAP_CONFIG_DIR=/var/root/t11-vault "$T" names`
-   — does it unlock? (If tswap refuses because of file ownership rather than the Secure Enclave,
-   record the message: that is the ownership check, not an answer to (b).)
+   — does it unlock? (If tswap refuses on a permission or ownership error rather than the Secure
+   Enclave, record the message: it is not an answer to (b).)
 6. Screen locked, from another machine: `ssh <this-mac> "TSWAP_CONFIG_DIR='$TSWAP_CONFIG_DIR' '$T' names"`
    — does it unlock?
 7. After a reboot, before anyone logs in, from another machine over ssh (if Remote Login is on):

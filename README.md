@@ -30,8 +30,8 @@ tswap draws a privilege boundary with sudo:
 - Commands that **use** a secret don't need sudo: an AI agent can make a random secret
   (`create`), see which secrets exist (`names`, names only) and use one in a command (`run`).
 - Commands that **reveal** a value, remove or replace a value that is still good, or administer
-  the vault need sudo: `get`, `add`, `list` and `delete` among them. An agent without sudo can't
-  run them.
+  the vault need sudo: `get`, `add`, `list` (names with their dates) and `delete` among them. An
+  agent without sudo can't run them.
 - `apply` needs no sudo and prints a file with the values filled in, so its output holds
   plaintext: send it to stdout or process substitution only
   ([agent-integration.md](docs/agent-integration.md#agent-role-no-sudo)).
@@ -98,9 +98,10 @@ For example, on a Linux laptop with a TPM and one YubiKey plugged in: pick both,
 password, keep the recovery slot and store its key offline. The YubiKey, the laptop's TPM and the
 recovery key each open the vault alone.
 
-`init` never overwrites a vault. Scripts and agents have no terminal to answer questions, so they
-name the slot instead: `tswap init --yubikey`, `tswap init --tpm`, or
-`tswap init --secure-enclave --with-touch` (or `--no-touch`).
+`init` never overwrites a vault. Scripts have no terminal to answer questions, so they name the
+slot instead: `tswap init --yubikey`, `tswap init --tpm`, or
+`tswap init --secure-enclave --with-touch` (or `--no-touch`). An AI agent doesn't run `init`: it
+prints the recovery key.
 
 Every step, each kind of slot, the recovery key and the limits of this version:
 [Setting up a vault](docs/setup.md).
