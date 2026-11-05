@@ -131,7 +131,7 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
   - slot 2 already configured: refuse without touching it, saying what's there (configured; touch yes/no can't be
     read, the spike found the SDK exposes no touch flag and learning it needs a challenge, so it says "touch: unknown") and that a
     vault using this key would no longer open;
-  - `--replace`: proceed only after the user types the key's serial; and refuse even then if the vault tswap is
+  - `--replace`: proceed only after the user types the key's serial (on an empty slot 2 there is nothing to replace, so setup programs it without the typed serial or the vault check: owner, 2026-11-05); and refuse even then if the vault tswap is
     pointed at has a slot on this key and that slot is the vault's only way in. **Other ways in (my call):** any
     other slot in the keyring counts, whether or not it works on this machine (another YubiKey, plugged in or not;
     a TPM or Secure Enclave slot of another machine; a recovery slot), because the vault stays openable somewhere.
