@@ -140,7 +140,7 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
     If tswap is pointed at no vault, or one it can't read, it proceeds after the serial confirmation and warns that
     it couldn't check;
   - does not need sudo (it changes a key, not the vault).
-- **Re-enrolling a reprogrammed key with an existing key (owner, 2026-11-05).** `slot add --yubikey` accepts a key whose existing slots no longer open (after `setup --replace`), unlocking with another way in, and enrols it as a new slot; dead slots are kept (keyrings merge as a union, so a deleted slot would return) and unlock tries a key's newest slot first. The migrate guide's touch upgrade uses this flow, one key at a time; `recover --yubikey` is only the fallback.
+- **Re-enrolling a reprogrammed key with an existing key (owner, 2026-11-05).** `slot add --yubikey` accepts a key whose existing slots no longer open (after `setup --replace`), unlocking with another way in, and enrols it as a new slot; dead slots are kept (keyrings merge as a union, so a deleted slot would return) and unlock tries the slot this machine remembers as the key's last working one first (a machine-local hint, amended 2026-11-05 after review). The migrate guide's touch upgrade uses this flow, one key at a time; `recover --yubikey` is only the fallback.
 - Every text that tells the user to run `ykman` (CommandRegistry, SecurityWarnings, MigrateCommand, YubiKey.cs
   touch parsing) moves to `tswap yubikey setup` / the SDK. `ykman` stops being mentioned in README/docs except in a
   migration note.
