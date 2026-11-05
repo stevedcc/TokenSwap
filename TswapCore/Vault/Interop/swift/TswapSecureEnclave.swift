@@ -202,7 +202,8 @@ public func tswap_se_unwrap(
 // prompt of a key made with presence required.
 //
 // Copies tswap can't wipe: `Data(bytes:count:)` below and the LAContext each hold a copy of the
-// credential until they are released (docs/security-model.md, "What the vault password does and doesn't protect", RAM, names them).
+// credential until they are released. docs/security-model.md names them: section "What the vault password
+// does and doesn't protect", the macOS RAM item.
 //
 // STATUS: written for brief T17 and built and run by CI's macOS job (SecureEnclavePasswordRoundTripTests,
 // no presence); the Touch ID + password case is a manual test (SecureEnclavePasswordHardwareTests).
