@@ -128,7 +128,8 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
   rules my recommendation, owner approved):
   - empty slot 2: program HMAC-SHA1 challenge-response with a fresh random secret generated on the key or by the
     system RNG (spike decides which the SDK offers), with or without touch (the flag is required: no default posture);
-  - slot 2 already configured: refuse without touching it, saying what's there (configured, touch yes/no) and that a
+  - slot 2 already configured: refuse without touching it, saying what's there (configured; touch yes/no can't be
+    read, the spike found the SDK exposes no touch flag and learning it needs a challenge, so it says "touch: unknown") and that a
     vault using this key would no longer open;
   - `--replace`: proceed only after the user types the key's serial; and refuse even then if the vault tswap is
     pointed at has a slot on this key and that slot is the vault's only way in. **Other ways in (my call):** any
