@@ -542,7 +542,7 @@ public sealed class VaultUnlocker
         }
         catch (Exception ex) when (ex is not TswapException)
         {
-            throw new TswapException($"Could not list the plugged-in YubiKeys: {ex.Message}. Is ykman installed?{ownFailure}");
+            throw new TswapException($"Could not list the plugged-in YubiKeys: {ex.Message}.{ownFailure}");
         }
 
         var matching = pluggedIn.Where(slotSerials.Contains).Distinct().ToList();

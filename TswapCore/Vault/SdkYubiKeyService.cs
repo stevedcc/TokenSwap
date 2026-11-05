@@ -9,8 +9,8 @@ namespace TswapCore.Vault;
 /// the device seam <see cref="IOtpKeys"/> (<see cref="YubicoOtpKeys"/> for real keys). Every failure is a
 /// <see cref="TswapException"/> that names the key and what is missing: a key hidden from the keyboard interface gets
 /// the per-OS explanation (<see cref="YubiKeyAccessTexts"/>), an empty slot 2 points to <c>tswap yubikey setup</c>,
-/// a busy key says so. An optional <paramref name="verboseOut"/> writer receives the progress line ykman's service
-/// printed ("YubiKey (serial: N)... ✓").
+/// a busy key says so. An optional <paramref name="verboseOut"/> writer receives the progress line the earlier
+/// command-line-based service printed ("YubiKey (serial: N)... ✓").
 /// </summary>
 public sealed class SdkYubiKeyService : IYubiKeyService
 {
@@ -98,7 +98,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
     public byte[] Challenge(int serial, string challenge) => ChallengeReportingTouch(serial, challenge).Response;
 
     /// <summary>
-    /// The challenge string as ykman got it (UTF-8, truncated or zero-padded to 64 bytes) to slot 2, and whether the
+    /// The challenge string as the earlier service sent it (UTF-8, truncated or zero-padded to 64 bytes) to slot 2, and whether the
     /// key asked for a touch (from the SDK's touch notification). The key is looked up first, so a missing or hidden
     /// key is named as such before any challenge is sent.
     /// </summary>

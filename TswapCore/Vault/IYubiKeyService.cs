@@ -2,8 +2,7 @@ namespace TswapCore.Vault;
 
 /// <summary>
 /// Hardware abstraction for YubiKey operations. The production implementation
-/// (<see cref="SdkYubiKeyService"/>) talks to the keys through Yubico's .NET SDK
-/// (<see cref="YkmanYubiKeyService"/>, the ykman one, goes in stage 1's task 3); tests substitute
+/// (<see cref="SdkYubiKeyService"/>) talks to the keys through Yubico's .NET SDK; tests substitute
 /// <see cref="TestKeyYubiKeyService"/>. No UI here — serial selection prompts and
 /// touch warnings are the CLI layer's job.
 /// </summary>

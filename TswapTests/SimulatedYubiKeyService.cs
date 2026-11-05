@@ -7,7 +7,7 @@ namespace TswapTests;
 /// <summary>
 /// A simulated set of YubiKeys for tests (brief T4 item 1): each serial has its own HMAC-SHA1
 /// secret, and <see cref="Challenge"/> computes a real HMAC-SHA1 over the challenge exactly as
-/// <see cref="YkmanYubiKeyService"/> sends it to the key (UTF-8, zero-padded or truncated to 64
+/// <see cref="SdkYubiKeyService"/> sends it to the key (UTF-8, zero-padded or truncated to 64
 /// bytes). Which keys are "plugged in" is configurable and can change during a test, so a test
 /// can unplug key A and plug in key B between two commands.
 ///
@@ -49,7 +49,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     public HashSet<int> NotAnswering { get; } = [];
 
     /// <summary>
-    /// Guided init: serials whose challenge fails with this message (a key ykman can't reach, e.g. macOS
+    /// Guided init: serials whose challenge fails with this message (a key tswap can't reach, e.g. macOS
     /// blocking its OTP interface, or one unplugged after the listing), before anything is recorded.
     /// </summary>
     public Dictionary<int, string> FailWith { get; } = [];
@@ -135,7 +135,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
         if (FailWith.TryGetValue(serial, out var failure))
             throw new TswapCore.TswapException(failure);
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
-            throw new TswapCore.TswapException($"ykman failed: device {serial} not found");
+            throw new TswapCore.TswapException($"YubiKey {serial} not found");
 
         if (Hidden.Contains(serial))
             throw new TswapCore.TswapException(YubiKeyAccessTexts.ExplainHidden(serial, YubiKeyAccessTexts.CurrentOs()));
@@ -146,7 +146,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
 
         Challenges.Add((serial, challenge)); // asked, even when it doesn't answer
         if (NotAnswering.Contains(serial))
-            throw new TswapCore.TswapException($"ykman failed: timed out waiting for YubiKey {serial}");
+            throw new TswapCore.TswapException($"Timed out waiting for YubiKey {serial}");
         var padded = new byte[64];
         var input = Encoding.UTF8.GetBytes(challenge);
         Array.Copy(input, padded, Math.Min(input.Length, 64));
@@ -154,8 +154,8 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     }
 
     /// <summary>
-    /// Brief T7 item 5: false makes <see cref="DetectTouchRequirement"/> return null, like real
-    /// <c>ykman otp info</c>, which can't read a slot's touch setting.
+    /// Brief T7 item 5: false makes <see cref="DetectTouchRequirement"/> return null, like the
+    /// real service, which can't read a slot's touch setting.
     /// </summary>
     public bool DetectionWorks { get; set; } = true;
 
@@ -163,7 +163,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
 
     /// <summary>
     /// Brief T7 item 5: the "asked for touch" flag is the key's touch setting (<see cref="SetTouch"/>),
-    /// as ykman prints "Touch your YubiKey..." exactly when the key waits for one.
+    /// as the real service reports a touch exactly when the key waits for one.
     /// </summary>
     public YubiKeyResponse ChallengeReportingTouch(int serial, string challenge)
         => new(Challenge(serial, challenge), _touch.GetValueOrDefault(serial));

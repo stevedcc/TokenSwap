@@ -125,14 +125,14 @@ public static class CommandRegistry
     {
         var p = ctx.Prefix;
         var o = ctx.Console.Out;
-        o.WriteLine("tswap - YubiKey Secret Manager");
+        o.WriteLine("tswap - hardware-backed secret manager");
         o.WriteLine("\nUsage:");
         foreach (var c in Commands.Where(c => !c.RequiresSudo))
             o.WriteLine($"  {p} {c.HelpUsage,-20}    {c.Description}");
         foreach (var c in Commands.Where(c => c.RequiresSudo))
             o.WriteLine($"  [sudo] {p} {c.HelpUsage,-13}    {c.Description}");
         o.WriteLine("\nCommands marked [sudo] require elevated privileges.");
-        o.WriteLine("Add -v or --verbose (before the command) for detailed YubiKey output.");
+        o.WriteLine("Add -v or --verbose (before the command) for detailed output about the hardware keys.");
         o.WriteLine("\nEnvironment:");
         o.WriteLine("  TSWAP_CONFIG_DIR    the config folder to use (overrides everything below)");
         o.WriteLine("  Under sudo (sudo -i included), tswap uses the vault of the user who ran sudo:");
@@ -160,11 +160,11 @@ public static class CommandRegistry
         o.WriteLine($"  sudo {p} get storj-pass");
         o.WriteLine($"  sudo {p} list");
         o.WriteLine("\nPrerequisites:");
-        o.WriteLine("  - ykman CLI: pip install yubikey-manager");
-        o.WriteLine("  - Configure YubiKeys with touch requirement (recommended):");
-        o.WriteLine("    ykman otp chalresp --generate --touch 2");
-        o.WriteLine("  - Or without touch (less secure):");
-        o.WriteLine("    ykman otp chalresp --generate 2");
+        o.WriteLine("  - A YubiKey: prepare its slot 2 for challenge-response with a touch requirement (recommended):");
+        o.WriteLine($"    {p} yubikey setup --touch");
+        o.WriteLine("    (without --touch the key answers any process that can reach it: less secure)");
+        o.WriteLine("  - A TPM (Windows, Linux) or the Secure Enclave (macOS) needs no preparation.");
+        o.WriteLine("  - Linux and YubiKeys: your user needs access to the key's hidraw device, which Yubico's udev rule gives.");
         o.WriteLine($"  - For [sudo] commands: copy tswap to /usr/local/bin");
     }
 }

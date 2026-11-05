@@ -193,12 +193,12 @@ public static class SecurityWarnings
                 console.SetForeground(ConsoleColor.Yellow);
                 e.WriteLine($"⚠ {keyLabel}: no touch required, so any process running as you can unlock the vault while the key is plugged in.");
                 e.WriteLine("  That can be deliberate (an always-on machine). To require a touch instead, reprogram the key");
-                e.WriteLine("  (ykman otp chalresp --generate --touch 2) and enroll it again. 'tswap slots' shows each key's setting.");
+                e.WriteLine("  (tswap yubikey setup --replace --touch) and enroll it again. 'tswap slots' shows each key's setting.");
                 console.ResetColor();
                 break;
             default:
-                e.WriteLine($"{keyLabel}: Couldn't check the touch setting (ykman didn't report whether the key asked for a touch).");
-                e.WriteLine("  Fix: install yubikey-manager 5 or later (ykman on PATH) and enroll the key again; until then");
+                e.WriteLine($"{keyLabel}: Couldn't check the touch setting (the key's first answer didn't say whether it asked for a touch).");
+                e.WriteLine("  Fix: enroll the key again with it plugged in; until then");
                 e.WriteLine("  'tswap slots' shows it as unknown, and if it needs no touch, any process running as you can use it.");
                 break;
         }

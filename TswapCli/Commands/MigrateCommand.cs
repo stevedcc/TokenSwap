@@ -70,8 +70,9 @@ public sealed class MigrateCommand : ICliCommand
         if (config.YubiKeySerials is not { Count: 2 })
         {
             c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");
-            c.Out.WriteLine("setting). To give a key a touch requirement, reprogram it (ykman otp chalresp --generate --touch 2)");
+            c.Out.WriteLine($"setting). To give a key a touch requirement, reprogram it ({ctx.Prefix} yubikey setup --replace --touch --serial N)");
             c.Out.WriteLine($"and enroll it again: sudo {ctx.Prefix} slot add --yubikey");
+            c.Out.WriteLine($"({ctx.Prefix} yubikey setup replaces the old command-line tool: ykman is no longer needed.)");
             return 0;
         }
 
@@ -151,25 +152,24 @@ public sealed class MigrateCommand : ICliCommand
                 c.Out.WriteLine(new string('═', 64) + "\n");
 
                 c.Out.WriteLine($"Step {step++}: Export all secrets to an encrypted backup (requires sudo)");
-                c.Out.WriteLine("  sudo tswap export ~/tswap-backup.enc");
+                c.Out.WriteLine($"  sudo {ctx.Prefix} export ~/tswap-backup.enc");
                 c.Out.WriteLine("  # Choose a strong passphrase — you will need it to import\n");
+
+                c.Out.WriteLine($"Step {step++}: Convert the vault (a classic vault is converted, never re-initialized)");
+                c.Out.WriteLine($"  sudo {ctx.Prefix} migrate --to-records\n");
 
                 if (needsTouchMigration)
                 {
-                    c.Out.WriteLine($"Step {step++}: Reconfigure YubiKey slots to require touch");
+                    c.Out.WriteLine($"Step {step++}: Reprogram each YubiKey to require touch (this replaces slot 2's secret; one key at a time)");
                     c.Out.WriteLine("  Insert YubiKey #1");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp delete 2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp chalresp --generate --touch 2");
+                    c.Out.WriteLine($"  {ctx.Prefix} yubikey setup --replace --touch --serial {config.YubiKeySerials[0]}");
                     c.Out.WriteLine("  Remove YubiKey #1, insert YubiKey #2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp delete 2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp chalresp --generate --touch 2\n");
+                    c.Out.WriteLine($"  {ctx.Prefix} yubikey setup --replace --touch --serial {config.YubiKeySerials[1]}");
+                    c.Out.WriteLine($"  # {ctx.Prefix} yubikey setup replaces the old command-line tool: ykman is no longer needed.\n");
                 }
 
-                c.Out.WriteLine($"Step {step++}: Reinitialize tswap (generates a new vault-unique unlock challenge)");
-                c.Out.WriteLine("  tswap init\n");
-
-                c.Out.WriteLine($"Step {step}: Restore secrets from backup");
-                c.Out.WriteLine("  sudo tswap import ~/tswap-backup.enc\n");
+                c.Out.WriteLine($"Step {step}: Enroll each YubiKey again (requires sudo)");
+                c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey\n");
 
                 c.Out.WriteLine(new string('═', 64));
             }

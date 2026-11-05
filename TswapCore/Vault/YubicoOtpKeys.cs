@@ -10,7 +10,7 @@ namespace TswapCore.Vault;
 /// <summary>
 /// What <see cref="YubicoOtpKeys.ProgramSlot2WithKey"/> sends for slot 2: HMAC-SHA1 challenge-response with
 /// HMAC_LT64 on (<c>UseSmallChallenge</c>), touch per flag (<c>UseButton</c>), a 20-byte key: the settings of
-/// <c>ykman otp chalresp</c> (yubikey-manager 5.9.2, <c>yubikit/yubiotp.py</c> <c>HmacSha1SlotConfiguration</c>).
+/// a slot programmed with Yubico's challenge-response tooling (sources in the stage 1 plan, Task 4).
 /// </summary>
 internal sealed record Slot2Programming(bool HmacSha1, bool SmallChallenge, bool Touch, int KeyLength);
 
@@ -248,7 +248,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     /// The settings <see cref="ProgramSlot2WithKey"/> follows. Each maps to one SDK call:
     /// <c>UseHmacSha1</c> (CHAL_HMAC + CHAL_RESP), <c>UseSmallChallenge</c> (HMAC_LT64), <c>UseButton</c>
     /// (CHAL_BTN_TRIG), <c>UseKey</c> (20 bytes). The SDK's operations also set SERIAL_API_VISIBLE and ALLOW_UPDATE by
-    /// default (<c>OperationBase</c>), as ykman's <c>SlotConfiguration</c> does.
+    /// default (<c>OperationBase</c>), as Yubico's own configuration code does.
     /// </summary>
     internal static Slot2Programming Slot2Settings(bool requireTouch) =>
         new(HmacSha1: true, SmallChallenge: true, Touch: requireTouch, KeyLength: ConfigureChallengeResponseKeySize);

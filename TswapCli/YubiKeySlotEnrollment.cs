@@ -85,8 +85,8 @@ internal static class YubiKeySlotEnrollment
     {
         var c = ctx.Console;
         c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
-        // Brief T7 item 5: the posture is whether the first challenge asked for a touch (ykman can't
-        // read a slot's touch setting); a service that can't tell falls back to its own detection.
+        // Brief T7 item 5: the posture is whether the first challenge asked for a touch (a slot's touch
+        // setting can't be read back); a service that can't tell falls back to its own detection.
         var probe = YubiKeySlotBlob.Create(serial, requiresTouch: null);
         var answer = ctx.YubiKeys.ChallengeReportingTouch(serial, probe.ChallengeString);
         var first = answer.Response;

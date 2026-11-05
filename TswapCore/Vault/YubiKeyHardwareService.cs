@@ -6,7 +6,7 @@ namespace TswapCore.Vault;
 /// The YubiKey <see cref="IHardwareKeyService"/>: derives the vault master key from a
 /// connected YubiKey plus the config's XOR share (the 1-of-2 redundancy scheme — either
 /// enrolled key reconstructs the other from a non-secret public share). Wraps the
-/// low-level <see cref="IYubiKeyService"/> ykman driver and owns the challenge/XOR/PBKDF2
+/// low-level <see cref="IYubiKeyService"/> driver and owns the challenge/XOR/PBKDF2
 /// logic that used to live inline in <see cref="VaultUnlocker"/>.
 ///
 /// When <paramref name="overrideKey"/> is set (test mode) unlock returns it directly

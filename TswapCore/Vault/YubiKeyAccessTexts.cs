@@ -4,8 +4,7 @@ namespace TswapCore.Vault;
 
 /// <summary>
 /// What tswap says about a YubiKey whose OTP interface the operating system hides or refuses (the key is seen over
-/// FIDO or smart card only). Moved here from <c>TswapCli/YubiKeyAccess.cs</c> (stage 1 task 3 deletes that copy and
-/// its ykman-text trigger) and extended with the spike's findings: on Linux, no smart-card fallback for this slot type.
+/// FIDO or smart card only). Extended with the spike's findings: on Linux, no smart-card fallback for this slot type.
 /// </summary>
 internal static class YubiKeyAccessTexts
 {

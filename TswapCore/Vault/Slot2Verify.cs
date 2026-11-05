@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace TswapCore.Vault;
 
 /// <summary>
-/// The answer a slot 2 programmed for HMAC-SHA1 with HMAC_LT64 gives (how <c>ykman otp chalresp</c> and
+/// The answer a slot 2 programmed for HMAC-SHA1 with HMAC_LT64 gives (how Yubico's challenge-response tooling and
 /// <c>tswap yubikey setup</c> program it). The key always receives a 64-byte frame; with HMAC_LT64, "whatever is in
 /// the last byte of the challenge is used as end of input marker (backtracking from end of payload)" (Yubico,
 /// yubikey-personalization <c>ykpersonalize.1.adoc</c>, option <c>hmac-lt64</c>): every trailing byte equal to the
