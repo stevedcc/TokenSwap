@@ -59,6 +59,10 @@ in [agent-integration.md](agent-integration.md).
   sudo --preserve-env=TSWAP_CONFIG_DIR tswap get ...
   ```
 
+  Keeping a variable this way needs the same sudoers permission as `sudo VAR=value` (implied for an
+  `ALL` command); otherwise use `sudo env TSWAP_CONFIG_DIR="$TSWAP_CONFIG_DIR" tswap ...`, as the
+  [broker guide](BROKER.md#setting-up-the-broker) does.
+
 ## Threat model and non-goals
 
 tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a
@@ -73,7 +77,7 @@ deployment.
 | Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
-| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unlock, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
@@ -85,7 +89,7 @@ deployment.
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
 | Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
-| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
+| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
@@ -185,12 +189,12 @@ it on every command**.
 - **Warning:** reprogramming gives the key a new secret, so its existing slot no longer opens the
   vault. `tswap slots` still lists that dead slot (tswap can't remove slots). Make sure another
   slot, or the recovery key, opens the vault before you start.
-- **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so today the
-  step is `recover --yubikey` with the recovery key on stdin
-  ([The recovery key](setup.md#the-recovery-key)):
+- **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so the step
+  is `recover --yubikey`, with the recovery key on stdin (where to keep it and how to pipe it:
+  [The recovery key](setup.md#the-recovery-key)):
 
   ```bash
-  <print the recovery key> | sudo tswap recover --yubikey
+  sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
   ```
 
   v0.3.0's YubiKey work changes this step.
@@ -251,7 +255,7 @@ to enrol ("update libtswapse.dylib together with tswap") rather than make a key 
   Choose `--no-touch` for such a vault, or keep it in the user's folder.
 - A slot enrolled with sudo before v0.1.0 (`sudo tswap recover --secure-enclave`, or `init` /
   `slot request` run with sudo) was created as root. If it doesn't unlock, run `recover` again
-  (sudo now creates the key as the owner).
+  (since v0.1.0, sudo creates the key as the owner).
 
 The design reasoning is in
 [hardware-backends.md](design/hardware-backends.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157).
@@ -293,7 +297,7 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   swapped" applies to the held stretched password only. On Linux the TPM auth text (`hex:` and the
   stretched bytes in hex) also sits in the kernel's pages of the memfd tpm2-tools reads it from,
   until that child exits; tswap can't wipe those.
-- **The tswap CLI stays dumpable** while it holds the vault key during a command, as before.
+- **The tswap CLI stays dumpable** while it holds the vault key during a command, as it always has.
 - **The agent's answers are authenticated by the vault folder.** The key check proves an answer is
   this vault's key given a `vault-password` file only the vault's machines can write: someone who
   can write your vault folder could plant a file and a fake agent of their own. Keep the folder's

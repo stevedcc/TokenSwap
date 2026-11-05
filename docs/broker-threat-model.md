@@ -223,7 +223,7 @@ to a container needs:
   Without them every container on a bound socket is refused.
 - The liveness check polls the peer's pidfd, which needs no permission; a poll error refuses the
   peer.
-- **Upgrade the module and the binary together:** a tswap older than this fix checks liveness with
+- **Upgrade the module and the binary together:** a tswap older than v0.2.0 checks liveness with
   signal 0, which this module no longer allows and which never worked for a client of another uid,
   so it refuses every container client as `peer-exited`.
 - Whether an MCS constraint also applies (the broker runs at `s0`, containers at `s0:cX,cY`) is
