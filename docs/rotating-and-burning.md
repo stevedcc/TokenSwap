@@ -15,10 +15,14 @@ tswap rotate api-token 48                 # a burned secret; one that isn't burn
 # (step 3 below):
 kubectl get secret x -o json | jq -r '.data["token"]' | base64 -d | tswap ingest --rotate api-token
 
-# Then update the system that uses it. Pipe the manifest into kubectl: printed, its base64 value
-# would show (run redacts only the plain value):
+# After a rotate, update the system that uses it (the stdin path already did). Pipe the manifest
+# into kubectl: printed, its base64 value would show (run redacts only the plain value). Leave out
+# -v: with it, run prints the command it runs on stdout too.
 tswap run kubectl create secret generic x --from-literal=token={{api-token}} --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+The value is on `kubectl`'s command line while it runs: see
+[What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
 
 - `rotate <name> [length]` writes a new random value for an existing secret as a newer version.
   Like `create`, the value is never shown, and the entropy mode from `init` applies
@@ -59,7 +63,7 @@ tswap rotate db-pw && tswap run psql "postgresql://app:{{db-pw:previous}}@db/app
 This works without sudo only for a burned `db-pw`. If it isn't burned, the user runs the rotate,
 with sudo (`sudo tswap rotate db-pw`); the `run` that follows needs no sudo.
 
-In these `run` examples the values are on `kubectl`'s and `psql`'s command line while they run:
+In this `run` example the values are on `psql`'s command line while it runs:
 see [What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
 
 `sudo tswap restore <name>` writes the previous value back as a new version (and if that value was

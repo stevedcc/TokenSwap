@@ -35,8 +35,9 @@ a secret value:
 | `prompt` / `prompt-hash` | Self-documentation | None |
 | `migrate` / `slot request` / `slot accept` | Migration status, joining a vault | Requires physical hardware interaction |
 
-`init` needs no sudo either, but it prints the recovery private key once
-([setup.md](setup.md#the-recovery-key)): an AI agent doesn't run it, the user does.
+`init` needs no sudo either, but AI agents shouldn't run it: creating a vault is the user's work
+(even with `--no-recovery`), and `init` prints the recovery private key once
+([setup.md](setup.md#the-recovery-key)).
 
 `agent start` and `broker unlock` need no sudo either, but they read the **vault password** at a
 terminal: they are for the human. An AI agent whose command fails with "needs the vault password"
@@ -63,8 +64,8 @@ If your environment supports command allowlists (for example a wrapper script, a
 agent framework permissions), configure the agent's allowed commands to match the agent role above.
 This sketch checks the first word only: it can't tell `slot request` from `slot approve`, plain
 `migrate` from `migrate --to-records`, or a burned secret's `rotate` from another, and it leaves out
-`slot`, `agent` and `init`. For an agent without sudo, tswap's own sudo check refuses the
-operator's commands either way.
+`slot` and `agent`. `init` is left out on purpose: agents shouldn't run it. For an agent without
+sudo, tswap's own sudo check refuses the operator's commands either way.
 
 ```bash
 # Example allowlist for an AI agent wrapper

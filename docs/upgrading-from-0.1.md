@@ -58,8 +58,8 @@ vault: [commands.md](commands.md#files)) can be shared and merged ([multi-machin
 - **`init` makes a record vault:** one YubiKey, TPM or Secure Enclave slot plus a recovery slot, in
   `<config dir>/vault` or `--folder <dir>`.
 - **A plain `tswap init` at a terminal is now a guided setup** ([setup.md](setup.md#the-guided-tswap-init)).
-  `init --yubikey` makes the one-YubiKey vault (plus a recovery slot) that plain `init` made before
-  the guided setup.
+  `init --yubikey` makes a one-YubiKey vault (plus a recovery slot) directly, without the guided
+  setup.
 - **`init --keyring` is gone.** `init` rejects it, and says so:
   *"--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey,
   --tpm or --secure-enclave."*
@@ -81,11 +81,13 @@ To move a classic vault's YubiKeys to a touch requirement:
    opens the vault, and `tswap slots` still lists that dead slot. Keep the recovery key from step 1
    at hand: step 3 needs it.
 3. Enroll each reprogrammed key again as a new slot (plug it in first). `slot add --yubikey` refuses
-   a key that already has a slot, so this is `recover --yubikey`, with the recovery key on stdin
-   (where to keep it and how to pipe it: [The recovery key](setup.md#the-recovery-key)):
+   a key that already has a slot, so this is `recover --yubikey`, with the recovery key you kept
+   from step 1 on stdin (more ways to pipe it: [The recovery key](setup.md#the-recovery-key)):
 
    ```bash
-   sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
+   read -rs RECOVERY_KEY          # paste the recovery key; it isn't shown or kept in history
+   printf '%s\n' "$RECOVERY_KEY" | sudo tswap recover --yubikey
+   unset RECOVERY_KEY
    ```
 
    v0.3.0's YubiKey work changes this step.

@@ -46,7 +46,8 @@ where shell history keeps them; read them without echo instead (bash: `read -rs 
     ([setup.md](setup.md#the-guided-tswap-init)).
 - **First and later slots.** The first password slot of a vault asks twice and creates the
   `vault-password` file in the vault folder. Every later one asks once and refuses a password that
-  isn't the vault's.
+  isn't the vault's. Without a terminal the password is read from stdin instead: twice, on two
+  lines, for a first password slot.
 - **Length.** A password under 12 characters gets a warning. An empty one is a usage error (use
   `--no-password`).
 - **`recover --password`** reads the recovery key from stdin's **first line** and the vault password
