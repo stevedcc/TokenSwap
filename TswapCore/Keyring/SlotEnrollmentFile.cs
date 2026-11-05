@@ -129,7 +129,7 @@ public sealed record SlotApproveFile(
 /// JSON, with explicit version checks on both this small format's own version and (for the
 /// approve file) the embedded <see cref="KeyringFormat.KeyringFormatVersion"/> — see
 /// <see cref="SlotRequestFile"/>'s doc comment for why JSON was chosen over fixed-binary here, and
-/// <c>MULTI_MACHINE_KEYING.md</c>'s implementation notes on this module's history of
+/// <c>docs/design/multi-machine-keying.md</c>'s implementation notes on this module's history of
 /// version-check gaps (never skip this check for a new persisted format).
 /// </summary>
 public static class SlotEnrollmentFileCodec

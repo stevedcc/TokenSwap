@@ -55,7 +55,7 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
             key = RecoverKey(package, null);
         }
         // RecoverKey is a generic primitive (Phase 6 will use it for Shamir shares of varying
-        // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
+        // size too — see docs/design/multi-machine-keying.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or
         // truncated sealed blob that still happens to unseal/decrypt should fail here with a
         // clear message, not surface as an opaque downstream error.

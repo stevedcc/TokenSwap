@@ -421,6 +421,6 @@ FodyWeavers.xsd
 *.msp
 
 # tswap-specific: local, machine-specific dev/test environment notes (VM access details,
-# personal network quirks). Never commit — see HARDWARE_BACKENDS.md for the generic,
+# personal network quirks). Never commit — see docs/design/hardware-backends.md for the generic,
 # shareable version of any setup documented here.
 /environment/

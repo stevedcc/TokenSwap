@@ -9,9 +9,9 @@
 #                                  prompts for biometry/presence)
 #   ./runtests.sh --tpm            Linux TPM backend tests (Linux + tpm2-tools required; needs
 #                                  a reachable TPM 2.0 device or swtpm simulator — see
-#                                  HARDWARE_BACKENDS.md's Linux TPM section)
+#                                  docs/design/hardware-backends.md's Linux TPM section)
 #   ./runtests.sh --tpm-windows    Windows TPM backend tests (Windows + a TPM 2.0 device or
-#                                  virtual TPM required — see HARDWARE_BACKENDS.md's Windows
+#                                  virtual TPM required — see docs/design/hardware-backends.md's Windows
 #                                  TPM section)
 set -eo pipefail
 

@@ -12,7 +12,7 @@ namespace TswapCore.Broker.SshAgent;
 /// The broker's ssh-agent endpoint (brief T10 decisions 1 and 2): for each socket that lists ssh keys,
 /// <c>serve</c> also listens on <c>&lt;name&gt;.ssh.sock</c> next to it, in the same folder, under the
 /// same lock, with the same peer-uid check and connection limits as T8's sockets. Each connection
-/// speaks the agent protocol (<c>docs/ssh-agent-wire.md</c>): frames of at most 256 KiB, handled one
+/// speaks the agent protocol (<c>docs/design/ssh-agent-wire.md</c>): frames of at most 256 KiB, handled one
 /// at a time and in order; an oversize, empty or truncated frame, an idle connection or any
 /// exception closes that connection only.
 /// </summary>

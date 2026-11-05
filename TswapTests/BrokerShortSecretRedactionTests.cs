@@ -50,7 +50,7 @@ public class BrokerShortSecretRedactionTests
 
         // One non-ASCII byte (0xE9, not valid UTF-8 alone): only the forms the redactor claims for
         // it, raw, hex upper and lower, base64 "6Q==" and "6Q". (Its percent and JSON forms are
-        // built from U+FFFD; BROKER.md documents that limitation.)
+        // built from U+FFFD; docs/broker-threat-model.md documents that limitation.)
         ["E9"] = new([0xE9],
             ["é", "E9", "e9", "6Q==", "6Q"],
             [("E9e9", R + R), ("6Q=", R + "="), ("éE9", R + R), ("6Q==é", R + R), ("EE9", "E" + R)]),

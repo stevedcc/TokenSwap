@@ -25,7 +25,7 @@ namespace TswapTests;
 /// or overwrite a real vault's TPM key — no isolation setup/teardown needed.
 ///
 /// <b>Dev/test setup:</b> developed and verified against a Parallels VM's virtual TPM (Windows
-/// 11, ARM64) — see <c>HARDWARE_BACKENDS.md</c>'s Windows TPM section for exactly what was and
+/// 11, ARM64) — see <c>docs/design/hardware-backends.md</c>'s Windows TPM section for exactly what was and
 /// wasn't verified.
 /// </summary>
 [SupportedOSPlatform("windows")]

@@ -13,7 +13,7 @@ namespace TswapCore.Vault.Interop;
 /// entirely through <c>System.Security.Cryptography.Cng</c> managed APIs
 /// (<see cref="CngKey"/>/<see cref="RSACng"/>); no P/Invoke or native shim needed — unlike the
 /// Secure Enclave (no C ABI) or Linux (chose a CLI shellout over a large P/Invoke surface), the
-/// managed CNG surface already reaches PCP directly. See <c>HARDWARE_BACKENDS.md</c>'s Windows
+/// managed CNG surface already reaches PCP directly. See <c>docs/design/hardware-backends.md</c>'s Windows
 /// TPM section for what's actually been verified here versus assumed.
 ///
 /// <para><b>Primitive: RSA-OAEP wrap/unwrap against a named, non-exportable, TPM-backed key —

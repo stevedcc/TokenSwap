@@ -344,13 +344,13 @@ as a localized change with no cross-cutting churn:
   YubiKey, omitted from `config.json` so existing vaults are byte-identical). The low-level
   `IYubiKeyService` stays as the YubiKey driver. TPM/Secure-Enclave backends plug in by
   implementing `IHardwareKeyService` and registering at the composition root — see
-  `HARDWARE_BACKENDS.md`. This is the same seam Phase 6's keyring builds on (the recovered
+  `hardware-backends.md`. This is the same seam Phase 6's keyring builds on (the recovered
   value becomes the per-machine KEK). The key model those backends share is worked out in
-  `MULTI_MACHINE_KEYING.md` (keyring of wrapped shares, user-set unlock threshold). **Secure
+  `multi-machine-keying.md` (keyring of wrapped shares, user-set unlock threshold). **Secure
   Enclave is now implemented and verified on real hardware** (`SecureEnclaveHardwareService` +
   `AppleSecureEnclaveInterop`, single-slot `k = 1` via `Config.SecureEnclaveWrappedKey`), backed
   by a small native Swift/CryptoKit shim rather than raw Security.framework calls — see
-  `HARDWARE_BACKENDS.md` for why (the raw `SecItem` path needs a paid Developer ID certificate
+  `hardware-backends.md` for why (the raw `SecItem` path needs a paid Developer ID certificate
   and provisioning profile just to create a key; CryptoKit needs neither, verified unsigned).
   Building the shim adds a Swift-toolchain dependency for macOS builds only. TPM is not
   implemented.
@@ -369,7 +369,7 @@ with the invariant that the synced files are **useless off-fleet**. This is the
 `IVaultStore` item from Phase 5 grown into a phase of its own, because it needs a new
 key-management model and a mergeable on-disk format.
 
-> **The key-management half is now worked out in `MULTI_MACHINE_KEYING.md`** — the keyring
+> **The key-management half is now worked out in `multi-machine-keying.md`** — the keyring
 > of wrapped shares, the design-space rationale (why escrow / XOR / Shamir / config-share all
 > collapse into it), why the Secure Enclave forces wrap/unwrap, and why `k ≥ 2` unlock is
 > demoted to a rationale note rather than a near-term goal. It is also the motivation for going
@@ -377,7 +377,7 @@ key-management model and a mergeable on-disk format.
 > sections below cover the *on-disk format* half.
 
 **A 2026-07-27 design review split this phase into v0 / v1 / v2** (full reasoning in
-`MULTI_MACHINE_KEYING.md` §Scope) — the short version, from the format side:
+`multi-machine-keying.md` §Scope) — the short version, from the format side:
 
 - **v0**: per-secret records with tombstones, a keyring at `k = 1`, hand-carried enrollment.
   No revocation, no `K_v` rotation, no merge engine.
@@ -648,12 +648,12 @@ rotation, no merge engine.
    no HLC yet; last-writer-wins by the write counter is enough for a single machine, since
    there's nothing to merge against.
 3. **Keyring + hand-carried enrollment** (multi-machine, `k = 1`): the keyring format,
-   `K_v` + per-machine wrapped slots (see `MULTI_MACHINE_KEYING.md`'s two-layer wrap and
+   `K_v` + per-machine wrapped slots (see `multi-machine-keying.md`'s two-layer wrap and
    per-slot X25519 keypair), and `slot request`/`approve`/`accept` for hand-carried enrollment
    (files moved by the user themselves — scp, USB, paste — not over the sync transport).
    **Fingerprint display on both sides is an explicit deliverable of this step, not an
    afterthought detail** — even though it's defense-in-depth rather than load-bearing in v0
-   (see `MULTI_MACHINE_KEYING.md` §Hand-carried enrollment), it's the seam v1's transport-borne
+   (see `multi-machine-keying.md` §Hand-carried enrollment), it's the seam v1's transport-borne
    enrollment builds on, and it's a couple dozen lines of code that are much cheaper to add now
    than to retrofit once `slot approve` output format is settled.
 
@@ -667,7 +667,7 @@ an acceptable v0 answer for a tool with no deployed fleets yet.
 4. **Revocation + rotation:** slot removal, `K_v` rotation, re-encrypt all records, bump a
    keyring generation counter so stale copies are detectably outdated. This is the step that
    makes revocation real; do not describe step 3 as "secure sharing" without it landing.
-   **Depends on step 3's per-slot X25519 keypair** (`MULTI_MACHINE_KEYING.md` §Per-slot X25519
+   **Depends on step 3's per-slot X25519 keypair** (`multi-machine-keying.md` §Per-slot X25519
    keypair) — without it, re-wrapping every slot during rotation needs every enrolled device
    physically present again, which for a token in a drawer in another country is a migration
    that never actually happens.
@@ -683,7 +683,7 @@ an acceptable v0 answer for a tool with no deployed fleets yet.
    wins, a burn marks a version, bounded burn history) are tested for commutativity and
    idempotence pairwise. Property/fuzz testing beyond the pairwise table remains for later.
 7. **k-of-n threshold enrollment:** Shamir-split enrollment key; extending the fleet requires
-   k approvals. Distinct from `k`-of-`n` *unlock*, which `MULTI_MACHINE_KEYING.md` demotes to a
+   k approvals. Distinct from `k`-of-`n` *unlock*, which `multi-machine-keying.md` demotes to a
    rationale note rather than a roadmap item — this is enrollment governance, a different
    property.
 
@@ -712,16 +712,16 @@ Still open:
   resumability if interrupted. Must be fully settled before step 4 writes a single rotated
   record — this is a byte-layout decision, not an implementation detail, and it is exactly the
   kind of thing that cannot be retrofitted once v1 vaults exist. See
-  `MULTI_MACHINE_KEYING.md` §Deferred to v1.
+  `multi-machine-keying.md` §Deferred to v1.
 - **Keyring authenticity / fleet signing key** — deferred to v1; see
-  `MULTI_MACHINE_KEYING.md` §Deferred to v1 for the settled reasoning (a fleet signing key
+  `multi-machine-keying.md` §Deferred to v1 for the settled reasoning (a fleet signing key
   `K_s`, not a per-slot signature) and why AAD binding, not a keyring signature, is the
   *primary* defense against threshold downgrade even before v1 lands.
 
 Filename determinism, padding, and per-record keys are **settled** (see the mergeable-format
 section above) — the open items above are what remain before v1/v2 code, not v0. Much of the
 groundwork a standalone design doc would otherwise need to establish first now lives directly
-in `MULTI_MACHINE_KEYING.md` (the v0 byte-layout gate: record types, the write-counter ordering
+in `multi-machine-keying.md` (the v0 byte-layout gate: record types, the write-counter ordering
 authority, deterministic filenames, the per-slot X25519 keypair) — what's left before v0 code
 is writing golden-byte-layout tests against those four decisions and settling the two leaning
 items above.

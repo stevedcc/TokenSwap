@@ -18,7 +18,7 @@ namespace TswapCore.Keyring;
 /// hand-carried enrollment exchange (<c>slot request</c>/<c>approve</c>/<c>accept</c>, issue
 /// #121, a later wave) trades between machines.
 ///
-/// <para><b>Why this gates v0 specifically</b> (see <c>MULTI_MACHINE_KEYING.md</c> §Per-slot
+/// <para><b>Why this gates v0 specifically</b> (see <c>docs/design/multi-machine-keying.md</c> §Per-slot
 /// X25519 keypair): every other v0 format decision migrates mechanically later — read with the
 /// old key, rewrite with the new, one pass, no ceremony. This is the one exception: retrofitting
 /// it after the fact would need every enrolled device physically present again, which for a

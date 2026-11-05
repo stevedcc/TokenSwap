@@ -10,7 +10,7 @@ namespace TswapTests;
 /// round-tripping. Tamper tests flip one AAD-bound field at a time after wrapping to prove each
 /// field is actually mixed into the AEAD call, not just present in a parameter list that isn't
 /// wired up — this is the primary defense against the threshold-downgrade attack described in
-/// <c>MULTI_MACHINE_KEYING.md</c> §The landmine.
+/// <c>docs/design/multi-machine-keying.md</c> §The landmine.
 /// </summary>
 public class SlotPayloadWrapTests
 {

@@ -1,6 +1,6 @@
 namespace TswapCore.Broker.SshAgent;
 
-/// <summary>Message numbers, flags and limits of <c>docs/ssh-agent-wire.md</c> (RFC 9987 §8; OpenSSH).</summary>
+/// <summary>Message numbers, flags and limits of <c>docs/design/ssh-agent-wire.md</c> (RFC 9987 §8; OpenSSH).</summary>
 public static class SshAgentProtocol
 {
     // Client to agent (RFC 9987 §8.1).

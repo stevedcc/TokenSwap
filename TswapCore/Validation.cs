@@ -111,7 +111,7 @@ public static class Validation
     // Issue #105: a shell or interpreter given inline code can transform a substituted secret
     // (split, reverse, encode) before printing it, which run's output redaction can't recognise.
     // So code must come from a file: inline-code options, code from stdin, and programs whose
-    // ordinary argument is code are refused. Still a shallow blocklist (README §Threat model):
+    // ordinary argument is code are refused. Still a shallow blocklist (docs/security-model.md §Threat model and non-goals):
     // a script file or any other program can misuse a secret it is given.
     // An interpreter's command-line syntax, as far as the check needs it.
     //   Inline:     short option letters that mean "code follows" (in a cluster too: -ec, -nle).

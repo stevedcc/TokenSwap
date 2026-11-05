@@ -2,7 +2,7 @@ namespace TswapCore.Keyring;
 
 /// <summary>
 /// Wrap/unwrap for a <see cref="SlotKind.Recovery"/> slot (issue #120,
-/// <c>MULTI_MACHINE_KEYING.md</c> §The recovery slot: a bare keypair, not a CA-issued
+/// <c>docs/design/multi-machine-keying.md</c> §The recovery slot: a bare keypair, not a CA-issued
 /// certificate / §Per-backend wrap primitive: "Wrap <c>KEK_slot</c> to a bare X25519 (or EC)
 /// keypair's public key — no PKI... Custody of the private key is the only control").
 ///
