@@ -54,7 +54,8 @@ public sealed class RememberedYubiKeySlots(string configDir, DirectoryOwnerMatch
             return;
         List<RememberedYubiKeySlot> updated = [.. entries.Where(e => !(e.VaultId == id && e.Serial == serial)), new(id, serial, slot)];
         owner.WriteAtomic(FilePath,
-            JsonSerializer.SerializeToUtf8Bytes(new RememberedYubiKeySlotsFile(updated), TswapJsonContext.Default.RememberedYubiKeySlotsFile));
+            JsonSerializer.SerializeToUtf8Bytes(new RememberedYubiKeySlotsFile(updated), TswapJsonContext.Default.RememberedYubiKeySlotsFile),
+            keepMode: false); // always 0600: a hint chmodded away recovers on the next write
     }
 
     /// <summary><see cref="Remember"/> that never throws: null when remembered, else why not (for a one-line note).</summary>

@@ -186,11 +186,29 @@ public sealed class VaultUnlocker
         // set-aside suffix themselves; otherwise it goes at the very end of the combined error.
         var pass1Suffix = plan.HasPasswordCandidates ? "" : plan.SetAsideSuffix;
         TswapException? pass1Error = ownError;
+        // Task 4b fix round: a key whose remembered slot needs the password keeps its password-free slots (older,
+        // likely dead since it was re-enrolled) out of pass 1; they are tried last, only if the password pass fails or
+        // can't run, so they stay reachable.
+        var deferred = DeferredPasswordFreeSlots(keyring, plan.YubiKeyCandidates, trace);
+        var pass1Candidates = deferred.Count == 0 ? plan.YubiKeyCandidates : plan.YubiKeyCandidates.Where(c => !deferred.Contains(c)).ToList();
+        byte[]? TryDeferred()
+        {
+            if (deferred.Count == 0)
+                return null;
+            try
+            {
+                return UnlockWithYubiKeySlot(keyring, deferred, selection, null, "", passwordPass: false, password: null, plugged, trace);
+            }
+            catch (TswapException ex) when (ex is not OwnerSwitchException)
+            {
+                return null;
+            }
+        }
         if (plan.YubiKeySlotCount > 0)
         {
             try
             {
-                var key = UnlockWithYubiKeySlot(keyring, plan.YubiKeyCandidates, selection, ownError, pass1Suffix,
+                var key = UnlockWithYubiKeySlot(keyring, pass1Candidates, selection, ownError, pass1Suffix,
                     passwordPass: false, password: null, plugged, trace);
                 if (key is not null)
                     return key;
@@ -223,20 +241,29 @@ public sealed class VaultUnlocker
 
         // ---- Pass 3: the prompt, called once.
         if (sources.Prompt is null)
+        {
+            if (TryDeferred() is { } deferredKey)
+                return deferredKey;
             throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal +
                 (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)));
+        }
         StretchedPassword prompted;
         try
         {
             prompted = sources.Prompt();
         }
-        catch (VaultPasswordUnavailableException ex) when (agentFailure is not null)
+        catch (VaultPasswordUnavailableException ex)
         {
+            if (TryDeferred() is { } deferredKey)
+                return deferredKey;
+            if (agentFailure is null)
+                throw;
             // No password to be had (no terminal, no vault-password file): still say why the agent failed.
             throw new VaultPasswordUnavailableException(ex.Message + " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure));
         }
         using var original = prompted;
-        var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, original.Clone, out var pass3Error, trace);
+        var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, original.Clone, out var pass3Error, trace)
+            ?? TryDeferred();
         if (opened is not null)
             return opened;
 
@@ -681,6 +708,27 @@ public sealed class VaultUnlocker
             return slots;
         return [.. slots.Where(s => s.Slot.SlotId.AsSpan().SequenceEqual(remembered)),
             .. slots.Where(s => !s.Slot.SlotId.AsSpan().SequenceEqual(remembered))];
+    }
+
+    /// <summary>
+    /// Task 4b fix round: the password-free slots of each key whose remembered slot is one of its password slots (a key
+    /// re-enrolled with the password over a password-free slot). The hint is read only when some key has slots of
+    /// both kinds.
+    /// </summary>
+    private static List<(Slot Slot, YubiKeySlotBlob Blob)> DeferredPasswordFreeSlots(
+        Keyring.Keyring keyring, List<(Slot Slot, YubiKeySlotBlob Blob)> candidates, SlotTrace trace)
+    {
+        List<(Slot Slot, YubiKeySlotBlob Blob)> deferred = [];
+        foreach (var group in candidates.GroupBy(c => c.Blob.Serial))
+        {
+            if (!group.Any(c => c.Blob.RequiresPassword) || group.All(c => c.Blob.RequiresPassword))
+                continue;
+            if (trace.RememberedSlot(keyring.VaultId, group.Key) is not { } remembered)
+                continue;
+            if (group.Any(c => c.Blob.RequiresPassword && c.Slot.SlotId.AsSpan().SequenceEqual(remembered)))
+                deferred.AddRange(group.Where(c => !c.Blob.RequiresPassword));
+        }
+        return deferred;
     }
 
     /// <summary>

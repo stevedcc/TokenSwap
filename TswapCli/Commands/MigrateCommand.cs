@@ -75,7 +75,7 @@ public sealed class MigrateCommand : ICliCommand
             c.Out.WriteLine($"  {ctx.Prefix} yubikey setup --replace --touch --serial N");
             c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "slot add --yubikey")}   # enrols the reprogrammed key again");
             c.Out.WriteLine($"  {ctx.Prefix} names   # with only that key plugged in: it opens the vault alone");
-            c.Out.WriteLine($"Only if no other way in is left: {ctx.Prefix} recover --yubikey, with the recovery key on stdin.");
+            c.Out.WriteLine($"Only if no other way in is left: pipe the recovery key into {ElevatedCommand.Line(ctx.Prefix, "recover --yubikey")}");
             c.Out.WriteLine($"({ctx.Prefix} yubikey setup replaces the old command-line tool: ykman is no longer needed.)");
             return 0;
         }

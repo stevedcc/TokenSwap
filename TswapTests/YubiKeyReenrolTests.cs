@@ -574,8 +574,6 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         // A's slot has the password, B's doesn't. A isn't reprogrammed: the mistyped password makes it look dead.
         var m = PasswordVaultOnAAndB(bPassword: false);
         m.Keys.Challenges.Clear();
-        var asked = 0;
-        AgentUnlock.AskedObserver = () => Interlocked.Increment(ref asked);
         m.Keys.PluggedIn = [SerialA, SerialB];
         var console = new FakeConsole("1\n" + WrongPassword + "\n") { IsInputRedirected = false, Interleaved = true };
         string? atEnrolment = null;
@@ -595,7 +593,122 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Contains(MistypedLine, atEnrolment); // printed before the enrolment's challenges, so before the write
         Assert.Contains(ReenrolledLine(SerialA), text);
         Assert.NotEmpty(ChallengesOf(m, SerialB)); // the unlock went through B
-        Assert.Equal(0, asked);
+    }
+
+    /// <summary>
+    /// Fix round, item 7: the agent opens the vault but never proves the typed password (or this key's slots). A's
+    /// password slot with a mistyped password looks dead; the agent opens the vault (the only way in without the
+    /// password); the new slot is to get the password, so the verifier is applied and the re-enrolment aborts.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_PasswordSlot_AgentDoesNotProveThePassword()
+    {
+        var m = PasswordVaultOnAAndB(bPassword: true, recovery: true);
+        var vaultKey = RecordVaultTestSupport.VaultKey(m, _recoveryKey);
+        var agentCalls = 0;
+        FakeAgent(m, () =>
+        {
+            Interlocked.Increment(ref agentCalls);
+            return vaultKey.ToArray();
+        });
+        var before = File.ReadAllBytes(KeyringPath(m));
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("the vault password didn't match", stderr);
+        Assert.Equal(1, agentCalls); // asked once, for the unlock only
+        Assert.Empty(ChallengesOf(m, SerialB)); // the agent opened it
+        Assert.Equal(before, File.ReadAllBytes(KeyringPath(m)));
+        Assert.DoesNotContain(ReenrolledLine(SerialA), stdout);
+    }
+
+    /// <summary>
+    /// Fix round, item 2: a slot of this key needs the vault password but the vault-password file is gone: refused with
+    /// the missing-file text before any challenge, whatever the new slot gets (a freshly salted password would make the
+    /// live slot look dead and write a second vault-password file).
+    /// </summary>
+    [Theory]
+    [InlineData("--password")]
+    [InlineData("--no-password")]
+    public void SlotAdd_KeySlotNeedsPassword_NoVaultPasswordFile_Refused(string flag)
+    {
+        var m = PasswordVaultOnAAndB(bPassword: false);
+        File.Delete(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName));
+        var before = File.ReadAllBytes(KeyringPath(m));
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, _, stderr) = m.RunOnTerminal("1\n" + Password + "\n" + Password + "\n", "slot", "add", "--yubikey", flag);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(VaultPasswordMessages.MissingFile, stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.Equal(before, File.ReadAllBytes(KeyringPath(m)));
+        Assert.False(File.Exists(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName)));
+    }
+
+    /// <summary>
+    /// Fix round, item 3: the unlock's own prompt can't run (no terminal), so nothing was typed: the refusal doesn't say
+    /// the password may have been mistyped.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_Reenrol_NoTerminalForUnlockPrompt_DoesNotSayMistyped()
+    {
+        var m = VaultAPasswordFreeBPassword();
+        Reprogram(m, SerialA);
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, _, stderr) = SlotAdd(m, "--no-password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialA}'s slot(s) in this vault no longer open", stderr);
+        Assert.DoesNotContain("may have been mistyped", stderr);
+    }
+
+    /// <summary>
+    /// Fix round, item 5 (controller ruling): with --recovery-key-stdin, the vault password is the line after the
+    /// recovery key, as for a first enrolment. The vault opens with the recovery key, so the typed password is checked
+    /// against the verifier: a wrong one aborts without a write, the right one re-enrols with the password.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_Reenrol_RecoveryKeyStdin_WithPassword_VerifierDecides()
+    {
+        var m = VaultAPasswordFreeBPassword();
+        Reprogram(m, SerialA);
+        var before = File.ReadAllBytes(KeyringPath(m));
+        m.Keys.PluggedIn = [SerialA];
+
+        var (wrongExit, wrongOut, wrongErr) = m.Run(_recoveryKey + "\n" + WrongPassword + "\n",
+            "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+
+        Assert.NotEqual(0, wrongExit);
+        Assert.Contains("the vault password didn't match", wrongErr);
+        Assert.DoesNotContain(ReenrolledLine(SerialA), wrongOut);
+        Assert.Equal(before, File.ReadAllBytes(KeyringPath(m)));
+
+        var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n" + Password + "\n",
+            "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains(ReenrolledLine(SerialA), stdout);
+        Assert.True(SlotsOf(m, SerialA)[^1].Blob.RequiresPassword);
+    }
+
+    /// <summary>A record vault on A (no password, with recovery: <c>_recoveryKey</c>) and B (a password slot), holding <c>db</c>.</summary>
+    private FleetMachine VaultAPasswordFreeBPassword()
+    {
+        var m = Machine(SerialA, SerialB);
+        m.Keys.PluggedIn = [SerialA];
+        _recoveryKey = RecordVaultTestSupport.RecoveryKeyFrom(m.Ok("", "init", "--yubikey", "--no-password"));
+        m.Ok("s3cret\ns3cret\n", "add", "db");
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        m.Ok(Password + "\n" + Password + "\n", "slot", "add", "--yubikey", "--password");
+        Assert.Equal([SerialA, SerialB], OneKeySlots(m).Select(s => s.Blob.Serial));
+        m.Keys.Challenges.Clear();
+        return m;
     }
 
     [Fact]
@@ -618,13 +731,16 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
-    /// A record vault on A (a password slot, no recovery) and B (a password slot or not), holding <c>db</c>.
+    /// A record vault on A (a password slot; a recovery slot only with <paramref name="recovery"/>, its key in
+    /// <c>_recoveryKey</c>) and B (a password slot or not), holding <c>db</c>.
     /// </summary>
-    private FleetMachine PasswordVaultOnAAndB(bool bPassword)
+    private FleetMachine PasswordVaultOnAAndB(bool bPassword, bool recovery = false)
     {
         var m = Machine(SerialA, SerialB);
         m.Keys.PluggedIn = [SerialA];
-        m.Ok(Password + "\n" + Password + "\n", "init", "--yubikey", "--password", "--no-recovery");
+        var init = m.Ok(Password + "\n" + Password + "\n", ["init", "--yubikey", "--password", .. recovery ? Array.Empty<string>() : ["--no-recovery"]]);
+        if (recovery)
+            _recoveryKey = RecordVaultTestSupport.RecoveryKeyFrom(init);
         var (addExit, _, addErr) = m.RunOnTerminal("s3cret\ns3cret\n" + Password + "\n", "add", "db");
         Assert.True(addExit == 0, addErr);
         m.Keys.PluggedIn = [SerialA, SerialB];
@@ -663,6 +779,59 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal("s3cret", m.Get("db"));
 
         Assert.Equal([newA.Blob.ChallengeString], ChallengesOf(m, SerialA));
+    }
+
+    /// <summary>
+    /// Fix round, item 1: re-enrolled with the vault password over a password-free slot (the documented path on a
+    /// converted XOR vault): the old password-free slot is not challenged first; the unlock costs one challenge of A.
+    /// </summary>
+    [Fact]
+    public void Unlock_ReenrolledWithPasswordOverPasswordFreeSlot_OneChallenge()
+    {
+        var m = ConvertedTwoKeyVault();
+        Reprogram(m, SerialA);
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        var (addExit, addOut, addErr) = m.RunOnTerminal("1\n" + Password + "\n" + Password + "\n", "slot", "add", "--yubikey", "--password");
+        Assert.True(addExit == 0, addErr + addOut);
+        var newA = SlotsOf(m, SerialA)[^1];
+        Assert.True(newA.Blob.RequiresPassword);
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialA];
+
+        var (exit, stdout, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("s3cret", stdout.Trim());
+        Assert.Equal([newA.Blob.ChallengeString], ChallengesOf(m, SerialA));
+    }
+
+    /// <summary>
+    /// Fix round, item 1: the password-free slots kept out of the first pass stay reachable. A's remembered slot is a
+    /// password slot (stale: it no longer opens), its password-free slot works, and there is no terminal for the
+    /// password: the password-free slot is tried last and opens.
+    /// </summary>
+    [Fact]
+    public void Unlock_RememberedPasswordSlotStale_NoTerminal_PasswordFreeSlotStillOpens()
+    {
+        // A: a password slot (dead after the reprogram) and, re-enrolled without the password, a password-free one.
+        var m = PasswordVaultOnAAndB(bPassword: false);
+        Reprogram(m, SerialA);
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        var (addExit, addOut, addErr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        Assert.True(addExit == 0, addErr + addOut);
+        var slotsOfA = SlotsOf(m, SerialA);
+        Assert.True(slotsOfA[0].Blob.RequiresPassword);
+        Assert.False(slotsOfA[1].Blob.RequiresPassword);
+        new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default).Remember(m.Keyring.VaultId, SerialA, slotsOfA[0].Slot.SlotId);
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialA];
+
+        var (exit, stdout, stderr) = m.Run("", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("s3cret", stdout.Trim());
+        Assert.Equal([slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
+        Assert.Equal(slotsOfA[1].Slot.SlotId, Remembered(m)[SerialA]);
     }
 
     [Fact]
@@ -776,8 +945,11 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal("s3cret", stdout.Trim());
         // The hint was ignored: keyring order, the dead slot first.
         Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
-        if (kind == "unreadable")
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (kind == "unreadable") // fix round, item 6: the hint was rewritten at 0600, so it works again
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+            Assert.Equal(slotsOfA[1].Slot.SlotId, Remembered(m)[SerialA]);
+        }
     }
 
     [Fact]

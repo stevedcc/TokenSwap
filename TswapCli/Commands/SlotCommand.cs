@@ -1032,20 +1032,30 @@ public sealed class SlotCommand : ICliCommand
         StretchedPassword? askedByUnlock = null;
         (byte[] Salt, VaultPasswordParams Params)? firstPasswordFile = null;
         byte[]? vaultKey = null;
+        byte[]? recoveryKey = null;
         try
         {
             var file = store?.ReadVaultPassword(keyring.VaultId);
-            if (ordered.Any(s => s.Blob.RequiresPassword) || newSlotPassword)
+            var keySlotNeedsPassword = ordered.Any(s => s.Blob.RequiresPassword);
+            var passwordNeeded = keySlotNeedsPassword || newSlotPassword;
+            // Fix round: a slot of this key needs the vault password but the vault-password file is missing: no
+            // password typed now could be checked against those slots (a freshly salted one would make a live slot
+            // look dead), whatever the new slot gets.
+            if (keySlotNeedsPassword && file is null)
+                throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+            // Fix round (controller ruling): with --recovery-key-stdin, stdin carries the recovery key on its first
+            // line and, when needed, the vault password on the next, as a first enrolment reads them.
+            if (withRecoveryKey)
+                recoveryKey = ReadRecoveryKey(ctx, keyring, keyOnFirstLine: passwordNeeded);
+            if (passwordNeeded)
             {
-                // slot add has no stdin option for the vault password (stdin may carry the recovery key).
-                if (c.IsInputRedirected)
+                if (c.IsInputRedirected && !withRecoveryKey)
                     throw new VaultPasswordUnavailableException(
                         $"YubiKey {serial} {(newSlotPassword ? "is to be enrolled with the vault password" : "has a slot that needs the vault password")}, " +
-                        "which is read at a terminal only, and stdin is not a terminal here. Run this at a terminal. Nothing was changed.");
+                        "which is read at a terminal (or, with --recovery-key-stdin, on the line after the recovery key), and stdin is " +
+                        "not a terminal here. Run this at a terminal. Nothing was changed.");
                 if (file is not null)
                     typed = VaultPasswordChoice.AskUnverified(ctx, file);
-                else if (!newSlotPassword)
-                    throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
                 else
                 {
                     var (stretched, salt, p) = VaultPasswordChoice.AskNew(ctx, "slot add --yubikey");
@@ -1080,28 +1090,35 @@ public sealed class SlotCommand : ICliCommand
             var unlockUsedPassword = false;
             VaultPasswordProvider prompt = () =>
             {
-                unlockUsedPassword = true;
+                StretchedPassword handed;
                 if (typed is not null)
-                    return typed.Clone();
-                askedByUnlock ??= TerminalPasswordProvider.For(ctx, config)();
-                return askedByUnlock.Clone();
+                    handed = typed.Clone();
+                else
+                {
+                    askedByUnlock ??= TerminalPasswordProvider.For(ctx, config)();
+                    handed = askedByUnlock.Clone();
+                }
+                unlockUsedPassword = true; // only once there is a password (a refused prompt typed nothing)
+                return handed;
             };
             try
             {
-                vaultKey = withRecoveryKey ? UnlockWithRecoveryKey(ctx, keyring) : ctx.UnlockExcluding(config, serial, prompt);
+                vaultKey = withRecoveryKey ? RecoveryKeyUnlock.Unlock(keyring, recoveryKey!) : ctx.UnlockExcluding(config, serial, prompt);
             }
             catch (TswapException e) when (!withRecoveryKey && e is not OwnerSwitchException)
             {
                 throw new TswapException(NoOtherWayInText(ctx, serial, e.Message, unlockUsedPassword), e.ExitCode);
             }
 
-            // A password slot opened the vault with the typed password only in the unlock's password pass.
-            var proven = unlockUsedPassword && typed is not null;
-            if (newSlotPassword && file is not null && !proven && !file.Verifies(vaultKey, typed!))
+            // The typed password is checked against the vault's verifier whatever opened the vault (a password slot
+            // that opened proves it as well; the verifier also covers the agent, the chip, the recovery key, and a
+            // password-free slot tried after the password pass).
+            var verified = typed is not null && file is not null && file.Verifies(vaultKey, typed);
+            if (newSlotPassword && file is not null && !verified)
                 throw new TswapException(
-                    $"YubiKey {serial} isn't enrolled again: the vault password didn't match this vault's (the vault opened " +
-                    "another way, so the password was checked against the vault's password verifier). Nothing was changed.");
-            if (typed is not null && !newSlotPassword && !proven)
+                    $"YubiKey {serial} isn't enrolled again: the vault password didn't match this vault's (checked against the " +
+                    "vault's password verifier). Nothing was changed.");
+            if (typed is not null && !newSlotPassword && !verified)
                 c.Error.WriteLine(
                     $"None of YubiKey {serial}'s slots opened with the vault password typed: if you mistyped the vault password, " +
                     $"stop now (Ctrl-C); otherwise YubiKey {serial} is enrolled again, as a new slot without the password.");
@@ -1137,6 +1154,8 @@ public sealed class SlotCommand : ICliCommand
         {
             typed?.Dispose();
             askedByUnlock?.Dispose();
+            if (recoveryKey is not null)
+                CryptographicOperations.ZeroMemory(recoveryKey);
             if (vaultKey is not null)
                 CryptographicOperations.ZeroMemory(vaultKey);
         }
@@ -1438,13 +1457,7 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     internal static byte[] UnlockWithRecoveryKey(CommandContext ctx, TswapCore.Keyring.Keyring keyring, bool keyOnFirstLine = false)
     {
-        if (!keyring.Slots.Any(s => s.Kind == SlotKind.Recovery))
-            throw new TswapException(RecoveryKeyUnlock.NoRecoverySlotMessage);
-        if (!ctx.Console.IsInputRedirected)
-            throw new TswapException(
-                "The recovery key is read from stdin only, and stdin is a terminal here (typing the key would show it). " +
-                $"Instead, pipe it in, for example: sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey");
-        var recoveryKey = RecoveryKeyUnlock.ReadKey(ctx.Console.In, keyOnFirstLine);
+        var recoveryKey = ReadRecoveryKey(ctx, keyring, keyOnFirstLine);
         try
         {
             return RecoveryKeyUnlock.Unlock(keyring, recoveryKey);
@@ -1453,6 +1466,22 @@ public sealed class SlotCommand : ICliCommand
         {
             CryptographicOperations.ZeroMemory(recoveryKey);
         }
+    }
+
+    /// <summary>
+    /// The recovery private key from stdin (refused when the keyring has no recovery slot or stdin is a terminal);
+    /// the caller zeroes it. Split out of <see cref="UnlockWithRecoveryKey"/> for task 4b, which reads it before asking
+    /// the vault password from the next line.
+    /// </summary>
+    internal static byte[] ReadRecoveryKey(CommandContext ctx, TswapCore.Keyring.Keyring keyring, bool keyOnFirstLine)
+    {
+        if (!keyring.Slots.Any(s => s.Kind == SlotKind.Recovery))
+            throw new TswapException(RecoveryKeyUnlock.NoRecoverySlotMessage);
+        if (!ctx.Console.IsInputRedirected)
+            throw new TswapException(
+                "The recovery key is read from stdin only, and stdin is a terminal here (typing the key would show it). " +
+                $"Instead, pipe it in, for example: sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey");
+        return RecoveryKeyUnlock.ReadKey(ctx.Console.In, keyOnFirstLine);
     }
 
     /// <summary>
