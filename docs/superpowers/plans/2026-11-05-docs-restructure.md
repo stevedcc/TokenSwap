@@ -22,6 +22,7 @@
 - `ykman` instructions: they stay where they are needed today (YubiKey preparation) but are gathered into the one section "Preparing a YubiKey" in `docs/setup.md`; no other page repeats them. The YubiKey SDK track rewrites that section later.
 - README length: 300 lines at most, not counting the collapsed "Moved sections" block.
 - **Old anchors everywhere, not only the README (owner: "keep every existing anchor ... or redirect it"):** a heading that leaves `README.md` or `docs/BROKER.md` keeps its old slug as an `<a id>` in that file's "Moved sections" block; the two root stubs carry every old heading slug of the file they replace in the same kind of block, each linking to the same heading in `docs/design/...`. In-repo links never point at a redirect anchor (Task 1's guard).
+- **Links only to what exists.** Every task ends with the link guard green, so a page links only to files that exist when its task commits. The task that creates a page adds the links to it that earlier pages need; each such edit is in that task's Files list. Execution order: 1, 2, 3, 4, 6, 5, 5b, 7.
 - **Reports are files:** each task's report (with its source-to-target table) is the SDD report file in the plan workspace; the final reviewers get those files.
 - **Reviews:** each task gets the SDD task review (a Claude reviewer, a check against the brief); the review that counts for merge is the external one at the end (GLM and MiMo, project rule).
 - Pre-existing dead links found by Task 1's guard: fixed in Task 1 with a `Ruling:` line each (not excluded).
@@ -50,10 +51,11 @@
 
 - [ ] **Step 1: Write the failing tests:**
   - `Slug_FollowsGitHubRules`: `"Threat Model & Non-Goals"` → `threat-model--non-goals`; `"Setting up: the guided \`tswap init\`"` → `setting-up-the-guided-tswap-init`; `"Install (compiled binary — recommended)"` → `install-compiled-binary--recommended`; two `## Setup` headings → `setup`, `setup-1`; a `# comment` line inside a fenced block is not a heading.
-  - `Anchors_EqualIndependentLists`: today (Task 1 only; later tasks change the files) `Anchors(README.md)` equals `old-readme-anchors.txt`, `Anchors(docs/BROKER.md)` equals `old-broker-anchors.txt`, and the two design files equal their prefixed entries. Later tasks delete the equality half of this test in Task 3 (design files) and Task 7 (README, BROKER) and keep the subset guards below; each deletion is named in that task's commit message.
+  - `Anchors_EqualIndependentLists`: today (Task 1 only; later tasks change the files) `Anchors(README.md)` equals `old-readme-anchors.txt`, `Anchors(docs/BROKER.md)` equals `old-broker-anchors.txt`, and the two design files equal their prefixed entries. Later tasks delete the equality half of this test in Task 3 (design files), Task 4 (BROKER) and Task 7 (README) and keep the subset guards below; each deletion is named in that task's commit message.
   - `EveryRelativeLinkResolves`: for every `.md` file under the repo root except `docs/superpowers/`, `docs/briefs/`, `bin/`, `obj/` and `.git/`: every link that isn't `http(s):`/`mailto:` points at an existing file or directory (relative to the linking file), compared **case-sensitively** against the directory listing (so `docs/broker.md` fails on macOS too), and its `#anchor`, if any, is in that file's `Anchors`; a bare `#anchor` is in the linking file. The failure message lists `file:line → target` for every broken one.
   - `OldReadmeAnchorsStillResolve`: every slug in `old-readme-anchors.txt` is in `Anchors(README.md)`; the same for `old-broker-anchors.txt` in `docs/BROKER.md`, and for `old-design-anchors.txt` in the root stub files.
-  - `NoInRepoLinkToRedirectAnchor`: no link in the repo's Markdown targets an anchor that exists only as a redirect inside a "Moved sections" block.
+  - `NoInRepoLinkToRedirectAnchor`: no link in the repo's Markdown targets an anchor that exists only as a redirect inside a "Moved sections" block, except links in `docs/release-notes/` files of released versions (never edited; landing on a redirect is what redirects are for).
+  - `NoDuplicateIds`: in each file, an explicit `<a id>` never equals a heading slug or another explicit id (the helper does not apply `-1`/`-2` to explicit ids, as GitHub doesn't).
   - `GuardFilesExist`: `MULTI_MACHINE_KEYING.md`, `HARDWARE_BACKENDS.md` and `docs/BROKER.md` exist; `docs/BROKER.md` has the heading anchors `selinux` and `redaction-confirms-whole-guesses` (the broker's log line names that heading), and the anchors `setup` and `setup-1`.
 - [ ] **Step 2:** `dotnet test TswapTests --filter "FullyQualifiedName~DocLinkTests"` → FAIL only because the helpers don't exist (compile error), then, with the helpers, `Slug_FollowsGitHubRules` passes and the three guard tests **pass on today's tree** (the inventory found no dead link). Break-it-once: change one README link target to a missing anchor, see `EveryRelativeLinkResolves` fail naming it, revert.
 - [ ] **Step 3: Commit.**
@@ -72,7 +74,7 @@
 - [ ] **Step 1: Write the failing tests:**
   - `CommandReferenceIsCurrent`: the text between the markers equals `Generate()` exactly (line endings normalised). With `TSWAP_REGENERATE_DOCS=1` set, the test writes the new block into the file instead and passes; the failure message says to run `TSWAP_REGENERATE_DOCS=1 dotnet test TswapTests --filter CommandReferenceIsCurrent` and commit the result.
   - `CommandReferenceCoversEveryCommand`: for each command in `CommandRegistry.All`, `Anchors(docs/commands.md)` contains `Slug(Name)` exactly once.
-  - `EnvironmentVariablesDocumented`: every `TSWAP_*` or `XDG_*` name the code reads (scan `TswapCli/` and `TswapCore/` `.cs` for those string literals) is in `docs/commands.md`, except the test-only ones (`TSWAP_TEST_*`); every `TSWAP_*`/`XDG_*` name in `docs/commands.md` is read by the code.
+  - `EnvironmentVariablesDocumented`: every `TSWAP_*` or `XDG_*` name the code reads (string literals passed to `GetEnvironmentVariable` or to the `getEnv` seam in `TswapCli/` and `TswapCore/` `.cs`; a name found only in a comment doesn't count) is in `docs/commands.md`, except the test-only ones (`TSWAP_TEST_*`); every `TSWAP_*`/`XDG_*` name in `docs/commands.md` is read by the code.
   - `NoTestOnlyVariablesInDocs`: no `TSWAP_TEST_` appears in any `.md` under `docs/` (outside `docs/superpowers`, `docs/briefs`, `docs/design`) or in `README.md`.
   - `Regenerate_RoundTrip`: on a temp copy of the file, `CommandReference.Rewrite(path)` (the writer the env var uses) on a file whose block was altered restores it byte for byte, writes LF line endings, writes through a temp file and rename; a file with a missing or duplicated marker fails with a message naming the marker.
 - [ ] **Step 2:** run → FAIL (no file).
@@ -87,7 +89,7 @@
 
 **Files:**
 - `git mv`: `MULTI_MACHINE_KEYING.md` → `docs/design/multi-machine-keying.md`, `HARDWARE_BACKENDS.md` → `docs/design/hardware-backends.md`, `docs/ssh-agent-wire.md` → `docs/design/ssh-agent-wire.md`, `REFACTORING_PLAN.md` → `docs/design/refactoring-plan.md`
-- Create: root `MULTI_MACHINE_KEYING.md` and `HARDWARE_BACKENDS.md` stubs (each: one heading with the old title, two sentences — "This design record moved to docs/design/... . For setting tswap up, see docs/setup.md and docs/multi-machine.md." — the links, and a collapsed "Moved sections" block with every old heading slug of that file as an `<a id>` row linking to the same heading in the moved file), `docs/design/README.md` (one line per record)
+- Create: root `MULTI_MACHINE_KEYING.md` and `HARDWARE_BACKENDS.md` stubs (each: one heading with the old title, one sentence — "This design record moved to docs/design/... ." — and its link (Tasks 5 and 5b add the guide links), and a collapsed "Moved sections" block with every old heading slug of that file as an `<a id>` row linking to the same heading in the moved file), `docs/design/README.md` (one line per record)
 - Modify: links to the moved files in every `.md` outside `docs/superpowers`/`docs/briefs`; `AGENTS.md` (lines 185, 211 and any other path), `runtests.sh` comments (lines 12, 14), code **comments** naming the moved files (inventory section 4, "Code comments citing design docs"; `grep -rn 'MULTI_MACHINE_KEYING\|HARDWARE_BACKENDS\|ssh-agent-wire\|REFACTORING_PLAN' TswapCli TswapCore TswapTests --include=*.cs --include=*.swift`), but **not** string literals a program prints (inventory 4a: `InitCommand.cs:255`, `:612`, `GuidedInit.cs:327`, `SlotCommand.cs:429`, `Tpm2ToolsInterop.cs:122` stay as they are; the stubs answer them).
 
 - Ownership note: `runtests.sh` comments and `TswapTests` comments are touched here by the design's comment-sweep carve-out; this track lands before the YubiKey track, which merges `main` afterwards.
@@ -106,47 +108,15 @@
 
 Content (spec D2): the guide keeps the opening (lines 1-30, shortened), Costs, Setup 1-8, the how-to parts of "A broker with a vault password" and "SSH: an agent that signs" (its Setup), Command templates (defining, examples, binds, output, logging), Platforms, Limits; "Changed in v0.2.0 (breaking)" becomes one line linking to `docs/release-notes/v0.2.0.md`. The threat model page takes "Threat model" (all of it), the trust model of the password broker and its control socket, memory and dumpability, the ssh agent's "How a signature is allowed" / "What the restriction does and doesn't do" / "What a compromised container can and can't do", and the template's "What a compromised container can do" / "What a template author must not do". Every heading that moves out of `docs/BROKER.md` keeps its old slug in a "Moved sections" block at the end of the guide. The guide's "Defining a template" carries a one-line pointer to "What a template author must not do". The guide's Setup section carries, as one-line warnings linking to the threat model: the vault user is root-equivalent for its secrets; no container may run with the vault user's uid (Review Focus 4). The guide keeps a `SELinux` section (setup steps; the reasoning moves) and a two-line `Redaction confirms whole guesses` section that links to the threat model's full text. The two `Setup` headings become distinct (`Setting up the broker` and `Setting up the SSH agent`; the old anchors `#setup` and `#setup-1` are kept with `<a id>`).
 
-- [ ] **Step 1:** write both pages from the existing text.
+- [ ] **Step 1:** write both pages from the existing text; delete the BROKER half of `Anchors_EqualIndependentLists` (named in the commit message).
 - [ ] **Step 2: Source-to-target table in the report:** every heading of the old `docs/BROKER.md` → its new page and heading (or "release notes", or a ruling).
 - [ ] **Step 3: Walk-through check:** read the guide's Setup as a new user: every command in it matches `tswap broker` `HelpUsage` and the README/AGENTS sudo split; list any mismatch found and how it was resolved (code wins).
 - [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs|FullyQualifiedName~BrokerContrib|FullyQualifiedName~BrokerShortSecretWarning"` → PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 5: Install, setup, portable
-
-**Model: Opus.**
-
-**Files:**
-- Create: `docs/install.md`, `docs/setup.md`, `docs/portable.md`
-- Modify: `docs/design/hardware-backends.md` (only these sections become a one-line pointer to the guide that now holds them: "Checking a no-touch Secure Enclave slot on a Mac" 341-407, "Under sudo: used as the vault folder's owner, not root" 247-272, "Several keys plugged in, and the touch posture" 153-174; every other section stays byte-identical, including "Touch or no touch: an explicit choice", which Task 6 needs)
-- Source map: inventory section 2, README rows with destination install or setup (100-175, 199-433), and the three design sections above.
-
-Content: `install.md` holds the per-OS detail, Windows notes, prerequisites, building from source, and a subsection named exactly **"YubiKey prerequisites"** (today: ykman and its install; the YubiKey track rewrites this subsection). `setup.md` has the guided `init` in full (README 199-242; its flag list is **not** repeated: link to `docs/commands.md#init`), per-backend setup (243-364 without the security disclosures, which go to `security-model.md` in Task 6: leave a one-line link), **one** section named exactly **"Preparing a YubiKey"** holding the ykman slot-2 instructions (today's text from README 247 and 822; nowhere else), the recovery key (403-420), limits (421-433). `portable.md` is short and owns only "using tswap without installing it": running from any folder; pointing at a vault with `TSWAP_CONFIG_DIR` (how-to; the variable's reference entry is `docs/commands.md`) from README 1417-1436; what refuses without sudo, as one paragraph that links to `docs/security-model.md` for why (the sudo split's home); the Linux TPM limit (from `docs/design/hardware-backends.md` "Linux TPM" 499-527: needs the `tss` group and `tpm2-tools`); unsigned binaries as one paragraph linking to `install.md` (README 110-117 and 171-175 are owned there). No YubiKey SDK content (that track adds a section named exactly **"YubiKeys"**; leave a one-line placeholder saying YubiKey notes arrive with v0.3.0's YubiKey work).
-
-- [ ] **Step 1:** write the three pages.
-- [ ] **Step 2: Source-to-target table** in the report: each source line range → page and heading; for every sentence in a source that states a status, a limit, a review state or a date, the target sentence quoted beside the source sentence.
-- [ ] **Step 3: Walk-through check:** follow `install.md` then `setup.md` as a new user on Linux with a YubiKey, and on macOS with the Secure Enclave: every command matches its `HelpUsage` (no `--keyring`, no classic-vault steps); list mismatches and resolutions.
-- [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS.
-- [ ] **Step 5: Commit.**
-
-### Task 5b: Multi-machine, the vault password and the agent
-
-**Model: Opus.**
-
-**Files:**
-- Create: `docs/multi-machine.md`, `docs/vault-password-and-agent.md`
-- Modify: `docs/design/multi-machine-keying.md` (only: "Hand-carried enrollment (v0)" 350-384, "Fleet enrollment" 385-466 and the how-to part of "The vault password" 575-680 become one-line pointers; the rest byte-identical)
-- Source map: inventory section 2 (README 365-402, 434-609, 660-796, 1314-1373), section 3 (the design parts above), and the duplication list in section 6.
-
-Content: `multi-machine.md` holds sharing, joining, remote enrolment step by step, the guide's commands, sync transports, and a short record-format-3 / `vault reindex` paragraph linking to the design record. `vault-password-and-agent.md` holds README 434-543 and 590-609 and is the one home for setting up and using the password and the agent; README 544-589 ("What the password does and doesn't protect") goes to `docs/security-model.md` in Task 6, and this page links to it in one sentence. The other copies (design records, `docs/BROKER.md` 357-493, release notes) are not edited except the design-record pointers above; `docs/BROKER.md` already links here after Task 4 (check it).
-
-- [ ] **Step 1:** write the two pages.
-- [ ] **Step 2: Source-to-target table** in the report, with the quoted status/limit sentences as in Task 5.
-- [ ] **Step 3: Walk-through check:** join a second machine following `multi-machine.md` (`slot request`, approve, accept, merge as `HelpUsage` names them); set a password and start the agent following `vault-password-and-agent.md`; list mismatches and resolutions.
-- [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS.
-- [ ] **Step 5: Commit.**
-
 ### Task 6: Security model, agent integration, rotating, examples, upgrading
+
+**Runs after Task 4 and before Task 5** (it is placed here in the file for that reason): Tasks 5 and 5b link to `docs/security-model.md`, and this task's pages link only to pages that already exist (`docs/commands.md`, the design records, the release notes, `evals/skill/README.md`). Its link from `security-model.md` to `docs/vault-password-and-agent.md` is added by Task 5b.
 
 **Model: Opus.**
 
@@ -163,6 +133,42 @@ If a page would be under ~40 lines, fold it into its nearest neighbour and say s
 - [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS.
 - [ ] **Step 5: Commit.**
 
+### Task 5: Install, setup, portable
+
+**Model: Opus.**
+
+**Files:**
+- Create: `docs/install.md`, `docs/setup.md`, `docs/portable.md`
+- Modify: root `HARDWARE_BACKENDS.md` and `MULTI_MACHINE_KEYING.md` stubs (add "For setting tswap up, see docs/setup.md.")
+- Modify: `docs/design/hardware-backends.md` (only these sections' bodies become a one-line pointer to the guide that now holds them, the heading itself staying, since the stubs' redirect rows link to it: "Checking a no-touch Secure Enclave slot on a Mac" 341-407, "Under sudo: used as the vault folder's owner, not root" 247-272, "Several keys plugged in, and the touch posture" 153-174; every other section stays byte-identical, including "Touch or no touch: an explicit choice", which Task 6 needs)
+- Source map: inventory section 2, README rows with destination install or setup (100-175, 199-433), and the three design sections above.
+
+Content: `install.md` holds the per-OS detail, Windows notes, prerequisites, building from source, and a subsection named exactly **"YubiKey prerequisites"** (today: ykman and its install; the YubiKey track rewrites this subsection). `setup.md` has the guided `init` in full (README 199-242; its flag list is **not** repeated: link to `docs/commands.md#init`), per-backend setup (243-364 without the security disclosures, which go to `security-model.md` in Task 6: leave a one-line link), **one** section named exactly **"Preparing a YubiKey"** holding the ykman slot-2 instructions (today's text from README 247 and 822; nowhere else), the recovery key (403-420), limits (421-433). `portable.md` is short and owns only "using tswap without installing it": running from any folder; pointing at a vault with `TSWAP_CONFIG_DIR` (how-to; the variable's reference entry is `docs/commands.md`) from README 1417-1436; what refuses without sudo, as one paragraph that links to `docs/security-model.md` for why (the sudo split's home); the Linux TPM limit (from `docs/design/hardware-backends.md` "Linux TPM" 499-527: needs the `tss` group and `tpm2-tools`); unsigned binaries as one paragraph linking to `install.md` (README 110-117 and 171-175 are owned there). No YubiKey SDK content (that track adds a section named exactly **"YubiKeys"**; leave a one-line placeholder saying YubiKey notes arrive with v0.3.0's YubiKey work).
+
+- [ ] **Step 1:** write the three pages.
+- [ ] **Step 2: Source-to-target table** in the report: each source line range → page and heading; for every sentence in a source that states a status, a limit, a review state or a date, the target sentence quoted beside the source sentence.
+- [ ] **Step 3: Walk-through check:** follow `install.md` then `setup.md` as a new user on Linux with a YubiKey, and on macOS with the Secure Enclave: every command matches its `HelpUsage` (no `--keyring`, no classic-vault steps); list mismatches and resolutions.
+- [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS.
+- [ ] **Step 5: Commit.**
+
+### Task 5b: Multi-machine, the vault password and the agent
+
+**Model: Opus.**
+
+**Files:**
+- Create: `docs/multi-machine.md`, `docs/vault-password-and-agent.md`
+- Modify: root `MULTI_MACHINE_KEYING.md` stub (add the `docs/multi-machine.md` link); `docs/security-model.md` (its one-sentence link to the how-to page); `docs/BROKER.md` (its kept password how-to is cut to the broker-specific steps, and the general setup becomes a link to `docs/vault-password-and-agent.md`)
+- Modify: `docs/design/multi-machine-keying.md` (only these bodies, headings kept: "Hand-carried enrollment (v0)" 350-384, "Fleet enrollment" 385-466 and the how-to part of "The vault password" 575-680 become one-line pointers; the rest byte-identical)
+- Source map: inventory section 2 (README 365-402, 434-609, 660-796, 1314-1373), section 3 (the design parts above), and the duplication list in section 6.
+
+Content: `multi-machine.md` holds sharing, joining, remote enrolment step by step, the guide's commands, sync transports, and a short record-format-3 / `vault reindex` paragraph linking to the design record. `vault-password-and-agent.md` holds README 434-543 and 590-609 and is the one home for setting up and using the password and the agent; README 544-589 ("What the password does and doesn't protect") goes to `docs/security-model.md` in Task 6, and this page links to it in one sentence. The other copies (design records, `docs/BROKER.md` 357-493, release notes) are not edited except the design-record pointers above; `docs/BROKER.md` gets its link in this task (Files above).
+
+- [ ] **Step 1:** write the two pages.
+- [ ] **Step 2: Source-to-target table** in the report, with the quoted status/limit sentences as in Task 5.
+- [ ] **Step 3: Walk-through check:** join a second machine following `multi-machine.md` (`slot request`, approve, accept, merge as `HelpUsage` names them); set a password and start the agent following `vault-password-and-agent.md`; list mismatches and resolutions.
+- [ ] **Step 4:** `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS.
+- [ ] **Step 5: Commit.**
+
 ### Task 7: The README front page, the index, and the moved-sections table
 
 **Model: Opus.**
@@ -172,10 +178,10 @@ If a page would be under ~40 lines, fold it into its nearest neighbour and say s
 - Modify (comments and agent docs that point at README sections, now at their new homes): `TswapCore/Validation.cs:114` ("README §Threat model" → `docs/security-model.md`), `TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift:205` ("the README's macOS RAM disclosure": find where that text went), `TswapTests/CliEnvironmentTests.cs:89`, `AGENTS.md:185`; and `grep -rn 'README' TswapCli TswapCore TswapTests AGENTS.md` for any other.
 - Create: `docs/README.md` (the index: one line per guide, grouped "Getting started", "Using tswap", "Security", "Reference", "Design records")
 
-Content (spec D1): what tswap is and why (the current pitch, lines 1-27, kept tight; no links to design docs here); install (release download, the macOS quarantine note, `installscript`; per-OS detail is a link to `docs/install.md`); the guided `tswap init` (short: what it asks, one example run, link to `docs/setup.md`); the first secret and `tswap run` (about 10 lines from "Example: AI Agent Workflow"); "Where to go next" (the index's groups, one line each); License. At the end, inside `<details><summary>Moved sections</summary>`, a table with one row per README heading that moved: old heading, `<a id="old-slug"></a>` in the row, and a link to its new page and heading. Every slug in `TswapTests/Docs/old-readme-anchors.txt` resolves (Task 1's guard), and the README is at most 300 lines outside the `<details>` block.
+Content (spec D1): what tswap is and why (the current pitch, lines 1-27, kept tight; no links to design docs here); install (release download, the macOS quarantine note, `installscript`; per-OS detail is a link to `docs/install.md`); the guided `tswap init` (short: what it asks, one example run, link to `docs/setup.md`); the first secret and `tswap run` (about 10 lines from "Example: AI Agent Workflow"); "Where to go next" (the index's groups, one line each); License. At the end, inside `<details><summary>Moved sections</summary>`, a table with one row per README heading that moved or was dropped (the dropped "Setup", `#setup`, points to `docs/setup.md`, the guided init that replaced it): old heading, `<a id="old-slug"></a>` in the row, and a link to its new page and heading. Every slug in `TswapTests/Docs/old-readme-anchors.txt` resolves (Task 1's guard), and the README is at most 300 lines outside the `<details>` block.
 
 - [ ] **Step 1:** write the README and the index.
-- [ ] **Step 2: Coverage check in the report:** every row of the inventory's README section map → where it went (page and heading, design record, or the planned drop of "Setup" 176-198; "release notes" only where `docs/release-notes/v0.2.0.md` already holds it); nothing unaccounted for. Delete the README/BROKER half of `Anchors_EqualIndependentLists` (named in the commit message).
+- [ ] **Step 2: Coverage check in the report:** every row of the inventory's README section map → where it went (page and heading, design record, or the planned drop of "Setup" 176-198; "release notes" only where `docs/release-notes/v0.2.0.md` already holds it); nothing unaccounted for. Delete the README half of `Anchors_EqualIndependentLists` (named in the commit message).
 - [ ] **Step 2b: GitHub render check:** render `README.md`, `docs/BROKER.md` and the two root stubs with `gh api markdown -f mode=gfm -f context=stevedcc/TokenSwap -F text=@<file>` and check that every slug of the matching old-anchor list appears as `id="user-content-<slug>"` (checked on 2026-11-05: GitHub keeps `<a id>` inside a table cell inside `<details>`); list any missing.
 - [ ] **Step 3:** `wc -l` of the README outside the `<details>` block ≤ 300; `dotnet test TswapTests --filter "FullyQualifiedName~Docs"` → PASS; the whole suite `./runtests.sh` → PASS.
 - [ ] **Step 4: Commit.**
