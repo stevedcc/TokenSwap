@@ -117,6 +117,8 @@ public class DocLinkTests
     [InlineData("__Strong__ and *em*", "strong-and-em")]
     [InlineData("TSWAP_CONFIG_DIR and snake_case", "tswap_config_dir-and-snake_case")]
     [InlineData("Using `_private_` names", "using-_private_-names")]
+    [InlineData("_Emphasis around `code` here_", "emphasis-around-code-here")]
+    [InlineData("Use ``_x_`` here", "use-_x_-here")]
     [InlineData("Threat Model & Non-Goals", "threat-model--non-goals")]
     [InlineData("Setting up: the guided `tswap init`", "setting-up-the-guided-tswap-init")]
     [InlineData("Install (compiled binary — recommended)", "install-compiled-binary--recommended")]

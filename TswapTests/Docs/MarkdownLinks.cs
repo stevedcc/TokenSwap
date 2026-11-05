@@ -196,17 +196,17 @@ internal static partial class MarkdownLinks
     [GeneratedRegex(@"(?<![\p{L}\p{N}_])(_{1,2})(?=\S)(.+?)(?<=\S)\1(?![\p{L}\p{N}_])")]
     private static partial Regex UnderscoreEmphasis();
 
-    /// <summary>Applies <paramref name="transform"/> to the text between inline code spans, never inside one.</summary>
+    /// <summary>
+    /// Applies <paramref name="transform"/> to the text with each inline code span's content hidden, so
+    /// a transform never changes text inside a code span but still sees markup that wraps one
+    /// (<c>_a `x` b_</c>). Each span is stood in for by a private-use character, restored afterwards.
+    /// </summary>
     private static string OutsideCodeSpans(string text, Func<string, string> transform)
     {
-        var sb = new StringBuilder();
-        var at = 0;
-        foreach (Match m in CodeSpan().Matches(text))
-        {
-            sb.Append(transform(text[at..m.Index])).Append(m.Value);
-            at = m.Index + m.Length;
-        }
-        return sb.Append(transform(text[at..])).ToString();
+        var spans = new List<string>();
+        var hidden = CodeSpan().Replace(text, m => { spans.Add(m.Value); return ((char)(0xE000 + spans.Count - 1)).ToString(); });
+        var done = transform(hidden);
+        return Regex.Replace(done, "[\uE000-\uF8FF]", m => spans[m.Value[0] - 0xE000]);
     }
 
     private static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.NonSpacingMark
