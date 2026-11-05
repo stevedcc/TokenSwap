@@ -69,7 +69,7 @@
 **Files:**
 - Create: `TswapCore/Vault/IOtpKeys.cs` (the seam, `OtpKeyInfo`, `OtpChallengeResult`, `OtpKeysException`, `OtpFailure`), `TswapCore/Vault/YubicoOtpKeys.cs` (the real one over the SDK), `TswapCore/Vault/SdkYubiKeyService.cs`, `TswapCore/Vault/Slot2Verify.cs`, `TswapCore/Vault/YubiKeyAccessTexts.cs` (the per-OS texts moved from `TswapCli/YubiKeyAccess.cs`), `TswapCore/Vault/YubiKeyProgramException.cs`
 - Note: `TswapCli/YubiKeyAccess.cs` stays as it is in this task (its texts are copied into TswapCore; Task 3 deletes the original, so the duplication lasts one task). `YubiKeyHardwareService` wraps an `IYubiKeyService` and does not implement it, so it needs no new members.
-- Modify: `TswapCore/Vault/IYubiKeyService.cs` (the two new members), `TswapCore/Vault/TestKeyYubiKeyService.cs`, `TswapTests/SimulatedYubiKeyService.cs`, `TswapCore/Vault/YkmanYubiKeyService.cs` (the two members throw `NotSupportedException("ykman service is being removed")` until Task 3 deletes the file, so the build stays green)
+- Modify: `TswapCore/Vault/IYubiKeyService.cs` (the three new members), `TswapCore/Vault/TestKeyYubiKeyService.cs`, `TswapTests/SimulatedYubiKeyService.cs`, `TswapCore/Vault/YkmanYubiKeyService.cs` (the three members throw `NotSupportedException("ykman service is being removed")` until Task 3 deletes the file, so the build stays green)
 - Test: `TswapTests/SdkYubiKeyServiceTests.cs`, `TswapTests/FakeOtpKeys.cs`, `TswapTests/YubiKeyHardwareSdkTests.cs` (category `YubiKey`), `TswapTests/Slot2VerifyTests.cs`
 
 **Interfaces:**
@@ -170,7 +170,7 @@ Behaviour (design, Stage 1 "tswap yubikey setup"):
   - `Setup_Replace_OtherSlotExists_Proceeds`: the same vault plus a recovery slot (or a TPM slot of another machine) → programmed, and no "couldn't check" warning.
   - `Setup_Replace_TwoSlotsBothOnThisKey_Refused`, `Setup_Replace_OtherSlotUnreadableYubiKey_Refused`.
   - `Setup_Replace_ClassicVaultUsingKey_Refused`.
-  - `Setup_Replace_NoVault_WarnsAndProceeds`.
+  - `Setup_Replace_NoVault_WarnsAndProceeds`, `Setup_Replace_UnreadableVault_WarnsAndProceeds`, `Setup_OnlyKeyHidden_ExplainsPerOs` (no `--serial`).
   - `Setup_ProgramFails_SaysSlotMayBeEmpty`, `Setup_VerifyWrongAnswer_SaysMismatch`, `Setup_VerifyFails_SaysProgrammedButUnchecked` (each through `ProgramOutcome`; the message and the exit code are the outcomes).
   - `Setup_OutputHasNoKeyMaterial`: every setup test's output contains no whitespace-delimited token that is 32 or more hex characters, or 24 or more base64 characters.
   - `Verbose_SetupListsTransports` (strategy line, then one line per key in `FindKeys` order), `Setup_TouchPromptBeforeProgramming` (the touch line precedes the `ProgramSlot2` call in the simulated service's call log), `Setup_PrintsInterruptionNote`.
