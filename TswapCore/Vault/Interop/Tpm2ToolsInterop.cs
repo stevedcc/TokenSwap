@@ -90,6 +90,23 @@ internal static partial class Tpm2ToolsInterop
         }
     }
 
+    /// <summary>
+    /// <see cref="IsAvailable"/> with the reason when the TPM can't be used (guided init lists it): the same
+    /// <c>tpm2_getcap properties-fixed</c> call, side-effect free.
+    /// </summary>
+    public static (bool Available, string? Reason) Probe()
+    {
+        try
+        {
+            var (exitCode, _, stderr) = Run("tpm2_getcap", "properties-fixed");
+            return LinuxTpmProbeOutcome.From(exitCode, stderr);
+        }
+        catch (TswapException ex)
+        {
+            return LinuxTpmProbeOutcome.From(ex);
+        }
+    }
+
     private static void RequireAvailable()
     {
         // Deliberately not implemented as "if (!IsAvailable()) throw generic-message": that
@@ -467,3 +484,24 @@ internal delegate TpmToolRun TpmToolRunner(string command, IReadOnlyList<string>
 /// <summary>A tpm2-tools call failed in a way that isn't a normal user-facing <see cref="TswapException"/> — an assertion that this codebase's own argument construction is wrong, not a hardware/config problem.</summary>
 [SupportedOSPlatform("linux")]
 internal sealed class TpmOperationException(string message) : Exception(message);
+
+/// <summary>
+/// What <see cref="Tpm2ToolsInterop.Probe"/>'s <c>tpm2_getcap</c> run says, as a pure mapping (no tool, no
+/// platform), so it is tested on every OS.
+/// </summary>
+internal static class LinuxTpmProbeOutcome
+{
+    /// <summary>Usable on exit 0, else why not (its first stderr line).</summary>
+    public static (bool Available, string? Reason) From(int exitCode, string stderr)
+    {
+        if (exitCode == 0)
+            return (true, null);
+        var firstLine = stderr.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        return (false, firstLine is null
+            ? $"no TPM found or no access to it (tpm2_getcap failed with exit code {exitCode})"
+            : $"no TPM found or no access to it (tpm2_getcap failed: {firstLine})");
+    }
+
+    /// <summary>The tool runner's own message when tpm2-tools can't be started (it says how to install them).</summary>
+    public static (bool Available, string? Reason) From(TswapException toolsMissing) => (false, toolsMissing.Message);
+}

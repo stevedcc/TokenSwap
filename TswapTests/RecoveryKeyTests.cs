@@ -350,7 +350,7 @@ public class RecoveryKeyTests : IDisposable
     [Theory]
     [InlineData("recover")]
     [InlineData("recover", "--yubikey", "--tpm")]
-    [InlineData("recover", "--keyring")]
+    [InlineData("recover", "--no-recovery")]
     public void RecoverWithoutExactlyOneDevice_IsAUsageError(params string[] args)
     {
         RouterVault();

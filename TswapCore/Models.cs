@@ -88,7 +88,7 @@ public record Config(List<int> YubiKeySerials,
     // a fresh 'tswap init' of the default YubiKey backend). Additive/backward-compatible,
     // following the same pattern as SecureEnclaveWrappedKey/TpmSealedKey above.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null,
-    // Phase 6 keyring vault only (issue #119, 'tswap init --keyring', and since brief T2 also
+    // Phase 6 keyring vault only (issue #119, then 'tswap init --keyring', now 'tswap init --yubikey'; since brief T2 also
     // 'tswap init --tpm'/'--secure-enclave', whose machine slot carries the TPM/Secure Enclave
     // blob as its hwBlob, issue #154): base64 of a versioned (2 or 3)
     // Keyring.KeyringCodec-encoded Keyring holding a random K_v wrapped by this machine's slot,
@@ -136,7 +136,7 @@ public record Config(List<int> YubiKeySerials,
     // *both* machines' slots, and "first Machine slot" would silently pick whichever one happens
     // to sort first, unwrapping with the wrong slot's AAD and failing (or, worse in a
     // differently-shaped future format, succeeding against the wrong slot). Every keyring vault
-    // created from here on (init --keyring's single slot, or slot accept's finalized slot) sets
+    // created from here on (init's first slot, or slot accept's finalized slot) sets
     // this to its own slot id; VaultUnlocker looks it up by id when present and falls back to the
     // old "first Machine slot" heuristic only when null — i.e. only for a keyring predating this
     // field, which is guaranteed single-machine-slot anyway, so the fallback is exact, not a

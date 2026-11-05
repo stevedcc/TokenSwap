@@ -228,7 +228,7 @@ public static class KeyringCodec
         if (formatVersion < KeyringFormat.KeyringFormatVersionWithoutHwBlob)
             throw new TswapException(
                 $"Unsupported keyring format version: {formatVersion}. This vault was created by a pre-release tswap " +
-                "whose keyring format is no longer supported; re-run 'tswap init --keyring'.");
+                "whose keyring format is no longer supported; re-run 'tswap init'.");
         var hasHwBlobColumn = formatVersion >= KeyringFormat.KeyringFormatVersion;
 
         var vaultId = bytes.AsSpan(1, KeyringFormat.VaultIdSize).ToArray();

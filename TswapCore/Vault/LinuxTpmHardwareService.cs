@@ -38,6 +38,12 @@ namespace TswapCore.Vault;
 [SupportedOSPlatform("linux")]
 public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => Tpm2ToolsInterop.IsAvailable();
+
+    /// <summary><see cref="IsAvailable"/>, with why not (guided init lists the reason).</summary>
+    public static (bool Available, string? Reason) Probe() => Tpm2ToolsInterop.Probe();
+
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
     /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine.

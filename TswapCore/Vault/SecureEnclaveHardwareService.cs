@@ -39,6 +39,9 @@ namespace TswapCore.Vault;
 [SupportedOSPlatform("macos")]
 public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : IHardwareKeyService, IHardwareEnrollmentService
 {
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => AppleSecureEnclaveInterop.IsAvailable();
+
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
     /// new Secure Enclave key via <see cref="Wrap"/>. The returned blob is useless off this Mac.

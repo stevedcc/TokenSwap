@@ -647,7 +647,7 @@ public sealed class VaultUnlocker
         catch (FormatException)
         {
             throw new TswapException(
-                "Config is corrupted: Keyring is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                "Config is corrupted: Keyring is not valid base64. Restore config.json from backup or re-run 'tswap init'.");
         }
         return KeyringCodec.Decode(keyringBytes);
     }
@@ -669,7 +669,7 @@ public sealed class VaultUnlocker
         catch (FormatException)
         {
             throw new TswapException(
-                "Config is corrupted: KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                "Config is corrupted: KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init'.");
         }
         return keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownSlotId));
     }
@@ -753,14 +753,14 @@ public sealed class VaultUnlocker
         catch (FormatException)
         {
             throw new TswapException(
-                "Config is corrupted: Keyring is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                "Config is corrupted: Keyring is not valid base64. Restore config.json from backup or re-run 'tswap init'.");
         }
 
         var keyring = KeyringCodec.Decode(keyringBytes);
 
         if (keyring.Slots.Count == 0)
             throw new TswapException(
-                "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                "Config is corrupted: keyring has no slots. Restore config.json from backup or re-run 'tswap init'.");
 
         Slot? slot;
         if (config.KeyringSlotId is not null)
@@ -773,7 +773,7 @@ public sealed class VaultUnlocker
             catch (FormatException)
             {
                 throw new TswapException(
-                    "Config is corrupted: KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                    "Config is corrupted: KeyringSlotId is not valid base64. Restore config.json from backup or re-run 'tswap init'.");
             }
             slot = keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownSlotId));
         }
@@ -784,7 +784,7 @@ public sealed class VaultUnlocker
 
         if (slot is null)
             throw new TswapException(
-                "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init --keyring'.");
+                "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init'.");
 
         var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, slot.SlotId);
         var (vaultKey, _slotPrivateKey) = SlotSecretPayload.Decode(payload);

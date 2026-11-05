@@ -8,7 +8,8 @@ namespace TswapTests;
 /// <summary>
 /// Brief T16-S1 task 8 (ruling 4): a plain <c>init</c> makes a record vault (one YubiKey slot plus
 /// a recovery slot) in <c>&lt;config dir&gt;/vault</c>, or in <c>--folder &lt;dir&gt;</c>, with the
-/// <c>record-format</c> marker; <c>--keyring</c> is a no-op; a classic vault is never initialized over.
+/// <c>record-format</c> marker; a classic vault is never initialized over. Guided init (v0.2.0): that is
+/// now <c>init --yubikey</c>; <c>--keyring</c> (a no-op until then) is refused, see <see cref="InitFlagsTests"/>.
 /// </summary>
 public sealed class InitRecordVaultTests : IDisposable
 {
@@ -45,7 +46,7 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_Plain_MakesARecordVault_WithMarker()
     {
-        var output = _m.Ok("", "init");
+        var output = _m.Ok("", "init", "--yubikey");
 
         var vaultDir = Path.Combine(_m.Dir, "vault");
         AssertRecordVault(vaultDir);
@@ -61,7 +62,7 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_Folder_CreatesTheVaultThere()
     {
-        var output = _m.Ok("", "init", "--folder", _outside);
+        var output = _m.Ok("", "init", "--yubikey", "--folder", _outside);
 
         AssertRecordVault(_outside);
         Assert.False(Directory.Exists(Path.Combine(_m.Dir, "vault")));
@@ -76,7 +77,7 @@ public sealed class InitRecordVaultTests : IDisposable
     {
         Directory.CreateDirectory(_outside);
 
-        _m.Ok("", "init", "--folder", _outside);
+        _m.Ok("", "init", "--yubikey", "--folder", _outside);
 
         AssertRecordVault(_outside);
     }
@@ -87,7 +88,7 @@ public sealed class InitRecordVaultTests : IDisposable
         Directory.CreateDirectory(_outside);
         File.WriteAllText(Path.Combine(_outside, "something"), "x");
 
-        var (exit, _, err) = _m.Run("", "init", "--folder", _outside);
+        var (exit, _, err) = _m.Run("", "init", "--yubikey", "--folder", _outside);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("not empty", err);
@@ -98,7 +99,7 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_Folder_WithoutAValue_IsAUsageError()
     {
-        var (exit, _, err) = _m.Run("", "init", "--folder");
+        var (exit, _, err) = _m.Run("", "init", "--yubikey", "--folder");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("Usage", err);
@@ -106,9 +107,9 @@ public sealed class InitRecordVaultTests : IDisposable
     }
 
     [Fact]
-    public void Init_KeyringFlag_IsAcceptedAsNoOp()
+    public void Init_YubiKeyFlag_MakesTheRecordVault()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
 
         AssertRecordVault(Path.Combine(_m.Dir, "vault"));
     }
@@ -116,7 +117,7 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_NoRecovery_IsAcceptedOnAPlainInit()
     {
-        _m.Ok("", "init", "--no-recovery");
+        _m.Ok("", "init", "--yubikey", "--no-recovery");
 
         var keyring = KeyringCodec.Decode(File.ReadAllBytes(Path.Combine(_m.Dir, "vault", "keyring")));
         Assert.Single(keyring.Slots);
@@ -131,7 +132,7 @@ public sealed class InitRecordVaultTests : IDisposable
         var config = File.ReadAllBytes(_m.ConfigPath);
         var secrets = File.ReadAllBytes(_m.SecretsPath);
 
-        var (exit, _, err) = _m.Run("yes\n", "init");
+        var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.Equal(1, exit);
         Assert.Contains(
@@ -154,7 +155,7 @@ public sealed class InitRecordVaultTests : IDisposable
         var config = File.ReadAllText(_m.ConfigPath);
         Assert.NotNull(_m.Config.PendingSlotId);
 
-        var (exit, stdout, err) = _m.Run("no\n", "init");
+        var (exit, stdout, err) = _m.Run("no\n", "init", "--yubikey");
 
         Assert.True(exit == 0, err);
         Assert.Contains("Already initialized. Reinitialize?", stdout);
@@ -169,7 +170,7 @@ public sealed class InitRecordVaultTests : IDisposable
         _m.Ok("", "slot", "request", _m.PathOf("request.json"));
         var config = File.ReadAllText(_m.ConfigPath);
 
-        var (exit, _, err) = _m.Run("yes\n", "init");
+        var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.True(exit == 0, err);
         Assert.Equal(config, File.ReadAllText(Assert.Single(_m.Backups)));
@@ -182,7 +183,7 @@ public sealed class InitRecordVaultTests : IDisposable
     {
         File.WriteAllBytes(_m.SecretsPath, [1, 2, 3]);
 
-        var (exit, _, err) = _m.Run("yes\n", "init");
+        var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.Equal(1, exit);
         Assert.Contains("This config folder holds a classic vault.", err);
@@ -193,10 +194,10 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_OnARecordVault_KeepsRefusing()
     {
-        _m.Ok("", "init");
+        _m.Ok("", "init", "--yubikey");
         var config = File.ReadAllText(_m.ConfigPath);
 
-        var (exit, _, err) = _m.Run("yes\n", "init");
+        var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.Equal(1, exit);
         Assert.Contains("shared record-store vault", err);
@@ -217,11 +218,11 @@ public sealed class InitRecordVaultTests : IDisposable
     [InlineData("yes\n")]
     public void Init_OnAFolderRecordVault_RefusesBeforeAnyPrompt(string stdin)
     {
-        _m.Ok("", "init", "--folder", _outside);
+        _m.Ok("", "init", "--yubikey", "--folder", _outside);
         var config = File.ReadAllText(_m.ConfigPath);
         var vault = Snapshot(_outside);
 
-        var (exit, stdout, err) = _m.Run(stdin, "init");
+        var (exit, stdout, err) = _m.Run(stdin, "init", "--yubikey");
 
         Assert.Equal(1, exit);
         Assert.Contains("shared record-store vault", err);
@@ -238,12 +239,12 @@ public sealed class InitRecordVaultTests : IDisposable
         var home = new FleetMachine("init-record-home", _keys);
         try
         {
-            home.Ok("", "init", "--folder", _outside);
+            home.Ok("", "init", "--yubikey", "--folder", _outside);
             _m.Ok("", "init", "--vault-dir", _outside);
             var config = File.ReadAllText(_m.ConfigPath);
             var vault = Snapshot(_outside);
 
-            var (exit, stdout, err) = _m.Run("yes\n", "init");
+            var (exit, stdout, err) = _m.Run("yes\n", "init", "--yubikey");
 
             Assert.Equal(1, exit);
             Assert.Contains("shared record-store vault", err);
@@ -265,13 +266,13 @@ public sealed class InitRecordVaultTests : IDisposable
     [Fact]
     public void Init_OnAConfigWithAVaultDirButNoStore_Refuses()
     {
-        _m.Ok("", "init", "--folder", _outside);
+        _m.Ok("", "init", "--yubikey", "--folder", _outside);
         File.WriteAllText(_m.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
             _m.Config with { Store = null }, TswapJsonContext.Default.Config));
         var config = File.ReadAllText(_m.ConfigPath);
         var vault = Snapshot(_outside);
 
-        var (exit, stdout, err) = _m.Run("yes\n", "init");
+        var (exit, stdout, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.Equal(1, exit);
         Assert.Contains(_outside, err);
@@ -290,7 +291,7 @@ public sealed class InitRecordVaultTests : IDisposable
         var expectedRelative = Path.GetFullPath(relativeName);
         try
         {
-            _m.Ok("", "init", "--folder", relativeName);
+            _m.Ok("", "init", "--yubikey", "--folder", relativeName);
             Assert.Equal(expectedRelative, _m.Config.VaultDir);
             Assert.True(File.Exists(Path.Combine(expectedRelative, "keyring")));
         }
@@ -304,7 +305,7 @@ public sealed class InitRecordVaultTests : IDisposable
         try
         {
             var spelled = Path.Combine(_outside, "sub", "..", "vault").Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            other.Ok("", "init", "--folder", spelled);
+            other.Ok("", "init", "--yubikey", "--folder", spelled);
             Assert.Equal(Path.GetFullPath(Path.Combine(_outside, "vault")), other.Config.VaultDir);
         }
         finally

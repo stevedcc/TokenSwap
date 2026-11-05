@@ -236,7 +236,7 @@ public sealed class AgentCommandTests : IDisposable
     public void Start_PasswordYubiKeyNotPluggedIn_SaysPlugIn()
     {
         var m = Machine("start-unplugged", tpm: false, RecordVaultTestSupport.SerialA);
-        m.Ok(Password + "\n" + Password + "\n", "init", "--password", "--no-recovery");
+        m.Ok(Password + "\n" + Password + "\n", "init", "--yubikey", "--password", "--no-recovery");
         m.Keys = SimulatedYubiKeyService.WithKeys();
 
         var (exit, _, stderr) = Start(m);
@@ -750,7 +750,7 @@ public sealed class AgentCommandTests : IDisposable
     public void AskingLine_PasswordYubiKeySlot_SaysTouch()
     {
         var m = Machine("asking-yk", tpm: false, RecordVaultTestSupport.SerialA);
-        m.Ok(Password + "\n" + Password + "\n", "init", "--password", "--no-recovery");
+        m.Ok(Password + "\n" + Password + "\n", "init", "--yubikey", "--password", "--no-recovery");
         FakeAgent(m, () => RandomNumberGenerator.GetBytes(32));
 
         var (_, _, stderr) = m.Run("", "names");

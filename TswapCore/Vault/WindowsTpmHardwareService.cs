@@ -39,6 +39,12 @@ namespace TswapCore.Vault;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => PlatformCryptoProviderInterop.IsAvailable();
+
+    /// <summary><see cref="IsAvailable"/>, with why not (guided init lists the reason).</summary>
+    public static (bool Available, string? Reason) Probe() => PlatformCryptoProviderInterop.Probe();
+
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
     /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.

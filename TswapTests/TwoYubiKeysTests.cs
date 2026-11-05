@@ -25,7 +25,7 @@ public class TwoYubiKeysTests : IDisposable
     {
         _m.Keys.SetTouch(SerialB, false);
         _m.Keys.PluggedIn = [SerialA];
-        _m.Ok("", "init", "--keyring", "--no-recovery");
+        _m.Ok("", "init", "--yubikey", "--no-recovery");
         _m.Keys.PluggedIn = [SerialA, SerialB];
         _m.Ok("", "slot", "add", "--yubikey");
         _m.Ok("", "create", "two-key-secret");
@@ -101,7 +101,7 @@ public class TwoYubiKeysTests : IDisposable
         // A vault with only A's slot; B (no touch, so first in the unattended order) has none.
         _m.Keys.SetTouch(SerialB, false);
         _m.Keys.PluggedIn = [SerialA];
-        _m.Ok("", "init", "--keyring", "--no-recovery");
+        _m.Ok("", "init", "--yubikey", "--no-recovery");
         _m.Ok("", "create", "only-a");
         _m.Keys.PluggedIn = [SerialB, SerialA];
         _m.Keys.Challenges.Clear();
@@ -223,7 +223,7 @@ public class TwoYubiKeysTests : IDisposable
     {
         _m.Keys.SetTouch(SerialB, false);
         _m.Keys.PluggedIn = [SerialA];
-        _m.Ok("2\n", "init", "--keyring", "--no-recovery"); // entropy source [2]: YubiKey
+        _m.Ok("2\n", "init", "--yubikey", "--no-recovery"); // entropy source [2]: YubiKey
         Assert.Equal(RngMode.YubiKey, _m.Config.RngMode);
         _m.Keys.PluggedIn = [SerialA, SerialB];
         _m.Ok("", "slot", "add", "--yubikey");
@@ -242,7 +242,7 @@ public class TwoYubiKeysTests : IDisposable
     {
         _m.Keys.PluggedIn = [SerialA, SerialB];
 
-        var (exit, stdout, stderr) = _m.Run("2\n", "init", "--keyring", "--no-recovery");
+        var (exit, stdout, stderr) = _m.Run("2\n", "init", "--yubikey", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         Assert.Contains("Multiple YubiKeys detected", stderr);

@@ -90,7 +90,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
     {
         var m = Machine("init-yk-pw", tpm: false, SerialA);
 
-        var (exit, _, stderr) = m.Run(Twice(Password), "init", "--password", "--no-recovery");
+        var (exit, _, stderr) = m.Run(Twice(Password), "init", "--yubikey", "--password", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         var blob = YubiKeySlotBlob.Decode(OwnSlot(m).HwBlob!);
@@ -128,8 +128,8 @@ public class VaultPasswordEnrolmentTests : IDisposable
 
         var yubiFlagged = Machine("yk-no-pw", tpm: false, SerialA);
         var yubiPlain = Machine("yk-plain", tpm: false, SerialA);
-        yubiFlagged.Ok("", "init", "--no-password", "--no-recovery");
-        yubiPlain.Ok("", "init", "--no-recovery");
+        yubiFlagged.Ok("", "init", "--yubikey", "--no-password", "--no-recovery");
+        yubiPlain.Ok("", "init", "--yubikey", "--no-recovery");
         foreach (var m in new[] { yubiFlagged, yubiPlain })
         {
             var hwBlob = OwnSlot(m).HwBlob!;
@@ -161,7 +161,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var m = Machine("asked-yes", tpm: false, SerialA);
 
         // The question, the password twice, "insert the key" Enter, the entropy choice.
-        var (exit, stdout, stderr) = m.RunOnTerminal("yes\n" + Twice(Password) + "\n\n", "init", "--no-recovery");
+        var (exit, stdout, stderr) = m.RunOnTerminal("yes\n" + Twice(Password) + "\n\n", "init", "--yubikey", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         Assert.Contains("Add a vault password? (yes/no, default no): ", stdout);
@@ -173,7 +173,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
     {
         var m = Machine("asked-no", tpm: false, SerialA);
 
-        var (exit, stdout, stderr) = m.RunOnTerminal("\n\n\n", "init", "--no-recovery");
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n\n\n", "init", "--yubikey", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         Assert.Contains("Add a vault password? (yes/no, default no): ", stdout);
@@ -186,7 +186,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
     {
         var m = Machine("explained", tpm: false, SerialA);
 
-        var (exit, stdout, stderr) = m.RunOnTerminal("no\n\n\n", "init", "--no-recovery");
+        var (exit, stdout, stderr) = m.RunOnTerminal("no\n\n\n", "init", "--yubikey", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         var lines = stdout.ReplaceLineEndings("\n").Split('\n');
@@ -491,7 +491,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var before = m.ConfigText;
 
         var (addExit, _, addErr) = m.Run(Twice(Password), "slot", "add", "--yubikey", "--password");
-        var (initExit, _, initErr) = m.Run(Twice(Password), "init", "--password");
+        var (initExit, _, initErr) = m.Run(Twice(Password), "init", "--yubikey", "--password");
 
         Assert.NotEqual(0, addExit);
         Assert.Contains("This is a classic single-file vault (secrets.json.enc), which tswap 0.2 only migrates.", addErr);
@@ -510,7 +510,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var free = Machine("win-free");
 
         var tpmOut = tpm.Ok(Twice(Password), "init", "--tpm", "--password", "--no-recovery");
-        var yubiKeyOut = yubiKey.Ok(Twice(Password), "init", "--password", "--no-recovery");
+        var yubiKeyOut = yubiKey.Ok(Twice(Password), "init", "--yubikey", "--password", "--no-recovery");
         var freeOut = free.Ok("", "init", "--tpm", "--no-password", "--no-recovery");
 
         Assert.Contains(WindowsLine, tpmOut);

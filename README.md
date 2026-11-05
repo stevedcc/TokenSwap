@@ -183,8 +183,7 @@ ykman otp chalresp --generate --touch 2
 # Or without touch (less secure, for advanced/CI use only)
 ykman otp chalresp --generate 2
 
-# Initialize with ONE key plugged in: a record vault in ~/.config/tswap/vault
-# (add the spare key afterwards with 'sudo tswap slot add --yubikey'; see below)
+# Set up a vault: tswap offers the keys and chip it finds and you pick (see "Setting up" below)
 tswap init
 
 # Create a secret (random, never displayed)
@@ -197,21 +196,66 @@ tswap run rclone sync --password {{storj-pass}} /data remote:backup
 tswap names
 ```
 
+### Setting up: the guided `tswap init`
+
+Run `tswap init` in a terminal and it asks, in order:
+
+1. **Plug in your keys.** It asks you to plug in the security keys you want to use, then press
+   Enter. Don't touch a key yet; tswap says when it needs one.
+2. **Pick what to use.** It lists the YubiKeys it finds (by serial number) and this machine's
+   chip (the Secure Enclave on a Mac, the TPM on Windows and Linux), and you type the numbers you
+   want, for example `1 3`. Any mix works: two YubiKeys and the chip, only keys, only the chip.
+   tswap never picks hardware for you. A chip it can't use is listed with the reason. A YubiKey is
+   listed by serial; if it turns out to be blocked (a Mac that blocks its OTP interface, say), tswap
+   explains why when its challenge fails at step 5 and tells you what to allow in System Settings.
+   For the Secure Enclave you also choose whether every unlock asks for Touch ID or your login
+   password, or none.
+3. **Vault password (optional).** One password for the vault. If you add it and picked more than
+   one slot (without `--password`), you choose which of them need it. A slot left out opens the
+   vault without the password, for example a backup key you keep somewhere safe, so a forgotten
+   password doesn't lock you out.
+4. **Recovery slot.** Added by default; its private key is shown once, so store it offline.
+5. **Create.** tswap builds every slot, then writes the vault in one step. If a key can't be
+   used, it says why and asks whether to carry on without it; nothing is written before you
+   answer, and answering no writes nothing. If the chip fails, nothing is written. A YubiKey
+   flashes when it wants a touch, and the prompt names the key (with several plugged in, touch the
+   flashing one).
+6. **Other machines?** Answer yes and tswap prints a step-by-step guide, with this vault's real
+   folder and commands, for adding your other machines.
+
+`init` never overwrites a vault. It refuses a config folder that holds a classic vault, a
+`config.json` that belongs to a record vault (wherever its folder is), and a vault folder that
+isn't empty, before it asks anything, and checks all three again just before the write.
+`--folder <dir>` sets where the vault goes (there is no question for it); `--no-recovery` and
+`--password` / `--no-password` answer their question up front.
+
+Scripts and agents have no terminal to answer questions, so they name the slot instead (see the
+flags in [Commands](#commands)):
+
+```bash
+tswap init --yubikey                                   # one plugged-in YubiKey
+tswap init --tpm                                       # this machine's TPM
+tswap init --secure-enclave --with-touch               # or --no-touch
+```
+
+A plain `tswap init` without a terminal is refused and names these flags.
+
 ### Setup with a YubiKey keyring vault (one key per slot)
 
 ```bash
 # Configure each YubiKey's slot 2 once, as above (touch recommended)
 ykman otp chalresp --generate --touch 2
 
-# Initialize with ONE key plugged in (several plugged in: tswap asks which; TSWAP_YUBIKEY_SERIAL picks one)
-tswap init                    # or: tswap init --folder ~/Sync/tswap-vault   (an absent or empty folder)
+# Script or agent, no terminal: a vault with ONE key plugged in (several plugged in: tswap asks which;
+# TSWAP_YUBIKEY_SERIAL picks one)
+tswap init --yubikey          # or: tswap init --yubikey --folder ~/Sync/tswap-vault   (an absent or empty folder)
 
 # Add each spare key as its own slot: plug it in (the first key may stay plugged in) and run
 sudo tswap slot add --yubikey
 tswap slots                   # lists the slots, with each key's serial
 ```
 
-Every vault `init` makes (since 0.2; `--keyring` is still accepted and changes nothing) is a
+Every vault `init` makes (since 0.2) is a
 **keyring vault** in the **record store**: a random vault key wrapped once per slot, and one
 encrypted file per secret in a vault folder (`~/.config/tswap/vault`, or `--folder <dir>`, which
 must be absent or empty). Each YubiKey is **its own slot**, and any one enrolled key opens the
@@ -252,8 +296,8 @@ touch setting: if that is a touch-required key, the command waits for its touch 
 
 Keyring vaults made by an older tswap with a **YubiKey pair** (two keys, an XOR share) keep
 working as they are. A pair vault whose keyring is format version 2 cannot take new slots; to
-give each key its own slot, create a new vault with `tswap init --keyring` and move the secrets
-across. Plain `tswap init` (above) is unchanged.
+give each key its own slot, create a new vault with `tswap init --yubikey` (or the guided
+`tswap init`) and move the secrets across.
 
 ### Setup on a TPM or Secure Enclave machine
 
@@ -265,8 +309,9 @@ tswap init --tpm              # or: tswap init --secure-enclave --with-touch   (
 This makes a **keyring vault**: a random vault key wrapped by this machine's TPM or Secure
 Enclave (the machine slot), plus a break-glass **recovery slot**. `init` prints the recovery
 private key once; store it offline (tswap never saves it). `--no-recovery` leaves the recovery
-slot out. `--keyring` is implied and accepted (`tswap init --keyring --tpm` is the same
-command); `--tpm` and `--secure-enclave` cannot be combined. `init` rejects any other argument.
+slot out. `--tpm`, `--secure-enclave` and `--yubikey` cannot be combined (to set up several unlock
+methods in one run, use the guided `tswap init`). `init` rejects any other argument, `--keyring`
+included: it is gone, and `init` says so.
 
 **Secure Enclave: touch or no touch is your explicit choice.** `--secure-enclave` needs exactly one
 of `--with-touch` (every unlock asks for Touch ID or the login password) or `--no-touch` (no
@@ -357,7 +402,7 @@ there, and merge that folder's `config.json` into the router with
 
 ### The recovery key
 
-`init --keyring`, `--tpm` and `--secure-enclave` print a **recovery private key** once. It opens
+The guided `init`, `init --yubikey`, `--tpm` and `--secure-enclave` print a **recovery private key** once. It opens
 the vault without any enrolled hardware, and tswap reads it **only from stdin** (never from an
 argument, the environment or a file path), so pipe it from wherever you keep it, for example a
 secret in your main vault (stdin must be the base64 key alone; surrounding whitespace is fine):
@@ -763,8 +808,9 @@ tswap 0.2 is a breaking release:
    still on 0.1 can't read records rewritten in format 3; they refuse them (and never delete or
    overwrite them) until they are upgraded.
 3. **`init` makes a record vault** (one YubiKey, TPM or Secure Enclave slot plus a recovery slot,
-   in `<config dir>/vault` or `--folder <dir>`). `init --keyring` keeps working and means the
-   same; the two-YubiKey XOR vault can no longer be created.
+   in `<config dir>/vault` or `--folder <dir>`). A plain `tswap init` at a terminal is now a
+   guided setup (see [Setting up](#setting-up-the-guided-tswap-init)); `init --yubikey` is the old
+   plain `init`; `init --keyring` is refused. The two-YubiKey XOR vault can no longer be created.
 
 See [docs/release-notes/v0.2.0.md](docs/release-notes/v0.2.0.md) for the full list.
 
@@ -1090,7 +1136,7 @@ sudo tswap delete <old-name>     ← clean up (operator only)
 
 | Command | Sudo | Description |
 |---------|------|-------------|
-| `init [--keyring] [--tpm\|--secure-enclave --with-touch\|--no-touch] [--password\|--no-password] [--no-recovery]` | No | Initialize with 2 YubiKeys; `--keyring` for a keyring vault with one YubiKey slot (see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or a keyring vault on this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)); `--secure-enclave` needs `--with-touch` or `--no-touch` |
+| `init [--yubikey\|--tpm\|--secure-enclave --with-touch\|--no-touch] [--password\|--no-password] [--no-recovery] [--folder <dir>]` | No | At a terminal with no slot flag: the guided setup (see [Setting up](#setting-up-the-guided-tswap-init)). Otherwise a vault with the one slot you name: `--yubikey` (one plugged-in YubiKey, see [Setup with a YubiKey keyring vault](#setup-with-a-yubikey-keyring-vault-one-key-per-slot)), or this machine's TPM / Secure Enclave (see [Setup on a TPM or Secure Enclave machine](#setup-on-a-tpm-or-secure-enclave-machine)); `--secure-enclave` needs `--with-touch` or `--no-touch`. A recovery slot is added unless `--no-recovery`. Without a terminal a plain `init` is refused and names the flags; `--keyring` is gone |
 | `init --vault-dir <folder>` | No | Join a shared record-store vault folder (see [Sharing a vault between machines](#sharing-a-vault-between-machines)) |
 | `migrate` | No | Review a classic vault's touch/entropy settings; guide to touch-required slots |
 | `create <name> [length]` | No | Generate random secret (never displayed); name: `[a-zA-Z0-9_-]`, max 64 chars; value length 1–4096, default 32 |

@@ -132,8 +132,8 @@ public class TpmInitCliTests : IDisposable
 
     [Theory]
     [InlineData("--tpm")]
-    [InlineData("--keyring", "--tpm")]
-    [InlineData("--tpm", "--keyring")]
+    [InlineData("--no-password", "--tpm")]
+    [InlineData("--tpm", "--no-password")]
     public void InitTpm_MakesAKeyringVaultWithAMachineAndARecoverySlot(params string[] flags)
     {
         var dir = NewTempDir();
@@ -286,7 +286,7 @@ public class TpmInitCliTests : IDisposable
 
     [Theory]
     [InlineData("--tmp")]
-    [InlineData("--keyring", "x")]
+    [InlineData("--yubikey", "x")]
     [InlineData("--help-me")]
     public void Init_UnknownArguments_UsageErrorListingTheValidFlags_NoHardwareCalled(params string[] flags)
     {
@@ -305,7 +305,7 @@ public class TpmInitCliTests : IDisposable
 
         Assert.Equal(1, exit);
         Assert.Contains("Usage:", console.ErrorText);
-        foreach (var flag in new[] { "--keyring", "--tpm", "--secure-enclave", "--no-recovery" })
+        foreach (var flag in new[] { "--yubikey", "--tpm", "--secure-enclave", "--no-recovery" })
             Assert.Contains(flag, console.ErrorText);
         Assert.DoesNotContain("must not touch", console.ErrorText);
         Assert.False(File.Exists(Path.Combine(dir, "config.json")));
@@ -313,7 +313,7 @@ public class TpmInitCliTests : IDisposable
 
     [Theory]
     [InlineData("--tpm", "--tpm")]
-    [InlineData("--tpm", "--keyring", "--keyring")]
+    [InlineData("--tpm", "--yubikey", "--yubikey")]
     [InlineData("--tpm", "--tmp")]
     [InlineData("--secure-enclave", "extra")]
     public void Init_HardwareFlagWithDuplicateOrUnknownArgument_IsAUsageError(params string[] flags)

@@ -133,7 +133,7 @@ public class HelpTests : IDisposable
     {
         // Reviewer finding: `burn leaked-key -h` must burn (reason "-h"), not print usage and
         // exit 0 with the secret unburned.
-        Run(sudoBypass: true, "init");
+        Run(sudoBypass: true, "init", "--yubikey");
         Run(sudoBypass: true, "create", "leaked-key");
 
         var (exit, stdout, stderr) = Run(sudoBypass: true, "burn", "leaked-key", "-h");
@@ -161,7 +161,7 @@ public class HelpTests : IDisposable
         // exit 0, a vault or validation error 1.
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return; // POSIX sh only (until #181: reported as Passed on Windows)
-        Run(sudoBypass: true, "init");
+        Run(sudoBypass: true, "init", "--yubikey");
         Run(sudoBypass: true, "create", "child-token");
         var script = Path.Combine(_tempDir, "exit7.sh");
         File.WriteAllText(script, "exit 7\n");

@@ -82,11 +82,12 @@ root-of-trust property; the trait-gated hardware suites stay as they are.
 
 ### TPM and Secure Enclave vaults are keyring vaults (brief T2, decisions 2 and 4)
 
-**`--keyring` is the default for `--tpm` and `--secure-enclave`.** `tswap init --tpm` (with or
-without `--keyring`) makes a keyring vault with a Machine slot, whose `KEK_slot` the TPM
+**A keyring vault is all `--tpm` and `--secure-enclave` make** (`--keyring`, once accepted beside
+them, is gone since v0.2.0). `tswap init --tpm` makes a keyring vault with a Machine slot, whose `KEK_slot` the TPM
 protects, plus a Recovery slot; `--no-recovery` drops the Recovery slot, as on YubiKey. No flag
 creates the old single-slot form any more. `--tpm` and `--secure-enclave` stay mutually
-exclusive, and `init` rejects any argument that is not one of its four flags (#177).
+exclusive (with `--yubikey` too; the guided plain `init` is how several are set up in one run),
+and `init` rejects any argument that is not one of its known flags (#177).
 
 **Existing single-slot TPM/Secure Enclave vaults** (no `Keyring`, the vault key itself in
 `TpmSealedKey`/`SecureEnclaveWrappedKey`) keep unlocking unchanged: `VaultUnlocker` is untouched
@@ -121,11 +122,10 @@ Decisions made in brief T4 (the design reasoning is in `MULTI_MACHINE_KEYING.md`
    with the vault files and that key, without `KeyringSlotId`. With no key plugged in the error
    says "No plugged-in YubiKey matches a slot of this vault" and lists the slot serials. A slot
    whose blob fails to decode is skipped, and named in the error only if nothing else unlocks.
-4. **`init --keyring`** enrolls one plugged-in key (the serial prompt when several are plugged
+4. **`init --yubikey`** (until v0.2.0 `init --keyring`) enrolls one plugged-in key (the serial prompt when several are plugged
    in): one YubiKey machine slot plus the recovery slot unless `--no-recovery`;
    `YubiKeySerials = []`, `RedundancyXor = ""`, no `UnlockChallenge`/`MasterKeySalt` (the
-   convention for non-pair vaults); `Backend` stays YubiKey (null). Plain `init` (the XOR vault)
-   is unchanged. No command makes new pair enrollments.
+   convention for non-pair vaults); `Backend` stays YubiKey (null). The XOR vault can no longer be created. No command makes new pair enrollments.
 5. **`slot add --yubikey`** (sudo) unlocks this machine's vault by any slot, enrolls a plugged-in
    key that has no slot yet (it refuses a key that has one, including a legacy pair slot's
    keys; a version 2 keyring is refused first, before sudo and any unlock), appends the new slot (its own slot id and X25519 keypair) to this machine's keyring,

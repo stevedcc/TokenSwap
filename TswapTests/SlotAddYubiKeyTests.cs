@@ -69,7 +69,7 @@ public class SlotAddYubiKeyTests : IDisposable
     private void YubiKeyVaultWithKeyA()
     {
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(0, Run("", null, "init", "--keyring").Exit);
+        Assert.Equal(0, Run("", null, "init", "--yubikey").Exit);
         Assert.Equal(0, Run("s3cret\ns3cret\n", null, "add", "db-password").Exit);
     }
 

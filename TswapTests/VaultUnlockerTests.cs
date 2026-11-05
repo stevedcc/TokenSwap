@@ -284,7 +284,7 @@ public class VaultUnlockerTests
 
     /// <summary>
     /// Builds a single-slot, k = 1 keyring vault exactly the way <c>InitCommand</c>'s
-    /// <c>--keyring</c> path does: KEK_slot recovered via the ordinary YubiKey challenge/XOR
+    /// keyring path did before brief T4 (then <c>init --keyring</c>): KEK_slot recovered via the ordinary YubiKey challenge/XOR
     /// dance (no <see cref="Crypto.DeriveKey"/> step — that value <b>is</b> KEK_slot here, not
     /// the master key), a fresh slot X25519 keypair, K_v and the slot private key concatenated
     /// via <see cref="SlotSecretPayload"/> and wrapped via <see cref="SlotPayloadWrap"/>.

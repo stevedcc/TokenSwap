@@ -8,27 +8,44 @@ namespace TswapCli.Commands;
 
 /// <summary>
 /// Brief T16-S1 (ruling 4): <c>init</c> makes a record vault (one file per secret, shareable by
-/// sync tools) with one YubiKey slot, or this machine's TPM / Secure Enclave slot, plus a recovery
-/// slot: in <c>&lt;config dir&gt;/vault</c>, or in <c>--folder &lt;dir&gt;</c> (absent or empty, e.g. a
+/// sync tools): in <c>&lt;config dir&gt;/vault</c>, or in <c>--folder &lt;dir&gt;</c> (absent or empty, e.g. a
 /// Syncthing or cloud-drive folder), with the <c>record-format</c> marker, so it writes record
 /// format 3 from the start. The two-YubiKey XOR vault can no longer be created (a record store needs
-/// a keyring; XOR vaults exist only to be migrated). <c>--keyring</c> is accepted as a no-op so old
-/// scripts keep working. On a config folder holding a classic vault <c>init</c> refuses.
+/// a keyring; XOR vaults exist only to be migrated). On a config folder holding a classic vault
+/// <c>init</c> refuses.
+///
+/// <para>Guided init (v0.2.0): a plain <c>init</c> at a terminal is the guided setup
+/// (<see cref="GuidedInit"/>: this machine's YubiKeys and chip, several slots around one vault key);
+/// <c>--yubikey</c> is the one-YubiKey vault a plain <c>init</c> made before, <c>--tpm</c> and
+/// <c>--secure-enclave</c> are unchanged. A plain <c>init</c> without a terminal is refused (it can't
+/// ask), and <c>--keyring</c>, a no-op since every vault got a keyring, is removed: refused with what
+/// to run instead, so a script that passed it learns of the change instead of getting a vault it
+/// didn't ask for.</para>
 /// </summary>
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => $"init [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
-    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder): one YubiKey slot (add keys with 'slot add --yubikey'), or this machine's --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning); plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --keyring is accepted for old scripts. --vault-dir joins a folder another machine shares";
+    public string HelpUsage => $"init [--yubikey|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). Plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
     /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
     public bool WorksOnClassicVault => true;
 
     /// <summary>The only arguments <c>init</c> accepts, each at most once (#177); <c>--folder</c> takes a value.</summary>
-    private static readonly string[] KnownFlags = ["--keyring", "--tpm", "--secure-enclave", "--no-recovery"];
+    private static readonly string[] KnownFlags = [YubiKeyFlag, "--tpm", "--secure-enclave", "--no-recovery"];
 
     private const string FolderFlag = "--folder";
+    private const string YubiKeyFlag = "--yubikey";
+
+    /// <summary>Guided init: the removed flag, refused before anything else (a no-op until v0.2.0).</summary>
+    private const string KeyringFlag = "--keyring";
+
+    internal const string KeyringRefusal =
+        "--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey, --tpm or --secure-enclave.";
+
+    internal const string NoTerminalRefusal =
+        "'tswap init' without a terminal needs the slot named: --yubikey, --tpm, or --secure-enclave with --with-touch or --no-touch.";
 
     public int Execute(CommandContext ctx, string[] args)
     {
@@ -42,14 +59,19 @@ public sealed class InitCommand : ICliCommand
             return ExecuteJoin(ctx, folder);
         }
 
+        // Guided init: --keyring is gone. Refused first, where #177's flag check runs, so it comes
+        // before any other refusal, prompt or hardware, whatever else the arguments say.
+        if (args.Contains(KeyringFlag))
+            throw new TswapException(KeyringRefusal);
+
         // Issue #177: the argument list must be exactly a combination of the known flags. Checked
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
+        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
                     $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {SecureEnclaveTouchChoice.WithTouch}, " +
                     $"{SecureEnclaveTouchChoice.NoTouch}, {VaultPasswordChoice.PasswordFlag}, {VaultPasswordChoice.NoPasswordFlag}; " +
-                    "--tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password)";
+                    $"{YubiKeyFlag}, --tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password)";
         (args, var newFolder) = SplitFolder(args, usage);
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
@@ -57,17 +79,64 @@ public sealed class InitCommand : ICliCommand
         if (args.Any(a => !KnownFlags.Contains(a)) || args.Distinct().Count() != args.Length)
             throw new UsageException(usage);
 
+        var yubiKey = args.Contains(YubiKeyFlag);
         var tpm = args.Contains("--tpm");
         var secureEnclave = args.Contains("--secure-enclave");
         var noRecovery = args.Contains("--no-recovery");
-        // --keyring: every vault init makes is a keyring vault now; accepted so scripts keep working.
 
-        if (tpm && secureEnclave)
+        // Several methods at once is the guided flow's job.
+        if (new[] { yubiKey, tpm, secureEnclave }.Count(f => f) > 1)
             throw new UsageException(usage);
 
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
         SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
 
+        // Guided init: with no slot named, init asks; without a terminal it can't, so it says which
+        // flags to use, before any store, refusal or hardware. Both ends: 'tswap init | tee log' would
+        // run the interview into the pipe.
+        var guided = !yubiKey && !tpm && !secureEnclave;
+        if (guided && (c.IsInputRedirected || c.IsOutputRedirected))
+            throw new TswapException(NoTerminalRefusal);
+
+        var fileStore = ctx.Storage as IFileVaultStore
+            ?? throw new TswapException("'init' needs a file-based config.");
+
+        // Checked before anything is printed or any hardware is touched, so a refusal enrolls nothing.
+        var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
+        RefuseExistingVault(ctx, fileStore, vaultDir);
+
+        // Ruling 4: any other config.json (a pending 'slot request', say) gets what init always did:
+        // ask, back it up. Read through GuidedPrompts so a stray Yubico OTP line is not an answer.
+        if (fileStore.Owner.FileExists(fileStore.ConfigFile))
+        {
+            c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
+            if (GuidedPrompts.ReadAnswer(c)?.ToLowerInvariant() != "yes")
+                return 0;
+            c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
+        }
+
+        // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
+        // recovery slot unless --no-recovery), as --yubikey does with one YubiKey.
+        if (secureEnclave)
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, passwordFlag, requirePresence: requirePresence!.Value);
+
+        if (tpm)
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery, passwordFlag);
+
+        if (yubiKey)
+            return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag);
+
+        return GuidedInit.Execute(ctx, fileStore, vaultDir, newFolder, noRecovery, passwordFlag);
+    }
+
+    /// <summary>
+    /// The three ways <c>init</c> never overwrites a vault (owner, hard rule), in this order: a config
+    /// belonging to a record vault, wherever its folder is; a classic vault in the config folder; a vault
+    /// folder that isn't empty. Run before anything is printed, and by the guided flow again right before
+    /// its single write (it waits minutes for keys and answers). Each reads the disk afresh.
+    /// </summary>
+    internal static void RefuseExistingVault(CommandContext ctx, IFileVaultStore fileStore, string vaultDir)
+    {
         // A record-store machine's config points at a shared vault folder; a new init here would
         // replace it (and an empty save would tombstone the shared secrets). Refuse up front.
         // Keyed on the config (fix round 2): a record store's config (Store "records"), or any config.json
@@ -75,42 +144,17 @@ public sealed class InitCommand : ICliCommand
         var recordVaultDir = ctx.Storage is RecordVaultStore shared ? shared.LoadConfig().VaultDir : ConfiguredVaultDir(ctx.Storage);
         if (recordVaultDir is not null)
             throw new TswapException(
-                $"This machine's {(ctx.Storage as IFileVaultStore)?.ConfigFile ?? "config.json"} belongs to a shared record-store vault ({recordVaultDir}). To set up " +
+                $"This machine's {fileStore.ConfigFile} belongs to a shared record-store vault ({recordVaultDir}). To set up " +
                 "a different vault, use another config folder (TSWAP_CONFIG_DIR) or move config.json aside first.");
 
-        var fileStore = ctx.Storage as IFileVaultStore
-            ?? throw new TswapException("'init' needs a file-based config.");
-
         // Ruling 4: a classic vault here is converted, never initialized over. "Classic vault" is the
-        // definition every command's refusal uses (CommandContext.IsClassicVault); any other
-        // config.json (a pending 'slot request', say) gets what init always did: ask, back it up.
+        // definition every command's refusal uses (CommandContext.IsClassicVault).
         if (CommandContext.IsClassicVault(ctx.Storage))
             throw new TswapException(
                 $"This config folder holds a classic vault. Convert it with 'sudo {ctx.Prefix} migrate --to-records', or move " +
                 "config.json and secrets.json.enc aside to start a new vault.");
-        var replacesConfig = fileStore.Owner.FileExists(fileStore.ConfigFile);
-        if (replacesConfig)
-        {
-            c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
-            if (c.ReadLine()?.ToLowerInvariant() != "yes")
-                return 0;
-        }
 
-        // Checked before any hardware is touched, so a refusal enrolls nothing.
-        var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
         RequireAbsentOrEmpty(ctx, fileStore.Owner, vaultDir);
-        if (replacesConfig)
-            c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
-
-        // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
-        // recovery slot unless --no-recovery), as a plain init does with one YubiKey.
-        if (secureEnclave)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, passwordFlag, requirePresence: requirePresence!.Value);
-
-        if (tpm)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery, passwordFlag);
-
-        return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag);
     }
 
     /// <summary>
@@ -274,7 +318,7 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>Where the new vault went: the shareable folder, and the per-machine config.</summary>
-    private static void PrintVaultFolder(IConsole c, IFileVaultStore fileStore, string vaultDir)
+    internal static void PrintVaultFolder(IConsole c, IFileVaultStore fileStore, string vaultDir)
     {
         c.Out.WriteLine($"\nVault folder: {vaultDir} (record format {KeyringFormat.RecordFormatVersion}; to share it, sync this folder, never config.json)");
         c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile}");
@@ -360,10 +404,10 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>
-    /// <b>Legacy pair layout, written by no command since brief T4</b> (<c>init --keyring</c> now
-    /// enrolls one key per slot); kept so tests can still build pair keyrings exactly as they
+    /// <b>Legacy pair layout, written by no command since brief T4</b> (<c>init</c> enrolls one
+    /// key per slot); kept so tests can still build pair keyrings exactly as they
     /// were made. Was: the YubiKey-shaped wrapper shared by both the interactive and test-mode
-    /// <c>--keyring</c> paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
+    /// keyring paths (issue #119, extended by #120; split by #151 into this wrapper, which fills the
     /// YubiKey fields, and the backend-neutral <see cref="AssembleKeyring"/>): generates a random <c>K_v</c> and this machine's X25519 slot keypair
     /// (<see cref="SlotKeyPair.Generate"/>), wraps <c>(K_v || slot private key)</c>
     /// (<see cref="SlotSecretPayload.Encode"/>) under <paramref name="kekSlot"/> via
@@ -449,7 +493,7 @@ public sealed class InitCommand : ICliCommand
         const byte k = 1;
 
         // Issue #121: extracted into MachineSlotWrap so 'slot accept' (functionally "the
-        // enrollment half of init --keyring" for a second machine) builds its own final slot with
+        // enrollment half of a keyring init" for a second machine) builds its own final slot with
         // the exact same construction, not a re-derived copy.
         var machineSlot = MachineSlotWrap.Wrap(
             vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
@@ -576,9 +620,11 @@ public sealed class InitCommand : ICliCommand
     /// <c>K_v</c> and the vault id are drawn here, before enrolment, because the <c>vault-password</c> file is
     /// keyed to both; the password is asked for twice. Null without a password.
     /// </summary>
-    private static NewPassword? NewVaultPassword(CommandContext ctx, bool? flag, HardwareBackend backend)
+    /// <param name="guided">Guided init's wording and read of the question (see <see cref="VaultPasswordChoice.Decide"/>); null elsewhere.</param>
+    internal static NewPassword? NewVaultPassword(CommandContext ctx, bool? flag, HardwareBackend backend,
+        VaultPasswordChoice.GuidedPasswordQuestion? guided = null)
     {
-        if (!VaultPasswordChoice.Decide(ctx, flag, backend))
+        if (!VaultPasswordChoice.Decide(ctx, flag, backend, guided))
             return null;
         var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
@@ -595,7 +641,7 @@ public sealed class InitCommand : ICliCommand
     }
 
     /// <summary>A new vault's password: the stretched bytes, its file, and the <c>K_v</c> and vault id it is keyed to.</summary>
-    private sealed record NewPassword(StretchedPassword Stretched, VaultPasswordFile File, byte[] VaultKey, byte[] VaultId) : IDisposable
+    internal sealed record NewPassword(StretchedPassword Stretched, VaultPasswordFile File, byte[] VaultKey, byte[] VaultId) : IDisposable
     {
         public void Dispose()
         {

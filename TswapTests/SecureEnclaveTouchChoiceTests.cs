@@ -287,7 +287,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     }
 
     public static TheoryData<string[]> InitBadChoices() =>
-        Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--keyring", c })));
+        Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--yubikey", c })));
 
     public static TheoryData<string[]> RecoverBadChoices() =>
         Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--yubikey", c })));

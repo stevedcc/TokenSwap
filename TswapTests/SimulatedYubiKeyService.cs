@@ -48,14 +48,36 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     /// <summary>Brief T7 item 4: plugged-in serials that don't answer a challenge (busy, or a touch that timed out).</summary>
     public HashSet<int> NotAnswering { get; } = [];
 
+    /// <summary>
+    /// Guided init: serials whose challenge fails with this message (a key ykman can't reach, e.g. macOS
+    /// blocking its OTP interface, or one unplugged after the listing), before anything is recorded.
+    /// </summary>
+    public Dictionary<int, string> FailWith { get; } = [];
+
+    /// <summary>
+    /// Guided init: called with the serial at the start of every <see cref="Challenge"/>, so a test can
+    /// change the world while init waits for a key (fill the vault folder, write a config).
+    /// </summary>
+    public Action<int>? OnChallenge { get; set; }
+
     public bool IsSimulated => false;
 
     public void SetTouch(int serial, bool? requiresTouch) => _touch[serial] = requiresTouch;
 
-    public IReadOnlyList<int> ListSerials() => PluggedIn.ToList();
+    /// <summary>Guided init: called at the start of every <see cref="ListSerials"/> (what was on screen by then).</summary>
+    public Action? OnListSerials { get; set; }
+
+    public IReadOnlyList<int> ListSerials()
+    {
+        OnListSerials?.Invoke();
+        return PluggedIn.ToList();
+    }
 
     public byte[] Challenge(int serial, string challenge)
     {
+        OnChallenge?.Invoke(serial);
+        if (FailWith.TryGetValue(serial, out var failure))
+            throw new TswapCore.TswapException(failure);
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
             throw new TswapCore.TswapException($"ykman failed: device {serial} not found");
 
