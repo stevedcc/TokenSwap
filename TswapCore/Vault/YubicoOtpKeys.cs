@@ -31,8 +31,9 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     /// public HID listing (<c>HidDevice.GetHidDevices</c>) and repeats the filter the SDK applies internally (its
     /// internal <c>IHidDeviceExtension.IsYubicoDevice</c>/<c>IsKeyboard</c>: Yubico vendor id, keyboard usage page;
     /// the product-id list is internal too and is left out), opens each for feature reports and reads one status
-    /// report. It never writes:
-    /// a write from here would make the other process's session reset its read mode. On Linux a node that can't be
+    /// report. It never writes (a write from here would make the other process's session reset its read mode); its
+    /// one status read, like the SDK's own listing, could take a frame from a response being read out at that moment.
+    /// On Linux a node that can't be
     /// opened has no vendor id (<c>LinuxHidDevice</c> reads it through the open handle) and so isn't listed at all.
     /// </summary>
     public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces()

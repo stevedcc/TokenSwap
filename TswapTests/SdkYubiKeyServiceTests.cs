@@ -590,13 +590,26 @@ public sealed class SdkYubiKeyServiceTests
         Assert.Contains("busy", ex.Message);
     }
 
+    [Fact]
+    public void Challenge_KeyTurnsUnreachableAfterLookup_UsesTheProbe()
+    {
+        // Race: listed as reachable by the look-up, then the seam's own listing misses its keyboard interface (it
+        // turned busy). The NotReachable from the seam goes through the probe like the look-up's own case.
+        var keys = new ThrowingOtpKeys(33060005, new OtpKeysException(OtpFailure.NotReachable, 33060005, "found over HidFido only"),
+            [KeyboardInterfaceState.Busy]);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+
+        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
     /// <summary>One reachable key whose every operation fails with one exception.</summary>
-    private sealed class ThrowingOtpKeys(int keySerial, OtpKeysException failure) : IOtpKeys
+    private sealed class ThrowingOtpKeys(int keySerial, OtpKeysException failure, IReadOnlyList<KeyboardInterfaceState>? interfaces = null) : IOtpKeys
     {
         public IReadOnlyList<OtpKeyInfo> Find() => [new OtpKeyInfo(keySerial, true, "HidKeyboard")];
         public OtpChallengeResult Challenge(int serial, ReadOnlySpan<byte> challenge64, Action onTouchRequested) => throw failure;
         public Slot2State Slot2(int serial) => throw failure;
         public void ProgramSlot2(int serial, bool requireTouch) => throw failure;
-        public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces() => [];
+        public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces() => interfaces ?? [];
     }
 }

@@ -205,7 +205,9 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         OtpFailure.Busy => $"{YubiKeyAccessTexts.Name(serial)} is busy (another tswap or app is using it); try again.",
         OtpFailure.Slot2Empty => $"Slot 2 of {YubiKeyAccessTexts.Name(serial)} isn't set up for challenge-response; run `tswap yubikey setup`.",
         OtpFailure.NoAnswer => $"{YubiKeyAccessTexts.Name(serial)} didn't answer: slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`), or another tswap or app is using it (then try again when it's done).",
-        OtpFailure.NotReachable => YubiKeyAccessTexts.ExplainHidden(serial, _os),
+        // Also reached in the race where the look-up saw the key reachable and the seam's own listing didn't (it
+        // turned busy in between): the probe decides, as in the look-up. Reachable count unknown here: 0.
+        OtpFailure.NotReachable => ExplainUnreachable([new OtpKeyInfo(serial, false, "")], reachableCount: 0),
         _ => $"{YubiKeyAccessTexts.Name(serial)}: {e.Detail}",
     };
 }
