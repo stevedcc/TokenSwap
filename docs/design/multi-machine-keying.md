@@ -386,7 +386,7 @@ sync folder.** Automating the exchange over the transport is v1 work, not a v0 s
 
 ### Fleet enrollment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
 
-The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault) is in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step); the recovery-key route without an exchange, as it works on a record vault, is in [its appendix](../multi-machine.md#appendix-adding-a-key-with-the-recovery-key).
+The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault) is in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step); the recovery-key route without an exchange, as it works on a record vault, is in [its appendix](../multi-machine.md#appendix-adding-a-key-with-the-recovery-key), as the fallback for when no enrolled machine is available (owner decision, 2026-11-05).
 
 Before T5 only the joining machine's keyring got the new slot: the approver *can't* build it (the
 slot is wrapped under a `KEK_slot` only the joiner's hardware produces), so the copies diverged
@@ -570,11 +570,10 @@ of its own. A second merge then writes nothing.
 
 ### The vault password (brief T17, v0.2.0)
 
-Setting up and using the vault password and the agent, for users, is in [vault-password-and-agent.md](../vault-password-and-agent.md).
+Setting up and using the vault password and the agent, for users, is in [vault-password-and-agent.md](../vault-password-and-agent.md), including the limit that a classic vault can't carry a password (convert it first, then add a password slot).
 
 An optional second factor on any machine or YubiKey slot (spec:
-`docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`; user docs: README, "The vault
-password and the agent"). One password per vault; slots with and without it can be mixed.
+`docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`; user docs: the link above). One password per vault; slots with and without it can be mixed.
 
 **Stretching.** The password (UTF-8 after NFC normalisation, so one password stretches alike on
 macOS, Linux and Windows) goes through Argon2id with m = 65536 KiB, t = 3, p = 1 and a 32-byte random

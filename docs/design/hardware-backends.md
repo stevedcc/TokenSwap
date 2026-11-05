@@ -156,15 +156,15 @@ Which key unlocks when several are plugged in (`YubiKeySelection`, used by `Vaul
 
 What the user sees of the touch posture (`Config.AcknowledgedTouch`, `tswap slots --ack`) moved to [security-model.md](../security-model.md#yubikey-touch-or-no-touch).
 
-- **The touch posture** in a slot's blob (the last byte, above) is recorded at enrolment from
-  whether the key asked for a touch during the enrolment challenge:
-  `IYubiKeyService.ChallengeReportingTouch`. `ykman otp calculate` prints "Touch your YubiKey..."
-  on stderr exactly when the key reports that it waits for one (the OTP HID keepalive status
-  "user presence needed"); a key without touch answers at once with nothing on stderr. **Checked
-  against the yubikey-manager 5.9.2 source** (`ykman/_cli/otp.py` `calculate`, which calls
-  `prompt_for_touch` in `ykman/_cli/util.py`; `yubikit/core/otp.py` signals it on
-  `RESP_TIMEOUT_WAIT_FLAG`). `ykman otp info` can't read a slot's touch setting, so slots enrolled
-  before this stay "unknown". Over USB only (tswap's only transport for `calculate`).
+**The touch posture** in a slot's blob (the last byte, above) is recorded at enrolment from
+whether the key asked for a touch during the enrolment challenge:
+`IYubiKeyService.ChallengeReportingTouch`. `ykman otp calculate` prints "Touch your YubiKey..."
+on stderr exactly when the key reports that it waits for one (the OTP HID keepalive status
+"user presence needed"); a key without touch answers at once with nothing on stderr. **Checked
+against the yubikey-manager 5.9.2 source** (`ykman/_cli/otp.py` `calculate`, which calls
+`prompt_for_touch` in `ykman/_cli/util.py`; `yubikit/core/otp.py` signals it on
+`RESP_TIMEOUT_WAIT_FLAG`). `ykman otp info` can't read a slot's touch setting, so slots enrolled
+before this stay "unknown". Over USB only (tswap's only transport for `calculate`).
 
 ### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
 
@@ -240,7 +240,7 @@ on a Mac) — they now pass via plain `dotnet test`, no publishing or signing re
 
 ### Under sudo: used as the vault folder's owner, not root (brief T12, issue #157)
 
-What a user sees and does under sudo (who Touch ID asks, the cases that can't use a `--with-touch` slot, re-running `recover`) moved to [security-model.md](../security-model.md#under-sudo-the-secure-enclave-asks-you-not-root).
+What a user sees and does under sudo (who Touch ID asks, the cases that can't use a `--with-touch` slot, re-running `recover`, and the two conclusions: less privilege than root, not more; the TPM and YubiKeys still run as root under sudo) moved to [security-model.md](../security-model.md#under-sudo-the-secure-enclave-asks-you-not-root).
 
 macOS asks Touch ID or the password of the process's effective user. Under sudo that was root, so
 a `--with-touch` slot showed *"tswap needs to authenticate to continue — Enter the password for the
@@ -327,7 +327,7 @@ requirePresence = true)`), and any other backend with `requirePresence: false` t
 
 ### Checking a no-touch Secure Enclave slot on a Mac
 
-How to run this check, and its recorded results, moved to the setup guide: [setup.md](../setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
+How to run this check, its recorded results and the v0.1.0 release gate it served (met on 2026-10-31, #157) moved to the setup guide: [setup.md](../setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 

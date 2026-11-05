@@ -209,7 +209,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
 6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion)
 
-YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `docs/design/hardware-backends.md` §YubiKey keyring slots). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `docs/design/hardware-backends.md`.
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `docs/design/hardware-backends.md` §YubiKey keyring slots). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 
@@ -239,6 +239,6 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 - `ykman` CLI (YubiKey Manager)
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
-  setting; a key without touch is for CI/automation only.
+  setting; a key without touch (less secure: no button press) is for CI/automation only.
 - .NET 10 SDK (build time only)
 - For sudo commands: copy the compiled binary to `/usr/local/bin`
