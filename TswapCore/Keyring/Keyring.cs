@@ -71,7 +71,7 @@ public sealed record Slot(byte[] SlotId, byte[] PublicKey, byte[] Wrapped, SlotK
 /// <summary>
 /// A vault's keyring (issue #119): the format version and vault id that feed every slot's AEAD
 /// associated data (see <see cref="SlotPayloadWrap.BuildAad"/>), the unlock threshold <c>k</c>
-/// (always 1 in v0 — see <c>docs/design/multi-machine-keying.md</c> §Why not k >= 2), and the list of slots
+/// (always 1 in v0 — see <c>docs/design/multi-machine-keying.md</c> §Why not k >= 2 (yet)), and the list of slots
 /// (always exactly one in v0, this machine's; #121 is where a second machine's slot gets
 /// appended via hand-carried enrollment).
 /// </summary>
