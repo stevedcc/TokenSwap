@@ -80,8 +80,8 @@ question up front; they are listed in [commands.md](commands.md#init).
 
 ### Without a terminal
 
-Scripts have no terminal to answer questions, so they name the slot instead. (An AI agent doesn't
-run `init`: it prints the recovery key, see
+Scripts have no terminal to answer questions, so they name the slot instead. (AI agents shouldn't
+run `init`: creating a vault is the user's work, and `init` prints the recovery key, see
 [agent-integration.md](agent-integration.md#agent-role-no-sudo).)
 
 ```bash
@@ -97,7 +97,7 @@ A plain `tswap init` without a terminal is refused and names these flags.
 Prepare each key's slot 2 first ([Preparing a YubiKey](#preparing-a-yubikey)). Then:
 
 ```bash
-# Script or agent, no terminal: a vault with ONE key plugged in (several plugged in: tswap asks
+# Script, no terminal: a vault with ONE key plugged in (several plugged in: tswap asks
 # which on stderr, and takes the first listed when nothing answers)
 tswap init --yubikey          # or: tswap init --yubikey --folder ~/Sync/tswap-vault   (an absent or empty folder)
 

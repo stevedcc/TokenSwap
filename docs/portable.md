@@ -36,7 +36,7 @@ default folder on each OS in [commands.md](commands.md#files).
 
 Commands that use secrets (`create`, `names`, `run` and others) work without sudo. Commands that
 reveal a value, remove or replace a value that is still good, or administer the vault (`get`,
-`add`, `list`, `delete` and others) refuse to run without sudo, or without an elevated prompt on
+`add`, `list` (names with their dates), `delete` and others) refuse to run without sudo, or without an elevated prompt on
 Windows. Which commands need it: [commands.md](commands.md#which-commands-need-sudo); why:
 [security-model.md](security-model.md#the-sudo-split).
 

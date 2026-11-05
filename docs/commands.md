@@ -361,7 +361,9 @@ folder: `/run/user/<uid>/tswap/agent-<16 hex>.sock` on Linux (else `~/.cache/tsw
 is `broker-<16 hex>/control.sock` in the same folder.
 
 A command that backs up `config.json` before it writes (`slot add`, `slot merge` and others) copies
-it to `config.json.bak-<UTC timestamp>` beside it, never overwriting an earlier backup.
+it to `config.json.bak-<UTC timestamp>` beside it (for example `config.json.bak-20261105T120000123Z`,
+with `-1`, `-2` added when two fall in one millisecond), never overwriting an earlier backup. Under
+sudo the backup is written as the folder's owner, mode 0600.
 
 On Linux and macOS the folders are created 0700 and the files 0600; an existing vault with wider
 permissions is narrowed on the next write, with a notice (reads change nothing). Windows: the

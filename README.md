@@ -100,8 +100,8 @@ recovery key each open the vault alone.
 
 `init` never overwrites a vault. Scripts have no terminal to answer questions, so they name the
 slot instead: `tswap init --yubikey`, `tswap init --tpm`, or
-`tswap init --secure-enclave --with-touch` (or `--no-touch`). An AI agent doesn't run `init`: it
-prints the recovery key.
+`tswap init --secure-enclave --with-touch` (or `--no-touch`). AI agents shouldn't run `init`:
+creating a vault is the user's work, and `init` prints the recovery key.
 
 Every step, each kind of slot, the recovery key and the limits of this version:
 [Setting up a vault](docs/setup.md).
