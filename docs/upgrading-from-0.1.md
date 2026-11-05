@@ -17,6 +17,8 @@ tswap 0.2 is a breaking release.
    Only `migrate --to-records` (and its plain form, the touch-upgrade guide) and `export` work on a
    classic single-file vault (`secrets.json.enc`); every other command refuses it with that hint. A
    two-YubiKey XOR vault becomes a keyring vault in the same run (plug in every enrolled key).
+   To convert straight into a synced folder, add `--vault-dir <folder>` (see
+   [What the conversion does](#what-the-conversion-does)).
 
 2. **Then, once every machine sharing the vault runs 0.2, reindex once:**
 
@@ -26,7 +28,26 @@ tswap 0.2 is a breaking release.
 
    A copy kept in step with `vault merge` takes the marker and the format 3 records with the next
    merge. Machines still on 0.1 can't read records rewritten in format 3; they refuse them (and
-   never delete or overwrite them) until they are upgraded.
+   never delete or overwrite them) until they are upgraded. What `vault reindex` does:
+   [multi-machine.md](multi-machine.md#record-format-3-and-vault-reindex).
+
+## What the conversion does
+
+```bash
+sudo tswap migrate --to-records                                  # default folder: ~/.config/tswap/vault
+sudo tswap migrate --to-records --vault-dir ~/OneDrive/tswap-vault  # or straight into a synced folder
+```
+
+- It writes everything into a temporary folder next to the target, reads it all back and compares,
+  renames it into place, switches `config.json`, and only then moves `secrets.json.enc` aside to a
+  `.bak` file (`config.json` is backed up as well).
+- A crash at any point leaves a vault that opens; running it again finishes or tells you what to do.
+- The target folder must be empty or absent.
+- A **plain XOR vault** (two YubiKeys, `tswap init` in 0.1) becomes a keyring vault in the same run:
+  plug in **every** enrolled YubiKey (each gets its own slot), and store the recovery key it prints
+  once. Its secrets keep their key; the XOR share is no longer used afterwards.
+
+Sharing the converted folder with other machines: [multi-machine.md](multi-machine.md#sharing-a-vault-folder).
 
 ## What changed in `init`
 

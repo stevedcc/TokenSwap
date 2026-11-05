@@ -4,6 +4,8 @@ This design record moved to [docs/design/multi-machine-keying.md](docs/design/mu
 
 For setting tswap up, see [docs/setup.md](docs/setup.md).
 
+For using a vault on several machines, see [docs/multi-machine.md](docs/multi-machine.md).
+
 <details>
 <summary>Moved sections</summary>
 

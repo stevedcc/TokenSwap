@@ -296,7 +296,7 @@ Credentials for containers that never hold them: HTTP routes, command templates 
 | `TSWAP_CONFIG_DIR` | The config directory to use; overrides everything else, including the `sudo` home lookup |
 | `TSWAP_YUBIKEY_SERIAL` | The YubiKey to unlock with when several are plugged in (see [Several YubiKeys plugged in](setup.md#several-yubikeys-plugged-in)); `sudo` drops it unless kept |
 | `XDG_CONFIG_HOME` | Linux: the config base, when it is an absolute path (a relative one is ignored) |
-| `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner |
+| `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner (see [Which agent a command asks](vault-password-and-agent.md#which-agent-a-command-asks)) |
 
 Commands that need no vault (`--help`, `<command> --help`, `prompt`, `prompt-hash`, `completion`,
 `installscript`) work without a home folder; the others say "Cannot determine the config folder"

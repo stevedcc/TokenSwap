@@ -345,9 +345,12 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:8080/anthropic
 
 ## A broker with a vault password
 
-When the vault user's slot on this machine has the vault password (README, "The vault password and
-the agent"), `serve` starts **locked**: after a reboot, a restart, or with the disk copied, the
-broker opens nothing until a human unlocks it. A broker whose slot has no password behaves exactly as
+Setting up the vault password itself (`init --password`, `slot add --yubikey --password`, the
+choice, joining with it) is in [vault-password-and-agent.md](vault-password-and-agent.md); this
+section is what the broker adds.
+
+When the vault user's slot on this machine has the vault password, `serve` starts **locked**:
+after a reboot, a restart, or with the disk copied, the broker opens nothing until a human unlocks it. A broker whose slot has no password behaves exactly as
 before. Only this machine's own slot decides: a broker whose own slot has no password never prompts
 and never asks an agent, so it can't use the vault's password YubiKey slots; give the broker machine
 a password slot of its own if it should serve through one. A slot that needs a newer tswap, or whose blob is corrupt, stops `serve` with that slot's id
@@ -368,8 +371,8 @@ sudo -iu vault tswap broker lock
   asks for the password it checks that the broker answers (`No 'tswap broker serve' answers at <path>;
   is it running?` otherwise) and prints, on stderr, the RAM disclosure with "The broker keeps" for its
   first words (and, on a Mac with a Secure Enclave slot, the line about the Secure Enclave library's
-  copy). `--timeout` takes the agent's durations
-  (60 s to 30 d, absolute); without it the broker stays unlocked until `broker lock` or a restart.
+  copy). `--timeout` takes the agent's durations ([`agent start --timeout`](vault-password-and-agent.md#the-tswap-agent));
+  without it the broker stays unlocked until `broker lock` or a restart.
 - **The proof.** `serve` checks the password with one real unlock through **this machine's password
   slot only** (never a password-free slot, never an agent), then the `vault-password` verifier, and
   holds a copy of the stretched password. Every later unlock (a route's secret, an ssh key, a

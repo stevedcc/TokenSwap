@@ -349,6 +349,8 @@ key even if copied.
 
 ## Hand-carried enrollment (v0)
 
+The steps for users (joining a machine with `slot request`, `approve`, `accept` and `merge`) are in [multi-machine.md](../multi-machine.md#joining-another-machine).
+
 The expensive part of enrollment in earlier drafts of this design was a fingerprint-comparison
 ceremony, and that cost exists **only because the request travels over the sync transport**,
 where a MITM could substitute their own public key and the approving machine would obligingly
@@ -383,6 +385,8 @@ enrollment reinstates the fingerprint as the primary control** — see "Deferred
 sync folder.** Automating the exchange over the transport is v1 work, not a v0 shortcut.
 
 ### Fleet enrollment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
+
+The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault), and the recovery-key route without an exchange as it works on a record vault, are in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step).
 
 Before T5 only the joining machine's keyring got the new slot: the approver *can't* build it (the
 slot is wrapped under a `KEK_slot` only the joiner's hardware produces), so the copies diverged
@@ -446,14 +450,6 @@ and the vault's home never opened with the joiner's device. Decisions made in br
      warning names `recover` and `--recovery-key-stdin`.
 4. **Version 2 keyrings stay unlock-only** (#186): merge and recover refuse them with the
    existing message.
-
-**The four-step flow** (the owner's router TPM vault and a YubiKey at the desk, no USB
-passthrough): request (desk machine, key plugged in) → approve (router) → accept (desk machine,
-writes the receipt) → merge (router). Further TPM or Secure Enclave machines join the same way
-with `slot request --tpm` / `--secure-enclave`. **Without an exchange** the recovery key gives a
-third route: copy the router's `config.json` and `secrets.json.enc` into a separate config folder
-on the desk machine, run `slot add --yubikey --recovery-key-stdin` there, and merge that
-`config.json` back into the router with `slot merge <file> --yes`.
 
 Out of scope (v1): automatic sync of keyrings or secrets, revocation and `K_v` rotation.
 
@@ -574,6 +570,8 @@ of its own. A second merge then writes nothing.
 
 ### The vault password (brief T17, v0.2.0)
 
+Setting up and using the vault password and the agent, for users, is in [vault-password-and-agent.md](../vault-password-and-agent.md).
+
 An optional second factor on any machine or YubiKey slot (spec:
 `docs/superpowers/specs/2026-11-02-vault-password-agent-design.md`; user docs: README, "The vault
 password and the agent"). One password per vault; slots with and without it can be mixed.
@@ -657,7 +655,6 @@ password slots get new blob bytes, so a vault without a password stays byte-iden
 - **Version requirement.** Every machine that opens a password slot, or rewrites a keyring that holds
   one, needs tswap 0.2.0 or newer: 0.1.x reads a `TSTP` or `TSSE` blob as a 1.3 GB length prefix and
   says the config is corrupted.
-- **Classic vaults** (no keyring) can't carry a password: migrate first, then add a password slot.
 
 **Unlock order** (`VaultUnlocker`): pass 1 tries every password-free
 candidate in the usual order (the own backend's slot if it has no password, then the password-free

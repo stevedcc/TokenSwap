@@ -49,7 +49,8 @@ Run `tswap init` in a terminal and it asks, in order:
 3. **Vault password (optional).** One password for the vault. If you add it and picked more than
    one slot (without `--password`), you choose which of them need it. A slot left out opens the
    vault without the password, for example a backup key you keep somewhere safe, so a forgotten
-   password doesn't lock you out.
+   password doesn't lock you out. More on the password and the agent that holds it:
+   [vault-password-and-agent.md](vault-password-and-agent.md).
 4. **Recovery slot.** Added by default. Its private key is shown once, so store it offline (see
    [The recovery key](#the-recovery-key)).
 5. **Create.** tswap builds every slot, then writes the vault in one step.
@@ -189,21 +190,8 @@ copy of the vault files, or if the TPM is replaced).
 
 ## Adding another machine
 
-Another machine can join the same vault in four steps:
-
-1. `tswap slot request` on the new machine: with one YubiKey plugged in, or `--tpm` /
-   `--secure-enclave --with-touch|--no-touch` for its own TPM or Secure Enclave.
-2. `sudo tswap slot approve` on this one.
-3. `tswap slot accept` back on the new one. It writes a receipt.
-4. `sudo tswap slot merge <receipt>` on this one again, so this machine's copy opens with the new
-   device too.
-
-Move the files yourself (scp, USB). `tswap slots` lists the slots.
-
-On a machine without a vault, `slot accept` creates a record vault at `~/.config/tswap/vault` (as
-`init` does) holding the keyring and no secrets yet. Bring the secrets in with
-`sudo tswap vault merge <copy of the other vault folder>`, or use
-`tswap slot accept <file> --vault-dir <shared folder>` to join a shared folder instead.
+Another machine joins the vault with four `slot` commands and files you carry yourself: see
+[multi-machine.md](multi-machine.md#joining-another-machine).
 
 ## The recovery key
 

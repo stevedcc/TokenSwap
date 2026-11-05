@@ -238,6 +238,8 @@ The design reasoning is in
 
 ## What the vault password does and doesn't protect
 
+Setting the password up, and the agent that holds it: [vault-password-and-agent.md](vault-password-and-agent.md).
+
 - **It stops** another local user without root (including one in group `tss`, or one who can use a
   plugged-in no-touch YubiKey) who has a copy of the vault folder, and anyone with a stolen disk or
   copied folder who later gets the hardware.
@@ -290,6 +292,7 @@ The design reasoning is in
 ## A shared vault folder: what a sync provider sees, and what isn't detected
 
 These notes apply to a record vault whose folder is synced, shared or copied between machines.
+How to share one, and the merge rules: [multi-machine.md](multi-machine.md#sharing-a-vault-folder).
 
 - **What a sync provider can see:** not names or values, and not which of an edit, a delete or a
   burn a change was, unless the change moves the record across a 256-byte padding bucket (a delete

@@ -36,7 +36,8 @@ These commands are safe for AI agents and automation. They never expose secret v
 
 `agent start` and `broker unlock` need no sudo either, but they read the **vault password** at a
 terminal: they are for the human. An AI agent whose command fails with "needs the vault password"
-asks the user to run `tswap agent start` and never handles the password itself.
+asks the user to run `tswap agent start` and never handles the password itself. Setting up the
+password and the agent: [vault-password-and-agent.md](vault-password-and-agent.md).
 
 ### Operator role (requires sudo)
 

@@ -335,7 +335,8 @@ vault, since that would be decrypted whole for every request; convert it as in
 ## A broker with a vault password
 
 How it starts locked and how to unlock it: [A broker with a vault password](BROKER.md#a-broker-with-a-vault-password)
-in the guide.
+in the guide. The vault password itself, and the agent's own socket checks:
+[vault-password-and-agent.md](vault-password-and-agent.md).
 
 ### The control socket and its trust model
 

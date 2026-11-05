@@ -30,7 +30,9 @@ stop working until they get the new one.
 
 On a record-store vault (what `init` makes since 0.2) the old version's burn stays in the record,
 and `tswap burned` lists it under "Rotated" instead of as outstanding (`burned --json` marks it
-`"status": "rotated"`).
+`"status": "rotated"`). When copies of a vault folder are merged (`vault merge`, or a sync tool's
+conflicted copies), a newer value supersedes the burn the same way: see
+[The merge rules](multi-machine.md#the-merge-rules).
 
 A **classic vault** (one `secrets.json.enc`, from 0.1) keeps one burn per secret and no history.
 tswap 0.2 refuses to rotate in it, as it refuses every command but `migrate` and `export`: convert
