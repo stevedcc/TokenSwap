@@ -55,7 +55,7 @@
 - [ ] **Step 2:** `dotnet test TswapTests --filter "FullyQualifiedName~YubicoSdkTests"` → FAIL (type missing).
 - [ ] **Step 3:** add the package and `YubicoSdk`.
 - [ ] **Step 4:** the tests → PASS.
-- [ ] **Step 5:** `dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-x64 2>&1 | grep -E 'warning IL(2|3)'` → no output; `bash contrib/packaging/package.sh linux-x64 <publish dir> <scratch> --smoke` → passes; record the binary size before and after in the report (spike: about 5 → 11 MB).
+- [ ] **Step 5:** `dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-x64 2>&1 | grep -E 'warning IL(2|3)'` → no output; (until Task 4 adds `yubikey setup`, the smoke has no YubiKey line;) `bash contrib/packaging/package.sh linux-x64 <publish dir> <scratch> --smoke` → passes; record the binary size before and after in the report (spike: about 5 → 11 MB).
 - [ ] **Step 6: Commit** (csproj, YubicoSdk.cs, the tests, workflows, package.sh, runtests.sh).
 
 ### Task 2: `SdkYubiKeyService` over a device seam
@@ -69,7 +69,7 @@
 - Produces:
   - `internal interface IOtpKeys { IReadOnlyList<OtpKeyInfo> Find(); OtpChallengeResult Challenge(int serial, ReadOnlySpan<byte> challenge64, Action onTouchRequested); Slot2State Slot2(int serial); void ProgramSlot2(int serial, bool requireTouch); }`
   - `internal sealed record OtpChallengeResult(byte[] Response, bool TouchRequested);` (the caller zeroes `Response` after use).
-  - **The slot secret has one owner:** `YubicoOtpKeys.ProgramSlot2` draws the 20 bytes from `RandomNumberGenerator` into its own `byte[]`, passes them to the SDK, and zeroes them in a `finally`; nothing above `IOtpKeys` ever holds them. Which flags it sends is decided by a pure function `internal static Slot2Programming YubicoOtpKeys.Slot2Settings(bool requireTouch)` returning `record Slot2Programming(bool HmacSha1, bool SmallChallenge, bool Touch, int KeyLength)`, which `ProgramSlot2` follows and Task 4 tests.
+  - **The slot secret has one owner:** `YubicoOtpKeys.ProgramSlot2` draws the 20 bytes from `RandomNumberGenerator` into its own `byte[]` (the design allows the key or the system RNG; the spike didn't program a slot, so the host RNG is the plan's choice: it is the same on every OS and testable), passes them to the SDK, and zeroes them in a `finally`; nothing above `IOtpKeys` ever holds them. Which flags it sends is decided by a pure function `internal static Slot2Programming YubicoOtpKeys.Slot2Settings(bool requireTouch)` returning `record Slot2Programming(bool HmacSha1, bool SmallChallenge, bool Touch, int KeyLength)`, which `ProgramSlot2` follows and Task 4 tests.
   - `KeyboardReachable` is `device.AvailableTransports.HasFlag(Transport.HidKeyboard)` on the SDK device (spike `Devices.cs` printed `transports=`); the hardware run records what it saw on each OS.
   - `internal sealed record OtpKeyInfo(int? Serial, bool KeyboardReachable);` — one entry per physical key the SDK sees on any transport; `KeyboardReachable` false when it is seen only over FIDO HID (Review Focus 2).
   - `public enum Slot2State { Empty, Configured }` in `TswapCore.Vault`.
@@ -77,7 +77,7 @@
   - Mixed keys: `ListSerials` returns the keyboard-reachable serials; it throws the per-OS explanation only when **none** is reachable and at least one key is seen over FIDO only. A key without a known serial is named "a YubiKey" in messages.
   - The per-OS texts of `TswapCli/YubiKeyAccess.cs` move into TswapCore (an internal static class beside `SdkYubiKeyService`); Task 3 deletes `YubiKeyAccess.cs` and its ykman-text trigger.
   - `public sealed class SdkYubiKeyService : IYubiKeyService` with constructor `SdkYubiKeyService(TextWriter? verboseOut = null)` (real keys) and `internal SdkYubiKeyService(IOtpKeys keys, OSPlatform os, TextWriter? verboseOut = null)` (tests); `IsSimulated => false`.
-  - `IYubiKeyService` gains `Slot2State GetSlot2State(int serial)` and `void ProgramSlot2(int serial, bool requireTouch)` (Task 4 uses them). `TestKeyYubiKeyService` returns `Configured` and throws `TswapException("test mode can't program a key")`; `SimulatedYubiKeyService` gets a settable per-serial state, and `ProgramSlot2` stores a fresh secret and the touch flag and records the call. `TestKeyYubiKeyService.ProgramSlot2` throws `TswapException("Test mode (TSWAP_TEST_KEY) can't program a YubiKey.")`.
+  - `IYubiKeyService` gains `Slot2State GetSlot2State(int serial)` and `void ProgramSlot2(int serial, bool requireTouch)` (Task 4 uses them). `TestKeyYubiKeyService` returns `Configured` and throws (text below); `SimulatedYubiKeyService` gets a settable per-serial state, and `ProgramSlot2` stores a fresh secret and the touch flag and records the call. `TestKeyYubiKeyService.ProgramSlot2` throws `TswapException("Test mode (TSWAP_TEST_KEY) can't program a YubiKey.")`, pinned by `TestKeyService_ProgramSlot2_Refuses`.
 
 - [ ] **Step 1: Write the failing tests** (`FakeOtpKeys` records every challenge and program call, and can be told: keys present, busy, slot 2 empty, keyboard unreachable, ask for touch):
   - `ListSerials_ReturnsKeyboardReachableSerials`: two reachable keys → both serials, in the SDK's order (ykman's order may differ; nothing auto-picks among several keys).
@@ -101,7 +101,7 @@
 **Files:**
 - Modify: `TswapCli/CliHost.cs:61-63` (`new SdkYubiKeyService(env.Verbose ? console.Out : null)`)
 - Enrolment's touch posture: `SdkYubiKeyService.ChallengeReportingTouch` always reports `true`/`false`, so `YubiKeySlotEnrollment`'s `?? DetectTouchRequirement(serial)` fallback is never reached with the real service; leave it (the interface keeps the method for other services) and don't add a third path. A slot's posture is learned from its first challenge, as today.
-- Delete: `TswapCore/Vault/YkmanYubiKeyService.cs`, `TswapCore/YubiKey.cs` (`ParseTouchRequirement`), and the tests of those two only (find them with `grep -rln 'ParseTouchRequirement\|YkmanYubiKeyService\|AskedForTouch(' TswapTests`)
+- Delete: `TswapCore/Vault/YkmanYubiKeyService.cs`, `TswapCore/YubiKey.cs` (`ParseTouchRequirement`), and the tests of those two only (find them with `grep -rln 'ParseTouchRequirement\|YkmanYubiKeyService\|AskedForTouch(' TswapTests`, and check each hit is a ykman-era test: Task 2's tests use the `AskedForTouch` property, which must stay)
 - Modify (texts): `TswapCli/CommandRegistry.cs` (banner `tswap - YubiKey Secret Manager` → `tswap - hardware-backed secret manager`; the `-v` line no longer says YubiKey-only; the Prerequisites block: YubiKey slot 2 is prepared with `tswap yubikey setup --touch`, TPM/Secure Enclave need nothing, Linux needs `libpcsclite` and the YubiKey udev rule for YubiKeys), `TswapCli/SecurityWarnings.cs:196-202` (reprogram with `tswap yubikey setup --replace --touch`; the "couldn't check" case names no ykman), `TswapCli/Commands/MigrateCommand.cs:73,161-165` (the reprogramming steps use `tswap yubikey setup --replace --touch --serial N`; this is the one place a migration note may say "ykman is no longer needed"), `TswapCore/Vault/VaultUnlocker.cs:545` (drop "Is ykman installed?"), `TswapCli/Commands/GuidedInit.cs:73-85,224,237` (comments and the `Win32Exception` "ykman can't be run" case, which can't happen any more: remove it), `TswapCli/YubiKeyAccess.cs` (removed or reduced to what Task 2 kept), XML doc comments that name ykman (`IYubiKeyService.cs`, `YubiKeySlotBlob.cs:12,100`, `YubiKeyHardwareService.cs:9`, `Tpm2ToolsInterop.cs:15`, `SimulatedYubiKeyService.cs`)
 - Test: `TswapTests/NoYkmanTests.cs`, existing `HelpTests.cs`
 
@@ -154,7 +154,7 @@ Behaviour (design, Stage 1 "tswap yubikey setup"):
   - `Setup_Replace_ClassicVaultUsingKey_Refused`.
   - `Setup_Replace_NoVault_WarnsAndProceeds`.
   - `Setup_ProgramFails_SaysSlotMayBeEmpty`, `Setup_VerifyFails_SaysProgrammedButUnchecked`.
-  - `Setup_OutputHasNoKeyMaterial`: every setup test's output contains no run of 32 or more hex characters.
+  - `Setup_OutputHasNoKeyMaterial`: every setup test's output contains no run of 32 or more hex characters and no run of 24 or more base64 characters.
   - `Setup_SeveralKeys_NoSerial_Prompts`, `Setup_SerialNotPluggedIn_Refused`.
   - `Help_ListsYubiKeySetup`.
 - [ ] **Step 2:** run → FAIL.
