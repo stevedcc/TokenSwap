@@ -101,8 +101,8 @@ path they need (install, guided `tswap init`, first secret), and tswap is meant 
   - the YubiKey track owns everything else in `TswapCli/`, `TswapCore/` and existing tests, including
     `CommandRegistry.cs`; this track changes code comments only by path sweep, and does not touch `CommandRegistry.cs`;
   - this track lands first (it is the shorter one). The YubiKey track then merges `main` and rewrites the one
-    "Preparing a YubiKey" section in `docs/setup.md` (ykman → `tswap yubikey setup`), adds the Linux `libpcsclite`
-    requirement to `docs/install.md` (owner, 2026-11-05: the SDK makes it a dependency), its parts of
+    "Preparing a YubiKey" section in `docs/setup.md` (ykman → `tswap yubikey setup`), updates `docs/install.md`'s
+    YubiKey prerequisites (no ykman; the udev rule; `libpcsclite` used if present, not needed), its parts of
     `docs/portable.md`, and regenerates `docs/commands.md` (the D3 test tells it to).
 - Copy rules (owner's house style for tswap docs): plain English, short sentences, lists and tables over long
   paragraphs; commands in code blocks; no marketing words.
