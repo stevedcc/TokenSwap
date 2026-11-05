@@ -249,6 +249,24 @@ public sealed class YubiKeyCommand : ICliCommand
     private enum WayIn { No, ByItself, OtherYubiKey }
 
     /// <summary>
+    /// A blob recognised as a TPM or Secure Enclave slot's, as their unlockers read it: a <c>TSTP</c>/<c>TSSE</c> header
+    /// that classifies as valid (<see cref="SlotPassword.Classify"/> None or Password, so not corrupt and not from a newer
+    /// tswap), or a headerless package in the shape every legacy TPM (Windows, Linux) and Secure Enclave package has: a
+    /// 4-byte little-endian length, that many bytes, at least one more (the unlockers' own length check). Anything else
+    /// (an unknown magic, a damaged header or length) is not a way in (fail closed).
+    /// </summary>
+    private static bool IsTpmOrSecureEnclaveSlot(Slot slot)
+    {
+        var blob = slot.HwBlob!;
+        if (TpmSlotBlob.HasHeader(blob) || SecureEnclaveSlotBlob.HasHeader(blob))
+            return SlotPassword.Classify(slot) is SlotPasswordKind.None or SlotPasswordKind.Password;
+        if (blob.Length < 4)
+            return false;
+        var length = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(blob);
+        return length >= 0 && length < blob.Length - 4;
+    }
+
+    /// <summary>
     /// Whether <paramref name="slot"/> may be a slot on YubiKey <paramref name="serial"/>: a one-key YubiKey slot of this
     /// serial, or one whose serial can't be read (fail closed); this machine's legacy pair slot when its pair (the
     /// config's pair serials) includes this key; another machine's legacy pair slot, whose pair isn't known here (fail
@@ -292,7 +310,7 @@ public sealed class YubiKeyCommand : ICliCommand
         if (slot.HwBlob is not { Length: > 0 })
             return WayIn.No;
         if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
-            return WayIn.ByItself;
+            return IsTpmOrSecureEnclaveSlot(slot) ? WayIn.ByItself : WayIn.No;
         try
         {
             return YubiKeySlotBlob.Decode(slot.HwBlob).Serial != serial ? WayIn.OtherYubiKey : WayIn.No;
@@ -313,7 +331,7 @@ public sealed class YubiKeyCommand : ICliCommand
         List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys, IReadOnlyList<YubiKeyInfo> keys)
     {
         var otherSerials = otherKeys.Select(k => k.Blob.Serial).Distinct().ToList();
-        var names = string.Join(", ", otherSerials.Select(s => $"YubiKey {s}"));
+        var names = string.Join(" or ", otherSerials.Select(s => $"YubiKey {s}"));
         var plugged = keys.Where(k => k.KeyboardReachable && k.Serial is not null).Select(k => k.Serial!.Value).ToHashSet();
         var candidates = otherKeys.Where(k => plugged.Contains(k.Blob.Serial)).ToList();
         if (candidates.Count == 0)
@@ -325,7 +343,10 @@ public sealed class YubiKeyCommand : ICliCommand
         StretchedPasswordCache password = new(TerminalPasswordProvider.For(ctx, config));
         try
         {
-            string? refusal = null;
+            // In keyring order (task 4b will try the slot that opened last first). A definite wrong answer is kept
+            // apart from a key that was busy or didn't answer: when no slot opens, the latter decides the message,
+            // since that key may still open the vault.
+            string? didntOpen = null, transient = null;
             foreach (var (slot, blob) in candidates)
             {
                 ctx.Console.Error.WriteLine($"Checking that YubiKey {blob.Serial}'s slot still opens the vault (touch it if it flashes)...");
@@ -333,8 +354,7 @@ public sealed class YubiKeyCommand : ICliCommand
                 {
                     if (ctx.Unlocker.YubiKeySlotOpens(keyring, slot, blob, password.Provide))
                         return;
-                    refusal ??= $"YubiKey {blob.Serial}'s slot didn't open (it may have been reprogrammed); this key may be " +
-                        "the vault's only working YubiKey, so it's left as it is.";
+                    didntOpen ??= DidntOpen(blob);
                 }
                 catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
                 {
@@ -342,14 +362,24 @@ public sealed class YubiKeyCommand : ICliCommand
                 }
                 catch (TswapException e)
                 {
-                    // The device's busy text as it is (Task 2's wording); anything else (a touch that timed out, the key
+                    // By the failure's kind: busy keeps the device's text (Task 2's wording); an empty slot 2 was
+                    // reprogrammed or cleared, so its slot didn't open; anything else (a touch that timed out, the key
                     // pulled mid-check, no answer) is "didn't answer", with the device's message after it.
-                    refusal ??= IsBusy(e)
-                        ? e.Message
-                        : $"YubiKey {blob.Serial} didn't answer; plug it in and touch it when it flashes. ({e.Message})";
+                    switch ((e as YubiKeyDeviceException)?.Kind)
+                    {
+                        case OtpFailure.Busy:
+                            transient ??= e.Message;
+                            break;
+                        case OtpFailure.Slot2Empty:
+                            didntOpen ??= DidntOpen(blob);
+                            break;
+                        default:
+                            transient ??= $"YubiKey {blob.Serial} didn't answer; plug it in and touch it when it flashes. ({e.Message})";
+                            break;
+                    }
                 }
             }
-            throw new TswapException($"Refusing: {refusal} Nothing was changed.");
+            throw new TswapException($"Refusing: {transient ?? didntOpen} Nothing was changed.");
         }
         finally
         {
@@ -357,11 +387,10 @@ public sealed class YubiKeyCommand : ICliCommand
         }
     }
 
-    /// <summary>
-    /// The busy texts of <see cref="SdkYubiKeyService"/> (and its test double) share this wording: "is busy (another tswap
-    /// or app is using it)" and "is busy (another tswap or app is waiting for a touch)".
-    /// </summary>
-    private static bool IsBusy(TswapException e) => e.Message.Contains("busy (another tswap or app", StringComparison.Ordinal);
+    /// <summary>A definite wrong answer (or an emptied slot 2); a password slot may also have had the wrong password.</summary>
+    private static string DidntOpen(YubiKeySlotBlob blob) =>
+        $"YubiKey {blob.Serial}'s slot didn't open (it may have been reprogrammed{(blob.RequiresPassword ? ", or the vault password was mistyped" : "")}); " +
+        "this key may be the vault's only working YubiKey, so it's left as it is.";
 
     /// <summary>A password provider that asks its source once and hands out clones.</summary>
     private sealed class StretchedPasswordCache(TswapCore.VaultPassword.VaultPasswordProvider source) : IDisposable

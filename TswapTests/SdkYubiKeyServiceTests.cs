@@ -38,7 +38,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.OSX).ListSerials());
 
         Assert.Contains("Input Monitoring", ex.Message);
         Assert.Contains("YubiKey 33060005", ex.Message);
@@ -49,7 +49,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
 
         Assert.Contains("YubiKey 33060005", ex.Message);
         Assert.Contains("OTP interface", ex.Message);
@@ -67,7 +67,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Windows).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Windows).ListSerials());
 
         Assert.Contains("YubiKey 33060005: its OTP interface can't be reached", ex.Message);
         Assert.DoesNotContain("Input Monitoring", ex.Message);
@@ -88,7 +88,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithKey(null);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
 
         Assert.Contains("serial", ex.Message);
         Assert.Contains("can't be read", ex.Message);
@@ -178,8 +178,8 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var mac = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).Challenge(33060005, "abc"));
-        var linux = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+        var mac = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.OSX).Challenge(33060005, "abc"));
+        var linux = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
         Assert.Contains("Input Monitoring", mac.Message);
         Assert.Contains("udev rule", linux.Message);
@@ -191,7 +191,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithKey(11111111);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
         Assert.DoesNotContain("udev", ex.Message);
@@ -204,7 +204,7 @@ public sealed class SdkYubiKeyServiceTests
         // The slot's key may be the hidden one whose serial can't be read.
         var keys = new FakeOtpKeys().WithHiddenKey(null);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
         Assert.Contains("udev rule", ex.Message);
@@ -217,7 +217,7 @@ public sealed class SdkYubiKeyServiceTests
         // A hidden key whose serial is known is not the one asked for: no reason to explain it.
         var keys = new FakeOtpKeys().WithHiddenKey(11111111);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
         Assert.DoesNotContain("udev", ex.Message);
@@ -246,7 +246,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithKey(33060005);
         keys.Busy.Add(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Contains("33060005", ex.Message);
         Assert.Contains("busy", ex.Message);
@@ -259,7 +259,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithKey(33060005);
         keys.Slot2Empty.Add(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Contains("tswap yubikey setup", ex.Message);
         Assert.Contains("33060005", ex.Message);
@@ -271,7 +271,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new ThrowingOtpKeys(9, new OtpKeysException(OtpFailure.Other, 9, "Timed out waiting for user interaction."));
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(9, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(9, "abc"));
 
         Assert.Contains("YubiKey 9", ex.Message);
         Assert.Contains("Timed out waiting for user interaction.", ex.Message);
@@ -309,7 +309,7 @@ public sealed class SdkYubiKeyServiceTests
     [Fact]
     public void GetSlot2State_SerialAbsent_SaysNotPluggedIn()
     {
-        var ex = Assert.Throws<TswapException>(() => Service(new FakeOtpKeys()).GetSlot2State(33060005));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(new FakeOtpKeys()).GetSlot2State(33060005));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
     }
@@ -345,7 +345,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).ProgramSlot2(33060005, true));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.OSX).ProgramSlot2(33060005, true));
 
         Assert.Contains("Input Monitoring", ex.Message);
         Assert.Empty(keys.Programs);
@@ -356,7 +356,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var service = new TestKeyYubiKeyService(new byte[32]);
 
-        var ex = Assert.Throws<TswapException>(() => service.ProgramSlot2(TestKeyYubiKeyService.Serial1, requireTouch: true));
+        var ex = Assert.ThrowsAny<TswapException>(() => service.ProgramSlot2(TestKeyYubiKeyService.Serial1, requireTouch: true));
 
         Assert.Equal("Test mode (TSWAP_TEST_KEY) can't program a YubiKey.", ex.Message);
     }
@@ -407,6 +407,69 @@ public sealed class SdkYubiKeyServiceTests
     public void Classify_MapsSdkExceptions(Exception sdkException, OtpFailure expected) =>
         Assert.Equal(expected, YubicoOtpKeys.Classify(sdkException));
 
+    // ── Task 4 review fix round, item 2: the failure's kind travels with its text ──
+
+    [Fact]
+    public void Challenge_KeyBusy_CarriesTheBusyKind()
+    {
+        var fake = new FakeOtpKeys().WithKey(33060005);
+        fake.Busy.Add(33060005);
+        var service = new SdkYubiKeyService(fake, OSPlatform.Linux);
+
+        var e = Assert.Throws<YubiKeyDeviceException>(() => service.Challenge(33060005, "c"));
+
+        Assert.Equal(OtpFailure.Busy, e.Kind);
+        Assert.Equal(33060005, e.Serial);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is using it); try again.", e.Message);
+    }
+
+    [Fact]
+    public void Challenge_Slot2Empty_CarriesItsKind()
+    {
+        var fake = new FakeOtpKeys().WithKey(33060005);
+        fake.Slot2Empty.Add(33060005);
+        var service = new SdkYubiKeyService(fake, OSPlatform.Linux);
+
+        var e = Assert.Throws<YubiKeyDeviceException>(() => service.Challenge(33060005, "c"));
+
+        Assert.Equal(OtpFailure.Slot2Empty, e.Kind);
+    }
+
+    [Fact]
+    public void Challenge_NotPluggedIn_CarriesItsKind()
+    {
+        var service = new SdkYubiKeyService(new FakeOtpKeys().WithKey(1), OSPlatform.Linux);
+
+        var e = Assert.Throws<YubiKeyDeviceException>(() => service.Challenge(33060005, "c"));
+
+        Assert.Equal(OtpFailure.NotPluggedIn, e.Kind);
+        Assert.StartsWith("YubiKey 33060005 is not plugged in.", e.Message);
+    }
+
+    [Fact]
+    public void Challenge_HiddenKey_ProbeSeesBusy_CarriesTheBusyKind()
+    {
+        var fake = new FakeOtpKeys().WithHiddenKey(33060005);
+        fake.Interfaces.Add(KeyboardInterfaceState.Busy);
+        var service = new SdkYubiKeyService(fake, OSPlatform.Linux);
+
+        var e = Assert.Throws<YubiKeyDeviceException>(() => service.Challenge(33060005, "c"));
+
+        Assert.Equal(OtpFailure.Busy, e.Kind);
+    }
+
+    [Fact]
+    public void Challenge_HiddenKey_CarriesNotReachable()
+    {
+        var fake = new FakeOtpKeys().WithHiddenKey(33060005);
+        fake.Interfaces.Add(KeyboardInterfaceState.Unopenable);
+        var service = new SdkYubiKeyService(fake, OSPlatform.Linux);
+
+        var e = Assert.Throws<YubiKeyDeviceException>(() => service.Challenge(33060005, "c"));
+
+        Assert.Equal(OtpFailure.NotReachable, e.Kind);
+    }
+
     // ── Slot2Settings (pure; task 4 pins the cited values) ─────────────────────
 
     [Fact]
@@ -426,7 +489,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
         keys.Interfaces.Add(KeyboardInterfaceState.Busy);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
 
         Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }
@@ -437,7 +500,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
         keys.Interfaces.Add(KeyboardInterfaceState.Unopenable);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.OSX).ListSerials());
 
         Assert.StartsWith("YubiKey 33060005: macOS is blocking", ex.Message);
         Assert.DoesNotContain("try again", ex.Message);
@@ -449,7 +512,7 @@ public sealed class SdkYubiKeyServiceTests
         // Linux without the udev rule: the SDK can't read the node's vendor id, so no Yubico keyboard interface is listed.
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
 
         Assert.StartsWith("YubiKey 33060005: its OTP interface can't be reached", ex.Message);
         Assert.DoesNotContain("try again", ex.Message);
@@ -463,7 +526,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
         keys.Interfaces.Add(Enum.Parse<KeyboardInterfaceState>(state));
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
 
         Assert.StartsWith(UncertainStart + "YubiKey 33060005: its OTP interface can't be reached", ex.Message);
         Assert.Contains("udev rule", ex.Message);
@@ -474,7 +537,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys { ProbeFails = true }.WithHiddenKey(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
 
         Assert.StartsWith(UncertainStart, ex.Message);
     }
@@ -485,7 +548,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
         keys.Interfaces.Add(KeyboardInterfaceState.Busy);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
         Assert.Empty(keys.Challenges);
@@ -497,7 +560,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(33060005);
         keys.Interfaces.Add(KeyboardInterfaceState.Idle);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.OSX).Challenge(33060005, "abc"));
 
         Assert.StartsWith(UncertainStart + "YubiKey 33060005: macOS is blocking", ex.Message);
     }
@@ -509,7 +572,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithKey(11111111).WithHiddenKey(33060005);
         keys.Interfaces.Add(KeyboardInterfaceState.Idle);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
         Assert.StartsWith("YubiKey 33060005: its OTP interface can't be reached", ex.Message);
         Assert.DoesNotContain("try again", ex.Message);
@@ -521,7 +584,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new FakeOtpKeys().WithHiddenKey(null);
         keys.Interfaces.Add(KeyboardInterfaceState.Busy);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
         Assert.Contains("A YubiKey is busy (another tswap or app is waiting for a touch)", ex.Message);
@@ -532,7 +595,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new FakeOtpKeys().WithKey(null);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
         Assert.Contains("A YubiKey whose serial can't be read is plugged in", ex.Message);
@@ -543,7 +606,7 @@ public sealed class SdkYubiKeyServiceTests
     {
         var keys = new ThrowingOtpKeys(9, new OtpKeysException(OtpFailure.NoAnswer, 9, "The YubiKey did not acknowledge a write to the keyboard interface within the alloted time."));
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(9, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(9, "abc"));
 
         Assert.Contains("YubiKey 9 didn't answer", ex.Message);
         Assert.Contains("slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`)", ex.Message);
@@ -571,7 +634,7 @@ public sealed class SdkYubiKeyServiceTests
         var sim = SimulatedYubiKeyService.WithKeys(33060005);
         sim.Hidden.Add(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => sim.Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => sim.Challenge(33060005, "abc"));
 
         Assert.Contains("YubiKey 33060005", ex.Message);
         Assert.Contains("OTP interface", ex.Message);
@@ -584,7 +647,7 @@ public sealed class SdkYubiKeyServiceTests
         var sim = SimulatedYubiKeyService.WithKeys(33060005);
         sim.Busy.Add(33060005);
 
-        var ex = Assert.Throws<TswapException>(() => sim.Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => sim.Challenge(33060005, "abc"));
 
         Assert.Contains("33060005", ex.Message);
         Assert.Contains("busy", ex.Message);
@@ -598,7 +661,7 @@ public sealed class SdkYubiKeyServiceTests
         var keys = new ThrowingOtpKeys(33060005, new OtpKeysException(OtpFailure.NotReachable, 33060005, "found over HidFido only"),
             [KeyboardInterfaceState.Busy]);
 
-        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
         Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }

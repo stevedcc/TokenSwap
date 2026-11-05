@@ -112,7 +112,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     public Slot2State GetSlot2State(int serial)
     {
         if (!PluggedIn.Contains(serial))
-            throw new TswapCore.TswapException($"YubiKey {serial} is not plugged in.");
+            throw new YubiKeyDeviceException(OtpFailure.NotPluggedIn, serial, $"YubiKey {serial} is not plugged in.");
         return Slot2States.GetValueOrDefault(serial, Slot2State.Configured);
     }
 
@@ -123,7 +123,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     public void ProgramSlot2(int serial, bool requireTouch)
     {
         if (!PluggedIn.Contains(serial))
-            throw new TswapCore.TswapException($"YubiKey {serial} is not plugged in.");
+            throw new YubiKeyDeviceException(OtpFailure.NotPluggedIn, serial, $"YubiKey {serial} is not plugged in.");
         OnProgram?.Invoke(serial);
         Programmed.Add((serial, requireTouch));
         if (ProgramOutcome.TryGetValue(serial, out var kind))
@@ -139,18 +139,18 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
         if (FailWith.TryGetValue(serial, out var failure))
             throw new TswapCore.TswapException(failure);
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
-            throw new TswapCore.TswapException($"YubiKey {serial} not found");
+            throw new YubiKeyDeviceException(OtpFailure.NotPluggedIn, serial, $"YubiKey {serial} not found");
 
         if (Hidden.Contains(serial))
-            throw new TswapCore.TswapException(YubiKeyAccessTexts.ExplainHidden(serial, YubiKeyAccessTexts.CurrentOs()));
+            throw new YubiKeyDeviceException(OtpFailure.NotReachable, serial, YubiKeyAccessTexts.ExplainHidden(serial, YubiKeyAccessTexts.CurrentOs()));
         if (Busy.Contains(serial))
-            throw new TswapCore.TswapException($"YubiKey {serial} is busy (another tswap or app is using it); try again.");
+            throw new YubiKeyDeviceException(OtpFailure.Busy, serial, $"YubiKey {serial} is busy (another tswap or app is using it); try again.");
         if (Slot2States.GetValueOrDefault(serial, Slot2State.Configured) == Slot2State.Empty)
-            throw new TswapCore.TswapException($"Slot 2 of YubiKey {serial} isn't set up for challenge-response; run `tswap yubikey setup`.");
+            throw new YubiKeyDeviceException(OtpFailure.Slot2Empty, serial, $"Slot 2 of YubiKey {serial} isn't set up for challenge-response; run `tswap yubikey setup`.");
 
         Challenges.Add((serial, challenge)); // asked, even when it doesn't answer
         if (NotAnswering.Contains(serial))
-            throw new TswapCore.TswapException($"Timed out waiting for YubiKey {serial}");
+            throw new YubiKeyDeviceException(OtpFailure.NoAnswer, serial, $"Timed out waiting for YubiKey {serial}");
         var padded = new byte[64];
         var input = Encoding.UTF8.GetBytes(challenge);
         Array.Copy(input, padded, Math.Min(input.Length, 64));

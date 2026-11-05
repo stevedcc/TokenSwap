@@ -82,6 +82,8 @@ public enum OtpFailure
     NoAnswer,
     /// <summary>Anything else; the SDK's message is passed through.</summary>
     Other,
+    /// <summary>No key with this serial is plugged in (task 4 review fix round: the kind of "YubiKey N is not plugged in").</summary>
+    NotPluggedIn,
 }
 
 /// <summary>A failure at the device seam: its kind, the key's serial when known, and the SDK's own message.</summary>

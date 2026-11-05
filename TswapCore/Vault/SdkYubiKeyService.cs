@@ -48,9 +48,9 @@ public sealed class SdkYubiKeyService : IYubiKeyService
 
         var hidden = keys.Where(k => !k.KeyboardReachable).ToList();
         if (hidden.Count > 0)
-            throw new TswapException(ExplainUnreachable(hidden, reachableCount: keys.Count(k => k.KeyboardReachable)));
+            throw Unreachable(null, ExplainUnreachable(hidden, reachableCount: keys.Count(k => k.KeyboardReachable)));
         if (keys.Count > 0)
-            throw new TswapException("A YubiKey is plugged in, but its serial number can't be read, so tswap can't tell which key it is.");
+            throw new YubiKeyDeviceException(OtpFailure.Other, null, "A YubiKey is plugged in, but its serial number can't be read, so tswap can't tell which key it is.");
         return [];
     }
 
@@ -64,7 +64,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
     /// explanation; anything else (an extra idle or unreadable interface, or the probe failing) → the uncertainty
     /// first, then the per-OS explanation.
     /// </summary>
-    private string ExplainUnreachable(IReadOnlyList<OtpKeyInfo> hidden, int reachableCount)
+    private (OtpFailure Kind, string Text) ExplainUnreachable(IReadOnlyList<OtpKeyInfo> hidden, int reachableCount)
     {
         var perOs = string.Join(Environment.NewLine, hidden.Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, _os)));
         IReadOnlyList<KeyboardInterfaceState> interfaces;
@@ -74,17 +74,21 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         }
         catch (OtpKeysException)
         {
-            return Uncertain(hidden, perOs);
+            return (OtpFailure.NotReachable, Uncertain(hidden, perOs));
         }
 
         if (interfaces.Contains(KeyboardInterfaceState.Busy))
-            return ProbeBusyMessage;
+            return (OtpFailure.Busy, ProbeBusyMessage);
         if (interfaces.Contains(KeyboardInterfaceState.Unreadable))
-            return Uncertain(hidden, perOs);
+            return (OtpFailure.NotReachable, Uncertain(hidden, perOs));
         if (interfaces.Contains(KeyboardInterfaceState.Unopenable))
-            return perOs;
-        return interfaces.Count(i => i == KeyboardInterfaceState.Idle) > reachableCount ? Uncertain(hidden, perOs) : perOs;
+            return (OtpFailure.NotReachable, perOs);
+        return (OtpFailure.NotReachable,
+            interfaces.Count(i => i == KeyboardInterfaceState.Idle) > reachableCount ? Uncertain(hidden, perOs) : perOs);
     }
+
+    private static YubiKeyDeviceException Unreachable(int? serial, (OtpFailure Kind, string Text) why) =>
+        new(why.Kind, serial, why.Text);
 
     private static string Uncertain(IReadOnlyList<OtpKeyInfo> hidden, string perOs)
     {
@@ -149,7 +153,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         }
         catch (OtpKeysException e)
         {
-            throw new TswapException(Describe(e, serial));
+            throw Describe(e, serial);
         }
     }
 
@@ -161,7 +165,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         }
         catch (OtpKeysException e)
         {
-            throw new TswapException(Describe(e, e.Serial));
+            throw Describe(e, e.Serial);
         }
     }
 
@@ -181,11 +185,11 @@ public sealed class SdkYubiKeyService : IYubiKeyService
                 message += " A YubiKey whose serial can't be read is plugged in.";
             var unknownHidden = keys.Where(k => !k.KeyboardReachable && k.Serial is null).ToList();
             if (unknownHidden.Count > 0)
-                message += Environment.NewLine + ExplainUnreachable(unknownHidden, reachableCount);
-            throw new TswapException(message);
+                message += Environment.NewLine + ExplainUnreachable(unknownHidden, reachableCount).Text;
+            throw new YubiKeyDeviceException(OtpFailure.NotPluggedIn, serial, message);
         }
         if (!key.KeyboardReachable)
-            throw new TswapException(ExplainUnreachable([key], reachableCount));
+            throw Unreachable(serial, ExplainUnreachable([key], reachableCount));
     }
 
     private T Call<T>(int serial, Func<T> call)
@@ -196,18 +200,19 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         }
         catch (OtpKeysException e)
         {
-            throw new TswapException(Describe(e, serial));
+            throw Describe(e, serial);
         }
     }
 
-    private string Describe(OtpKeysException e, int? serial) => e.Kind switch
+    /// <summary>The seam's failure as a <see cref="YubiKeyDeviceException"/>: its kind, and the text named for it.</summary>
+    private YubiKeyDeviceException Describe(OtpKeysException e, int? serial) => e.Kind switch
     {
-        OtpFailure.Busy => $"{YubiKeyAccessTexts.Name(serial)} is busy (another tswap or app is using it); try again.",
-        OtpFailure.Slot2Empty => $"Slot 2 of {YubiKeyAccessTexts.Name(serial)} isn't set up for challenge-response; run `tswap yubikey setup`.",
-        OtpFailure.NoAnswer => $"{YubiKeyAccessTexts.Name(serial)} didn't answer: slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`), or another tswap or app is using it (then try again when it's done).",
+        OtpFailure.Busy => new(OtpFailure.Busy, serial, $"{YubiKeyAccessTexts.Name(serial)} is busy (another tswap or app is using it); try again."),
+        OtpFailure.Slot2Empty => new(OtpFailure.Slot2Empty, serial, $"Slot 2 of {YubiKeyAccessTexts.Name(serial)} isn't set up for challenge-response; run `tswap yubikey setup`."),
+        OtpFailure.NoAnswer => new(OtpFailure.NoAnswer, serial, $"{YubiKeyAccessTexts.Name(serial)} didn't answer: slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`), or another tswap or app is using it (then try again when it's done)."),
         // Also reached in the race where the look-up saw the key reachable and the seam's own listing didn't (it
         // turned busy in between): the probe decides, as in the look-up. Reachable count unknown here: 0.
-        OtpFailure.NotReachable => ExplainUnreachable([new OtpKeyInfo(serial, false, "")], reachableCount: 0),
-        _ => $"{YubiKeyAccessTexts.Name(serial)}: {e.Detail}",
+        OtpFailure.NotReachable => Unreachable(serial, ExplainUnreachable([new OtpKeyInfo(serial, false, "")], reachableCount: 0)),
+        var kind => new(kind, serial, $"{YubiKeyAccessTexts.Name(serial)}: {e.Detail}"),
     };
 }

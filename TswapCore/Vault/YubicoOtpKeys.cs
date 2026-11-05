@@ -261,6 +261,27 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     /// </summary>
     private static void Configure(OtpSession otp, byte[] key20, Slot2Programming settings)
     {
+        var cmd = BuildSlot2Command(key20, settings);
+        try
+        {
+            var response = otp.Connection.SendCommand(cmd);
+            if (response.Status != ResponseStatus.Success)
+                throw new InvalidOperationException($"the key refused the configuration: {response.StatusMessage}");
+        }
+        finally
+        {
+            cmd.Clear();
+        }
+    }
+
+    /// <summary>
+    /// The configure command for slot 2 (<see cref="Slot.LongPress"/>): <see cref="Slot2Flags"/>, the key laid out by
+    /// <see cref="Slot2KeyLayout"/>, no access code now or after. Its APDU equals yubikey-manager 5.9.2's bytes for the
+    /// same key and settings (pinned by a test). The returned command holds the key: the caller calls
+    /// <c>Clear()</c> when done.
+    /// </summary>
+    internal static Yubico.YubiKey.Otp.Commands.ConfigureSlotCommand BuildSlot2Command(byte[] key20, Slot2Programming settings)
+    {
         var (extended, ticket, configuration) = Slot2Flags(settings);
         var (aesKey, uid) = Slot2KeyLayout(key20);
         var cmd = new Yubico.YubiKey.Otp.Commands.ConfigureSlotCommand
@@ -274,13 +295,15 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             cmd.SetUid(uid);
             cmd.ApplyCurrentAccessCode(new byte[Yubico.YubiKey.Otp.Commands.SlotConfigureBase.AccessCodeLength]);
             cmd.SetAccessCode(new byte[Yubico.YubiKey.Otp.Commands.SlotConfigureBase.AccessCodeLength]);
-            var response = otp.Connection.SendCommand(cmd);
-            if (response.Status != ResponseStatus.Success)
-                throw new InvalidOperationException($"the key refused the configuration: {response.StatusMessage}");
+            return cmd;
+        }
+        catch
+        {
+            cmd.Clear();
+            throw;
         }
         finally
         {
-            cmd.Clear();
             CryptographicOperations.ZeroMemory(aesKey);
             CryptographicOperations.ZeroMemory(uid);
         }
@@ -295,7 +318,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     {
         if (!settings.HmacSha1)
             throw new InvalidOperationException("tswap programs slot 2 for HMAC-SHA1 only");
-        byte configuration = ChallengeResponseHmacSha1Bits;
+        byte configuration = Yubico.YubiKey.Otp.ConfigurationFlags.HmacSha1ChallengeResponse;
         if (settings.SmallChallenge)
             configuration |= Yubico.YubiKey.Otp.ConfigurationFlags.HmacLessThan64Bytes;
         if (settings.Touch)
@@ -306,8 +329,6 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             Configuration: configuration);
     }
 
-    /// <summary>The configuration's CHAL_HMAC bits (yubikey-manager <c>CFGFLAG.CHAL_HMAC = 0x22</c>; SDK flag table <c>(1&lt;&lt;5)|(1&lt;&lt;1)</c>).</summary>
-    private const byte ChallengeResponseHmacSha1Bits = 0x22;
 
     /// <summary>
     /// The 20-byte key as the SDK's operation lays it out: the first 16 bytes are the AES key field, the remaining 4,

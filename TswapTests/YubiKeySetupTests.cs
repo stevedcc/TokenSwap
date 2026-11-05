@@ -184,6 +184,28 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.Equal((Extended: (byte)0x24, Ticket: (byte)0x40, Configuration: (byte)0x26), YubicoOtpKeys.Slot2Flags(YubicoOtpKeys.Slot2Settings(false)));
     }
 
+    /// <summary>
+    /// Review fix round, item 1: the command tswap sends equals yubikey-manager 5.9.2's own bytes for the key 01..14
+    /// (20 bytes). The expected data were computed without a device by
+    /// <c>python3 -I</c> running <c>HmacSha1SlotConfiguration(bytes(range(1, 21))).require_touch(t).get_config(None)</c>
+    /// plus the 6-byte current access code (none: zeros) that <c>YubiOtpSession.put_configuration</c> sends with it
+    /// (yubikit/yubiotp.py on oort). Ins 0x01 is the OTP configure instruction, P1 0x03 configuration slot 2.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "000000000000000000000000000000001112131400000102030405060708090a0b0c0d0e0f100000000000000024402e0000c48b000000000000")]
+    [InlineData(false, "000000000000000000000000000000001112131400000102030405060708090a0b0c0d0e0f10000000000000002440260000064d000000000000")]
+    public void Setup_Slot2CommandApduMatchesYkman(bool touch, string ykmanHex)
+    {
+        var key = Enumerable.Range(1, 20).Select(i => (byte)i).ToArray();
+
+        var cmd = YubicoOtpKeys.BuildSlot2Command(key, YubicoOtpKeys.Slot2Settings(touch));
+        var apdu = cmd.CreateCommandApdu();
+
+        Assert.Equal(0x01, apdu.Ins);
+        Assert.Equal(0x03, apdu.P1);
+        Assert.Equal(ykmanHex, Convert.ToHexStringLower(apdu.Data.Span));
+    }
+
     /// <summary>The 20-byte key goes into the configuration as the SDK's operation puts it: 16 bytes AES key, then 4 + 2 zero bytes of uid.</summary>
     [Fact]
     public void Setup_SlotKeyLayoutMatchesTheSdk()
@@ -296,6 +318,35 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.DoesNotContain(NotSetUpWarning, r.All);
     }
 
+    /// <summary>
+    /// Review fix round, item 4: only a blob recognised as a TPM or Secure Enclave slot counts: a password blob with a
+    /// valid <c>TSTP</c>/<c>TSSE</c> header, or a password-free (headerless) one in the length-prefixed shape every
+    /// legacy TPM and Secure Enclave package has (as their unlockers check it). Anything else is not a way in.
+    /// </summary>
+    public static TheoryData<string, byte[], bool> HardwareBlobs => new()
+    {
+        { "headerless TPM / Secure Enclave package", LegacyPackage(), true },
+        { "TSTP password header", TpmSlotBlob.Wrap(LegacyPackage()), true },
+        { "TSSE password header", SecureEnclaveSlotBlob.Wrap(LegacyPackage()), true },
+        { "TSTP header without the password flag (corrupt)", WithFlags(TpmSlotBlob.Wrap(LegacyPackage()), 0x00), false },
+        { "TSSE header with unknown flags (needs a newer tswap)", WithFlags(SecureEnclaveSlotBlob.Wrap(LegacyPackage()), 0x03), false },
+        { "unknown magic", "TSFD"u8.ToArray().Concat(RandomNumberGenerator.GetBytes(40)).ToArray(), false },
+        { "length prefix past the end", BitConverter.GetBytes(4000).Concat(RandomNumberGenerator.GetBytes(40)).ToArray(), false },
+    };
+
+    [Theory]
+    [MemberData(nameof(HardwareBlobs))]
+    public void Setup_Replace_OnlyRecognisedHardwareBlobsCount(string what, byte[] blob, bool counts)
+    {
+        var dir = WriteKeyringVault([YubiKeySlot(SerialA), MachineSlot(blob)]);
+
+        var keys = Keys(SerialA);
+        var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialA}\n", terminal: true);
+
+        Assert.True((r.Exit == 0) == counts, $"{what}: {r.All}");
+        Assert.Equal(counts ? [(SerialA, true)] : [], keys.Programmed);
+    }
+
     [Fact]
     public void Setup_Replace_AnotherMachinesTpmSlot_CountsAsAnotherWayIn()
     {
@@ -360,8 +411,79 @@ public sealed partial class YubiKeySetupTests : IDisposable
 
     private static string PlugInText(int other) => $"plug in YubiKey {other} so its slot can be checked, or leave this key as it is";
 
+    /// <summary>Review fix round, item 3: another key whose slot 2 is now empty was reprogrammed (or cleared): its slot didn't open.</summary>
     [Fact]
-    public void Setup_Replace_OtherKeyNoAnswer_Refused()
+    public void Setup_Replace_OtherKeySlot2Empty_SaysDidntOpen()
+    {
+        var m = VaultOnAAndB();
+        m.Keys.Slot2States[SerialB] = Slot2State.Empty;
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains(DeadText(SerialB), r.Err);
+        Assert.DoesNotContain("didn't answer", r.Err);
+        Assert.Empty(m.Keys.Programmed);
+    }
+
+    /// <summary>
+    /// Review fix round, item 6: every one-key slot of the plugged-in other key is tried (keyring order until task 4b
+    /// remembers which opened last); one that opens is enough, even after a dead one.
+    /// </summary>
+    [Fact]
+    public void Setup_Replace_OtherKeyMultiSlot_DeadFirst_StillProceeds()
+    {
+        var m = VaultOnAAndB();
+        var keyring = m.Keyring;
+        var real = keyring.Slots.Single(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial == SerialB);
+        // A dead slot of B (another challenge and salt: its KEK never matches), ahead of B's real one.
+        var dead = real with { SlotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), HwBlob = YubiKeySlotBlob.Create(SerialB, true).Encode() };
+        File.WriteAllBytes(Path.Combine(m.VaultDir!, "keyring"),
+            KeyringCodec.Encode(keyring with { Slots = [dead, .. keyring.Slots] }));
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        Assert.Equal(2, m.Keys.Challenges.Count(c => c.Serial == SerialB)); // the dead slot, then the real one
+    }
+
+    /// <summary>Plan review addendum: with several other keys and none plugged in, the message names each of them.</summary>
+    [Fact]
+    public void Setup_Replace_SeveralOtherKeysNotPlugged_NamesEach()
+    {
+        var dir = WriteKeyringVault([YubiKeySlot(SerialA), YubiKeySlot(SerialB), YubiKeySlot(SerialC)]);
+
+        var keys = Keys(SerialA);
+        var r = Setup(keys, ["--touch", "--replace"], dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains($"plug in YubiKey {SerialB} or YubiKey {SerialC} so its slot can be checked, or leave this key as it is", r.Err);
+        Assert.Empty(keys.Programmed);
+    }
+
+    /// <summary>
+    /// Plan review addendum: a mixed result (no slot opened, one key's slot definitely wrong, another key busy) refuses
+    /// with the busy text: the busy key may still open the vault, so "didn't open" would be the wrong advice.
+    /// </summary>
+    [Fact]
+    public void Setup_Replace_MixedResult_DeadAndBusy_SaysBusy()
+    {
+        var dir = WriteKeyringVault([YubiKeySlot(SerialA), YubiKeySlot(SerialB), YubiKeySlot(SerialC)]); // B's slot: a definite wrong answer
+
+        var keys = Keys(SerialA, SerialB, SerialC);
+        keys.Busy.Add(SerialC);
+        var r = Setup(keys, ["--touch", "--replace", "--serial", $"{SerialA}"], dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains($"YubiKey {SerialC} is busy (another tswap or app is using it); try again.", r.Err);
+        Assert.DoesNotContain("didn't open", r.Err);
+        Assert.Contains(keys.Challenges, c => c.Serial == SerialB); // B was tried first, in keyring order
+        Assert.Empty(keys.Programmed);
+    }
+
+    [Fact]
+    public void Setup_Replace_OtherKeyDidNotAnswer_Refused()
     {
         var m = VaultOnAAndB();
         m.Keys.NotAnswering.Add(SerialB); // a touch that timed out
@@ -459,7 +581,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
     }
 
     [Fact]
-    public void Setup_Replace_OtherKeyPasswordSlot_WrongPassword_Refused()
+    public void Setup_Replace_PasswordSlotWrongPassword_SaysSo()
     {
         const string password = "correct horse battery staple";
         var m = VaultOnAAndB(password);
@@ -467,7 +589,8 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\nwrong password\n", terminal: true);
 
         Assert.NotEqual(0, r.Exit);
-        Assert.Contains(DeadText(SerialB), r.Err);
+        Assert.Contains($"YubiKey {SerialB}'s slot didn't open (it may have been reprogrammed, or the vault password was mistyped); " +
+            "this key may be the vault's only working YubiKey, so it's left as it is", r.Err);
         Assert.Empty(m.Keys.Programmed);
     }
 
@@ -988,8 +1111,23 @@ public sealed partial class YubiKeySetupTests : IDisposable
         new(RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), RandomNumberGenerator.GetBytes(32), RandomNumberGenerator.GetBytes(48),
             SlotKind.Machine, hwBlob);
 
-    /// <summary>A hardware blob that isn't a YubiKey's (the TPM blob's header; contents don't matter here).</summary>
-    private static byte[] TpmLikeBlob() => "TSTP"u8.ToArray().Concat(RandomNumberGenerator.GetBytes(40)).ToArray();
+    /// <summary>A password-free TPM slot's blob: the legacy headerless package (contents don't matter here).</summary>
+    private static byte[] TpmLikeBlob() => LegacyPackage();
+
+    /// <summary>
+    /// The shape of every headerless TPM / Secure Enclave package: a 4-byte little-endian length, that many bytes
+    /// (key name, public part or key representation), then at least one more byte.
+    /// </summary>
+    private static byte[] LegacyPackage() =>
+        BitConverter.GetBytes(10).Concat(RandomNumberGenerator.GetBytes(10)).Concat(RandomNumberGenerator.GetBytes(30)).ToArray();
+
+    /// <summary>A <c>TSTP</c>/<c>TSSE</c> header (magic 4, version 1, flags 1) with its flags byte replaced.</summary>
+    private static byte[] WithFlags(byte[] headed, byte flags)
+    {
+        var copy = (byte[])headed.Clone();
+        copy[5] = flags;
+        return copy;
+    }
 
     /// <summary>A keyring vault in the single-file layout, its keyring holding exactly <paramref name="slots"/>.</summary>
     private string WriteKeyringVault(IReadOnlyList<Slot> slots)
