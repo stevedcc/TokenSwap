@@ -2,7 +2,7 @@ namespace TswapCore.Keyring;
 
 /// <summary>
 /// Shared constants for the Phase 6 per-secret record wire format (design: see
-/// <c>MULTI_MACHINE_KEYING.md</c> and <c>REFACTORING_PLAN.md</c> §Phase 6).
+/// <c>docs/design/multi-machine-keying.md</c> and <c>docs/design/refactoring-plan.md</c> §Phase 6).
 ///
 /// Deliberately fixed-binary, length-prefixed, explicitly-ordered — not
 /// <see cref="System.Text.Json"/>. JSON gives no byte-stability guarantee across versions or

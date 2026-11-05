@@ -8,7 +8,7 @@ namespace TswapCore.Vault;
 /// <summary>
 /// Windows TPM 2.0 <see cref="IHardwareKeyService"/>. Needs a TPM 2.0 device exposed through
 /// Windows' CNG "Microsoft Platform Crypto Provider", so it only builds/runs on Windows — see
-/// <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c> for the design this
+/// <c>docs/design/hardware-backends.md</c> and <c>docs/design/multi-machine-keying.md</c> for the design this
 /// implements. The <see cref="Unlock"/> validation logic (base64 decode, 32-byte length check)
 /// lives in <see cref="TpmHardwareServiceBase"/>, shared with <see cref="LinuxTpmHardwareService"/>.
 ///
@@ -29,7 +29,7 @@ namespace TswapCore.Vault;
 ///
 /// <para><b>Status: developed and tested only against this machine's (virtual) TPM in a
 /// Parallels VM, not yet verified against physical TPM hardware</b> — see
-/// <c>HARDWARE_BACKENDS.md</c>'s Windows TPM section before trusting this as a primary vault
+/// <c>docs/design/hardware-backends.md</c>'s Windows TPM section before trusting this as a primary vault
 /// backend.</para>
 ///
 /// <para>Registered at the composition root only on Windows — see <c>TswapCli/Program.cs</c>. On

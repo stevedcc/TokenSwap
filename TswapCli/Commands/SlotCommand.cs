@@ -7,7 +7,7 @@ using TswapCore.VaultPassword;
 namespace TswapCli.Commands;
 
 /// <summary>
-/// Hand-carried multi-machine enrollment (issues #121/#122, <c>MULTI_MACHINE_KEYING.md</c>
+/// Hand-carried multi-machine enrollment (issues #121/#122, <c>docs/design/multi-machine-keying.md</c>
 /// §Hand-carried enrollment): three subcommands, all dispatched through this one
 /// <see cref="ICliCommand"/> — <c>slot request</c> (on the new, not-yet-enrolled machine),
 /// <c>slot approve</c> (on an already-enrolled machine), and <c>slot accept</c> (back on the new
@@ -301,7 +301,7 @@ public sealed class SlotCommand : ICliCommand
         if (backend == HardwareBackend.SecureEnclave)
         {
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
-            // Known gap (HARDWARE_BACKENDS.md): the request file doesn't carry the posture.
+            // Known gap (docs/design/hardware-backends.md): the request file doesn't carry the posture.
             if (!requirePresence)
                 c.Out.WriteLine("The approving machine can't see that this slot needs no presence: tell whoever approves it.");
         }

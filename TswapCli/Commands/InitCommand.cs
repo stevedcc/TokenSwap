@@ -539,7 +539,7 @@ public sealed class InitCommand : ICliCommand
     /// with <c>slot request/approve/accept</c>.
     ///
     /// <para>The TPM backends are verified against swtpm (Linux) and a VM's virtual TPM
-    /// (Windows) and an Intel PTT (#155); see <c>HARDWARE_BACKENDS.md</c>.</para>
+    /// (Windows) and an Intel PTT (#155); see <c>docs/design/hardware-backends.md</c>.</para>
     /// </summary>
     private static int ExecuteHardwareKeyring(
         CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool? passwordFlag, bool requirePresence = true)
@@ -606,7 +606,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine($"physical {hardware}: losing the machine (or clearing its {hardware}) loses that slot.");
         if (backend == HardwareBackend.SecureEnclave)
         {
-            // Brief T7 item 8 (#159): said where the user sees it, in proportion (HARDWARE_BACKENDS.md).
+            // Brief T7 item 8 (#159): said where the user sees it, in proportion (docs/design/hardware-backends.md).
             c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
             c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
             c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");

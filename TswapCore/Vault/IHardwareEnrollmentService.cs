@@ -24,7 +24,7 @@ public sealed record HardwareEnrollment(byte[] KekSlot, byte[] HwBlob);
 /// it: a YubiKey cannot wrap bytes, it <em>derives</em> <c>KEK_slot</c> from a challenge (one key
 /// per slot since brief T4, <see cref="TswapCore.Keyring.YubiKeySlotKek"/>), so the CLI derives it
 /// and passes it in. No console I/O
-/// moves behind this interface. See <c>HARDWARE_BACKENDS.md</c> §Adding a backend.</para>
+/// moves behind this interface. See <c>docs/design/hardware-backends.md</c> §Adding a backend.</para>
 /// </summary>
 public interface IHardwareEnrollmentService
 {

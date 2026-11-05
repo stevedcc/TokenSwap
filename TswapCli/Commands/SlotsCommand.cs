@@ -14,7 +14,7 @@ namespace TswapCli.Commands;
 ///
 /// <para><b>The core requirement this issue calls out by name:</b> a no-touch YubiKey machine
 /// slot must never be reported as a bare "unprotected"/"insecure" — see
-/// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet), which documents custody (physically
+/// <c>docs/design/multi-machine-keying.md</c> §Why not k &gt;= 2 (yet), which documents custody (physically
 /// controlling who has the key at all) as a real, if unusual, control distinct from no
 /// protection whatsoever. See <see cref="DescribeMachineProtection"/> and
 /// <see cref="DescribeRecoveryProtection"/> for how each slot kind's actual guarantee is
@@ -177,7 +177,7 @@ public sealed class SlotsCommand : ICliCommand
     /// issue calls out: <c>false</c> (or <c>null</c>, unknown) must never collapse to a bare
     /// "unprotected"/"insecure" — a no-touch YubiKey is still only usable by whoever has
     /// physical custody of it, which is a real, if unusual, control (see
-    /// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet)).
+    /// <c>docs/design/multi-machine-keying.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
     private static string DescribeMachineProtection(Config config, Slot slot) => SlotPassword.Classify(slot) switch
     {
@@ -231,7 +231,7 @@ public sealed class SlotsCommand : ICliCommand
     /// A recovery slot's presence guarantee is not a weaker machine slot — it's a deliberately
     /// different kind of slot with a different job: a break-glass credential that must work
     /// offline, with nobody present, potentially years after enrollment (see
-    /// <c>MULTI_MACHINE_KEYING.md</c>'s "The recovery slot" section and its per-backend table,
+    /// <c>docs/design/multi-machine-keying.md</c>'s "The recovery slot" section and its per-backend table,
     /// where the recovery row is explicitly "none — this is the deliberately presence-free,
     /// offline-capable break-glass slot"). Custody of the recovery private key is the only real
     /// control, by design.

@@ -324,7 +324,7 @@ public class CommandTests : IDisposable
     {
         // The exact failure mode this issue calls out by name: a no-touch YubiKey slot has a
         // real, if unusual, control (custody) and must never be reduced to a bare
-        // "unprotected"/"insecure" label. See MULTI_MACHINE_KEYING.md §Why not k >= 2 (yet).
+        // "unprotected"/"insecure" label. See docs/design/multi-machine-keying.md §Why not k >= 2 (yet).
         var (config, _, _) = InitCommand.BuildKeyringConfig(
             RandomNumberGenerator.GetBytes(32),
             new List<int> { 11111111, 22222222 },

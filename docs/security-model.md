@@ -1,0 +1,348 @@
+# Security model
+
+This page is for anyone deciding whether tswap fits their setup, or checking what a given vault
+protects against. It covers the sudo split, the threat model and its non-goals, what each kind of
+slot needs to unlock, the touch posture, what the vault password does and doesn't protect, and what
+a synced vault folder can't detect yet.
+
+The broker has its own threat model: [broker-threat-model.md](broker-threat-model.md).
+
+## The sudo split
+
+tswap draws a privilege boundary with sudo:
+
+- Commands that **use** secrets don't need sudo.
+- Commands that **reveal** a value, remove or replace a value that is still good, or administer the
+  vault need sudo.
+
+The list of which command needs sudo, subcommand by subcommand, is in
+[commands.md](commands.md#which-commands-need-sudo).
+
+An AI agent (Claude Code, Copilot, etc.) can:
+
+- generate strong random passwords with `create`: the value is never displayed;
+- see what secrets exist with `names`: just the names, no values;
+- use secrets in commands with `run`: tokens are substituted internally.
+
+An AI agent **without sudo** (no passwordless sudo for its user, and never given the sudo
+password) **cannot**:
+
+- read a secret value (`get` requires sudo);
+- set a secret to a known value (`add` requires sudo);
+- enumerate secrets with metadata (`list` requires sudo);
+- delete secrets (`delete` requires sudo), or run any other command that needs sudo;
+- exfiltrate via `run` in the blocked ways: `echo`, `printf`, pipes, redirects, and inline
+  shell/interpreter code (`sh -c`, `python -c`, ...) are blocked. The blocklist is shallow: a
+  program such as `curl`, or a script file, can still take a value out (see
+  [What tswap does not protect against](#what-tswap-does-not-protect-against)).
+
+Agents should never run sudo. The roles that follow from this split, and an example allowlist, are
+in [agent-integration.md](agent-integration.md).
+
+### Which vault a command under sudo uses
+
+- Under `sudo` (tswap running as root), tswap uses the vault of the user who ran sudo:
+  `SUDO_USER`'s home folder from the system's user database, used only when `SUDO_UID` matches that
+  user's uid (otherwise tswap refuses). That includes `sudo -i`. A tswap that isn't running as root
+  ignores `SUDO_USER`, so `sudo -u <another user>` uses that user's own vault.
+- `SUDO_USER=root` means root's own folder.
+- Without `SUDO_USER` (a root service, or `su`) tswap uses the folder under `HOME`, which with plain
+  `su` is still the caller's.
+- `TSWAP_CONFIG_DIR` overrides all of this.
+- **Windows:** an elevated prompt keeps your `APPDATA`, so it uses your own vault.
+- **Linux:** under sudo tswap can't know your `XDG_CONFIG_HOME`, so it uses `<home>/.config/tswap`.
+  If you set `XDG_CONFIG_HOME` to something else, set `TSWAP_CONFIG_DIR` to your config folder and
+  keep it for sudo commands:
+
+  ```bash
+  export TSWAP_CONFIG_DIR="$XDG_CONFIG_HOME/tswap"
+  sudo --preserve-env=TSWAP_CONFIG_DIR tswap get ...
+  ```
+
+  Keeping a variable this way needs the same sudoers permission as `sudo VAR=value` (implied for an
+  `ALL` command); otherwise, if sudoers lets you run `env`, use
+  `sudo env TSWAP_CONFIG_DIR="$TSWAP_CONFIG_DIR" tswap ...`, as the
+  [broker guide](BROKER.md#setting-up-the-broker) does.
+
+## Threat model and non-goals
+
+tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a
+determined local actor. Knowing these boundaries is how you judge whether tswap fits your
+deployment.
+
+### What tswap protects against
+
+| Threat | How |
+|--------|-----|
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the plain value from the program's output, not its encoded forms ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
+| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
+| Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
+| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unlock, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
+| Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
+| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
+
+### What tswap does not protect against
+
+| Non-goal | Why |
+|----------|-----|
+| Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
+| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
+| Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
+| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
+| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
+
+### Design rationale
+
+The `run` command's exfiltration prevention is deliberately a **shallow blocklist, not a sandbox**.
+Deep command analysis (parsing shell semantics, detecting indirect exfiltration) would add
+complexity without real security: a motivated attacker can always find a bypass. The blocklist
+catches honest mistakes and obvious misuse. For stronger containment, combine tswap with OS-level
+sandboxing (containers, seccomp, AppArmor) or network-level controls.
+
+## Posture per backend
+
+A vault made by `init` is a keyring vault: each slot opens it on its own (setting each kind up:
+[setup.md](setup.md); the kinds of vault: [commands.md](commands.md#files)). The slots don't all offer the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
+means no source states it.
+
+| Slot | What unlocks it | Presence needed | Vault password | Reviewed / verified | Sources |
+|---|---|---|---|---|---|
+| YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection checked against the yubikey-manager 5.9.2 source | [1] [2] [3] |
+| YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
+| Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [3] [4] [5] |
+| Windows TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [3] [5] [6] |
+| Secure Enclave, `--with-touch` | This Mac's Secure Enclave; the key never leaves it and works only on this Mac | Yes: Touch ID or the login password on every unlock | Optional vault password (a password Secure Enclave slot) | **PoC-grade.** Verified for correctness (round trips, fails cleanly on denial). The wrapping is a **hand-rolled ECIES equivalent** (ephemeral ECDH + HKDF-SHA256 + AES-GCM) that **has had no independent cryptographic review** (#159). Tested on Apple Silicon only (M4 Pro, macOS 26 and 27.2); Intel T2 Macs untested | [3] [7] [8] [9] |
+| Secure Enclave, `--no-touch` | This Mac's Secure Enclave: anything that can run code on this Mac and read this vault's config, from any account, including root | No prompt | Optional vault password, as above | As above (PoC-grade, construction not independently reviewed, Apple Silicon only). Whether it unlocks with the screen locked, over ssh or after a reboot before anyone logs in is not known yet | [3] [7] [8] [9] [10] |
+| Recovery key | The recovery private key, printed once at `init`, read only from stdin | Not documented; the key opens the vault without any enrolled hardware | Not documented | Not documented | [11] |
+
+Sources. A date here is when that source's text was written or last changed, not when anything was
+checked; dates of checks are in the Reviewed / verified column.
+
+1. [Issue #158](https://github.com/stevedcc/TokenSwap/issues/158), work item 4 (2026-07-28).
+2. [YubiKey: touch or no touch](#yubikey-touch-or-no-touch), this page (2026-02-21, changed 2026-10-30).
+3. [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect), this page (2026-11-03).
+4. [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor) (2026-10-31).
+5. [TPM: no presence check](#tpm-no-presence-check), this page (2026-11-03).
+6. [hardware-backends.md, Windows TPM status](design/hardware-backends.md#status-virtual-tpm-verified-physical-tpm-tested-during-development-v010-re-check-open) (2026-10-31).
+7. [hardware-backends.md, Secure Enclave status](design/hardware-backends.md#status-poc-grade-not-yet-production-hardened) (2026-07-25, changed 2026-10-31).
+8. [Issue #159](https://github.com/stevedcc/TokenSwap/issues/159) (2026-07-28).
+9. [Secure Enclave: touch or no touch](#secure-enclave-touch-or-no-touch), this page (2026-10-30).
+10. [hardware-backends.md, touch or no touch](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11) (2026-10-30).
+11. [setup.md, The recovery key](setup.md#the-recovery-key) (2026-10-30).
+
+A vault is only as strong as the weakest slot usable on that machine: see
+[What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect).
+
+### TPM: no presence check
+
+The TPM key has no PCR policy, and without a vault password (`--password`) any process running as
+you can unseal it (no presence check, unlike a touch-required YubiKey or a `--with-touch` Secure
+Enclave slot).
+
+### The Secure Enclave's wrapping has not been reviewed
+
+The Secure Enclave slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction, a
+hand-rolled ECIES equivalent. In the words of the
+[design record](design/hardware-backends.md#status-poc-grade-not-yet-production-hardened), it has
+"been verified for correctness (round-trips, fails cleanly on denial), not reviewed by anyone with
+cryptography expertise for subtler issues". It has not had an independent cryptographic review;
+`init --secure-enclave` says so too. Tested on Apple Silicon only. The design record lists what
+else is open before it should be trusted as a primary vault backend.
+
+## Touch posture
+
+### YubiKey: touch or no touch
+
+tswap recommends configuring a YubiKey's slot 2 with a touch requirement (the commands are in
+[Preparing a YubiKey](setup.md#preparing-a-yubikey)). That means:
+
+- **Physical presence required:** touching the YubiKey confirms intent.
+- **Protection from local malware:** processes can't silently unlock the vault.
+- **Something you have and something you do:** the key, and the touch.
+
+Slots configured without touch let any process running as you unlock the vault while the key is
+plugged in. That can be the right choice (a key that lives in an always-on machine, a CI runner),
+and tswap treats it as one: it **explains the posture once, where it is chosen, and doesn't repeat
+it on every command**.
+
+- **At enrolment** (`init`, `slot add`, `slot request`, `migrate --to-records`, `recover`) tswap
+  records each key's posture in its slot and explains it on stderr.
+- **How it knows:** it detects the posture from whether `ykman otp calculate` asked for a touch.
+  ykman prints "Touch your YubiKey..." on stderr exactly when the key waits for one (checked against
+  the yubikey-manager **5.9.2** source). `ykman otp info` can't read a slot's touch setting, so
+  slots enrolled before v0.1.0 show as "unknown". Over USB only (tswap's only transport for
+  `calculate`). If tswap couldn't check, it says so, with the fix.
+- **`tswap slots`** shows each slot's posture at any time.
+- **Everyday commands** print nothing about it, except one line on stderr when a slot's posture
+  differs from what this machine last acknowledged (for example a no-touch key's slot arriving from
+  another machine with `slot merge`). `tswap slots --ack` acknowledges the current postures.
+- **The notice is advisory.** The acknowledgement is per machine, in `config.json`
+  (`AcknowledgedTouch`). That file is writable by you and by any process running as you. For a
+  YubiKey slot, `tswap slots`, which reads the posture from the slot itself, is the reliable view.
+
+**Moving a key to touch-required:** in a keyring vault, reprogram the key's slot 2 with ykman's
+`--touch` ([Preparing a YubiKey](setup.md#preparing-a-yubikey)), then enroll it again as a new slot.
+
+- **Warning:** reprogramming gives the key a new secret, so its existing slot no longer opens the
+  vault. `tswap slots` still lists that dead slot (tswap can't remove slots). Make sure another
+  slot, or the recovery key, opens the vault before you start.
+- **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so the step
+  is `recover --yubikey`, with the vault's recovery key on stdin (more ways to pipe it:
+  [The recovery key](setup.md#the-recovery-key)):
+
+  ```bash
+  read -rs RECOVERY_KEY          # paste the recovery key; it isn't shown or kept in history
+  printf '%s\n' "$RECOVERY_KEY" | sudo tswap recover --yubikey
+  unset RECOVERY_KEY
+  ```
+
+  v0.3.0's YubiKey work changes this step.
+
+A classic vault from 0.1 is covered in [upgrading-from-0.1.md](upgrading-from-0.1.md).
+
+### Secure Enclave: touch or no touch
+
+`--secure-enclave` needs exactly one of `--with-touch` or `--no-touch`, on `init`, `slot request`
+and `recover` alike; there is no default.
+
+- `--with-touch`: every unlock asks for Touch ID or the login password.
+- `--no-touch`: no prompt.
+- **The choice lives in the key.** It is fixed into the Secure Enclave key when the key is created
+  and can't be read back from it, so tswap records it in `config.json` (`RequiresTouch`), and
+  `tswap slots` shows that record. The record only changes what tswap says, never what the Secure
+  Enclave enforces.
+- **No recurring banner.** There is no per-command banner for a no-touch Secure Enclave slot: you
+  chose it with the flag. (A YubiKey's posture is set outside tswap, with ykman.)
+- `slot approve` on the approving machine can't see a requesting Mac's choice; `slot request
+  --no-touch` says so.
+
+What `--no-touch` trades away, as the warning it prints says:
+
+1. This Mac's slot unlocks the vault without Touch ID or a password.
+2. Anything that can run code on this Mac and read this vault's config, from any account, including
+   root, can unlock the vault without you noticing. The key still never leaves the Secure Enclave
+   and works only on this Mac; the config file's permissions are what keep other accounts out.
+3. The slot can't be changed or removed later: tswap can't remove slots, so the only way to drop it
+   is a new vault and moving the secrets over.
+
+It exists for unattended use. But whether a no-touch slot unlocks with the screen locked, over ssh
+or after a reboot before anyone logs in (which a scheduled job or a separate user for unattended work may need) is
+**not known yet**: that depends on the recorded check in
+[setup.md](setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
+
+`tswap` and `libtswapse.dylib` beside it ship together: a newer `tswap` with an older dylib refuses
+to enrol ("update libtswapse.dylib together with tswap") rather than make a key it can't vouch for.
+
+### Under sudo: the Secure Enclave asks you, not root
+
+- Under sudo, every Secure Enclave call (the unlock, and creating the key in `init`, `slot request`
+  and `recover`) runs as the **owner of the vault's config folder**, normally you, so Touch ID asks
+  you. The macOS dialog *"Enter the password for the user System Administrator"* under sudo was a
+  bug.
+- So it opens only that user's own vault, with that user's presence: less privilege than root, not
+  more.
+- If switching to the folder's owner fails, or the owner can't be read, the command fails: nothing
+  runs as root, and no other slot (a one-key YubiKey slot) is tried.
+- Without sudo nothing changes. The TPM and YubiKeys are not affected (they still run as root under
+  sudo).
+- Two cases still can't use a `--with-touch` slot under sudo:
+  - a vault folder owned by root (`sudo tswap init` with the vault under `/var/root`) evaluates
+    presence for root;
+  - a folder owned by a uid with no login (a service account) asks presence of that uid, which
+    nobody can give.
+
+  Choose `--no-touch` for such a vault, or keep it in the user's folder.
+- A slot enrolled with sudo before v0.1.0 (`sudo tswap recover --secure-enclave`, or `init` /
+  `slot request` run with sudo) was created as root. If it doesn't unlock, run `recover` again
+  (since v0.1.0, sudo creates the key as the owner).
+
+The design reasoning is in
+[hardware-backends.md](design/hardware-backends.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157).
+
+## What the vault password does and doesn't protect
+
+Setting the password up, and the agent that holds it: [vault-password-and-agent.md](vault-password-and-agent.md).
+
+- **It stops** another local user without root (including one in group `tss`, or one who can use a
+  plugged-in no-touch YubiKey) who has a copy of the vault folder, and anyone with a stolen disk or
+  copied folder who later gets the hardware.
+- **It doesn't stop** root, a kernel-level attacker, or someone at your unlocked session while the
+  agent holds the password (the agent answers your uid; a person at your keyboard *is* your uid).
+- **A vault is only as strong as the weakest slot usable on that machine.** A password TPM slot next
+  to a plugged-in no-touch YubiKey slot without the password protects nothing against another user
+  of that machine. A YubiKey kept in a drawer, or the recovery key, is fine. `tswap slots` warns.
+- **Don't reuse the vault password anywhere else.** Two consequences make it worth guessing:
+  - whoever can open a mixed vault through a slot **without** the password can read the
+    `vault-password` file's verifier and test vault-password guesses offline, at one Argon2id
+    (64 MiB, t = 3) per guess;
+  - whoever holds a YubiKey with a password slot can guess that slot's password offline the same
+    way.
+
+  A long password is the defence in both cases.
+- **RAM.** `agent start` and `broker unlock` say it once, verbatim:
+  *"The agent keeps your stretched vault password in memory until you stop it or it times out.
+  Root, or anything that can read this process's memory, can take it while it runs; it still needs
+  this machine's TPM/YubiKey/Secure Enclave to open the vault."*
+  - The held copy is in locked memory (never swapped; a failed lock is a warning).
+  - The agent makes itself non-dumpable (Linux), denies debugger attachment (macOS) or denies other
+    processes' memory access through its DACL (Windows: a speed bump, the process's owner can change
+    it back).
+  - On a Mac with a password Secure Enclave slot one more line follows: the Secure Enclave library's
+    copies of the password during each unlock (a Swift `Data` copy and the `LAContext`'s copy) can't
+    be wiped by tswap.
+- **The derivation is best effort.** The typed password is a .NET string, which can't be zeroed, and
+  Argon2id's 64 MiB working memory and output array live on the managed heap, which may be swapped
+  and can't be zeroed reliably. tswap zeroes its own UTF-8 bytes and output buffer. "Locked, never
+  swapped" applies to the held stretched password only. On Linux the TPM auth text (`hex:` and the
+  stretched bytes in hex) also sits in the kernel's pages of the memfd tpm2-tools reads it from,
+  until that child exits; tswap can't wipe those.
+- **The tswap CLI stays dumpable** while it holds the vault key during a command, as it always has.
+- **The agent's answers are authenticated by the vault folder.** The key check proves an answer is
+  this vault's key given a `vault-password` file only the vault's machines can write: someone who
+  can write your vault folder could plant a file and a fake agent of their own. Keep the folder's
+  owner and mode as tswap sets them (as for the keyring).
+- **Windows TPM lockout is a denial of service.** Windows counts wrong TPM passwords per Windows
+  user, and across all standard users of the machine: about 4 wrong passwords for one user, or 9
+  across all of them, lock TPM use for up to 8 hours (480 minutes). That lock covers **everyone's**
+  TPM use, not only tswap's: it also blocks creating TPM keys, and may block slots without a
+  password. So another local standard user can lock you out of your TPM for hours with wrong
+  passwords against their own keys. They still can't open your vault. Run `tswap agent start` to
+  avoid retyping the password.
+- **Linux TPM lockout.** When the TPM's lockout password is empty, anyone who can use the TPM can
+  reset its failed-password counter and keep guessing. tswap warns at each TPM password enrolment
+  (`tpm2_changeauth -c lockout file:-`, as root, with the new lockout password on stdin, sets one,
+  and affects every program that uses the TPM; `file:-` keeps the password out of the process list
+  and shell history, where an argument would show it).
+
+## A shared vault folder: what a sync provider sees, and what isn't detected
+
+These notes apply to a record vault whose folder is synced, shared or copied between machines.
+How to share one, and the merge rules: [multi-machine.md](multi-machine.md#sharing-a-vault-folder).
+
+- **What a sync provider can see:** not names or values, and not which of an edit, a delete or a
+  burn a change was, unless the change moves the record across a 256-byte padding bucket (a delete
+  empties the value, a burn adds its reason, and a rotation keeps the previous value beside the new
+  one, so a long value, reason or retained previous value can change the file's size class).
+  - It can see that the file with a given hash changed at a given time, so it can follow when each
+    (unnamed) secret is edited; the single-file vault only showed that something changed.
+  - Each machine's origin id is in every record it writes; it is per machine and vault, so it
+    doesn't link one machine across vaults.
+  - If a stamp is more than a year ahead of the clock (a machine with a badly wrong clock), tswap
+    warns, and `tswap names` shows "far future".
+- **What is not detected yet:** deletes and burns are protected when versions are *merged* (an
+  older copy can't undo them). But a sync tool's "restore previous version" of a single file, or
+  someone with write access to the folder replacing a record (or the keyring) with an older copy of
+  itself, is taken as the current state: **tswap does not yet notice a record or keyring going back
+  in time.** Keep the vault folder's write access to your own machines and sync account.
+- **Export and import** keep the single-file encrypted format. An export is a snapshot of the
+  current values and burn state (no deletes, no history). Importing into a record-store vault
+  writes each secret as a new version, so importing an old export **can bring back a secret you
+  deleted since**: that is your explicit choice.
+- **Permissions:** the vault folder, `records/` and the config folder are created 0700 and their
+  files 0600; an existing vault with wider permissions is narrowed on the next write, with a notice.
+  Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files inherit
+  the profile folder's permissions.)

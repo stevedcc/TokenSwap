@@ -526,7 +526,7 @@ public sealed class VaultUnlocker
     /// The vault's own backend for a keyring vault: recover this machine's <c>KEK_slot</c> and
     /// unwrap this machine's slot (issue #119). Backend-agnostic: whichever backend recovered the
     /// 32 bytes, a keyring vault always needs this same extra unwrap step (see
-    /// MULTI_MACHINE_KEYING.md §Two-layer slot wrap). <paramref name="password"/> reaches the backend
+    /// docs/design/multi-machine-keying.md §Two-layer slot wrap). <paramref name="password"/> reaches the backend
     /// for a password slot (brief T17).
     /// </summary>
     private byte[] OwnBackend(Config config, YubiKeySelection selection, VaultPasswordProvider? password)

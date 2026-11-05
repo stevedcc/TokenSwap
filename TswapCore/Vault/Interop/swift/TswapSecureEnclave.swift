@@ -3,7 +3,7 @@
 // Security.framework directly: SecKeyCreateRandomKey(kSecAttrTokenIDSecureEnclave,
 // kSecAttrIsPermanent: true) requires the calling process to carry a keychain-access-groups
 // entitlement backed by a real Apple Developer Team ID + provisioning profile (verified on
-// real hardware — see HARDWARE_BACKENDS.md). CryptoKit's SecureEnclave key types need none of
+// real hardware — see docs/design/hardware-backends.md). CryptoKit's SecureEnclave key types need none of
 // that: they never touch the keychain at all. The key's `dataRepresentation` is an
 // SEP-encrypted, app-managed blob — safe to store anywhere (here, inside the wrapped payload
 // in Config.SecureEnclaveWrappedKey) and meaningless without the exact physical Secure Enclave
@@ -202,7 +202,8 @@ public func tswap_se_unwrap(
 // prompt of a key made with presence required.
 //
 // Copies tswap can't wipe: `Data(bytes:count:)` below and the LAContext each hold a copy of the
-// credential until they are released (the README's macOS RAM disclosure names them).
+// credential until they are released. docs/security-model.md names them, in the macOS RAM item of
+// section "What the vault password does and doesn't protect".
 //
 // STATUS: written for brief T17 and built and run by CI's macOS job (SecureEnclavePasswordRoundTripTests,
 // no presence); the Touch ID + password case is a manual test (SecureEnclavePasswordHardwareTests).
