@@ -1,9 +1,9 @@
 # Security model
 
 This page is for anyone deciding whether tswap fits their setup, or checking what a given vault
-protects against. It covers the sudo split, what each kind of slot needs to unlock, the touch
-posture, what the vault password does and doesn't protect, the threat model and its non-goals, and
-what a synced vault folder can't detect yet.
+protects against. It covers the sudo split, the threat model and its non-goals, what each kind of
+slot needs to unlock, the touch posture, what the vault password does and doesn't protect, and what
+a synced vault folder can't detect yet.
 
 The broker has its own threat model: [broker-threat-model.md](broker-threat-model.md).
 
@@ -54,21 +54,75 @@ in [agent-integration.md](agent-integration.md).
   sudo --preserve-env=TSWAP_CONFIG_DIR tswap get ...
   ```
 
+## Threat model and non-goals
+
+tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a
+determined local actor. Knowing these boundaries is how you judge whether tswap fits your
+deployment.
+
+### What tswap protects against
+
+| Threat | How |
+|--------|-----|
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
+| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
+| Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
+| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
+| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
+| Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
+
+### What tswap does not protect against
+
+| Non-goal | Why |
+|----------|-----|
+| Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
+| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
+| Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
+| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture |
+| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and XOR share are obtained without a YubiKey |
+| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
+
+### Design rationale
+
+The `run` command's exfiltration prevention is deliberately a **shallow blocklist, not a sandbox**.
+Deep command analysis (parsing shell semantics, detecting indirect exfiltration) would add
+complexity without real security: a motivated attacker can always find a bypass. The blocklist
+catches honest mistakes and obvious misuse. For stronger containment, combine tswap with OS-level
+sandboxing (containers, seccomp, AppArmor) or network-level controls.
+
 ## Posture per backend
 
 A vault made by `init` is a keyring vault: each slot opens it on its own. The slots don't all offer
 the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
 means no source states it.
 
-| Slot | What unlocks it | Presence needed | PIN / vault password | Reviewed / verified | Sources (date) |
+| Slot | What unlocks it | Presence needed | PIN / vault password | Reviewed / verified | Sources |
 |---|---|---|---|---|---|
-| YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection checked against the yubikey-manager 5.9.2 source | [#158](https://github.com/stevedcc/TokenSwap/issues/158) (2026-07-28); [touch posture](#yubikey-touch-or-no-touch) (2026-02-21, 2026-10-30); [vault password](#what-the-vault-password-does-and-doesnt-protect) (2026-11-03) |
-| YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [#158](https://github.com/stevedcc/TokenSwap/issues/158) (2026-07-28); [touch posture](#yubikey-touch-or-no-touch) (2026-10-30); [vault password](#what-the-vault-password-does-and-doesnt-protect) (2026-11-03) |
-| Linux TPM | This machine's TPM (the machine slot) | No: without a vault password, any process running as you can unseal it | No PCR policy. Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor) (2026-10-31); [TPM note](#tpm-no-presence-check) (2026-11-03); [vault password](#what-the-vault-password-does-and-doesnt-protect) (2026-11-03) |
-| Windows TPM | This machine's TPM (the machine slot) | No: without a vault password, any process running as you can unseal it | No PCR policy. Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [hardware-backends.md, Windows TPM status](design/hardware-backends.md#status-virtual-tpm-verified-physical-tpm-tested-during-development-v010-re-check-open) (2026-10-31); [TPM note](#tpm-no-presence-check) (2026-11-03); [vault password](#what-the-vault-password-does-and-doesnt-protect) (2026-11-03) |
-| Secure Enclave, `--with-touch` | This Mac's Secure Enclave; the key never leaves it and works only on this Mac | Yes: Touch ID or the login password on every unlock | Optional vault password (a password Secure Enclave slot) | **PoC-grade.** Verified for correctness (round trips, fails cleanly on denial). The wrapping is a **hand-rolled ECIES equivalent** (ephemeral ECDH + HKDF-SHA256 + AES-GCM) that **has had no independent cryptographic review** ([#159](https://github.com/stevedcc/TokenSwap/issues/159)). Tested on Apple Silicon only (M4 Pro, macOS 26 and 27.2); Intel T2 Macs untested | [hardware-backends.md, Secure Enclave status](design/hardware-backends.md#status-poc-grade-not-yet-production-hardened) (2026-07-25, 2026-10-31); [#159](https://github.com/stevedcc/TokenSwap/issues/159) (2026-07-28); [Secure Enclave posture](#secure-enclave-touch-or-no-touch) (2026-10-30); [vault password](#what-the-vault-password-does-and-doesnt-protect) (2026-11-03) |
-| Secure Enclave, `--no-touch` | This Mac's Secure Enclave: anything that can run code on this Mac and read this vault's config, from any account, including root | No prompt | Optional vault password, as above | As above (PoC-grade, construction not independently reviewed, Apple Silicon only). Whether it unlocks with the screen locked, over ssh or after a reboot before anyone logs in is not known yet | As above; [hardware-backends.md, touch or no touch](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11) (2026-10-30) |
-| Recovery key | The recovery private key, printed once at `init`, read only from stdin | Not documented; the key opens the vault without any enrolled hardware | Not documented | Not documented | [README, The recovery key](../README.md#the-recovery-key) (2026-10-30) |
+| YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection checked against the yubikey-manager 5.9.2 source | [1] [2] [3] |
+| YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
+| Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [3] [4] [5] |
+| Windows TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [3] [5] [6] |
+| Secure Enclave, `--with-touch` | This Mac's Secure Enclave; the key never leaves it and works only on this Mac | Yes: Touch ID or the login password on every unlock | Optional vault password (a password Secure Enclave slot) | **PoC-grade.** Verified for correctness (round trips, fails cleanly on denial). The wrapping is a **hand-rolled ECIES equivalent** (ephemeral ECDH + HKDF-SHA256 + AES-GCM) that **has had no independent cryptographic review** (#159). Tested on Apple Silicon only (M4 Pro, macOS 26 and 27.2); Intel T2 Macs untested | [3] [7] [8] [9] |
+| Secure Enclave, `--no-touch` | This Mac's Secure Enclave: anything that can run code on this Mac and read this vault's config, from any account, including root | No prompt | Optional vault password, as above | As above (PoC-grade, construction not independently reviewed, Apple Silicon only). Whether it unlocks with the screen locked, over ssh or after a reboot before anyone logs in is not known yet | [3] [7] [8] [9] [10] |
+| Recovery key | The recovery private key, printed once at `init`, read only from stdin | Not documented; the key opens the vault without any enrolled hardware | Not documented | Not documented | [11] |
+
+Sources. A date here is when that source's text was written or last changed, not when anything was
+checked; dates of checks are in the Reviewed / verified column.
+
+1. [Issue #158](https://github.com/stevedcc/TokenSwap/issues/158), work item 4 (2026-07-28; written before the vault password and `--no-touch` existed).
+2. [YubiKey: touch or no touch](#yubikey-touch-or-no-touch), this page (2026-02-21, changed 2026-10-30).
+3. [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect), this page (2026-11-03).
+4. [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor) (2026-10-31).
+5. [TPM: no presence check](#tpm-no-presence-check), this page (2026-11-03).
+6. [hardware-backends.md, Windows TPM status](design/hardware-backends.md#status-virtual-tpm-verified-physical-tpm-tested-during-development-v010-re-check-open) (2026-10-31).
+7. [hardware-backends.md, Secure Enclave status](design/hardware-backends.md#status-poc-grade-not-yet-production-hardened) (2026-07-25, changed 2026-10-31).
+8. [Issue #159](https://github.com/stevedcc/TokenSwap/issues/159) (2026-07-28).
+9. [Secure Enclave: touch or no touch](#secure-enclave-touch-or-no-touch), this page (2026-10-30).
+10. [hardware-backends.md, touch or no touch](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11) (2026-10-30).
+11. [README, The recovery key](../README.md#the-recovery-key) (2026-10-30).
 
 A vault is only as strong as the weakest slot usable on that machine: see
 [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect).
@@ -231,45 +285,6 @@ The design reasoning is in
 - **Linux TPM lockout.** When the TPM's lockout password is empty, anyone who can use the TPM can
   reset its failed-password counter and keep guessing. tswap warns at each TPM password enrolment
   (`tpm2_changeauth -c lockout`, as root, sets one, and affects every program that uses the TPM).
-
-## Threat model and non-goals
-
-tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a
-determined local actor. Knowing these boundaries is how you judge whether tswap fits your
-deployment.
-
-### What tswap protects against
-
-| Threat | How |
-|--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
-| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
-| Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
-| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
-| Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
-| Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
-| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
-
-### What tswap does not protect against
-
-| Non-goal | Why |
-|----------|-----|
-| Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
-| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
-| Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
-| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
-| Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
-| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture |
-| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and XOR share are obtained without a YubiKey |
-| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
-
-### Design rationale
-
-The `run` command's exfiltration prevention is deliberately a **shallow blocklist, not a sandbox**.
-Deep command analysis (parsing shell semantics, detecting indirect exfiltration) would add
-complexity without real security: a motivated attacker can always find a bypass. The blocklist
-catches honest mistakes and obvious misuse. For stronger containment, combine tswap with OS-level
-sandboxing (containers, seccomp, AppArmor) or network-level controls.
 
 ## A shared vault folder: what a sync provider sees, and what isn't detected
 

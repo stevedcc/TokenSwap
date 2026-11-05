@@ -41,20 +41,28 @@ tswap 0.2 is a breaking release.
 
 ## A classic vault without touch
 
-If you have a classic installation without touch, `tswap migrate` (the plain form) reviews its
-touch and entropy settings and offers a guide:
+To move a classic vault's YubiKeys to a touch requirement:
 
-```bash
-tswap migrate
-```
+1. Convert the vault. Each enrolled YubiKey becomes its own slot (plug in every one):
 
-The guide's steps are: back up your secrets, reconfigure the YubiKeys with a touch requirement,
-reinitialise tswap, and restore the secrets. In a keyring vault (what `migrate --to-records` makes),
-reprogram a key with `--touch` and enroll it again as a new slot instead:
+   ```bash
+   sudo tswap migrate --to-records
+   ```
 
-```bash
-sudo tswap slot add --yubikey
-```
+2. Reprogram each key's slot 2 with a touch requirement.
+3. Enroll each reprogrammed key again as a new slot (plug it in first):
+
+   ```bash
+   sudo tswap slot add --yubikey
+   ```
+
+`tswap slots` then shows each slot's touch setting.
+
+**Plain `tswap migrate`** (without `--to-records`) is a status check on a classic vault: it shows
+the touch setting, the entropy mode and the unlock challenge (it asks for the entropy mode if none
+is set), and offers to print a re-initialisation guide. That guide's "Reinitialize tswap" step (`tswap init`) is refused in 0.2
+while the classic vault is there: `init` asks you to convert it with `migrate --to-records` first.
+Use the steps above instead.
 
 What the touch requirement protects against: [security-model.md](security-model.md#touch-posture).
 
