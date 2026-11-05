@@ -102,40 +102,8 @@ files on another machine opens with the YubiKey too.
 
 Repeat for each key (the one at the desk, the one in the wallet): each becomes its own slot.
 
-### Without the exchange: the recovery key
-
-The recovery key does it on the desk machine alone, with a copy of the router's vault folder:
-
-1. Copy the router's vault folder to the desk machine, and point a separate config folder at the
-   copy:
-
-   ```bash
-   TSWAP_CONFIG_DIR=~/.config/tswap-router tswap init --vault-dir <copy of the router's vault folder>
-   ```
-
-2. Add the YubiKey there, unlocking with the recovery key:
-
-   ```bash
-   sudo tswap get recovery-key | sudo TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot add --yubikey --recovery-key-stdin
-   ```
-
-3. Carry the copy back and merge it into the router, on a terminal:
-
-   ```bash
-   sudo tswap vault merge <the copy>
-   ```
-
-   The router never approved the new slot, so it shows the slot's fingerprint and asks
-   `Add it to this vault? Compare the fingerprint first. (yes/no)`. Compare it with the
-   `New slot fingerprint` that step 2 printed. Answering no merges nothing. Without a terminal,
-   pass `--yes` instead (`sudo tswap vault merge <the copy> --yes`), after comparing the
-   fingerprints yourself.
-
-Afterwards the copy and `~/.config/tswap-router` on the desk machine are a second copy of the vault,
-which opens with that YubiKey. tswap leaves them as they are: delete both if you don't need that
-copy.
-
-How tswap reads the recovery key: [setup.md](setup.md#the-recovery-key).
+No enrolled machine available to approve? See
+[Appendix: adding a key with the recovery key](#appendix-adding-a-key-with-the-recovery-key).
 
 ## Sharing a vault folder
 
@@ -325,3 +293,43 @@ The format itself, its keys and the merge of sections are in the design record:
 Files are carried by hand, there is no revocation and no rotation of the vault key yet: see
 [setup.md, Limits of this version](setup.md#limits-of-this-version). The design behind the keyring,
 receipts and merge is in [multi-machine-keying.md](design/multi-machine-keying.md).
+
+## Appendix: adding a key with the recovery key
+
+This is the fallback for when no enrolled machine is available: no working TPM, Secure Enclave or
+YubiKey slot can open the vault. Otherwise an enrolled machine approves the new key through the
+exchange in [Remote enrolment](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step), and
+the recovery key stays offline.
+
+The recovery key does it on the desk machine alone, with a copy of the router's vault folder:
+
+1. Copy the router's vault folder to the desk machine, and point a separate config folder at the
+   copy:
+
+   ```bash
+   TSWAP_CONFIG_DIR=~/.config/tswap-router tswap init --vault-dir <copy of the router's vault folder>
+   ```
+
+2. Add the YubiKey there, unlocking with the recovery key:
+
+   ```bash
+   sudo tswap get recovery-key | sudo TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot add --yubikey --recovery-key-stdin
+   ```
+
+3. Carry the copy back and merge it into the router, on a terminal:
+
+   ```bash
+   sudo tswap vault merge <the copy>
+   ```
+
+   The router never approved the new slot, so it shows the slot's fingerprint and asks
+   `Add it to this vault? Compare the fingerprint first. (yes/no)`. Compare it with the
+   `New slot fingerprint` that step 2 printed. Answering no merges nothing. Without a terminal,
+   pass `--yes` instead (`sudo tswap vault merge <the copy> --yes`), after comparing the
+   fingerprints yourself.
+
+Afterwards the copy and `~/.config/tswap-router` on the desk machine are a second copy of the vault,
+which opens with that YubiKey. tswap leaves them as they are: delete both if you don't need that
+copy.
+
+How tswap reads the recovery key: [setup.md](setup.md#the-recovery-key).

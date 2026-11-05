@@ -386,7 +386,7 @@ sync folder.** Automating the exchange over the transport is v1 work, not a v0 s
 
 ### Fleet enrollment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
 
-The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault), and the recovery-key route without an exchange as it works on a record vault, are in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step).
+The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault) is in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step); the recovery-key route without an exchange, as it works on a record vault, is in [its appendix](../multi-machine.md#appendix-adding-a-key-with-the-recovery-key).
 
 Before T5 only the joining machine's keyring got the new slot: the approver *can't* build it (the
 slot is wrapped under a `KEK_slot` only the joiner's hardware produces), so the copies diverged
