@@ -135,6 +135,7 @@ macOS and via webauthn.dll on Windows. Its findings go into this document before
     pointed at has a slot on this key and that slot is the vault's only way in. **Other ways in (my call):** any
     other slot in the keyring counts, whether or not it works on this machine (another YubiKey, plugged in or not;
     a TPM or Secure Enclave slot of another machine; a recovery slot), because the vault stays openable somewhere.
+    **Amended 2026-11-05 after plan review (stricter, only refuses more; to be confirmed by the owner):** only a slot that can open the vault by itself counts (never a legacy pair slot); and when the only other ways in are YubiKey slots, one of those keys must be plugged in and its slot must open now, so a user can't reprogram key B while key A's slot is already dead. TPM, Secure Enclave and recovery slots count without a check.
     A classic (pre-keyring) pair vault that uses this key is refused unconditionally (both keys are always needed).
     If tswap is pointed at no vault, or one it can't read, it proceeds after the serial confirmation and warns that
     it couldn't check;
