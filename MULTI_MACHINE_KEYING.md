@@ -2,6 +2,8 @@
 
 This design record moved to [docs/design/multi-machine-keying.md](docs/design/multi-machine-keying.md).
 
+For setting tswap up, see [docs/setup.md](docs/setup.md).
+
 <details>
 <summary>Moved sections</summary>
 

@@ -3,6 +3,8 @@
 This page is for anyone who runs tswap by hand or from scripts. It lists every command with its usage,
 which commands need sudo, the environment variables tswap reads, and the files it writes.
 
+Setting up a vault step by step, with the guided `init`, is in [setup.md](setup.md).
+
 The per-command part is generated from tswap's own help text. A test checks it and the list of
 environment variables against the code; the Files section is not checked.
 
@@ -292,7 +294,7 @@ Credentials for containers that never hold them: HTTP routes, command templates 
 | Variable | Effect |
 |----------|--------|
 | `TSWAP_CONFIG_DIR` | The config directory to use; overrides everything else, including the `sudo` home lookup |
-| `TSWAP_YUBIKEY_SERIAL` | The YubiKey to unlock with when several are plugged in (see [Two YubiKeys plugged in](../README.md#two-yubikeys-plugged-in)); `sudo` drops it unless kept |
+| `TSWAP_YUBIKEY_SERIAL` | The YubiKey to unlock with when several are plugged in (see [Several YubiKeys plugged in](setup.md#several-yubikeys-plugged-in)); `sudo` drops it unless kept |
 | `XDG_CONFIG_HOME` | Linux: the config base, when it is an absolute path (a relative one is ignored) |
 | `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner |
 

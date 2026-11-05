@@ -4,6 +4,8 @@ This design record moved to [docs/design/hardware-backends.md](docs/design/hardw
 
 For the review status and posture of each backend, see [docs/security-model.md](docs/security-model.md).
 
+For setting tswap up, see [docs/setup.md](docs/setup.md).
+
 <details>
 <summary>Moved sections</summary>
 

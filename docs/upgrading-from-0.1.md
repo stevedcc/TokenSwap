@@ -32,8 +32,8 @@ tswap 0.2 is a breaking release.
 
 - **`init` makes a record vault:** one YubiKey, TPM or Secure Enclave slot plus a recovery slot, in
   `<config dir>/vault` or `--folder <dir>`.
-- **A plain `tswap init` at a terminal is now a guided setup.** `init --yubikey` is the old plain
-  `init`.
+- **A plain `tswap init` at a terminal is now a guided setup** ([setup.md](setup.md#the-guided-tswap-init)).
+  `init --yubikey` is the old plain `init`.
 - **`init --keyring` is gone.** `init` rejects it, and says so:
   *"--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey,
   --tpm or --secure-enclave."*
@@ -50,7 +50,7 @@ To move a classic vault's YubiKeys to a touch requirement:
    ```
 
 2. Reprogram each key's slot 2 with a touch requirement, with ykman, as the printed guide shows. The
-   commands are in the setup guide's "Preparing a YubiKey" section.
+   commands are in the setup guide's [Preparing a YubiKey](setup.md#preparing-a-yubikey) section.
 3. Enroll each reprogrammed key again as a new slot (plug it in first):
 
    ```bash

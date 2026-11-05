@@ -152,13 +152,10 @@ the vault's backend.
 
 ### Several keys plugged in, and the touch posture (brief T7, issues #198 and #185)
 
-- **Which key unlocks** (`YubiKeySelection`, used by `VaultUnlocker` and `YubiKeyHardwareService`):
-  `TSWAP_YUBIKEY_SERIAL` if set (an unplugged serial, or one without a slot, is an error); on a
-  terminal the user picks, the prompt on stderr, with a touch-required key as the default; with
-  stdin redirected tswap never asks: it tries the plugged-in keys that have a slot in the order
-  no-touch, unknown, touch-required (a classic XOR vault: the enrolled keys in plugged-in order),
-  and a key that doesn't answer or opens none of its slots passes to the next. Enrolment
-  (`init`, `slot add`, `slot request`) still asks which key to enroll.
+Which key unlocks when several are plugged in (`YubiKeySelection`, used by `VaultUnlocker` and `YubiKeyHardwareService`) moved to [setup.md](../setup.md#several-yubikeys-plugged-in).
+
+What the user sees of the touch posture (`Config.AcknowledgedTouch`, `tswap slots --ack`) moved to [security-model.md](../security-model.md#yubikey-touch-or-no-touch).
+
 - **The touch posture** in a slot's blob (the last byte, above) is recorded at enrolment from
   whether the key asked for a touch during the enrolment challenge:
   `IYubiKeyService.ChallengeReportingTouch`. `ykman otp calculate` prints "Touch your YubiKey..."
@@ -168,9 +165,6 @@ the vault's backend.
   `prompt_for_touch` in `ykman/_cli/util.py`; `yubikit/core/otp.py` signals it on
   `RESP_TIMEOUT_WAIT_FLAG`). `ykman otp info` can't read a slot's touch setting, so slots enrolled
   before this stay "unknown". Over USB only (tswap's only transport for `calculate`).
-- **What the user sees**: the posture is explained once where it is chosen; everyday commands
-  print one line only when a slot's posture differs from what this machine acknowledged
-  (`Config.AcknowledgedTouch`, written by the enrolling commands and `tswap slots --ack`).
 
 ### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
 
@@ -246,6 +240,8 @@ on a Mac) — they now pass via plain `dotnet test`, no publishing or signing re
 
 ### Under sudo: used as the vault folder's owner, not root (brief T12, issue #157)
 
+What a user sees and does under sudo (who Touch ID asks, the cases that can't use a `--with-touch` slot, re-running `recover`) moved to [security-model.md](../security-model.md#under-sudo-the-secure-enclave-asks-you-not-root).
+
 macOS asks Touch ID or the password of the process's effective user. Under sudo that was root, so
 a `--with-touch` slot showed *"tswap needs to authenticate to continue — Enter the password for the
 user System Administrator"*, which nobody can answer, and the unlock failed: that dialog under sudo
@@ -258,15 +254,6 @@ after). A switch that fails is a hard stop: the command fails with T5's error as
 the same holds when the folder's owner can't be read there. `VaultUnlocker` treats that error this
 way for every backend, so a TPM vault would stop the same way on a failed owner switch (the switch
 code is shared), though the TPM's own hardware call never switches.
-So it opens only that
-user's own vault, with that user's presence: less privilege than root, not more. Without sudo
-nothing changes; the TPM and YubiKeys are not affected (they still run as root under sudo). Two
-cases still can't use a `--with-touch` slot under sudo: a vault folder owned by root (`sudo tswap
-init` with the vault under `/var/root`) evaluates presence for root, and a folder owned by a uid
-with no login (a service account) asks presence of that uid, which nobody can give; choose
-`--no-touch` for such a vault, or keep it in the user's folder. A slot enrolled with sudo before
-this version (`sudo tswap recover --secure-enclave`, or `init`/`slot request` run with sudo) was
-created as root: if it doesn't unlock, run `recover` again (sudo now creates the key as the owner).
 `SecureEnclaveOwnerScopeTests` covers this with the simulated Secure Enclave and a fake identity
 switch; `SecureEnclaveFactoryScanTests` fails if a Secure Enclave service is built anywhere else.
 
@@ -340,70 +327,7 @@ requirePresence = true)`), and any other backend with `requirePresence: false` t
 
 ### Checking a no-touch Secure Enclave slot on a Mac
 
-Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
-**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim; the root half of step 5 ran on the vault itself, not on a root-owned copy). If a
-recorded step contradicts a warning claim (a)-(c), the warning text and its test assertions are
-corrected before release, not only the docs.
-
-Setup (an unsigned local build and a throwaway config folder; never your real vault):
-
-```bash
-dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
-BIN="$PWD/TswapCli/bin/Release/net10.0/osx-arm64/publish"   # tswap + libtswapse.dylib
-T="$BIN/tswap"
-export TSWAP_CONFIG_DIR="$(mktemp -d)"                      # the no-touch vault (steps 1-7)
-sw_vers -productVersion                                     # record: macOS version
-sysctl -n machdep.cpu.brand_string                          # record: the chip
-sysadminctl -screenLock status 2>&1                         # record: "require password after screen saver/sleep"
-                                                            # (or read it in System Settings > Lock Screen)
-```
-
-1. `"$T" init --secure-enclave --no-touch --no-recovery` — does the warning show (all three
-   claims)? Is there any prompt?
-2. `"$T" create t11-check`, then `"$T" names` — any prompt? Is `t11-check` listed?
-3. A fresh folder with the touch posture:
-   `TOUCH_DIR="$(mktemp -d)"; TSWAP_CONFIG_DIR="$TOUCH_DIR" "$T" init --secure-enclave --with-touch --no-recovery`,
-   then `TSWAP_CONFIG_DIR="$TOUCH_DIR" "$T" names` — does it prompt? (The only real-hardware run of
-   `tswap_se_wrap_v2` with `1`.)
-4. Screen unlocked, same user over ssh:
-   `ssh localhost "TSWAP_CONFIG_DIR='$TSWAP_CONFIG_DIR' '$T' names"` — does step 2's vault unlock?
-5. Claim (b). Another local account (`other` below), with a copy of the config folder and binary it
-   can read: `sudo mkdir -p /Users/Shared/t11 && sudo cp -R "$TSWAP_CONFIG_DIR" /Users/Shared/t11/vault && sudo cp "$BIN/tswap" "$BIN/libtswapse.dylib" /Users/Shared/t11/ && sudo chown -R other /Users/Shared/t11`,
-   then `sudo -u other env TSWAP_CONFIG_DIR=/Users/Shared/t11/vault /Users/Shared/t11/tswap names`
-   — does it unlock? Then as root, with a root-owned copy:
-   `sudo cp -R "$TSWAP_CONFIG_DIR" /var/root/t11-vault && sudo env TSWAP_CONFIG_DIR=/var/root/t11-vault "$T" names`
-   — does it unlock? (If tswap refuses because of file ownership rather than the Secure Enclave,
-   record the message: that is the ownership check, not an answer to (b).)
-6. Screen locked, from another machine: `ssh <this-mac> "TSWAP_CONFIG_DIR='$TSWAP_CONFIG_DIR' '$T' names"`
-   — does it unlock?
-7. After a reboot, before anyone logs in, from another machine over ssh (if Remote Login is on):
-   the same command — does it unlock?
-8. Skew: a copy of the publish folder with a dylib built from the pre-T11 Swift source:
-   `OLD="$(mktemp -d)"; cp "$BIN/tswap" "$OLD/"; git show 4f321a0:TswapCore/Vault/Interop/swift/TswapSecureEnclave.swift > "$OLD/old.swift"; swiftc -emit-library -O -o "$OLD/libtswapse.dylib" "$OLD/old.swift"`
-   (`4f321a0` is the last commit on `main` that changed the Swift source before T11; `main` is
-   never rewritten, so it stays valid after this brief is merged. The release tags `v0.0.1` and
-   `v0.0.2` predate the shim and can't be used),
-   then `TSWAP_CONFIG_DIR="$(mktemp -d)" "$OLD/tswap" init --secure-enclave --with-touch --no-recovery`
-   — does it fail with "update libtswapse.dylib together with tswap", and is no config written?
-9. Steps 4, 6 and 7 again against step 3's touch vault (`TSWAP_CONFIG_DIR="$TOUCH_DIR"`).
-
-Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -rf /Users/Shared/t11 /var/root/t11-vault`.
-
-| Step | What | Recorded |
-|---|---|---|
-| — | macOS version, chip, "require password after screen saver/sleep" setting | macOS 27.2 (26B123), Apple M4 Pro, Swift 6.4, .NET SDK 10.0.403; lock setting not recorded (2026-10-31, #157) |
-| 1 | `init --no-touch`: warning shown? any prompt? | warning shown, no prompt |
-| 2 | `create` + `names`: any prompt? name listed? | no prompt; listed (also `add`/`get`/`list` with zero Touch ID prompts) |
-| 3 | `init --with-touch` + `names`: prompt? | Touch ID on every unlock |
-| 4 | no-touch vault, ssh, screen unlocked: unlocks? | not run |
-| 5 | no-touch vault, another account with a copy: unlocks? | yes, with no prompt: a copy in `/Users/Shared/t11`, `chown -R nobody`, then `sudo -u nobody … tswap names` listed the secret, exit 0 (claim (b) confirmed) |
-| 5 | no-touch vault, root with a copy: unlocks? | under `sudo` (root) the user's no-touch vault unlocked with no dialog (the vault itself, not a root-owned copy) |
-| 6 | no-touch vault, ssh, screen locked: unlocks? | not run |
-| 7 | no-touch vault, ssh, after reboot before login: unlocks? | not run |
-| 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | yes: with `libtswapse.dylib` built from the pre-T11 Swift source (`4f321a0`), `init --secure-enclave --with-touch` failed with "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_wrap_v2). No key was created: update libtswapse.dylib together with tswap…", exit 1, no files written |
-| 9 | touch vault: step 4 / step 6 / step 7 | not run |
-
-**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so decision 6's remedy (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication on the tested paths; the forked-`setuid` fallback is not needed for them (a second admin account was not available to test).
+How to run this check, and its recorded results, moved to the setup guide: [setup.md](../setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 
 ### Why a Swift shim, not raw Security.framework P/Invoke (the path not taken)
 

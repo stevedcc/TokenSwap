@@ -95,8 +95,8 @@ sandboxing (containers, seccomp, AppArmor) or network-level controls.
 
 ## Posture per backend
 
-A vault made by `init` is a keyring vault: each slot opens it on its own. The slots don't all offer
-the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
+A vault made by `init` is a keyring vault: each slot opens it on its own (setting each kind up:
+[setup.md](setup.md)). The slots don't all offer the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
 means no source states it.
 
 | Slot | What unlocks it | Presence needed | PIN / vault password | Reviewed / verified | Sources |
@@ -122,7 +122,7 @@ checked; dates of checks are in the Reviewed / verified column.
 8. [Issue #159](https://github.com/stevedcc/TokenSwap/issues/159) (2026-07-28).
 9. [Secure Enclave: touch or no touch](#secure-enclave-touch-or-no-touch), this page (2026-10-30).
 10. [hardware-backends.md, touch or no touch](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11) (2026-10-30).
-11. [README, The recovery key](../README.md#the-recovery-key) (2026-10-30).
+11. [setup.md, The recovery key](setup.md#the-recovery-key) (2026-10-30).
 
 A vault is only as strong as the weakest slot usable on that machine: see
 [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect).
@@ -147,7 +147,8 @@ else is open before it should be trusted as a primary vault backend.
 
 ### YubiKey: touch or no touch
 
-tswap recommends configuring a YubiKey's slot 2 with a touch requirement. That means:
+tswap recommends configuring a YubiKey's slot 2 with a touch requirement (the commands are in
+[Preparing a YubiKey](setup.md#preparing-a-yubikey)). That means:
 
 - **Physical presence required:** touching the YubiKey confirms intent.
 - **Protection from local malware:** processes can't silently unlock the vault.
@@ -204,7 +205,7 @@ What `--no-touch` trades away, as the warning it prints says:
 It exists for unattended use. But whether a no-touch slot unlocks with the screen locked, over ssh
 or after a reboot before anyone logs in (which a scheduled job or a separate lane user may need) is
 **not known yet**: that depends on the recorded check in
-[hardware-backends.md](design/hardware-backends.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
+[setup.md](setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 
 `tswap` and `libtswapse.dylib` beside it ship together: a newer `tswap` with an older dylib refuses
 to enrol ("update libtswapse.dylib together with tswap") rather than make a key it can't vouch for.
