@@ -101,14 +101,52 @@ public class DocLinkTests
     }
 
     [Fact]
+    public void MovedSections_HeadingWithClosingHashesIsRecognised()
+    {
+        var anchors = MarkdownLinks.AnchorsDetailed("# T\n\n## Moved sections ##\n\n<a id=\"old\"></a>\n");
+        Assert.Equal(["t", "moved-sections", "old"], anchors.Select(a => a.Id));
+        Assert.Equal([false, false, true], anchors.Select(a => a.InMovedSections));
+    }
+
+    /// <summary>The four files with redirects: one known old id each, and the file's Moved sections is its last section.</summary>
+    public static TheoryData<string, string> MovedSectionsFiles => new()
+    {
+        { "README.md", "ai-agent-safety" },
+        { "docs/BROKER.md", "threat-model" },
+        { "HARDWARE_BACKENDS.md", "the-seam" },
+        { "MULTI_MACHINE_KEYING.md", "scope-v0--v1--v2" },
+    };
+
+    [Theory]
+    [MemberData(nameof(MovedSectionsFiles))]
+    public void MovedSections_RealFilesKeepTheirRedirectsInTheLastSection(string file, string oldId)
+    {
+        var anchors = MarkdownLinks.AnchorsDetailed(Read(file));
+        var old = Assert.Single(anchors, a => a.Id == oldId);
+        Assert.True(old.InMovedSections, $"{file}: #{oldId} is not under the Moved sections heading");
+        var heading = Assert.Single(anchors, a => a.Id == "moved-sections");
+        var after = anchors.Where(a => a.Line > heading.Line && !a.InMovedSections).Select(a => a.Id).ToList();
+        Assert.True(after.Count == 0, $"{file}: Moved sections is not the last section; after it: {string.Join(", ", after)}");
+    }
+
+    [Theory]
+    [InlineData("<details>\n<summary>Moved sections</summary>\n\n<a id=\"x\"></a>\n</details>\n", true)]
+    [InlineData("<details><summary>**Moved sections**</summary><a id=\"x\"></a></details>\n", true)]
+    [InlineData("<details>\n<summary>\nOld links: Moved  sections\n</summary>\n</details>\n", true)]
+    [InlineData("```html\n<details><summary>Moved sections</summary></details>\n```\n", false)]
+    [InlineData("<!--\n<details><summary>Moved sections</summary></details>\n-->\n", false)]
+    [InlineData("## Moved sections\n\n<details><summary>Other</summary></details>\n", false)]
+    public void CollapsedMovedSections_IsFoundOutsideCodeOnly(string markdown, bool collapsed)
+    {
+        Assert.Equal(collapsed, MarkdownLinks.HasCollapsedMovedSections(markdown));
+    }
+
+    [Fact]
     public void MovedSections_AreNeverCollapsed()
     {
         // Firefox doesn't open a closed <details> for a link into it: an old link landed on a
         // collapsed block at the foot of the README (owner check after PR #248).
-        var collapsed = MarkdownLinks.CheckedMarkdown()
-            .Where(f => System.Text.RegularExpressions.Regex.IsMatch(Read(f),
-                @"<summary\b[^>]*>\s*Moved\s+sections", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            .ToList();
+        var collapsed = MarkdownLinks.CheckedMarkdown().Where(f => MarkdownLinks.HasCollapsedMovedSections(Read(f))).ToList();
         Assert.True(collapsed.Count == 0, "Moved sections inside <details> in: " + string.Join(", ", collapsed));
     }
 
@@ -300,10 +338,11 @@ public class DocLinkTests
     [Fact]
     public void ReadmeStaysShort()
     {
-        // The redirect table under "## Moved sections" (the end of the file) doesn't count.
-        var lines = Read("README.md").Split('\n');
-        var moved = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^#{1,6}\s+Moved sections\s*$"));
-        var counted = moved < 0 ? lines.Length : moved;
+        // The redirect table under the Moved sections heading (the last section, pinned by
+        // MovedSections_RealFilesKeepTheirRedirectsInTheLastSection) doesn't count.
+        var readme = Read("README.md");
+        var heading = MarkdownLinks.AnchorsDetailed(readme).SingleOrDefault(a => a.Id == "moved-sections");
+        var counted = heading is null ? readme.Split('\n').Length : heading.Line - 1;
         Assert.True(counted <= 300, $"README.md has {counted} lines before its Moved sections (limit 300)");
     }
 

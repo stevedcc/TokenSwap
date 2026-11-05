@@ -231,7 +231,7 @@ internal static partial class MarkdownLinks
         for (var i = 0; i < live.Length; i++)
         {
             var h = AtxHeading().Match(live[i]);
-            if (!h.Success || !Regex.IsMatch(h.Groups[2].Value, @"^Moved\s+sections$", RegexOptions.IgnoreCase)) continue;
+            if (!h.Success || !Regex.IsMatch(ClosingHashes().Replace(h.Groups[2].Value, "").Trim(), @"^Moved\s+sections$", RegexOptions.IgnoreCase)) continue;
             var level = h.Groups[1].Length;
             var j = i + 1;
             while (j < live.Length && !(AtxHeading().Match(live[j]) is { Success: true } next && next.Groups[1].Length <= level)) j++;
@@ -265,6 +265,13 @@ internal static partial class MarkdownLinks
 
         return found.OrderBy(f => f.Offset).Select(f => f.Anchor).ToList();
     }
+
+    /// <summary>True when a "Moved sections" summary sits in a &lt;details&gt; block outside code and comments.</summary>
+    public static bool HasCollapsedMovedSections(string markdown) =>
+        CollapsedMovedSections().IsMatch(MaskCodeSpans(string.Join('\n', LiveLines(markdown))));
+
+    [GeneratedRegex(@"<summary\b[^>]*>(?:(?!</summary).)*?Moved\s+sections", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex CollapsedMovedSections();
 
     /// <summary>Heading slugs and explicit ids, in document order.</summary>
     public static IReadOnlyList<string> Anchors(string markdown) => AnchorsDetailed(markdown).Select(a => a.Id).ToList();
