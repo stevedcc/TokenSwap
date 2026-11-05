@@ -26,6 +26,12 @@ public sealed class YubicoSdkTests
         YubicoSdk.EnsureInitialized();
     }
 
+    /// <summary>
+    /// Under the JIT test host the SDK's own name-based defaults work too, so this test proves the creators
+    /// <see cref="YubicoSdk.EnsureInitialized"/> leaves in place work, not that it set them. The guard against the
+    /// NativeAOT failure is <see cref="YubicoSdk.EnsureInitialized"/>'s own self-check, which runs in the published
+    /// binary, and task 4's <c>package.sh --smoke</c> run of <c>tswap yubikey setup</c>.
+    /// </summary>
     [Fact]
     public void EnsureInitialized_CryptoCreatorsReturnWorkingAlgorithms()
     {
@@ -51,7 +57,8 @@ public sealed class YubicoSdkTests
 
     /// <summary>
     /// Yubico.Core 1.18.1 imports <c>"libudev.so"</c> (<c>Yubico.Core/src/Yubico/PlatformInterop/Linux/Linux.Libraries.cs</c>
-    /// line 20), the -devel package's link; the resolver must answer that name with the runtime library.
+    /// line 20), the -devel package's link; the resolver must answer that name, and the bare "libudev" it also accepts,
+    /// with the runtime library. Needs libudev.so.1 on the machine (every systemd Linux, and GitHub's Ubuntu runners).
     /// </summary>
     [Fact]
     public void LibudevResolver_AnswersTheSdksImportName()
@@ -63,6 +70,7 @@ public sealed class YubicoSdkTests
         var handle = YubicoSdk.ResolveLibudev("libudev.so", sdk, null);
 
         Assert.NotEqual(IntPtr.Zero, handle);
+        Assert.NotEqual(IntPtr.Zero, YubicoSdk.ResolveLibudev("libudev", sdk, null));
         Assert.Equal(IntPtr.Zero, YubicoSdk.ResolveLibudev("libc.so.6", sdk, null));
     }
 

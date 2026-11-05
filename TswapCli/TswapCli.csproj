@@ -31,15 +31,18 @@
     Yubico.NativeShims' build targets link its static archive and add -lpcsclite (target
     _YubicoNativeShimsConfigureAot), which would give tswap a NEEDED entry for libpcsclite.so.1. Instead
     Native/pcsc-loader.c defines the archive's 11 PC/SC functions (forwarding to libpcsclite.so.1 through dlopen
-    when it is there, a SCARD_E_NO_SERVICE stand-in otherwise) and tswap_pcsc_strategy(), compiled with the
-    compiler the AOT link uses ($(CppCompilerAndLinker)) into one static archive, libtswap_pcsc.a:
-    - TswapBuildPcscLoader (before SetupOSSpecificProps, which puts NativeLibrary items on the link line) runs the
-      canary, compiles the archive and adds it as a NativeLibrary. Added in a target, it lands after the SDK's
-      archive, so GNU ld resolves the SDK's references to the 11 from it. Only the archive, never the object too
-      (that would define the 11 twice).
+    when it is there, a SCARD_E_NO_SERVICE stand-in otherwise) and tswap_pcsc_strategy(), compiled into one static
+    archive, libtswap_pcsc.a:
+    - TswapAddPcscLoader (before SetupOSSpecificProps, which puts NativeLibrary items on the link line) runs the
+      canary and adds the archive as a NativeLibrary. Added in a target, it lands after the SDK's archive, so GNU ld
+      resolves the SDK's references to the 11 from it. Only the archive, never the object too (that would define
+      the 11 twice).
     - The canary: `nm -u` of the SDK archive of the rid being published must list exactly the 11 SCard functions
       and no g_rgSCard*Pci data (the loader defines no data symbols), else the build fails: an SDK update that
       calls a 12th function, or reads pcsc-lite's PCI structures, is loud.
+    - TswapBuildPcscLoader (before LinkNative, so after SetupOSSpecificProps) compiles the archive with the compiler
+      the AOT link itself uses: SetupOSSpecificProps probes PATH for clang and falls back to gcc, sets $(CppLinker)
+      and, when cross-compiling, $(TargetTriple); the archive gets the same compiler, triple and sysroot.
     - TswapRemoveSdkPcscliteLink (before LinkNative, so it runs even if the SDK renames its target) removes the
       SDK's -lpcsclite and fails if it wasn't there.
     macOS and Windows keep the SDK's own linking (PCSC.framework, winscard.lib), which every such system has.
@@ -52,36 +55,51 @@
     <DirectPInvoke Include="tswap_pcsc" />
   </ItemGroup>
 
-  <Target Name="TswapBuildPcscLoader" BeforeTargets="SetupOSSpecificProps" Condition="'$(TswapPcscLoader)' == 'true'">
+  <!-- In a target: IntermediateOutputPath is set after the project body is evaluated. -->
+  <Target Name="_TswapPcscPaths">
     <PropertyGroup>
       <_TswapPcscSource>$(MSBuildProjectDirectory)/Native/pcsc-loader.c</_TswapPcscSource>
       <_TswapPcscDir>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)tswap_pcsc/</_TswapPcscDir>
       <_TswapPcscObject>$(_TswapPcscDir)pcsc-loader.o</_TswapPcscObject>
       <_TswapPcscArchive>$(_TswapPcscDir)libtswap_pcsc.a</_TswapPcscArchive>
+      <_TswapPcscNmOutput>$(_TswapPcscDir)sdk-archive.nm</_TswapPcscNmOutput>
       <_TswapPcscExpected>SCardBeginTransaction SCardCancel SCardConnect SCardDisconnect SCardEndTransaction SCardEstablishContext SCardGetStatusChange SCardListReaders SCardReconnect SCardReleaseContext SCardTransmit</_TswapPcscExpected>
-      <!-- Cross-compiling (host rid differs): the triple the AOT link derives the same way (SetupOSSpecificProps). -->
-      <_TswapPcscTarget Condition="'$(NETCoreSdkPortableRuntimeIdentifier)' != '$(RuntimeIdentifier)' and $(RuntimeIdentifier.EndsWith('-x64'))">--target=x86_64-linux-gnu</_TswapPcscTarget>
-      <_TswapPcscTarget Condition="'$(NETCoreSdkPortableRuntimeIdentifier)' != '$(RuntimeIdentifier)' and $(RuntimeIdentifier.EndsWith('-arm64'))">--target=aarch64-linux-gnu</_TswapPcscTarget>
-      <_TswapPcscSysRoot Condition="'$(SysRoot)' != ''">--sysroot=&quot;$(SysRoot)&quot;</_TswapPcscSysRoot>
     </PropertyGroup>
+  </Target>
 
+  <Target Name="TswapAddPcscLoader" BeforeTargets="SetupOSSpecificProps" DependsOnTargets="_TswapPcscPaths" Condition="'$(TswapPcscLoader)' == 'true'">
     <Error Condition="'@(_YubicoNativeShimsStaticArchive->Count())' != '1'"
            Text="tswap: expected one Yubico.NativeShims static archive for $(RuntimeIdentifier), found '@(_YubicoNativeShimsStaticArchive)' (the SDK's build targets changed; check TswapCli.csproj's PC/SC loader)." />
-    <Exec Command="nm -u &quot;@(_YubicoNativeShimsStaticArchive)&quot; | grep -oE '\b(SCard[A-Za-z]+|g_rgSCard[A-Za-z0-9]+)\b' | LC_ALL=C sort -u | tr '\n' ' '"
-          ConsoleToMSBuild="true" StandardOutputImportance="Low">
+
+    <!-- nm runs on its own, so a missing or failing nm stops here with its own error, not as an empty symbol list. -->
+    <Exec Command="command -v nm" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ExitCode" PropertyName="_TswapNmProbe" />
+    </Exec>
+    <Error Condition="'$(_TswapNmProbe)' != '0'"
+           Text="tswap: nm (binutils) is required to check Yubico.NativeShims' PC/SC symbols for the Linux NativeAOT publish; install binutils." />
+    <MakeDir Directories="$(_TswapPcscDir)" />
+    <Exec Command="nm -u &quot;@(_YubicoNativeShimsStaticArchive)&quot; &gt; &quot;$(_TswapPcscNmOutput)&quot;" />
+    <Exec Command="grep -oE '\b(SCard[A-Za-z]+|g_rgSCard[A-Za-z0-9]+)\b' &quot;$(_TswapPcscNmOutput)&quot; | LC_ALL=C sort -u | tr '\n' ' '"
+          ConsoleToMSBuild="true" StandardOutputImportance="Low" IgnoreExitCode="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="_TswapPcscFound" />
     </Exec>
     <Error Condition="'$(_TswapPcscFound.Trim())' != '$(_TswapPcscExpected)'"
            Text="tswap: Yubico.NativeShims' archive (@(_YubicoNativeShimsStaticArchive)) references PC/SC symbols [$(_TswapPcscFound.Trim())], not the 11 Native/pcsc-loader.c defines [$(_TswapPcscExpected)]. Update the loader for this SDK version before publishing." />
 
-    <MakeDir Directories="$(_TswapPcscDir)" />
-    <Delete Files="$(_TswapPcscArchive)" />
-    <Exec Command="&quot;$(CppCompilerAndLinker)&quot; $(_TswapPcscTarget) $(_TswapPcscSysRoot) -c -std=c11 -O2 -fPIC -fvisibility=hidden -pthread -Wall -Wextra -Werror &quot;$(_TswapPcscSource)&quot; -o &quot;$(_TswapPcscObject)&quot;" />
-    <Exec Command="&quot;$(CppLibCreator)&quot; crs &quot;$(_TswapPcscArchive)&quot; &quot;$(_TswapPcscObject)&quot;" />
-
     <ItemGroup>
       <NativeLibrary Include="$(_TswapPcscArchive)" />
     </ItemGroup>
+  </Target>
+
+  <Target Name="TswapBuildPcscLoader" BeforeTargets="LinkNative" DependsOnTargets="_TswapPcscPaths" Condition="'$(TswapPcscLoader)' == 'true'">
+    <PropertyGroup>
+      <_TswapPcscTarget Condition="'$(TargetTriple)' != ''">--target=$(TargetTriple)</_TswapPcscTarget>
+      <_TswapPcscSysRoot Condition="'$(SysRoot)' != ''">--sysroot=&quot;$(SysRoot)&quot;</_TswapPcscSysRoot>
+    </PropertyGroup>
+    <MakeDir Directories="$(_TswapPcscDir)" />
+    <Delete Files="$(_TswapPcscArchive)" />
+    <Exec Command="&quot;$(CppLinker)&quot; $(_TswapPcscTarget) $(_TswapPcscSysRoot) -c -std=c11 -O2 -fPIC -fvisibility=hidden -pthread -Wall -Wextra -Werror &quot;$(_TswapPcscSource)&quot; -o &quot;$(_TswapPcscObject)&quot;" />
+    <Exec Command="&quot;$(CppLibCreator)&quot; crs &quot;$(_TswapPcscArchive)&quot; &quot;$(_TswapPcscObject)&quot;" />
   </Target>
 
   <Target Name="TswapRemoveSdkPcscliteLink" BeforeTargets="LinkNative" Condition="'$(TswapPcscLoader)' == 'true'">
