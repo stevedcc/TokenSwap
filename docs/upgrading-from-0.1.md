@@ -76,10 +76,15 @@ To move a classic vault's YubiKeys to a touch requirement:
 
 2. Reprogram each key's slot 2 with a touch requirement, with ykman, as the printed guide shows. The
    commands are in the setup guide's [Preparing a YubiKey](setup.md#preparing-a-yubikey) section.
-3. Enroll each reprogrammed key again as a new slot (plug it in first):
+   **Warning:** reprogramming gives the key a new secret, so the slot step 1 made for it no longer
+   opens the vault, and `tswap slots` still lists that dead slot. Keep the recovery key from step 1
+   at hand: step 3 needs it.
+3. Enroll each reprogrammed key again as a new slot (plug it in first). `slot add --yubikey` refuses
+   a key that already has a slot, so today this is `recover --yubikey` with the recovery key on
+   stdin ([The recovery key](setup.md#the-recovery-key)); v0.3.0's YubiKey work changes this step:
 
    ```bash
-   sudo tswap slot add --yubikey
+   <print the recovery key> | sudo tswap recover --yubikey
    ```
 
 `tswap slots` then shows each slot's touch setting.

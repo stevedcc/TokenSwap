@@ -14,6 +14,10 @@ Skip this if you won't use a YubiKey. tswap uses a YubiKey's slot 2, set up for 
 challenge-response. Set it up once on each key, with `ykman` (installing it:
 [YubiKey prerequisites](install.md#yubikey-prerequisites)).
 
+**Warning:** setting up slot 2 gives the key a new secret. On a key that already has a slot in a
+vault, that slot no longer opens the vault (`tswap slots` still lists it); enroll the key again
+afterwards, as in [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
+
 With a touch requirement (recommended; it requires a button press):
 
 ```bash

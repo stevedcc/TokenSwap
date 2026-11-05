@@ -180,9 +180,22 @@ it on every command**.
   YubiKey slot, `tswap slots`, which reads the posture from the slot itself, is the reliable view.
 
 **Moving a key to touch-required:** in a keyring vault, reprogram the key's slot 2 with ykman's
-`--touch` ([Preparing a YubiKey](setup.md#preparing-a-yubikey)) and enroll
-it again as a new slot (`sudo tswap slot add --yubikey`). A classic vault from 0.1 is covered in
-[upgrading-from-0.1.md](upgrading-from-0.1.md).
+`--touch` ([Preparing a YubiKey](setup.md#preparing-a-yubikey)), then enroll it again as a new slot.
+
+- **Warning:** reprogramming gives the key a new secret, so its existing slot no longer opens the
+  vault. `tswap slots` still lists that dead slot (tswap can't remove slots). Make sure another
+  slot, or the recovery key, opens the vault before you start.
+- **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so today the
+  step is `recover --yubikey` with the recovery key on stdin
+  ([The recovery key](setup.md#the-recovery-key)):
+
+  ```bash
+  <print the recovery key> | sudo tswap recover --yubikey
+  ```
+
+  v0.3.0's YubiKey work changes this step.
+
+A classic vault from 0.1 is covered in [upgrading-from-0.1.md](upgrading-from-0.1.md).
 
 ### Secure Enclave: touch or no touch
 
@@ -294,7 +307,9 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   avoid retyping the password.
 - **Linux TPM lockout.** When the TPM's lockout password is empty, anyone who can use the TPM can
   reset its failed-password counter and keep guessing. tswap warns at each TPM password enrolment
-  (`tpm2_changeauth -c lockout`, as root, sets one, and affects every program that uses the TPM).
+  (`tpm2_changeauth -c lockout file:-`, as root, with the new lockout password on stdin, sets one,
+  and affects every program that uses the TPM; `file:-` keeps the password out of the process list
+  and shell history, where an argument would show it).
 
 ## A shared vault folder: what a sync provider sees, and what isn't detected
 
