@@ -48,18 +48,49 @@ public sealed class SdkYubiKeyService : IYubiKeyService
 
         var hidden = keys.Where(k => !k.KeyboardReachable).ToList();
         if (hidden.Count > 0)
-            throw new TswapException(string.Join(Environment.NewLine, hidden.Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, _os)))
-                + Environment.NewLine + BusyHint);
+            throw new TswapException(ExplainUnreachable(hidden, reachableCount: keys.Count(k => k.KeyboardReachable)));
         if (keys.Count > 0)
             throw new TswapException("A YubiKey is plugged in, but its serial number can't be read, so tswap can't tell which key it is.");
         return [];
     }
 
+    internal const string ProbeBusyMessage = "A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.";
+
     /// <summary>
-    /// Added where the keyboard interface seems hidden: Yubico's SDK skips an interface it can't talk to while it
-    /// lists the keys, which is also what a key busy with another program's command looks like.
+    /// Why keys seen only on other transports can't be used. Yubico's SDK skips a keyboard interface it can't talk to
+    /// while it lists the keys, which a key busy with another program's command looks like too, so the raw keyboard
+    /// interfaces are probed (read only, <see cref="IOtpKeys.ProbeKeyboardInterfaces"/>): one showing a command in
+    /// progress → busy; one that can't be opened, or none listed beyond those of the reachable keys → the per-OS
+    /// explanation; anything else (an extra idle or unreadable interface, or the probe failing) → the uncertainty
+    /// first, then the per-OS explanation.
     /// </summary>
-    internal const string BusyHint = "If another tswap or app is using the key right now, try again when it is done.";
+    private string ExplainUnreachable(IReadOnlyList<OtpKeyInfo> hidden, int reachableCount)
+    {
+        var perOs = string.Join(Environment.NewLine, hidden.Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, _os)));
+        IReadOnlyList<KeyboardInterfaceState> interfaces;
+        try
+        {
+            interfaces = _keys.ProbeKeyboardInterfaces();
+        }
+        catch (OtpKeysException)
+        {
+            return Uncertain(hidden, perOs);
+        }
+
+        if (interfaces.Contains(KeyboardInterfaceState.Busy))
+            return ProbeBusyMessage;
+        if (interfaces.Contains(KeyboardInterfaceState.Unreadable))
+            return Uncertain(hidden, perOs);
+        if (interfaces.Contains(KeyboardInterfaceState.Unopenable))
+            return perOs;
+        return interfaces.Count(i => i == KeyboardInterfaceState.Idle) > reachableCount ? Uncertain(hidden, perOs) : perOs;
+    }
+
+    private static string Uncertain(IReadOnlyList<OtpKeyInfo> hidden, string perOs)
+    {
+        var names = string.Join(", ", hidden.Select(k => k.Serial is { } s ? $"YubiKey {s}'s" : "a YubiKey's"));
+        return $"tswap can't reach {names} OTP interface. If another tswap or app is using it, try again when it's done; otherwise: {perOs}";
+    }
 
     public IReadOnlyList<YubiKeyInfo> FindKeys() =>
         Find().Select(k => new YubiKeyInfo(k.Serial, k.KeyboardReachable, k.Transports)).ToList();
@@ -142,16 +173,19 @@ public sealed class SdkYubiKeyService : IYubiKeyService
     {
         var keys = Find();
         var key = keys.FirstOrDefault(k => k.Serial == serial);
+        var reachableCount = keys.Count(k => k.KeyboardReachable);
         if (key is null)
         {
             var message = $"YubiKey {serial} is not plugged in.";
+            if (keys.Any(k => k.KeyboardReachable && k.Serial is null))
+                message += " A YubiKey whose serial can't be read is plugged in.";
             var unknownHidden = keys.Where(k => !k.KeyboardReachable && k.Serial is null).ToList();
             if (unknownHidden.Count > 0)
-                message += Environment.NewLine + YubiKeyAccessTexts.ExplainHidden(null, _os);
+                message += Environment.NewLine + ExplainUnreachable(unknownHidden, reachableCount);
             throw new TswapException(message);
         }
         if (!key.KeyboardReachable)
-            throw new TswapException(YubiKeyAccessTexts.ExplainHidden(serial, _os) + Environment.NewLine + BusyHint);
+            throw new TswapException(ExplainUnreachable([key], reachableCount));
     }
 
     private T Call<T>(int serial, Func<T> call)
@@ -170,6 +204,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
     {
         OtpFailure.Busy => $"{YubiKeyAccessTexts.Name(serial)} is busy (another tswap or app is using it); try again.",
         OtpFailure.Slot2Empty => $"Slot 2 of {YubiKeyAccessTexts.Name(serial)} isn't set up for challenge-response; run `tswap yubikey setup`.",
+        OtpFailure.NoAnswer => $"{YubiKeyAccessTexts.Name(serial)} didn't answer: slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`), or another tswap or app is using it (then try again when it's done).",
         OtpFailure.NotReachable => YubiKeyAccessTexts.ExplainHidden(serial, _os),
         _ => $"{YubiKeyAccessTexts.Name(serial)}: {e.Detail}",
     };

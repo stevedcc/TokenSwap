@@ -28,6 +28,26 @@ internal interface IOtpKeys
     /// or <see cref="OtpFailure.VerifyNoAnswer"/> (or, before anything was written, the kind of the failure).
     /// </summary>
     void ProgramSlot2(int serial, bool requireTouch);
+
+    /// <summary>
+    /// A read-only look at every YubiKey keyboard interface the OS lists, for a key <see cref="Find"/> saw only on other
+    /// transports: busy (a command in progress), hidden (can't be opened) or idle. Never writes to a key. Throws
+    /// <see cref="OtpKeysException"/> when the interfaces can't be listed.
+    /// </summary>
+    IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces();
+}
+
+/// <summary>One keyboard interface, as the read-only probe found it.</summary>
+internal enum KeyboardInterfaceState
+{
+    /// <summary>Opened; its status shows no command in progress.</summary>
+    Idle,
+    /// <summary>Opened; its status shows a command in progress (another program, e.g. waiting for a touch).</summary>
+    Busy,
+    /// <summary>The OS refused to open it (no udev rule, no Input Monitoring, access denied).</summary>
+    Unopenable,
+    /// <summary>Opened, but its status couldn't be read.</summary>
+    Unreadable,
 }
 
 /// <summary>
@@ -55,6 +75,11 @@ public enum OtpFailure
     VerifyWrong,
     /// <summary>Slot 2 was programmed, but it didn't answer the verify challenge (including a touch timeout).</summary>
     VerifyNoAnswer,
+    /// <summary>
+    /// The key didn't take or answer the command in time: busy with another program, or slot 2 holds a configuration
+    /// that doesn't answer HMAC challenges.
+    /// </summary>
+    NoAnswer,
     /// <summary>Anything else; the SDK's message is passed through.</summary>
     Other,
 }

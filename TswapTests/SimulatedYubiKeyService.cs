@@ -79,6 +79,9 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     /// </summary>
     public HashSet<int> Hidden { get; set; } = [];
 
+    /// <summary>Stage 1: serials whose challenge fails as busy (another tswap or app is using the key).</summary>
+    public HashSet<int> Busy { get; } = [];
+
     /// <summary>Stage 1: a serial's transports as <see cref="FindKeys"/> reports them (default by reachability).</summary>
     public Dictionary<int, string> Transports { get; } = [];
 
@@ -134,6 +137,10 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
         if (!PluggedIn.Contains(serial) || !_secrets.TryGetValue(serial, out var secret))
             throw new TswapCore.TswapException($"ykman failed: device {serial} not found");
 
+        if (Hidden.Contains(serial))
+            throw new TswapCore.TswapException(YubiKeyAccessTexts.ExplainHidden(serial, YubiKeyAccessTexts.CurrentOs()));
+        if (Busy.Contains(serial))
+            throw new TswapCore.TswapException($"YubiKey {serial} is busy (another tswap or app is using it); try again.");
         if (Slot2States.GetValueOrDefault(serial, Slot2State.Configured) == Slot2State.Empty)
             throw new TswapCore.TswapException($"Slot 2 of YubiKey {serial} isn't set up for challenge-response; run `tswap yubikey setup`.");
 

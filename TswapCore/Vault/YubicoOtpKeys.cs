@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Yubico.Core.Devices.Hid;
 using Yubico.PlatformInterop;
 using Yubico.YubiKey;
 using Yubico.YubiKey.Otp;
@@ -24,6 +25,72 @@ internal sealed class YubicoOtpKeys : IOtpKeys
 {
     /// <summary>The verify challenge after programming: a short string, zero-padded to 64 bytes like tswap's own.</summary>
     private static ReadOnlySpan<byte> VerifyChallenge => "tswap yubikey setup verify v1"u8;
+
+    /// <summary>
+    /// Read-only probe of every Yubico keyboard interface, for keys <see cref="Find"/> didn't see on it. Uses the SDK's
+    /// public HID listing (<c>HidDevice.GetHidDevices</c>) and repeats the filter the SDK applies internally (its
+    /// internal <c>IHidDeviceExtension.IsYubicoDevice</c>/<c>IsKeyboard</c>: Yubico vendor id, keyboard usage page;
+    /// the product-id list is internal too and is left out), opens each for feature reports and reads one status
+    /// report. It never writes:
+    /// a write from here would make the other process's session reset its read mode. On Linux a node that can't be
+    /// opened has no vendor id (<c>LinuxHidDevice</c> reads it through the open handle) and so isn't listed at all.
+    /// </summary>
+    public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces()
+    {
+        YubicoSdk.EnsureInitialized();
+        try
+        {
+            return HidDevice.GetHidDevices()
+                .Where(d => d.VendorId == YubicoVendorId && d.UsagePage == HidUsagePage.Keyboard)
+                .Select(Probe)
+                .ToList();
+        }
+        catch (Exception e)
+        {
+            throw new OtpKeysException(OtpFailure.Other, null, e.Message);
+        }
+    }
+
+    /// <summary>Yubico's USB vendor id (SDK <c>VendorIdentifiers.Yubico</c>).</summary>
+    private const short YubicoVendorId = 0x1050;
+
+    private static KeyboardInterfaceState Probe(IHidDevice device)
+    {
+        IHidConnection connection;
+        try
+        {
+            connection = device.ConnectToFeatureReports();
+        }
+        catch (Exception e) when (e is PlatformApiException or UnauthorizedAccessException)
+        {
+            return KeyboardInterfaceState.Unopenable;
+        }
+
+        using (connection)
+        {
+            try
+            {
+                return StatusShowsBusy(connection.GetReport()) ? KeyboardInterfaceState.Busy : KeyboardInterfaceState.Idle;
+            }
+            catch (Exception)
+            {
+                return KeyboardInterfaceState.Unreadable;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a keyboard status report shows a command in progress. Its last byte holds the flags (SDK
+    /// <c>KeyboardReportFlags</c>: touch pending 0x20, read pending 0x40) and the sequence number (low 5 bits); a
+    /// session's status read accepts only sequence 0 without read pending (<c>KeyboardFrameReader.AddStatusReport</c>),
+    /// so either of those, or a pending touch, means another program is mid-command.
+    /// </summary>
+    internal static bool StatusShowsBusy(ReadOnlySpan<byte> report) =>
+        report.Length > 0 && (report[^1] & (TouchPendingFlag | ReadPendingFlag | SequenceMask)) != 0;
+
+    private const byte TouchPendingFlag = 0x20;
+    private const byte ReadPendingFlag = 0x40;
+    private const byte SequenceMask = 0x1F;
 
     public IReadOnlyList<OtpKeyInfo> Find()
     {
@@ -141,7 +208,9 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             try
             {
                 expected = Slot2Verify.ExpectedResponse(key20, frame);
-                using var touchSeen = new ManualResetEventSlim();
+                // Not disposed: the SDK's notifier task may still run after this method returns, and Set on a
+                // disposed event throws there. Without a WaitHandle requested, the event holds no OS resource.
+                var touchSeen = new ManualResetEventSlim();
                 OtpChallengeResult result;
                 try
                 {
@@ -188,6 +257,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     // The SDK's messages (Yubico.NET.SDK 1.18.1, Resources/ExceptionMessages.resx of each assembly). The SDK ships no
     // satellite resource assemblies, so these are the texts it throws on every system.
     private const string KeyboardTimeoutMessage = "The YubiKey did not acknowledge a write to the keyboard interface within the alloted time.";
+    private const string InvalidStatusReportMessage = "The status report must be the first and only report returned by the YubiKey.";
     private const string LinuxHidOpenFailedMessage = "Could not open HID node on Linux.";
     private const string IOKitCannotOpenDeviceMessage = "Can't open IOKit device.";
     private const string NoSuitableInterfaceMessage = "No suitable interface present. Unable to establish connection to YubiKey.";
@@ -201,10 +271,12 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     /// </summary>
     internal static OtpFailure Classify(Exception e) => e switch
     {
-        // KeyboardTransform.WaitFor: the key didn't take the command within ~1 s (busy with another process's
-        // command, such as a challenge waiting for its touch). ykman's equivalent: "Timeout waiting for YubiKey to
-        // become ready to receive".
-        KeyboardConnectionException { Message: KeyboardTimeoutMessage } => OtpFailure.Busy,
+        // KeyboardTransform.WaitFor: no acknowledgement of the write, or no answer within ~1 s. Either another
+        // process's command is in progress, or slot 2 holds a configuration that doesn't answer HMAC challenges (a
+        // static password, Yubico OTP): IsLongPressConfigured is true for those too. Both causes are named.
+        KeyboardConnectionException { Message: KeyboardTimeoutMessage } => OtpFailure.NoAnswer,
+        // KeyboardFrameReader.AddStatusReport, at the session's status read: the report shows a command in progress.
+        MalformedYubiKeyResponseException { Message: InvalidStatusReportMessage } => OtpFailure.Busy,
         PlatformApiException p when p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
             && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal) => OtpFailure.Busy,
         PlatformApiException { Message: LinuxHidOpenFailedMessage } => OtpFailure.NotReachable,

@@ -25,6 +25,12 @@ internal sealed class FakeOtpKeys : IOtpKeys
     /// <summary>Per serial: the kind <see cref="ProgramSlot2"/> fails with (absent: success).</summary>
     public Dictionary<int, OtpFailure> ProgramOutcome { get; } = [];
 
+    /// <summary>What the read-only probe of the raw keyboard interfaces finds (default: none listed).</summary>
+    public List<KeyboardInterfaceState> Interfaces { get; } = [];
+
+    /// <summary>The probe itself fails (the SDK's HID listing threw).</summary>
+    public bool ProbeFails { get; init; }
+
     /// <summary>Every challenge: the serial and the exact 64 bytes received (a copy).</summary>
     public List<(int Serial, byte[] Challenge)> Challenges { get; } = [];
 
@@ -69,6 +75,9 @@ internal sealed class FakeOtpKeys : IOtpKeys
             throw new OtpKeysException(OtpFailure.Busy, serial, "the key did not accept the command");
         return Slot2Empty.Contains(serial) ? Slot2State.Empty : Slot2State.Configured;
     }
+
+    public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces() =>
+        ProbeFails ? throw new OtpKeysException(OtpFailure.Other, null, "fake probe failure") : Interfaces.ToList();
 
     public void ProgramSlot2(int serial, bool requireTouch)
     {

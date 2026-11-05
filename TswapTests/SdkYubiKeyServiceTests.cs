@@ -378,8 +378,11 @@ public sealed class SdkYubiKeyServiceTests
     /// </summary>
     public static TheoryData<Exception, OtpFailure> SdkExceptions => new()
     {
-        // KeyboardTransform.WaitFor: the key didn't take the command (another process mid-command) → busy.
-        { new KeyboardConnectionException("The YubiKey did not acknowledge a write to the keyboard interface within the alloted time."), OtpFailure.Busy },
+        // KeyboardTransform.WaitFor: no acknowledgement or no answer within ~1 s: another process mid-command, or a
+        // slot 2 that isn't an HMAC challenge-response (static password, Yubico OTP) → no answer, both causes named.
+        { new KeyboardConnectionException("The YubiKey did not acknowledge a write to the keyboard interface within the alloted time."), OtpFailure.NoAnswer },
+        // KeyboardFrameReader.AddStatusReport at session open: the status report shows a command in progress → busy.
+        { new MalformedYubiKeyResponseException("The status report must be the first and only report returned by the YubiKey."), OtpFailure.Busy },
         // KeyboardTransform.WaitFor: the touch wasn't given in time → passed through.
         { new KeyboardConnectionException("Timed out waiting for user interaction."), OtpFailure.Other },
         { new KeyboardConnectionException("Tried writing a keyboard report and unexpectedly recieved no reply."), OtpFailure.Other },
@@ -413,6 +416,180 @@ public sealed class SdkYubiKeyServiceTests
         Assert.Equal(new Slot2Programming(HmacSha1: true, SmallChallenge: true, Touch: false, KeyLength: 20), YubicoOtpKeys.Slot2Settings(false));
     }
 
+    // ── Fix round 1: a key that isn't keyboard-reachable is probed (read-only) ──
+
+    private const string UncertainStart = "tswap can't reach YubiKey 33060005's OTP interface. If another tswap or app is using it, try again when it's done; otherwise: ";
+
+    [Fact]
+    public void ListSerials_HiddenKey_ProbeSeesBusyInterface_SaysBusy()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys).ListSerials());
+
+        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
+    [Fact]
+    public void ListSerials_HiddenKey_ProbeCantOpen_ExplainsPerOsOnly()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+        keys.Interfaces.Add(KeyboardInterfaceState.Unopenable);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).ListSerials());
+
+        Assert.StartsWith("YubiKey 33060005: macOS is blocking", ex.Message);
+        Assert.DoesNotContain("try again", ex.Message);
+    }
+
+    [Fact]
+    public void ListSerials_HiddenKey_NoKeyboardInterfaceListed_ExplainsPerOsOnly()
+    {
+        // Linux without the udev rule: the SDK can't read the node's vendor id, so no Yubico keyboard interface is listed.
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+
+        Assert.StartsWith("YubiKey 33060005: its OTP interface can't be reached", ex.Message);
+        Assert.DoesNotContain("try again", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(nameof(KeyboardInterfaceState.Idle))]
+    [InlineData(nameof(KeyboardInterfaceState.Unreadable))]
+    public void ListSerials_HiddenKey_ProbeInconclusive_PutsUncertaintyFirst(string state)
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+        keys.Interfaces.Add(Enum.Parse<KeyboardInterfaceState>(state));
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+
+        Assert.StartsWith(UncertainStart + "YubiKey 33060005: its OTP interface can't be reached", ex.Message);
+        Assert.Contains("udev rule", ex.Message);
+    }
+
+    [Fact]
+    public void ListSerials_HiddenKey_ProbeFails_PutsUncertaintyFirst()
+    {
+        var keys = new FakeOtpKeys { ProbeFails = true }.WithHiddenKey(33060005);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).ListSerials());
+
+        Assert.StartsWith(UncertainStart, ex.Message);
+    }
+
+    [Fact]
+    public void Challenge_KeyNotReachable_ProbeSeesBusyInterface_SaysBusy()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+
+        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+        Assert.Empty(keys.Challenges);
+    }
+
+    [Fact]
+    public void Challenge_KeyNotReachable_ProbeInconclusive_PutsUncertaintyFirst()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005);
+        keys.Interfaces.Add(KeyboardInterfaceState.Idle);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.OSX).Challenge(33060005, "abc"));
+
+        Assert.StartsWith(UncertainStart + "YubiKey 33060005: macOS is blocking", ex.Message);
+    }
+
+    [Fact]
+    public void Challenge_KeyNotReachable_IdleInterfaceBelongsToAnotherKey_ExplainsPerOsOnly()
+    {
+        // One idle keyboard interface, and one keyboard-reachable key to own it: nothing unaccounted for.
+        var keys = new FakeOtpKeys().WithKey(11111111).WithHiddenKey(33060005);
+        keys.Interfaces.Add(KeyboardInterfaceState.Idle);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
+
+        Assert.StartsWith("YubiKey 33060005: its OTP interface can't be reached", ex.Message);
+        Assert.DoesNotContain("try again", ex.Message);
+    }
+
+    [Fact]
+    public void Challenge_SerialAbsent_HiddenSerialUnknown_ProbeSeesBusy_SaysBusy()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(null);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+
+        Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
+        Assert.Contains("A YubiKey is busy (another tswap or app is waiting for a touch)", ex.Message);
+    }
+
+    [Fact]
+    public void Challenge_SerialAbsent_ReachableKeyWithoutSerial_SaysSoToo()
+    {
+        var keys = new FakeOtpKeys().WithKey(null);
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
+
+        Assert.Contains("YubiKey 33060005 is not plugged in", ex.Message);
+        Assert.Contains("A YubiKey whose serial can't be read is plugged in", ex.Message);
+    }
+
+    [Fact]
+    public void Challenge_NoAnswer_NamesBothCauses()
+    {
+        var keys = new ThrowingOtpKeys(9, new OtpKeysException(OtpFailure.NoAnswer, 9, "The YubiKey did not acknowledge a write to the keyboard interface within the alloted time."));
+
+        var ex = Assert.Throws<TswapException>(() => Service(keys).Challenge(9, "abc"));
+
+        Assert.Contains("YubiKey 9 didn't answer", ex.Message);
+        Assert.Contains("slot 2 may not be set up for HMAC challenge-response (run `tswap yubikey setup`)", ex.Message);
+        Assert.Contains("another tswap or app is using it", ex.Message);
+        Assert.DoesNotContain("is busy", ex.Message);
+    }
+
+    /// <summary>The keyboard interface's status byte (the report's last byte): touch 0x20, read 0x40, sequence 0x1F.</summary>
+    [Theory]
+    [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0x00 }, false)]
+    [InlineData(new byte[] { 5, 4, 3, 2, 1, 0, 0, 0x00 }, false)]
+    [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0x20 }, true)]
+    [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0x40 }, true)]
+    [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0x01 }, true)]
+    [InlineData(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0x2A }, true)]
+    public void StatusShowsBusy_ReadsTheLastByte(byte[] report, bool busy) =>
+        Assert.Equal(busy, YubicoOtpKeys.StatusShowsBusy(report));
+
+    [Fact]
+    public void StatusShowsBusy_EmptyReport_IsNotBusy() => Assert.False(YubicoOtpKeys.StatusShowsBusy([]));
+
+    [Fact]
+    public void Simulated_HiddenKey_ChallengeExplainsHidden()
+    {
+        var sim = SimulatedYubiKeyService.WithKeys(33060005);
+        sim.Hidden.Add(33060005);
+
+        var ex = Assert.Throws<TswapException>(() => sim.Challenge(33060005, "abc"));
+
+        Assert.Contains("YubiKey 33060005", ex.Message);
+        Assert.Contains("OTP interface", ex.Message);
+        Assert.Empty(sim.Challenges);
+    }
+
+    [Fact]
+    public void Simulated_BusyKey_ChallengeSaysBusy()
+    {
+        var sim = SimulatedYubiKeyService.WithKeys(33060005);
+        sim.Busy.Add(33060005);
+
+        var ex = Assert.Throws<TswapException>(() => sim.Challenge(33060005, "abc"));
+
+        Assert.Contains("33060005", ex.Message);
+        Assert.Contains("busy", ex.Message);
+    }
+
     /// <summary>One reachable key whose every operation fails with one exception.</summary>
     private sealed class ThrowingOtpKeys(int keySerial, OtpKeysException failure) : IOtpKeys
     {
@@ -420,5 +597,6 @@ public sealed class SdkYubiKeyServiceTests
         public OtpChallengeResult Challenge(int serial, ReadOnlySpan<byte> challenge64, Action onTouchRequested) => throw failure;
         public Slot2State Slot2(int serial) => throw failure;
         public void ProgramSlot2(int serial, bool requireTouch) => throw failure;
+        public IReadOnlyList<KeyboardInterfaceState> ProbeKeyboardInterfaces() => [];
     }
 }
