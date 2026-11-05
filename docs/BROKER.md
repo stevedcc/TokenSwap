@@ -48,7 +48,7 @@ secret shorter than 16 bytes. The full text: [Redaction confirms whole guesses](
 
 ## Setting up the broker
 
-**Two rules before you start** (the threat model rests on both):
+**Two rules before you start** (the threat model explains both):
 
 - **The vault user is root-equivalent for its secrets:** it must run nothing but `tswap broker serve`
   ([why](broker-threat-model.md#the-vault-user-is-root-equivalent-for-its-secrets)).
@@ -57,7 +57,8 @@ secret shorter than 16 bytes. The full text: [Redaction confirms whole guesses](
 
 You run the `sudo tswap broker ...` commands from your own account. Under `sudo`, tswap uses the vault of
 the user who ran sudo, so each of them sets `TSWAP_CONFIG_DIR` to the vault user's config folder
-(here `/home/vault/.config/tswap`).
+(here `/home/vault/.config/tswap`). `sudo VAR=value` needs a sudoers rule that allows setting
+variables (implied for an `ALL` command); otherwise use `sudo env TSWAP_CONFIG_DIR=… tswap ...`.
 
 ### 1. The vault user
 
@@ -84,14 +85,10 @@ sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 ```
 
 Run as root on the vault user's folder, tswap does every file write in that
-folder **as the folder's owner** (T5's identity switch, `DirectoryOwnerMatcher`: effective uid
-and gid of the owner, no supplementary groups), so the keyring, the records and `config.json`
-come out owned by `vault`, mode 0600, and a link `vault` planted in its own folder gets no further
-than `vault`'s own rights. Tests:
-`BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_WritesEverythingAsThatUser` and
-`RecordStoreFileLayerTests`. `sudo VAR=value` needs a sudoers rule that
-allows setting variables (implied for an `ALL` command); otherwise use
-`sudo env TSWAP_CONFIG_DIR=… tswap migrate --to-records`.
+folder **as the folder's owner** (it switches to the owner's effective uid and gid, with no
+supplementary groups), so the keyring, the records and `config.json` come out owned by `vault`,
+mode 0600, and a link `vault` planted in its own folder gets no further than `vault`'s own rights.
+The test suite checks this. The `sudo VAR=value` note above applies here too.
 
 ### 2. The socket folder
 
@@ -228,7 +225,8 @@ copy, `/usr/local/libexec/tswap-broker broker serve` (see the SELinux note in st
 without SELinux, install the copy anyway, or point `ExecStart` at `tswap`):
 
 ```bash
-sudo -iu vault install -D -m 0644 tswap-broker.service ~vault/.config/systemd/user/tswap-broker.service
+# run from the folder holding contrib/ (a tswap checkout): your shell reads the file, vault writes the copy
+sudo -iu vault install -D -m 0644 /dev/stdin .config/systemd/user/tswap-broker.service < contrib/systemd/tswap-broker.service
 sudo -iu vault systemctl --user daemon-reload
 sudo -iu vault systemctl --user enable --now tswap-broker
 ```
@@ -322,7 +320,7 @@ still to bind.
 ```bash
 git config --global url."http://127.0.0.1:8080/github/".insteadOf https://github.com/
 git clone https://github.com/stevedcc/croft.git      # goes to the broker; it adds the token
-git push origin brief/t8
+git push origin my-branch
 ```
 
 **A registry** (basic auth), as an insecure local endpoint, through a route named `v2` so the
@@ -507,7 +505,7 @@ container can do with the agent: [The SSH agent in the threat model](broker-thre
 
 ### Memory, limits and logging
 
-- **One unlock per signature,** reading **only that key's record** (T8's single-record read),
+- **One unlock per signature,** reading **only that key's record** (as for a route, one record per request),
   serialised with every other unlock of the broker; the key is parsed, checked against the public
   key loaded at start (a key replaced in the vault since is refused, not used), used once, and the
   byte arrays are zeroed and the key objects disposed. Key material is **not kept beyond the
@@ -515,11 +513,11 @@ container can do with the agent: [The SSH agent in the threat model](broker-thre
   the platform crypto library's internal copies, and the .NET `BigInteger`s an `openssh-key-v1` RSA
   key's CRT values are computed with, can't be zeroed by tswap. `serve` is non-dumpable
   (`PR_SET_DUMPABLE 0`; see [The vault user is root-equivalent for its secrets](broker-threat-model.md#the-vault-user-is-root-equivalent-for-its-secrets)).
-- **Limits:** T8's connection limits (an agent socket counts as `<name>.ssh`), a connection idle
+- **Limits:** the broker's connection limits (an agent socket counts as `<name>.ssh`), a connection idle
   for 120 s between messages is closed, messages are at most 256 KiB (a larger, empty or truncated
   frame closes the connection), one request at a time per connection, in order. **At most 30
   successful signatures a minute per socket** (each is a TPM unlock); beyond that a sign request
-  is refused and logged (`reason=sign-rate`) with no unlock. T8's unlock-failure lockout, the
+  is refused and logged (`reason=sign-rate`) with no unlock. The broker's unlock-failure lockout, the
   per-socket unlock budget (20 a minute) and the global unlock limit (30) apply too, so in practice
   a socket gets at most 20 signatures a minute (`reason=socket-unlock-rate` beyond that); the
   lockout and the budget are shared with the client's HTTP socket.
@@ -665,7 +663,8 @@ the template.
 template remove <name>` removes it (refused while a socket allows it); like the setup's
 commands, they take `TSWAP_CONFIG_DIR` pointing at the vault user's folder. A socket's `templates` list
 is the only gate: a socket without one may call none. A template's secrets don't also need to be on
-any route. `sudo tswap broker socket add <name> --uids ... --templates deploy,sign` allows them.
+any route. `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap broker socket add <name> --uids ... --templates deploy,sign`
+(with its binding, as in step 3) allows them.
 
 | Field | Meaning |
 |---|---|
@@ -742,7 +741,7 @@ Signing with a key held in the vault, handed over as a read-only file:
 
 ### One unlock per call, reading only the template's secrets
 
-A call takes one of its socket's request slots for its whole duration (T8's limits), then **one
+A call takes one of its socket's request slots for its whole duration (the broker's connection limits), then **one
 unlock**, and decrypts only the records of the secrets the template names, each on its own
 (`records/HMAC(K_names, name)`), never the whole vault; a template with no secrets doesn't unlock
 at all. The vault key is zeroed straight after, the secret bytes once they are in the environment
@@ -795,7 +794,9 @@ v0.2.0 tightened the template rules; a `broker.json` that breaks one no longer l
 one rule is not in them: a bind may not be, contain or be inside the broker's run folder
 (`~/.cache/tswap/run` for a vault user without `/run/user/<uid>`), existing or not (see
 [The bind rule](#the-bind-rule-binds-cwd)). A program that lived in a bind moves under `/usr` or into
-the image; drop the bind if it was there only for the program.
+the image; drop the bind if it was there only for the program. A template that sets a newly refused env
+name, even a harmless one such as `JAVA_HOME`, must drop it (or set it in a wrapper script under `/usr`):
+check templates before upgrading.
 
 ## Platforms
 

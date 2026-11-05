@@ -124,7 +124,7 @@ public sealed class BrokerRedactor
         // wrapped at 76 columns (GNU base64, MIME with CRLF) and at 64 (openssl base64); hex with a
         // space between bytes (od -An -tx1, xxd -g1, within one line) and plain hex wrapped at 60
         // (xxd -p). A value inside a longer wrapped stream, or split over xxd's or od's lines
-        // with offsets and an ASCII column between, is not covered (BROKER.md says so).
+        // with offsets and an ASCII column between, is not covered (docs/broker-threat-model.md says so).
         var b64Plain = Convert.ToBase64String(raw);
         AddWrapped(b64Plain, 76, "\n");
         AddWrapped(b64Plain, 76, "\r\n");

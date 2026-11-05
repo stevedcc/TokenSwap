@@ -329,8 +329,8 @@ are strings and stay in memory until the garbage collector reuses them. Only roo
 anyway. (The byte buffers around them, such as a basic route's `user:secret` bytes, are zeroed.)
 
 This needs a **record-store vault** (one file per secret). `serve` refuses a classic single-file
-vault, since that would be decrypted whole for every request; convert it with
-`sudo tswap migrate --to-records`.
+vault, since that would be decrypted whole for every request; convert it as in
+[step 1 of the setup](BROKER.md#1-the-vault-user).
 
 ## A broker with a vault password
 
