@@ -44,8 +44,8 @@ determined local actor. What it protects against, and what it doesn't:
 
 Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive per platform:
 `tswap-linux-x64.tar.gz`, `tswap-linux-arm64.tar.gz`, `tswap-osx-arm64.tar.gz` and
-`tswap-win-x64.zip`. Unpack it into a folder of your own and run `tswap` from there, or install it
-with `installscript` (below).
+`tswap-win-x64.zip`. Unpack it into a folder of your own, and keep that folder writable only by you (tswap runs code
+from it). Run `tswap` from there, or install it with `installscript` (below).
 
 You need one hardware backend: a YubiKey (with the `ykman` CLI), a TPM 2.0 (Windows, or Linux with
 `tpm2-tools`), or a Mac's Secure Enclave. Prerequisites, building from source and notes for Windows
@@ -82,7 +82,8 @@ Then run `tswap init` in a terminal. It asks, in order:
 
 1. to plug in the security keys you want to use (don't touch them yet);
 2. which of the YubiKeys it found and this machine's chip (the TPM, or the Secure Enclave on a Mac)
-   to use: you type their numbers, and any mix works;
+   to use: you type their numbers, and any mix works (on a Mac, also whether each unlock asks for
+   Touch ID or your login password);
 3. whether to add a vault password (optional);
 4. whether to add a recovery slot (the default): its private key is shown once, so store it
    offline;

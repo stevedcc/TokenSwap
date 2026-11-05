@@ -97,8 +97,8 @@ copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppDat
 
 ## Reinstall with installscript
 
-Once tswap is built and on your PATH, `installscript` writes a ready-to-run install script for your
-current platform. Review the script before you run it.
+`installscript` writes a ready-to-run install script for your current platform. Run it from the
+unpacked folder, or with tswap on your PATH. Review the script before you run it.
 
 **Linux / macOS**
 

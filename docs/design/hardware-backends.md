@@ -645,7 +645,7 @@ folder source (`dotnet nuget add source <folder>`) containing the resulting `.nu
 
 ## The vault password per backend (brief T17)
 
-A slot with a vault password (README, "The vault password and the agent"; the file and blob formats
+A slot with a vault password ([The vault password and the agent](../vault-password-and-agent.md); the file and blob formats
 are in [multi-machine-keying.md](multi-machine-keying.md#the-vault-password-brief-t17-v020)) hands
 its backend the 32-byte **stretched password**. Where the hardware can, the hardware checks it.
 
