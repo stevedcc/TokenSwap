@@ -92,10 +92,24 @@ public class DocLinkTests
     }
 
     [Fact]
-    public void MovedSections_SummaryTextOnTheNextLineIsRecognised()
+    public void MovedSections_RunFromTheHeadingToTheNextHeadingOfTheSameOrHigherLevel()
     {
-        var md = "<details>\n<summary>\nMoved sections\n</summary>\n\n<a id=\"old\"></a>\n\n</details>\n<a id=\"after\"></a>\n";
-        Assert.Equal([true, false], MarkdownLinks.AnchorsDetailed(md).Select(a => a.InMovedSections));
+        var md = "# T\n\n## Moved sections\n\n<a id=\"old\"></a>\n\n### Sub\n\n<a id=\"sub-old\"></a>\n\n## Next\n\n<a id=\"after\"></a>\n";
+        var anchors = MarkdownLinks.AnchorsDetailed(md);
+        Assert.Equal(["t", "moved-sections", "old", "sub", "sub-old", "next", "after"], anchors.Select(a => a.Id));
+        Assert.Equal([false, false, true, true, true, false, false], anchors.Select(a => a.InMovedSections));
+    }
+
+    [Fact]
+    public void MovedSections_AreNeverCollapsed()
+    {
+        // Firefox doesn't open a closed <details> for a link into it: an old link landed on a
+        // collapsed block at the foot of the README (owner check after PR #248).
+        var collapsed = MarkdownLinks.CheckedMarkdown()
+            .Where(f => System.Text.RegularExpressions.Regex.IsMatch(Read(f),
+                @"<summary\b[^>]*>\s*Moved\s+sections", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .ToList();
+        Assert.True(collapsed.Count == 0, "Moved sections inside <details> in: " + string.Join(", ", collapsed));
     }
 
     [Fact]
@@ -140,13 +154,13 @@ public class DocLinkTests
     [Fact]
     public void ExplicitAnchors_AreRecordedWithMovedSectionsFlag()
     {
-        var md = "# Title\n\n<a id=\"live\"></a>\n\n<details>\n<summary>Moved sections</summary>\n\n"
-               + "<a id=\"old-one\"></a> <a name=\"old-two\"></a>\n\n</details>\n\n"
-               + "<details><summary>Other</summary><a id=\"inside-other\"></a></details>\n\n`<a id=\"in-code\">`\n";
+        var md = "# Title\n\n<a id=\"live\"></a>\n\n"
+               + "<details><summary>Other</summary><a id=\"inside-other\"></a></details>\n\n`<a id=\"in-code\">`\n\n"
+               + "## Moved sections\n\n<a id=\"old-one\"></a> <a name=\"old-two\"></a>\n";
         var anchors = MarkdownLinks.AnchorsDetailed(md);
-        Assert.Equal(["title", "live", "old-one", "old-two", "inside-other"], anchors.Select(a => a.Id));
-        Assert.Equal([false, false, true, true, false], anchors.Select(a => a.InMovedSections));
-        Assert.All(anchors.Skip(1), a => Assert.Equal(AnchorKind.Explicit, a.Kind));
+        Assert.Equal(["title", "live", "inside-other", "moved-sections", "old-one", "old-two"], anchors.Select(a => a.Id));
+        Assert.Equal([false, false, false, false, true, true], anchors.Select(a => a.InMovedSections));
+        Assert.All(anchors.Where(a => a.Id is "live" or "inside-other" or "old-one" or "old-two"), a => Assert.Equal(AnchorKind.Explicit, a.Kind));
     }
 
     /// <summary>Broken links of the checked files as <c>file:line → target</c>.</summary>
@@ -286,17 +300,11 @@ public class DocLinkTests
     [Fact]
     public void ReadmeStaysShort()
     {
+        // The redirect table under "## Moved sections" (the end of the file) doesn't count.
         var lines = Read("README.md").Split('\n');
-        var depth = 0;
-        var counted = 0;
-        foreach (var line in lines)
-        {
-            var opens = System.Text.RegularExpressions.Regex.Matches(line, @"<details\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-            var closes = System.Text.RegularExpressions.Regex.Matches(line, @"</details\s*>", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
-            if (depth == 0 && opens == 0) counted++;
-            depth = Math.Max(0, depth + opens - closes);
-        }
-        Assert.True(counted <= 300, $"README.md has {counted} lines outside <details> blocks (limit 300)");
+        var moved = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^#{1,6}\s+Moved sections\s*$"));
+        var counted = moved < 0 ? lines.Length : moved;
+        Assert.True(counted <= 300, $"README.md has {counted} lines before its Moved sections (limit 300)");
     }
 
     [Fact]

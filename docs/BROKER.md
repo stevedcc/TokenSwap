@@ -935,8 +935,9 @@ Each refusal names the socket and the reason; on a reload the running config is 
   `Accept-Encoding` never reach the upstream; `Set-Cookie`, hop-by-hop headers and any header
   holding a redaction form never reach the client.
 
-<details>
-<summary>Moved sections</summary>
+## Moved sections
+
+Old links to these sections land here.
 
 | Old section | Now |
 |---|---|
@@ -961,5 +962,3 @@ Each refusal names the socket and the reason; on a reload the running config is 
 | <a id="setup-1"></a>Setup (of the broker) | [Setting up the broker](#setting-up-the-broker), on this page |
 | <a id="what-a-compromised-container-can-do-with-a-template"></a>What a compromised container can do with a template | [What a compromised container can do with a template](broker-threat-model.md#what-a-compromised-container-can-do-with-a-template), in the threat model |
 | <a id="what-a-template-author-must-not-do"></a>What a template author must not do | [What a template author must not do](broker-threat-model.md#what-a-template-author-must-not-do), in the threat model |
-
-</details>
