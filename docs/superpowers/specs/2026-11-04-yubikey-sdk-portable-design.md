@@ -56,6 +56,15 @@ mine, open to change.
 - Every supported platform's user, without admin, must be able to reach the key, or tswap must say exactly what's
   missing (Linux device rule, Windows elevation for raw FIDO access) instead of a generic failure.
 - External reviews as for every tswap brief: GLM and MiMo, brief and code (project rule).
+- **Linux: `libpcsclite.so.1` becomes a run-time dependency (owner, 2026-11-05).** `Yubico.NativeShims`' static
+  archive links `-lpcsclite`, so the NativeAOT binary lists it as NEEDED and won't start without it (Fedora
+  `pcsc-lite-libs`, Debian/Ubuntu `libpcsclite1`). Accepted over a stub; the docs' install page and the release notes
+  say so, and the build machines need the development package (`libpcsclite-dev`) to link.
+- **Parallel with the docs restructure (#244), file ownership:** this work owns `TswapCli/`, `TswapCore/` and the
+  tests, including `CommandRegistry.PrintHelp` (its banner "YubiKey Secret Manager" and ykman-only Prerequisites
+  block are rewritten here). The docs track owns `README.md` and `docs/`; it lands first, then this work merges
+  `main` and rewrites the docs' one "Preparing a YubiKey" section, the install page's Linux requirement, its parts
+  of `docs/portable.md`, and regenerates `docs/commands.md`.
 
 ## What the research found (2026-11-04, to be confirmed by the spike)
 
