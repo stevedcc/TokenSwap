@@ -56,10 +56,16 @@ mine, open to change.
 - Every supported platform's user, without admin, must be able to reach the key, or tswap must say exactly what's
   missing (Linux device rule, Windows elevation for raw FIDO access) instead of a generic failure.
 - External reviews as for every tswap brief: GLM and MiMo, brief and code (project rule).
-- **Linux: `libpcsclite.so.1` becomes a run-time dependency (owner, 2026-11-05).** `Yubico.NativeShims`' static
-  archive links `-lpcsclite`, so the NativeAOT binary lists it as NEEDED and won't start without it (Fedora
-  `pcsc-lite-libs`, Debian/Ubuntu `libpcsclite1`). Accepted over a stub; the docs' install page and the release notes
-  say so, and the build machines need the development package (`libpcsclite-dev`) to link.
+- **Linux: `libpcsclite` is used when present, never required (owner, 2026-11-05, replacing "accept the
+  dependency" from earlier the same day).** `Yubico.NativeShims`' static archive calls 11 PC/SC functions
+  (`SCardEstablishContext`, `SCardReleaseContext`, `SCardListReaders`, `SCardGetStatusChange`, `SCardConnect`,
+  `SCardReconnect`, `SCardDisconnect`, `SCardBeginTransaction`, `SCardEndTransaction`, `SCardTransmit`,
+  `SCardCancel`) and its build targets link `-lpcsclite`, which would make the binary refuse to start without the
+  library. Instead tswap links its own definitions of those 11 functions (a strategy chosen once, at the first
+  call): it loads `libpcsclite.so.1` and forwards to it when it is there, and otherwise a stand-in answers
+  `SCARD_E_NO_SERVICE`, which the SDK already handles (a machine with no smart-card service). tswap uses no
+  smart-card feature today (the spike: OTP over CCID is refused), so OTP and FIDO2 work either way; a future
+  smart-card feature gets the real library wherever it is installed.
 - **Parallel with the docs restructure (#244), file ownership:** this work owns `TswapCli/`, `TswapCore/` and the
   tests, including `CommandRegistry.PrintHelp` (its banner "YubiKey Secret Manager" and ykman-only Prerequisites
   block are rewritten here). The docs track owns `README.md` and `docs/`; it lands first, then this work merges

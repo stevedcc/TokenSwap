@@ -17,7 +17,7 @@
 - No fallback to ykman, anywhere (design anti-goal). After this plan, `ykman` appears in `TswapCli/` and `TswapCore/` only inside the migration note text named in Task 3.
 - `Yubico.YubiKey` is referenced as `Version="[1.18.1]"` (exact pin, like BouncyCastle's) in `TswapCore/TswapCore.csproj`.
 - NativeAOT publish has zero IL2xxx/IL3xxx warnings (spike: 0).
-- Linux: `libpcsclite.so.1` is a run-time dependency (owner, 2026-11-05); build machines install `libpcsclite-dev`.
+- Linux: `libpcsclite.so.1` is used when present and never required (owner, 2026-11-05; design "Constraints"): the binary has no `NEEDED` entry for it and starts and works without it.
 - The SDK's own logging never reaches the user's terminal (the spike printed `fail: Yubico.Core...` lines on macOS).
 - `TestKeyYubiKeyService` and `SimulatedYubiKeyService` keep their behaviour; tests using them don't change except where a task says so.
 - `tswap yubikey setup` never needs sudo, never writes the vault, and only ever touches slot 2.
@@ -40,23 +40,27 @@
 **Files:**
 - Modify: `TswapCore/TswapCore.csproj` (package reference)
 - Create: `TswapCore/Vault/YubicoSdk.cs` (one-time SDK set-up)
-- Modify: `.github/workflows/ci.yml`, `.github/workflows/release.yml` (apt: `libpcsclite-dev` beside the existing installs on every Linux job that builds or publishes)
-- Modify: `contrib/packaging/package.sh` (`--smoke` on Linux only: `readelf -d` lists `libpcsclite.so.1`; the existing smoke runs stay)
+- Create: `TswapCli/Native/pcsc-loader.c` (the 11 PC/SC functions; Linux only)
+- Modify: `TswapCli/TswapCli.csproj` (Linux NativeAOT publish: compile `pcsc-loader.c` with the same `clang` the AOT link uses, add the object as a `NativeLibrary`, and remove the SDK targets' `-lpcsclite` `LinkerArg` in a target that runs after `_YubicoNativeShimsConfigureAot`; macOS and Windows unchanged)
+- Modify: `contrib/packaging/package.sh` (`--smoke` on Linux only: `readelf -d` has **no** `libpcsclite` entry; and the binary runs once with the library hidden, `bwrap --dev-bind / / --ro-bind /dev/null <path of libpcsclite.so.1> ./tswap prompt-hash`, when both exist; the existing smoke runs stay)
+- Modify: `.github/workflows/ci.yml`, `.github/workflows/release.yml` only if the runners lack something the loader build needs (it needs only the C compiler and `dlfcn.h`, already there for NativeAOT)
 - Modify: `runtests.sh` and the CI test filters (a new hardware category `YubiKey`, excluded by default like `Tpm`; `./runtests.sh --yubikey` runs it)
 - Test: `TswapTests/YubicoSdkTests.cs`
 
 **Interfaces:**
+- Produces (Linux, C): `pcsc-loader.c` defines the 11 functions with pcsc-lite's exact signatures (`<PCSC/winscard.h>` types written out locally: the header isn't needed at build time; `DWORD`/`LONG` are `unsigned long`/`long` on Linux, as pcsc-lite defines them). The first call, under `pthread_once`, picks the strategy: `dlopen("libpcsclite.so.1", RTLD_NOW | RTLD_LOCAL)` and `dlsym` of all 11; if the open fails or **any** symbol is missing, the stand-in is used for all 11 (never a mix). The stand-in returns `SCARD_E_NO_SERVICE` (`0x8010001D`) from every function, writes nothing through output pointers except `SCardEstablishContext`'s context (set to 0) and `SCardListReaders`' length (set to 0), and never crashes on null pointers. It also exports `int tswap_pcsc_strategy(void)` (0: not chosen yet, 1: system library, 2: stand-in), read through a `DllImport` with `DirectPInvoke` so tests and `-v` output can say which one is in use.
 - Produces: `internal static class YubicoSdk { public static void EnsureInitialized(); }` in `TswapCore.Vault`: idempotent and thread-safe; sets the SDK crypto creators explicitly (HMAC SHA1/256/384/512, SHA1, SHA256, AES; the spike's `Native.SetupCrypto` values), registers the Linux `libudev` → `libudev.so.1` resolver for the `Yubico.Core` assembly, and configures the SDK logger factory to discard everything. After setting the crypto creators it checks them once: an HMAC-SHA1 through `CryptographyProviders.HmacCreator("HMACSHA1")` of a fixed key and message must equal `HMACSHA1.HashData`, else `TswapException("YubiKey support is broken in this build (SDK crypto set-up failed)")`. This runs in the published binary every time, so the AOT failure the spike met can't come back unnoticed: `package.sh --smoke` runs `tswap yubikey setup --touch` with no key on Linux, macOS and Windows and expects "No YubiKey detected" (Task 4 adds this smoke line). `SdkYubiKeyService` (Task 2) calls it before any SDK call.
 
 - [ ] **Step 1: Write the failing tests**
   - `EnsureInitialized_TwiceIsHarmless`: calls it twice, no exception.
   - `EnsureInitialized_CryptoCreatorsReturnWorkingAlgorithms`: after it, `CryptographyProviders.HmacCreator("HMACSHA1")` computes HMAC-SHA1 of a fixed key and message equal to `HMACSHA1.HashData`; the same for `"HMACSHA256"`; `Sha256Creator()` and `AesCreator()` are non-null.
+  - The loader's own tests run against the published binary (the JIT test host uses the SDK's shared library, which links pcsc-lite itself): in `package.sh --smoke` on Linux, `tswap -v yubikey setup --touch` with no key says which PC/SC strategy it used: "system library" normally, and "stand-in" with the library hidden by `bwrap`; both end in "No YubiKey detected" (Task 4 adds this line). A C unit test is not needed: the stand-in's behaviour is these two runs and the SDK's own handling of `SCARD_E_NO_SERVICE`.
   - `EnsureInitialized_SdkLoggingDiscarded`: after it, a logger obtained through the SDK's public logging API (`Yubico.Core.Logging.Log`) logs an error and nothing appears on a captured `Console.Error`/`Console.Out`, and `Log`'s configured factory is the one `EnsureInitialized` set (not merely an unconfigured default).
 - [ ] **Step 2:** `dotnet test TswapTests --filter "FullyQualifiedName~YubicoSdkTests"` → FAIL (type missing).
 - [ ] **Step 3:** add the package and `YubicoSdk`.
 - [ ] **Step 4:** the tests → PASS.
 - [ ] **Step 5:** `dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-x64 2>&1 | grep -E 'warning IL(2|3)'` → no output; (until Task 4 adds `yubikey setup`, the smoke has no YubiKey line;) `bash contrib/packaging/package.sh linux-x64 <publish dir> <scratch> --smoke` → passes; record the binary size before and after in the report (spike: about 5 → 11 MB).
-- [ ] **Step 6: Commit** (csproj, YubicoSdk.cs, the tests, workflows, package.sh, runtests.sh).
+- [ ] **Step 6: Commit** (csproj files, pcsc-loader.c, YubicoSdk.cs, the tests, package.sh, runtests.sh, workflows if changed).
 
 ### Task 2: `SdkYubiKeyService` over a device seam
 
@@ -102,7 +106,7 @@
 - Modify: `TswapCli/CliHost.cs:61-63` (`new SdkYubiKeyService(env.Verbose ? console.Out : null)`)
 - Enrolment's touch posture: `SdkYubiKeyService.ChallengeReportingTouch` always reports `true`/`false`, so `YubiKeySlotEnrollment`'s `?? DetectTouchRequirement(serial)` fallback is never reached with the real service; leave it (the interface keeps the method for other services) and don't add a third path. A slot's posture is learned from its first challenge, as today.
 - Delete: `TswapCore/Vault/YkmanYubiKeyService.cs`, `TswapCore/YubiKey.cs` (`ParseTouchRequirement`), and the tests of those two only (find them with `grep -rln 'ParseTouchRequirement\|YkmanYubiKeyService\|AskedForTouch(' TswapTests`, and check each hit is a ykman-era test: Task 2's tests use the `AskedForTouch` property, which must stay)
-- Modify (texts): `TswapCli/CommandRegistry.cs` (banner `tswap - YubiKey Secret Manager` → `tswap - hardware-backed secret manager`; the `-v` line no longer says YubiKey-only; the Prerequisites block: YubiKey slot 2 is prepared with `tswap yubikey setup --touch`, TPM/Secure Enclave need nothing, Linux needs `libpcsclite` and the YubiKey udev rule for YubiKeys), `TswapCli/SecurityWarnings.cs:196-202` (reprogram with `tswap yubikey setup --replace --touch`; the "couldn't check" case names no ykman), `TswapCli/Commands/MigrateCommand.cs:73,161-165` (the reprogramming steps use `tswap yubikey setup --replace --touch --serial N`; this is the one place a migration note may say "ykman is no longer needed"), `TswapCore/Vault/VaultUnlocker.cs:545` (drop "Is ykman installed?"), `TswapCli/Commands/GuidedInit.cs:73-85,224,237` (comments and the `Win32Exception` "ykman can't be run" case, which can't happen any more: remove it), `TswapCli/YubiKeyAccess.cs` (removed or reduced to what Task 2 kept), XML doc comments that name ykman (`IYubiKeyService.cs`, `YubiKeySlotBlob.cs:12,100`, `YubiKeyHardwareService.cs:9`, `Tpm2ToolsInterop.cs:15`, `SimulatedYubiKeyService.cs`)
+- Modify (texts): `TswapCli/CommandRegistry.cs` (banner `tswap - YubiKey Secret Manager` → `tswap - hardware-backed secret manager`; the `-v` line no longer says YubiKey-only; the Prerequisites block: YubiKey slot 2 is prepared with `tswap yubikey setup --touch`, TPM/Secure Enclave need nothing, Linux needs the YubiKey udev rule for YubiKeys), `TswapCli/SecurityWarnings.cs:196-202` (reprogram with `tswap yubikey setup --replace --touch`; the "couldn't check" case names no ykman), `TswapCli/Commands/MigrateCommand.cs:73,161-165` (the reprogramming steps use `tswap yubikey setup --replace --touch --serial N`; this is the one place a migration note may say "ykman is no longer needed"), `TswapCore/Vault/VaultUnlocker.cs:545` (drop "Is ykman installed?"), `TswapCli/Commands/GuidedInit.cs:73-85,224,237` (comments and the `Win32Exception` "ykman can't be run" case, which can't happen any more: remove it), `TswapCli/YubiKeyAccess.cs` (removed or reduced to what Task 2 kept), XML doc comments that name ykman (`IYubiKeyService.cs`, `YubiKeySlotBlob.cs:12,100`, `YubiKeyHardwareService.cs:9`, `Tpm2ToolsInterop.cs:15`, `SimulatedYubiKeyService.cs`)
 - Test: `TswapTests/NoYkmanTests.cs`, existing `HelpTests.cs`
 
 **Interfaces:**
@@ -181,8 +185,8 @@ Behaviour (design, Stage 1 "tswap yubikey setup"):
 
 **Files:**
 - First: `git fetch origin && git merge --no-edit origin/main` (the docs restructure is expected to have landed; if it hasn't, this task waits and the ledger says so; if `main` has no command-reference test, skip the regeneration and say so).
-- Modify: `docs/setup.md` "Preparing a YubiKey" (ykman → `tswap yubikey setup`, with the refusal rules in two lines), `docs/install.md` (Linux: `pcsc-lite-libs` / `libpcsclite1`, and the YubiKey udev rule; no ykman), `docs/portable.md` (YubiKey parts: no ykman, macOS Input Monitoring for the OTP slot, Linux device rule), `docs/commands.md` (regenerate as the docs track's test says), any remaining `ykman` in `README.md`/`docs/` except a migration note in `docs/upgrading-from-0.1.md`.
-- Create: `docs/release-notes/v0.3.0.md` (start it: "YubiKeys without ykman", `tswap yubikey setup`, the Linux library, the binary size, that programming was tested against a fake device only until the owner's spare-key check).
+- Modify: `docs/setup.md` "Preparing a YubiKey" (ykman → `tswap yubikey setup`, with the refusal rules in two lines), `docs/install.md` (Linux: the YubiKey udev rule; no ykman; `libpcsclite` is used if installed and not needed), `docs/portable.md` (YubiKey parts: no ykman, macOS Input Monitoring for the OTP slot, Linux device rule), `docs/commands.md` (regenerate as the docs track's test says), any remaining `ykman` in `README.md`/`docs/` except a migration note in `docs/upgrading-from-0.1.md`.
+- Create: `docs/release-notes/v0.3.0.md` (start it: "YubiKeys without ykman", `tswap yubikey setup`, the binary size, that programming was tested against a fake device only until the owner's spare-key check).
 - Test: the docs track's link check and command-reference tests.
 
 - [ ] **Step 1:** merge `main`; `./runtests.sh` → PASS before any edit.
