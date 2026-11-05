@@ -104,7 +104,18 @@ public class DocLinkTests
         Assert.Equal([(1, "s.md"), (1, "d.md")], MarkdownLinks.Links("<a href='s.md'>s</a> <a href=\"d.md\">d</a>\n"));
     }
 
+    [Fact]
+    public void Links_ImageInsideLinkTextAndImgSrcAreRead()
+    {
+        // The badge shape: the image's own target is a link too, and so is a raw <img src>.
+        Assert.Equal([(1, "docs/setup.md"), (1, "img/badge.png"), (2, "img/raw.png")],
+            MarkdownLinks.Links("[![badge](img/badge.png)](docs/setup.md)\n<img src=\"img/raw.png\" alt=\"x\">\n"));
+    }
+
     [Theory]
+    [InlineData("The _vault_ password", "the-vault-password")]
+    [InlineData("__Strong__ and *em*", "strong-and-em")]
+    [InlineData("TSWAP_CONFIG_DIR and snake_case", "tswap_config_dir-and-snake_case")]
     [InlineData("Threat Model & Non-Goals", "threat-model--non-goals")]
     [InlineData("Setting up: the guided `tswap init`", "setting-up-the-guided-tswap-init")]
     [InlineData("Install (compiled binary — recommended)", "install-compiled-binary--recommended")]
@@ -182,6 +193,12 @@ public class DocLinkTests
     [Fact]
     public void OldReadmeAnchorsStillResolve()
     {
+        // An emptied or truncated fixture would pass vacuously.
+        foreach (var list in new[] { "old-readme-anchors.txt", "old-broker-anchors.txt", "old-design-anchors.txt" })
+            Assert.NotEmpty(ReadList(list));
+        Assert.All(ReadList("old-design-anchors.txt"), e => Assert.Contains(DesignFiles, f => e.StartsWith(f + "#", StringComparison.Ordinal)));
+        foreach (var file in DesignFiles)
+            Assert.Contains(ReadList("old-design-anchors.txt"), e => e.StartsWith(file + "#", StringComparison.Ordinal));
         AssertContainsAll("README.md", ReadList("old-readme-anchors.txt"), AnchorsOf("README.md"));
         AssertContainsAll("docs/BROKER.md", ReadList("old-broker-anchors.txt"), AnchorsOf("docs/BROKER.md"));
         foreach (var file in DesignFiles)

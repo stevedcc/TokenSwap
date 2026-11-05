@@ -177,6 +177,7 @@ internal static partial class MarkdownLinks
     {
         var text = InlineLinkText().Replace(headingText, "$1");
         text = HtmlTag().Replace(text, "");
+        text = UnderscoreEmphasis().Replace(text, "$2"); // _em_ and __strong__; TSWAP_CONFIG_DIR keeps its underscores
         text = WebUtility.HtmlDecode(text).Replace("`", "").Replace("*", "").Trim().ToLowerInvariant();
         var sb = new StringBuilder();
         foreach (var rune in text.EnumerateRunes())
@@ -186,6 +187,14 @@ internal static partial class MarkdownLinks
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Underscore emphasis as GitHub renders it (markup removed from the slug): a run of one or two
+    /// <c>_</c> not inside a word, opening before and closing after a non-space. Intraword underscores
+    /// (<c>snake_case</c>) are literal and stay.
+    /// </summary>
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])(_{1,2})(?=\S)(.+?)(?<=\S)\1(?![\p{L}\p{N}_])")]
+    private static partial Regex UnderscoreEmphasis();
 
     private static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.NonSpacingMark
         or System.Globalization.UnicodeCategory.SpacingCombiningMark or System.Globalization.UnicodeCategory.EnclosingMark;
@@ -276,11 +285,11 @@ internal static partial class MarkdownLinks
 
     // ---- links ----
 
-    [GeneratedRegex(@"(?<!\\)\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+(?:""[^""]*""|'[^']*'))?\s*\)")]
+    [GeneratedRegex(@"(?<!\\)\[(?<text>(?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(?<target><[^>\n]*>|[^\s)]+)(?:\s+(?:""[^""]*""|'[^']*'))?\s*\)")]
     private static partial Regex InlineLink();
     [GeneratedRegex(@"^ {0,3}\[([^\]^][^\]]*)\]:[ \t]*<?([^\s>]+)>?", RegexOptions.Multiline)]
     private static partial Regex ReferenceDefinition();
-    [GeneratedRegex(@"\bhref\s*=\s*(?:""([^""]*)""|'([^']*)')", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(?:href|src)\s*=\s*(?:""([^""]*)""|'([^']*)')", RegexOptions.IgnoreCase)]
     private static partial Regex HrefAttribute();
 
     [GeneratedRegex(@"(\n[ \t]*\n)")]
@@ -302,8 +311,9 @@ internal static partial class MarkdownLinks
     private static partial Regex CodeSpan();
 
     /// <summary>
-    /// Every link target of the file with its 1-based line: inline and image links, reference definitions
-    /// and <c>href</c> attributes, outside code and comments.
+    /// Every link target of the file with its 1-based line: inline and image links (an image inside a
+    /// link's text too), reference definitions and <c>href</c> and <c>src</c> attributes, outside code and
+    /// comments.
     /// </summary>
     public static IReadOnlyList<(int Line, string Target)> Links(string markdown)
     {
@@ -319,7 +329,13 @@ internal static partial class MarkdownLinks
         }
 
         foreach (Match m in InlineLink().Matches(text))
-            links.Add((LineOf(m.Groups[1].Index), Unwrap(m.Groups[1].Value)));
+        {
+            links.Add((LineOf(m.Groups["target"].Index), Unwrap(m.Groups["target"].Value)));
+            // An image inside the link's text (the badge shape [![alt](img.png)](page.md)) is a link too.
+            var inner = m.Groups["text"];
+            foreach (Match n in InlineLink().Matches(inner.Value))
+                links.Add((LineOf(inner.Index + n.Groups["target"].Index), Unwrap(n.Groups["target"].Value)));
+        }
         foreach (Match m in ReferenceDefinition().Matches(text))
             links.Add((LineOf(m.Groups[2].Index), m.Groups[2].Value));
         foreach (Match m in HrefAttribute().Matches(text))

@@ -113,6 +113,7 @@ public class CommandReferenceTests
     [Fact]
     public void NoTestOnlyVariablesInDocs()
     {
+        // Reader docs only: AGENTS.md and the design records are for contributors, who need the seams.
         var files = MarkdownLinks.CheckedMarkdown()
             .Where(p => p == "README.md" || p.StartsWith("docs/", StringComparison.Ordinal) && !p.StartsWith("docs/design/", StringComparison.Ordinal))
             .ToList();
@@ -327,6 +328,16 @@ internal static class SudoTableDrive
         var results = new Dictionary<string, SudoDriveResult>(StringComparer.Ordinal);
         static SudoDriveResult R((int Exit, string Out, string Err) r, bool? job = null) => new(r.Exit, r.Out, r.Err, job);
 
+        // forward and serve run until a signal; they are driven to an early refusal of their own. If that
+        // refusal regresses, fail here instead of hanging the suite.
+        static (int Exit, string Out, string Err) Bounded(Func<(int Exit, string Out, string Err)> run, string what)
+        {
+            var task = Task.Run(run);
+            if (!task.Wait(TimeSpan.FromSeconds(60)))
+                throw new Xunit.Sdk.XunitException($"{what} did not return within 60 s: its early refusal no longer happens.");
+            return task.Result;
+        }
+
         // ---- slot: an enrolled machine (A) and a new one (B) that enrolls into it.
         using var a = new FleetMachine("sudo-a", SimulatedYubiKeyService.WithKeys(11111111));
         using var b = new FleetMachine("sudo-b", SimulatedYubiKeyService.WithKeys(22222222)) { Sudo = false };
@@ -362,8 +373,10 @@ internal static class SudoTableDrive
             results["broker call"] = R(call, call.Exit == 125 && call.Err.Contains("404", StringComparison.Ordinal));
         }
 
-        // ---- broker forward runs until a signal: driven to its own refusal of a LAN address (it needs no vault).
-        var fwd = c.Run("", "broker", "forward", "--listen", "0.0.0.0:8080");
+        // ---- broker forward runs until a signal: driven to its own refusal of a non-loopback address (it needs
+        // no vault). 192.0.2.1 (TEST-NET-1, RFC 5737) is no address of this host, so a regressed check can't open a
+        // listener on the LAN.
+        var fwd = Bounded(() => c.Run("", "broker", "forward", "--listen", "192.0.2.1:8080"), "broker forward");
         results["broker forward"] = R(fwd, fwd.Exit != 0 && fwd.Err.Contains("loopback", StringComparison.Ordinal));
 
         // ---- broker unlock|lock|status: a password broker's control socket, the real password proof.
@@ -388,7 +401,7 @@ internal static class SudoTableDrive
 
             // broker serve runs until a signal: driven to its own refusal of root (as root, never with sudo's message).
             BrokerCommand.Ownership = new AgentOwnership(privileged: true);
-            var serve = d.Run("", "broker", "serve");
+            var serve = Bounded(() => d.Run("", "broker", "serve"), "broker serve");
             results["broker serve"] = R(serve, serve.Exit != 0 && serve.Err.Contains("never as root", StringComparison.Ordinal));
         }
         finally
