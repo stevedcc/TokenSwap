@@ -69,7 +69,9 @@ internal static partial class MarkdownLinks
 
     // ---- live lines: the Markdown with code and comments blanked, one entry per source line ----
 
-    [GeneratedRegex(@"^\s*(`{3,}|~{3,})")]
+    [GeneratedRegex(@"^[ \t>]*")]
+    private static partial Regex BlockquotePrefix();
+    [GeneratedRegex(@"^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d+[.)])[ \t]+)?(`{3,}|~{3,})")]
     private static partial Regex FenceOpen();
     [GeneratedRegex(@"^\s*([-*+]|\d+[.)])(\s|$)")]
     private static partial Regex ListMarker();
@@ -93,7 +95,7 @@ internal static partial class MarkdownLinks
 
             if (fenceChar != '\0')
             {
-                var t = line.Trim();
+                var t = BlockquotePrefix().Replace(line, "").Trim();
                 if (t.Length >= fenceLen && t.All(c => c == fenceChar)) fenceChar = '\0';
                 live[i] = "";
                 prevBlank = false;
@@ -103,7 +105,8 @@ internal static partial class MarkdownLinks
             if (!inComment)
             {
                 var m = FenceOpen().Match(line);
-                if (m.Success)
+                var indentedCode = (line.StartsWith("    ", StringComparison.Ordinal) || line.StartsWith('\t')) && prevBlank && !inList;
+                if (m.Success && !indentedCode)
                 {
                     fenceChar = m.Groups[1].Value[0];
                     fenceLen = m.Groups[1].Value.Length;
@@ -164,12 +167,6 @@ internal static partial class MarkdownLinks
     private static partial Regex ClosingHashes();
     [GeneratedRegex(@"<a\s[^>]*?\b(?:id|name)\s*=\s*""([^""]+)""", RegexOptions.IgnoreCase)]
     private static partial Regex ExplicitAnchor();
-    [GeneratedRegex(@"<details\b", RegexOptions.IgnoreCase)]
-    private static partial Regex DetailsOpen();
-    [GeneratedRegex(@"</details\s*>", RegexOptions.IgnoreCase)]
-    private static partial Regex DetailsClose();
-    [GeneratedRegex(@"<summary\b[^>]*>[^<]*Moved sections", RegexOptions.IgnoreCase)]
-    private static partial Regex MovedSummary();
     [GeneratedRegex(@"!?\[([^\]]*)\]\([^)]*\)")]
     private static partial Regex InlineLinkText();
     [GeneratedRegex(@"<[^>]+>")]
@@ -193,49 +190,68 @@ internal static partial class MarkdownLinks
     private static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.NonSpacingMark
         or System.Globalization.UnicodeCategory.SpacingCombiningMark or System.Globalization.UnicodeCategory.EnclosingMark;
 
+    [GeneratedRegex(@"<details\b|</details\s*>|<summary\b[^>]*>.*?</summary\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex DetailsTags();
+
     /// <summary>Every anchor of the file in document order: heading slugs and explicit ids.</summary>
     public static IReadOnlyList<Anchor> AnchorsDetailed(string markdown)
     {
         var live = LiveLines(markdown);
-        var result = new List<Anchor>();
+        var masked = MaskCodeSpans(string.Join('\n', live)); // code spans per paragraph
+        var lineStarts = new int[live.Length];
+        for (int i = 0, off = 0; i < live.Length; i++) { lineStarts[i] = off; off += live[i].Length + 1; }
+        int LineOf(int offset)
+        {
+            var idx = Array.BinarySearch(lineStarts, offset);
+            return (idx >= 0 ? idx : ~idx - 1) + 1;
+        }
+
+        // "Moved sections" blocks as offset intervals; a <summary> may span lines.
+        var moved = new List<(int Start, int End)>();
+        var stack = new Stack<(int Start, bool Moved)>();
+        foreach (Match tag in DetailsTags().Matches(masked))
+        {
+            if (tag.Value.StartsWith("</details", StringComparison.OrdinalIgnoreCase))
+            {
+                if (stack.Count == 0) continue;
+                var top = stack.Pop();
+                if (top.Moved) moved.Add((top.Start, tag.Index));
+            }
+            else if (tag.Value.StartsWith("<details", StringComparison.OrdinalIgnoreCase)) stack.Push((tag.Index, false));
+            else if (stack.Count > 0 && Regex.IsMatch(tag.Value, @"Moved\s+sections", RegexOptions.IgnoreCase))
+            {
+                var top = stack.Pop();
+                stack.Push((top.Start, true));
+            }
+        }
+        foreach (var open in stack.Where(o => o.Moved)) moved.Add((open.Start, masked.Length));
+        bool InMoved(int offset) => moved.Any(r => offset >= r.Start && offset < r.End);
+
+        var found = new List<(int Offset, Anchor Anchor)>();
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var details = new Stack<bool>();
 
         for (var i = 0; i < live.Length; i++)
         {
-            var line = live[i];
-            var inlineMasked = MaskCodeSpans(line);
-
-            // <details> nesting and the "Moved sections" marker (count several tags on one line in order).
-            foreach (Match tag in Regex.Matches(inlineMasked, @"<details\b|</details\s*>|<summary\b[^>]*>[^<]*", RegexOptions.IgnoreCase))
+            var h = AtxHeading().Match(live[i]);
+            if (!h.Success) continue;
+            var text = ClosingHashes().Replace(h.Groups[2].Value, "");
+            if (text.StartsWith('#') && text.All(c => c == '#')) text = "";
+            var baseSlug = BaseSlug(text);
+            var candidate = baseSlug;
+            while (seen.Contains(candidate))
             {
-                if (DetailsOpen().IsMatch(tag.Value) && !tag.Value.StartsWith("</", StringComparison.Ordinal)) details.Push(false);
-                else if (DetailsClose().IsMatch(tag.Value)) { if (details.Count > 0) details.Pop(); }
-                else if (MovedSummary().IsMatch(tag.Value) && details.Count > 0) { details.Pop(); details.Push(true); }
+                counts[baseSlug] = counts.GetValueOrDefault(baseSlug) + 1;
+                candidate = baseSlug + "-" + counts[baseSlug];
             }
-            var moved = details.Contains(true);
-
-            var h = AtxHeading().Match(line);
-            if (h.Success)
-            {
-                var text = ClosingHashes().Replace(h.Groups[2].Value, "");
-                if (text.StartsWith('#') && text.All(c => c == '#')) text = "";
-                var baseSlug = BaseSlug(text);
-                var candidate = baseSlug;
-                while (seen.Contains(candidate))
-                {
-                    counts[baseSlug] = counts.GetValueOrDefault(baseSlug) + 1;
-                    candidate = baseSlug + "-" + counts[baseSlug];
-                }
-                seen.Add(candidate);
-                result.Add(new Anchor(candidate, AnchorKind.Heading, moved, i + 1));
-            }
-
-            foreach (Match a in ExplicitAnchor().Matches(inlineMasked))
-                result.Add(new Anchor(a.Groups[1].Value, AnchorKind.Explicit, moved, i + 1));
+            seen.Add(candidate);
+            found.Add((lineStarts[i], new Anchor(candidate, AnchorKind.Heading, InMoved(lineStarts[i]), i + 1)));
         }
-        return result;
+
+        foreach (Match a in ExplicitAnchor().Matches(masked))
+            found.Add((a.Index, new Anchor(a.Groups[1].Value, AnchorKind.Explicit, InMoved(a.Index), LineOf(a.Index))));
+
+        return found.OrderBy(f => f.Offset).Select(f => f.Anchor).ToList();
     }
 
     /// <summary>Heading slugs and explicit ids, in document order.</summary>
@@ -264,12 +280,23 @@ internal static partial class MarkdownLinks
     private static partial Regex InlineLink();
     [GeneratedRegex(@"^ {0,3}\[([^\]^][^\]]*)\]:[ \t]*<?([^\s>]+)>?", RegexOptions.Multiline)]
     private static partial Regex ReferenceDefinition();
-    [GeneratedRegex(@"\bhref\s*=\s*""([^""]*)""", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\bhref\s*=\s*(?:""([^""]*)""|'([^']*)')", RegexOptions.IgnoreCase)]
     private static partial Regex HrefAttribute();
 
-    /// <summary>Replaces every inline code span with spaces (newlines kept).</summary>
-    internal static string MaskCodeSpans(string text) =>
-        CodeSpan().Replace(text, m => Regex.Replace(m.Value, @"[^\n]", " "));
+    [GeneratedRegex(@"(\n[ \t]*\n)")]
+    private static partial Regex ParagraphBreak();
+
+    /// <summary>
+    /// Replaces every inline code span with spaces (newlines kept). A span cannot cross a blank line,
+    /// so each paragraph is masked on its own: a stray backtick hides nothing outside its paragraph.
+    /// </summary>
+    internal static string MaskCodeSpans(string text)
+    {
+        var parts = ParagraphBreak().Split(text); // separators are kept at the odd indexes
+        for (var i = 0; i < parts.Length; i += 2)
+            parts[i] = CodeSpan().Replace(parts[i], m => Regex.Replace(m.Value, @"[^\n]", " "));
+        return string.Concat(parts);
+    }
 
     [GeneratedRegex(@"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", RegexOptions.Singleline)]
     private static partial Regex CodeSpan();
@@ -296,7 +323,7 @@ internal static partial class MarkdownLinks
         foreach (Match m in ReferenceDefinition().Matches(text))
             links.Add((LineOf(m.Groups[2].Index), m.Groups[2].Value));
         foreach (Match m in HrefAttribute().Matches(text))
-            links.Add((LineOf(m.Groups[1].Index), m.Groups[1].Value));
+            { var g = m.Groups[1].Success ? m.Groups[1] : m.Groups[2]; links.Add((LineOf(g.Index), g.Value)); }
 
         return links.Where(l => l.Target.Length > 0).OrderBy(l => l.Line).ToList();
     }

@@ -65,6 +65,45 @@ public class DocLinkTests
             MarkdownLinks.Links(md));
     }
 
+    [Fact]
+    public void Links_StrayBacktickDoesNotHideLaterParagraphs()
+    {
+        Assert.Equal([(3, "a.md")], MarkdownLinks.Links("A stray ` backtick.\n\nNext [real](a.md) and `code` here.\n"));
+    }
+
+    [Fact]
+    public void Links_CodeSpanWrappingLinesInOneParagraphIsMasked()
+    {
+        Assert.Equal([(2, "ok.md")], MarkdownLinks.Links("text `wrapped\n[x](hidden.md)` end [ok](ok.md)\n"));
+        Assert.DoesNotContain(MarkdownLinks.AnchorsDetailed("text `wrapped\n<a id=\"hidden\"></a>` end\n"), a => a.Kind == AnchorKind.Explicit);
+    }
+
+    [Fact]
+    public void Links_FencesInBlockquotesAndListItemsAreCode()
+    {
+        var md = "> ```\n> [q](hidden1.md)\n> ```\n\n- ```\n  [l](hidden2.md)\n  ```\n\n[ok](ok.md)\n";
+        Assert.Equal([(9, "ok.md")], MarkdownLinks.Links(md));
+    }
+
+    [Fact]
+    public void Links_IndentedFenceMarkerIsIndentedCodeNotAFence()
+    {
+        Assert.Equal([(5, "real.md")], MarkdownLinks.Links("para\n\n    ```\n\n[real](real.md)\n\n    ```\n"));
+    }
+
+    [Fact]
+    public void MovedSections_SummaryTextOnTheNextLineIsRecognised()
+    {
+        var md = "<details>\n<summary>\nMoved sections\n</summary>\n\n<a id=\"old\"></a>\n\n</details>\n<a id=\"after\"></a>\n";
+        Assert.Equal([true, false], MarkdownLinks.AnchorsDetailed(md).Select(a => a.InMovedSections));
+    }
+
+    [Fact]
+    public void Links_SingleQuotedHrefIsRead()
+    {
+        Assert.Equal([(1, "s.md"), (1, "d.md")], MarkdownLinks.Links("<a href='s.md'>s</a> <a href=\"d.md\">d</a>\n"));
+    }
+
     [Theory]
     [InlineData("Threat Model & Non-Goals", "threat-model--non-goals")]
     [InlineData("Setting up: the guided `tswap init`", "setting-up-the-guided-tswap-init")]
