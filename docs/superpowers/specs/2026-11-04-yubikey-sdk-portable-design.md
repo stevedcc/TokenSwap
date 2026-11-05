@@ -78,7 +78,7 @@ mine, open to change.
   programming (`ConfigureChallengeResponse`, with a touch flag), device enumeration (`YubiKeyDevice.FindAll`), and
   FIDO2 with the hmac-secret extension.
 - `Yubico.NativeShims` ships static libraries for NativeAOT on Windows, macOS and Linux (SDK release notes).
-- **Linux:** the SDK P/Invokes `libudev` by that bare name and Yubico's docs tell users to create a
+- **Linux:** the SDK P/Invokes `libudev` by a bare name (Yubico.Core 1.18.1 imports `"libudev.so"`, found in Task 1; the spike's resolver matched `"libudev"` and so never ran, working only because oort has systemd-devel's `libudev.so`) and Yubico's docs tell users to create a
   `/usr/lib/libudev.so` symlink (root). tswap can likely avoid that with `NativeLibrary.SetDllImportResolver` for
   the Yubico.Core assembly (load `libudev.so.1`). OTP over HID needs the user to have access to the OTP hidraw node:
   on Fedora the `ykpers` package's `69-yubikey.rules` marks it `ID_SECURITY_TOKEN` so systemd grants the seated
