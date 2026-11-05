@@ -116,6 +116,7 @@ public class DocLinkTests
     [InlineData("The _vault_ password", "the-vault-password")]
     [InlineData("__Strong__ and *em*", "strong-and-em")]
     [InlineData("TSWAP_CONFIG_DIR and snake_case", "tswap_config_dir-and-snake_case")]
+    [InlineData("Using `_private_` names", "using-_private_-names")]
     [InlineData("Threat Model & Non-Goals", "threat-model--non-goals")]
     [InlineData("Setting up: the guided `tswap init`", "setting-up-the-guided-tswap-init")]
     [InlineData("Install (compiled binary — recommended)", "install-compiled-binary--recommended")]

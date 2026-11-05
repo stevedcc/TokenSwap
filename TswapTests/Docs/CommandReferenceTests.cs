@@ -333,9 +333,10 @@ internal static class SudoTableDrive
         static (int Exit, string Out, string Err) Bounded(Func<(int Exit, string Out, string Err)> run, string what)
         {
             var task = Task.Run(run);
-            if (!task.Wait(TimeSpan.FromSeconds(60)))
+            // On a timeout the abandoned run is left to the FleetMachine's disposal; the suite fails here either way.
+            if (!((IAsyncResult)task).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(60))) // waits without throwing
                 throw new Xunit.Sdk.XunitException($"{what} did not return within 60 s: its early refusal no longer happens.");
-            return task.Result;
+            return task.GetAwaiter().GetResult(); // a faulted run rethrows its own exception, not an AggregateException
         }
 
         // ---- slot: an enrolled machine (A) and a new one (B) that enrolls into it.

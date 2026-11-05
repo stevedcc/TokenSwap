@@ -177,7 +177,7 @@ internal static partial class MarkdownLinks
     {
         var text = InlineLinkText().Replace(headingText, "$1");
         text = HtmlTag().Replace(text, "");
-        text = UnderscoreEmphasis().Replace(text, "$2"); // _em_ and __strong__; TSWAP_CONFIG_DIR keeps its underscores
+        text = OutsideCodeSpans(text, t => UnderscoreEmphasis().Replace(t, "$2")); // _em_ and __strong__; TSWAP_CONFIG_DIR and `_code_` keep their underscores
         text = WebUtility.HtmlDecode(text).Replace("`", "").Replace("*", "").Trim().ToLowerInvariant();
         var sb = new StringBuilder();
         foreach (var rune in text.EnumerateRunes())
@@ -195,6 +195,19 @@ internal static partial class MarkdownLinks
     /// </summary>
     [GeneratedRegex(@"(?<![\p{L}\p{N}_])(_{1,2})(?=\S)(.+?)(?<=\S)\1(?![\p{L}\p{N}_])")]
     private static partial Regex UnderscoreEmphasis();
+
+    /// <summary>Applies <paramref name="transform"/> to the text between inline code spans, never inside one.</summary>
+    private static string OutsideCodeSpans(string text, Func<string, string> transform)
+    {
+        var sb = new StringBuilder();
+        var at = 0;
+        foreach (Match m in CodeSpan().Matches(text))
+        {
+            sb.Append(transform(text[at..m.Index])).Append(m.Value);
+            at = m.Index + m.Length;
+        }
+        return sb.Append(transform(text[at..])).ToString();
+    }
 
     private static bool IsMark(Rune r) => Rune.GetUnicodeCategory(r) is System.Globalization.UnicodeCategory.NonSpacingMark
         or System.Globalization.UnicodeCategory.SpacingCombiningMark or System.Globalization.UnicodeCategory.EnclosingMark;
