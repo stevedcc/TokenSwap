@@ -230,7 +230,8 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.NotEqual(0, r.Exit);
         Assert.Contains(
             $"slot 2 of YubiKey {SerialA} is already set up (touch: unknown — the key doesn't report it); a vault using this key " +
-            "would no longer open if it were replaced. Use --replace to overwrite it.", r.Err);
+            "would no longer open if it were replaced. Use --replace to overwrite it; after reprogramming, enrol it again with " +
+            ElevatedCommand.For("tswap", "slot add --yubikey") + ".", r.Err);
         Assert.Empty(keys.Programmed);
         Assert.Empty(keys.Challenges); // never challenged to learn the touch posture
     }
@@ -440,6 +441,9 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var dead = real with { SlotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), HwBlob = YubiKeySlotBlob.Create(SerialB, true).Encode() };
         File.WriteAllBytes(Path.Combine(m.VaultDir!, "keyring"),
             KeyringCodec.Encode(keyring with { Slots = [dead, .. keyring.Slots] }));
+        // Task 4b: nothing remembered on this machine (the unlock in VaultOnAAndB remembered B's real slot), so the
+        // slots are tried in keyring order, the dead one first.
+        File.Delete(Path.Combine(m.Dir, RememberedYubiKeySlots.FileName));
 
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
 
@@ -553,6 +557,88 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.Empty(m.Keys.Programmed);
     }
 
+    /// <summary>Carried from task 4: the other key is plugged in but hidden from the keyboard interface: the per-OS text.</summary>
+    [Fact]
+    public void Setup_Replace_OtherKeyHidden_ExplainsPerOs()
+    {
+        var m = VaultOnAAndB();
+        m.Keys.Hidden = [SerialB];
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains(Hidden(SerialB), r.Err);
+        Assert.Empty(m.Keys.Programmed);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
+    /// <summary>
+    /// Carried from task 4: an agent holding the vault key doesn't vouch for another key's slot (it hands out only the
+    /// vault key, which can't prove that key's slot opens): B's slot is dead, so setup refuses, and the agent is never
+    /// asked.
+    /// </summary>
+    [Fact]
+    public async Task Setup_Replace_RunningAgentDoesNotVouchForOtherKey()
+    {
+        const string password = "correct horse battery staple";
+        var m = VaultOnAAndB(password);
+        var vaultId = m.Keyring.VaultId;
+        var agentCalls = 0;
+        var address = OperatingSystem.IsWindows() ? TswapCore.Agent.AgentSocketPath.For(0, vaultId, _ => null) : m.AgentSocket!;
+        await using var agent = await TswapCore.Agent.AgentServer.StartAsync(new TswapCore.Agent.AgentServerOptions(address, vaultId, () =>
+        {
+            Interlocked.Increment(ref agentCalls);
+            return RandomNumberGenerator.GetBytes(32);
+        }, null, TimeProvider.System, AgentHarness.MyUid));
+        m.Keys.ProgramSlot2(SerialB, true); // B's slot is dead
+        m.Keys.Programmed.Clear();
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n{password}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains($"YubiKey {SerialB}'s slot didn't open", r.Err);
+        Assert.Empty(m.Keys.Programmed);
+        Assert.Equal(0, agentCalls);
+        Assert.DoesNotContain("Asking the tswap agent", r.All);
+    }
+
+    /// <summary>Task 4b: the other key's remembered slot (the one it last opened the vault with) is tried first.</summary>
+    [Fact]
+    public void Setup_Replace_TriesRememberedSlotFirst()
+    {
+        var m = VaultOnAAndB();
+        var keyring = m.Keyring;
+        var real = keyring.Slots.Single(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial == SerialB);
+        var dead = real with { SlotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), HwBlob = YubiKeySlotBlob.Create(SerialB, true).Encode() };
+        File.WriteAllBytes(Path.Combine(m.VaultDir!, "keyring"), KeyringCodec.Encode(keyring with { Slots = [dead, .. keyring.Slots] }));
+        new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default).Remember(keyring.VaultId, SerialB, real.SlotId);
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        Assert.Equal([(SerialB, YubiKeySlotBlob.Decode(real.HwBlob!).ChallengeString)], m.Keys.Challenges); // the remembered slot only
+    }
+
+    /// <summary>
+    /// Task 4b: with no recovery or chip slot, the second key can't be reprogrammed while the first one's slot is dead
+    /// (it isn't re-enrolled yet): B may be the vault's only working key.
+    /// </summary>
+    [Fact]
+    public void Setup_Replace_SecondKeyBeforeFirstReenrolled_Refused()
+    {
+        var m = VaultOnAAndB();
+        var first = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n", terminal: true);
+        Assert.True(first.Exit == 0, first.All);
+        m.Keys.Programmed.Clear();
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialB}"], m.Dir, $"{SerialB}\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains(DeadText(SerialA), r.Err);
+        Assert.Empty(m.Keys.Programmed);
+    }
+
     [Fact]
     public void Setup_Replace_OtherKeyBusy_Refused()
     {
@@ -650,8 +736,9 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.Empty(m.Keys.Programmed);
     }
 
+    /// <summary>Carried from task 4 (its name in the plan; the case was written in task 4 as ClassicVaultNotUsingKey).</summary>
     [Fact]
-    public void Setup_Replace_ClassicVaultNotUsingKey_ProceedsWithoutWarning()
+    public void Setup_Replace_ClassicPairVaultNotUsingKey_ProceedsWithoutWarning()
     {
         var m = Machine(Keys(SerialA, SerialB, SerialC));
         ClassicVaultTestSupport.CreateXorVault(m, SerialA, SerialB);
@@ -978,7 +1065,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.NotEqual(0, r.Exit);
         Assert.Contains($"slot 2 of YubiKey {SerialA} is programmed, but its check failed", r.Err);
         Assert.Contains("slot add --yubikey", r.Err);
-        Assert.Contains("challenges it twice", r.Err);
+        Assert.Contains("which checks it before enrolling it", r.Err);
     }
 
     // ── what setup prints ─────────────────────────────────────────────────────
@@ -1011,7 +1098,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         Assert.True(r.Exit == 0, r.All);
         Assert.Contains(
             "If this is interrupted, slot 2 may be left programmed but unchecked: enrol it with `slot add --yubikey` " +
-            "(which challenges it twice), or run setup again with --replace.", atProgram);
+            "(which checks it before enrolling it), or run setup again with --replace.", atProgram);
     }
 
     [Fact]

@@ -158,6 +158,9 @@ public sealed record YubiKeySlotBlob
         return blob ?? throw new TswapException(error!);
     }
 
+    /// <summary>The blob, or null when <paramref name="bytes"/> don't decode (corrupt, or from a newer tswap).</summary>
+    public static YubiKeySlotBlob? TryDecode(byte[] bytes) => Parse(bytes).Blob;
+
     /// <summary>
     /// Never throws: the blob and its <see cref="SlotPasswordKind"/> (None or Password), or null with the
     /// kind (NeedsNewerTswap or Corrupt) and the error text <see cref="Decode"/> throws.

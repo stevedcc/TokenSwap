@@ -23,6 +23,13 @@ public sealed record YubiKeySelection
     /// </summary>
     public Func<IReadOnlyList<int>, IReadOnlyList<bool?>, int, int>? Ask { get; init; }
 
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b: a key this unlock must not use (<c>slot add --yubikey</c> re-enrolling it: its
+    /// slots no longer open). Its one-key slots aren't candidates, and a legacy pair slot opens only through the pair's
+    /// other key. Null: none.
+    /// </summary>
+    public int? ExcludeSerial { get; init; }
+
     /// <summary>Never asks, no explicit key: the unattended order.</summary>
     public static YubiKeySelection Unattended { get; } = new();
 

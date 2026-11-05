@@ -868,10 +868,13 @@ public sealed class SlotCommand : ICliCommand
     /// keyring as a one-key slot (<see cref="YubiKeySlotBlob"/>), so that key alone opens the
     /// vault. This is how a TPM vault on the router gets the owner's keys: plug each key into the
     /// router and run this. Sudo-gated like <c>slot approve</c>: it unlocks the vault and creates a
-    /// new way to decrypt it. Unlocks by any slot; refuses a key that already has a slot (a
-    /// one-key slot's serial, or one of a legacy pair slot's two serials); backs up
-    /// <c>config.json</c> before writing, as <c>init</c> does. Other machines' keyring copies don't
-    /// get the slot (v0, no sync).
+    /// new way to decrypt it. Unlocks by any slot; backs up <c>config.json</c> before writing, as
+    /// <c>init</c> does. Other machines' keyring copies don't get the slot (v0, no sync).
+    /// <para>YubiKey SDK stage 1, task 4b: a key that already has one-key slots is checked first
+    /// (<see cref="Reenrol"/>): one that still opens the vault is refused as before; one whose slots all
+    /// answer wrongly (reprogrammed by <c>yubikey setup --replace</c>) is enrolled again as a new slot,
+    /// through another way in. A legacy pair slot doesn't count as a key's slot here: a key whose only
+    /// slots are pair slots gets its first one-key slot.</para>
     /// </summary>
     private static int ExecuteAdd(CommandContext ctx, string[] args)
     {
@@ -910,13 +913,22 @@ public sealed class SlotCommand : ICliCommand
         ctx.RequireSudo("slot add");
 
         var keyring = KeyringCodec.Decode(keyringBytes);
+
+        // Task 4b: every plugged-in key already has one-key slots (pair slots don't count): the one picked is
+        // checked, and re-enrolled if none of its slots opens any more.
+        var oneKeySlots = OneKeySlotsBySerial(keyring);
+        var pluggedIn = ctx.YubiKeys.ListSerials();
+        if (pluggedIn.Count > 0 && pluggedIn.All(oneKeySlots.ContainsKey))
+        {
+            var serial = ctx.ChooseSerialAmong(pluggedIn);
+            return Reenrol(ctx, config, keyring, serial, oneKeySlots[serial], passwordFlag, withRecoveryKey);
+        }
+
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
 
-        var enrolled = keyring.Slots
-            .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
-            .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial)
-            .Concat(config.YubiKeySerials) // a legacy pair slot's keys already open this vault
-            .ToHashSet();
+        // A first enrolment: only keys without a one-key slot are offered (task 4b: a key whose only slots are
+        // legacy pair slots is one of them; a pair slot belongs to the pair, not to one key).
+        var enrolled = oneKeySlots.Keys.ToHashSet();
 
         VaultPasswordChoice.Resolved? password = null;
         YubiKeySlotBlob blob;
@@ -961,6 +973,184 @@ public sealed class SlotCommand : ICliCommand
         c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
         return 0;
     }
+
+    /// <summary>Task 4b: each key's one-key slots (decodable YubiKey slot blobs), in keyring order; legacy pair slots are left out.</summary>
+    private static Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> OneKeySlotsBySerial(TswapCore.Keyring.Keyring keyring)
+    {
+        Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> bySerial = [];
+        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)))
+        {
+            if (YubiKeySlotBlob.TryDecode(slot.HwBlob!) is not { } blob)
+                continue;
+            if (!bySerial.TryGetValue(blob.Serial, out var slots))
+                bySerial[blob.Serial] = slots = [];
+            slots.Add((slot, blob));
+        }
+        return bySerial;
+    }
+
+    /// <summary>The refusal for a key one of whose slots still opens the vault (task 4b: checked, not assumed).</summary>
+    internal static string WorkingSlotText(int serial) =>
+        $"YubiKey {serial} already has a working slot in this vault (one of its slots still opens it), so there is nothing to " +
+        "enrol again. To add another key, plug in a YubiKey that has no slot yet; each key needs only one slot.";
+
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b: <c>slot add --yubikey</c> for a key that already has one-key slots.
+    /// <list type="number">
+    /// <item>Slot 2's state is read once: empty points to <c>yubikey setup</c> (nothing is challenged).</item>
+    /// <item>Whether the new slot gets the vault password is decided, and the vault password is asked once, at the
+    /// terminal, before any challenge, when a step is known to need it (one of this key's slots, or the new slot);
+    /// otherwise the unlock asks for it at most once, only if it needs it. The one value serves every step.</item>
+    /// <item>The liveness check challenges the key against each of its slots, the remembered one first, and stops at
+    /// the first that opens: then it is refused as before. A key that is busy, unplugged or doesn't answer aborts with
+    /// the device's text. Only when every slot answers wrongly is the key re-enrolled.</item>
+    /// <item>The vault is opened without this key (another key, a legacy pair slot through its other key, the chip, the
+    /// agent, or <c>--recovery-key-stdin</c>); a new slot is enrolled exactly as a first enrolment's; the keyring is
+    /// written once; the new slot is remembered on this machine (a failed write is a note).</item>
+    /// </list>
+    /// The old slots are kept: keyrings merge as a union, so a deleted slot would come back from another copy.
+    /// </summary>
+    private static int Reenrol(CommandContext ctx, Config config, TswapCore.Keyring.Keyring keyring, int serial,
+        List<(Slot Slot, YubiKeySlotBlob Blob)> slots, bool? passwordFlag, bool withRecoveryKey)
+    {
+        var c = ctx.Console;
+        var store = ctx.Storage as RecordVaultStore;
+        var remembered = ctx.RememberedSlots;
+
+        // Read once, before any challenge: a setup that failed to program may have left slot 2 empty.
+        if (ctx.YubiKeys.GetSlot2State(serial) == Slot2State.Empty)
+            throw new TswapException(
+                $"Slot 2 of YubiKey {serial} isn't set up for challenge-response, so none of its slots can open this vault. " +
+                $"Run `{ctx.Prefix} yubikey setup` (with --touch or --no-touch) to program it, then run this again. Nothing was changed.");
+        var ordered = VaultUnlocker.RememberedFirst(keyring, slots, serial, remembered);
+
+        if (passwordFlag == true && store is null)
+            throw new TswapException(VaultPasswordChoice.NeedsRecordVaultText);
+        var newSlotPassword = store is not null && VaultPasswordChoice.Decide(ctx, passwordFlag, HardwareBackend.YubiKey);
+
+        StretchedPassword? typed = null;
+        StretchedPassword? askedByUnlock = null;
+        (byte[] Salt, VaultPasswordParams Params)? firstPasswordFile = null;
+        byte[]? vaultKey = null;
+        try
+        {
+            var file = store?.ReadVaultPassword(keyring.VaultId);
+            if (ordered.Any(s => s.Blob.RequiresPassword) || newSlotPassword)
+            {
+                // slot add has no stdin option for the vault password (stdin may carry the recovery key).
+                if (c.IsInputRedirected)
+                    throw new VaultPasswordUnavailableException(
+                        $"YubiKey {serial} {(newSlotPassword ? "is to be enrolled with the vault password" : "has a slot that needs the vault password")}, " +
+                        "which is read at a terminal only, and stdin is not a terminal here. Run this at a terminal. Nothing was changed.");
+                if (file is not null)
+                    typed = VaultPasswordChoice.AskUnverified(ctx, file);
+                else if (!newSlotPassword)
+                    throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+                else
+                {
+                    var (stretched, salt, p) = VaultPasswordChoice.AskNew(ctx, "slot add --yubikey");
+                    typed = stretched;
+                    firstPasswordFile = (salt, p);
+                }
+            }
+
+            c.Out.WriteLine(
+                $"\nYubiKey {serial} has {ordered.Count} slot(s) in this vault: checking whether one still opens it before enrolling " +
+                $"it again. If the key needs a touch, expect up to {ordered.Count} for the check, plus 2 if the key is re-enrolled.");
+            string? noAnswer = null;
+            foreach (var (slot, blob) in ordered)
+            {
+                bool opens;
+                try
+                {
+                    opens = ctx.Unlocker.YubiKeySlotOpens(keyring, slot, blob, blob.RequiresPassword ? typed!.Clone : null);
+                }
+                catch (TswapException e) when (e is not OwnerSwitchException)
+                {
+                    noAnswer ??= e.Message; // busy, unplugged, a touch that timed out: no usable answer
+                    continue;
+                }
+                if (opens)
+                    throw new TswapException(WorkingSlotText(serial));
+            }
+            if (noAnswer is not null)
+                throw new TswapException($"{noAnswer} YubiKey {serial}'s slots couldn't all be checked, so it isn't enrolled again. Nothing was changed.");
+
+            // Every slot answered wrongly: open the vault another way.
+            var unlockUsedPassword = false;
+            VaultPasswordProvider prompt = () =>
+            {
+                unlockUsedPassword = true;
+                if (typed is not null)
+                    return typed.Clone();
+                askedByUnlock ??= TerminalPasswordProvider.For(ctx, config)();
+                return askedByUnlock.Clone();
+            };
+            try
+            {
+                vaultKey = withRecoveryKey ? UnlockWithRecoveryKey(ctx, keyring) : ctx.UnlockExcluding(config, serial, prompt);
+            }
+            catch (TswapException e) when (!withRecoveryKey && e is not OwnerSwitchException)
+            {
+                throw new TswapException(NoOtherWayInText(ctx, serial, e.Message, unlockUsedPassword), e.ExitCode);
+            }
+
+            // A password slot opened the vault with the typed password only in the unlock's password pass.
+            var proven = unlockUsedPassword && typed is not null;
+            if (newSlotPassword && file is not null && !proven && !file.Verifies(vaultKey, typed!))
+                throw new TswapException(
+                    $"YubiKey {serial} isn't enrolled again: the vault password didn't match this vault's (the vault opened " +
+                    "another way, so the password was checked against the vault's password verifier). Nothing was changed.");
+            if (typed is not null && !newSlotPassword && !proven)
+                c.Error.WriteLine(
+                    $"None of YubiKey {serial}'s slots opened with the vault password typed: if you mistyped the vault password, " +
+                    $"stop now (Ctrl-C); otherwise YubiKey {serial} is enrolled again, as a new slot without the password.");
+
+            var (newSlot, blob2) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, newSlotPassword ? typed : null);
+            var newFile = firstPasswordFile is { } f ? VaultPasswordFile.Create(vaultKey, keyring.VaultId, typed!, f.Salt, f.Params) : null;
+
+            var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
+            var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
+            newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(newSlot.SlotId)]);
+            if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
+                c.Out.WriteLine($"\nPrevious config backed up to: {fileStore.BackupConfig()}");
+            if (newFile is not null)
+                store!.WriteVaultPassword(newFile);
+            ctx.Storage.SaveConfig(newConfig); // the keyring, written once
+
+            c.Out.WriteLine(
+                $"\n✓ YubiKey {serial} re-enrolled as a new slot (fingerprint {SlotFingerprint.Compute(newSlot.PublicKey)}); its old " +
+                $"slot(s) no longer open and are kept (`{ctx.Prefix} slots` lists them as other slots of this key).");
+            if (newSlotPassword)
+                c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
+            YubiKeySlotEnrollment.PrintTouchPolicy(c, blob2);
+            c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
+            c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
+
+            // A hint, written after the keyring: a failure is a note, never a failed re-enrolment.
+            if (remembered.TryRemember(keyring.VaultId, serial, newSlot.SlotId) is { } failure)
+                c.Error.WriteLine($"Note: couldn't remember YubiKey {serial}'s new slot on this machine ({failure}); its next unlock " +
+                    "here may cost an extra challenge.");
+            return 0;
+        }
+        finally
+        {
+            typed?.Dispose();
+            askedByUnlock?.Dispose();
+            if (vaultKey is not null)
+                CryptographicOperations.ZeroMemory(vaultKey);
+        }
+    }
+
+    /// <summary>Task 4b: no other way in opened the vault, so the key can't be re-enrolled; names every way.</summary>
+    private static string NoOtherWayInText(CommandContext ctx, int serial, string unlockError, bool passwordWasTried) =>
+        $"YubiKey {serial}'s slot(s) in this vault no longer open (it was probably reprogrammed), so it can be enrolled again, " +
+        "but only once the vault opens another way, and none did" +
+        (passwordWasTried ? " (the vault password may have been mistyped: a slot that needs it was the only other way in that was tried)" : "") +
+        $": {unlockError} Ways in: another enrolled YubiKey, a legacy pair slot whose two keys are plugged in and don't include " +
+        $"this key, this machine's TPM or Secure Enclave slot, a running `{ctx.Prefix} agent` (it holds the vault key), or the " +
+        $"recovery key with --recovery-key-stdin. If none is left, `{ctx.Prefix} recover --yubikey` with the recovery key is the " +
+        "fallback. Nothing was changed.";
 
     // --- slot merge (runs on the approving machine, or any copy of the vault) ---
 

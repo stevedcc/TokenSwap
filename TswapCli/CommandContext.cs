@@ -146,9 +146,32 @@ public sealed record CommandContext(
         if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
+        // Task 4b: each key's remembered slot first, and the slot that opens is remembered.
         return Unlocker.Unlock(config, UnlockSelection(),
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)));
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)) { Remembered = RememberedSlots });
     }
+
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b (<c>slot add --yubikey</c> re-enrolling a key): <see cref="Unlock"/> without
+    /// YubiKey <paramref name="excludeSerial"/>, with <paramref name="prompt"/> as pass 3's password (the command's one
+    /// password, asked before its challenges or on first use).
+    /// </summary>
+    internal byte[] UnlockExcluding(Config config, int excludeSerial, TswapCore.VaultPassword.VaultPasswordProvider prompt)
+    {
+        if (TestKey is null)
+            SecurityWarnings.NoticeIfChanged(Console, config);
+        return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots });
+    }
+
+    /// <summary>
+    /// Task 4b: this machine's remembered YubiKey slots (<c>yubikey-slots.json</c> in the config folder, beside
+    /// <c>config.json</c>), written through the store's owner-preserving file layer. The store as it is opened (not
+    /// through <see cref="Storage"/>): a hint beside the config is no reason for the classic-vault refusal.
+    /// </summary>
+    internal RememberedYubiKeySlots RememberedSlots => _storage.Value is TswapCore.IFileVaultStore fileStore
+        ? new(fileStore.ConfigDir, fileStore.Owner)
+        : new(Env.ConfigDir, TswapCore.DirectoryOwnerMatcher.Default);
 
     /// <summary>
     /// Brief T17 task 11: how <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's pass 2,

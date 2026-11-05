@@ -54,7 +54,8 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
         if (connected.Count == 0)
             throw new TswapException("No YubiKey detected. Please insert YubiKey.");
 
-        var enrolled = connected.Where(config.YubiKeySerials.Contains).Distinct().ToList();
+        // Task 4b: a key being re-enrolled is never used (the pair's other key alone opens it with the share).
+        var enrolled = connected.Where(config.YubiKeySerials.Contains).Where(s => s != selection.ExcludeSerial).Distinct().ToList();
         if (enrolled.Count == 0 && selection.Serial is null)
             throw new TswapException(connected.Count == 1
                 ? $"YubiKey {connected[0]} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}"

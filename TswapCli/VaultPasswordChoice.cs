@@ -187,6 +187,25 @@ internal static class VaultPasswordChoice
     public static (StretchedPassword Stretched, VaultPasswordFile File) CreateNew(
         CommandContext ctx, byte[] vaultKey, byte[] vaultId, string command)
     {
+        var (stretched, salt, p) = AskNew(ctx, command);
+        try
+        {
+            return (stretched, VaultPasswordFile.Create(vaultKey, vaultId, stretched, salt, p));
+        }
+        catch
+        {
+            stretched.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The asking half of <see cref="CreateNew"/> (task 4b: <c>slot add --yubikey</c> asks before its challenges and
+    /// builds the file once the vault is open): a new password, twice, stretched with a fresh salt and the default
+    /// parameters.
+    /// </summary>
+    public static (StretchedPassword Stretched, byte[] Salt, VaultPasswordParams Params) AskNew(CommandContext ctx, string command)
+    {
         var c = ctx.Console;
         c.Error.Write("New vault password: ");
         var first = c.ReadPassword(c.Error);
@@ -200,16 +219,7 @@ internal static class VaultPasswordChoice
 
         var salt = RandomNumberGenerator.GetBytes(VaultPasswordKdf.SaltSize);
         var p = VaultPasswordParams.Default;
-        var stretched = VaultPasswordKdf.Stretch(first, salt, p, c.Error);
-        try
-        {
-            return (stretched, VaultPasswordFile.Create(vaultKey, vaultId, stretched, salt, p));
-        }
-        catch
-        {
-            stretched.Dispose();
-            throw;
-        }
+        return (VaultPasswordKdf.Stretch(first, salt, p, c.Error), salt, p);
     }
 
     /// <summary>

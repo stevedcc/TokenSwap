@@ -32,7 +32,7 @@ public sealed class YubiKeyCommand : ICliCommand
 
     internal const string InterruptionNote =
         "If this is interrupted, slot 2 may be left programmed but unchecked: enrol it with `slot add --yubikey` " +
-        "(which challenges it twice), or run setup again with --replace.";
+        "(which checks it before enrolling it), or run setup again with --replace.";
 
     internal const string TouchPrompt = "touch the key when it flashes (to check the new slot)";
 
@@ -54,7 +54,8 @@ public sealed class YubiKeyCommand : ICliCommand
             if (!replace)
                 throw new TswapException(
                     $"slot 2 of YubiKey {chosen} is already set up (touch: unknown — the key doesn't report it); a vault using " +
-                    "this key would no longer open if it were replaced. Use --replace to overwrite it.");
+                    "this key would no longer open if it were replaced. Use --replace to overwrite it; after reprogramming, enrol it " +
+                    $"again with {ElevatedCommand.For(ctx.Prefix, "slot add --yubikey")}.");
             ConfirmSerial(ctx, chosen);
             CheckVault(ctx, chosen, keys);
         }
@@ -333,17 +334,28 @@ public sealed class YubiKeyCommand : ICliCommand
         var otherSerials = otherKeys.Select(k => k.Blob.Serial).Distinct().ToList();
         var names = string.Join(" or ", otherSerials.Select(s => $"YubiKey {s}"));
         var plugged = keys.Where(k => k.KeyboardReachable && k.Serial is not null).Select(k => k.Serial!.Value).ToHashSet();
-        var candidates = otherKeys.Where(k => plugged.Contains(k.Blob.Serial)).ToList();
+        // Task 4b: each key's slots with the one it last opened the vault with on this machine first.
+        var remembered = ctx.RememberedSlots;
+        var candidates = otherSerials.Where(plugged.Contains)
+            .SelectMany(s => VaultUnlocker.RememberedFirst(keyring, otherKeys.Where(k => k.Blob.Serial == s), s, remembered))
+            .ToList();
         if (candidates.Count == 0)
+        {
+            // Carried from task 4: a key that is plugged in but hidden from the keyboard interface gets the per-OS text.
+            var os = YubiKeyAccessTexts.CurrentOs();
+            var hidden = keys.Where(k => !k.KeyboardReachable && k.Serial is { } s && otherSerials.Contains(s))
+                .Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, os) + Environment.NewLine);
             throw new TswapException(
+                string.Concat(hidden) +
                 $"Refusing: apart from YubiKey {serial}, only {names} can open the vault in {ctx.Env.ConfigDir}, and none of " +
                 $"them can be checked here: plug in {names} so its slot can be checked, or leave this key as it is. Nothing was changed.");
+        }
 
         // The vault password is asked at most once (only a password slot asks), and dropped at the end.
         StretchedPasswordCache password = new(TerminalPasswordProvider.For(ctx, config));
         try
         {
-            // In keyring order (task 4b will try the slot that opened last first). A definite wrong answer is kept
+            // The remembered slot first, then keyring order (task 4b). A definite wrong answer is kept
             // apart from a key that was busy or didn't answer: when no slot opens, the latter decides the message,
             // since that key may still open the vault.
             string? didntOpen = null, transient = null;
@@ -430,8 +442,8 @@ public sealed class YubiKeyCommand : ICliCommand
                 OtpFailure.VerifyNoAnswer =>
                     $"slot 2 of YubiKey {serial} is programmed, but its check failed{detail}: it didn't answer the check " +
                     $"challenge (a touch that timed out counts). `{ctx.Prefix} yubikey setup` refuses an occupied slot, so check " +
-                    $"it by enrolling it: `sudo {ctx.Prefix} slot add --yubikey` (or `{ctx.Prefix} init --yubikey` for a new " +
-                    "vault) challenges it twice.",
+                    $"it by enrolling it: {ElevatedCommand.For(ctx.Prefix, "slot add --yubikey")}, which checks it before enrolling it " +
+                    $"(or `{ctx.Prefix} init --yubikey` for a new vault).",
                 _ =>
                     $"Programming failed{detail}: slot 2 of YubiKey {serial} may now be empty or half-written (or, if the " +
                     "failure came before anything was written, unchanged). Don't enrol it as it is: run " +
