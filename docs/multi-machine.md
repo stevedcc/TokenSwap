@@ -345,4 +345,17 @@ Afterwards the copy and `~/.config/tswap-router` on the desk machine are a secon
 which opens with that YubiKey. tswap leaves them as they are: delete both if you don't need that
 copy.
 
+**A reprogrammed key, with nothing else to open the vault.** The same `slot add` enrols a key again
+after `tswap yubikey setup --replace` gave it a new secret (its old slots no longer open the vault),
+when no other enrolled key, TPM or Secure Enclave slot, or running agent opens the vault. Run it on
+the machine that holds the vault, with the recovery key on stdin:
+
+```bash
+sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
+```
+
+When one of the key's slots or the new slot needs the vault password, stdin carries the recovery
+key on its first line and the vault password on the next. If `slot add` still can't enrol the key,
+`sudo tswap recover --yubikey`, with the recovery key on stdin, enrols it as a new slot.
+
 How tswap reads the recovery key: [setup.md](setup.md#the-recovery-key).

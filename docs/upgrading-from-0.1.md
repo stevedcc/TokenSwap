@@ -69,36 +69,41 @@ vault: [commands.md](commands.md#files)) can be shared and merged ([multi-machin
 
 To move a classic vault's YubiKeys to a touch requirement:
 
-1. Convert the vault. Each enrolled YubiKey becomes its own slot (plug in every one):
+1. Convert the vault. Each enrolled YubiKey becomes its own slot (plug in every one), and a recovery
+   slot is added: keep the recovery key it prints.
 
    ```bash
    sudo tswap migrate --to-records
    ```
 
-2. Reprogram each key's slot 2 with a touch requirement, with ykman, as the printed guide shows. The
-   commands are in the setup guide's [Preparing a YubiKey](setup.md#preparing-a-yubikey) section.
-   **Warning:** reprogramming gives the key a new secret, so the slot step 1 made for it no longer
-   opens the vault, and `tswap slots` still lists that dead slot. Keep the recovery key from step 1
-   at hand: step 3 needs it.
-3. Enroll each reprogrammed key again as a new slot (plug it in first). `slot add --yubikey` refuses
-   a key that already has a slot, so this is `recover --yubikey`, with the recovery key you kept
-   from step 1 on stdin (more ways to pipe it: [The recovery key](setup.md#the-recovery-key)):
+2. Give each key a touch requirement, one key at a time, with both keys plugged in. For the key
+   with serial N:
 
    ```bash
-   read -rs RECOVERY_KEY          # paste the recovery key; it isn't shown or kept in history
-   printf '%s\n' "$RECOVERY_KEY" | sudo tswap recover --yubikey
-   unset RECOVERY_KEY
+   tswap yubikey setup --replace --touch --serial N   # reprogram key N's slot 2, with a touch requirement
+   sudo tswap slot add --yubikey                      # enrol key N again (pick it if asked)
+   tswap names                                        # with only key N plugged in: it opens the vault alone
    ```
 
-   v0.3.0's YubiKey work changes this step.
+   Reprogramming gives key N a new secret, so the slot step 1 made for it no longer opens the vault
+   (`tswap slots` still lists that dead slot). `slot add --yubikey` checks that, opens the vault
+   with the other key, and enrols key N as a new slot. Finish and check one key before you start
+   the next, so the other key still opens the vault while you do. What `slot add` checks and asks
+   for: [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch). If neither key
+   opens the vault any more, the recovery key from step 1 is the fallback:
+   [adding a key with the recovery key](multi-machine.md#appendix-adding-a-key-with-the-recovery-key).
 
 `tswap slots` then shows each slot's touch setting.
 
+**No more ykman.** tswap 0.1 and 0.2 told you to program slot 2 with `ykman otp chalresp`; since
+v0.3.0 `tswap yubikey setup` does it, and tswap talks to the key itself, so ykman is no longer
+needed. A slot 2 that ykman programmed is used as it is: tswap sends it the same challenge as before.
+
 **Plain `tswap migrate`** (without `--to-records`) is a status check on a classic vault: it shows
 the touch setting, the entropy mode ([YubiKey entropy](setup.md#several-yubikeys-plugged-in)) and the unlock challenge (it asks for the entropy mode if none
-is set), and offers to print a re-initialisation guide. That guide's "Reinitialize tswap" step (`tswap init`) is refused in 0.2
-while the classic vault is there: `init` asks you to convert it with `migrate --to-records` first.
-Use the steps above instead.
+is set), and offers to print a step-by-step guide with your keys' serials: an encrypted backup with
+`export`, the conversion with `migrate --to-records`, and, if the keys have no touch requirement,
+the touch steps above.
 
 What the touch requirement protects against: [security-model.md](security-model.md#touch-posture).
 

@@ -11,24 +11,42 @@ they compare, is in [security-model.md](security-model.md#posture-per-backend).
 ## Preparing a YubiKey
 
 Skip this if you won't use a YubiKey. tswap uses a YubiKey's slot 2, set up for HMAC-SHA1
-challenge-response. Set it up once on each key, with `ykman` (installing it:
+challenge-response, and sets it up itself: run `tswap yubikey setup` once on each key. It needs no
+sudo and no other tool (what a key needs on each OS:
 [YubiKey prerequisites](install.md#yubikey-prerequisites)).
 
-**Warning:** setting up slot 2 gives the key a new secret. On a key that already has a slot in a
-vault, that slot no longer opens the vault (`tswap slots` still lists it); enroll the key again
-afterwards, as in [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
-
-With a touch requirement (recommended; it requires a button press):
+With a touch requirement (recommended; every unlock needs a press of the key):
 
 ```bash
-ykman otp chalresp --generate --touch 2
+tswap yubikey setup --touch
 ```
 
 Without a touch requirement (less secure: no button press):
 
 ```bash
-ykman otp chalresp --generate 2
+tswap yubikey setup --no-touch
 ```
+
+One of the two flags is required; there is no default. With several keys plugged in, tswap asks
+which one at a terminal; a script names it with `--serial N`. tswap programs the slot with a new
+random secret, then challenges it once to check that it answers as set up (with `--touch`, touch the
+key when it flashes), and prints `YubiKey N slot 2: HMAC-SHA1 challenge-response, touch required`
+(or `no touch required`).
+
+**Warning:** programming slot 2 replaces what was there with a new secret. On a key that already
+has a slot in a vault, that slot no longer opens the vault (`tswap slots` still lists it); enrol the
+key again afterwards, as in [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
+So `tswap yubikey setup` guards an occupied slot:
+
+- It refuses a slot 2 that is already set up, and changes nothing, unless you pass `--replace`.
+- With `--replace` you type the key's serial to confirm, and it refuses if the vault tswap is
+  pointed at would be left without a way in that doesn't need this key. A TPM, Secure Enclave or
+  recovery slot counts, or another YubiKey's slot, if that key is plugged in and its slot opens the
+  vault when tswap checks it. If tswap can't read a vault there, it warns and goes on. An empty
+  slot 2 is programmed without these checks: there is nothing on it to lose.
+
+If setup is interrupted, slot 2 may be left programmed but unchecked: `slot add --yubikey` checks
+a key before it enrols it, or run setup again with `--replace`.
 
 What the touch requirement protects against, and what a key without it allows:
 [security-model.md](security-model.md#yubikey-touch-or-no-touch).
@@ -118,8 +136,9 @@ What `init` makes:
   offline; `--no-recovery` leaves it out).
 - A key's serial, challenge and salt live in its slot, so the vault files plus any one enrolled key
   open the vault on any machine.
-- `slot add --yubikey` refuses a key that already has a slot, and backs up `config.json` before it
-  writes.
+- `slot add --yubikey` refuses a key that already has a working slot, and backs up `config.json`
+  before it writes. A key whose slots no longer open the vault (its slot 2 was reprogrammed) is
+  enrolled again instead: see [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
 
 ### Several YubiKeys plugged in
 
