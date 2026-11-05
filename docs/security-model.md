@@ -112,7 +112,7 @@ means no source states it.
 Sources. A date here is when that source's text was written or last changed, not when anything was
 checked; dates of checks are in the Reviewed / verified column.
 
-1. [Issue #158](https://github.com/stevedcc/TokenSwap/issues/158), work item 4 (2026-07-28; written before the vault password and `--no-touch` existed).
+1. [Issue #158](https://github.com/stevedcc/TokenSwap/issues/158), work item 4 (2026-07-28).
 2. [YubiKey: touch or no touch](#yubikey-touch-or-no-touch), this page (2026-02-21, changed 2026-10-30).
 3. [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect), this page (2026-11-03).
 4. [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor) (2026-10-31).

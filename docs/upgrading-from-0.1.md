@@ -49,7 +49,8 @@ To move a classic vault's YubiKeys to a touch requirement:
    sudo tswap migrate --to-records
    ```
 
-2. Reprogram each key's slot 2 with a touch requirement.
+2. Reprogram each key's slot 2 with a touch requirement, with ykman, as the printed guide shows. The
+   commands are in the setup guide's "Preparing a YubiKey" section.
 3. Enroll each reprogrammed key again as a new slot (plug it in first):
 
    ```bash
