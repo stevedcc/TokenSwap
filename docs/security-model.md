@@ -60,7 +60,8 @@ in [agent-integration.md](agent-integration.md).
   ```
 
   Keeping a variable this way needs the same sudoers permission as `sudo VAR=value` (implied for an
-  `ALL` command); otherwise use `sudo env TSWAP_CONFIG_DIR="$TSWAP_CONFIG_DIR" tswap ...`, as the
+  `ALL` command); otherwise, if sudoers lets you run `env`, use
+  `sudo env TSWAP_CONFIG_DIR="$TSWAP_CONFIG_DIR" tswap ...`, as the
   [broker guide](BROKER.md#setting-up-the-broker) does.
 
 ## Threat model and non-goals
@@ -89,7 +90,7 @@ deployment.
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
 | Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
-| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
+| Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
@@ -190,11 +191,13 @@ it on every command**.
   vault. `tswap slots` still lists that dead slot (tswap can't remove slots). Make sure another
   slot, or the recovery key, opens the vault before you start.
 - **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so the step
-  is `recover --yubikey`, with the recovery key on stdin (where to keep it and how to pipe it:
+  is `recover --yubikey`, with the vault's recovery key on stdin (more ways to pipe it:
   [The recovery key](setup.md#the-recovery-key)):
 
   ```bash
-  sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
+  read -rs RECOVERY_KEY          # paste the recovery key; it isn't shown or kept in history
+  printf '%s\n' "$RECOVERY_KEY" | sudo tswap recover --yubikey
+  unset RECOVERY_KEY
   ```
 
   v0.3.0's YubiKey work changes this step.
