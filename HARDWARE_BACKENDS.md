@@ -2,6 +2,8 @@
 
 This design record moved to [docs/design/hardware-backends.md](docs/design/hardware-backends.md).
 
+For the review status and posture of each backend, see [docs/security-model.md](docs/security-model.md).
+
 <details>
 <summary>Moved sections</summary>
 
