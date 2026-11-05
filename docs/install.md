@@ -12,7 +12,8 @@ You need one hardware backend:
 
 - **YubiKeys:** see [YubiKey prerequisites](#yubikey-prerequisites) below.
 - **TPM 2.0:** Windows, or Linux with `tpm2-tools` (see
-  [hardware-backends.md](design/hardware-backends.md)).
+  [hardware-backends.md](design/hardware-backends.md)). On Linux your user also needs access to
+  the TPM: see [portable.md](portable.md#linux-tpm).
 - **Secure Enclave:** a Mac (Apple Silicon tested).
 
 You need the .NET 10 SDK at build time only. The compiled binary has no runtime dependencies.

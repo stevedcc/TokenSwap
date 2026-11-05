@@ -2,7 +2,8 @@
 
 This page is for anyone setting up tswap on a machine for the first time. It covers preparing a
 YubiKey, the guided `tswap init`, setting up with a YubiKey, a TPM or a Mac's Secure Enclave, the
-recovery key, and the limits of this version.
+recovery key, and the limits of this version. It ends with the test procedure for a no-touch
+Secure Enclave slot on a Mac, with its recorded results.
 
 Install tswap first: [install.md](install.md). What each kind of slot protects against, and how
 they compare, is in [security-model.md](security-model.md#posture-per-backend).
@@ -242,6 +243,8 @@ vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add y
 This is a test procedure, not a setup step: the checks behind the `--no-touch` warning, and their
 recorded results. Its design context is in
 [hardware-backends.md](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11).
+Claims (a)-(c) below are the three points of the `--no-touch` warning, listed as 1-3 in
+[security-model.md](security-model.md#secure-enclave-touch-or-no-touch).
 
 Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
 **Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim; the root half of step 5 ran on the vault itself, not on a root-owned copy). If a

@@ -26,7 +26,9 @@ export TSWAP_CONFIG_DIR=~/my-vault-config
 ./tswap names
 ```
 
-Under `sudo`, keep the variable: `sudo --preserve-env=TSWAP_CONFIG_DIR ./tswap get <name>`. The
+Under `sudo`, keep the variable: `sudo --preserve-env=TSWAP_CONFIG_DIR ./tswap get <name>` (which
+vault a command under sudo uses:
+[security-model.md](security-model.md#which-vault-a-command-under-sudo-uses)). The
 variable's reference entry is in [commands.md](commands.md#environment-variables), and the
 default folder on each OS in [commands.md](commands.md#files).
 
