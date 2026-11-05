@@ -25,17 +25,27 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
     private static SdkYubiKeyService Service(FakeOtpKeys fake, OSPlatform? os = null) =>
         new(fake, os ?? YubiKeyAccessTexts.CurrentOs());
 
-    private (int Exit, string Out, string Err) Run(SdkYubiKeyService keys, string stdin, bool terminal, params string[] args)
+    private (int Exit, string Out, string Err) Run(SdkYubiKeyService keys, string stdin, bool terminal, params string[] args) =>
+        Run(keys, new FakeConsole(stdin) { IsInputRedirected = !terminal }, () => new MachineChip(null, "no chip in this test"), args);
+
+    private (int Exit, string Out, string Err) Run(
+        SdkYubiKeyService keys, FakeConsole console, Func<MachineChip> chip, params string[] args)
     {
-        var console = new FakeConsole(stdin) { IsInputRedirected = !terminal };
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
         var ctx = new CommandContext(console, env, () => VaultStores.Open(_dir, warnings: console.Error), keys,
             new VaultUnlocker(keys), testKey: null, sudoBypass: true)
         {
-            ChipProbe = () => new MachineChip(null, "no chip in this test"),
+            ChipProbe = chip,
         };
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
+    }
+
+    private static void Hide(FakeOtpKeys fake, int serial, KeyboardInterfaceState probe)
+    {
+        fake.Keys.RemoveAll(k => k.Serial == serial);
+        fake.WithHiddenKey(serial);
+        fake.Interfaces.Add(probe);
     }
 
     /// <summary>A vault with one slot on <see cref="SerialA"/> (and the recovery slot), made over a working fake.</summary>
@@ -55,6 +65,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialA}", err);
         Assert.Contains(SetupHint, err);
     }
 
@@ -68,7 +79,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("busy", err);
+        Assert.Contains($"YubiKey {SerialA} is busy", err);
         Assert.DoesNotContain("No YubiKey detected", err);
     }
 
@@ -78,14 +89,8 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var fake = new FakeOtpKeys().WithHiddenKey(SerialA);
         var keys = Service(fake, OSPlatform.OSX);
         var console = new FakeConsole("\n1\ny\n") { IsInputRedirected = false };
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = ["init"] };
-        var ctx = new CommandContext(console, env, () => VaultStores.Open(_dir, warnings: console.Error), keys,
-            new VaultUnlocker(keys), testKey: null, sudoBypass: true)
-        {
-            ChipProbe = () => new MachineChip(HardwareBackend.SecureEnclave, null),
-        };
 
-        CliRunner.Run(ctx, ["init"]);
+        Run(keys, console, () => new MachineChip(HardwareBackend.SecureEnclave, null), "init");
 
         var text = console.OutText;
         Assert.Contains("YubiKeys: " + YubiKeyAccessTexts.ExplainHidden(SerialA, OSPlatform.OSX), text);
@@ -101,10 +106,14 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         fake.WithKey(SerialB);
         fake.Slot2Empty.Add(SerialB);
 
+        var before = File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring"));
+
         var (exit, _, err) = Run(Service(fake), "", false, "slot", "add", "--yubikey");
 
         Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialB}", err);
         Assert.Contains(SetupHint, err);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring")));
     }
 
     [Fact]
@@ -121,7 +130,56 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("busy", err);
+        Assert.Contains($"YubiKey {SerialA} is busy", err);
+        Assert.Contains($"YubiKey {SerialB}", err);
         Assert.Contains(SetupHint, err);
+    }
+
+    private const int SerialC = 63333333;
+
+    [Fact]
+    public void Unlock_BusyHiddenKeyAndUnrelatedReachableKey_SaysBusy()
+    {
+        var fake = new FakeOtpKeys().WithKey(SerialA);
+        MakeVault(fake);
+        fake.WithKey(SerialB);
+        var (addExit, _, addErr) = Run(Service(fake), "", false, "slot", "add", "--yubikey");
+        Assert.True(addExit == 0, addErr);
+        fake.Keys.RemoveAll(k => k.Serial == SerialB);
+        Hide(fake, SerialA, KeyboardInterfaceState.Busy);
+        fake.WithKey(SerialC);
+
+        var (exit, _, err) = Run(Service(fake), "", false, "names");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("No plugged-in YubiKey matches", err);
+        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+    }
+
+    [Fact]
+    public void Enrol_BusyHiddenNewKeyAndEnrolledReachableKey_SaysBusy()
+    {
+        var fake = new FakeOtpKeys().WithKey(SerialB);
+        MakeVault(fake);
+        Hide(fake, SerialA, KeyboardInterfaceState.Busy);
+
+        var (exit, _, err) = Run(Service(fake), "", false, "slot", "add", "--yubikey");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("already has a working slot", err);
+        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+    }
+
+    [Fact]
+    public void Setup_SerialOfBusyHiddenKey_SaysBusy()
+    {
+        var fake = new FakeOtpKeys().WithKey(SerialB);
+        Hide(fake, SerialA, KeyboardInterfaceState.Busy);
+
+        var (exit, _, err) = Run(Service(fake), "", false, "yubikey", "setup", "--touch", "--serial", $"{SerialA}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+        Assert.Empty(fake.Programs);
     }
 }

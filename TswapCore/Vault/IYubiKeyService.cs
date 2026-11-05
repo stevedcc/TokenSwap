@@ -43,6 +43,14 @@ public interface IYubiKeyService
     /// </summary>
     IReadOnlyList<YubiKeyInfo> FindKeys() => ListSerials().Select(s => new YubiKeyInfo(s, true, "HidKeyboard")).ToList();
 
+    /// <summary>
+    /// Why keys that are plugged in but not reachable over the keyboard interface (busy with another program, or hidden
+    /// by the OS) can't be used, or null when every key seen is reachable. <see cref="ListSerials"/> returns only the
+    /// reachable serials, so a message that says "no key matches" or "every key has a slot" appends this. The default
+    /// (test doubles, the legacy services): null.
+    /// </summary>
+    string? DescribeUnreachable() => null;
+
     /// <summary>Whether slot 2 of the given key holds any configuration.</summary>
     Slot2State GetSlot2State(int serial) => throw new NotSupportedException($"{GetType().Name} can't read a YubiKey's slot 2");
 

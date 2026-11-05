@@ -612,6 +612,7 @@ public sealed class VaultUnlocker
                 (slotSerials.Count == 0 ? "This vault has no readable YubiKey slot; " :
                     $"This vault's YubiKey slots are for serial(s) {string.Join(", ", slotSerials)}; ") +
                 (pluggedIn.Count == 0 ? "no YubiKey is plugged in." : $"plugged in: {string.Join(", ", pluggedIn)}.") +
+                (_yubiKeys.DescribeUnreachable() is { } unreachable ? " " + unreachable : "") +
                 " Plug in one of those keys and try again." + ownFailure);
 
         // This pass's slots only (brief T17 ruling 13).

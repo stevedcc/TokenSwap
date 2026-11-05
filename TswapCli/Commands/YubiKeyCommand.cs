@@ -134,7 +134,7 @@ public sealed class YubiKeyCommand : ICliCommand
                 throw new TswapException(message);
             }
             if (!key.KeyboardReachable)
-                throw new TswapException(YubiKeyAccessTexts.ExplainHidden(wanted, os));
+                throw new TswapException(ctx.YubiKeys.DescribeUnreachable() ?? YubiKeyAccessTexts.ExplainHidden(wanted, os));
             return wanted;
         }
 

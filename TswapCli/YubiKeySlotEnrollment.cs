@@ -46,10 +46,14 @@ internal static class YubiKeySlotEnrollment
         if (eligible.Count == 0)
             throw new TswapException(
                 $"Every plugged-in YubiKey ({string.Join(", ", pluggedIn)}) already has a slot in this vault. " +
-                "Plug in a YubiKey that has no slot yet; each key needs only one slot.");
+                "Plug in a YubiKey that has no slot yet; each key needs only one slot." + UnreachableNote(ctx));
 
         return ctx.ChooseSerialAmong(eligible);
     }
+
+    /// <summary>A plugged-in key that can't be reached (busy, hidden) may be the one the user means: its reason, after a space ("" when none).</summary>
+    public static string UnreachableNote(CommandContext ctx) =>
+        ctx.YubiKeys.DescribeUnreachable() is { } why ? " " + why : "";
 
     /// <summary>
     /// Builds a new one-key YubiKey slot for the keyring in memory (shared by <c>slot add

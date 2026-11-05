@@ -1081,7 +1081,7 @@ public sealed class SlotCommand : ICliCommand
                     continue;
                 }
                 if (opens)
-                    throw new TswapException(WorkingSlotText(serial));
+                    throw new TswapException(WorkingSlotText(serial) + YubiKeySlotEnrollment.UnreachableNote(ctx));
             }
             if (noAnswer is not null)
                 throw new TswapException($"{noAnswer} YubiKey {serial}'s slots couldn't all be checked, so it isn't enrolled again. Nothing was changed.");

@@ -54,6 +54,13 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         return [];
     }
 
+    public string? DescribeUnreachable()
+    {
+        var keys = Find();
+        var hidden = keys.Where(k => !k.KeyboardReachable).ToList();
+        return hidden.Count == 0 ? null : ExplainUnreachable(hidden, reachableCount: keys.Count - hidden.Count).Text;
+    }
+
     internal const string ProbeBusyMessage = "A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.";
 
     /// <summary>
