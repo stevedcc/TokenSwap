@@ -37,6 +37,7 @@ that already opens the vault.
   swapped on the way would get the vault key wrapped to someone else's key. Why carrying them is
   enough: [the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0).
 - `tswap slots` lists the slots.
+- On Windows, run the `sudo` steps from an administrator prompt, without `sudo`.
 - **A machine without a vault:** `slot accept` creates a record vault at `~/.config/tswap/vault`
   (as `init` does). It holds the keyring and no secrets yet. Bring the secrets in with
   `sudo tswap vault merge <copy of the other vault folder>` (see
@@ -79,7 +80,9 @@ prints the steps for your vault, as commands for "there" and "here":
 ## Remote enrolment of a YubiKey into a TPM vault, step by step
 
 The vault lives on a machine with a TPM (say a router VM), and the YubiKey stays at your desk: no
-USB passthrough. Nothing secret crosses between the machines; you carry three small files.
+USB passthrough. Nothing secret crosses between the machines: you carry three small files that hold
+public keys and wrapped (encrypted) key material, nothing readable
+([the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0)).
 
 ```bash
 # 1. Desk machine, YubiKey plugged in (use a separate config folder if this machine has a vault):
@@ -113,6 +116,7 @@ A record vault ([the kinds of vault](commands.md#files)) keeps one encrypted fil
 **vault folder**. A sync tool, a network
 share or a plain copy can carry that folder, and two copies of it can be merged. `init --folder`
 makes a new vault in a folder; `init --vault-dir` joins a folder that already holds one.
+(`migrate --to-records --vault-dir` names the folder a converted vault goes into, absent or empty.)
 
 ```bash
 # A new vault straight into a synced folder (an absent or empty one):

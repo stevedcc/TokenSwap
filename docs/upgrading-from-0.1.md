@@ -58,7 +58,8 @@ vault: [commands.md](commands.md#files)) can be shared and merged ([multi-machin
 - **`init` makes a record vault:** one YubiKey, TPM or Secure Enclave slot plus a recovery slot, in
   `<config dir>/vault` or `--folder <dir>`.
 - **A plain `tswap init` at a terminal is now a guided setup** ([setup.md](setup.md#the-guided-tswap-init)).
-  `init --yubikey` is the old plain `init`.
+  `init --yubikey` makes the one-YubiKey vault (plus a recovery slot) that plain `init` made before
+  the guided setup.
 - **`init --keyring` is gone.** `init` rejects it, and says so:
   *"--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey,
   --tpm or --secure-enclave."*
@@ -80,12 +81,14 @@ To move a classic vault's YubiKeys to a touch requirement:
    opens the vault, and `tswap slots` still lists that dead slot. Keep the recovery key from step 1
    at hand: step 3 needs it.
 3. Enroll each reprogrammed key again as a new slot (plug it in first). `slot add --yubikey` refuses
-   a key that already has a slot, so today this is `recover --yubikey` with the recovery key on
-   stdin ([The recovery key](setup.md#the-recovery-key)); v0.3.0's YubiKey work changes this step:
+   a key that already has a slot, so this is `recover --yubikey`, with the recovery key on stdin
+   (where to keep it and how to pipe it: [The recovery key](setup.md#the-recovery-key)):
 
    ```bash
-   <print the recovery key> | sudo tswap recover --yubikey
+   sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
    ```
+
+   v0.3.0's YubiKey work changes this step.
 
 `tswap slots` then shows each slot's touch setting.
 
@@ -123,5 +126,6 @@ Both produce the same master key. This meant:
 - **No need to re-enroll if you lose one:** the XOR share and the remaining key reconstruct
   everything.
 - **The XOR share alone is useless:** it needs a physical YubiKey to derive anything.
-- **Either key alone opens the vault** (with the vault files): a lost key costs no access, and gives
-  whoever holds it and the files the vault.
+- **Either key alone opens the vault** (with the vault files). Losing one key costs you no access:
+  the other still opens the vault. But whoever finds the lost key and has the vault files can open
+  it too.

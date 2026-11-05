@@ -11,7 +11,8 @@ tswap burned                              # what needs rotating
 
 # Either a new random 48-char value, never displayed:
 tswap rotate api-token 48                 # a burned secret; one that isn't burned needs sudo
-# or a value from stdin, here from a Kubernetes secret:
+# or a value from stdin, here a new value from a Kubernetes secret, after rotating it there
+# (step 3 below):
 kubectl get secret x -o json | jq -r '.data["token"]' | base64 -d | tswap ingest --rotate api-token
 
 # Then update the system that uses it. Pipe the manifest into kubectl: printed, its base64 value
@@ -57,6 +58,9 @@ tswap rotate db-pw && tswap run psql "postgresql://app:{{db-pw:previous}}@db/app
 
 This works without sudo only for a burned `db-pw`. If it isn't burned, the user runs the rotate,
 with sudo (`sudo tswap rotate db-pw`); the `run` that follows needs no sudo.
+
+In these `run` examples the values are on `kubectl`'s and `psql`'s command line while they run:
+see [What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
 
 `sudo tswap restore <name>` writes the previous value back as a new version (and if that value was
 burned, its burn is outstanding again). So an agent's burn-then-rotate is visible (the burn stays in

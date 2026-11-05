@@ -100,16 +100,18 @@ tswap check values.yaml
 # Automatically replace inline secret values with # tswap: markers
 tswap tocomment values.yaml --dry-run   # preview changes
 tswap tocomment values.yaml             # apply
-
-# Substitute actual secret values for deployment (the output holds plaintext: see Option 3 below)
-tswap apply values.yaml > values.deployed.yaml
 ```
+
+`tswap apply values.yaml` substitutes the values for deployment. Its output holds plaintext: send it
+straight to the tool that needs it, as in the Helm patterns below (Option 1), and write it to a file
+only as in Option 3.
 
 ### Helm deployment patterns
 
 For Helm deployments, there are three approaches.
 
-**Option 1: Process substitution (recommended).** No temporary files; secrets never touch disk:
+**Option 1: Process substitution (recommended).** tswap writes no temporary file: the values reach
+`helm` over a pipe. What Helm then does with the values it is given is up to Helm:
 
 ```bash
 # Directly pipe applied secrets to helm via process substitution

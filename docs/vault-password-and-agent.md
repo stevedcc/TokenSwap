@@ -77,7 +77,8 @@ sudo TSWAP_CONFIG_DIR=<new config folder> tswap import <backup file>
 
 - `init` never overwrites a vault, so the new vault goes in a config folder of its own
   (`TSWAP_CONFIG_DIR`). Without a terminal, name the slot and give `--password`, for example
-  `tswap init --tpm --password` ([Setting up a password](#setting-up-a-password)).
+  `tswap init --tpm --password` ([Setting up a password](#setting-up-a-password)); it then reads
+  the new password from stdin, twice, on two lines.
 - `import` skips burned secrets unless you add `--include-burned`.
 - The new vault has new slots and a new recovery key: enroll every machine and key again
   ([multi-machine.md](multi-machine.md#joining-another-machine)).
