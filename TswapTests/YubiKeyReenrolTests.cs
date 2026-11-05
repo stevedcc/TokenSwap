@@ -813,8 +813,23 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     [Fact]
     public void Unlock_RememberedPasswordSlotStale_NoTerminal_PasswordFreeSlotStillOpens()
     {
-        // A: a password slot (dead after the reprogram) and, re-enrolled without the password, a password-free one.
-        var m = PasswordVaultOnAAndB(bPassword: false);
+        var (m, slotsOfA) = StaleRememberedPasswordSlotOfA();
+
+        var (exit, stdout, stderr) = m.Run("", "get", "db");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("s3cret", stdout.Trim());
+        Assert.Equal([slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
+        Assert.Equal(slotsOfA[1].Slot.SlotId, Remembered(m)[SerialA]);
+    }
+
+    /// <summary>
+    /// A with a password slot (dead after a reprogram) and, re-enrolled without the password, a live password-free
+    /// slot; the hint names the dead password slot (stale), so the password-free one is deferred. Only A plugged in.
+    /// </summary>
+    private (FleetMachine M, List<(Slot Slot, YubiKeySlotBlob Blob)> SlotsOfA) StaleRememberedPasswordSlotOfA(bool recovery = false)
+    {
+        var m = PasswordVaultOnAAndB(bPassword: false, recovery: recovery);
         Reprogram(m, SerialA);
         m.Keys.PluggedIn = [SerialA, SerialB];
         var (addExit, addOut, addErr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
@@ -825,13 +840,120 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default).Remember(m.Keyring.VaultId, SerialA, slotsOfA[0].Slot.SlotId);
         m.Keys.Challenges.Clear();
         m.Keys.PluggedIn = [SerialA];
+        return (m, slotsOfA);
+    }
 
-        var (exit, stdout, stderr) = m.Run("", "get", "db");
+    /// <summary>
+    /// Fix round 2, item 2a: at a terminal with a stale hint, the password pass runs and fails (the remembered password
+    /// slot is dead), then the deferred password-free slot opens, and the hint moves to it.
+    /// </summary>
+    [Fact]
+    public void Unlock_RememberedPasswordSlotStale_AtTerminal_PasswordPassFails_DeferredSlotOpens()
+    {
+        var (m, slotsOfA) = StaleRememberedPasswordSlotOfA();
+
+        var (exit, stdout, stderr) = m.RunOnTerminal(Password + "\n", "get", "db");
 
         Assert.True(exit == 0, stderr);
         Assert.Equal("s3cret", stdout.Trim());
+        Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
+        Assert.Equal(slotsOfA[1].Slot.SlotId, Remembered(m)[SerialA]);
+    }
+
+    /// <summary>
+    /// Fix round 2, item 2b: an unlock with no prompt source at all (no agent, no password provider) still tries the
+    /// deferred password-free slot.
+    /// </summary>
+    [Fact]
+    public void Unlock_RememberedPasswordSlotStale_NoPromptSource_DeferredSlotOpens()
+    {
+        var (m, slotsOfA) = StaleRememberedPasswordSlotOfA(recovery: true);
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        var remembered = new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default);
+
+        var key = new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended, new UnlockSources(null, null) { Remembered = remembered });
+
+        Assert.Equal(RecordVaultTestSupport.VaultKey(m, _recoveryKey), key);
         Assert.Equal([slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
         Assert.Equal(slotsOfA[1].Slot.SlotId, Remembered(m)[SerialA]);
+    }
+
+    /// <summary>
+    /// Fix round 2, item 1a: B's remembered slot is a dead password slot and its password-free slot is live, so the
+    /// unlock uses the mistyped password (its password pass fails), then opens through B's deferred password-free slot.
+    /// The unlock using the password is no proof of it: the verifier aborts A's re-enrolment with the password, and
+    /// nothing is written.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_Reenrol_PasswordUsedByUnlockButNotProven_MistypedAborts()
+    {
+        var m = Machine(SerialA, SerialB);
+        m.Keys.PluggedIn = [SerialA];
+        m.Ok("", "init", "--yubikey", "--no-password");
+        m.Ok("s3cret\ns3cret\n", "add", "db");
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        m.Ok(Password + "\n" + Password + "\n", "slot", "add", "--yubikey", "--password"); // B's password slot and the file
+        Reprogram(m, SerialB);
+        m.Keys.PluggedIn = [SerialB, SerialA];
+        var (bExit, bOut, bErr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        Assert.True(bExit == 0, bErr + bOut);
+        var slotsOfB = SlotsOf(m, SerialB);
+        Assert.True(slotsOfB[0].Blob.RequiresPassword);
+        Assert.False(slotsOfB[1].Blob.RequiresPassword);
+        new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default).Remember(m.Keyring.VaultId, SerialB, slotsOfB[0].Slot.SlotId);
+        Reprogram(m, SerialA);
+        var passwordFile = Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName);
+        var keyringBefore = File.ReadAllBytes(KeyringPath(m));
+        var passwordFileBefore = File.ReadAllBytes(passwordFile);
+        var backupsBefore = m.Backups.Order().ToArray();
+        m.Keys.Challenges.Clear();
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("the vault password didn't match", stderr);
+        Assert.DoesNotContain(ReenrolledLine(SerialA), stdout);
+        // The unlock went the way this test is about: B's dead password slot, then its deferred password-free slot.
+        Assert.Equal([slotsOfB[0].Blob.ChallengeString, slotsOfB[1].Blob.ChallengeString], ChallengesOf(m, SerialB));
+        Assert.Single(SlotsOf(m, SerialA)); // no new slot
+        Assert.Equal(keyringBefore, File.ReadAllBytes(KeyringPath(m)));
+        Assert.Equal(passwordFileBefore, File.ReadAllBytes(passwordFile));
+        Assert.Equal(backupsBefore, m.Backups.Order());
+    }
+
+    /// <summary>
+    /// Fix round 2, item 1b: the right password, typed for A's dead password slot; the new slot without the password;
+    /// the unlock through B's password-free slot (it never uses the password): no mistyped line.
+    /// </summary>
+    [Fact]
+    public void SlotAdd_Reenrol_CorrectPassword_UnlockWithoutIt_NoMistypedLine()
+    {
+        var m = PasswordVaultOnAAndB(bPassword: false);
+        Reprogram(m, SerialA);
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains(ReenrolledLine(SerialA), stdout);
+        Assert.DoesNotContain(MistypedLine, stdout + stderr);
+    }
+
+    /// <summary>Fix round 2, item 3: the one-key keyring vault's touch note uses the flow, with the elevated recover fallback.</summary>
+    [Fact]
+    public void MigrateKeyringNote_UsesReenrolFlowAndElevatedRecoverFallback()
+    {
+        var m = Machine(SerialA);
+        m.Keys.PluggedIn = [SerialA];
+        m.Ok("", "init", "--yubikey");
+
+        var output = m.Ok("", "migrate");
+
+        Assert.Contains("tswap yubikey setup --replace --touch --serial N", output);
+        Assert.Contains(ElevatedCommand.Line("tswap", "slot add --yubikey") + "   # enrols the reprogrammed key again", output);
+        Assert.Contains("tswap names   # with only that key plugged in", output);
+        Assert.Contains("Only if no other way in is left: pipe the recovery key into " + ElevatedCommand.Line("tswap", "recover --yubikey"), output);
     }
 
     [Fact]
