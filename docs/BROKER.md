@@ -240,8 +240,8 @@ sudo -iu vault systemctl --user enable --now tswap-broker
 After a `route` change or a change to a socket's uids, routes or binding:
 `systemctl --user reload tswap-broker` (SIGHUP; the new file is validated completely, then
 swapped in; a request keeps the config it started with). A new or removed socket, or a new
-`socket_dir`, needs `systemctl --user restart tswap-broker` (a reload stops serving a removed
-socket, but only a restart releases its listener: see step 4 of the SSH setup).
+`socket_dir`, needs `systemctl --user restart tswap-broker` (what a reload does with a removed
+socket's file and listener: step 4 of the SSH setup).
 
 Logs: one line per request in the journal and in `broker.log` (mode `0600`) next to
 `broker.json`: time, socket, peer uid and pid, route, method, decoded path (escaped,
@@ -688,7 +688,7 @@ any route. `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap broker socket 
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
 | `argv` | the command, run directly (no shell): see [The `argv` rules](#the-argv-rules) below |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above; some environment names are refused: see [Refused environment names](#refused-environment-names) below |
+| `env`, `files` | the secrets, as above; some environment names are refused: see [Refused and restricted environment names](#refused-and-restricted-environment-names) below |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
@@ -712,9 +712,10 @@ any route. `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap broker socket 
 - `{arg}` placeholders are allowed in `argv[1..]` only.
 - Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105).
 
-#### Refused environment names
+#### Refused and restricted environment names
 
-- The baseline: `PATH`, `LC_ALL`, `PWD`, and `LD_*`.
+- The baseline (the names the sandbox itself sets): `PATH`, `LC_ALL`, `PWD`.
+- `LD_*`.
 - Names that make a shell, an interpreter, a library or a tool run code, or that name files it
   loads, trusts or writes:
 
