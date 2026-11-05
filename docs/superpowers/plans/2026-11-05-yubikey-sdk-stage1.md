@@ -42,7 +42,7 @@
 - Create: `TswapCore/Vault/YubicoSdk.cs` (one-time SDK set-up)
 - Create: `TswapCli/Native/pcsc-loader.c` (the 11 PC/SC functions; Linux only)
 - Modify: `TswapCli/TswapCli.csproj` (Linux NativeAOT publish: compile `pcsc-loader.c` with the same `clang` the AOT link uses into one static archive `libtswap_pcsc.a` and add only that archive as a `NativeLibrary` (never the object as well, which would define the 11 twice), and remove the SDK targets' `-lpcsclite` `LinkerArg` in a target that runs after `_YubicoNativeShimsConfigureAot`; macOS and Windows unchanged)
-- Modify: `contrib/packaging/package.sh` (`--smoke` on Linux only: `readelf -d` has **no** `libpcsclite` entry; and the binary runs once with the library hidden, `bwrap --dev-bind / / --ro-bind /dev/null <path> ... ./tswap prompt-hash`, hiding every path `ldconfig -p` lists for `libpcsclite.so.1`, when bwrap and the library exist; otherwise it prints a loud `SKIP: stand-in run (no bwrap or no libpcsclite)` line; the existing smoke runs stay)
+- Modify: `contrib/packaging/package.sh` (`--smoke` on Linux only: `readelf -d` has **no** `libpcsclite` entry; and the binary runs once with the library hidden, `bwrap --dev-bind / / --ro-bind /dev/null <path> ... ./tswap prompt-hash`, hiding every path `ldconfig -p` lists for `libpcsclite.so.1`, when bwrap and the library exist; otherwise, or when bwrap exists but can't create its sandbox (nested user namespaces), it prints a loud `SKIP: stand-in run (<reason>)` line; the existing smoke runs stay)
 - Modify: `.github/workflows/ci.yml`, `.github/workflows/release.yml` only if the runners lack something the loader build needs (it needs only the C compiler and `dlfcn.h`, already there for NativeAOT)
 - Modify: `runtests.sh` and the CI test filters (a new hardware category `YubiKey`, excluded by default like `Tpm`; `./runtests.sh --yubikey` runs it)
 - Test: `TswapTests/YubicoSdkTests.cs`
@@ -57,7 +57,7 @@
   - `EnsureInitialized_TwiceIsHarmless`: calls it twice, no exception.
   - `EnsureInitialized_CryptoCreatorsReturnWorkingAlgorithms`: after it, `CryptographyProviders.HmacCreator("HMACSHA1")` computes HMAC-SHA1 of a fixed key and message equal to `HMACSHA1.HashData`; the same for `"HMACSHA256"`; `Sha256Creator()` and `AesCreator()` are non-null.
   - The loader's own tests run against the published binary (the JIT test host uses the SDK's shared library, which links pcsc-lite itself): in `package.sh --smoke` on Linux, `tswap -v yubikey setup --touch` with no key says which PC/SC strategy it used: "system library" normally, and "stand-in" with the library hidden by `bwrap` ("not chosen yet" is accepted if the SDK made no PC/SC call because no reader exists; the oort run in Task 4 is where the strategy must show); both end in "No YubiKey detected" (Task 4 adds this line). A C unit test is not needed: the stand-in's behaviour is these two runs and the SDK's own handling of `SCARD_E_NO_SERVICE`.
-  - `EnsureInitialized_SdkLoggingDiscarded`: after it, a logger obtained through the SDK's public logging API (`Yubico.Core.Logging.Log`) logs an error and nothing appears on a captured `Console.Error`/`Console.Out`, and `Log`'s configured factory is the one `EnsureInitialized` set (not merely an unconfigured default).
+  - `EnsureInitialized_SdkLoggingDiscarded`: after it, a logger obtained through the SDK's public logging API (`Yubico.Core.Logging.Log`) logs an error and nothing appears on a captured `Console.Error`/`Console.Out`, and, if `Yubico.Core.Logging.Log` exposes its configured factory, that it is the one `EnsureInitialized` set (no reflection: without a getter the console assertion is the test).
 - [ ] **Step 2:** `dotnet test TswapTests --filter "FullyQualifiedName~YubicoSdkTests"` → FAIL (type missing).
 - [ ] **Step 3:** add the package and `YubicoSdk`.
 - [ ] **Step 4:** the tests → PASS.
@@ -67,7 +67,7 @@
 ### Task 2: `SdkYubiKeyService` over a device seam
 
 **Files:**
-- Create: `TswapCore/Vault/IOtpKeys.cs` (the seam), `TswapCore/Vault/YubicoOtpKeys.cs` (the real one over the SDK), `TswapCore/Vault/SdkYubiKeyService.cs`
+- Create: `TswapCore/Vault/IOtpKeys.cs` (the seam, `OtpKeyInfo`, `OtpChallengeResult`, `OtpKeysException`, `OtpFailure`), `TswapCore/Vault/YubicoOtpKeys.cs` (the real one over the SDK), `TswapCore/Vault/SdkYubiKeyService.cs`, `TswapCore/Vault/Slot2Verify.cs`, `TswapCore/Vault/YubiKeyAccessTexts.cs` (the per-OS texts moved from `TswapCli/YubiKeyAccess.cs`), `TswapCore/Vault/YubiKeyProgramException.cs`
 - Modify: `TswapCore/Vault/IYubiKeyService.cs` (the two new members), `TswapCore/Vault/TestKeyYubiKeyService.cs`, `TswapTests/SimulatedYubiKeyService.cs`, `TswapCore/Vault/YkmanYubiKeyService.cs` (the two members throw `NotSupportedException("ykman service is being removed")` until Task 3 deletes the file, so the build stays green)
 - Test: `TswapTests/SdkYubiKeyServiceTests.cs`, `TswapTests/FakeOtpKeys.cs`, `TswapTests/YubiKeyHardwareSdkTests.cs` (category `YubiKey`), `TswapTests/Slot2VerifyTests.cs`
 
@@ -93,6 +93,7 @@
   - `ListSerials_NoKeys_ReturnsEmpty` (callers already turn empty into "no YubiKey detected").
   - `ListSerials_KeyVisibleOnlyOverFido_ExplainsPerOs`: one key with `KeyboardReachable: false`; on macOS the `TswapException` message contains "Input Monitoring"; on Linux it says the key's OTP interface needs the YubiKey udev rule (often from the `ykpers`/`yubikey-personalization` package, which needs an administrator) and that there is no smart-card fallback for this slot type, and suggests a TPM or another machine; on Windows it says the OTP interface can't be reached. (Texts: today's `YubiKeyAccess.ExplainBlocked`, moved whole into TswapCore; its ykman-text trigger `OtpBlockedLine` goes.)
   - `Challenge_SendsYkmanBytes`: challenge string `"abc"` → the fake receives 64 bytes: `61 62 63` then 61 zero bytes; a 100-character ASCII string → its first 64 bytes; `"a"` + 32 × `é` (65 UTF-8 bytes) → `61`, then `C3 A9` 31 times, then `C3` (the 32nd `é` cut in half, byte truncation as today); the test asserts `challenge[63] == 0xC3` explicitly.
+  - `Classify_MapsSdkExceptions` (above), `TestKeyService_ProgramSlot2_Refuses`, and `SdkService_ProgramSlot2_PassesKindThrough`: one row per `ProgramOutcome` kind on `FakeOtpKeys`, through `SdkYubiKeyService.ProgramSlot2`, gives a `YubiKeyProgramException` with that kind and the serial.
   - `Slot2Verify_StripsZeroPadding`: `ExpectedResponse(k, "abc" + 61 zero bytes)` equals `HMACSHA1.HashData(k, "abc"u8)`; `Slot2Verify_StripsTrailingRepeatsOfLastByte`: `"ab"` + 62 × `0x62` hashes `"a"`; `Slot2Verify_FullFrameDistinctLastByte_NotStripped`: a 64-byte frame ending in a byte that occurs once hashes all 64 bytes.
   - `ChallengeReportingTouch_TouchRequested_ReportsTrue` / `_NoTouch_ReportsFalse`: the fake calls `onTouchRequested` or not; `AskedForTouch` is `true` / `false` (never null from this service).
   - `Challenge_KeyBusy_SaysBusy`, `ListSerials_KeyBusy_SaysBusy`: message contains the serial (when known) and "busy".
@@ -167,7 +168,7 @@ Behaviour (design, Stage 1 "tswap yubikey setup"):
   - `Setup_Replace_TwoSlotsBothOnThisKey_Refused`, `Setup_Replace_OtherSlotUnreadableYubiKey_Refused`.
   - `Setup_Replace_ClassicVaultUsingKey_Refused`.
   - `Setup_Replace_NoVault_WarnsAndProceeds`.
-  - `Setup_ProgramFails_SaysSlotMayBeEmpty`, `Setup_VerifyFails_SaysProgrammedButUnchecked` (each through `ProgramOutcome`; the message and the exit code are the outcomes).
+  - `Setup_ProgramFails_SaysSlotMayBeEmpty`, `Setup_VerifyWrongAnswer_SaysMismatch`, `Setup_VerifyFails_SaysProgrammedButUnchecked` (each through `ProgramOutcome`; the message and the exit code are the outcomes).
   - `Setup_OutputHasNoKeyMaterial`: every setup test's output contains no whitespace-delimited token that is 32 or more hex characters, or 24 or more base64 characters.
   - `Setup_SeveralKeys_NoSerial_Prompts`, `Setup_SerialNotPluggedIn_Refused`, `Setup_SerialHiddenKey_ExplainsPerOs`, `Setup_KeyWithoutSerial_Refused`.
   - `Help_ListsYubiKeySetup`.
