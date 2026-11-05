@@ -7,7 +7,9 @@ protects against, and what it doesn't, is in [the broker's threat model](broker-
 `tswap broker` is a credential-adding HTTP proxy. A container sends a plain HTTP request to a
 loopback port inside itself; the broker, running on the host as the vault's user, unlocks the
 vault, adds the route's credential to the request and sends it to that route's HTTPS upstream.
-The container never sees the credential, the vault files or the TPM.
+The container is never given the credential, the vault files or the TPM. (What can still come back
+to it, such as an echoed value or a template's output, is in the
+[threat model](broker-threat-model.md#redaction-is-best-effort).)
 
 ```
 container                                  host (vault user)                     internet
@@ -34,8 +36,8 @@ Linux and macOS only. On Windows, `tswap broker` says it is not supported.
 
 ## Costs
 
-- **Every request unlocks the vault afresh** (no cached key, by design). On the router's TPM that
-  is about 2 s: a model API call through the broker gets about 2 s slower, and so does every git
+- **Every request unlocks the vault afresh** (no cached key, by design). On the router's TPM (the
+  test host in [Platforms](#platforms)) that is about 2 s: a model API call through the broker gets about 2 s slower, and so does every git
   or registry request (a `git push` makes two or three).
 - Unlocks are serialised, so concurrent requests queue for the TPM.
 - One request per connection: the broker answers every request with `Connection: close`.
@@ -51,7 +53,7 @@ secret shorter than 16 bytes. The full text: [Redaction confirms whole guesses](
 **Two rules before you start** (the threat model explains both):
 
 - **The vault user is root-equivalent for its secrets:** it must run nothing but `tswap broker serve`
-  ([why](broker-threat-model.md#the-vault-user-is-root-equivalent-for-its-secrets)).
+  and what `serve` itself starts (the template sandboxes) ([why](broker-threat-model.md#the-vault-user-is-root-equivalent-for-its-secrets)).
 - **No container may run with the vault user's uid:** never start containers as the vault user
   ([why](broker-threat-model.md#the-load-bearing-assumption-no-container-runs-with-the-vault-users-uid)).
 
@@ -62,7 +64,8 @@ variables (implied for an `ALL` command); otherwise use `sudo env TSWAP_CONFIG_D
 
 ### 1. The vault user
 
-A dedicated user (here `vault`) holds the vault and is the only member of `tss` that does. Its
+A dedicated user (here `vault`) holds the vault; of the members of group `tss`, it is the only one
+that does. Its
 vault is a TPM vault (`tswap init --tpm`), so it unlocks unattended. `init` makes a record store
 (one file per secret), so a request decrypts only its own record. `init` asks whether the slot
 gets a vault password; with one, the broker starts locked (see
@@ -73,7 +76,7 @@ sudo useradd -m vault
 sudo usermod -aG tss vault
 sudo loginctl enable-linger vault      # its user units run without a login session
 sudo -iu vault tswap init --tpm
-sudo -iu vault tswap ingest github-token < token-file    # or create; or add, with sudo as in step 3
+sudo -iu vault tswap ingest github-token < token-file    # or create; add needs sudo, with TSWAP_CONFIG_DIR as in step 3
 ```
 
 **A vault made by tswap 0.1** (a classic single-file vault) must be converted first: `serve` refuses
@@ -87,7 +90,8 @@ sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate --to-records
 Run as root on the vault user's folder, tswap does every file write in that
 folder **as the folder's owner** (it switches to the owner's effective uid and gid, with no
 supplementary groups), so the keyring, the records and `config.json` come out owned by `vault`,
-mode 0600, and a link `vault` planted in its own folder gets no further than `vault`'s own rights.
+mode 0600, and a symlink that `vault` planted in its own folder gets no further than `vault`'s own
+rights.
 The test suite checks this. The `sudo VAR=value` note above applies here too.
 
 ### 2. The socket folder
@@ -162,8 +166,8 @@ socket (`ausearch -m avc -ts recent` shows no denial).
 ### 3. Routes and sockets (`broker.json`)
 
 `broker.json` lives next to the vault's `config.json` (mode `0600`). Changing it needs sudo;
-under sudo it is written as the vault folder's owner. `TSWAP_CONFIG_DIR` names that folder (see
-[Setting up the broker](#setting-up-the-broker)).
+under sudo it is written as the vault folder's owner. `TSWAP_CONFIG_DIR` names that folder (see the
+note above step 1).
 
 ```bash
 # git over HTTPS (GitHub, basic auth with a fixed user name and a token)
@@ -202,7 +206,8 @@ Rules (checked on every load, not only on `add`):
   compiles it as `\A(?:<pattern>)`, case-sensitive, culture-invariant, never multiline, with a
   match timeout. Inline option groups (`(?i)`, `(?m)`, `(?s)`, `(?x)`, …) are refused. Anchor the
   end yourself (`$`) when a prefix is too wide. The regex never sees the query. The query is
-  forwarded unchanged; one containing a raw `#` is refused (the uniform `404`);
+  forwarded unchanged; one containing a raw `#` is refused (the uniform `404`: the same bytes as an
+  unknown route);
 - `idle_timeout_sec` (default 120) ends a stream with no bytes moving;
 - every socket has exactly one of `container` (`{ "cgroup": "<unit path>" }`, optionally with
   `"selinux_label"`) and `"uid_only": true`. A socket with neither (a v0.1 file) is refused with
@@ -369,9 +374,10 @@ sudo -iu vault tswap broker lock
 - **`broker unlock` needs a terminal.** Without one it refuses with `broker unlock reads the vault
   password from a terminal; there is none. Run 'tswap broker unlock' from your session.` Before it
   asks for the password it checks that the broker answers (`No 'tswap broker serve' answers at <path>;
-  is it running?` otherwise) and prints, on stderr, the RAM disclosure with "The broker keeps" for its
-  first words (and, on a Mac with a Secure Enclave slot, the line about the Secure Enclave library's
-  copy). `--timeout` takes the agent's durations ([`agent start --timeout`](vault-password-and-agent.md#the-tswap-agent));
+  is it running?` otherwise) and prints, on stderr, its RAM disclosure, which starts "The broker
+  keeps" (the agent's is quoted in
+  [security-model.md](security-model.md#what-the-vault-password-does-and-doesnt-protect)), and, on a
+  Mac with a Secure Enclave slot, the line about the Secure Enclave library's copy. `--timeout` takes the agent's durations ([`agent start --timeout`](vault-password-and-agent.md#the-tswap-agent));
   without it the broker stays unlocked until `broker lock` or a restart.
 - **The proof.** `serve` checks the password with one real unlock through **this machine's password
   slot only** (never a password-free slot, never an agent), then the `vault-password` verifier, and
@@ -382,16 +388,16 @@ sudo -iu vault tswap broker lock
   `broker unlock` (like `agent start`) answers `The vault password opened this machine's slot but does
   not match the vault's vault-password file (it may belong to another vault or be out of sync). Copy
   vault-password from a machine where the password works, or re-enrol this slot.` and doesn't count it.
-  Wrong passwords count towards the
-  unlock guard under the key `control`: after 3 in a row, `broker unlock` is refused for a few minutes
+  Wrong passwords count towards an unlock guard of their own (like a socket's, kept under the name
+  `control`): after 3 in a row, `broker unlock` is refused for a few minutes
   (`Too many wrong vault passwords for this broker; wait a few minutes and try again.`) before the
   password is even read. On a TPM each wrong password also counts towards the TPM's
   dictionary-attack lockout (see [The TPM's dictionary-attack counter](broker-threat-model.md#the-tpms-dictionary-attack-counter)).
 - **While locked** every request gets the refusal a busy or rate-limited request gets: HTTP `503`,
   `SSH_AGENT_FAILURE` for every ssh-agent message (the identities list too), and `broker call` exit
   125, with `reason=locked` in the log only. A locked request is not an unlock failure and never counts
-  towards any guard. It is refused at once, like a busy one; the timing difference from a served
-  request is the one that already separates busy from served (see [Timing](broker-threat-model.md#timing)).
+  towards any guard. It is refused at once, like a busy one, so its timing differs from a served
+  request's only as a busy refusal's already does (see [Timing](broker-threat-model.md#timing)).
 - **ssh keys load after the first unlock.** `serve` checks what it can without an unlock at start; the
   keys themselves load on the first successful `broker unlock`. A key that can't load fails that
   unlock (`ssh key '<name>' can't be loaded: <reason>`) and the broker locks again: no half-working
@@ -463,9 +469,13 @@ container can do with the agent: [The SSH agent in the threat model](broker-thre
        "allowed_host_keys": ["SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"] }
    ],
    "sockets": [
-     { "name": "lane1", "uids": ["100999"], "routes": ["openai"], "ssh_keys": ["github-deploy"] }
+     { "name": "lane1", "uids": ["100999"], "routes": ["github", "v2", "openai"],
+       "container": { "cgroup": "/user.slice/user-1001.slice/user@1001.service/app.slice/lane1.service" },
+       "ssh_keys": ["github-deploy"] }
    ]
    ```
+
+   The socket is the one step 3 made, with `ssh_keys` added; every other field stays as it was.
 
    A key's name follows the route and socket rule (`[a-z0-9-]{1,32}`); `secret` is a plain
    secret name; `allowed_host_keys` must not be empty, and an entry that isn't a `SHA256:`
@@ -496,7 +506,8 @@ container can do with the agent: [The SSH agent in the threat model](broker-thre
        -v /srv/tswap-broker/lane1.sock:/run/tswap.sock \
        -v /srv/tswap-broker/lane1.ssh.sock:/run/tswap-ssh.sock \
        -e SSH_AUTH_SOCK=/run/tswap-ssh.sock <image> ...
-   # inside: the verified host keys from step 2, and strict checking
+   # inside (github.keys copied in, or built into the image): the verified host keys from step 2,
+   # and strict checking (StrictHostKeyChecking yes in ~/.ssh/config)
    cat github.keys >> ~/.ssh/known_hosts
    git clone git@github.com:stevedcc/croft.git
    ```
@@ -596,8 +607,9 @@ at start that it makes a sandbox with every option the broker uses. If `bwrap` i
 old (0.5 or later is needed for `--perms`), the C library is older than glibc 2.36
 (`posix_spawn_file_actions_addclosefrom_np`, `pidfd_open`), or user namespaces are disabled, template calls are refused (`503`,
 `broker call` exits 125) and logged. **A template never runs unsandboxed.** On Ubuntu 24.04,
-unprivileged user namespaces are restricted by AppArmor
-(`sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile for `bwrap`).
+unprivileged user namespaces are restricted by AppArmor: give `bwrap` an AppArmor profile, or, as a
+last resort that relaxes the restriction for every program on the host,
+`sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
 
 The broker signals the sandbox only through pidfds (`pidfd_open`), so a kill can never reach a
 process that later got a finished run's pid, and it starts every `bwrap` from one dedicated thread
@@ -674,7 +686,7 @@ any route. `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap broker socket 
 | `name` | `[a-z0-9-]{1,32}`, not starting with `_` |
 | `argv` | the command, run directly (no shell). `argv[0]` a **literal** absolute path under `/usr`, `/bin`, `/sbin` or `/lib*`, never a placeholder, and never at or under one of the template's binds (read-only ones too), as configured or resolved (symlinks followed, a dangling one too; a program not installed yet through its nearest existing folder; it still loads, and its calls fail until it is installed), checked at load and again before every call; no `.` or `..` segment; on a template with binds, a program (or `bwrap_path`) whose path can't be resolved (a symlink loop, more than 40 links, a link that can't be read) is refused at load: a container that can write a bound folder (through another mount) could replace the program. Since v0.2 a program may no longer live in a bind: install it under `/usr` or ship it in the image. `{arg}` placeholders in `argv[1..]` only. Inline interpreter code (`sh -c`, `python -c`, `env`, `xargs`, ...) is refused (#105) |
 | `args` | per argument: `pattern` (wrapped as `\A(?:...)\z`, culture-invariant, never multiline, no inline option groups, 100 ms match timeout), `max_length` (default 256), `allow_leading_dash` (default false). Every placeholder must be declared and every declared argument used |
-| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or load, trust or write files, they name: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, `GIT_DIR`, `GIT_WORK_TREE` (a repo whose hooks would run), `LESSOPEN`, `LESSCLOSE`, `BROWSER`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. `KUBECONFIG`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `GNUPGHOME` and `GRADLE_USER_HOME` name a config file or folder that can name a command to run (a kubeconfig `exec`, AWS `credential_process`, GnuPG's `pinentry-program`, Gradle's `init.d`): they are allowed, but a literal value at or under one of the template's binds (read-only ones too; as configured and resolved, a relative value against `cwd`, each `KUBECONFIG` list entry) is refused, at load and again before every call, because a container could plant such a file there. Point them under `/run/secrets/` (a `files` entry) or outside every bind. The list catches mistakes; it isn't complete, so choose tools you know |
+| `env`, `files` | the secrets, as above. Refused env names: `PATH`, `LC_ALL`, `PWD` (the baseline), `LD_*`, and those that make a shell, an interpreter, a library or a tool run code, or that name files it loads, trusts or writes: `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `PROMPT_COMMAND`, `IFS`, `CDPATH`, `GLIBC_TUNABLES`, `MALLOC_CHECK_`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EXEC_PATH`, `GIT_PROXY_COMMAND`, `GIT_TEMPLATE_DIR`, `GIT_EDITOR`, `EDITOR`, `VISUAL`, `PAGER`, `GIT_PAGER`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`, `REQUESTS_CA_BUNDLE`, `NETRC`, `HOSTALIASES`, `LOCALDOMAIN`, `RES_OPTIONS`, `TMPDIR`, `HOME` (the sandbox sets none, so a template's `HOME` would choose the `~/.gitconfig`, `~/.netrc` and `~/.curlrc` its tool reads), `CLASSPATH`, `SSLKEYLOGFILE`, `INPUTRC`, `TERMINFO`, `TERMINFO_DIRS`, `MAVEN_OPTS`, `GRADLE_OPTS`, `GIT_DIR`, `GIT_WORK_TREE` (a repo whose hooks would run), `LESSOPEN`, `LESSCLOSE`, `BROWSER`, and every name starting with `GIT_CONFIG`, `BASH_FUNC_`, `PYTHON`, `PERL`, `RUBY`, `GEM_`, `NODE_`, `DOTNET_`, `JAVA`, `_JAVA_`, `JDK_JAVA_`, `OPENSSL_`, `LUA_`, `XDG_`, `SSL_` or `CURL_`. The prefixes knowingly refuse harmless names too (`JAVA_HOME`, `NODE_ENV`, `PYTHONUNBUFFERED`, `DOTNET_CLI_TELEMETRY_OPTOUT`); a tool that needs one gets it from a wrapper script under `/usr` or from the image. `KUBECONFIG`, `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `GNUPGHOME` and `GRADLE_USER_HOME` name a config file or folder that can name a command to run (a kubeconfig `exec`, AWS `credential_process`, GnuPG's `pinentry-program`, Gradle's `init.d`): they are allowed, but a literal value at or under one of the template's binds (read-only ones too; as configured and resolved, a relative value against `cwd`, each `KUBECONFIG` list entry) is refused, at load and again before every call, because a container could plant such a file there. Point them under `/run/secrets/` (a `files` entry) or outside every bind. The list catches mistakes; it isn't complete, so choose tools you know |
 | `binds`, `cwd` | as above |
 | `network` | `none` (default) or `host` |
 | `limits` | `nproc` (≤ 64), `as_mib` (≤ 2048), `nofile` (≤ 256), `fsize_mib` (≤ 256) |
@@ -699,7 +711,8 @@ Before you write one, read [What a template author must not do](broker-threat-mo
 
 ### Examples
 
-A deploy trigger (no network inside except the one API it calls; the token in env):
+A deploy trigger (`"network": "host"`, so `curl` can reach the deploy API; the token in a
+read-only file, so it never appears in argv):
 
 ```json
 {
@@ -825,9 +838,11 @@ Elsewhere:
 - **Debian and Ubuntu (AppArmor):** Podman's and Docker's default AppArmor profiles don't block
   connecting to a bind-mounted Unix socket, so no module is needed. **Untested.**
 - **Hosts without a mandatory access control system** need nothing extra.
-- **macOS and Windows:** not supported in v1. The broker identifies clients by kernel peer
-  credentials on a Unix socket, so it must run on the same Linux kernel as the containers, for
-  example inside the Podman machine VM, not on the macOS or Windows host.
+- **Containers on a macOS or Windows host:** not supported in v1. The broker identifies clients by
+  kernel peer credentials on a Unix socket, so it must run on the same Linux kernel as the
+  containers, for example inside the Podman machine VM, not on the macOS or Windows host.
+  (`serve` itself runs on macOS with `uid_only` sockets only, see below; on Windows `tswap broker`
+  refuses.)
 
 **Binding a socket to a container** (v0.2.0) needs, besides the above:
 
@@ -853,14 +868,15 @@ Each refusal names the socket and the reason; on a reload the running config is 
   a token from the realm itself. Basic-auth registries are covered.
 - No TLS on the socket (it is a local Unix socket), no arbitrary `run` over the socket, no key
   caching.
-- A socket's container binding needs Linux 6.5 or later (`SO_PEERPIDFD`), cgroup v2 and `serve` in
-  the host's root cgroup namespace; elsewhere sockets are `uid_only`. The binding separates
+- A socket's container binding has the prerequisites listed under [Platforms](#platforms);
+  elsewhere sockets are `uid_only`. The binding separates
   containers from each other, not from the host user who runs them (see [Limits of the identity
   check](broker-threat-model.md#limits-of-the-identity-check)).
 - Templates run on Linux only (they need `bwrap`), always as the vault user's uid (in a sandbox);
   running them as another uid would need root or capabilities.
 - Request and response trailers are never forwarded; `Range` requests are dropped (no partial
-  reads); compressed responses fail closed.
+  reads); compressed responses fail closed (`502`, see
+  [Redaction is best-effort](broker-threat-model.md#redaction-is-best-effort)).
 - The client's `Authorization`, `Proxy-Authorization`, `Cookie`, `Host`, `Connection` and every
   header it names, the other hop-by-hop headers, `Expect`, `Range`, `If-Range` and
   `Accept-Encoding` never reach the upstream; `Set-Cookie`, hop-by-hop headers and any header
