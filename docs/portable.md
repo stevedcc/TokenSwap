@@ -59,4 +59,5 @@ quarantine mark, which you can do as yourself (no admin needed): see
 
 ## YubiKeys
 
-YubiKey notes arrive with v0.3.0's YubiKey work.
+This page has no YubiKey notes yet; they arrive with v0.3.0's YubiKey work. Setting up a key:
+[Preparing a YubiKey](setup.md#preparing-a-yubikey).

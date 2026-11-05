@@ -1,7 +1,7 @@
 # Installing tswap
 
 This page is for anyone putting tswap on a machine. It covers what you need first, downloading a
-release, building from source on each OS, reinstalling with `installscript`, and notes for Windows.
+release, building from source on each OS, installing with `installscript`, and notes for Windows.
 When tswap is installed, set up a vault: [setup.md](setup.md).
 
 To use tswap without installing it (no admin rights), see [portable.md](portable.md).
@@ -16,13 +16,13 @@ You need one hardware backend:
   the TPM: see [portable.md](portable.md#linux-tpm).
 - **Secure Enclave:** a Mac (Apple Silicon tested).
 
-You need the .NET 10 SDK at build time only. The compiled binary has no runtime dependencies.
+You need the .NET 10 SDK at build time only. The compiled binary needs no .NET runtime.
 
 ### YubiKey prerequisites
 
 - The `ykman` CLI (YubiKey Manager), version 5 or later. Touch detection was checked against
   yubikey-manager 5.9.2.
-- Install it with `pip install yubikey-manager`, or with your system's package manager.
+- Install it with your system's package manager, or with `pip install yubikey-manager`.
 - Each key's slot 2 is set up for HMAC-SHA1 challenge-response before you use it: see
   [Preparing a YubiKey](setup.md#preparing-a-yubikey).
 
@@ -36,7 +36,7 @@ Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive pe
 - `tswap-win-x64.zip`
 
 Unpack it into a folder of your own and run `tswap` from there, or install it with
-[`installscript`](#reinstall-with-installscript).
+[`installscript`](#installing-with-installscript).
 
 **macOS: two files.** The macOS archive holds `tswap` and `libtswapse.dylib` (the Secure Enclave
 support).
@@ -89,13 +89,15 @@ sudo cp TswapCli/bin/Release/net10.0/osx-x64/publish/{tswap,libtswapse.dylib} /u
 
 ### Windows (x64)
 
-```powershell
+In a command prompt (`cmd`):
+
+```bat
 dotnet publish TswapCli/TswapCli.csproj -c Release -r win-x64
 # Copy tswap.exe to a directory on your PATH, e.g.:
 copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
 ```
 
-## Reinstall with installscript
+## Installing with installscript
 
 `installscript` writes a ready-to-run install script for your current platform. Run it from the
 unpacked folder, or with tswap on your PATH. Review the script before you run it.

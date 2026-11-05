@@ -307,7 +307,7 @@ if there is none and `TSWAP_CONFIG_DIR` isn't set.
 > tswap stops and tells you to move it (or to set `TSWAP_CONFIG_DIR`); if both folders hold a
 > vault, it refuses until you choose. It never moves or picks one by itself.
 
-> **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: on Linux/macOS rename `~/.config/tswap-poc/` to `~/.config/tswap/`, and on Windows rename `%APPDATA%\tswap-poc\` to `%APPDATA%\tswap\`.
+> **Upgrading from an earlier version?** tswap automatically renames `tswap-poc` to `tswap` on first run if the old directory exists and the new one does not. If both directories are present (e.g. you ran `init` twice), move your files manually: rename the `tswap-poc` folder beside the config directory (see [Files](#files)) to `tswap`, for example `~/.config/tswap-poc/` to `~/.config/tswap/` on Linux, `~/Library/Application Support/tswap-poc/` to `~/Library/Application Support/tswap/` on macOS, and `%APPDATA%\tswap-poc\` to `%APPDATA%\tswap\` on Windows.
 
 ## Files
 
@@ -336,7 +336,8 @@ shareable part in the vault folder:
 └── records/<hash>       # one encrypted record per secret; the file name is a keyed hash of the name
 ```
 
-`vault-password` holds nothing usable without the vault key. If a sync tool leaves two different
+`vault-password` holds nothing usable without the vault key: its verifier and key check are
+keyed with the vault key. If a sync tool leaves two different
 copies, every password operation refuses until you keep one (`The vault folder has two different
 vault-password files (...)`); a byte-identical copy is deleted on the next password write (only a
 file matching the sync tools' conflict-copy names, never `vault-password` itself; a sync tool that

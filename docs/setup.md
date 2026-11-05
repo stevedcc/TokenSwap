@@ -91,8 +91,8 @@ A plain `tswap init` without a terminal is refused and names these flags.
 Prepare each key's slot 2 first ([Preparing a YubiKey](#preparing-a-yubikey)). Then:
 
 ```bash
-# Script or agent, no terminal: a vault with ONE key plugged in (several plugged in: tswap asks which;
-# TSWAP_YUBIKEY_SERIAL picks one)
+# Script or agent, no terminal: a vault with ONE key plugged in (several plugged in: tswap asks
+# which on stderr, and takes the first listed when nothing answers)
 tswap init --yubikey          # or: tswap init --yubikey --folder ~/Sync/tswap-vault   (an absent or empty folder)
 
 # Add each spare key as its own slot: plug it in (the first key may stay plugged in) and run
@@ -104,7 +104,8 @@ What `init` makes:
 
 - Every vault `init` makes (since 0.2) is a **keyring vault** in the **record store**: a random
   vault key wrapped once per slot, and one encrypted file per secret in a vault folder
-  (`~/.config/tswap/vault`, or `--folder <dir>`, which must be absent or empty).
+  (`<config directory>/vault`, or `--folder <dir>`, which must be absent or empty; the config
+  directory on each OS: [commands.md](commands.md#files)).
 - Each YubiKey is **its own slot**, and any one enrolled key opens the vault alone. There is no XOR
   share to back up.
 - `init` also makes a break-glass **recovery slot** and prints its private key once (store it
@@ -119,12 +120,12 @@ What `init` makes:
 When several plugged-in YubiKeys can open the vault, an unlock never waits on a prompt in a script
 or an agent's `tswap run`:
 
-- **No terminal** (stdin redirected): tswap tries the keys that have a slot in this vault, the ones
-  that need **no touch first, then unknown, then touch-required**, and the first that opens the
-  vault wins (a classic vault takes the first enrolled key that answers). A touch-required key
-  tried first would stall every unattended unlock until its touch timed out; with a no-touch key
-  plugged in, an unattended unlock is possible anyway. Only when none opens it does tswap fail,
-  saying why for each key.
+- **No terminal** (stdin redirected): tswap tries the keys that have a slot in this vault in this
+  order: **no touch first, then unknown, then touch-required**. The first that opens the vault
+  wins. (A classic vault takes the first enrolled key that answers.)
+  - Why this order: a touch-required key tried first would stall every unattended unlock until its
+    touch timed out. With a no-touch key plugged in, an unattended unlock is possible anyway.
+  - Only when no key opens the vault does tswap fail, saying why for each key.
 - **On a terminal**, tswap asks which key to use, on stderr (stdout stays the command's output),
   and offers the **touch-required key as the default**: plugging in the touch key means "I am here
   and permit this".
@@ -133,12 +134,15 @@ or an agent's `tswap run`:
   (`sudo --preserve-env=TSWAP_YUBIKEY_SERIAL tswap ...`); that is intended.
 
 Enrolling a key (`init`, `slot add`, `slot request`) still asks which key to enroll when several
-qualify (on stderr).
+qualify (on stderr). With nothing to answer (stdin at its end), it takes the first key listed.
+`TSWAP_YUBIKEY_SERIAL` picks the key for an unlock (and for the entropy below), not for an
+enrolment.
 
-`create` (and `rotate`) on a vault with **YubiKey entropy** (`init`'s entropy choice 2) asks a key
-for randomness too. Unattended it takes the first plugged-in key, without looking at the touch
-setting: if that is a touch-required key, the command waits for its touch (unplug it, or set
-`TSWAP_YUBIKEY_SERIAL`, for a scripted `create`).
+`tswap init --yubikey` asks for the entropy source: `[1] System RNG` (the default) or
+`[2] YubiKey`; the guided `tswap init` always uses the system's. On a vault with **YubiKey
+entropy**, `create` (and `rotate`) ask a key for randomness too. Unattended they take the first
+plugged-in key, without looking at the touch setting: if that is a touch-required key, the command
+waits for its touch (unplug it, or set `TSWAP_YUBIKEY_SERIAL`, for a scripted `create`).
 
 Keyring vaults made by an older tswap with a **YubiKey pair** (two keys, an XOR share) keep working
 as they are. A pair vault whose keyring is format version 2 cannot take new slots. To give each key
@@ -199,16 +203,25 @@ The guided `init`, `init --yubikey`, `--tpm` and `--secure-enclave` print a **re
 key** once. It opens the vault without any enrolled hardware.
 
 tswap reads it **only from stdin**: never from an argument, the environment or a file path. Pipe it
-from wherever you keep it, for example a secret in your main vault. Stdin must be the base64 key
-alone; surrounding whitespace is fine.
+from wherever you keep it. Stdin must be the base64 key alone; surrounding whitespace is fine.
+
+The examples below keep it as the secret `recovery-key` in **another vault** you can still open,
+your main vault, whose config folder `TSWAP_CONFIG_DIR` names on the `get` side. A vault's own
+recovery key can't come out of that vault when its hardware is lost: keep the key somewhere that
+doesn't depend on that vault (`init` says to store it offline).
 
 ```bash
 # Total hardware loss (TPM cleared, keys lost): enroll new hardware as a new slot
-sudo tswap get recovery-key | sudo tswap recover --yubikey     # or --tpm / --secure-enclave --with-touch|--no-touch
+sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
+#   (or --tpm / --secure-enclave --with-touch|--no-touch)
 
 # Or unlock with it for a keyring change
-sudo tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
+sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap slot add --yubikey --recovery-key-stdin
 ```
+
+tswap's own messages show the short form `sudo tswap get recovery-key | sudo tswap recover
+--yubikey`, where both sides use the same vault: that works only when the key is kept in a vault
+other than the one being recovered.
 
 `slot approve` and `slot merge` take `--recovery-key-stdin` too. A wrong or malformed key is
 refused with one message and nothing is written; the recovery slot always stays.
@@ -231,13 +244,15 @@ vault, re-create it with `tswap init --tpm` (or `--secure-enclave`) and re-add y
 This is a test procedure, not a setup step: the checks behind the `--no-touch` warning, and their
 recorded results. Its design context is in
 [hardware-backends.md](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11).
-Claims (a)-(c) below are the three points of the `--no-touch` warning, listed as 1-3 in
+Claims (a), (b) and (c) below are points 1, 2 and 3 of the `--no-touch` warning, as listed in
 [security-model.md](security-model.md#secure-enclave-touch-or-no-touch).
 
 Run by the owner on a real Mac before release; **every result is recorded, none is predicted**.
-**Release gate:** v0.1.0 waits until steps 1-3, 5 (both halves: claim (b)) and 8 are recorded (**met** on 2026-10-31, #157; no result contradicted a claim; the root half of step 5 ran on the vault itself, not on a root-owned copy). If a
-recorded step contradicts a warning claim (a)-(c), the warning text and its test assertions are
-corrected before release, not only the docs.
+**Release gate (v0.1.0):** steps 1-3, 5 (both halves: claim (b)) and 8 had to be recorded before
+v0.1.0. The gate was **met** on 2026-10-31 (#157): no result contradicted a claim, and the root half
+of step 5 ran on the vault itself, not on a root-owned copy. If a recorded step contradicts a
+warning claim (a)-(c), the warning text and its test assertions are corrected before release, not
+only the docs.
 
 Setup (an unsigned local build and a throwaway config folder; never your real vault):
 
@@ -297,4 +312,4 @@ Clean up afterwards: `rm -rf "$TSWAP_CONFIG_DIR" "$TOUCH_DIR" "$OLD"; sudo rm -r
 | 8 | new binary + pre-T11 dylib: "update together" error, nothing written? | yes: with `libtswapse.dylib` built from the pre-T11 Swift source (`4f321a0`), `init --secure-enclave --with-touch` failed with "libtswapse.dylib beside tswap is older than tswap (it has no tswap_se_wrap_v2). No key was created: update libtswapse.dylib together with tswap…", exit 1, no files written |
 | 9 | touch vault: step 4 / step 6 / step 7 | not run |
 
-**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so decision 6's remedy (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication on the tested paths; the forked-`setuid` fallback is not needed for them (a second admin account was not available to test).
+**Brief T12 (under sudo the Secure Enclave runs as the folder's owner), recorded on the same Mac with a Release (NativeAOT) build of `24f584b`:** `sudo tswap names` on a `--with-touch` vault asks for the user's Touch ID (before T12 it showed the "System Administrator" password dialog and failed); `sudo tswap recover --secure-enclave --with-touch` enrols without a root dialog and the new slot unlocks for the user; `--no-touch` under sudo shows no prompt; without sudo nothing changed. A slot made as root by the older build (`recover` under sudo with `eb02143`) still opens under the T12 build, asking for the user's Touch ID with no root dialog, so the remedy in [security-model.md](security-model.md#under-sudo-the-secure-enclave-asks-you-not-root) (run `recover` again) isn't needed for that case. Not run: a second admin account (none on that Mac). So `seteuid` to the owner is enough for LocalAuthentication on the tested paths; the forked-`setuid` fallback (a child process that switches to the owner with a real `setuid`; [design record](design/hardware-backends.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157)) is not needed for them (a second admin account was not available to test).

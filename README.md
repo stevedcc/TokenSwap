@@ -30,7 +30,11 @@ tswap draws a privilege boundary with sudo:
 - Commands that **use** a secret don't need sudo: an AI agent can make a random secret
   (`create`), see which secrets exist (`names`, names only) and use one in a command (`run`).
 - Commands that **reveal** a value, remove or replace a value that is still good, or administer
-  the vault need sudo: `get`, `add`, `list` and `delete` among them. An agent can't run them.
+  the vault need sudo: `get`, `add`, `list` and `delete` among them. An agent without sudo can't
+  run them.
+- `apply` needs no sudo and prints a file with the values filled in, so its output holds
+  plaintext: send it to stdout or process substitution only
+  ([agent-integration.md](docs/agent-integration.md#agent-role-no-sudo)).
 - `run` blocks `echo`, `printf`, pipes, redirects, and inline shell or interpreter code
   (`sh -c`, `python -c`, ...), so a command can't simply print the value it was given.
 
@@ -73,7 +77,7 @@ bash installTswap.sh
 ```
 
 On Windows, write `installTswap.ps1` and run it with `pwsh`: see
-[Reinstall with installscript](docs/install.md#reinstall-with-installscript).
+[Installing with installscript](docs/install.md#installing-with-installscript).
 
 ### Setting up: the guided `tswap init`
 
@@ -83,7 +87,7 @@ Then run `tswap init` in a terminal. It asks, in order:
 1. to plug in the security keys you want to use (don't touch them yet);
 2. which of the YubiKeys it found and this machine's chip (the TPM, or the Secure Enclave on a Mac)
    to use: you type their numbers, and any mix works (on a Mac, also whether each unlock asks for
-   Touch ID or your login password);
+   Touch ID or your login password, or neither);
 3. whether to add a vault password (optional);
 4. whether to add a recovery slot (the default): its private key is shown once, so store it
    offline;
@@ -145,7 +149,7 @@ MIT
 | <a id="ai-agent-safety"></a>AI Agent Safety | [The sudo split](docs/security-model.md#the-sudo-split), in the security model |
 | <a id="yubikey-cold-storage-classic-vault-migration-only"></a>YubiKey Cold Storage (classic vault, migration only) | [How the classic vault worked](docs/upgrading-from-0.1.md#how-the-classic-vault-worked), in Upgrading from 0.1 |
 | <a id="install-compiled-binary--recommended"></a>Install (compiled binary — recommended) | [Building from source](docs/install.md#building-from-source), in Installing tswap |
-| <a id="reinstall-using-installscript"></a>Reinstall using installscript | [Reinstall with installscript](docs/install.md#reinstall-with-installscript), in Installing tswap |
+| <a id="reinstall-using-installscript"></a>Reinstall using installscript | [Installing with installscript](docs/install.md#installing-with-installscript), in Installing tswap |
 | <a id="windows-notes"></a>Windows notes | [Windows notes](docs/install.md#windows-notes), in Installing tswap |
 | <a id="setup"></a>Setup | Replaced by the guided `tswap init`: [Setting up a vault](docs/setup.md) |
 | <a id="setup-with-a-yubikey-keyring-vault-one-key-per-slot"></a>Setup with a YubiKey keyring vault (one key per slot) | [Setting up with a YubiKey (one key per slot)](docs/setup.md#setting-up-with-a-yubikey-one-key-per-slot), in Setting up a vault |
