@@ -182,7 +182,7 @@ the vault password's Argon2id salt and parameters, a verifier and a key check, a
 the vault key. Whether a slot needs the password is in that slot's own hardware blob (YubiKey slot
 blob v2, `TSTP` / `TSSE` headers; `SlotPassword.Classify`); the keyring format is unchanged. The
 agent's socket is `agent-<16 hex of the vault id>.sock` in the vault user's run folder
-(`AgentSocketPath`). See README "The vault password and the agent" and MULTI_MACHINE_KEYING.md.
+(`AgentSocketPath`). See README "The vault password and the agent" and docs/design/multi-machine-keying.md.
 
 Load/save of both files sits behind `TswapCore.IVaultStore`; `Storage` is the default
 single-file implementation. Commands depend on the interface, so an alternative backend
@@ -208,7 +208,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
 6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion)
 
-YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `HARDWARE_BACKENDS.md` §YubiKey keyring slots). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `HARDWARE_BACKENDS.md`.
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `docs/design/hardware-backends.md` §YubiKey keyring slots). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `docs/design/hardware-backends.md`.
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
 

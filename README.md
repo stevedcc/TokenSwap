@@ -21,8 +21,8 @@ from Sealed Secrets, SOPS, age or Vault, which protect a secret at rest; use bot
    typed per command, or held by `tswap agent` like `ssh-agent`. See
    [The vault password and the agent](#the-vault-password-and-the-agent-v02).
 
-Further reading: [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md) (the backends, their status and
-what has and hasn't been verified) and [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md) (the
+Further reading: [hardware-backends.md](docs/design/hardware-backends.md) (the backends, their status and
+what has and hasn't been verified) and [multi-machine-keying.md](docs/design/multi-machine-keying.md) (the
 keyring, slots, enrolment and the record store).
 
 ## How It Works
@@ -327,7 +327,7 @@ removed later: tswap can't remove slots, so the only way to drop it is a new vau
 secrets over. It exists for unattended use, but whether a no-touch slot unlocks with the screen
 locked, over ssh or after a reboot before anyone logs in (which a scheduled job or a separate lane
 user may need) is not known yet: that depends on the recorded check in
-[HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
+[hardware-backends.md](docs/design/hardware-backends.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 There is no recurring per-command banner for a no-touch Secure Enclave slot (unlike a no-touch
 YubiKey, whose posture is set outside tswap): you chose it with the flag. `slot approve` on the
 approving machine can't see a requesting Mac's choice; `slot request --no-touch` says so.
@@ -337,10 +337,10 @@ Under sudo, the Secure Enclave is used as the vault **folder's owner** (normally
 Touch ID asks you: the macOS dialog *"Enter the password for the user System Administrator"* under
 sudo was a bug. A vault folder owned by root or by a service account can't use a `--with-touch`
 slot under sudo (choose `--no-touch` there), and a slot enrolled with sudo before this version that
-doesn't unlock needs `recover` again; see [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157).
+doesn't unlock needs `recover` again; see [hardware-backends.md](docs/design/hardware-backends.md#under-sudo-used-as-the-vault-folders-owner-not-root-brief-t12-issue-157).
 
 The slot's wrapping is an ephemeral-ECDH + HKDF-SHA256 + AES-GCM construction,
-a hand-rolled ECIES equivalent. In the words of [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#status-poc-grade-not-yet-production-hardened):
+a hand-rolled ECIES equivalent. In the words of [hardware-backends.md](docs/design/hardware-backends.md#status-poc-grade-not-yet-production-hardened):
 it has "been verified for correctness (round-trips, fails cleanly on denial), not reviewed by
 anyone with cryptography expertise for subtler issues". It has not had an independent
 cryptographic review; `init --secure-enclave` says so too. Tested on Apple Silicon only.
@@ -484,8 +484,8 @@ printf '%s\n%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" "$PASSWORD" | sudo tswap recov
 or the key's usage auth (Windows) and counts failures towards its lockout; the Secure Enclave
 checks it as the key's application password (it doesn't rate-limit guesses as a TPM does); a
 YubiKey slot mixes it into the slot key's derivation, so whoever holds the plugged-in key can guess
-it offline at one Argon2id per guess. Details: [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md#the-vault-password-per-backend-brief-t17)
-and [MULTI_MACHINE_KEYING.md](MULTI_MACHINE_KEYING.md#the-vault-password-brief-t17-v020).
+it offline at one Argon2id per guess. Details: [hardware-backends.md](docs/design/hardware-backends.md#the-vault-password-per-backend-brief-t17)
+and [multi-machine-keying.md](docs/design/multi-machine-keying.md#the-vault-password-brief-t17-v020).
 
 ### Typing it, or the agent
 
@@ -1443,7 +1443,7 @@ One hardware backend:
   a keyring vault):
   - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
   - **Less secure**: `ykman otp chalresp --generate 2` (no button press)
-- **TPM 2.0**: Windows, or Linux with `tpm2-tools` (see [HARDWARE_BACKENDS.md](HARDWARE_BACKENDS.md)).
+- **TPM 2.0**: Windows, or Linux with `tpm2-tools` (see [hardware-backends.md](docs/design/hardware-backends.md)).
 - **Secure Enclave**: a Mac (Apple Silicon tested).
 
 .NET 10 SDK at build time only — the compiled binary has no runtime dependencies.

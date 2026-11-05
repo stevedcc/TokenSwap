@@ -9,12 +9,12 @@ namespace TswapCore.Keyring;
 /// from the request file. A user who wants extra assurance can read both aloud and compare.
 ///
 /// <para><b>Not load-bearing in v0.</b> The hand-carried file exchange itself is the trust
-/// boundary (see <c>MULTI_MACHINE_KEYING.md</c> §Hand-carried enrollment) — there is no network
+/// boundary (see <c>docs/design/multi-machine-keying.md</c> §Hand-carried enrollment) — there is no network
 /// path for a MITM to substitute a different public key on, so this fingerprint is defense in
 /// depth, not a required verification step. It is, however, the seam v1's transport-borne
 /// enrollment builds on, where substitution again becomes possible and this fingerprint becomes
 /// the *primary* defense — hence adding it now, cheaply, while this file format is being
-/// designed, rather than retrofitting it later (see <c>MULTI_MACHINE_KEYING.md</c> §Deferred to
+/// designed, rather than retrofitting it later (see <c>docs/design/multi-machine-keying.md</c> §Deferred to
 /// v1).</para>
 ///
 /// <para><b>Construction:</b> SHA-256 the public key, keep the first <see cref="DisplayBytes"/>

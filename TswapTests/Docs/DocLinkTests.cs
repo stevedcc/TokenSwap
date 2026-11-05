@@ -138,12 +138,11 @@ public class DocLinkTests
     [Fact]
     public void Anchors_EqualIndependentLists()
     {
-        // Task 1 only: later tasks change these files by design and delete the matching half (Task 3 design files,
-        // Task 4 BROKER, Task 7 README); the subset guards below stay.
+        // Task 1 only: later tasks change these files by design and delete the matching half (Task 4 BROKER,
+        // Task 7 README); the subset guards below stay. The design files' half went in Task 3: they moved by
+        // design, and OldReadmeAnchorsStillResolve's stub guard supersedes it.
         Assert.Equal(ReadList("old-readme-anchors.txt"), AnchorsOf("README.md"));
         Assert.Equal(ReadList("old-broker-anchors.txt"), AnchorsOf("docs/BROKER.md"));
-        var design = DesignFiles.SelectMany(f => AnchorsOf(f).Select(a => $"{f}#{a}")).ToList();
-        Assert.Equal(ReadList("old-design-anchors.txt"), design);
     }
 
     /// <summary>Broken links of the checked files as <c>file:line → target</c>.</summary>

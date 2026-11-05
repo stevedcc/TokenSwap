@@ -7,7 +7,7 @@ namespace TswapCore.Vault;
 
 /// <summary>
 /// Apple Secure Enclave <see cref="IHardwareKeyService"/>. Needs a physical Secure Enclave, so
-/// it only builds/runs on macOS — see <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c>
+/// it only builds/runs on macOS — see <c>docs/design/hardware-backends.md</c> and <c>docs/design/multi-machine-keying.md</c>
 /// for the design this implements.
 ///
 /// <para><b>Primitive:</b> ECIES wrap/unwrap against a <b>non-extractable P-256 key</b> created
@@ -15,7 +15,7 @@ namespace TswapCore.Vault;
 /// (through the <see cref="AppleSecureEnclaveInterop"/> Swift shim — see its header comment for
 /// why CryptoKit rather than raw Security.framework <c>SecItem</c> calls). No key material ever
 /// leaves the Enclave; unlock unwraps <c>K_v</c> transiently in memory. The k≥2 threshold
-/// (Shamir shares instead of the whole key) is Phase 6 — see <c>MULTI_MACHINE_KEYING.md</c>.</para>
+/// (Shamir shares instead of the whole key) is Phase 6 — see <c>docs/design/multi-machine-keying.md</c>.</para>
 ///
 /// <para><b>Where the blob lives (issue #154).</b> In a keyring vault (what <c>tswap init</c>
 /// makes since brief T2) the self-contained wrapped blob is this machine's machine slot's
@@ -100,7 +100,7 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
             key = Unwrap(package);
         }
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
-        // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
+        // size too — see docs/design/multi-machine-keying.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or
         // truncated wrapped blob that still happens to decrypt should fail here with a clear
         // message, not surface as an opaque AES-GCM key-size exception further downstream.

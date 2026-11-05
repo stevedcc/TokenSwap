@@ -495,7 +495,7 @@ connect to `control.sock` (an AVC denial), and `broker unlock` from the vault us
 
 Containers need SSH too (git over ssh, deploys). Handing them a private key would break the
 broker's rule, so the broker is also an **ssh-agent**: the client asks for signatures, and the key
-stays on the host. The wire formats are pinned in [ssh-agent-wire.md](ssh-agent-wire.md).
+stays on the host. The wire formats are pinned in [ssh-agent-wire.md](design/ssh-agent-wire.md).
 
 - For each socket that lists `ssh_keys`, `serve` also listens on **`<name>.ssh.sock`** next to
   `<name>.sock`: same folder, lock, mode `0666`, peer-uid list and connection limits. The

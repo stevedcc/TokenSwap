@@ -3,7 +3,7 @@
 // Security.framework directly: SecKeyCreateRandomKey(kSecAttrTokenIDSecureEnclave,
 // kSecAttrIsPermanent: true) requires the calling process to carry a keychain-access-groups
 // entitlement backed by a real Apple Developer Team ID + provisioning profile (verified on
-// real hardware — see HARDWARE_BACKENDS.md). CryptoKit's SecureEnclave key types need none of
+// real hardware — see docs/design/hardware-backends.md). CryptoKit's SecureEnclave key types need none of
 // that: they never touch the keychain at all. The key's `dataRepresentation` is an
 // SEP-encrypted, app-managed blob — safe to store anywhere (here, inside the wrapped payload
 // in Config.SecureEnclaveWrappedKey) and meaningless without the exact physical Secure Enclave
