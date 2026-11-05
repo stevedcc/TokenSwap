@@ -13,7 +13,8 @@ before you rely on the password.
 Any hardware slot (TPM, Secure Enclave or YubiKey) can carry an optional **vault password**: a
 second factor against other users of the same machine. Someone with an account on your machine, a
 copy of the vault folder and access to the TPM (or a plugged-in no-touch YubiKey) still can't open
-a password slot.
+a password slot without the password. How hard it is to guess depends on the hardware: see
+[How each backend enforces it](#how-each-backend-enforces-it).
 
 - There is **one password per vault**. Every slot with a password uses the same one.
 - Slots without it keep working as before, so a vault can mix both.
@@ -24,13 +25,17 @@ a password slot.
 ```bash
 tswap init --tpm --password                  # asks for the password twice and creates vault-password
 tswap init --secure-enclave --with-touch --password
-tswap init --password                        # a YubiKey slot
+tswap init --yubikey --password              # a YubiKey slot
 sudo tswap slot add --yubikey --password     # a later password slot: asks once, checked against the vault
 tswap slot request --tpm --password [--vault-dir <shared folder>] request.json
+# recover --password: the recovery key on the first line, the vault password on the next
 printf '%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" | sudo tswap recover --tpm --password
 # the vault's first password slot asks for the password twice, so give it on two lines:
 printf '%s\n%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" "$PASSWORD" | sudo tswap recover --tpm --password
 ```
+
+`$RECOVERY_KEY` and `$PASSWORD` stand for your own values. Don't type them into a command line,
+where shell history keeps them; read them without echo instead (bash: `read -rs PASSWORD`).
 
 - **The choice.** `init`, `slot add --yubikey`, `slot request` and `recover` take `--password` or
   `--no-password`.
@@ -68,8 +73,8 @@ or the folder of this machine's existing config.
 - A TPM or Secure Enclave request asks for the password then, and seals with it.
 - `slot accept` asks again, checks it against the vault, and refuses if the files differ between
   the request, the approve file and the folder.
-- If the TPM refuses at accept a password that the vault accepts, the password typed at request
-  time was different: run `slot request` again.
+- If `slot accept` finds the password right for the vault but the TPM refuses it, you typed a
+  different password at `slot request`: run `slot request` again.
 - Without the folder, enrol without the password and re-enrol the slot later.
 
 The rest of joining is in [multi-machine.md](multi-machine.md#joining-another-machine).
@@ -89,7 +94,7 @@ Details:
 
 ## Typing it, or the agent
 
-A command that needs a password slot tries, in this order:
+A command that opens a vault whose slot on this machine has the password tries, in this order:
 
 1. every slot that has **no** password (a plugged-in YubiKey slot without the password opens the
    vault silently, without asking anyone);

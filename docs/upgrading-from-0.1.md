@@ -14,16 +14,19 @@ tswap 0.2 is a breaking release.
    sudo tswap migrate --to-records
    ```
 
-   Only `migrate --to-records` (and its plain form, the touch-upgrade guide) and `export` work on a
+   Only `migrate --to-records` (and plain `migrate`, a status check: see
+   [A classic vault without touch](#a-classic-vault-without-touch)) and `export` work on a
    classic single-file vault (`secrets.json.enc`); every other command refuses it with that hint.
    A two-YubiKey XOR vault and converting straight into a synced folder: see
    [What the conversion does](#what-the-conversion-does).
 
-2. **Then, once every machine sharing the vault runs 0.2, reindex once:**
+2. **A record vault made by 0.1:** once every machine sharing it runs 0.2, reindex it once:
 
    ```bash
    sudo tswap vault reindex
    ```
+
+   A vault converted in step 1 needs no reindex: like every new vault, it starts in format 3.
 
    A copy kept in step with `vault merge` takes the marker and the format 3 records with the next
    merge. Machines still on 0.1 can't read records rewritten in format 3; they refuse them (and
@@ -82,7 +85,7 @@ To move a classic vault's YubiKeys to a touch requirement:
 `tswap slots` then shows each slot's touch setting.
 
 **Plain `tswap migrate`** (without `--to-records`) is a status check on a classic vault: it shows
-the touch setting, the entropy mode and the unlock challenge (it asks for the entropy mode if none
+the touch setting, the entropy mode ([YubiKey entropy](setup.md#several-yubikeys-plugged-in)) and the unlock challenge (it asks for the entropy mode if none
 is set), and offers to print a re-initialisation guide. That guide's "Reinitialize tswap" step (`tswap init`) is refused in 0.2
 while the classic vault is there: `init` asks you to convert it with `migrate --to-records` first.
 Use the steps above instead.
@@ -115,3 +118,5 @@ Both produce the same master key. This meant:
 - **No need to re-enroll if you lose one:** the XOR share and the remaining key reconstruct
   everything.
 - **The XOR share alone is useless:** it needs a physical YubiKey to derive anything.
+- **Either key alone opens the vault** (with the vault files): a lost key costs no access, and gives
+  whoever holds it and the files the vault.

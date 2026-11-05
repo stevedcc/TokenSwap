@@ -38,7 +38,7 @@ tswap burned
 
 What to do after a burn: [rotating-and-burning.md](rotating-and-burning.md).
 
-Attempts to exfiltrate are blocked:
+Some exfiltration attempts are blocked (the blocklist is shallow, see below):
 
 ```bash
 tswap run echo {{db-password}}
@@ -61,15 +61,17 @@ What the blocklist covers, and what it doesn't: [security-model.md](security-mod
 
 ```bash
 #!/bin/bash
-# This script is safe to commit, share, or show to AI agents
+# This script holds no secret value (only the secret's name): it is safe to commit, share,
+# or show to AI agents
 
 tswap run rclone sync \
   --password {{storj-backup}} \
   /data remote:backup
 ```
 
-Shell history records `{{storj-backup}}`, not the password. The secret only exists in the
-subprocess's memory while it runs.
+Shell history records `{{storj-backup}}`, not the password. While `rclone` runs, its command line
+and memory hold the value: see
+[What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
 
 ## Keeping secrets out of config files
 
@@ -99,7 +101,7 @@ tswap check values.yaml
 tswap tocomment values.yaml --dry-run   # preview changes
 tswap tocomment values.yaml             # apply
 
-# Substitute actual secret values for deployment
+# Substitute actual secret values for deployment (the output holds plaintext: see Option 3 below)
 tswap apply values.yaml > values.deployed.yaml
 ```
 
@@ -119,15 +121,14 @@ helm upgrade myapp ./chart \
   -f <(tswap apply secrets.yaml)
 ```
 
-**Note:** the `# tswap: <secret-name>` comments remain in the applied output. Secret *values* are
-protected, but secret *names* appear in:
+**Note:** the `# tswap: <secret-name>` comments remain in the applied output, so secret *names*
+appear in:
 
 - Helm's `--debug` output;
 - release manifests stored in Kubernetes secrets;
 - audit logs and observability tools.
 
-This exposes which secrets your application uses (for example `db-password`, `api-key`) but not
-their values. If secret names are sensitive in your threat model, use generic names (for example
+This exposes which secrets your application uses (for example `db-password`, `api-key`). If secret names are sensitive in your threat model, use generic names (for example
 `secret-1`, `secret-2`) or strip the comments with `sed`:
 
 ```bash
@@ -142,10 +143,17 @@ tswap run helm upgrade myapp ./chart \
   --set redis.auth={{redis-auth}}
 ```
 
-**Option 3: Temporary file.** When process substitution isn't available:
+The values are on `helm`'s command line while it runs: see
+[What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
+
+**Option 3: Temporary file.** When process substitution isn't available. The file holds every value
+in plaintext, so make it readable by you only and delete it straight after. This is an operator's
+pattern: an agent sends `apply` output to stdout or process substitution only
+([agent-integration.md](agent-integration.md#agent-role-no-sudo)).
 
 ```bash
-tswap apply values.yaml > /tmp/values.deployed.yaml
-helm upgrade myapp ./chart -f /tmp/values.deployed.yaml
-rm /tmp/values.deployed.yaml
+f=$(mktemp)                     # a new file only you can read
+tswap apply values.yaml > "$f"
+helm upgrade myapp ./chart -f "$f"
+rm "$f"
 ```

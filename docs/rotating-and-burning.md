@@ -8,13 +8,20 @@ response when a secret has been seen.
 
 ```bash
 tswap burned                              # what needs rotating
-tswap rotate api-token 48                 # new random 48-char value, never displayed
+
+# Either a new random 48-char value, never displayed:
+tswap rotate api-token 48                 # a burned secret; one that isn't burned needs sudo
+# or a value from stdin, here from a Kubernetes secret:
 kubectl get secret x -o json | jq -r '.data["token"]' | base64 -d | tswap ingest --rotate api-token
-tswap run kubectl create secret generic x --from-literal=token={{api-token}} --dry-run=client -o yaml
+
+# Then update the system that uses it. Pipe the manifest into kubectl: printed, its base64 value
+# would show (run redacts only the plain value):
+tswap run kubectl create secret generic x --from-literal=token={{api-token}} --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 - `rotate <name> [length]` writes a new random value for an existing secret as a newer version.
-  Like `create`, the value is never shown, and the entropy mode from `init` applies.
+  Like `create`, the value is never shown, and the entropy mode from `init` applies
+  ([YubiKey entropy](setup.md#several-yubikeys-plugged-in)).
 - `ingest --rotate <name>` does the same with a value from stdin.
 - There is no delete and no gap: the secret exists throughout. Remember to update the system that
   uses it.
@@ -65,7 +72,7 @@ a plaintext value, follow these steps.
 Mark the secret as compromised. This is the **first** action, before anything else:
 
 ```bash
-tswap burn <name> "reason: how it was exposed"
+tswap burn <name> "<how it was exposed>"
 ```
 
 This records a timestamp and reason. `names` shows `[BURNED]` next to the secret, and `apply` and

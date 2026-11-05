@@ -33,7 +33,9 @@ that already opens the vault.
 | 3 | there | `tswap slot accept approve.json` | Finishes the slot and writes a receipt, `approve.json.receipt.json` (or the path given with `--receipt <file>`) |
 | 4 | here | `sudo tswap slot merge approve.json.receipt.json` | Adds the new slot to this machine's keyring, so this copy opens with the new device too |
 
-- **Move the files yourself** (scp, USB, a paste). Don't drop them in a sync folder.
+- **Move the files yourself** (scp, USB, a paste). Don't drop them in a sync folder: a request
+  swapped on the way would get the vault key wrapped to someone else's key. Why carrying them is
+  enough: [the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0).
 - `tswap slots` lists the slots.
 - **A machine without a vault:** `slot accept` creates a record vault at `~/.config/tswap/vault`
   (as `init` does). It holds the keyring and no secrets yet. Bring the secrets in with
@@ -108,7 +110,8 @@ No enrolled machine available to approve? See
 ## Sharing a vault folder
 
 A record vault keeps one encrypted file per secret in a **vault folder**. A sync tool, a network
-share or a plain copy can carry that folder, and two copies of it can be merged.
+share or a plain copy can carry that folder, and two copies of it can be merged. `init --folder`
+makes a new vault in a folder; `init --vault-dir` joins a folder that already holds one.
 
 ```bash
 # A new vault straight into a synced folder (an absent or empty one):
@@ -134,7 +137,7 @@ see [upgrading-from-0.1.md](upgrading-from-0.1.md#what-the-conversion-does).
 
 - `keyring`: the wrapped vault key, one slot per device.
 - `records/<hash>`: one file per secret. The file name is a keyed hash of the secret's name, so
-  names never appear on disk.
+  names never appear in the vault folder in the clear.
 - Every record is padded to 256-byte size buckets.
 - Deletes and burns are records too, so a deleted secret can't come back from an old copy.
 - `vault-password`, only when the vault has a vault password. If a sync tool leaves two different
@@ -156,8 +159,7 @@ syncs.
   reads it, and the later change wins. It uses a hybrid logical clock, so a machine with a wrong
   clock can't make an older change win. The copy is removed the next time that secret is written.
 - A copy tswap can't decrypt is reported and left alone.
-- Mark the folder "available offline". OneDrive Files On-Demand and Google Drive stream files by
-  default, and a placeholder can't be read offline.
+- Mark the folder "available offline": see [Cloud placeholder files](#sync-transports).
 
 #### A network share
 
@@ -167,8 +169,9 @@ SMB, NFS: works one machine at a time.
   still cost the record it was writing.
 - A record that can't be read is reported, kept, and never overwritten or treated as deleted until
   you restore it.
-- tswap uses no lock files. A command re-reads each record just before writing it; if another
-  machine changed it in the meantime, the write is refused and nothing is written.
+- A command re-reads each record just before writing it; if another machine changed it in the
+  meantime, the write is refused and nothing is written. tswap uses no lock files (why:
+  [Sync transports](#sync-transports)).
 - Running Samba or NFS in a container changes nothing about this. A sync tool in a container
   (Syncthing, Nextcloud) gives each machine its own local copy and is the better choice.
 
@@ -246,9 +249,9 @@ catches a conflicting write after the fact instead of preventing it.
 default, leaving a placeholder on disk until something reads the real file. Reads usually fetch it
 transparently, but not when the machine is offline: an offline read of a record not fetched yet
 fails or returns the wrong thing. **Mark the tswap vault folder "always available offline"** in
-your sync client's settings. Google Drive is the worst of the four major providers for this;
-OneDrive, Dropbox, and Syncthing or Nextcloud either don't stream on demand by default or make the
-setting easy to find.
+your sync client's settings. Google Drive is the worst of the major sync tools for this; OneDrive,
+Dropbox, Syncthing and Nextcloud either don't stream on demand by default or make the setting easy
+to find.
 
 ## Record format 3 and `vault reindex`
 
@@ -315,6 +318,11 @@ The recovery key does it on the desk machine alone, with a copy of the router's 
    ```bash
    sudo tswap get recovery-key | sudo TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot add --yubikey --recovery-key-stdin
    ```
+
+   The two sides of the pipe use different vaults: here the router's recovery key is kept as the
+   secret `recovery-key` in the desk machine's own vault (the default config folder), and
+   `slot add` works on the router's copy. Pipe it from wherever you keep it
+   ([setup.md](setup.md#the-recovery-key)).
 
 3. Carry the copy back and merge it into the router, on a terminal:
 

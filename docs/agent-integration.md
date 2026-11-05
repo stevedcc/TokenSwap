@@ -14,7 +14,8 @@ automation. Every command's own sudo requirement is in
 
 ### Agent role (no sudo)
 
-These commands are safe for AI agents and automation. They never expose secret values:
+These commands need no sudo. Except where the Risk column says otherwise (`apply`, and `init`,
+which prints the recovery key), they never show a secret value:
 
 | Command | Purpose | Risk |
 |---------|---------|------|
@@ -32,7 +33,7 @@ These commands are safe for AI agents and automation. They never expose secret v
 | `slots` | List slots and what protects each | None — reads metadata only |
 | `agent status` / `agent stop` | The tswap agent's state; stop it | None — never returns a value |
 | `prompt` / `prompt-hash` | Self-documentation | None |
-| `init` / `migrate` / `slot request` / `slot accept` | Setup, migration, joining a vault | Requires physical hardware interaction |
+| `init` / `migrate` / `slot request` / `slot accept` | Setup, migration, joining a vault | Requires physical hardware interaction; `init` prints the recovery private key once (see [setup.md](setup.md#the-recovery-key)) |
 
 `agent start` and `broker unlock` need no sudo either, but they read the **vault password** at a
 terminal: they are for the human. An AI agent whose command fails with "needs the vault password"
@@ -56,7 +57,10 @@ These commands expose or modify secret values. Only human operators should use t
 ### Example: policy enforcement
 
 If your environment supports command allowlists (for example a wrapper script, a CI/CD policy, or
-agent framework permissions), configure the agent's allowed commands to match the agent role above:
+agent framework permissions), configure the agent's allowed commands to match the agent role above.
+This sketch checks the first word only: it can't tell `slot request` from `slot approve`, or a
+burned secret's `rotate` from another, and it leaves out `slot` and `agent`. For an agent without
+sudo, tswap's own sudo check refuses the operator's commands either way.
 
 ```bash
 # Example allowlist for an AI agent wrapper
