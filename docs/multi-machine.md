@@ -119,12 +119,21 @@ The recovery key does it on the desk machine alone, with a copy of the router's 
    sudo tswap get recovery-key | sudo TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot add --yubikey --recovery-key-stdin
    ```
 
-3. Carry the copy back and merge it into the router. The new slot is one the router never approved,
-   so confirm its fingerprint on the terminal, or pass `--yes`:
+3. Carry the copy back and merge it into the router, on a terminal:
 
    ```bash
-   sudo tswap vault merge <the copy> --yes
+   sudo tswap vault merge <the copy>
    ```
+
+   The router never approved the new slot, so it shows the slot's fingerprint and asks
+   `Add it to this vault? Compare the fingerprint first. (yes/no)`. Compare it with the
+   `New slot fingerprint` that step 2 printed. Answering no merges nothing. Without a terminal,
+   pass `--yes` instead (`sudo tswap vault merge <the copy> --yes`), after comparing the
+   fingerprints yourself.
+
+Afterwards the copy and `~/.config/tswap-router` on the desk machine are a second copy of the vault,
+which opens with that YubiKey. tswap leaves them as they are: delete both if you don't need that
+copy.
 
 How tswap reads the recovery key: [setup.md](setup.md#the-recovery-key).
 
@@ -277,6 +286,8 @@ setting easy to find.
 
 Since 0.2 a record has an encrypted **metadata section** (the name, burns, the version list and
 keyed fingerprints of every retained value) and one encrypted **value section** per retained value.
+The fingerprints cover each form tswap matches (plain, whitespace-stripped, base64 and base64url):
+for each, its length, a keyed rolling hash and a truncated keyed HMAC.
 Commands that only need names, burns or fingerprints then never decrypt a value.
 
 ```bash
@@ -295,7 +306,8 @@ sudo tswap vault reindex     # rewrites every record in format 3 with fingerprin
 - `vault merge` copies the marker from a reindexed copy. A new vault (`init`, `migrate
   --to-records`) starts in format 3.
 - **"Not fully fingerprinted":** a record written in format 2 after the reindex (by a machine still
-  on 0.1), a replayed older copy, a format 2 tombstone or a lingering format 2 sync-conflict copy
+  on 0.1), a replayed older copy, a format 2 tombstone (its type can't be known without decrypting
+  it) or a lingering format 2 sync-conflict copy
   leaves the vault reported this way until a write of that record, a `vault merge` or another
   `vault reindex`. In a folder that writes format 3, `vault merge` rewrites every record it can read
   that isn't format 3 yet, so merging a reindexed copy leaves the folder fully fingerprinted.
