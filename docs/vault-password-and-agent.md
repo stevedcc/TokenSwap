@@ -60,10 +60,29 @@ where shell history keeps them; read them without echo instead (bash: `read -rs 
   corrupted").
 - **Classic vaults can't carry a password.** Convert first (`sudo tswap migrate --to-records`, see
   [upgrading-from-0.1.md](upgrading-from-0.1.md)), then add a password slot.
-- **The password is never changed in place:** re-enrol a slot instead (`vault password change` is
-  later work).
+- **Changing the password** means a new vault: see [Changing the password](#changing-the-password).
 - **Two `vault-password` files** (a sync tool's conflict copy) make every password operation refuse
   until you keep one: see [Files](commands.md#files).
+
+### Changing the password
+
+The password is never changed in place. To change it, move the secrets into a new vault that has
+the new password:
+
+```bash
+sudo tswap export <backup file>                                # asks for an export passphrase
+TSWAP_CONFIG_DIR=<new config folder> tswap init                # the guided init: add the new password
+sudo TSWAP_CONFIG_DIR=<new config folder> tswap import <backup file>
+```
+
+- `init` never overwrites a vault, so the new vault goes in a config folder of its own
+  (`TSWAP_CONFIG_DIR`). Without a terminal, name the slot and give `--password`, for example
+  `tswap init --tpm --password` ([Setting up a password](#setting-up-a-password)).
+- `import` skips burned secrets unless you add `--include-burned`.
+- The new vault has new slots and a new recovery key: enroll every machine and key again
+  ([multi-machine.md](multi-machine.md#joining-another-machine)).
+- The backup file holds every secret, protected by its export passphrase: keep the file and the
+  passphrase safe until the new vault works.
 
 ### Joining with a password
 
