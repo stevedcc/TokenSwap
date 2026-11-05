@@ -63,7 +63,7 @@ jobs:
         env:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
           CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
-        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey"
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.

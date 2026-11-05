@@ -64,6 +64,18 @@
   </ItemGroup>
 
   <!--
+    YubiKey SDK stage 1 (design docs/superpowers/specs/2026-11-04-yubikey-sdk-portable-design.md): tswap talks to
+    YubiKeys through Yubico's .NET SDK (Apache-2.0), no ykman. It brings Yubico.Core and Yubico.NativeShims, whose
+    NativeAOT build targets link a static archive; on Linux its 11 PC/SC calls are answered by TswapCli's own
+    Native/pcsc-loader.c, so libpcsclite is used when present and never required. The one-time set-up (crypto
+    creators, libudev resolver, logging off) is Vault/YubicoSdk.cs. Pinned to an exact version (brackets): TswapCli's
+    link canary checks the archive's PC/SC symbols, which belong to this version.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Yubico.YubiKey" Version="[1.18.1]" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a

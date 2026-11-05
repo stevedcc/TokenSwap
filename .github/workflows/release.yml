@@ -36,7 +36,7 @@ jobs:
         run: |
           set -o pipefail
           TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx \
-            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows" | tee "$RUNNER_TEMP/test.log"
+            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey" | tee "$RUNNER_TEMP/test.log"
           # A filter that matches no tests exits 0: require one summary line with tests in it.
           grep -qE '^Passed! +- Failed: +0, Passed: +[1-9][0-9]*,' "$RUNNER_TEMP/test.log" \
             || { echo "::error::no 'Passed!' summary with tests in it: no tests ran, or some failed" >&2; exit 1; }
