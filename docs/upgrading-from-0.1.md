@@ -41,8 +41,8 @@ sudo tswap migrate --to-records --vault-dir ~/OneDrive/tswap-vault  # or straigh
 ```
 
 A classic vault is one encrypted file, so two copies of it can't be combined: the newer file wins
-and edits made on the other machine are lost. The record vault the conversion makes can be shared
-and merged ([multi-machine.md](multi-machine.md#sharing-a-vault-folder)).
+and edits made on the other machine are lost. The record vault the conversion makes (the kinds of
+vault: [commands.md](commands.md#files)) can be shared and merged ([multi-machine.md](multi-machine.md#sharing-a-vault-folder)).
 
 - It writes everything into a temporary folder next to the target, reads it all back and compares,
   renames it into place, switches `config.json`, and only then moves `secrets.json.enc` aside to a

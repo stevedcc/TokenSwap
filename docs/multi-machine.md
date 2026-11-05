@@ -109,7 +109,8 @@ No enrolled machine available to approve? See
 
 ## Sharing a vault folder
 
-A record vault keeps one encrypted file per secret in a **vault folder**. A sync tool, a network
+A record vault ([the kinds of vault](commands.md#files)) keeps one encrypted file per secret in a
+**vault folder**. A sync tool, a network
 share or a plain copy can carry that folder, and two copies of it can be merged. `init --folder`
 makes a new vault in a folder; `init --vault-dir` joins a folder that already holds one.
 

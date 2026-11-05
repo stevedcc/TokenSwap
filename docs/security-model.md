@@ -24,33 +24,38 @@ An AI agent (Claude Code, Copilot, etc.) can:
 - see what secrets exist with `names`: just the names, no values;
 - use secrets in commands with `run`: tokens are substituted internally.
 
-An AI agent **cannot**:
+An AI agent **without sudo** (no passwordless sudo for its user, and never given the sudo
+password) **cannot**:
 
 - read a secret value (`get` requires sudo);
 - set a secret to a known value (`add` requires sudo);
 - enumerate secrets with metadata (`list` requires sudo);
-- delete secrets (`delete` requires sudo);
-- exfiltrate via `run`: `echo`, `printf`, pipes, redirects, and inline shell/interpreter code
-  (`sh -c`, `python -c`, ...) are blocked.
+- delete secrets (`delete` requires sudo), or run any other command that needs sudo;
+- exfiltrate via `run` in the blocked ways: `echo`, `printf`, pipes, redirects, and inline
+  shell/interpreter code (`sh -c`, `python -c`, ...) are blocked. The blocklist is shallow: a
+  program such as `curl`, or a script file, can still take a value out (see
+  [What tswap does not protect against](#what-tswap-does-not-protect-against)).
 
 Agents should never run sudo. The roles that follow from this split, and an example allowlist, are
 in [agent-integration.md](agent-integration.md).
 
 ### Which vault a command under sudo uses
 
-- Under `sudo`, tswap uses the vault of the user who ran sudo: `SUDO_USER`'s home folder from the
-  system's user database, used only when `SUDO_UID` matches that user's uid (otherwise tswap
-  refuses). That includes `sudo -i`.
+- Under `sudo` (tswap running as root), tswap uses the vault of the user who ran sudo:
+  `SUDO_USER`'s home folder from the system's user database, used only when `SUDO_UID` matches that
+  user's uid (otherwise tswap refuses). That includes `sudo -i`. A tswap that isn't running as root
+  ignores `SUDO_USER`, so `sudo -u <another user>` uses that user's own vault.
 - `SUDO_USER=root` means root's own folder.
 - Without `SUDO_USER` (a root service, or `su`) tswap uses the folder under `HOME`, which with plain
   `su` is still the caller's.
 - `TSWAP_CONFIG_DIR` overrides all of this.
+- **Windows:** an elevated prompt keeps your `APPDATA`, so it uses your own vault.
 - **Linux:** under sudo tswap can't know your `XDG_CONFIG_HOME`, so it uses `<home>/.config/tswap`.
-  If you set `XDG_CONFIG_HOME` to something else, set `TSWAP_CONFIG_DIR` to your vault folder and
+  If you set `XDG_CONFIG_HOME` to something else, set `TSWAP_CONFIG_DIR` to your config folder and
   keep it for sudo commands:
 
   ```bash
-  export TSWAP_CONFIG_DIR=$XDG_CONFIG_HOME/tswap
+  export TSWAP_CONFIG_DIR="$XDG_CONFIG_HOME/tswap"
   sudo --preserve-env=TSWAP_CONFIG_DIR tswap get ...
   ```
 
@@ -64,13 +69,14 @@ deployment.
 
 | Threat | How |
 |--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in agent context or shell history |
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the plain value from the program's output, not its encoded forms ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
 | Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
-| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the stored XOR share |
+| Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
 | Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unwrap, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
-| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned, and vault administration require sudo; agents should never run sudo |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
+| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
 
 ### What tswap does not protect against
 
@@ -81,9 +87,8 @@ deployment.
 | Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
-| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture |
-| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and XOR share are obtained without a YubiKey |
-| Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
+| Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
+| Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
 
 ### Design rationale
 
@@ -96,10 +101,10 @@ sandboxing (containers, seccomp, AppArmor) or network-level controls.
 ## Posture per backend
 
 A vault made by `init` is a keyring vault: each slot opens it on its own (setting each kind up:
-[setup.md](setup.md)). The slots don't all offer the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
+[setup.md](setup.md); the kinds of vault: [commands.md](commands.md#files)). The slots don't all offer the same protection. The table says, for each kind of slot, what the sources say today; "not documented"
 means no source states it.
 
-| Slot | What unlocks it | Presence needed | PIN / vault password | Reviewed / verified | Sources |
+| Slot | What unlocks it | Presence needed | Vault password | Reviewed / verified | Sources |
 |---|---|---|---|---|---|
 | YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection checked against the yubikey-manager 5.9.2 source | [1] [2] [3] |
 | YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
@@ -164,17 +169,18 @@ it on every command**.
 - **How it knows:** it detects the posture from whether `ykman otp calculate` asked for a touch.
   ykman prints "Touch your YubiKey..." on stderr exactly when the key waits for one (checked against
   the yubikey-manager **5.9.2** source). `ykman otp info` can't read a slot's touch setting, so
-  slots enrolled before this release show as "unknown". Over USB only (tswap's only transport for
+  slots enrolled before v0.1.0 show as "unknown". Over USB only (tswap's only transport for
   `calculate`). If tswap couldn't check, it says so, with the fix.
 - **`tswap slots`** shows each slot's posture at any time.
 - **Everyday commands** print nothing about it, except one line on stderr when a slot's posture
   differs from what this machine last acknowledged (for example a no-touch key's slot arriving from
   another machine with `slot merge`). `tswap slots --ack` acknowledges the current postures.
 - **The notice is advisory.** The acknowledgement is per machine, in `config.json`
-  (`AcknowledgedTouch`). That file is writable by you and by any process running as you. `tswap
-  slots`, which reads each posture from the slot itself, is the reliable view.
+  (`AcknowledgedTouch`). That file is writable by you and by any process running as you. For a
+  YubiKey slot, `tswap slots`, which reads the posture from the slot itself, is the reliable view.
 
-**Moving a key to touch-required:** in a keyring vault, reprogram the key with `--touch` and enroll
+**Moving a key to touch-required:** in a keyring vault, reprogram the key's slot 2 with ykman's
+`--touch` ([Preparing a YubiKey](setup.md#preparing-a-yubikey)) and enroll
 it again as a new slot (`sudo tswap slot add --yubikey`). A classic vault from 0.1 is covered in
 [upgrading-from-0.1.md](upgrading-from-0.1.md).
 
@@ -186,10 +192,11 @@ and `recover` alike; there is no default.
 - `--with-touch`: every unlock asks for Touch ID or the login password.
 - `--no-touch`: no prompt.
 - **The choice lives in the key.** It is fixed into the Secure Enclave key when the key is created
-  and can't be read back from it, so tswap records it in `config.json` (`RequiresTouch`). That
-  record only changes what tswap says, never what the Secure Enclave enforces.
-- **No recurring banner.** There is no per-command banner for a no-touch Secure Enclave slot
-  (unlike a no-touch YubiKey, whose posture is set outside tswap): you chose it with the flag.
+  and can't be read back from it, so tswap records it in `config.json` (`RequiresTouch`), and
+  `tswap slots` shows that record. The record only changes what tswap says, never what the Secure
+  Enclave enforces.
+- **No recurring banner.** There is no per-command banner for a no-touch Secure Enclave slot: you
+  chose it with the flag. (A YubiKey's posture is set outside tswap, with ykman.)
 - `slot approve` on the approving machine can't see a requesting Mac's choice; `slot request
   --no-touch` says so.
 
@@ -203,7 +210,7 @@ What `--no-touch` trades away, as the warning it prints says:
    is a new vault and moving the secrets over.
 
 It exists for unattended use. But whether a no-touch slot unlocks with the screen locked, over ssh
-or after a reboot before anyone logs in (which a scheduled job or a separate lane user may need) is
+or after a reboot before anyone logs in (which a scheduled job or a separate user for unattended work may need) is
 **not known yet**: that depends on the recorded check in
 [setup.md](setup.md#checking-a-no-touch-secure-enclave-slot-on-a-mac).
 
@@ -229,7 +236,7 @@ to enrol ("update libtswapse.dylib together with tswap") rather than make a key 
     nobody can give.
 
   Choose `--no-touch` for such a vault, or keep it in the user's folder.
-- A slot enrolled with sudo before this change (`sudo tswap recover --secure-enclave`, or `init` /
+- A slot enrolled with sudo before v0.1.0 (`sudo tswap recover --secure-enclave`, or `init` /
   `slot request` run with sudo) was created as root. If it doesn't unlock, run `recover` again
   (sudo now creates the key as the owner).
 
@@ -250,7 +257,7 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   of that machine. A YubiKey kept in a drawer, or the recovery key, is fine. `tswap slots` warns.
 - **Don't reuse the vault password anywhere else.** Two consequences make it worth guessing:
   - whoever can open a mixed vault through a slot **without** the password can read the
-    `vault-password` file's verifier and test fleet-password guesses offline, at one Argon2id
+    `vault-password` file's verifier and test vault-password guesses offline, at one Argon2id
     (64 MiB, t = 3) per guess;
   - whoever holds a YubiKey with a password slot can guess that slot's password offline the same
     way.

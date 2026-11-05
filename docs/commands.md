@@ -317,6 +317,17 @@ if there is none and `TSWAP_CONFIG_DIR` isn't set.
 | macOS | `~/Library/Application Support/tswap/` (also under sudo; see the macOS note under [Environment variables](#environment-variables)) |
 | Windows | `%APPDATA%\tswap\` |
 
+The kinds of vault, in the words these pages use:
+
+- A **keyring vault** keeps a random vault key wrapped once per slot (a YubiKey, a TPM, a Secure
+  Enclave, the recovery key), so each slot opens it on its own.
+- A **record vault** (or record-store vault) keeps one encrypted file per secret in a vault folder,
+  with its keyring there too. Every vault `init` makes since 0.2 is a record vault and a keyring
+  vault.
+- A **classic** vault (from 0.1) is one encrypted file, `secrets.json.enc`; its `config.json`
+  holds either an XOR share (two YubiKeys) or a keyring. tswap 0.2 only converts or exports it
+  ([upgrading-from-0.1.md](upgrading-from-0.1.md)).
+
 A **classic** vault:
 
 ```
