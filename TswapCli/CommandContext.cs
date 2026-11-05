@@ -264,11 +264,26 @@ public sealed record CommandContext(
         return serials.Count == 1 ? serials[0] : ChooseSerial(serials);
     }
 
-    private int ChooseSerial(IReadOnlyList<int> serials)
+    /// <summary>
+    /// The same prompt, always shown (even for one key), with <paramref name="note"/> under the list: <c>yubikey
+    /// setup</c> offers only the keyboard-reachable keys and says which other keys are plugged in but not offered.
+    /// </summary>
+    public int PromptForSerial(IReadOnlyList<int> serials, string? note)
+    {
+        if (serials.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
+        return ChooseSerial(serials, note);
+    }
+
+    private int ChooseSerial(IReadOnlyList<int> serials) => ChooseSerial(serials, note: null);
+
+    private int ChooseSerial(IReadOnlyList<int> serials, string? note)
     {
         Console.Error.WriteLine("\nMultiple YubiKeys detected:");
         for (int i = 0; i < serials.Count; i++)
             Console.Error.WriteLine($"  {i + 1}. Serial: {serials[i]}");
+        if (note is not null)
+            Console.Error.WriteLine(note);
         Console.Error.Write($"Select YubiKey (1-{serials.Count}): ");
         var input = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))

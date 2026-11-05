@@ -94,6 +94,9 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     /// <summary>Stage 1: every <see cref="ProgramSlot2"/> call, also failed ones: (serial, touch asked for).</summary>
     public List<(int Serial, bool RequireTouch)> Programmed { get; } = [];
 
+    /// <summary>Stage 1, task 4: called with the serial at the start of every <see cref="ProgramSlot2"/> (what was on screen by then).</summary>
+    public Action<int>? OnProgram { get; set; }
+
     /// <summary>Plugged-in keys (reachable unless hidden), then hidden keys that aren't plugged in.</summary>
     public IReadOnlyList<YubiKeyInfo> FindKeys()
     {
@@ -121,6 +124,7 @@ public sealed class SimulatedYubiKeyService : IYubiKeyService
     {
         if (!PluggedIn.Contains(serial))
             throw new TswapCore.TswapException($"YubiKey {serial} is not plugged in.");
+        OnProgram?.Invoke(serial);
         Programmed.Add((serial, requireTouch));
         if (ProgramOutcome.TryGetValue(serial, out var kind))
             throw new YubiKeyProgramException(kind, serial);

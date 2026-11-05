@@ -5,8 +5,9 @@ namespace TswapCore.Vault;
 /// <summary>
 /// What tswap says about a YubiKey whose OTP interface the operating system hides or refuses (the key is seen over
 /// FIDO or smart card only). Extended with the spike's findings: on Linux, no smart-card fallback for this slot type.
+/// Public for <c>tswap yubikey setup</c>, which explains a hidden key itself before it reaches the SDK (task 4).
 /// </summary>
-internal static class YubiKeyAccessTexts
+public static class YubiKeyAccessTexts
 {
     /// <summary>"YubiKey N", or "A YubiKey" for a key whose serial can't be read.</summary>
     public static string Name(int? serial) => serial is { } s ? $"YubiKey {s}" : "A YubiKey";

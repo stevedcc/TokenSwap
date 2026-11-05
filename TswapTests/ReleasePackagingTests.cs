@@ -26,6 +26,18 @@ public class ReleasePackagingTests : IDisposable
         " 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n" +
         " 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n";
     private string LdconfigOutput { get; set; } = "";
+
+    /// <summary>
+    /// Task 4: what the fake <c>tswap yubikey setup</c> prints on stderr and its exit code (default: the refusal the
+    /// real binary gives for <c>--serial 2147483647</c>), and the PC/SC strategy it prints with <c>-v</c> (default: as
+    /// the real binary chooses: the stand-in in the sandbox or when <c>ldconfig -p</c> lists no libpcsclite.so.1).
+    /// </summary>
+    private string? YubiKeyOutput { get; set; }
+    private int? YubiKeyExit { get; set; }
+    private string? StrategyOutput { get; set; }
+
+    private const string NotPluggedIn = "YubiKey 2147483647 is not plugged in";
+    private const string YubiKeySmokeArgs = "yubikey setup --touch --serial 2147483647";
     private bool BwrapFails { get; set; }
     private string BwrapLog => Path.Combine(_dir, "bwrap.log");
 
@@ -37,7 +49,7 @@ public class ReleasePackagingTests : IDisposable
         WriteTool("ldconfig", "#!/bin/sh\ncat \"$FAKE_DIR/ldconfig.out\"\n");
         WriteTool("bwrap",
             "#!/bin/sh\necho \"$*\" >> \"$FAKE_DIR/bwrap.log\"\n[ -f \"$FAKE_DIR/bwrap.fails\" ] && { echo 'bwrap: No permissions to create new namespace' >&2; exit 1; }\n" +
-            "while [ $# -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n");
+            "while [ $# -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexport FAKE_IN_SANDBOX=1\nexec \"$@\"\n");
     }
 
     private void WriteTool(string name, string script)
@@ -73,6 +85,12 @@ public class ReleasePackagingTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "ldconfig.out"), LdconfigOutput);
         if (BwrapFails)
             File.WriteAllText(Path.Combine(_dir, "bwrap.fails"), "");
+        if (YubiKeyOutput is not null)
+            File.WriteAllText(Path.Combine(_dir, "yubikey.out"), YubiKeyOutput);
+        if (YubiKeyExit is not null)
+            File.WriteAllText(Path.Combine(_dir, "yubikey.exit"), YubiKeyExit.Value.ToString());
+        if (StrategyOutput is not null)
+            File.WriteAllText(Path.Combine(_dir, "strategy.out"), StrategyOutput);
         psi.Environment["FAKE_DIR"] = _dir;
         psi.Environment["PATH"] = _tools + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
         using var process = Process.Start(psi)!;
@@ -89,14 +107,39 @@ public class ReleasePackagingTests : IDisposable
     private (int ExitCode, string Output) Package(string rid, string publish, params string[] extra) =>
         Run("bash", [RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"), .. extra]);
 
-    /// <summary>A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with <paramref name="exitCode"/>.</summary>
+    /// <summary>
+    /// A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with
+    /// <paramref name="exitCode"/>; <c>yubikey setup</c> answers like the real binary instead (see <see cref="YubiKeyOutput"/>).
+    /// </summary>
     private string PublishFakeBinary(int exitCode, params string[] extraFiles)
     {
         var publish = Publish(["tswap", .. extraFiles]);
-        File.WriteAllText(Path.Combine(publish, "tswap"),
-            $"#!/bin/sh\necho \"ran from $(dirname \"$0\") with: $* (config: ${{TSWAP_CONFIG_DIR:-unset}})\"\nexit {exitCode}\n");
+        File.WriteAllText(Path.Combine(publish, "tswap"), $$"""
+            #!/bin/sh
+            echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})"
+            case " $* " in
+              *" yubikey setup "*)
+                if [ "$1" = -v ]; then
+                  if [ -n "$FAKE_IN_SANDBOX" ] || ! grep -q 'libpcsclite.so.1 (' "$FAKE_DIR/ldconfig.out"; then
+                    s='stand-in (libpcsclite.so.1 not found; no smart-card readers)'
+                  else
+                    s='system library (libpcsclite.so.1)'
+                  fi
+                  [ -f "$FAKE_DIR/strategy.out" ] && s=$(cat "$FAKE_DIR/strategy.out")
+                  echo "PC/SC (smart-card) access: $s"
+                fi
+                if [ -f "$FAKE_DIR/yubikey.out" ]; then cat "$FAKE_DIR/yubikey.out" >&2; else echo "Error: {{NotPluggedIn}}." >&2; fi
+                if [ -f "$FAKE_DIR/yubikey.exit" ]; then exit "$(cat "$FAKE_DIR/yubikey.exit")"; fi
+                exit 1
+                ;;
+            esac
+            exit {{exitCode}}
+
+            """);
         return publish;
     }
+
+    private static List<string> Runs(string output) => output.Split('\n').Where(line => line.StartsWith("ran from ")).ToList();
 
     private List<string> ArchiveEntries(string rid)
     {
@@ -171,9 +214,10 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = Package("linux-x64", publish, "--smoke");
 
         Assert.True(exitCode == 0, output);
-        var ran = Assert.Single(output.Split('\n'), line => line.StartsWith("ran from "));
-        Assert.EndsWith(" with: prompt-hash (config: unset)", ran);
-        Assert.DoesNotContain(publish, ran);
+        // Task 4 added the yubikey setup runs after prompt-hash; every run is the unpacked binary.
+        var runs = Runs(output);
+        Assert.EndsWith(" with: prompt-hash (config: unset)", runs[0]);
+        Assert.All(runs, ran => Assert.DoesNotContain(publish, ran));
     }
 
     /// <summary>
@@ -190,13 +234,14 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = Package("osx-arm64", publish, "--smoke");
 
         Assert.True(exitCode == 0, output);
-        var runs = output.Split('\n').Where(line => line.StartsWith("ran from ")).ToList();
-        Assert.Equal(3, runs.Count);
+        var runs = Runs(output);
+        Assert.Equal(4, runs.Count); // task 4: the yubikey setup run after prompt-hash
         var folder = runs[0]["ran from ".Length..runs[0].IndexOf(" with: ", StringComparison.Ordinal)];
         Assert.DoesNotContain(publish, folder);
         Assert.Equal($"ran from {folder} with: prompt-hash (config: unset)", runs[0]);
-        Assert.Equal($"ran from {folder} with: init --secure-enclave --no-touch --no-password --no-recovery (config: {folder}/config)", runs[1]);
-        Assert.Equal($"ran from {folder} with: names (config: {folder}/config)", runs[2]);
+        Assert.Equal($"ran from {folder} with: {YubiKeySmokeArgs} (config: unset)", runs[1]);
+        Assert.Equal($"ran from {folder} with: init --secure-enclave --no-touch --no-password --no-recovery (config: {folder}/config)", runs[2]);
+        Assert.Equal($"ran from {folder} with: names (config: {folder}/config)", runs[3]);
     }
 
     /// <summary>A binary that fails its smoke run fails the packaging.</summary>
@@ -261,12 +306,23 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
 
         Assert.True(exitCode == 0, output);
-        var runs = output.Split('\n').Where(line => line.StartsWith("ran from ")).ToList();
-        Assert.Equal(2, runs.Count);
-        Assert.All(runs, run => Assert.EndsWith(" with: prompt-hash (config: unset)", run));
-        var sandboxRun = File.ReadAllLines(BwrapLog).Last();
-        Assert.Contains("--dev-bind / / --ro-bind /dev/null /nonexistent/a/libpcsclite.so.1 --ro-bind /dev/null /nonexistent/b/libpcsclite.so.1 -- ", sandboxRun);
-        Assert.EndsWith("/tswap prompt-hash", sandboxRun);
+        // Task 4: each binary run of prompt-hash is followed by the yubikey setup smoke (with -v in the sandbox).
+        var runs = Runs(output).Select(run => run[run.IndexOf(" with: ", StringComparison.Ordinal)..]).ToList();
+        Assert.Equal([
+            " with: prompt-hash (config: unset)",
+            $" with: {YubiKeySmokeArgs} (config: unset)",
+            $" with: -v {YubiKeySmokeArgs} (config: unset)",
+            " with: prompt-hash (config: unset)",
+            $" with: -v {YubiKeySmokeArgs} (config: unset)",
+        ], runs);
+        var sandboxRuns = File.ReadAllLines(BwrapLog).Where(line => line.Contains("/tswap ")).ToList();
+        Assert.Equal(2, sandboxRuns.Count);
+        Assert.All(sandboxRuns, run => Assert.Contains(
+            "--dev-bind / / --ro-bind /dev/null /nonexistent/a/libpcsclite.so.1 --ro-bind /dev/null /nonexistent/b/libpcsclite.so.1 -- ", run));
+        Assert.EndsWith("/tswap prompt-hash", sandboxRuns[0]);
+        Assert.EndsWith($"/tswap -v {YubiKeySmokeArgs}", sandboxRuns[1]);
+        Assert.Contains("PC/SC (smart-card) access: system library", output);
+        Assert.Contains("PC/SC (smart-card) access: stand-in", output);
         Assert.DoesNotContain("libpcsclite_real", File.ReadAllText(BwrapLog));
         Assert.Contains("stand-in run passed", output);
     }
@@ -284,7 +340,7 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         Assert.Contains("SKIP: stand-in run (bwrap can't create its sandbox", output);
-        Assert.Single(output.Split('\n'), line => line.StartsWith("ran from "));
+        Assert.Equal(3, Runs(output).Count); // prompt-hash and the two yubikey setup runs outside the sandbox only
     }
 
     /// <summary>Without libpcsclite the first run already was the stand-in run: SKIP, saying why.</summary>
@@ -313,5 +369,100 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         Assert.DoesNotContain("readelf ran", output);
+    }
+
+    // ---- Task 4: the yubikey setup smoke (never --replace; a serial no YubiKey has). ----
+
+    /// <summary>The smoke expects the refusal: a yubikey setup run that exits 0 fails the packaging.</summary>
+    [Fact]
+    public void YubiKeySmoke_SetupSucceeding_FailsThePackaging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        YubiKeyExit = 0;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("should refuse with 'YubiKey 2147483647 is not plugged in'", output);
+    }
+
+    /// <summary>Another refusal than "not plugged in" (the --serial path not consulted) fails the packaging too.</summary>
+    [Fact]
+    public void YubiKeySmoke_OtherRefusal_FailsThePackaging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        YubiKeyOutput = "Error: No YubiKey detected. Please insert YubiKey.\n";
+
+        var (exitCode, output) = Package("osx-arm64", PublishFakeBinary(exitCode: 0, "libtswapse.dylib"), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("should refuse with 'YubiKey 2147483647 is not plugged in'", output);
+    }
+
+    /// <summary>The refusal may be followed by a per-OS explanation (a hidden key whose serial can't be read).</summary>
+    [Fact]
+    public void YubiKeySmoke_RefusalWithPerOsText_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        YubiKeyOutput = $"Error: {NotPluggedIn}.\nA YubiKey: its OTP interface can't be reached.\n";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.True(exitCode == 0, output);
+    }
+
+    /// <summary>Linux, library listed: the -v run outside the sandbox must say the system library was chosen.</summary>
+    [Fact]
+    public void LinuxSmoke_WrongStrategyOutsideTheSandbox_FailsThePackaging()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        LdconfigOutput = "\tlibpcsclite.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite.so.1\n";
+        StrategyOutput = "not chosen yet (no PC/SC call made)";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected the PC/SC strategy 'system library'", output);
+    }
+
+    /// <summary>Linux, no library listed: the -v run must say the stand-in was chosen.</summary>
+    [Fact]
+    public void LinuxSmoke_NoLibrary_StrategyMustBeTheStandIn()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        StrategyOutput = "system library (libpcsclite.so.1)";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected the PC/SC strategy 'stand-in'", output);
+    }
+
+    /// <summary>The smoke never passes --replace (that, not only --serial, keeps it from overwriting a configured slot).</summary>
+    [Fact]
+    public void YubiKeySmoke_NeverPassesReplace()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        LdconfigOutput = "\tlibpcsclite.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite.so.1\n";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        Assert.DoesNotContain("--replace", output);
+        // No line that runs yubikey setup passes --replace (comments may say that it doesn't).
+        foreach (var file in new[] { RepoFile("contrib", "packaging", "package.sh"), RepoFile(".github", "workflows", "ci.yml"), RepoFile(".github", "workflows", "release.yml") })
+        {
+            var runLines = File.ReadAllLines(file).Where(l => l.Contains("yubikey setup") && !l.TrimStart().StartsWith('#')).ToList();
+            Assert.True(runLines.Count > 0, $"{file} runs no yubikey setup");
+            Assert.All(runLines, l => Assert.DoesNotContain("--replace", l));
+        }
+        foreach (var workflow in new[] { "ci.yml", "release.yml" })
+            Assert.Contains(YubiKeySmokeArgs, File.ReadAllText(RepoFile(".github", "workflows", workflow)));
     }
 }

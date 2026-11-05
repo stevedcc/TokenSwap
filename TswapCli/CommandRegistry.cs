@@ -20,6 +20,7 @@ public static class CommandRegistry
         new RotateCommand(),
         new NamesCommand(),
         new SlotsCommand(),
+        new YubiKeyCommand(),
         new AgentCommand(),
         new RunCommand(),
         new CheckCommand(),

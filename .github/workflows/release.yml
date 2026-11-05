@@ -123,6 +123,17 @@ jobs:
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
           & (Join-Path $check 'tswap.exe') prompt-hash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The YubiKey smoke package.sh runs on Linux and macOS (YubiKey SDK stage 1, task 4): a serial no YubiKey has,
+          # never --replace, so the only expected outcome is the refusal.
+          $ErrorActionPreference = 'Continue'
+          $out = (& (Join-Path $check 'tswap.exe') yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -eq 0 -or -not $out.Contains('YubiKey 2147483647 is not plugged in')) {
+            Write-Output "::error::tswap yubikey setup --touch --serial 2147483647 should refuse with 'YubiKey 2147483647 is not plugged in' (exit $code)"
+            exit 1
+          }
+          exit 0
 
       - name: Upload archive
         uses: actions/upload-artifact@v4

@@ -70,6 +70,27 @@ jobs:
       - name: AOT publish
         run: dotnet publish TswapCli/TswapCli.csproj -c Release
 
+      # Windows: the published binary's YubiKey smoke (YubiKey SDK stage 1, task 4; macOS and Linux run the same line in
+      # package.sh --smoke below). 2147483647 is outside the range YubiKey serials use, so it can never select, let alone
+      # program, a key that happens to be plugged in, and the line never passes --replace: the only expected outcome is
+      # the refusal, which also shows the YubiKey SDK starts in the shipped binary.
+      - name: YubiKey smoke (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = @(Get-ChildItem -Path TswapCli/bin/Release -Recurse -Filter tswap.exe | Where-Object { $_.Directory.Name -eq 'publish' })
+          if ($exe.Count -ne 1) { Write-Output "::error::expected exactly one published tswap.exe, found $($exe.Count)"; exit 1 }
+          $out = (& $exe[0].FullName yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -eq 0 -or -not $out.Contains('YubiKey 2147483647 is not plugged in')) {
+            Write-Output "::error::tswap yubikey setup --touch --serial 2147483647 should refuse with 'YubiKey 2147483647 is not plugged in' (exit $code)"
+            exit 1
+          }
+          exit 0
+
       # The release archive, packed and smoke-tested by the script release.yml uses, so a PR that breaks
       # packaging (issue #238: the macOS archive lacked libtswapse.dylib) fails here, not at tag time.
       # The rid comes from the publish folder's parent (bin/Release/net10.0/<rid>/publish); exactly one such

@@ -674,6 +674,32 @@ public sealed class VaultUnlocker
         return keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownSlotId));
     }
 
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4 (<c>yubikey setup --replace</c>): whether one one-key YubiKey slot opens the vault
+    /// now. Its key is challenged (<paramref name="password"/> is called for a password slot) and the slot unwrapped;
+    /// the vault key is zeroed at once, never returned, and nothing else is unlocked. False: the slot didn't
+    /// authenticate under the key's answer (a definite wrong answer). A failed challenge (the key busy, no answer, not
+    /// reachable) or no password is thrown as it is.
+    /// </summary>
+    public bool YubiKeySlotOpens(Keyring.Keyring keyring, Slot slot, YubiKeySlotBlob blob, VaultPasswordProvider? password)
+    {
+        var kekSlot = YubiKeySlotKek.Recover(_yubiKeys, blob, slot.SlotId, password);
+        try
+        {
+            var vaultKey = UnwrapSlot(keyring, slot, kekSlot);
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(vaultKey);
+            return true;
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(kekSlot);
+        }
+    }
+
     /// <summary>Unwraps one machine slot under <paramref name="kekSlot"/> and returns <c>K_v</c>.</summary>
     private static byte[] UnwrapSlot(Keyring.Keyring keyring, Slot slot, byte[] kekSlot)
     {

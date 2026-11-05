@@ -57,7 +57,7 @@ public class VaultFreeCommandTests
     {
         var vaultFree = CommandRegistry.All.Where(c => !c.NeedsVault).Select(c => c.Name).Order().ToArray();
 
-        Assert.Equal(["completion", "installscript", "prompt", "prompt-hash"], vaultFree);
+        Assert.Equal(["completion", "installscript", "prompt", "prompt-hash", "yubikey"], vaultFree);
     }
 
     [Fact]
@@ -65,12 +65,35 @@ public class VaultFreeCommandTests
     {
         if (OperatingSystem.IsWindows()) return;
 
-        foreach (var command in CommandRegistry.All.Where(c => !c.NeedsVault))
+        // yubikey setup always ends in a refusal in test mode (the test key's slot is configured and can't be
+        // programmed): YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn covers it.
+        foreach (var command in CommandRegistry.All.Where(c => !c.NeedsVault && c.Name != "yubikey"))
         {
             string[] args = command.Name == "completion" ? [command.Name, "bash"] : [command.Name];
             var (exit, _, stderr) = Run(new(), args);
             Assert.True(exit == 0, $"{command.Name}: exit {exit}: {stderr}");
         }
+    }
+
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4: <c>yubikey setup</c> needs no vault. Without a home folder it still reads the key,
+    /// and <c>--replace</c> (typed serial at a terminal) warns that it couldn't check a vault and goes on to programming,
+    /// which test mode refuses.
+    /// </summary>
+    [Fact]
+    public void YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn()
+    {
+        if (!OperatingSystem.IsLinux()) return; // only there does a missing HOME leave no config folder (see below)
+
+        var env = new Dictionary<string, string?> { ["TSWAP_TEST_KEY"] = TestKeyHex };
+        var console = new FakeConsole($"{TswapCore.Vault.TestKeyYubiKeyService.Serial1}\n") { IsInputRedirected = false };
+        var exit = CliHost.Run(["yubikey", "setup", "--touch", "--replace"], console, name => env.GetValueOrDefault(name),
+            isPrivileged: false, processPath: "/usr/local/bin/tswap");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("couldn't check whether a vault depends on this key", console.ErrorText);
+        Assert.Contains("Cannot determine the config folder", console.ErrorText);
+        Assert.Contains("Test mode (TSWAP_TEST_KEY) can't program a YubiKey", console.ErrorText);
     }
 
     [Fact]

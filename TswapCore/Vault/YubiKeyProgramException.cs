@@ -11,6 +11,9 @@ public sealed class YubiKeyProgramException(OtpFailure kind, int serial, string?
     public OtpFailure Kind { get; } = kind;
     public int Serial { get; } = serial;
 
+    /// <summary>The device's own message, when there is one (never key material).</summary>
+    public string? Detail { get; } = detail;
+
     private static string DefaultMessage(OtpFailure kind, int serial, string? detail)
     {
         var what = kind switch
