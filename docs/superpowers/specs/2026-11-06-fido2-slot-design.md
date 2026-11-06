@@ -133,8 +133,15 @@ lives; the exact texts.
 
 ## Open (owner)
 
-- **Windows gate:** if the NativeAOT Windows check fails, v0.3.0 ships without FIDO2 (FIDO2 becomes v0.3.1), or
-  v0.3.0 waits. Recommended: ship without. Owner is thinking it over (2026-11-06).
+- **Windows gate: passed (owner's run, 2026-11-06; spike commit 1e3d56b on design/yubikey-sdk).** On Windows 11
+  (build 26200, webauthn.dll API 9) a NativeAOT build (`aot=True`, no IL warnings, not elevated) created a
+  non-discoverable hmac-secret credential through `WebAuthNAuthenticatorMakeCredential` with user verification
+  (`uv_flag=True`, `credential_id_matches_auth_data=True`); two UV assertions gave the same 32-byte output
+  (`eea20ed0999fcc25`), and the same credential asserted on Linux through the SDK with PIN + touch gave the same
+  output. **AAGUID:** under attestation "none" webauthn.dll zeroes it; under "direct" it is kept
+  (`d7781e5d-e353-46aa-afe2-3ca49f13332a`, Yubico's YubiKey 5 Series with NFC). So on Windows, enrolment asks for
+  direct attestation (the fallback in "Calls after the builder check"). Not yet run: a Linux-made credential asserted
+  on Windows (the reverse direction), and macOS.
 - **A spare key** for the destructive checks (slot 2 programming, busy message, no-PIN FIDO2, wrong-PIN counts, a
   FIDO2 reset): the owner is considering ordering one (a YubiKey 5 with OTP and FIDO2). The Windows check itself is
   safe on the owner's daily key (a non-discoverable credential takes no space and touches nothing else).
