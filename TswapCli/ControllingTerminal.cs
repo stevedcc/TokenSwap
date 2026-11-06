@@ -11,7 +11,7 @@ namespace TswapCli;
 /// null otherwise. On Linux and macOS secrets are read from <c>/dev/tty</c> with its echo off, so a PIN typed there
 /// works while stdin carries <c>--recovery-key-stdin</c>; the echo comes back on after the line, and on SIGINT or
 /// SIGTERM during the read. On Windows the FIDO2 PIN is Windows' dialog's: this console terminal is only there to say
-/// one is present.
+/// one is present, and it refuses every read.
 /// </summary>
 internal static partial class ControllingTerminal
 {
@@ -21,12 +21,13 @@ internal static partial class ControllingTerminal
         if (OperatingSystem.IsWindows())
             return WindowsConsole.IsPresent() ? new WindowsConsole() : null;
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            return UnixTty.TryOpen();
+            return UnixTty.OpenPath("/dev/tty");
         return null;
     }
 
     /// <summary><c>/dev/tty</c>, through libc: reads one byte at a time, so nothing typed after the line is consumed.</summary>
-    private sealed partial class UnixTty : ITerminal
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    internal sealed partial class UnixTty : ITerminal
     {
         private const int ORdWr = 2;
         private const int EIntr = 4;
@@ -42,10 +43,11 @@ internal static partial class ControllingTerminal
 
         private UnixTty(int fd) => _fd = fd;
 
-        public static UnixTty? TryOpen()
+        /// <summary><paramref name="path"/> opened for reading and writing (<c>/dev/tty</c>; a test opens a plain file), or null.</summary>
+        internal static UnixTty? OpenPath(string path)
         {
             var flags = ORdWr | (OperatingSystem.IsMacOS() ? 0x1000000 : 0x80000); // O_CLOEXEC
-            var fd = open("/dev/tty", flags);
+            var fd = open(path, flags);
             return fd < 0 ? null : new UnixTty(fd);
         }
 
@@ -84,22 +86,29 @@ internal static partial class ControllingTerminal
             var saved = new byte[TermiosBufferSize];
             fixed (byte* p = saved)
             {
+                // Fail closed: echo that can't be switched off would show the secret, so nothing is read (a cancel).
                 if (tcgetattr(_fd, p) != 0)
-                    return ReadBytesLine(); // not a terminal device after all: nothing to switch off
+                    return null;
             }
             var quiet = (byte[])saved.Clone();
             ClearEcho(quiet);
 
-            void Restore()
+            void Apply(byte[] termios, int when)
             {
-                fixed (byte* p = saved)
-                    tcsetattr(_fd, TcsaNow, p);
+                fixed (byte* p = termios)
+                    tcsetattr(_fd, when, p);
             }
 
+            void Restore() => Apply(saved, TcsaNow);
+
+            // The echo comes back whenever the process leaves the read: ended (SIGINT, SIGTERM, SIGQUIT) or stopped
+            // (SIGTSTP, Ctrl+Z); on SIGCONT the read goes on, so the echo goes off again.
             using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, _ => Restore());
             using var terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => Restore());
-            fixed (byte* p = quiet)
-                tcsetattr(_fd, TcsaFlush, p);
+            using var quit = PosixSignalRegistration.Create(PosixSignal.SIGQUIT, _ => Restore());
+            using var stop = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, _ => Restore());
+            using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, _ => Apply(quiet, TcsaNow));
+            Apply(quiet, TcsaFlush);
             try
             {
                 return ReadBytesLine();
@@ -194,7 +203,7 @@ internal static partial class ControllingTerminal
     }
 
     /// <summary>The console, on Windows: present when one of the standard handles is a console.</summary>
-    private sealed partial class WindowsConsole : ITerminal
+    internal sealed partial class WindowsConsole : ITerminal
     {
         private const int StdInput = -10;
         private const int StdOutput = -11;
@@ -211,9 +220,12 @@ internal static partial class ControllingTerminal
 
         public void Write(string text) => Console.Error.Write(text);
 
-        public string? ReadLine() => Console.ReadLine();
+        /// <summary>Never reads: Windows' dialog asks for the PIN and picks the key, so tswap reads nothing here (not stdin either).</summary>
+        public const string NeverReads = "Windows' dialog owns PIN entry: tswap reads no PIN or answer from the console on Windows.";
 
-        public byte[]? ReadSecret() => Encoding.UTF8.GetBytes(new SystemConsole().ReadPassword(Console.Error));
+        public string? ReadLine() => throw new InvalidOperationException(NeverReads);
+
+        public byte[]? ReadSecret() => throw new InvalidOperationException(NeverReads);
 
         public void Dispose()
         {

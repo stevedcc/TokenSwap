@@ -163,6 +163,38 @@ public class SlotAddFido2Tests : IDisposable
     }
 
     [Fact]
+    public void SlotAddFido2_UnlockFails_NoKeyCall()
+    {
+        OtpVault();
+        _otp.PluggedIn = []; // no other way in: no OTP key, no recovery key, no agent
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        var before = Snapshot();
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("No plugged-in YubiKey matches a slot of this vault", stderr);
+        Assert.Empty(_fido2.Calls); // the vault is unlocked before any FIDO2 call
+        Assert.Empty(_terminal.Reads);
+        Assert.Equal(before, Snapshot());
+    }
+
+    [Fact]
+    public void SlotAddFido2_VaultWithoutKeyring_NamesInitFido2()
+    {
+        File.WriteAllText(Path.Combine(_dir, "config.json"), System.Text.Json.JsonSerializer.Serialize(
+            new Config([], "", DateTime.UtcNow), TswapJsonContext.Default.Config));
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("This vault has no keyring", stderr);
+        Assert.Contains("'tswap init --fido2'", stderr);
+        Assert.Empty(_fido2.Calls);
+    }
+
+    [Fact]
     public void SlotAddFido2_NoPin_OffersToSetOne()
     {
         OtpVault();

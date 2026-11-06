@@ -991,7 +991,7 @@ public sealed class SlotCommand : ICliCommand
         if (config.Keyring is null)
             throw new TswapException(
                 "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
-                "('tswap init', or 'tswap init --yubikey', '--tpm' or '--secure-enclave') take extra slots.");
+                "('tswap init', or 'tswap init --yubikey', 'tswap init --fido2', '--tpm' or '--secure-enclave') take extra slots.");
         byte[] keyringBytes;
         try
         {
