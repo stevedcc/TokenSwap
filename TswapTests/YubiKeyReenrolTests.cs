@@ -568,31 +568,36 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal("s3cret", getOut.Trim());
     }
 
-    [Fact]
-    public void SlotAdd_PasswordSlot_MistypedPassword_WarnsBeforeReenrolling()
+    [Theory]
+    [InlineData("--no-password")]
+    [InlineData("--password")]
+    public void SlotAdd_PasswordSlot_MistypedPassword_Aborts(string flag)
     {
         // A's slot has the password, B's doesn't. A isn't reprogrammed: the mistyped password makes it look dead.
+        // Final review (owner decision): one mistyped password stops the command, whatever the new slot gets.
         var m = PasswordVaultOnAAndB(bPassword: false);
         m.Keys.Challenges.Clear();
         m.Keys.PluggedIn = [SerialA, SerialB];
-        var console = new FakeConsole("1\n" + WrongPassword + "\n") { IsInputRedirected = false, Interleaved = true };
-        string? atEnrolment = null;
-        var challengesOfA = 0;
-        m.Keys.OnChallenge = s =>
-        {
-            if (s == SerialA && ++challengesOfA == 2)
-                atEnrolment = console.OutText;
-        };
-        string[] args = ["slot", "add", "--yubikey", "--no-password"];
+        var passwordFile = Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName);
+        var keyringBefore = File.ReadAllBytes(KeyringPath(m));
+        var configBefore = File.ReadAllBytes(m.ConfigPath);
+        var passwordFileBefore = File.ReadAllBytes(passwordFile);
+        var checkChallenges = SlotsOf(m, SerialA).Count;
 
-        var exit = CliRunner.Run(m.Context(console, args), args);
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", flag);
 
-        var text = console.OutText;
-        Assert.True(exit == 0, text);
-        Assert.NotNull(atEnrolment);
-        Assert.Contains(MistypedLine, atEnrolment); // printed before the enrolment's challenges, so before the write
-        Assert.Contains(ReenrolledLine(SerialA), text);
-        Assert.NotEmpty(ChallengesOf(m, SerialB)); // the unlock went through B
+        Assert.NotEqual(0, exit);
+        Assert.Contains(
+            $"YubiKey {SerialA} isn't enrolled again: the vault password didn't match this vault's (checked against the " +
+            "vault's password verifier), so tswap can't tell whether its slot(s) that need the password still open the vault. " +
+            "Nothing was changed.", stderr);
+        Assert.DoesNotContain(MistypedLine, stdout + stderr);
+        Assert.DoesNotContain(ReenrolledLine(SerialA), stdout + stderr);
+        Assert.Equal(keyringBefore, File.ReadAllBytes(KeyringPath(m)));
+        Assert.Equal(configBefore, File.ReadAllBytes(m.ConfigPath));
+        Assert.Equal(passwordFileBefore, File.ReadAllBytes(passwordFile));
+        Assert.Equal(checkChallenges, ChallengesOf(m, SerialA).Count); // the check only: no enrolment challenge
+        Assert.Empty(m.Keys.Programmed);
     }
 
     /// <summary>

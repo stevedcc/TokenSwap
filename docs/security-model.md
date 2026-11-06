@@ -227,9 +227,9 @@ Finish and check one key before you start the next. A vault whose keys still sha
   slots needs it, or the new slot will get it), `slot add` asks before any challenge. Otherwise it
   asks only if the unlock needs it, which is after the key's checks. When the vault has a vault
   password, the password typed before the checks is compared with the vault's password verifier
-  before anything is written: if the new slot was to get the password, a mismatch stops it with
-  nothing changed; otherwise tswap warns that the key is about to be enrolled without the password,
-  so you can stop (Ctrl-C) if you mistyped it.
+  before anything is written: a mismatch always stops the command with nothing written, whether
+  or not the new slot was to get the password (with a mistyped password, tswap can't tell whether
+  the key's slots that need it still open the vault).
 - **When nothing else opens the vault**, `slot add` lists the ways in it looked for and changes
   nothing. The recovery key is then the fallback:
   [adding a key with the recovery key](multi-machine.md#appendix-adding-a-key-with-the-recovery-key).

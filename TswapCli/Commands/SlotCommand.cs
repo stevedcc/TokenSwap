@@ -1113,15 +1113,13 @@ public sealed class SlotCommand : ICliCommand
             // The typed password is checked against the vault's verifier whatever opened the vault (a password slot
             // that opened proves it as well; the verifier also covers the agent, the chip, the recovery key, and a
             // password-free slot tried after the password pass).
-            var verified = typed is not null && file is not null && file.Verifies(vaultKey, typed);
-            if (newSlotPassword && file is not null && !verified)
+            // Final review (owner decision): a typed password that fails the verifier stops the command whatever the new
+            // slot gets; with a mistyped password, this key's password slots can't be told dead from alive.
+            if (typed is not null && file is not null && !file.Verifies(vaultKey, typed))
                 throw new TswapException(
                     $"YubiKey {serial} isn't enrolled again: the vault password didn't match this vault's (checked against the " +
-                    "vault's password verifier). Nothing was changed.");
-            if (typed is not null && !newSlotPassword && !verified)
-                c.Error.WriteLine(
-                    $"None of YubiKey {serial}'s slots opened with the vault password typed: if you mistyped the vault password, " +
-                    $"stop now (Ctrl-C); otherwise YubiKey {serial} is enrolled again, as a new slot without the password.");
+                    "vault's password verifier), so tswap can't tell whether its slot(s) that need the password still open the " +
+                    "vault. Nothing was changed.");
 
             var (newSlot, blob2) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, newSlotPassword ? typed : null);
             var newFile = firstPasswordFile is { } f ? VaultPasswordFile.Create(vaultKey, keyring.VaultId, typed!, f.Salt, f.Params) : null;
