@@ -6,43 +6,155 @@ using System.Text;
 namespace YkSpike;
 
 /// <summary>
-/// Task 4: FIDO2 PRF through webauthn.dll. Asserts the Linux-made credential with the PRF input (not the raw salt), so
-/// Windows applies SHA-256("WebAuthn PRF" || 0x00 || input) itself; output_h must equal the Linux SDK run's output_h.
-/// Struct layouts follow Microsoft's webauthn.h (API version 9 header), cut at the struct version this spike needs.
+/// FIDO2 through webauthn.dll (the "Windows gate"): make a non-discoverable credential with hmac-secret and user
+/// verification required, then assert it twice with user verification required and the PRF input (not the raw salt), so
+/// Windows applies SHA-256("WebAuthn PRF" || 0x00 || input) itself. output_h must equal the Linux/macOS SDK run's
+/// <c>fido2-assert --uv</c> output_h for the same credential. Structures: WebAuthnNative.cs.
 /// </summary>
 public static unsafe partial class Fido2Windows
 {
-    // webauthn.h constants.
-    private const uint ApiVersionWithHmacSecretSaltValues = 4; // WEBAUTHN_API_VERSION_4: GET_ASSERTION_OPTIONS v6, ASSERTION v3
-    private const uint ClientDataVersion = 1; // WEBAUTHN_CLIENT_DATA_CURRENT_VERSION
-    private const uint CredentialExVersion = 1; // WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION
-    private const uint GetAssertionOptionsVersion6 = 6; // first version with pHmacSecretSaltValues
-    private const uint AssertionVersion3 = 3; // first version with pHmacSecret
-    private const uint CtapTransportUsb = 0x00000001;
-    private const uint AttachmentCrossPlatform = 2;
-    private const uint UserVerificationDiscouraged = 3;
-    private const uint TimeoutMilliseconds = 60_000;
+    private const uint TimeoutMilliseconds = 120_000;
 
-    public static void Enroll(string outPath) =>
-        throw new PlatformNotSupportedException("enrol on Linux; the cross-OS check uses the Linux credential");
+    [SupportedOSPlatform("windows")]
+    public static void Enroll(string outPath, bool directAttestation)
+    {
+        CheckApi();
+        var userId = RandomNumberGenerator.GetBytes(16);
+        var clientDataJson = ClientDataJson("webauthn.create", Fido2.RpId);
+        var hmacSecretOn = 1; // BOOL TRUE: the hmac-secret make-credential input
+        var conveyance = directAttestation ? WebAuthn.AttestationConveyanceDirect : WebAuthn.AttestationConveyanceNone;
+        Report.Line("attestation_requested", directAttestation ? "direct" : "none");
+
+        using var strings = new NativeStrings();
+        WebAuthnCredentialAttestation* attestation = null;
+        fixed (byte* pUserId = userId)
+        fixed (byte* pClientDataJson = clientDataJson)
+        {
+            try
+            {
+                var rp = new WebAuthnRpEntityInformation
+                {
+                    dwVersion = WebAuthn.RpEntityVersion,
+                    pwszId = strings.Add(Fido2.RpId),
+                    pwszName = strings.Add("tswap yk-spike"),
+                    pwszIcon = IntPtr.Zero,
+                };
+                var user = new WebAuthnUserEntityInformation
+                {
+                    dwVersion = WebAuthn.UserEntityVersion,
+                    cbId = (uint)userId.Length,
+                    pbId = (IntPtr)pUserId,
+                    pwszName = strings.Add("yk-spike"),
+                    pwszIcon = IntPtr.Zero,
+                    pwszDisplayName = strings.Add("yk-spike"),
+                };
+                var es256 = new WebAuthnCoseCredentialParameter
+                {
+                    dwVersion = WebAuthn.CoseCredentialParameterVersion,
+                    pwszCredentialType = strings.Add(WebAuthn.CredentialTypePublicKey),
+                    lAlg = WebAuthn.CoseAlgorithmEs256,
+                };
+                var pubKeyParams = new WebAuthnCoseCredentialParameters { cCredentialParameters = 1, pCredentialParameters = (IntPtr)(&es256) };
+                var clientData = new WebAuthnClientData
+                {
+                    dwVersion = WebAuthn.ClientDataVersion,
+                    cbClientDataJSON = (uint)clientDataJson.Length,
+                    pbClientDataJSON = (IntPtr)pClientDataJson,
+                    pwszHashAlgId = strings.Add(WebAuthn.HashAlgorithmSha256),
+                };
+                var hmacSecret = new WebAuthnExtension
+                {
+                    pwszExtensionIdentifier = strings.Add(WebAuthn.ExtensionHmacSecret),
+                    cbExtension = sizeof(int),
+                    pvExtension = (IntPtr)(&hmacSecretOn),
+                };
+                var options = new WebAuthnMakeCredentialOptionsV5
+                {
+                    dwVersion = WebAuthn.MakeCredentialOptionsVersion5,
+                    dwTimeoutMilliseconds = TimeoutMilliseconds,
+                    CredentialList = default, // no exclude list
+                    Extensions = new WebAuthnExtensions { cExtensions = 1, pExtensions = (IntPtr)(&hmacSecret) },
+                    dwAuthenticatorAttachment = WebAuthn.AttachmentCrossPlatform,
+                    bRequireResidentKey = 0, // non-discoverable: nothing is stored on the key
+                    dwUserVerificationRequirement = WebAuthn.UserVerificationRequired,
+                    dwAttestationConveyancePreference = conveyance,
+                    dwFlags = 0,
+                    pCancellationId = IntPtr.Zero,
+                    pExcludeCredentialList = IntPtr.Zero,
+                    dwEnterpriseAttestation = 0,
+                    dwLargeBlobSupport = 0,
+                    bPreferResidentKey = 0,
+                    bBrowserInPrivateMode = 0,
+                };
+
+                Console.Error.WriteLine("(Windows will show its security key dialog: enter your FIDO2 PIN, then touch your YubiKey)");
+                var hr = WebAuthNAuthenticatorMakeCredential(Window(), &rp, &user, &pubKeyParams, &clientData, &options, &attestation);
+                if (hr < 0)
+                    throw Failure("WebAuthNAuthenticatorMakeCredential", hr);
+                if (attestation == null)
+                    throw new InvalidOperationException("WebAuthNAuthenticatorMakeCredential returned no attestation");
+
+                Report.Line("attestation_version", attestation->dwVersion);
+                Report.Line("attestation_format", Marshal.PtrToStringUni(attestation->pwszFormatType) ?? "(null)");
+                if (attestation->dwVersion >= WebAuthn.CredentialAttestationVersion3)
+                    Report.Line("used_transport", $"0x{attestation->dwUsedTransport:X}");
+                Report.Line("hmac_secret_created", attestation->dwVersion >= WebAuthn.CredentialAttestationVersion2
+                    ? HmacSecretOutput(attestation->Extensions)
+                    : $"unknown (attestation version {attestation->dwVersion} has no extensions)");
+                if (attestation->dwVersion >= WebAuthn.CredentialAttestationVersion5)
+                    Report.Line("prf_enabled", attestation->bPrfEnabled != 0);
+
+                var authData = new ReadOnlySpan<byte>((void*)attestation->pbAuthenticatorData, (int)attestation->cbAuthenticatorData);
+                var parsed = AuthenticatorDataInfo.Parse(authData);
+                Report.Line("uv_flag", $"{parsed.UserVerified} (the key's own user-verified flag)");
+                Fido2.ReportAaguid(parsed);
+                if (parsed.AaguidIsZero && !directAttestation)
+                    Report.Line("aaguid_note",
+                        "webauthn.dll zeroed the AAGUID under attestation \"none\"; rerun with: fido2-enroll --attestation direct --out cred-windows-direct.json");
+
+                var credentialId = new ReadOnlySpan<byte>((void*)attestation->pbCredentialId, (int)attestation->cbCredentialId).ToArray();
+                Report.Line("credential_id_bytes", credentialId.Length);
+                Report.Line("credential_id_matches_auth_data", parsed.CredentialId is { } id && id.AsSpan().SequenceEqual(credentialId));
+                Fido2.SaveCred(outPath, credentialId);
+            }
+            finally
+            {
+                if (attestation != null)
+                    WebAuthNFreeCredentialAttestation(attestation);
+            }
+        }
+    }
 
     [SupportedOSPlatform("windows")]
     public static void Assert(Fido2.Cred cred)
     {
-        var api = WebAuthNGetApiVersionNumber();
-        Report.Line("webauthn_api", api);
-        if (api < ApiVersionWithHmacSecretSaltValues)
-            throw new PlatformNotSupportedException(
-                $"webauthn.dll API version {api} has no hmac-secret salt values (needs {ApiVersionWithHmacSecretSaltValues} or later)");
-
+        CheckApi();
         var credentialId = Fido2.FromBase64Url(cred.credential_id);
-        var prfInput = Encoding.UTF8.GetBytes(Fido2.PrfInput);
-        var clientDataJson = Encoding.UTF8.GetBytes(
-            $$"""{"type":"webauthn.get","challenge":"{{Fido2.Base64Url(RandomNumberGenerator.GetBytes(32))}}","origin":"https://{{cred.rp_id}}"}""");
+        var first = AssertOnce(cred.rp_id, credentialId, out var uv1);
+        var second = AssertOnce(cred.rp_id, credentialId, out var uv2);
+        try
+        {
+            Report.Line("uv_flag", $"{uv1},{uv2} (the key's own user-verified flag; must be True)");
+            Report.Line("output_bytes", first.Length);
+            Report.Line("output_h_1", Report.Hash16(first));
+            Report.Line("output_h_2", Report.Hash16(second));
+            Report.Line("output_h", Report.Hash16(first));
+            Report.Line("deterministic", first.AsSpan().SequenceEqual(second));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(first);
+            CryptographicOperations.ZeroMemory(second);
+        }
+    }
 
-        var rpId = IntPtr.Zero;
-        var hashAlg = IntPtr.Zero;
-        var credType = IntPtr.Zero;
+    /// <summary>One get-assertion with user verification required and the PRF input as the global salt.</summary>
+    [SupportedOSPlatform("windows")]
+    private static byte[] AssertOnce(string rpIdText, byte[] credentialId, out bool userVerified)
+    {
+        var prfInput = Encoding.UTF8.GetBytes(Fido2.PrfInput);
+        var clientDataJson = ClientDataJson("webauthn.get", rpIdText);
+        using var strings = new NativeStrings();
         WebAuthnAssertion* assertion = null;
         fixed (byte* pCredId = credentialId)
         fixed (byte* pPrfInput = prfInput)
@@ -50,24 +162,21 @@ public static unsafe partial class Fido2Windows
         {
             try
             {
-                rpId = Marshal.StringToHGlobalUni(cred.rp_id);
-                hashAlg = Marshal.StringToHGlobalUni("SHA-256"); // WEBAUTHN_HASH_ALGORITHM_SHA_256
-                credType = Marshal.StringToHGlobalUni("public-key"); // WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY
-
+                var rpId = strings.Add(rpIdText);
                 var clientData = new WebAuthnClientData
                 {
-                    dwVersion = ClientDataVersion,
+                    dwVersion = WebAuthn.ClientDataVersion,
                     cbClientDataJSON = (uint)clientDataJson.Length,
                     pbClientDataJSON = (IntPtr)pClientDataJson,
-                    pwszHashAlgId = hashAlg,
+                    pwszHashAlgId = strings.Add(WebAuthn.HashAlgorithmSha256),
                 };
                 var credential = new WebAuthnCredentialEx
                 {
-                    dwVersion = CredentialExVersion,
+                    dwVersion = WebAuthn.CredentialExVersion,
                     cbId = (uint)credentialId.Length,
                     pbId = (IntPtr)pCredId,
-                    pwszCredentialType = credType,
-                    dwTransports = CtapTransportUsb,
+                    pwszCredentialType = strings.Add(WebAuthn.CredentialTypePublicKey),
+                    dwTransports = WebAuthn.CtapTransportUsb,
                 };
                 var pCredential = &credential;
                 var allowList = new WebAuthnCredentialList { cCredentials = 1, ppCredentials = (IntPtr)(&pCredential) };
@@ -86,12 +195,12 @@ public static unsafe partial class Fido2Windows
                 };
                 var options = new WebAuthnGetAssertionOptionsV6
                 {
-                    dwVersion = GetAssertionOptionsVersion6,
+                    dwVersion = WebAuthn.GetAssertionOptionsVersion6,
                     dwTimeoutMilliseconds = TimeoutMilliseconds,
                     CredentialList = default, // ignored when pAllowCredentialList is set
                     Extensions = default,
-                    dwAuthenticatorAttachment = AttachmentCrossPlatform,
-                    dwUserVerificationRequirement = UserVerificationDiscouraged,
+                    dwAuthenticatorAttachment = WebAuthn.AttachmentCrossPlatform,
+                    dwUserVerificationRequirement = WebAuthn.UserVerificationRequired,
                     dwFlags = 0, // no WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG: Windows applies the PRF transform
                     pwszU2fAppId = IntPtr.Zero,
                     pbU2fAppId = IntPtr.Zero,
@@ -104,187 +213,103 @@ public static unsafe partial class Fido2Windows
                     bBrowserInPrivateMode = 0,
                 };
 
-                var hwnd = GetConsoleWindow();
-                if (hwnd == IntPtr.Zero)
-                    hwnd = GetForegroundWindow();
-
-                Console.Error.WriteLine("(Windows will show its security key dialog; touch your YubiKey)");
-                var hr = WebAuthNAuthenticatorGetAssertion(hwnd, rpId, &clientData, &options, &assertion);
+                Console.Error.WriteLine("(Windows will show its security key dialog: enter your FIDO2 PIN, then touch your YubiKey)");
+                var hr = WebAuthNAuthenticatorGetAssertion(Window(), rpId, &clientData, &options, &assertion);
                 if (hr < 0)
-                {
-                    var name = Marshal.PtrToStringUni(WebAuthNGetErrorName(hr)) ?? "?";
-                    Report.Line("error", $"hresult 0x{hr:X8} {name}");
-                    return;
-                }
+                    throw Failure("WebAuthNAuthenticatorGetAssertion", hr);
                 if (assertion == null)
-                {
-                    Report.Line("error", "no assertion returned");
-                    return;
-                }
+                    throw new InvalidOperationException("WebAuthNAuthenticatorGetAssertion returned no assertion");
 
                 Report.Line("assertion_version", assertion->dwVersion);
-                if (assertion->cbAuthenticatorData > 32)
-                {
-                    var flags = ((byte*)assertion->pbAuthenticatorData)[32];
-                    Report.Line("uv_flag", $"{(flags & 0x04) != 0} (the key's own user-verified flag; False = touch only)");
-                }
-                else
-                {
-                    Report.Line("uv_flag", $"unknown (authenticator data only {assertion->cbAuthenticatorData} bytes)");
-                }
-
-                if (assertion->dwVersion < AssertionVersion3 || assertion->pHmacSecret == IntPtr.Zero)
-                {
-                    Report.Line("error", "no hmac-secret output in the assertion");
-                }
-                else
-                {
-                    var secret = (WebAuthnHmacSecretSalt*)assertion->pHmacSecret;
-                    var output = new ReadOnlySpan<byte>((void*)secret->pbFirst, (int)secret->cbFirst);
-                    Report.Line("output_bytes", output.Length);
-                    Report.Line("output_h", Report.Hash16(output));
-                }
+                var authData = new ReadOnlySpan<byte>((void*)assertion->pbAuthenticatorData, (int)assertion->cbAuthenticatorData);
+                userVerified = AuthenticatorDataInfo.Parse(authData).UserVerified;
+                if (assertion->dwVersion < WebAuthn.AssertionVersion3 || assertion->pHmacSecret == IntPtr.Zero)
+                    throw new InvalidOperationException("no hmac-secret output in the assertion");
+                var secret = (WebAuthnHmacSecretSalt*)assertion->pHmacSecret;
+                return new ReadOnlySpan<byte>((void*)secret->pbFirst, (int)secret->cbFirst).ToArray();
             }
             finally
             {
                 if (assertion != null)
                     WebAuthNFreeAssertion(assertion);
-                Marshal.FreeHGlobal(rpId);
-                Marshal.FreeHGlobal(hashAlg);
-                Marshal.FreeHGlobal(credType);
             }
         }
-
-        Console.Error.Write("Did Windows ask for a PIN? (y/n) ");
-        var answer = Console.ReadLine()?.Trim();
-        Report.Line("pin_asked", answer is { Length: > 0 } && (answer[0] == 'y' || answer[0] == 'Y'));
     }
 
-    // WEBAUTHN_CLIENT_DATA (version 1): 4 fields.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnClientData
+    [SupportedOSPlatform("windows")]
+    private static void CheckApi()
     {
-        public uint dwVersion;
-        public uint cbClientDataJSON;
-        public IntPtr pbClientDataJSON;
-        public IntPtr pwszHashAlgId;
+        var api = WebAuthNGetApiVersionNumber();
+        Report.Line("webauthn_api", api);
+        if (api < WebAuthn.ApiVersion4)
+            throw new PlatformNotSupportedException(
+                $"webauthn.dll API version {api} has no hmac-secret salt values (needs {WebAuthn.ApiVersion4} or later)");
     }
 
-    // WEBAUTHN_CREDENTIAL (version 1): 4 fields. Embedded in WEBAUTHN_ASSERTION.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnCredential
+    /// <summary>The hmac-secret make-credential output: a BOOL, TRUE when the credential was made with hmac-secret.</summary>
+    private static string HmacSecretOutput(WebAuthnExtensions extensions)
     {
-        public uint dwVersion;
-        public uint cbId;
-        public IntPtr pbId;
-        public IntPtr pwszCredentialType;
+        var list = (WebAuthnExtension*)extensions.pExtensions;
+        for (var i = 0; i < extensions.cExtensions; i++)
+        {
+            if (Marshal.PtrToStringUni(list[i].pwszExtensionIdentifier) != WebAuthn.ExtensionHmacSecret)
+                continue;
+            if (list[i].cbExtension < sizeof(int) || list[i].pvExtension == IntPtr.Zero)
+                return $"unknown (hmac-secret output of {list[i].cbExtension} bytes)";
+            return (*(int*)list[i].pvExtension != 0).ToString();
+        }
+        return $"not returned ({extensions.cExtensions} extension outputs, none hmac-secret)";
     }
 
-    // WEBAUTHN_CREDENTIALS (unversioned): 2 fields. Embedded in the options (CredentialList, unused here).
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnCredentials
+    private static byte[] ClientDataJson(string type, string rpId) => Encoding.UTF8.GetBytes(
+        $$"""{"type":"{{type}}","challenge":"{{Fido2.Base64Url(RandomNumberGenerator.GetBytes(32))}}","origin":"https://{{rpId}}","crossOrigin":false}""");
+
+    [SupportedOSPlatform("windows")]
+    private static IntPtr Window()
     {
-        public uint cCredentials;
-        public IntPtr pCredentials;
+        var hwnd = GetConsoleWindow();
+        return hwnd != IntPtr.Zero ? hwnd : GetForegroundWindow();
     }
 
-    // WEBAUTHN_CREDENTIAL_EX (version 1): 5 fields.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnCredentialEx
+    [SupportedOSPlatform("windows")]
+    private static InvalidOperationException Failure(string call, int hr)
     {
-        public uint dwVersion;
-        public uint cbId;
-        public IntPtr pbId;
-        public IntPtr pwszCredentialType;
-        public uint dwTransports;
+        var name = Marshal.PtrToStringUni(WebAuthNGetErrorName(hr)) ?? "?";
+        return new InvalidOperationException(
+            $"{call} failed: hresult 0x{hr:X8} {name} (a cancelled dialog, a wrong PIN or a timeout all end here; the spike never retries)");
     }
 
-    // WEBAUTHN_CREDENTIAL_LIST (unversioned): 2 fields; ppCredentials is an array of PWEBAUTHN_CREDENTIAL_EX.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnCredentialList
+    /// <summary>UTF-16 strings in unmanaged memory for one call; freed together.</summary>
+    private sealed class NativeStrings : IDisposable
     {
-        public uint cCredentials;
-        public IntPtr ppCredentials;
-    }
+        private readonly List<IntPtr> _all = [];
 
-    // WEBAUTHN_EXTENSIONS (unversioned): 2 fields. Embedded in the options and the assertion.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnExtensions
-    {
-        public uint cExtensions;
-        public IntPtr pExtensions;
-    }
+        public IntPtr Add(string text)
+        {
+            var p = Marshal.StringToHGlobalUni(text);
+            _all.Add(p);
+            return p;
+        }
 
-    // WEBAUTHN_HMAC_SECRET_SALT (unversioned): 4 fields.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnHmacSecretSalt
-    {
-        public uint cbFirst;
-        public IntPtr pbFirst;
-        public uint cbSecond;
-        public IntPtr pbSecond;
-    }
-
-    // WEBAUTHN_HMAC_SECRET_SALT_VALUES (unversioned): 3 fields.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnHmacSecretSaltValues
-    {
-        public IntPtr pGlobalHmacSalt;
-        public uint cCredWithHmacSecretSaltList;
-        public IntPtr pCredWithHmacSecretSaltList;
-    }
-
-    // WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS cut at version 6: 16 fields (v1: 7, v2: +2, v3: +1, v4: +1, v5: +3, v6: +2).
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnGetAssertionOptionsV6
-    {
-        public uint dwVersion;
-        public uint dwTimeoutMilliseconds;
-        public WebAuthnCredentials CredentialList;
-        public WebAuthnExtensions Extensions;
-        public uint dwAuthenticatorAttachment;
-        public uint dwUserVerificationRequirement;
-        public uint dwFlags;
-        // v2
-        public IntPtr pwszU2fAppId;
-        public IntPtr pbU2fAppId; // BOOL*
-        // v3
-        public IntPtr pCancellationId; // GUID*
-        // v4
-        public IntPtr pAllowCredentialList;
-        // v5
-        public uint dwCredLargeBlobOperation;
-        public uint cbCredLargeBlob;
-        public IntPtr pbCredLargeBlob;
-        // v6
-        public IntPtr pHmacSecretSaltValues;
-        public int bBrowserInPrivateMode; // BOOL
-    }
-
-    // WEBAUTHN_ASSERTION cut at version 3: 13 fields (v1: 8, v2: +4, v3: +1). Only read through a pointer that
-    // webauthn.dll allocated (at its own, possibly later, version), so the later fields need not be declared.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WebAuthnAssertion
-    {
-        public uint dwVersion;
-        public uint cbAuthenticatorData;
-        public IntPtr pbAuthenticatorData;
-        public uint cbSignature;
-        public IntPtr pbSignature;
-        public WebAuthnCredential Credential;
-        public uint cbUserId;
-        public IntPtr pbUserId;
-        // v2
-        public WebAuthnExtensions Extensions;
-        public uint cbCredLargeBlob;
-        public IntPtr pbCredLargeBlob;
-        public uint dwCredLargeBlobStatus;
-        // v3
-        public IntPtr pHmacSecret; // PWEBAUTHN_HMAC_SECRET_SALT
+        public void Dispose()
+        {
+            foreach (var p in _all)
+                Marshal.FreeHGlobal(p);
+            _all.Clear();
+        }
     }
 
     [LibraryImport("webauthn.dll")]
     private static partial uint WebAuthNGetApiVersionNumber();
+
+    [LibraryImport("webauthn.dll")]
+    private static partial int WebAuthNAuthenticatorMakeCredential(
+        IntPtr hWnd, WebAuthnRpEntityInformation* pRpInformation, WebAuthnUserEntityInformation* pUserInformation,
+        WebAuthnCoseCredentialParameters* pPubKeyCredParams, WebAuthnClientData* pClientData,
+        WebAuthnMakeCredentialOptionsV5* pOptions, WebAuthnCredentialAttestation** ppAttestation);
+
+    [LibraryImport("webauthn.dll")]
+    private static partial void WebAuthNFreeCredentialAttestation(WebAuthnCredentialAttestation* pAttestation);
 
     [LibraryImport("webauthn.dll")]
     private static partial int WebAuthNAuthenticatorGetAssertion(

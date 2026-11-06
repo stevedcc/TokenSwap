@@ -4,3 +4,4 @@ yubikey-sdk/bin/
 yubikey-sdk/obj/
 yubikey-sdk.Tests/bin/
 yubikey-sdk.Tests/obj/
+yubikey-sdk/cred*.json

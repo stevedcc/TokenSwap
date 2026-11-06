@@ -12,5 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../yubikey-sdk/Prf.cs" Link="Prf.cs" />
+    <Compile Include="../yubikey-sdk/WebAuthnNative.cs" Link="WebAuthnNative.cs" />
+    <Compile Include="../yubikey-sdk/AuthenticatorDataInfo.cs" Link="AuthenticatorDataInfo.cs" />
   </ItemGroup>
 </Project>

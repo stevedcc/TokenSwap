@@ -10,7 +10,11 @@ public static class Report
 {
     private static StreamWriter? _file;
 
-    public static void Open(string path) => _file = new StreamWriter(path, append: false) { AutoFlush = true };
+    public static void Open(string path, bool append = false)
+    {
+        Close();
+        _file = new StreamWriter(path, append) { AutoFlush = true };
+    }
 
     public static void Close()
     {
@@ -45,17 +49,27 @@ public static class Program
             Native.Setup(noResolver);
             Native.SetupCrypto(args.Contains("--default-crypto"));
             var serial = Arg(args, "--serial") is { } s ? int.Parse(s) : (int?)null;
+            if (Arg(args, "--report") is { } reportPath)
+                Report.Open(reportPath, append: true); // key=value lines also go to this file (fido2-windows-check.ps1)
+            var direct = Arg(args, "--attestation") switch
+            {
+                null or "none" => false,
+                "direct" => true,
+                var other => throw new SpikeUsageException($"--attestation takes none or direct, not {other}"),
+            };
             switch (args.FirstOrDefault())
             {
                 case "env": SpikeEnvironment.Print(); break;
                 case "list": Devices.Print(); break;
                 case "otp-status": Otp.Status(serial); break;
                 case "otp-challenge": Otp.Challenge(serial); break;
-                case "fido2-enroll": Fido2.Enroll(serial, Arg(args, "--out") ?? "cred.json", args.Contains("--sdk")); break;
-                case "fido2-assert": Fido2.Assert(serial, Arg(args, "--cred") ?? "cred.json", args.Contains("--sdk")); break;
+                case "fido2-enroll": Fido2.Enroll(serial, Arg(args, "--out") ?? "cred.json", args.Contains("--sdk"), direct); break;
+                case "fido2-assert": Fido2.Assert(serial, Arg(args, "--cred") ?? "cred.json", args.Contains("--sdk"), args.Contains("--uv")); break;
                 case "report": RunReport(); break;
                 default:
-                    Console.Error.WriteLine("usage: yk-spike env|list|report|otp-status|otp-challenge|fido2-enroll [--out f]|fido2-assert [--cred f] [--serial N] [--no-resolver] [--sdk]");
+                    Console.Error.WriteLine(
+                        "usage: yk-spike env|list|report|otp-status|otp-challenge|fido2-enroll [--out f] [--attestation none|direct]|fido2-assert [--cred f] [--uv]"
+                        + " [--serial N] [--no-resolver] [--sdk] [--report file]");
                     return 2;
             }
             return 0;
