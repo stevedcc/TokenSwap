@@ -409,6 +409,50 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.NotEmpty(ChallengesOf(m, PairB));
     }
 
+    /// <summary>
+    /// Round 2, B (MiMo M-1): the excluded key isn't plugged in, another key is: the "not authorized" refusal doesn't ask
+    /// for the key being enrolled again as one to plug in.
+    /// </summary>
+    [Fact]
+    public void UnlockExcluding_PairVault_ExcludedKeyNotPlugged_DoesNotAskForIt()
+    {
+        var m = ConvertedPairVault(SerialT);
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        m.Keys.PluggedIn = [SerialT];
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = PairA }));
+
+        Assert.Contains($"YubiKey {SerialT} not authorized. Expected: {PairB} (YubiKey {PairA} is left out because it's " +
+            "being enrolled again).", ex.Message);
+        Assert.DoesNotContain($"{PairA}, {PairB}", ex.Message);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
+    /// <summary>Round 2, B: a classic config whose two serials are the excluded key (damaged): no "other key ()".</summary>
+    [Fact]
+    public void UnlockExcluding_ClassicConfigOnlyTheExcludedKey_SaysNoOtherKey()
+    {
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var config = new Config([SerialA, SerialA], new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => new YubiKeyHardwareService(keys)
+            .Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = SerialA }));
+
+        Assert.Equal($"YubiKey {SerialA} is left out of this unlock because it's being enrolled again, and the vault has " +
+            "no other enrolled key.", ex.Message);
+        Assert.Empty(keys.Challenges);
+    }
+
+    /// <summary>Round 2, B: the left-out text for every count of other enrolled keys (several can't happen today: a classic
+    /// config has exactly two serials, but the wording doesn't assume it).</summary>
+    [Theory]
+    [InlineData(new int[0], "YubiKey 1 is left out of this unlock because it's being enrolled again, and the vault has no other enrolled key.")]
+    [InlineData(new[] { 2 }, "YubiKey 1 is left out of this unlock because it's being enrolled again, and the pair's other key (2) isn't plugged in.")]
+    [InlineData(new[] { 2, 3 }, "YubiKey 1 is left out of this unlock because it's being enrolled again, and none of the other enrolled keys (2, 3) is plugged in.")]
+    public void LeftOutText_EveryCountOfOtherKeys(int[] others, string expected) =>
+        Assert.Equal(expected, YubiKeyHardwareService.LeftOutText(1, others));
+
     [Fact]
     public void SlotAdd_LegacyPairSlotsOnly_FirstEnrolment_NoPairLabelled()
     {
