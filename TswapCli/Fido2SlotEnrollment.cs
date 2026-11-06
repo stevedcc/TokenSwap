@@ -19,18 +19,18 @@ internal static class Fido2SlotEnrollment
     public const string SerialFlag = "--serial";
 
     /// <summary>Said before each key operation on Linux and macOS (the device layer has no touch callback).</summary>
-    public const string TouchLine = "Touch your YubiKey when it blinks.";
+    public const string TouchLine = Fido2Texts.TouchLine;
 
     /// <summary>Said once on Windows, before the first key operation.</summary>
     public const string WindowsDialogLine =
         "Windows will ask for the key's PIN and a touch (twice). If the key has no FIDO2 PIN yet, Windows asks you to create one.";
 
     /// <summary>Said before each key operation on Windows.</summary>
-    public const string WindowsTouchLine = "Follow Windows' security key dialog: the key's PIN, then a touch.";
+    public const string WindowsTouchLine = Fido2Texts.WindowsTouchLine;
 
     public const string WindowsSerialRefusal = "--serial: on Windows, Windows' dialog picks the key.";
 
-    public const string Unavailable = "FIDO2 slots aren't available in this build or on this OS.";
+    public const string Unavailable = Fido2Texts.Unavailable;
 
     /// <summary>Said when the second key operation fails: the first made a credential, but nothing was written.</summary>
     public const string RetrySafeText =

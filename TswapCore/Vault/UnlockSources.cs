@@ -1,3 +1,4 @@
+using TswapCore.Vault.Fido2;
 using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
@@ -28,6 +29,18 @@ public sealed record UnlockSources(Func<byte[]?>? AskAgent, VaultPasswordProvide
     /// writes the hint only once it has written its own change.
     /// </summary>
     public Action<byte[], int, byte[]>? RememberLater { get; init; }
+
+    /// <summary>
+    /// FIDO2 plan, task 7: pass 4's PIN source (the terminal's, <c>Fido2PinPrompt.For</c>), or null when there is no
+    /// terminal: then the FIDO2 slots are skipped (no key call, no dialog) and the error says why.
+    /// </summary>
+    public Fido2Pin? Fido2Pin { get; init; }
+
+    /// <summary>
+    /// FIDO2 plan, task 7: where pass 4 says its touch line before the key operation (the device layer has no touch
+    /// callback); stderr in the CLI. Null says nothing.
+    /// </summary>
+    public Action<string>? Fido2Notice { get; init; }
 
     /// <summary>No agent and no prompt: a slot that needs the password can't be opened.</summary>
     public static UnlockSources None { get; } = new(null, null);

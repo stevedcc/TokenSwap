@@ -161,9 +161,21 @@ public sealed record CommandContext(
             SecurityWarnings.NoticeIfChanged(Console, config);
         // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
         // Task 4b: each key's remembered slot first, and the slot that opens is remembered.
+        // FIDO2 plan, task 7: pass 4's PIN at the terminal and its touch line on stderr.
         return Unlocker.Unlock(config, UnlockSelection(),
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)) { Remembered = RememberedSlots });
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config))
+            {
+                Remembered = RememberedSlots,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
     }
+
+    /// <summary>
+    /// FIDO2 plan, task 7: the terminal's PIN source for an unlock of <paramref name="config"/>, opened only when the
+    /// vault has a FIDO2 slot (so no other unlock looks for a terminal); null when there is none.
+    /// </summary>
+    private Fido2Pin? Fido2PinFor(Config config) => VaultUnlocker.HasFido2Slots(config) ? Fido2PinPrompt.For(this) : null;
 
     /// <summary>
     /// YubiKey SDK stage 1, task 4b (<c>slot add --yubikey</c> re-enrolling a key): <see cref="Unlock"/> without
@@ -180,7 +192,13 @@ public sealed record CommandContext(
         if (TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots, RememberLater = rememberLater });
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt)
+            {
+                Remembered = RememberedSlots,
+                RememberLater = rememberLater,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
     }
 
     /// <summary>

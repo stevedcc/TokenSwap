@@ -19,6 +19,32 @@ public static class Fido2Texts
     public const string NoTerminal =
         "A FIDO2 slot needs a person at a terminal to type the key's PIN and touch the key; there is no terminal here, so the key was not used.";
 
+    /// <summary>Said before each FIDO2 key operation on Linux and macOS (the device layer has no touch callback).</summary>
+    public const string TouchLine = "Touch your YubiKey when it blinks.";
+
+    /// <summary>Said before each FIDO2 key operation on Windows.</summary>
+    public const string WindowsTouchLine = "Follow Windows' security key dialog: the key's PIN, then a touch.";
+
+    /// <summary>No FIDO2 service in this build or on this OS.</summary>
+    public const string Unavailable = "FIDO2 slots aren't available in this build or on this OS.";
+
+    /// <summary>Unlock: one PIN per run, so a FIDO2 slot found after the one tried was not tried.</summary>
+    public const string OtherSlotNotTried =
+        "Another FIDO2 slot of this vault wasn't tried: tswap asks for one FIDO2 PIN per run. Run the command again with that key.";
+
+    /// <summary>Unlock (controller ruling A): a TPM or Secure Enclave password slot refused the vault password in this run.</summary>
+    public static string LeftOutPasswordRefused(string name) =>
+        $"The FIDO2 slot of {name} was left out: the vault password didn't match.";
+
+    /// <summary>Unlock: the slot mixes in the vault password, and none can be had (<paramref name="reason"/>).</summary>
+    public static string PasswordUnavailable(string name, string reason) =>
+        $"The FIDO2 slot of {name} needs the vault password too, and none could be had: {reason}";
+
+    /// <summary>Unlock: the key answered (its PIN was right), but its slot didn't unwrap.</summary>
+    public static string UnwrapFailed(string name, bool requiresPassword) => requiresPassword
+        ? $"{name}: the key that answered doesn't open the vault; the vault password may be wrong (the key's PIN was right, so no PIN try was lost)."
+        : $"{name}: the key that answered doesn't open the vault (its slot didn't unwrap: config.json may be damaged; restore it from backup).";
+
     public const string WindowsNoAaguid =
         "Windows didn't report which key this is (its FIDO2 model id came back as zeros), so tswap can't check that it is a YubiKey. No slot was added.";
 

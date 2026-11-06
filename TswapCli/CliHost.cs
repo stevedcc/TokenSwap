@@ -71,12 +71,14 @@ internal static class CliHost
             // Secure Enclave's owner scope (brief T12) reads the same store, at call time.
             var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
-            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
+            // One FIDO2 service for enrolment (CommandContext.Fido2) and unlock (pass 4, FIDO2 plan task 7).
+            var fido2 = Fido2Service(testKey);
+            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
             var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
             {
                 Time = time,
-                Fido2 = Fido2Service(testKey),
+                Fido2 = fido2,
                 // Test mode has no FIDO2 service, so it needs no terminal either (a test's own may never answer).
                 Terminal = testKey is null ? ControllingTerminal.Open : null,
             };
