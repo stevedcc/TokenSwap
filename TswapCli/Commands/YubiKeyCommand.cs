@@ -279,19 +279,43 @@ public sealed class YubiKeyCommand : ICliCommand
         List<(Slot Slot, Fido2SlotBlob Blob)> fido2Slots, StretchedPasswordCache password, string? otpFailure)
     {
         ctx.Console.Error.WriteLine(CheckingFido2Text);
-        var why = ctx.Unlocker.Fido2SlotOpens(keyring, fido2Slots, new UnlockSources(AskAgent: null, Prompt: password.Provide)
+        string? why;
+        try
         {
-            Fido2Pin = Fido2PinPrompt.For(ctx),
-            Fido2Notice = ctx.Console.Error.WriteLine,
-        });
+            why = ctx.Unlocker.Fido2SlotOpens(keyring, fido2Slots, new UnlockSources(AskAgent: null, Prompt: password.Provide)
+            {
+                Fido2Pin = Fido2PinPrompt.For(ctx),
+                Fido2Notice = ctx.Console.Error.WriteLine,
+            });
+        }
+        catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
+        {
+            // As CheckAnotherKey does. (Pass 4 turns a password it can't have into its own text today; this keeps the
+            // composed refusal if that ever lets the exception through.)
+            why = e.Message;
+        }
         if (why is null)
             return;
         var names = string.Join(", ", fido2Slots.Select(f => Fido2SlotBlob.DisplayName(f.Blob.Serial, f.Blob.Aaguid)).Distinct());
         var slots = fido2Slots.Count == 1 ? $"the vault's FIDO2 slot ({names})" : $"the vault's FIDO2 slots ({names})";
-        throw new TswapException(otpFailure is null
-            ? $"Refusing: apart from YubiKey {serial}, only {slots} can open the vault in {ctx.Env.ConfigDir}, and " +
-              $"{(fido2Slots.Count == 1 ? "it didn't" : "none of them did")} open now: {why} Nothing was changed."
-            : $"Refusing: {otpFailure} {char.ToUpperInvariant(slots[0])}{slots[1..]} didn't open now: {why} Nothing was changed.");
+        throw new TswapException(Fido2Refusal(serial, ctx.Env.ConfigDir, slots, fido2Slots.Count, why, otpFailure));
+    }
+
+    /// <summary>
+    /// <see cref="CheckFido2Slots"/>'s refusal: why the FIDO2 slots didn't count, after <paramref name="otpFailure"/>.
+    /// Each reason ends as a sentence, whether or not its own text has a full stop.
+    /// </summary>
+    internal static string Fido2Refusal(int serial, string configDir, string slots, int count, string why, string? otpFailure) =>
+        otpFailure is null
+            ? $"Refusing: apart from YubiKey {serial}, only {slots} can open the vault in {configDir}, and " +
+              $"{(count == 1 ? "it didn't" : "none of them did")} open now: {Sentence(why)} Nothing was changed."
+            : $"Refusing: {Sentence(otpFailure)} {char.ToUpperInvariant(slots[0])}{slots[1..]} didn't open now: {Sentence(why)} " +
+              "Nothing was changed.";
+
+    private static string Sentence(string text)
+    {
+        var trimmed = text.TrimEnd();
+        return trimmed.EndsWith('.') || trimmed.EndsWith('!') || trimmed.EndsWith('?') ? trimmed : trimmed + ".";
     }
 
     /// <summary>

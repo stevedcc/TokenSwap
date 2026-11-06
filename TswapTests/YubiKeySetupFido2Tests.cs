@@ -94,6 +94,56 @@ public sealed class YubiKeySetupFido2Tests : IDisposable
         Assert.DoesNotContain("Programming", stdout + stderr);
     }
 
+    // Final review (GLM p7a I2): a FIDO2 password slot whose vault password can't be had gives the composed refusal,
+    // not an unhandled exception.
+    [Fact]
+    public void SetupReplace_Fido2PasswordSlot_NoPassword_ComposedRefusal()
+    {
+        _m.Ok("", "init", "--yubikey", "--no-recovery");
+        _m.Ok("s3cret\ns3cret\n", "add", "tok");
+        Fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _m.Terminal!.Enqueue(Pin, Pin);
+        _m.Ok("a long vault password\na long vault password\n", "slot", "add", "--fido2", "--password");
+        Fido2.Calls.Clear();
+        _m.Sudo = false;
+        _m.Terminal.Enqueue(Pin);
+
+        // The vault-password file is gone, so no vault password can be had (VaultPasswordUnavailableException from
+        // the provider, MissingFile).
+        File.Delete(Assert.Single(Directory.GetFiles(_m.Dir, "vault-password", SearchOption.AllDirectories)));
+        var readsBefore = _m.Terminal.Reads.Count;
+
+        var (exit, stdout, stderr) = SetupReplace();
+
+        Assert.NotEqual(0, exit);
+        Assert.Empty(_m.Keys.Programmed);
+        Assert.Contains(
+            $"Refusing: apart from YubiKey {SerialA}, only the vault's FIDO2 slot (YubiKey {SerialA}) can open the vault in {_m.Dir}, " +
+            "and it didn't open now: ", stderr);
+        Assert.Contains("vault password", stderr);
+        Assert.EndsWith("Nothing was changed.", stderr.TrimEnd());
+        // No PIN or touch spent without the password: only the silent probe ran.
+        Assert.All(Fido2.Calls, c => Assert.Equal(FakeFido2Op.FindHolder, c.Op));
+        Assert.DoesNotContain(_m.Terminal.Reads.Skip(readsBefore), r => r.Secret);
+        Assert.DoesNotContain("Unhandled", stdout + stderr);
+    }
+
+    // The refusal reads as sentences whatever the reasons end with (MiMo p7a minor 5).
+    [Theory]
+    [InlineData("no full stop", "the key said no")]
+    [InlineData("full stop", "the key said no.")]
+    public void Fido2Refusal_ReasonsWithoutAFullStop_StillSentences(string _, string why)
+    {
+        var alone = TswapCli.Commands.YubiKeyCommand.Fido2Refusal(SerialA, "/v", "the vault's FIDO2 slot (YubiKey 1)", 1, why, otpFailure: null);
+        var afterOtp = TswapCli.Commands.YubiKeyCommand.Fido2Refusal(SerialA, "/v", "the vault's FIDO2 slot (YubiKey 1)", 1, why,
+            otpFailure: "YubiKey 2's slot needs the vault password to be checked: no terminal");
+
+        Assert.Equal($"Refusing: apart from YubiKey {SerialA}, only the vault's FIDO2 slot (YubiKey 1) can open the vault in /v, and " +
+                     "it didn't open now: the key said no. Nothing was changed.", alone);
+        Assert.Equal("Refusing: YubiKey 2's slot needs the vault password to be checked: no terminal. The vault's FIDO2 slot " +
+                     "(YubiKey 1) didn't open now: the key said no. Nothing was changed.", afterOtp);
+    }
+
     [Fact]
     public void SetupReplace_OtherKeysOtpSlotOpens_NoPinAsked()
     {
