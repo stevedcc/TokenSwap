@@ -95,6 +95,50 @@ public sealed class YubiKeySetupFido2Tests : IDisposable
     }
 
     [Fact]
+    public void SetupReplace_OtherKeysOtpSlotOpens_NoPinAsked()
+    {
+        // Another key's OTP slot opens: the FIDO2 slot is never checked (no PIN try spent, no touch).
+        _m.Keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB);
+        VaultOnAOtpAndFido2();
+        _m.Sudo = true;
+        _m.Ok("", "slot", "add", "--yubikey");
+        _m.Sudo = false;
+        Fido2.Calls.Clear();
+        var reads = _m.Terminal!.Reads.Count;
+
+        var (exit, stdout, stderr) = SetupReplace();
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal([(SerialA, true)], _m.Keys.Programmed);
+        Assert.Contains(_m.Keys.Challenges, c => c.Serial == SerialB);
+        Assert.DoesNotContain(TswapCli.Commands.YubiKeyCommand.CheckingFido2Text, stderr);
+        Assert.Equal(reads, _m.Terminal.Reads.Count);
+        Assert.Empty(Fido2.Calls);
+    }
+
+    [Fact]
+    public void SetupReplace_RecoverySlot_NoPinAsked()
+    {
+        // A recovery slot opens the vault by itself: the FIDO2 slot is never checked. (A TPM slot takes the same
+        // ByItself branch, but the simulated TPM's blob isn't in a real TPM package's shape, so it can't stand in here.)
+        _m.Ok("", "init", "--yubikey");
+        Fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _m.Terminal!.Enqueue(Pin, Pin);
+        _m.Ok("", "slot", "add", "--fido2");
+        Fido2.Calls.Clear();
+        _m.Sudo = false;
+        var reads = _m.Terminal.Reads.Count;
+
+        var (exit, stdout, stderr) = SetupReplace();
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal([(SerialA, true)], _m.Keys.Programmed);
+        Assert.DoesNotContain(TswapCli.Commands.YubiKeyCommand.CheckingFido2Text, stderr);
+        Assert.Equal(reads, _m.Terminal.Reads.Count);
+        Assert.Empty(Fido2.Calls);
+    }
+
+    [Fact]
     public void SetupReplace_OtherKeyNotPlugged_Fido2Opens_Proceeds()
     {
         // Another key's OTP slot that can't be checked here, and A's FIDO2 slot that opens now: setup goes on.
