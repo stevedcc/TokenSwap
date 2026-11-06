@@ -87,10 +87,11 @@ public class SlotAddFido2Tests : IDisposable
         }
     }
 
-    /// <summary>Every file under the config folder (the vault folder included), with its bytes.</summary>
-    private Dictionary<string, string> Snapshot() => Directory
+    /// <summary>Every file under the config folder (the vault folder included), with its bytes, sorted by path.</summary>
+    private List<KeyValuePair<string, string>> Snapshot() => [.. Directory
         .GetFiles(_dir, "*", SearchOption.AllDirectories)
-        .ToDictionary(f => Path.GetRelativePath(_dir, f), f => Convert.ToHexString(File.ReadAllBytes(f)));
+        .Select(f => KeyValuePair.Create(Path.GetRelativePath(_dir, f), Convert.ToHexString(File.ReadAllBytes(f))))
+        .OrderBy(kv => kv.Key, StringComparer.Ordinal)];
 
     private List<FakeFido2Op> Ops() => [.. _fido2.Calls.Select(c => c.Op)];
 
@@ -129,7 +130,7 @@ public class SlotAddFido2Tests : IDisposable
         _terminal = new FakeTerminal(Pin, Pin);
         var before = Snapshot();
         var onDiskAtEachKeyCall = new List<(FakeFido2Op Op, bool Unchanged)>();
-        _fido2.OnCall = call => onDiskAtEachKeyCall.Add((call.Op, Snapshot().OrderBy(kv => kv.Key).SequenceEqual(before.OrderBy(kv => kv.Key))));
+        _fido2.OnCall = call => onDiskAtEachKeyCall.Add((call.Op, Snapshot().SequenceEqual(before)));
 
         var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
 
@@ -137,7 +138,7 @@ public class SlotAddFido2Tests : IDisposable
         Assert.All(onDiskAtEachKeyCall, call => Assert.True(call.Unchanged, $"the vault changed before {call.Op}"));
         Assert.True(exit == 0, stderr);
         Assert.Equal([FakeFido2Op.MakeCredential, FakeFido2Op.GetHmacSecret], Ops().Where(op => op != FakeFido2Op.Find));
-        Assert.NotEqual(before.OrderBy(kv => kv.Key), Snapshot().OrderBy(kv => kv.Key));
+        Assert.NotEqual(before, Snapshot());
         // Each operation: a PIN at the terminal and a touch.
         Assert.Equal([(true, PinPrompt(SerialA)), (true, PinPrompt(SerialA))], _terminal.Reads);
         Assert.Equal(2, CountOf(stdout, Fido2SlotEnrollment.TouchLine));
@@ -170,9 +171,10 @@ public class SlotAddFido2Tests : IDisposable
         _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
         _terminal = new FakeTerminal("");
 
-        var (exit, stdout, _) = Run("", "slot", "add", "--fido2");
+        var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
 
         Assert.NotEqual(0, exit);
+        Assert.Contains(Fido2Texts.Cancelled($"YubiKey {SerialA}"), stderr);
         Assert.DoesNotContain(Fido2SlotEnrollment.TouchLine, stdout);
     }
 
@@ -192,6 +194,72 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Empty(_fido2.Calls);
         Assert.Empty(_otp.Challenges); // refused before the vault was unlocked
         Assert.Equal(before, Snapshot());
+    }
+
+    // Final review (pins): Windows (no listing) without a terminal refuses before any key call or unlock too.
+    [Fact]
+    public void SlotAddFido2_Windows_NoTerminal_RefusedBeforeAnyKeyCall()
+    {
+        OtpVault();
+        _fido2.CanList = false;
+        _fido2.Picked = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = null;
+        var before = Snapshot();
+        _otp.Challenges.Clear();
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(Fido2Texts.NoTerminal, stderr);
+        Assert.Empty(_fido2.Calls);
+        Assert.Empty(_otp.Challenges);
+        Assert.Equal(before, Snapshot());
+    }
+
+    // The PIN is never shown: not on stdout, stderr or the terminal; the new PIN of a key without one is read as a
+    // secret; and every terminal the command opened was closed again.
+    [Fact]
+    public void SlotAddFido2_PinNeverShown_SetPinReadsSecret_TerminalClosed()
+    {
+        const string pin = "Qx7-pin-9Zr";
+        OtpVault();
+        var key = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: null);
+        _terminal = new FakeTerminal("yes", pin, pin, pin, pin);
+
+        var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(pin, key.Pin);
+        Assert.DoesNotContain(pin, stdout + stderr + _terminal.Text);
+        Assert.False(_terminal.Reads[0].Secret); // the yes/no question
+        Assert.All(_terminal.Reads.Skip(1), r => Assert.True(r.Secret, r.Prompt)); // the new PIN twice, then the PINs
+        Assert.True(_terminal.Opens > 0);
+        Assert.Equal(_terminal.Opens, _terminal.Disposals);
+    }
+
+    // With two FIDO2 slots in the vault, a third enrolment's exclude list carries both credentials.
+    [Fact]
+    public void SlotAddFido2_ThirdEnrolment_ExcludesBothSlots()
+    {
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        Assert.Equal(0, Run("", "slot", "add", "--fido2", "--serial", SerialA.ToString()).Exit);
+        _fido2.AddKey(SerialB, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        Assert.Equal(0, Run("", "slot", "add", "--fido2", "--serial", SerialB.ToString()).Exit);
+        var enrolled = Keyring().Slots
+            .Select(s => YubiKeySlotKinds.Classify(s.HwBlob)).OfType<YubiKeySlotKind.Fido2>().Select(f => f.Blob.CredentialId).ToList();
+        Assert.Equal(2, enrolled.Count);
+        _fido2.AddKey(33060007, Fido2TestSlots.Aaguid);
+        _fido2.Calls.Clear();
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2", "--serial", "33060007");
+
+        Assert.True(exit == 0, stderr);
+        var excluded = _fido2.Calls.Single(c => c.Op == FakeFido2Op.MakeCredential).CredentialIds;
+        Assert.Equal(enrolled.Select(Convert.ToHexString).Order(), excluded.Select(Convert.ToHexString).Order());
     }
 
     [Fact]
@@ -352,7 +420,7 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Empty(_terminal.Reads); // no PIN read
         Assert.Empty(_fido2.DevicePinCalls);
         Assert.All(Ops(), op => Assert.True(op is FakeFido2Op.Find or FakeFido2Op.FindHolder, $"{op} before the refusal"));
-        Assert.Equal(before.OrderBy(kv => kv.Key), Snapshot().OrderBy(kv => kv.Key));
+        Assert.Equal(before, Snapshot());
     }
 
     [Fact]
@@ -572,8 +640,7 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Equal(hint, LastLine(stderr));
 
         // slot add --yubikey likewise.
-        var second = SimulatedYubiKeyService.WithKeys(OtpSerial, 22222222);
-        _otp.PluggedIn = [OtpSerial];
+        var second = SimulatedYubiKeyService.WithKeys(OtpSerial, 22222222); // the vault's key and a new one, both plugged in
         var console = new FakeConsole();
         string[] args = ["slot", "add", "--yubikey"];
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };

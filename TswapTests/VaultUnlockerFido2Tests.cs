@@ -278,6 +278,26 @@ public class VaultUnlockerFido2Tests
         Assert.Equal(1, Count(FakeFido2Op.GetHmacSecret));
     }
 
+    // Final review (pins): an empty answer at the PIN prompt is a cancel: no assertion answered, the key's PIN tries
+    // untouched, and the cancellation text. (The fake logs GetHmacSecret on entry, as the device asks for the PIN inside
+    // the call; the SDK device takes the PIN before it sends anything: SdkFido2Keys_KeyCollector_PromptRefusal...)
+    [Fact]
+    public void Unlock_Fido2EmptyPin_CancelsWithoutAnAssertion()
+    {
+        var vault = new Vault();
+        var key = _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid);
+        var (own, _) = vault.AddFido2(_fido2, key);
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources(pin: _ => [])));
+
+        Assert.Contains(Fido2Texts.Cancelled($"YubiKey {KeyA}"), ex.Message);
+        Assert.Null(_fido2.LastOutput);
+        Assert.Equal(8, key.Retries);
+        Assert.Equal(0, key.WrongInARow);
+        Assert.DoesNotContain("notice: " + Fido2Texts.TouchLine, _log);
+    }
+
     /// <summary>One vault-password prompt in the run: pass 3 asks it for the TPM slot, pass 4 reuses it.</summary>
     [Fact]
     public void Unlock_Fido2PasswordSlot_ReusesTypedPassword()

@@ -38,9 +38,10 @@ public class InitFido2Tests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = dir, Verbose = false, CommandArgs = args };
-        var ctx = new CommandContext(console, env, VaultStores.Open(dir), _otp, new VaultUnlocker(_otp), TestKey: null, SudoBypass: true)
+        var fido2 = new Fido2Service(_fido2);
+        var ctx = new CommandContext(console, env, VaultStores.Open(dir), _otp, new VaultUnlocker(_otp, fido2: fido2), TestKey: null, SudoBypass: true)
         {
-            Fido2 = new Fido2Service(_fido2),
+            Fido2 = fido2,
             Terminal = () => _terminal?.Open(),
         };
         var exit = CliRunner.Run(ctx, args);
@@ -165,6 +166,47 @@ public class InitFido2Tests : IDisposable
         Assert.Contains(Fido2Texts.NoTerminal, stderr);
         Assert.Empty(_fido2.Calls);
         Assert.False(Directory.Exists(Path.Combine(Dir(), "vault")));
+    }
+
+    // Final review (pins): Windows (no listing) without a terminal: refused before any key call, nothing written.
+    [Fact]
+    public void InitFido2_Windows_NoTerminal_RefusedBeforeAnyKeyCall()
+    {
+        _fido2.CanList = false;
+        _fido2.Picked = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = null;
+
+        var (exit, _, stderr) = Run(Dir(), "", "init", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(Fido2Texts.NoTerminal, stderr);
+        Assert.Empty(_fido2.Calls);
+        Assert.False(File.Exists(Path.Combine(Dir(), "config.json")));
+        Assert.False(Directory.Exists(Path.Combine(Dir(), "vault")));
+    }
+
+    // The PIN is never shown, at enrolment or at the unlock that follows.
+    [Fact]
+    public void InitFido2_ThenUnlock_PinNeverShown()
+    {
+        const string pin = "Qx7-pin-9Zr";
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: pin);
+        _terminal = new FakeTerminal(pin, pin);
+        var (exit, stdout, stderr) = Run(Dir(), "", "init", "--fido2", "--no-recovery", "--no-password");
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain(pin, stdout + stderr + _terminal.Text);
+
+        _terminal = new FakeTerminal(pin);
+        var created = Run(Dir(), "", "create", "fido2-check", "16");
+        Assert.True(created.Exit == 0, created.Err + created.Out);
+        Assert.Contains(_terminal.Reads, r => r.Secret);
+        _terminal = new FakeTerminal(pin);
+        var (namesExit, namesOut, namesErr) = Run(Dir(), "", "names");
+
+        Assert.True(namesExit == 0, namesErr);
+        Assert.Contains("fido2-check", namesOut);
+        Assert.All(_terminal.Reads, r => Assert.True(r.Secret, r.Prompt));
+        Assert.DoesNotContain(pin, namesOut + namesErr + _terminal.Text);
     }
 
     [Fact]
