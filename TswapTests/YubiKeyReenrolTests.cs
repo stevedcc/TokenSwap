@@ -922,12 +922,13 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
-    /// Final review item 2 (p6-I2): A's slots are all dead (its remembered one needs the password, its password-free one
-    /// is deferred), B's password-free slot is dead, a wrong password is typed: the deferred slot's failure is part of
-    /// the combined error.
+    /// Final review items 2 and 3 (p6-I2, p6-M2): A's slots are all dead (its remembered one needs the password, its
+    /// password-free one is deferred), B's password-free slot is dead, a wrong password is typed. Pass 1 tries B only
+    /// (A has no password-free slot left there, so no "A opened none of its slots" line for a key never challenged in
+    /// it); the deferred slot's failure is part of the combined error.
     /// </summary>
     [Fact]
-    public void Unlock_AllDead_CombinedErrorHasDeferredFailure()
+    public void Unlock_AllDead_CombinedErrorHasDeferredFailure_NoSpuriousPass1Line()
     {
         var (m, slotsOfA) = StaleRememberedPasswordSlotOfA();
         m.Keys.PluggedIn = [SerialA, SerialB];
@@ -941,6 +942,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Contains($"YubiKey {SerialB} did not open any of its slots in this vault", stderr); // pass 1: B alone
         Assert.Contains($"YubiKey {SerialA}: {VaultPasswordMessages.WrongPasswordKdf}", stderr); // pass 3
         Assert.Contains($"YubiKey {SerialA} did not open any of its slots in this vault", stderr); // the deferred slot
+        Assert.DoesNotContain($"{SerialA} opened none of its slots", stderr);
         Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
     }
 
