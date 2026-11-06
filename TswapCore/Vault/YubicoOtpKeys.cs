@@ -363,6 +363,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     // The SDK's messages (Yubico.NET.SDK 1.18.1, Resources/ExceptionMessages.resx of each assembly). The SDK ships no
     // satellite resource assemblies, so these are the texts it throws on every system.
     private const string KeyboardTimeoutMessage = "The YubiKey did not acknowledge a write to the keyboard interface within the alloted time.";
+    private const string KeyboardNoReplyMessage = "Tried writing a keyboard report and unexpectedly recieved no reply.";
     private const string InvalidStatusReportMessage = "The status report must be the first and only report returned by the YubiKey.";
     private const string LinuxHidOpenFailedMessage = "Could not open HID node on Linux.";
     private const string IOKitCannotOpenDeviceMessage = "Can't open IOKit device.";
@@ -390,6 +391,8 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         // process's command is in progress, or slot 2 holds a configuration that doesn't answer HMAC challenges (a
         // static password, Yubico OTP): IsLongPressConfigured is true for those too. Both causes are named.
         KeyboardConnectionException { Message: KeyboardTimeoutMessage } => OtpFailure.NoAnswer,
+        // KeyboardTransform: the write got no reply at all; the same two causes.
+        KeyboardConnectionException { Message: KeyboardNoReplyMessage } => OtpFailure.NoAnswer,
         // KeyboardFrameReader.AddStatusReport, at the session's status read: the report shows a command in progress.
         MalformedYubiKeyResponseException { Message: InvalidStatusReportMessage } => OtpFailure.Busy,
         PlatformApiException p when IsMacExclusiveAccess(p) => OtpFailure.Busy,
@@ -404,8 +407,14 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     private static IYubiKeyDevice KeyboardDevice(int serial)
     {
         YubicoSdk.EnsureInitialized();
-        var device = YubiKeyDevice.FindAll().FirstOrDefault(d => d.SerialNumber == serial)
-            ?? throw new OtpKeysException(OtpFailure.Other, serial, "it is not plugged in");
+        return KeyboardDevice(YubiKeyDevice.FindAll(), serial);
+    }
+
+    /// <summary><see cref="KeyboardDevice(int)"/> among <paramref name="devices"/> (the SDK's listing).</summary>
+    internal static IYubiKeyDevice KeyboardDevice(IEnumerable<IYubiKeyDevice> devices, int serial)
+    {
+        var device = devices.FirstOrDefault(d => d.SerialNumber == serial)
+            ?? throw new OtpKeysException(OtpFailure.NotPluggedIn, serial, "it is not plugged in");
         if (!device.AvailableTransports.HasFlag(Transport.HidKeyboard))
             throw new OtpKeysException(OtpFailure.NotReachable, serial, $"found over {device.AvailableTransports} only");
         return device;

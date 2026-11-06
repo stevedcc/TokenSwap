@@ -147,12 +147,12 @@ public sealed class MigrateCommand : ICliCommand
 
             c.Out.WriteLine("\n⚠️  IMPORTANT: Ensure your XOR share is backed up before proceeding.");
 
-            c.Out.Write("\nShow detailed re-initialization instructions? (yes/no): ");
+            c.Out.Write("\nShow detailed conversion instructions? (yes/no): ");
             if ((c.ReadLine()?.ToLower() ?? "") is "yes" or "y")
             {
                 int step = 1;
                 c.Out.WriteLine("\n" + new string('═', 64));
-                c.Out.WriteLine("RE-INITIALIZATION GUIDE");
+                c.Out.WriteLine("CONVERSION GUIDE");
                 c.Out.WriteLine(new string('═', 64) + "\n");
 
                 // Task 4b: convert, then (a legacy pair keyring vault) give each key its own slot, then the touch

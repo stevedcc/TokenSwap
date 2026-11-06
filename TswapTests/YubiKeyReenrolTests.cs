@@ -1255,8 +1255,8 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     {
         var (exit, stdout, stderr) = m.Run("yes\n", "migrate");
         Assert.True(exit == 0, stderr);
-        Assert.Contains("RE-INITIALIZATION GUIDE", stdout);
-        return stdout[stdout.IndexOf("RE-INITIALIZATION GUIDE", StringComparison.Ordinal)..];
+        Assert.Contains("CONVERSION GUIDE", stdout);
+        return stdout[stdout.IndexOf("CONVERSION GUIDE", StringComparison.Ordinal)..];
     }
 
     [Fact]

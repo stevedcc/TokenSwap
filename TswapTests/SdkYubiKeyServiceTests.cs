@@ -414,7 +414,8 @@ public sealed class SdkYubiKeyServiceTests
         { new MalformedYubiKeyResponseException("The status report must be the first and only report returned by the YubiKey."), OtpFailure.Busy },
         // KeyboardTransform.WaitFor: the touch wasn't given in time → passed through.
         { new KeyboardConnectionException("Timed out waiting for user interaction."), OtpFailure.Other },
-        { new KeyboardConnectionException("Tried writing a keyboard report and unexpectedly recieved no reply."), OtpFailure.Other },
+        // KeyboardTransform: the write got no reply at all → no answer, like the missing acknowledgement (final review p2-M-6).
+        { new KeyboardConnectionException("Tried writing a keyboard report and unexpectedly recieved no reply."), OtpFailure.NoAnswer },
         // LinuxHidFeatureReportConnection: the hidraw node can't be opened (no udev rule) → not reachable.
         { new PlatformApiException("Could not open HID node on Linux."), OtpFailure.NotReachable },
         { new PlatformApiException("A HIDRAW operation failed."), OtpFailure.Other },
@@ -430,6 +431,16 @@ public sealed class SdkYubiKeyServiceTests
         { new InvalidOperationException("YubiKey Operation Failed [Conditions of use not satisfied]"), OtpFailure.Other },
         { new MalformedYubiKeyResponseException("bad"), OtpFailure.Other },
     };
+
+    /// <summary>Final review p1-M1: a serial the SDK doesn't list is reported as not plugged in, not as Other.</summary>
+    [Fact]
+    public void KeyboardDevice_SerialNotListed_IsNotPluggedIn()
+    {
+        var e = Assert.Throws<OtpKeysException>(() => YubicoOtpKeys.KeyboardDevice([], 33060005));
+
+        Assert.Equal(OtpFailure.NotPluggedIn, e.Kind);
+        Assert.Equal(33060005, e.Serial);
+    }
 
     [Theory]
     [MemberData(nameof(SdkExceptions))]

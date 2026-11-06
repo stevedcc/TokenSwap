@@ -364,7 +364,10 @@ public sealed partial class YubiKeySetupTests : IDisposable
 
     // Amended 2026-11-05: another key's YubiKey slot counts only when that key is plugged in and its slot opens now.
 
-    /// <summary>A vault with one-key slots on A and B, made by init (A) and slot add (B), so B's slot really opens it.</summary>
+    /// <summary>
+    /// A vault with one-key slots on B and A, made by init (B, with the vault password when one is given) and slot add
+    /// (A, without it), so B's slot really opens it.
+    /// </summary>
     private FleetMachine VaultOnAAndB(string? password = null)
     {
         var m = Machine(Keys(SerialA, SerialB));
