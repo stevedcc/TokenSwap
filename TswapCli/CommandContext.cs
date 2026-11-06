@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -126,6 +127,12 @@ public sealed record CommandContext(
     /// Which chip this machine can offer (guided init); tests substitute their simulated one.
     /// </summary>
     public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
+
+    /// <summary>
+    /// The FIDO2 slots' key service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS
+    /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it, and on Windows until task 5.
+    /// </summary>
+    public IFido2Service? Fido2 { get; init; }
 
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }

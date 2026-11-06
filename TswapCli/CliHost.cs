@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -72,7 +73,11 @@ internal static class CliHost
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
 
-            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass) { Time = time };
+            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
+            {
+                Time = time,
+                Fido2 = Fido2Service(testKey),
+            };
             return CliRunner.Run(ctx, env.CommandArgs);
         }
         // CliRunner maps command errors; these catches cover composition failures only
@@ -88,6 +93,16 @@ internal static class CliHost
             return 1;
         }
     }
+
+    /// <summary>
+    /// The FIDO2 service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS; none in test mode (a test that needs
+    /// one sets <see cref="CommandContext.Fido2"/>) and none on Windows, whose <c>webauthn.dll</c> device is task 5's.
+    /// Nothing touches a key until a command calls it.
+    /// </summary>
+    internal static IFido2Service? Fido2Service(byte[]? testKey) =>
+        testKey is null && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            ? new Fido2Service(new SdkFido2Keys())
+            : null;
 
 #if DEBUG
     /// <summary>
