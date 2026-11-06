@@ -981,10 +981,14 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var (exit, _, stderr) = m.RunOnTerminal(WrongPassword + "\n", "get", "db");
 
         Assert.NotEqual(0, exit);
+        // Round 2, C: A is named exactly twice (pass 3 and the deferred slot): a pass-1 line for A, in any wording, or a
+        // key prompt listing it, would add a mention. And the error opens with pass 1's single-key sentence for B.
+        Assert.Equal(2, Regex.Count(stderr, SerialA.ToString()));
+        var error = stderr[(stderr.IndexOf("Error: ", StringComparison.Ordinal) + "Error: ".Length)..];
+        Assert.StartsWith($"YubiKey {SerialB} did not open any of its slots in this vault:", error);
         Assert.Contains($"YubiKey {SerialB} did not open any of its slots in this vault", stderr); // pass 1: B alone
         Assert.Contains($"YubiKey {SerialA}: {VaultPasswordMessages.WrongPasswordKdf}", stderr); // pass 3
         Assert.Contains($"YubiKey {SerialA} did not open any of its slots in this vault", stderr); // the deferred slot
-        Assert.DoesNotContain($"{SerialA} opened none of its slots", stderr);
         Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
     }
 
