@@ -5,7 +5,8 @@ namespace TswapCore.Keyring;
 /// <summary>
 /// The WebAuthn PRF salt transform (PRF transform version 1, <see cref="Fido2SlotBlob.PrfVersion"/>):
 /// <c>SHA-256(UTF-8("WebAuthn PRF") || 0x00 || input)</c>. The result is the hmac-secret salt sent to the key.
-/// Windows' <c>webauthn.dll</c> applies the same transform to a PRF input itself, so every path sends the key
+/// Both device paths apply it here, in tswap (the SDK path, and the Windows path, which hands the result to
+/// <c>webauthn.dll</c> raw under <c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c>), so every path sends the key
 /// the same salt for a slot and gets the same output back.
 /// </summary>
 public static class Fido2Prf

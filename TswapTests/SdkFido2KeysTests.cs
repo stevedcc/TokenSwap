@@ -1,9 +1,11 @@
 using System.Formats.Cbor;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
 using TswapCore.Keyring;
 using TswapCore.Vault;
 using TswapCore.Vault.Fido2;
+using TswapCore.Vault.Interop;
 using Xunit;
 using Yubico.Core.Iso7816;
 using Yubico.PlatformInterop;
@@ -466,6 +468,28 @@ public class SdkFido2KeysTests
         Keys(session).GetHmacSecret(Key, [(CredentialId, PrfInput)], _ => Pin.ToArray());
 
         Assert.Equal(Fido2Prf.Salt(PrfInput), EncodedSalt(session.LastAssertion!));
+    }
+
+    // Final review: both paths hand the key the same hmac-secret salt for one PRF input, so a slot enrolled on one OS
+    // opens on the others (Windows passes it raw under WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG).
+    [Fact]
+    public void SdkAndWindowsPaths_SendTheKeyTheSameSalt()
+    {
+        var session = new FakeSession();
+        Keys(session).GetHmacSecret(Key, [(CredentialId, PrfInput)], _ => Pin.ToArray());
+        var sdkSalt = EncodedSalt(session.LastAssertion!);
+
+        using var call = WebAuthnFido2Keys.BuildGetAssertion([(CredentialId, PrfInput)]);
+        var options = Marshal.PtrToStructure<WebAuthnGetAssertionOptionsV6>(call.Options);
+        var values = Marshal.PtrToStructure<WebAuthnHmacSecretSaltValues>(options.pHmacSecretSaltValues);
+        var entry = Marshal.PtrToStructure<WebAuthnCredWithHmacSecretSalt>(values.pCredWithHmacSecretSaltList);
+        var salt = Marshal.PtrToStructure<WebAuthnHmacSecretSalt>(entry.pHmacSecretSalt);
+        var windowsSalt = new byte[salt.cbFirst];
+        Marshal.Copy(salt.pbFirst, windowsSalt, 0, windowsSalt.Length);
+
+        Assert.Equal(WebAuthn.AuthenticatorHmacSecretValuesFlag, options.dwFlags & WebAuthn.AuthenticatorHmacSecretValuesFlag);
+        Assert.Equal(32, sdkSalt.Length);
+        Assert.Equal(sdkSalt, windowsSalt);
     }
 
     // ---- FindHolder's silent probe ----

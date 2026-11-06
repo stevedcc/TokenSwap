@@ -33,8 +33,9 @@ internal static class WebAuthn
     public const uint AttestationConveyanceDirect = 3;
 
     /// <summary>
-    /// <c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c>: the salts are raw hmac-secret salts. tswap never sets it,
-    /// so Windows applies the PRF transform to each PRF input itself.
+    /// <c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c>: the salts are raw hmac-secret salts. tswap sets it at every
+    /// assertion and hashes each PRF input itself (<c>Fido2Prf.Salt</c>): the header added this flag together with the
+    /// default PRF conversion (Feb 2022, API still 4), so an earlier API-4 DLL may pass salts raw either way.
     /// </summary>
     public const uint AuthenticatorHmacSecretValuesFlag = 0x00100000;
 

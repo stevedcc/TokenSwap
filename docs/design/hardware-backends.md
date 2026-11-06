@@ -203,9 +203,13 @@ it. Layout pin: `Fido2SlotBlobTests.Fido2Blob_LayoutIsPinned`; the v0.2.0 parser
 
 **The salt and the KEK.** The key is sent the WebAuthn PRF transform of the slot's PRF input,
 `salt = SHA-256(UTF-8("WebAuthn PRF") || 0x00 || input)` (`Fido2Prf.Salt`, pinned by the spike's
-vector). On Linux and macOS tswap applies it and sends the salt through the SDK; on Windows
-`webauthn.dll` applies it to the PRF input itself (`dwFlags = 0`, never the raw-salt flag), so the
-key gets the same salt on every OS. The key's 32-byte hmac-secret output (with user verification;
+vector). tswap applies it on every OS: on Linux and macOS it sends the salt through the SDK; on
+Windows it hands the salt to `webauthn.dll` raw, with `WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG`
+set, so the key gets the same salt on every OS (`SdkAndWindowsPaths_SendTheKeyTheSameSalt`). Not
+`webauthn.dll`'s own conversion: webauthn.h gained that default and the raw-salt flag together
+(Feb 2022) while the API version stayed 4, so an earlier API-4 `webauthn.dll` may pass a salt raw,
+which would give a wrong KEK without an error; with the flag and tswap's own hash, both generations
+send the same salt (a DLL that rejected the flag would fail loudly). The key's 32-byte hmac-secret output (with user verification;
 a key keeps separate outputs with and without it) becomes the slot key:
 
 ```
@@ -248,8 +252,8 @@ device implementations:
   off, no PIN token and no extension: no PIN and no touch. CTAPHID error frames (busy,
   timeout) are read from the raw answer, since the SDK reports them as success.
 - `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
-  FIDO2 credential of the vault in its allow list, each with its own PRF input
-  (`pCredWithHmacSecretSaltList`); the credential that answers picks the slot. Transports USB and
+  FIDO2 credential of the vault in its allow list, each with its own salt
+  (`pCredWithHmacSecretSaltList`, `Fido2Prf.Salt` of its PRF input, passed raw); the credential that answers picks the slot. Transports USB and
   NFC (NFC untested). Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called
   there; it is still required, as the no-terminal gate. HRESULTs are mapped by a table
   (`NTE_EXISTS`: the key already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds

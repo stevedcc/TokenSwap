@@ -37,8 +37,8 @@ public interface IFido2Keys
     /// <summary>
     /// A user-verified assertion with the <c>hmac-secret</c> extension over <paramref name="allowed"/>: the SDK path
     /// is called with one entry (the located slot) and sends the key <c>Fido2Prf.Salt(PrfInput)</c>; the Windows path
-    /// with every FIDO2 slot of the vault, passing each PRF input to <c>webauthn.dll</c>, which applies the same
-    /// transform. Returns which credential answered and its output (the caller zeroes the output).
+    /// with every FIDO2 slot of the vault, passing <c>Fido2Prf.Salt</c> of each PRF input to <c>webauthn.dll</c>
+    /// raw (<c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c>), so the key gets the same salt. Returns which credential answered and its output (the caller zeroes the output).
     /// <paramref name="pin"/> is called at most once.
     /// </summary>
     Fido2Output GetHmacSecret(Fido2KeyRef? key, IReadOnlyList<(byte[] CredentialId, byte[] PrfInput)> allowed, Fido2DevicePin pin);

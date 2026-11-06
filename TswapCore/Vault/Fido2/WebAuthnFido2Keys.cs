@@ -23,10 +23,14 @@ namespace TswapCore.Vault.Fido2;
 /// AAGUID and credential id come from the attested credential data; a credential id that differs from the
 /// attestation's is refused.</para>
 ///
-/// <para><b>The assertion</b> allows every credential passed, each with its own PRF input in
-/// <c>pCredWithHmacSecretSaltList</c>, and <c>dwFlags = 0</c>: Windows applies
-/// <c>SHA-256("WebAuthn PRF" || 0x00 || input)</c> itself, the transform the SDK path applies by hand. The credential
-/// Windows answers with says which slot it was. Windows' copy of the output is zeroed before it is freed.</para>
+/// <para><b>The assertion</b> allows every credential passed, each with its own salt in
+/// <c>pCredWithHmacSecretSaltList</c>: tswap applies the PRF transform itself (<see cref="Fido2Prf.Salt"/>, the SDK
+/// path's function) and sets <c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c> so Windows passes that salt raw.
+/// Why not let Windows hash it: webauthn.h gained the PRF default conversion and the flag together (Feb 2022) while the
+/// API version stayed 4, so an earlier API-4 <c>webauthn.dll</c> may pass a salt raw and would silently give a wrong
+/// KEK; with the flag and tswap's own hash, both DLL generations send the key the same salt as Linux and macOS (a DLL
+/// that rejects the flag fails loudly, never with a wrong KEK). The credential Windows answers with says which slot it
+/// was. Windows' copy of the output is zeroed before it is freed.</para>
 ///
 /// <para><b>Failures</b> are <see cref="Fido2DeviceException"/>s only: an HRESULT becomes a kind and its winerror.h
 /// name (<see cref="FromHResult"/>); an API below version 4 is <see cref="Fido2Failure.Unsupported"/> with the version
@@ -169,9 +173,10 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     }
 
     /// <summary>
-    /// The user-verified assertion over every credential in <paramref name="allowed"/>, each with its PRF input as its
-    /// own salt (<c>pCredWithHmacSecretSaltList</c>; no global salt), <c>dwFlags = 0</c> so Windows applies the PRF
-    /// transform. In native memory the returned call owns.
+    /// The user-verified assertion over every credential in <paramref name="allowed"/>, each with
+    /// <see cref="Fido2Prf.Salt"/> of its PRF input as its own salt (<c>pCredWithHmacSecretSaltList</c>; no global salt)
+    /// and <c>WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG</c> so Windows passes the salts raw (see the class summary).
+    /// In native memory the returned call owns.
     /// </summary>
     internal static WebAuthnGetAssertionCall BuildGetAssertion(IReadOnlyList<(byte[] CredentialId, byte[] PrfInput)> allowed)
     {
@@ -184,16 +189,18 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
         for (var i = 0; i < allowed.Count; i++)
         {
             var (credentialId, prfInput) = allowed[i];
+            var salt = Fido2Prf.Salt(prfInput);
             salts[i] = new WebAuthnCredWithHmacSecretSalt
             {
                 cbCredID = (uint)credentialId.Length,
                 pbCredID = arena.Bytes(credentialId),
                 pHmacSecretSalt = arena.Struct(new WebAuthnHmacSecretSalt
                 {
-                    cbFirst = (uint)prfInput.Length,
-                    pbFirst = arena.Bytes(prfInput),
+                    cbFirst = (uint)salt.Length,
+                    pbFirst = arena.Bytes(salt),
                 }),
             };
+            CryptographicOperations.ZeroMemory(salt);
         }
         var saltValues = arena.Struct(new WebAuthnHmacSecretSaltValues
         {
@@ -208,7 +215,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
             dwTimeoutMilliseconds = TimeoutMilliseconds,
             dwAuthenticatorAttachment = WebAuthn.AttachmentCrossPlatform,
             dwUserVerificationRequirement = WebAuthn.UserVerificationRequired,
-            dwFlags = 0, // not WebAuthn.AuthenticatorHmacSecretValuesFlag: Windows applies the PRF transform
+            dwFlags = WebAuthn.AuthenticatorHmacSecretValuesFlag, // the salts are hashed already: pass them raw
             pAllowCredentialList = CredentialList(arena, [.. allowed.Select(a => a.CredentialId)]),
             pHmacSecretSaltValues = saltValues,
         });

@@ -177,7 +177,7 @@ public sealed class SdkFido2Keys : IFido2Keys
 
     /// <summary>
     /// The user-verified assertion for one slot: its credential, user presence left on (a touch), and the
-    /// <c>hmac-secret</c> salt <see cref="Fido2Prf.Salt"/> of the slot's PRF input, applied here and only here.
+    /// <c>hmac-secret</c> salt <see cref="Fido2Prf.Salt"/> of the slot's PRF input (the same function the Windows path uses).
     /// </summary>
     internal static GetAssertionParameters BuildAssertionParameters(byte[] credentialId, byte[] prfInput)
     {

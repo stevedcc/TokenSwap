@@ -184,6 +184,12 @@ Then open each vault on the other two OSes:
 
 Paste back: the table filled in (opened / the error), and each `names` output.
 
+**Re-check after the final-review change to the Windows salt.** Windows now hands `webauthn.dll` the
+salt tswap computed, with the raw-salt flag set, instead of letting Windows hash the PRF input. A
+Windows build from before that change proves nothing about it: run the Windows column (and the
+Windows row) with a build that has it, and expect it to reproduce the Linux result, the vault made on
+Linux opening on Windows and the other way round.
+
 ### A4. No terminal: refused without a PIN prompt or a dialog
 
 With a FIDO2-only vault (A1's, A3's) and the key plugged in, run `names` with no terminal at all:

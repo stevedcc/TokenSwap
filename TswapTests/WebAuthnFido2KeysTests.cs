@@ -339,16 +339,18 @@ public class WebAuthnFido2KeysTests
         Assert.Equal(Fido2Texts.WindowsNoAaguid, e.Message);
     }
 
-    // ---- WebAuthn_AssertionPassesPrfInputUntransformed / WebAuthn_AssertionAllowsEveryVaultCredential ----
+    // ---- WebAuthn_AssertionSetsRawSaltFlagAndPassesThePrfSalt / WebAuthn_AssertionAllowsEveryVaultCredential ----
 
+    // Changed rule (final review): WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG is set and tswap hashes the PRF input
+    // itself (Fido2Prf.Salt, the SDK path's function). An API-4 webauthn.dll from before the PRF default (Feb 2022) may
+    // pass salts raw; with the flag and tswap's own hash, both DLL generations send the key the same 32-byte salt.
     [Fact]
-    public void WebAuthn_AssertionPassesPrfInputUntransformed()
+    public void WebAuthn_AssertionSetsRawSaltFlagAndPassesThePrfSalt()
     {
         using var call = WebAuthnFido2Keys.BuildGetAssertion([(CredentialA, PrfInputA), (CredentialB, PrfInputB)]);
 
         var options = Marshal.PtrToStructure<WebAuthnGetAssertionOptionsV6>(call.Options);
-        // No WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG: Windows applies SHA-256("WebAuthn PRF" || 0x00 || input).
-        Assert.Equal(0u, options.dwFlags);
+        Assert.Equal(0x00100000u, options.dwFlags); // WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG
 
         var values = Marshal.PtrToStructure<WebAuthnHmacSecretSaltValues>(options.pHmacSecretSaltValues);
         Assert.Equal(IntPtr.Zero, values.pGlobalHmacSalt);
@@ -526,7 +528,8 @@ public class WebAuthnFido2KeysTests
         var entry = Marshal.PtrToStructure<WebAuthnCredWithHmacSecretSalt>(list + index * Marshal.SizeOf<WebAuthnCredWithHmacSecretSalt>());
         Assert.Equal(id, Bytes(entry.pbCredID, entry.cbCredID));
         var salt = Marshal.PtrToStructure<WebAuthnHmacSecretSalt>(entry.pHmacSecretSalt);
-        Assert.Equal(prfInput, Bytes(salt.pbFirst, salt.cbFirst)); // the PRF input itself, not Fido2Prf.Salt(input)
+        Assert.Equal(32u, salt.cbFirst);
+        Assert.Equal(Fido2Prf.Salt(prfInput), Bytes(salt.pbFirst, salt.cbFirst)); // hashed by tswap, passed raw
         Assert.Equal(0u, salt.cbSecond);
         Assert.Equal(IntPtr.Zero, salt.pbSecond);
     }
