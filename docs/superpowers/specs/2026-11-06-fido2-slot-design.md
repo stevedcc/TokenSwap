@@ -140,7 +140,8 @@ lives; the exact texts.
   (`eea20ed0999fcc25`), and the same credential asserted on Linux through the SDK with PIN + touch gave the same
   output. **AAGUID:** under attestation "none" webauthn.dll zeroes it; under "direct" it is kept
   (`d7781e5d-e353-46aa-afe2-3ca49f13332a`, Yubico's YubiKey 5 Series with NFC). So on Windows, enrolment asks for
-  direct attestation (the fallback in "Calls after the builder check"). Not yet run: a Linux-made credential asserted
+  direct attestation (the fallback in "Calls after the builder check"); Windows showed no extra consent screen for
+  it, only the PIN and the touch (owner), so the enrolment text needs no extra step. Not yet run: a Linux-made credential asserted
   on Windows (the reverse direction), and macOS.
 - **A spare key** for the destructive checks (slot 2 programming, busy message, no-PIN FIDO2, wrong-PIN counts, a
   FIDO2 reset): the owner is considering ordering one (a YubiKey 5 with OTP and FIDO2). The Windows check itself is
