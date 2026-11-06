@@ -51,24 +51,43 @@ public class WebAuthnFido2KeysTests
         { 0x80090033, Fido2Failure.PinWrong, "NTE_INCORRECT_PASSWORD" },
         { 0x8010006B, Fido2Failure.PinWrong, "SCARD_W_WRONG_CHV" },
         { 0x8010006C, Fido2Failure.PinBlocked, "SCARD_W_CHV_BLOCKED" },
-        { 0x8007048C, Fido2Failure.PinNeedsReinsert, "ERROR_DEVICE_REINITIALIZATION_NEEDED" },
     };
 
     [Theory]
     [MemberData(nameof(HResults))]
     public void WebAuthn_HResultsMapToFailures(uint hr, Fido2Failure kind, string name)
     {
-        var e = WebAuthnFido2Keys.FromHResult(unchecked((int)hr));
+        var e = WebAuthnFido2Keys.FromHResult(unchecked((int)hr), atAssertion: true);
 
         Assert.Equal(kind, e.Kind);
         Assert.Equal(name, e.Detail);
         Assert.Null(e.RetriesLeft);
     }
 
+    // Nothing ties ERROR_DEVICE_REINITIALIZATION_NEEDED to CTAP2_ERR_PIN_AUTH_BLOCKED: no PIN text for it (review).
+    [Fact]
+    public void WebAuthn_DeviceReinitialisationNeeded_IsOther() =>
+        Assert.Equal((Fido2Failure.Other, "HRESULT 0x8007048C"),
+            (WebAuthnFido2Keys.FromHResult(unchecked((int)0x8007048C), atAssertion: true).Kind,
+             WebAuthnFido2Keys.FromHResult(unchecked((int)0x8007048C), atAssertion: true).Detail));
+
+    // At make-credential no credential was asked for: NTE_NOT_FOUND must not become "the key you picked holds none of
+    // this vault's FIDO2 credentials" (review).
+    [Fact]
+    public void WebAuthn_NotFoundAtMakeCredential_IsOther()
+    {
+        var api = new FakeApi { Result = unchecked((int)0x80090011) };
+
+        var e = Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).MakeCredential(null, UserId, [], NoPinCall));
+
+        Assert.Equal(Fido2Failure.Other, e.Kind);
+        Assert.Equal("NTE_NOT_FOUND", e.Detail);
+    }
+
     [Fact]
     public void WebAuthn_UnknownHResult_IsOtherWithItsValue()
     {
-        var e = WebAuthnFido2Keys.FromHResult(unchecked((int)0x80004005));
+        var e = WebAuthnFido2Keys.FromHResult(unchecked((int)0x80004005), atAssertion: true);
 
         Assert.Equal(Fido2Failure.Other, e.Kind);
         Assert.Equal("HRESULT 0x80004005", e.Detail);
@@ -411,6 +430,19 @@ public class WebAuthnFido2KeysTests
     }
 
     [Fact]
+    public void WebAuthn_AssertionBelowVersion3_HasNoOutputEvenWithAPointer()
+    {
+        // pHmacSecret is a v3 field: in a v2 assertion that memory is not Windows' to give, so it is never read.
+        var api = new FakeApi();
+        using var answer = api.Assertion(CredentialA, Enumerable.Repeat((byte)9, 32).ToArray(), userVerified: true, version: 2);
+
+        var result = new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall);
+
+        Assert.Empty(result.Output);
+        Assert.Equal(Enumerable.Repeat((byte)9, 32), Bytes(api.NativeOutput, 32)); // untouched: not read, not zeroed
+    }
+
+    [Fact]
     public void WebAuthn_OpenThroughTheService_PicksTheAnsweringSlot()
     {
         var api = new FakeApi();
@@ -484,7 +516,9 @@ public class WebAuthnFido2KeysTests
         Assert.Equal(1u, credential.dwVersion);
         Assert.Equal(id, Bytes(credential.pbId, credential.cbId));
         Assert.Equal("public-key", Marshal.PtrToStringUni(credential.pwszCredentialType));
-        Assert.Equal(1u, credential.dwTransports); // WEBAUTHN_CTAP_TRANSPORT_USB, as the owner's run used
+        // WEBAUTHN_CTAP_TRANSPORT_USB | _NFC: a YubiKey tapped on a reader too (USB only would hide it, and let an NFC
+        // enrolment slip past the exclude list); not 0, which may offer hybrid (a phone), and not BLE.
+        Assert.Equal(0x3u, credential.dwTransports);
     }
 
     private static void AssertCredWithSalt(IntPtr list, int index, byte[] id, byte[] prfInput)
@@ -613,7 +647,7 @@ public class WebAuthnFido2KeysTests
         }
 
         /// <summary>A WEBAUTHN_ASSERTION (version 3) for <paramref name="credentialId"/>; no output when null.</summary>
-        public WebAuthnArena Assertion(byte[] credentialId, byte[]? output, bool userVerified)
+        public WebAuthnArena Assertion(byte[] credentialId, byte[]? output, bool userVerified, uint version = 3)
         {
             var arena = new WebAuthnArena();
             var authData = AuthenticatorDataBytes(userVerified, null, null);
@@ -625,7 +659,7 @@ public class WebAuthnFido2KeysTests
             }
             Returned = arena.Struct(new WebAuthnAssertion
             {
-                dwVersion = 3,
+                dwVersion = version,
                 cbAuthenticatorData = (uint)authData.Length,
                 pbAuthenticatorData = arena.Bytes(authData),
                 Credential = new WebAuthnCredential

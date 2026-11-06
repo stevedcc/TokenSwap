@@ -64,7 +64,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
             try
             {
                 if (hr < 0)
-                    throw FromHResult(hr);
+                    throw FromHResult(hr, atAssertion: false);
                 if (attestation == IntPtr.Zero)
                     throw new Fido2DeviceException(Fido2Failure.Other, null, "NoAttestation");
                 return ReadAttestation(attestation);
@@ -91,7 +91,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
             try
             {
                 if (hr < 0)
-                    throw FromHResult(hr);
+                    throw FromHResult(hr, atAssertion: true);
                 if (assertion == IntPtr.Zero)
                     throw new Fido2DeviceException(Fido2Failure.Other, null, "NoAssertion");
                 return ReadAssertion(assertion);
@@ -215,7 +215,12 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
         return call;
     }
 
-    /// <summary>A WEBAUTHN_CREDENTIAL_LIST of USB public-key credentials (the transport the owner's run used).</summary>
+    /// <summary>
+    /// A WEBAUTHN_CREDENTIAL_LIST of public-key credentials over USB or NFC: a YubiKey tapped on a reader is offered too
+    /// (USB only would hide it at unlock and let an NFC enrolment pass the exclude list, the only duplicate check on
+    /// Windows). Not 0 ("no transport restrictions", webauthn.h l.335), which with cross-platform attachment may offer
+    /// hybrid sign-in with a phone, a dead end for these non-discoverable credentials; not BLE.
+    /// </summary>
     private static IntPtr CredentialList(WebAuthnArena arena, IReadOnlyList<byte[]> ids)
     {
         var type = arena.String(WebAuthn.CredentialTypePublicKey);
@@ -227,7 +232,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
                 cbId = (uint)ids[i].Length,
                 pbId = arena.Bytes(ids[i]),
                 pwszCredentialType = type,
-                dwTransports = WebAuthn.CtapTransportUsb,
+                dwTransports = WebAuthn.CtapTransportUsb | WebAuthn.CtapTransportNfc,
             });
         return arena.Struct(new WebAuthnCredentialList { cCredentials = (uint)ids.Count, ppCredentials = arena.Array<IntPtr>(pointers) });
     }
@@ -365,20 +370,22 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     private const int ScardWChvBlocked = unchecked((int)0x8010006C);
     private const int Win32NotSupported = unchecked((int)0x80070032); // HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)
     private const int Win32Busy = unchecked((int)0x800700AA); // HRESULT_FROM_WIN32(ERROR_BUSY)
-    private const int Win32DeviceReinitializationNeeded = unchecked((int)0x8007048C); // ..._REINITIALIZATION_NEEDED, 1164
     private const int Win32Cancelled = unchecked((int)0x800704C7); // HRESULT_FROM_WIN32(ERROR_CANCELLED)
     private const int Win32Timeout = unchecked((int)0x800705B4); // HRESULT_FROM_WIN32(ERROR_TIMEOUT)
 
     /// <summary>
     /// A failed HRESULT as a failure: the kind, and its winerror.h name as the detail (<c>HRESULT 0x...</c> for one
-    /// without a name here). PIN results carry no count (Windows' dialog doesn't report one).
+    /// without a name here). PIN results carry no count (Windows' dialog doesn't report one). NTE_NOT_FOUND is
+    /// <see cref="Fido2Failure.NoCredential"/> only <paramref name="atAssertion"/> (credentials were asked for); at
+    /// make-credential it is <see cref="Fido2Failure.Other"/>. No HRESULT is mapped to
+    /// <see cref="Fido2Failure.PinNeedsReinsert"/>: none is known to mean CTAP2_ERR_PIN_AUTH_BLOCKED.
     /// </summary>
-    internal static Fido2DeviceException FromHResult(int hr)
+    internal static Fido2DeviceException FromHResult(int hr, bool atAssertion)
     {
         var (kind, name) = hr switch
         {
             NteExists => (Fido2Failure.CredentialExcluded, "NTE_EXISTS"),
-            NteNotFound => (Fido2Failure.NoCredential, "NTE_NOT_FOUND"),
+            NteNotFound => (atAssertion ? Fido2Failure.NoCredential : Fido2Failure.Other, "NTE_NOT_FOUND"),
             NteDeviceNotFound => (Fido2Failure.NotPluggedIn, "NTE_DEVICE_NOT_FOUND"),
             NteUserCancelled => (Fido2Failure.Cancelled, "NTE_USER_CANCELLED"),
             Win32Cancelled => (Fido2Failure.Cancelled, "ERROR_CANCELLED"),
@@ -391,7 +398,6 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
             NteIncorrectPassword => (Fido2Failure.PinWrong, "NTE_INCORRECT_PASSWORD"),
             ScardWWrongChv => (Fido2Failure.PinWrong, "SCARD_W_WRONG_CHV"),
             ScardWChvBlocked => (Fido2Failure.PinBlocked, "SCARD_W_CHV_BLOCKED"),
-            Win32DeviceReinitializationNeeded => (Fido2Failure.PinNeedsReinsert, "ERROR_DEVICE_REINITIALIZATION_NEEDED"),
             _ => (Fido2Failure.Other, $"HRESULT 0x{hr:X8}"),
         };
         return new Fido2DeviceException(kind, null, name);

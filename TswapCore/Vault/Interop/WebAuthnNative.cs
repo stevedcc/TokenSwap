@@ -26,6 +26,7 @@ internal static class WebAuthn
     public const uint AssertionVersion3 = 3; // pHmacSecret
 
     public const uint CtapTransportUsb = 0x00000001;
+    public const uint CtapTransportNfc = 0x00000002;
     public const int CoseAlgorithmEs256 = -7;
     public const uint AttachmentCrossPlatform = 2;
     public const uint UserVerificationRequired = 1;
