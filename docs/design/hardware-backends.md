@@ -250,10 +250,10 @@ device implementations:
 - `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
   FIDO2 credential of the vault in its allow list, each with its own PRF input
   (`pCredWithHmacSecretSaltList`); the credential that answers picks the slot. Transports USB and
-  NFC. Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called there; it is
-  still required, as the no-terminal gate. HRESULTs are mapped by a table (`NTE_EXISTS`: the key
-  already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds none of the
-  credentials; cancel and timeout; anything else is reported with its HRESULT).
+  NFC (NFC untested). Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called
+  there; it is still required, as the no-terminal gate. HRESULTs are mapped by a table
+  (`NTE_EXISTS`: the key already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds
+  none of the credentials; cancel and timeout; anything else is reported with its HRESULT).
 - `FakeFido2Keys` (tests): credentials, PIN state and retries, and different outputs with and
   without user verification, so every path is tested without hardware.
 

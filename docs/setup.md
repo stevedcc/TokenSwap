@@ -2,19 +2,18 @@
 
 This page is for anyone setting up tswap on a machine for the first time. It covers preparing a
 YubiKey, the guided `tswap init`, setting up with a YubiKey (its OTP slot or a FIDO2 slot), a TPM
-or a Mac's Secure Enclave, the recovery key, and the limits of this version. It ends with the test procedure for a no-touch
-Secure Enclave slot on a Mac, with its recorded results.
+or a Mac's Secure Enclave, the recovery key, and the limits of this version. It ends with the test
+procedure for a no-touch Secure Enclave slot on a Mac, with its recorded results.
 
 Install tswap first: [install.md](install.md). What each kind of slot protects against, and how
 they compare, is in [security-model.md](security-model.md#posture-per-backend).
 
 ## Preparing a YubiKey
 
-Skip this if you won't use a YubiKey, or will use only its FIDO2 slot
-([FIDO2 slots](#fido2-slots): nothing to prepare). A YubiKey's OTP slot is its slot 2, set up for
-HMAC-SHA1 challenge-response, and tswap sets it up itself: run `tswap yubikey setup` once on each key. It needs no
-sudo and no other tool (what a key needs on each OS:
-[YubiKey prerequisites](install.md#yubikey-prerequisites)).
+Skip this if you won't use a YubiKey, or will use only its FIDO2 slot ([FIDO2 slots](#fido2-slots):
+nothing to prepare). A YubiKey's OTP slot is its slot 2, set up for HMAC-SHA1 challenge-response,
+and tswap sets it up itself: run `tswap yubikey setup` once on each key. It needs no sudo and no
+other tool (what a key needs on each OS: [YubiKey prerequisites](install.md#yubikey-prerequisites)).
 
 With a touch requirement (recommended; every unlock needs a press of the key):
 
@@ -206,8 +205,11 @@ A YubiKey can open a vault in two ways, and each is a slot of its own:
   interface, so macOS asks for Input Monitoring for the terminal app, and that lets every program
   the terminal runs read your keystrokes. The FIDO interface isn't a keyboard, so macOS asks for
   nothing.
-- **It behaves the same on Linux, macOS and Windows.** A FIDO2 slot made on one OS opens the vault
-  on the others, wherever the vault folder goes.
+- **It is meant to behave the same on Linux, macOS and Windows**, so that a FIDO2 slot made on one
+  OS opens the vault on the others, wherever the vault folder goes. That is the design; what is
+  verified so far is a spike on one key, in which one credential gave the same output on Linux and
+  on Windows. Nothing of this build has run on macOS yet, and the cross-OS directions with this
+  build are still to be checked on real keys.
 - **There is nothing to prepare** on the key besides its FIDO2 PIN, which tswap offers to set when
   the key has none (Linux and macOS).
 
@@ -262,7 +264,7 @@ a YubiKey OTP slot) for that.
 ```bash
 tswap init --fido2                     # a new vault: one YubiKey's FIDO2 slot, plus the recovery slot
 tswap init --fido2 --serial 12345678   # several keys plugged in (Linux, macOS; without it tswap asks)
-sudo tswap slot add --fido2            # a key's FIDO2 slot in this machine's vault (Windows: an elevated prompt)
+sudo tswap slot add --fido2            # a key's FIDO2 slot in this vault (Windows: elevated prompt)
 tswap slots                            # YubiKey 12345678, FIDO2: PIN + touch, no password
 ```
 

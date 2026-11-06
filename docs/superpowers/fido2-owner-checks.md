@@ -10,9 +10,12 @@ in [hardware-backends.md](../design/hardware-backends.md#yubikey-fido2-slots-v03
 
 - **(A) Safe checks** run on the daily key. A FIDO2 slot's credential is non-discoverable: it
   takes no space on the key and touches nothing else on it (no passkey, no slot 2). A wrong PIN
-  costs a try, so type the PIN carefully in (A); tswap never retries it.
+  costs a try, so type the PIN carefully in (A); tswap never retries it. A6 and A7 also use a
+  second key (the spare, or the Token2 for A6) in ways that change nothing destructive; A7 may set
+  a first FIDO2 PIN on the spare.
 - **(B) Destructive checks** run on the **spare YubiKey 5C NFC only**: wrong-PIN counts, a key
-  without a PIN, a FIDO2 reset, programming slot 2. Unplug the daily key for all of (B).
+  without a PIN, a FIDO2 reset, programming slot 2. Unplug the daily key for all of (B), except B6
+  (below).
 - **(C)** The Token2 PIN+ Dual (a non-YubiKey) is refused cleanly on every OS.
 - **(D)** Optional: a Security Key or Bio, if one is to hand.
 
@@ -71,8 +74,9 @@ Paste back: the summary line, and whether the key blinked.
 
 ### A1. Enrol and unlock on Linux
 
-The session's helper script `fido2-check.sh` runs steps 1 to 5 of this check (it was written for
-an earlier build of the branch; point its `T=` at the current build). By hand:
+If you still have the helper script `fido2-check.sh` from the session that prepared this check,
+it runs steps 1 to 5 (it was written for an earlier build of the branch; point its `T=` at the
+current build). By hand:
 
 ```bash
 export TSWAP_CONFIG_DIR="$W/linux-config"
@@ -295,14 +299,15 @@ Expect the list to read, per OS:
 Under the list, on every OS: `Using a key on other machines too? An OTP slot needs Input Monitoring
 ...`. Picking both gives two `machine` rows in `slots` (the OTP one and `..., FIDO2: PIN + touch,
 ...`), and the FIDO2 reset warning after the FIDO2 slot. `names` then opens through the OTP slot
-with no PIN. On the Mac with Input Monitoring off, `names` should fall through to the FIDO2 slot
+with no PIN (with a touch if the key's slot 2 requires one). On the Mac with Input Monitoring off, `names` should fall through to the FIDO2 slot
 and ask for the PIN.
 
 Paste back: the list as printed, the `slots` output and how `names` opened, per OS.
 
 ## (B) Destructive checks on the spare 5C NFC only
 
-Unplug the daily key first. Each check names what it changes on the spare. `ykman` is useful here
+Unplug the daily key first (B6 is the one exception). Each check names what it changes on the
+spare. `ykman` is useful here
 for reading the PIN counter (`ykman --device <spare serial> fido info`) and for the reset; tswap
 itself never resets a key.
 
@@ -386,8 +391,12 @@ enrolment. Record exactly what the dialog asked, how many times, and the output;
 
 ### B6. Stage 1: programming slot 2 (`SpareKey_ProgrammedSlotMatchesYkmanSemantics`)
 
-Overwrites the spare's slot 2 with a known test key (and leaves it so). Needs `ykman`, and only the
-spare plus (optionally) the daily key attached; the daily key's serial must be named and differ:
+Overwrites the spare's slot 2 with a known test key (and leaves it so). **The one exception to
+(B)'s rule: plug the daily key in too.** `runtests.sh --yubikey` also runs the read-only
+`RealKey_*` tests, which use the key `TSWAP_TEST_YUBIKEY_SERIAL` names and fail if it isn't
+plugged in. The spare-key test names the daily key only to refuse to program it: it programs only
+the key with the spare's serial, and refuses to run while any key other than these two is
+attached. Needs `ykman`:
 
 ```bash
 TSWAP_TEST_YUBIKEY_SERIAL=<daily serial> TSWAP_TEST_SPARE_YUBIKEY_SERIAL=<spare serial> ./runtests.sh --yubikey
