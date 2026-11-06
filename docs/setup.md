@@ -272,11 +272,13 @@ tswap slots                            # YubiKey 12345678, FIDO2: PIN + touch, n
   vault password into its key derivation, as a YubiKey OTP slot does, and asks for the password
   before the PIN. `init --fido2` takes `--no-recovery`; `slot add --fido2` takes
   `--recovery-key-stdin`.
-- A key has at most one FIDO2 slot per vault. A second is refused once the vault is open: on Linux
-  and macOS by a silent check before the key is asked for a credential, on Windows by the key itself
-  after the dialog: ``YubiKey N: this key already has a FIDO2 slot in this
-  vault (one per key; `tswap slots` lists them). No slot was added.`` A key's OTP slot and its FIDO2
-  slot are separate and may both exist.
+- A key has at most one FIDO2 slot per vault. On Linux and macOS a second is refused by a silent
+  check (no PIN, no touch) before the vault is unlocked: ``YubiKey N: this key already has a FIDO2
+  slot in this vault (one per key; `tswap slots` lists them). No slot was added.`` Windows can't
+  check keys silently, so there the key itself refuses, once the vault is open, after the dialog;
+  Windows names no serial or model, so the text is ``The key you picked: this key already has a
+  FIDO2 slot in this vault (one per key; `tswap slots` lists them). No slot was added.`` A key's OTP
+  slot and its FIDO2 slot are separate and may both exist.
 - After each FIDO2 enrolment tswap prints what a FIDO2 reset does (below).
 - If the second key operation fails, nothing is written, and running the command again is safe
   (the key keeps an unused credential, which on a YubiKey takes no space).

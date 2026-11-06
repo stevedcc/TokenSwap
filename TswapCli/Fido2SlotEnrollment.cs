@@ -82,6 +82,16 @@ internal static class Fido2SlotEnrollment
     /// </summary>
     public static Fido2KeyInfo? ChooseKey(CommandContext ctx, int? serial)
     {
+        var key = PickKey(ctx, serial);
+        return key is null ? null : EnsurePin(ctx, key);
+    }
+
+    /// <summary>
+    /// <see cref="ChooseKey"/> without the PIN offer: on Windows null (and <see cref="WindowsDialogLine"/> is said),
+    /// elsewhere the key picked by <paramref name="serial"/>, as the only one, or at the terminal. No PIN, no touch.
+    /// </summary>
+    public static Fido2KeyInfo? PickKey(CommandContext ctx, int? serial)
+    {
         var fido2 = Require(ctx, serial);
         if (!fido2.CanList)
         {
@@ -92,16 +102,33 @@ internal static class Fido2SlotEnrollment
         var keys = fido2.ListYubiKeys();
         if (keys.Count == 0)
             throw new TswapException("No YubiKey with FIDO2 detected. Please insert YubiKey.");
-        Fido2KeyInfo key;
         if (serial is { } wanted)
-            key = keys.FirstOrDefault(k => k.Serial == wanted)
+            return keys.FirstOrDefault(k => k.Serial == wanted)
                 ?? throw new TswapException($"YubiKey {wanted} is not plugged in (plugged in: {string.Join(", ", keys.Select(fido2.KeyName))}).");
-        else
-            key = keys.Count == 1 ? keys[0] : AskWhich(ctx, fido2, keys);
+        return keys.Count == 1 ? keys[0] : AskWhich(ctx, fido2, keys);
+    }
 
-        if (!key.PinSet)
-            key = OfferPin(ctx, fido2, key);
-        return key;
+    /// <summary><paramref name="key"/>, after offering it a FIDO2 PIN when it has none (<see cref="OfferPin"/>).</summary>
+    public static Fido2KeyInfo EnsurePin(CommandContext ctx, Fido2KeyInfo key) =>
+        key.PinSet ? key : OfferPin(ctx, Require(ctx, key.Serial), key);
+
+    /// <summary>The FIDO2 slots of <paramref name="keyring"/> (readable without the vault key).</summary>
+    public static List<Fido2SlotBlob> VaultFido2Slots(Keyring keyring) => [.. keyring.Slots
+        .Where(s => s.Kind == SlotKind.Machine)
+        .Select(s => YubiKeySlotKinds.Classify(s.HwBlob))
+        .OfType<YubiKeySlotKind.Fido2>()
+        .Select(f => f.Blob)];
+
+    /// <summary>
+    /// Linux and macOS: refuses <paramref name="key"/> when the silent probe finds one of
+    /// <paramref name="vaultFido2Slots"/> on it (no PIN, no touch), so <c>slot add --fido2</c> can refuse before the
+    /// vault is unlocked. (Windows can't probe: there the exclude list refuses, after the unlock.)
+    /// </summary>
+    public static void RefuseIfEnrolled(IFido2Service fido2, Fido2KeyInfo key, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots)
+    {
+        foreach (var blob in vaultFido2Slots)
+            if (fido2.Locate(blob) is Fido2Locate.Found found && found.Key.Key == key.Key)
+                throw new Fido2Exception(Fido2Failure.CredentialExcluded, key.Serial, null, Fido2Texts.AlreadyHasSlot(fido2.KeyName(key)));
     }
 
     private static Fido2KeyInfo AskWhich(CommandContext ctx, IFido2Service fido2, IReadOnlyList<Fido2KeyInfo> keys)
@@ -142,12 +169,7 @@ internal static class Fido2SlotEnrollment
         CommandContext ctx, Fido2KeyInfo? key, byte[] vaultKey, Keyring keyring, StretchedPassword? password)
     {
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        List<Fido2SlotBlob> existing = [.. keyring.Slots
-            .Where(s => s.Kind == SlotKind.Machine)
-            .Select(s => YubiKeySlotKinds.Classify(s.HwBlob))
-            .OfType<YubiKeySlotKind.Fido2>()
-            .Select(f => f.Blob)];
-        var (blob, kekSlot) = Enroll(ctx, key, slotId, existing, password);
+        var (blob, kekSlot) = Enroll(ctx, key, slotId, VaultFido2Slots(keyring), password);
         try
         {
             var slotKeyPair = SlotKeyPair.Generate();

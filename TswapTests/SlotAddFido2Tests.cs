@@ -207,7 +207,10 @@ public class SlotAddFido2Tests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("No plugged-in YubiKey matches a slot of this vault", stderr);
-        Assert.Empty(_fido2.Calls); // the vault is unlocked before any FIDO2 call
+        // Before the unlock only silent calls (the listing, and the duplicate probe when the vault has FIDO2 slots):
+        // no PIN, no touch, no credential made.
+        Assert.All(Ops(), op => Assert.True(op is FakeFido2Op.Find or FakeFido2Op.FindHolder, $"{op} before the unlock"));
+        Assert.Empty(_fido2.DevicePinCalls);
         Assert.Empty(_terminal.Reads);
         Assert.Equal(before, Snapshot());
     }
@@ -324,6 +327,32 @@ public class SlotAddFido2Tests : IDisposable
         Assert.DoesNotContain(FakeFido2Op.MakeCredential, Ops());
         Assert.Empty(_terminal.Reads); // found by the silent probe, before any PIN
         Assert.Equal(before, Snapshot());
+    }
+
+    // Final review (carry-forward 2): where keys can be listed, a key that already holds one of this vault's FIDO2
+    // credentials is refused by the silent probe before the vault is unlocked: no PIN, no touch, no unlock.
+    [Fact]
+    public void SlotAddFido2_KeyWithASlotAlready_RefusedBeforeUnlock()
+    {
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        Assert.Equal(0, Run("", "slot", "add", "--fido2").Exit);
+        var before = Snapshot();
+        _fido2.Calls.Clear();
+        _fido2.DevicePinCalls.Clear();
+        _otp.Challenges.Clear();
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialA}: this key already has a FIDO2 slot in this vault", stderr);
+        Assert.Empty(_otp.Challenges); // the vault was not unlocked
+        Assert.Empty(_terminal.Reads); // no PIN read
+        Assert.Empty(_fido2.DevicePinCalls);
+        Assert.All(Ops(), op => Assert.True(op is FakeFido2Op.Find or FakeFido2Op.FindHolder, $"{op} before the refusal"));
+        Assert.Equal(before.OrderBy(kv => kv.Key), Snapshot().OrderBy(kv => kv.Key));
     }
 
     [Fact]

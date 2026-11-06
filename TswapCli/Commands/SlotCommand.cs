@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
@@ -942,15 +943,24 @@ public sealed class SlotCommand : ICliCommand
 
     /// <summary>
     /// FIDO2 plan, task 6: <c>slot add --fido2</c>, the FIDO2 twin of the first enrolment above. Refused before any
-    /// unlock or key call without a terminal (the PIN is typed there) or with <c>--serial</c> on Windows; the vault is
-    /// unlocked before any FIDO2 call; the key is chosen (asked at the terminal when several are plugged in, offered a
-    /// PIN when it has none); two key operations make the slot; the keyring is written once, after both.
+    /// unlock or key call without a terminal (the PIN is typed there) or with <c>--serial</c> on Windows. On Linux and
+    /// macOS the key is picked (asked at the terminal when several are plugged in) and a key that already holds one of
+    /// this vault's FIDO2 credentials is refused by the silent probe, before the vault is unlocked (final review: no PIN
+    /// or touch spent); Windows can't list keys, so its exclude list refuses one after the unlock. Then the vault is
+    /// unlocked, the key is offered a PIN when it has none, two key operations make the slot, and the keyring is
+    /// written once, after both.
     /// </summary>
     private static int ExecuteAddFido2(CommandContext ctx, int? serial, bool? passwordFlag, bool withRecoveryKey)
     {
         var c = ctx.Console;
         var (config, keyring) = LoadKeyringForAdd(ctx);
         var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+        Fido2KeyInfo? key = null;
+        if (fido2.CanList)
+        {
+            key = Fido2SlotEnrollment.PickKey(ctx, serial)!;
+            Fido2SlotEnrollment.RefuseIfEnrolled(fido2, key, Fido2SlotEnrollment.VaultFido2Slots(keyring));
+        }
 
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
 
@@ -961,7 +971,7 @@ public sealed class SlotCommand : ICliCommand
         {
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
                 vaultKey, keyring.VaultId, "slot add --fido2");
-            var key = Fido2SlotEnrollment.ChooseKey(ctx, serial);
+            key = key is null ? Fido2SlotEnrollment.PickKey(ctx, serial) : Fido2SlotEnrollment.EnsurePin(ctx, key);
             (newSlot, blob) = Fido2SlotEnrollment.EnrollAsSlot(ctx, key, vaultKey, keyring, password?.Stretched);
         }
         finally
