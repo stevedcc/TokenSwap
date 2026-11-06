@@ -24,7 +24,11 @@ disagree, this one wins. Issue: #193 (FIDO2 slot backend).
    enrolment.
 3. **Guided `init` offers the FIDO2 slot**, with a hint on macOS that it is the preferred YubiKey slot there,
    because the OTP (HMAC-SHA1) slot needs Input Monitoring.
-4. **Other brands later.** v0.3.0 supports YubiKeys only (see "Which keys" below). Titan, Nitrokey, SoloKey, Feitian
+4. **Relying-party id `tswap.crawford.dev` (owner, 2026-11-06).** Every FIDO2 slot is bound to it for good. It is a
+   real domain the owner controls so that a future iOS or Android app (owner: phones "yet!") can be associated with
+   it (`apple-app-site-association`, Digital Asset Links); nothing needs hosting there until such an app exists, the
+   domain only has to stay the owner's. An invented id would shut every slot made now out of a phone app.
+5. **Other brands later.** v0.3.0 supports YubiKeys only (see "Which keys" below). Titan, Nitrokey, SoloKey, Feitian
    and others stay on #193; the preferred later route is libfido2 loaded at run time when installed (the pattern
    chosen for `libpcsclite`), not a new hard dependency.
 
@@ -150,11 +154,6 @@ lives; the exact texts.
   direct attestation (the fallback in "Calls after the builder check"); Windows showed no extra consent screen for
   it, only the PIN and the touch (owner), so the enrolment text needs no extra step. Not yet run: a Linux-made credential asserted
   on Windows (the reverse direction), and macOS.
-- **Relying-party id (raised 2026-11-06, owner: phones "yet!").** Every FIDO2 slot is bound to its relying-party id
-  for good. A future iOS or Android app can only use an id that is a domain it is associated with
-  (`apple-app-site-association`, Digital Asset Links), so an invented id (`tswap.local`) would shut every v0.3.0 slot
-  out of a phone app. Recommended: a domain the owner controls, e.g. `tswap.crawford.dev`; nothing needs hosting there
-  until a phone app exists, the domain only has to stay the owner's. Moved out of "Left to the builder".
 - **A spare key** for the destructive checks (slot 2 programming, busy message, no-PIN FIDO2, wrong-PIN counts, a
   FIDO2 reset): the owner is considering ordering one (a YubiKey 5 with OTP and FIDO2). The Windows check itself is
   safe on the owner's daily key (a non-discoverable credential takes no space and touches nothing else).
