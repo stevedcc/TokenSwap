@@ -98,7 +98,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
                     throw FromHResult(hr, atAssertion: true);
                 if (assertion == IntPtr.Zero)
                     throw new Fido2DeviceException(Fido2Failure.Other, null, "NoAssertion");
-                return ReadAssertion(assertion);
+                return ReadAssertion(assertion, allowed);
             }
             finally
             {
@@ -120,7 +120,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     internal static WebAuthnMakeCredentialCall BuildMakeCredential(byte[] userId, IReadOnlyList<byte[]> excludeCredentialIds)
     {
         if (userId.Length != Fido2Service.UserIdSize)
-            throw new ArgumentException($"The user id is {Fido2Service.UserIdSize} bytes", nameof(userId));
+            throw new ArgumentException($"The user id must be {Fido2Service.UserIdSize} bytes, got {userId.Length}", nameof(userId));
 
         var call = new WebAuthnMakeCredentialCall();
         var arena = call.Arena;
@@ -263,9 +263,10 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     }
 
     /// <summary>
-    /// Reads a WEBAUTHN_CREDENTIAL_ATTESTATION: the credential id (which must equal the attested credential data's), the
-    /// AAGUID from the attested credential data, and the UV flag. A credential the extension output says was made
-    /// without <c>hmac-secret</c> is refused; when Windows reports no output, the first assertion tells.
+    /// Reads a WEBAUTHN_CREDENTIAL_ATTESTATION, each field only when its <c>dwVersion</c> has it (an API 4-5
+    /// <c>webauthn.dll</c> returns version 4, without <c>bPrfEnabled</c>): the credential id (which must equal the attested
+    /// credential data's), the AAGUID from the attested credential data, and the UV flag. Refused: a resident
+    /// (discoverable) credential (<c>bResidentKey</c>, version 4 on), and one not shown to have <c>hmac-secret</c>.
     /// </summary>
     private static unsafe Fido2Made ReadAttestation(IntPtr pointer)
     {
@@ -278,7 +279,16 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
         var credentialId = new ReadOnlySpan<byte>((void*)attestation->pbCredentialId, (int)attestation->cbCredentialId).ToArray();
         if (!credentialId.AsSpan().SequenceEqual(authData.CredentialId))
             throw new Fido2DeviceException(Fido2Failure.Other, null, "CredentialIdMismatch");
-        if (attestation->dwVersion >= WebAuthn.CredentialAttestationVersion2 && HmacSecretCreated(attestation->Extensions) == false)
+        if (attestation->dwVersion >= WebAuthn.CredentialAttestationVersion4 && attestation->bResidentKey != 0)
+            throw new Fido2DeviceException(Fido2Failure.Other, null, "ResidentCredential");
+
+        // Which signal says hmac-secret was made: the extension output's BOOL when Windows returns one (version 2 on).
+        // It is the key's own answer to the extension tswap asked for, so it wins over bPrfEnabled, which is about the
+        // PRF extension (not requested) and may say FALSE for an hmac-secret credential. Without an extension output,
+        // bPrfEnabled TRUE (version 5 on) is taken as Windows' word; with neither signal the credential is refused.
+        var extension = attestation->dwVersion >= WebAuthn.CredentialAttestationVersion2 ? HmacSecretCreated(attestation->Extensions) : null;
+        var created = extension ?? (attestation->dwVersion >= WebAuthn.CredentialAttestationVersion5 && attestation->bPrfEnabled != 0);
+        if (!created)
             throw new Fido2DeviceException(Fido2Failure.Other, null, "HmacSecretNotCreated");
 
         return new Fido2Made(credentialId, new Guid(authData.Aaguid, bigEndian: true), Serial: null, authData.UserVerified);
@@ -300,10 +310,12 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     }
 
     /// <summary>
-    /// Reads a WEBAUTHN_ASSERTION: the credential that answered, the UV flag, and the hmac-secret output (empty when
-    /// Windows returned none: the service refuses a missing output). Windows' copy of the output is zeroed here.
+    /// Reads a WEBAUTHN_ASSERTION: the credential that answered (one of <paramref name="allowed"/>, else refused), the UV
+    /// flag, and the hmac-secret output (empty when Windows returned none: the service refuses a missing output; refused
+    /// when it isn't 32 bytes or has no bytes). Windows' copy of the output is zeroed here, refused or not (a copy of the
+    /// wrong length is left alone: its length can't be trusted).
     /// </summary>
-    private static unsafe Fido2Output ReadAssertion(IntPtr pointer)
+    private static unsafe Fido2Output ReadAssertion(IntPtr pointer, IReadOnlyList<(byte[] CredentialId, byte[] PrfInput)> allowed)
     {
         var assertion = (WebAuthnAssertion*)pointer;
         var authData = AuthenticatorData.Parse(
@@ -314,14 +326,18 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
         if (assertion->dwVersion >= WebAuthn.AssertionVersion3 && assertion->pHmacSecret != IntPtr.Zero)
         {
             var secret = (WebAuthnHmacSecretSalt*)assertion->pHmacSecret;
-            if (secret->pbFirst != IntPtr.Zero)
-            {
-                var first = new Span<byte>((void*)secret->pbFirst, (int)secret->cbFirst);
-                output = first.ToArray();
-                CryptographicOperations.ZeroMemory(first);
-            }
             if (secret->pbSecond != IntPtr.Zero)
                 CryptographicOperations.ZeroMemory(new Span<byte>((void*)secret->pbSecond, (int)secret->cbSecond));
+            if (secret->pbFirst == IntPtr.Zero || secret->cbFirst != Fido2Service.OutputSize)
+                throw new Fido2DeviceException(Fido2Failure.Other, null, "BadHmacSecretOutput");
+            var first = new Span<byte>((void*)secret->pbFirst, (int)secret->cbFirst);
+            output = first.ToArray();
+            CryptographicOperations.ZeroMemory(first);
+        }
+        if (!allowed.Any(a => a.CredentialId.AsSpan().SequenceEqual(credentialId)))
+        {
+            CryptographicOperations.ZeroMemory(output);
+            throw new Fido2DeviceException(Fido2Failure.Other, null, "UnknownCredential");
         }
         return new Fido2Output(credentialId, output, authData.UserVerified);
     }

@@ -374,6 +374,93 @@ public class WebAuthnFido2KeysTests
         Assert.Equal("HmacSecretNotCreated", e.Detail);
     }
 
+    // ---- final review: attestation hardening ----
+
+    // (a) A version-4 attestation (API 4-5) has no bPrfEnabled: it is never read (here it says FALSE; the extension
+    // output says TRUE, and that is what counts).
+    [Fact]
+    public void WebAuthn_MakeCredential_Version4Attestation_ReadsNoV5Field()
+    {
+        var api = new FakeApi();
+        using var answer = api.Attestation(Aaguid(YubiKey5Nfc), CredentialA, CredentialA, userVerified: true, version: 4, prfEnabled: false);
+
+        var made = new WebAuthnFido2Keys(api).MakeCredential(null, UserId, [], NoPinCall);
+
+        Assert.Equal(CredentialA, made.CredentialId);
+    }
+
+    // (a) bResidentKey is a v4 field: a version-3 attestation's is never read.
+    [Fact]
+    public void WebAuthn_MakeCredential_Version3Attestation_ReadsNoResidentKeyField()
+    {
+        var api = new FakeApi();
+        using var answer = api.Attestation(Aaguid(YubiKey5Nfc), CredentialA, CredentialA, userVerified: true, version: 3, residentKey: true);
+
+        Assert.Equal(CredentialA, new WebAuthnFido2Keys(api).MakeCredential(null, UserId, [], NoPinCall).CredentialId);
+    }
+
+    // (b) A discoverable (resident) credential stores something on the key: refused.
+    [Theory]
+    [InlineData(4u)]
+    [InlineData(5u)]
+    public void WebAuthn_MakeCredential_ResidentCredential_IsRefused(uint version)
+    {
+        var api = new FakeApi();
+        using var answer = api.Attestation(Aaguid(YubiKey5Nfc), CredentialA, CredentialA, userVerified: true, version: version, residentKey: true);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).MakeCredential(null, UserId, [], NoPinCall));
+
+        Assert.Equal(Fido2Failure.Other, e.Kind);
+        Assert.Equal("ResidentCredential", e.Detail);
+        Assert.Equal([api.Returned], api.FreedAttestations);
+    }
+
+    // (c) Which signal says hmac-secret was made: the extension output's BOOL when present (bPrfEnabled is about the
+    // PRF extension, which tswap doesn't request); without it, bPrfEnabled TRUE in a v5 attestation; else refused.
+    [Theory]
+    [InlineData(true, true, 5u, true)]
+    [InlineData(true, false, 5u, true)]
+    [InlineData(false, true, 5u, false)]
+    [InlineData(false, false, 5u, false)]
+    [InlineData(null, true, 5u, true)]
+    [InlineData(null, false, 5u, false)]
+    [InlineData(null, true, 4u, false)] // no bPrfEnabled before v5: no signal at all
+    [InlineData(true, false, 4u, true)]
+    public void WebAuthn_MakeCredential_HmacSecretSignals(bool? extension, bool prfEnabled, uint version, bool accepted)
+    {
+        var api = new FakeApi();
+        using var answer = api.Attestation(Aaguid(YubiKey5Nfc), CredentialA, CredentialA, userVerified: true,
+            hmacSecretCreated: extension, version: version, prfEnabled: prfEnabled);
+        var keys = new WebAuthnFido2Keys(api);
+
+        if (accepted)
+            Assert.Equal(CredentialA, keys.MakeCredential(null, UserId, [], NoPinCall).CredentialId);
+        else
+            Assert.Equal("HmacSecretNotCreated", Assert.Throws<Fido2DeviceException>(() => keys.MakeCredential(null, UserId, [], NoPinCall)).Detail);
+    }
+
+    // (d) On failure webauthn.dll may return no answer at all: nothing is freed.
+    [Fact]
+    public void WebAuthn_FailedCeremonyWithNoAnswer_FreesNothing()
+    {
+        var api = new FakeApi { Result = unchecked((int)0x800704C7) }; // ERROR_CANCELLED, no answer built: NULL
+
+        Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).MakeCredential(null, UserId, [], NoPinCall));
+        Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall));
+
+        Assert.Empty(api.FreedAttestations);
+        Assert.Empty(api.FreedAssertions);
+    }
+
+    // (h)
+    [Fact]
+    public void WebAuthn_MakeCredential_UserIdGuard_SaysTheLength()
+    {
+        var e = Assert.Throws<ArgumentException>(() => WebAuthnFido2Keys.BuildMakeCredential(new byte[32], []));
+
+        Assert.StartsWith("The user id must be 16 bytes, got 32", e.Message);
+    }
+
     [Fact]
     public void WebAuthn_MakeCredential_ZeroAaguid_IsReturnedForTheServiceToRefuse()
     {
@@ -465,6 +552,48 @@ public class WebAuthnFido2KeysTests
         using var answer = api.Assertion(CredentialA, new byte[32], userVerified: false);
 
         Assert.False(new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall).UserVerified);
+    }
+
+    // (e) An hmac-secret output that isn't 32 bytes, or has no bytes at all, is refused.
+    [Theory]
+    [InlineData(16)]
+    [InlineData(64)]
+    public void WebAuthn_Assertion_OutputNot32Bytes_IsRefused(int length)
+    {
+        var api = new FakeApi();
+        using var answer = api.Assertion(CredentialA, new byte[length], userVerified: true);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall));
+
+        Assert.Equal(Fido2Failure.Other, e.Kind);
+        Assert.Equal("BadHmacSecretOutput", e.Detail);
+        Assert.Equal([api.Returned], api.FreedAssertions);
+    }
+
+    [Fact]
+    public void WebAuthn_Assertion_OutputPointerNull_IsRefused()
+    {
+        var api = new FakeApi();
+        using var answer = api.Assertion(CredentialA, new byte[32], userVerified: true, nullFirst: true);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall));
+
+        Assert.Equal("BadHmacSecretOutput", e.Detail);
+    }
+
+    // (f) Windows answered with a credential that wasn't asked for: refused.
+    [Fact]
+    public void WebAuthn_Assertion_CredentialNotAllowed_IsRefused()
+    {
+        var api = new FakeApi();
+        using var answer = api.Assertion(CredentialB, Enumerable.Repeat((byte)5, 32).ToArray(), userVerified: true);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => new WebAuthnFido2Keys(api).GetHmacSecret(null, [(CredentialA, PrfInputA)], NoPinCall));
+
+        Assert.Equal(Fido2Failure.Other, e.Kind);
+        Assert.Equal("UnknownCredential", e.Detail);
+        Assert.Equal(new byte[32], Bytes(api.NativeOutput, 32)); // Windows' copy is still zeroed
+        Assert.Equal([api.Returned], api.FreedAssertions);
     }
 
     [Fact]
@@ -665,7 +794,7 @@ public class WebAuthnFido2KeysTests
 
         /// <summary>A WEBAUTHN_CREDENTIAL_ATTESTATION (version 5) as webauthn.dll would return it.</summary>
         public WebAuthnArena Attestation(byte[]? aaguid, byte[] attestationCredentialId, byte[] authDataCredentialId, bool userVerified,
-            bool? hmacSecretCreated = true, int? authDataLength = null)
+            bool? hmacSecretCreated = true, int? authDataLength = null, uint version = 5, bool residentKey = false, bool prfEnabled = true)
         {
             var arena = new WebAuthnArena();
             var authData = AuthenticatorDataBytes(userVerified, aaguid, authDataCredentialId);
@@ -684,20 +813,21 @@ public class WebAuthnFido2KeysTests
             }
             Returned = arena.Struct(new WebAuthnCredentialAttestation
             {
-                dwVersion = 5,
+                dwVersion = version,
                 pwszFormatType = arena.String("packed"),
                 cbAuthenticatorData = (uint)authData.Length,
                 pbAuthenticatorData = arena.Bytes(authData),
                 cbCredentialId = (uint)attestationCredentialId.Length,
                 pbCredentialId = arena.Bytes(attestationCredentialId),
                 Extensions = extensions,
-                bPrfEnabled = 1,
+                bResidentKey = residentKey ? 1 : 0,
+                bPrfEnabled = prfEnabled ? 1 : 0,
             });
             return arena;
         }
 
         /// <summary>A WEBAUTHN_ASSERTION (version 3) for <paramref name="credentialId"/>; no output when null.</summary>
-        public WebAuthnArena Assertion(byte[] credentialId, byte[]? output, bool userVerified, uint version = 3)
+        public WebAuthnArena Assertion(byte[] credentialId, byte[]? output, bool userVerified, uint version = 3, bool nullFirst = false)
         {
             var arena = new WebAuthnArena();
             var authData = AuthenticatorDataBytes(userVerified, null, null);
@@ -705,7 +835,11 @@ public class WebAuthnFido2KeysTests
             if (output is not null)
             {
                 NativeOutput = arena.Bytes(output);
-                secret = arena.Struct(new WebAuthnHmacSecretSalt { cbFirst = (uint)output.Length, pbFirst = NativeOutput });
+                secret = arena.Struct(new WebAuthnHmacSecretSalt
+                {
+                    cbFirst = (uint)output.Length,
+                    pbFirst = nullFirst ? IntPtr.Zero : NativeOutput,
+                });
             }
             Returned = arena.Struct(new WebAuthnAssertion
             {

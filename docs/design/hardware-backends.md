@@ -253,12 +253,17 @@ device implementations:
   timeout) are read from the raw answer, since the SDK reports them as success.
 - `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
   FIDO2 credential of the vault in its allow list, each with its own salt
-  (`pCredWithHmacSecretSaltList`, `Fido2Prf.Salt` of its PRF input, passed raw); the credential that answers picks the slot. Transports USB and
-  NFC (NFC untested). Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called
-  there; it is still required, as the no-terminal gate. HRESULTs are mapped by a table
+  (`pCredWithHmacSecretSaltList`, `Fido2Prf.Salt` of its PRF input, passed raw); the credential
+  that answers picks the slot. Transports USB and NFC (NFC untested). Windows' dialog asks for the
+  PIN, so the `Fido2Pin` delegate is never called there; it is still required, as the no-terminal
+  gate. HRESULTs are mapped by a table
   (`NTE_EXISTS`: the key already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds
   none of the credentials; cancel and timeout; anything else is reported with its HRESULT). Under
   `-v` every failed HRESULT is printed too, on stderr: `Windows HRESULT 0x........ (NAME)`.
+  Each answer is read only as far as its struct version goes; refused: a resident credential, one
+  not shown to have hmac-secret (the extension output's BOOL; without one, `bPrfEnabled` from
+  attestation version 5), an hmac-secret output that isn't 32 bytes, and an assertion by a
+  credential that wasn't asked for. `webauthn.dll` is loaded from System32 only.
 - `FakeFido2Keys` (tests): credentials, PIN state and retries, and different outputs with and
   without user verification, so every path is tested without hardware.
 

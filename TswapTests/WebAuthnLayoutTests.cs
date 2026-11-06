@@ -220,4 +220,21 @@ public class WebAuthnLayoutTests
         Assert.Equal(104, Off<WebAuthnAssertion>(nameof(WebAuthnAssertion.dwCredLargeBlobStatus)));
         Assert.Equal(112, Off<WebAuthnAssertion>(nameof(WebAuthnAssertion.pHmacSecret)));
     }
+
+    // Final review (GLM p4a 4): webauthn.dll is not a KnownDLL, so it is loaded from System32 only, never from the
+    // application folder.
+    [Fact]
+    public void WebAuthnImports_LoadFromSystem32Only()
+    {
+        var imports = typeof(TswapCore.Vault.Interop.WebAuthnNativeMethods)
+            .GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
+            .Where(m => m.GetCustomAttributes(typeof(System.Runtime.InteropServices.LibraryImportAttribute), false).Length > 0)
+            .ToList();
+
+        Assert.Equal(7, imports.Count);
+        Assert.All(imports, m => Assert.Equal(
+            System.Runtime.InteropServices.DllImportSearchPath.System32,
+            Assert.IsType<System.Runtime.InteropServices.DefaultDllImportSearchPathsAttribute>(
+                Assert.Single(m.GetCustomAttributes(typeof(System.Runtime.InteropServices.DefaultDllImportSearchPathsAttribute), false))).Paths));
+    }
 }

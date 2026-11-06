@@ -23,6 +23,8 @@ internal static class WebAuthn
     public const uint MakeCredentialOptionsVersion5 = 5;
     public const uint GetAssertionOptionsVersion6 = 6;
     public const uint CredentialAttestationVersion2 = 2; // Extensions
+    public const uint CredentialAttestationVersion4 = 4; // bResidentKey (API 4-5 return this version)
+    public const uint CredentialAttestationVersion5 = 5; // bPrfEnabled (API 6 on)
     public const uint AssertionVersion3 = 3; // pHmacSecret
 
     public const uint CtapTransportUsb = 0x00000001;
@@ -324,32 +326,42 @@ internal sealed unsafe class WebAuthnArena : IDisposable
     }
 }
 
-/// <summary>The P/Invokes into <c>webauthn.dll</c> (and the window handle for its dialog). Windows only.</summary>
+/// <summary>
+/// The P/Invokes into <c>webauthn.dll</c> (and the window handle for its dialog). Windows only. Each loads from System32
+/// only: <c>webauthn.dll</c> is not a KnownDLL, so the default search would try the application folder first.
+/// </summary>
 [SupportedOSPlatform("windows")]
 internal static unsafe partial class WebAuthnNativeMethods
 {
     [LibraryImport("webauthn.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial uint WebAuthNGetApiVersionNumber();
 
     [LibraryImport("webauthn.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial int WebAuthNAuthenticatorMakeCredential(
         IntPtr hWnd, IntPtr pRpInformation, IntPtr pUserInformation, IntPtr pPubKeyCredParams, IntPtr pClientData,
         IntPtr pOptions, IntPtr* ppAttestation);
 
     [LibraryImport("webauthn.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial void WebAuthNFreeCredentialAttestation(IntPtr pAttestation);
 
     [LibraryImport("webauthn.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial int WebAuthNAuthenticatorGetAssertion(
         IntPtr hWnd, IntPtr pwszRpId, IntPtr pClientData, IntPtr pOptions, IntPtr* ppAssertion);
 
     [LibraryImport("webauthn.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial void WebAuthNFreeAssertion(IntPtr pAssertion);
 
     [LibraryImport("kernel32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial IntPtr GetConsoleWindow();
 
     [LibraryImport("user32.dll")]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     internal static partial IntPtr GetForegroundWindow();
 
     /// <summary>The window Windows' security key dialog belongs to: the console's, else the foreground window.</summary>
