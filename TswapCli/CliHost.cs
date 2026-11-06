@@ -95,14 +95,18 @@ internal static class CliHost
     }
 
     /// <summary>
-    /// The FIDO2 service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS; none in test mode (a test that needs
-    /// one sets <see cref="CommandContext.Fido2"/>) and none on Windows, whose <c>webauthn.dll</c> device is task 5's.
-    /// Nothing touches a key until a command calls it.
+    /// The FIDO2 service (FIDO2 plan, tasks 4 and 5): Yubico's SDK on Linux and macOS, <c>webauthn.dll</c> on Windows;
+    /// none in test mode (a test that needs one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, or calls
+    /// into <c>webauthn.dll</c>, until a command calls it.
     /// </summary>
-    internal static IFido2Service? Fido2Service(byte[]? testKey) =>
-        testKey is null && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            ? new Fido2Service(new SdkFido2Keys())
-            : null;
+    internal static IFido2Service? Fido2Service(byte[]? testKey)
+    {
+        if (testKey is not null)
+            return null;
+        if (OperatingSystem.IsWindows())
+            return new Fido2Service(new WebAuthnFido2Keys());
+        return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? new Fido2Service(new SdkFido2Keys()) : null;
+    }
 
 #if DEBUG
     /// <summary>
