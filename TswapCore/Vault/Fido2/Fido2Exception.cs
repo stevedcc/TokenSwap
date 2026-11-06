@@ -58,4 +58,10 @@ public sealed class Fido2DeviceException(Fido2Failure kind, int? retriesLeft, st
     public Fido2Failure Kind { get; } = kind;
     public int? RetriesLeft { get; } = retriesLeft;
     public string? Detail { get; } = detail;
+
+    /// <summary>
+    /// The failed HRESULT <c>webauthn.dll</c> returned (Windows only; null elsewhere), printed under <c>-v</c> by
+    /// <see cref="Fido2Service"/>. <see cref="Detail"/> stays its winerror.h name.
+    /// </summary>
+    public int? WindowsHResult { get; init; }
 }

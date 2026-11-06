@@ -8,9 +8,10 @@ namespace TswapCore.Vault.Fido2;
 /// PIN policy (no terminal → refused before any key call; one PIN request per operation; never a retry), the silent
 /// duplicate probe, the exclude list, the Windows one-ceremony assertion, and every text (<see cref="Fido2Texts"/>).
 /// Device failures (<see cref="Fido2DeviceException"/>) become <see cref="Fido2Exception"/>s here. Outputs the service
-/// refuses are zeroed before it throws.
+/// refuses are zeroed before it throws. With <paramref name="verbose"/> (<c>-v</c>), a Windows failure's HRESULT is
+/// written there as it is mapped (<c>Windows HRESULT 0x........ (NAME)</c>), whatever the caller then does with the text.
 /// </summary>
-public sealed class Fido2Service(IFido2Keys keys) : IFido2Service
+public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : IFido2Service
 {
     /// <summary>The size of an <c>hmac-secret</c> output for one salt.</summary>
     public const int OutputSize = 32;
@@ -187,6 +188,11 @@ public sealed class Fido2Service(IFido2Keys keys) : IFido2Service
 
     private Fido2Exception Map(Fido2DeviceException e, string name, int? serial)
     {
+        if (verbose is not null && e.WindowsHResult is { } hr)
+        {
+            var hex = $"HRESULT 0x{hr:X8}";
+            verbose.WriteLine(e.Detail is { } named && named != hex ? $"Windows {hex} ({named})" : $"Windows {hex}");
+        }
         var text = e.Kind switch
         {
             Fido2Failure.NotPluggedIn => Fido2Texts.NotPluggedIn(name),

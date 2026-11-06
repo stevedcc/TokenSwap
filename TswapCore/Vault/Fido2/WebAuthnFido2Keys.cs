@@ -381,8 +381,8 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     private const int Win32Timeout = unchecked((int)0x800705B4); // HRESULT_FROM_WIN32(ERROR_TIMEOUT)
 
     /// <summary>
-    /// A failed HRESULT as a failure: the kind, and its winerror.h name as the detail (<c>HRESULT 0x...</c> for one
-    /// without a name here). PIN results carry no count (Windows' dialog doesn't report one). NTE_NOT_FOUND is
+    /// A failed HRESULT as a failure: the kind, its winerror.h name as the detail (<c>HRESULT 0x...</c> for one
+    /// without a name here), and the HRESULT itself (<see cref="Fido2DeviceException.WindowsHResult"/>, for <c>-v</c>). PIN results carry no count (Windows' dialog doesn't report one). NTE_NOT_FOUND is
     /// <see cref="Fido2Failure.NoCredential"/> only <paramref name="atAssertion"/> (credentials were asked for); at
     /// make-credential it is <see cref="Fido2Failure.Other"/>. No HRESULT is mapped to
     /// <see cref="Fido2Failure.PinNeedsReinsert"/>: none is known to mean CTAP2_ERR_PIN_AUTH_BLOCKED.
@@ -407,7 +407,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
             ScardWChvBlocked => (Fido2Failure.PinBlocked, "SCARD_W_CHV_BLOCKED"),
             _ => (Fido2Failure.Other, $"HRESULT 0x{hr:X8}"),
         };
-        return new Fido2DeviceException(kind, null, name);
+        return new Fido2DeviceException(kind, null, name) { WindowsHResult = hr };
     }
 
     private static void RequireNoKey(Fido2KeyRef? key)

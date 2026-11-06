@@ -72,7 +72,7 @@ internal static class CliHost
             var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
             // One FIDO2 service for enrolment (CommandContext.Fido2) and unlock (pass 4, FIDO2 plan task 7).
-            var fido2 = Fido2Service(testKey);
+            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null);
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
             var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
@@ -103,13 +103,13 @@ internal static class CliHost
     /// none in test mode (a test that needs one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, or calls
     /// into <c>webauthn.dll</c>, until a command calls it.
     /// </summary>
-    internal static IFido2Service? Fido2Service(byte[]? testKey)
+    internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null)
     {
         if (testKey is not null)
             return null;
         if (OperatingSystem.IsWindows())
-            return new Fido2Service(new WebAuthnFido2Keys());
-        return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? new Fido2Service(new SdkFido2Keys()) : null;
+            return new Fido2Service(new WebAuthnFido2Keys(), verbose);
+        return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? new Fido2Service(new SdkFido2Keys(), verbose) : null;
     }
 
 #if DEBUG

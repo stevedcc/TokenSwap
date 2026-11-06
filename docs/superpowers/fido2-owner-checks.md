@@ -223,14 +223,17 @@ header only). On Windows, in the joined Linux vault (A3), from an **elevated** P
 
 ```powershell
 $env:TSWAP_CONFIG_DIR = "$W\join-linux-config"
-& $T slot add --fido2 --no-password
+& $T -v slot add --fido2 --no-password
 ```
 
-The vault opens first (dialog: PIN, touch), then a second dialog for the new credential, with
+Run it with `-v` (before the command name, as above): a Windows failure then prints its own line,
+`Windows HRESULT 0x........ (NAME)`, on stderr. The vault opens first (dialog: PIN, touch), then a
+second dialog for the new credential, with
 the same daily key. Expect, with nothing written: ``The key you picked: this key already has a
 FIDO2 slot in this vault (one per key; `tswap slots` lists them). No slot was added.`` If you see
 `The key you picked: the FIDO2 operation failed (HRESULT 0x........).` instead, the HRESULT is the
-finding. Note whether the dialog asked for a touch before refusing.
+finding. Either way, paste the `Windows HRESULT` line. Note whether the dialog asked for a touch
+before refusing.
 
 ### A6. Windows: a key with no slot of this vault
 
@@ -240,10 +243,11 @@ Records the HRESULT when the key picked holds none of the vault's credentials (m
 
 ```powershell
 $env:TSWAP_CONFIG_DIR = "$W\join-linux-config"
-& $T names
+& $T -v names
 ```
 
-Record which of these comes back (each one tells which Windows result it was):
+Run with `-v` and paste the `Windows HRESULT 0x........ (NAME)` line. Record which of these comes
+back (each one tells which Windows result it was):
 
 - ``The key you picked holds none of this vault's FIDO2 credentials: another key, or a FIDO2 reset
   deleted it (then enrol the key again with `tswap slot add --fido2`).`` (`NTE_NOT_FOUND`);
@@ -252,7 +256,8 @@ Record which of these comes back (each one tells which Windows result it was):
 - `The key you picked: the FIDO2 operation failed (HRESULT 0x........).` (unmapped: paste the
   HRESULT).
 
-The HRESULT itself is printed only in the last case, even with `-v`.
+The message names the HRESULT only in the last case; with `-v` the `Windows HRESULT` line shows it
+in every case.
 
 ### A7. Windows: two FIDO2 slots in one dialog
 

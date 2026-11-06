@@ -257,7 +257,8 @@ device implementations:
   NFC (NFC untested). Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called
   there; it is still required, as the no-terminal gate. HRESULTs are mapped by a table
   (`NTE_EXISTS`: the key already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds
-  none of the credentials; cancel and timeout; anything else is reported with its HRESULT).
+  none of the credentials; cancel and timeout; anything else is reported with its HRESULT). Under
+  `-v` every failed HRESULT is printed too, on stderr: `Windows HRESULT 0x........ (NAME)`.
 - `FakeFido2Keys` (tests): credentials, PIN state and retries, and different outputs with and
   without user verification, so every path is tested without hardware.
 

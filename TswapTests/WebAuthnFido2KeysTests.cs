@@ -64,6 +64,53 @@ public class WebAuthnFido2KeysTests
         Assert.Null(e.RetriesLeft);
     }
 
+    // Final review (carry-forward 1): the HRESULT travels beside the name, so `-v` can print it for runbook A5/A6.
+    [Fact]
+    public void WebAuthn_MappedHResult_KeepsTheNameAndCarriesTheHResult()
+    {
+        var e = WebAuthnFido2Keys.FromHResult(unchecked((int)0x80090011), atAssertion: true);
+
+        Assert.Equal("NTE_NOT_FOUND", e.Detail);
+        Assert.Equal(unchecked((int)0x80090011), e.WindowsHResult);
+    }
+
+    [Fact]
+    public void WebAuthn_Verbose_PrintsTheHResultLine()
+    {
+        var api = new FakeApi { Result = unchecked((int)0x8009000F) };
+        var verbose = new StringWriter();
+        var service = new Fido2Service(new WebAuthnFido2Keys(api), verbose);
+
+        var e = Assert.Throws<Fido2Exception>(() => service.Enrol(null, false, [], _ => "123456"u8.ToArray()));
+
+        Assert.Equal(Fido2Failure.CredentialExcluded, e.Kind);
+        Assert.Equal("Windows HRESULT 0x8009000F (NTE_EXISTS)" + Environment.NewLine, verbose.ToString());
+    }
+
+    [Fact]
+    public void WebAuthn_Verbose_UnnamedHResult_PrintsItOnce()
+    {
+        var api = new FakeApi { Result = unchecked((int)0x80004005) };
+        var verbose = new StringWriter();
+        var service = new Fido2Service(new WebAuthnFido2Keys(api), verbose);
+
+        Assert.Throws<Fido2Exception>(() => service.Enrol(null, false, [], _ => "123456"u8.ToArray()));
+
+        Assert.Equal("Windows HRESULT 0x80004005" + Environment.NewLine, verbose.ToString());
+    }
+
+    [Fact]
+    public void WebAuthn_NotVerbose_PrintsNoHResult()
+    {
+        var api = new FakeApi { Result = unchecked((int)0x80090011) };
+        var service = new Fido2Service(new WebAuthnFido2Keys(api));
+
+        var e = Assert.Throws<Fido2Exception>(() =>
+            service.Open([Fido2Slot(CredentialA, PrfInputA)], null, _ => "123456"u8.ToArray()));
+
+        Assert.DoesNotContain("0x", e.Message);
+    }
+
     // Nothing ties ERROR_DEVICE_REINITIALIZATION_NEEDED to CTAP2_ERR_PIN_AUTH_BLOCKED: no PIN text for it (review).
     [Fact]
     public void WebAuthn_DeviceReinitialisationNeeded_IsOther() =>
