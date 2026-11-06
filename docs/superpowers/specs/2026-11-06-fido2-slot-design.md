@@ -135,7 +135,7 @@ user verification already covers; a signed macOS helper holding Input Monitoring
 
 ## Left to the builder
 
-The blob's exact layout and magic; the relying-party id string; the fake device's shape; where the Windows interop
+The blob's exact layout and magic; the fake device's shape; where the Windows interop
 lives; the exact texts.
 
 ## Open (owner)
@@ -150,6 +150,11 @@ lives; the exact texts.
   direct attestation (the fallback in "Calls after the builder check"); Windows showed no extra consent screen for
   it, only the PIN and the touch (owner), so the enrolment text needs no extra step. Not yet run: a Linux-made credential asserted
   on Windows (the reverse direction), and macOS.
+- **Relying-party id (raised 2026-11-06, owner: phones "yet!").** Every FIDO2 slot is bound to its relying-party id
+  for good. A future iOS or Android app can only use an id that is a domain it is associated with
+  (`apple-app-site-association`, Digital Asset Links), so an invented id (`tswap.local`) would shut every v0.3.0 slot
+  out of a phone app. Recommended: a domain the owner controls, e.g. `tswap.crawford.dev`; nothing needs hosting there
+  until a phone app exists, the domain only has to stay the owner's. Moved out of "Left to the builder".
 - **A spare key** for the destructive checks (slot 2 programming, busy message, no-PIN FIDO2, wrong-PIN counts, a
   FIDO2 reset): the owner is considering ordering one (a YubiKey 5 with OTP and FIDO2). The Windows check itself is
   safe on the owner's daily key (a non-discoverable credential takes no space and touches nothing else).
