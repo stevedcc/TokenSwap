@@ -61,7 +61,21 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         return hidden.Count == 0 ? null : ExplainUnreachable(hidden, reachableCount: keys.Count - hidden.Count).Text;
     }
 
-    internal const string ProbeBusyMessage = "A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.";
+    /// <summary>
+    /// The probe saw a busy keyboard interface: names each hidden key with a readable serial ("YubiKey N or YubiKey M
+    /// is busy ..."), or "A YubiKey" when none has one.
+    /// </summary>
+    private static string ProbeBusyText(IReadOnlyList<OtpKeyInfo> hidden)
+    {
+        var names = hidden.Where(k => k.Serial is not null).Select(k => $"YubiKey {k.Serial}").Distinct().ToList();
+        var who = names.Count switch
+        {
+            0 => "A YubiKey",
+            1 => names[0],
+            _ => string.Join(", ", names[..^1]) + " or " + names[^1],
+        };
+        return $"{who} is busy (another tswap or app is waiting for a touch); try again when it's done.";
+    }
 
     /// <summary>
     /// Why keys seen only on other transports can't be used. Yubico's SDK skips a keyboard interface it can't talk to
@@ -85,7 +99,7 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         }
 
         if (interfaces.Contains(KeyboardInterfaceState.Busy))
-            return (OtpFailure.Busy, ProbeBusyMessage);
+            return (OtpFailure.Busy, ProbeBusyText(hidden));
         if (interfaces.Contains(KeyboardInterfaceState.Unreadable))
             return (OtpFailure.NotReachable, Uncertain(hidden, perOs));
         if (interfaces.Contains(KeyboardInterfaceState.Unopenable))

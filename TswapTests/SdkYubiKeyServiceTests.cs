@@ -509,6 +509,30 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
 
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
+    /// <summary>Final review item 5: several hidden keys and a busy interface: each readable serial is named.</summary>
+    [Fact]
+    public void ListSerials_TwoHiddenKeys_ProbeSeesBusy_NamesEachSerial()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005).WithHiddenKey(33060006).WithHiddenKey(null);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
+
+        Assert.Equal("YubiKey 33060005 or YubiKey 33060006 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
+    /// <summary>Final review item 5: a hidden key without a readable serial keeps the generic sentence.</summary>
+    [Fact]
+    public void ListSerials_HiddenKeyWithoutSerial_ProbeSeesBusy_SaysAYubiKeyIsBusy()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(null);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
+
         Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }
 
@@ -568,7 +592,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
-        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
         Assert.Empty(keys.Challenges);
     }
 
@@ -681,7 +705,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
-        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }
 
     /// <summary>One reachable key whose every operation fails with one exception.</summary>
