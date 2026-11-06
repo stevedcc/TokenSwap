@@ -24,6 +24,18 @@
 - British English; commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, no session links; commit with explicit paths. Full suites go through `~/RiderProjects/tswap-wt/tools/with-suite-lock.sh ./runtests.sh` (another branch is being built on this machine).
 - AGENTS.md is changed only with the owner's approval.
 
+### Plan review round 1 (GLM, MiMo; owner on the threat model, 2026-11-06)
+- **Threat model (owner: "a shallow sandbox against accidents"; docs/security-model.md:69, :100):** tswap stops accidental leaks and casual exfiltration, not a determined local actor. Out of scope, documented (Task 2): an agent running as the user reading the filled copy from a second command while the first runs; a NOPASSWD sudo grant for tswap (it voids the sudo gate on `apply`, as on `get`).
+- **Casual exfiltration is blocked:** with any `{{@file}}` token, refuse programs that print, encode or copy a file: `base64`, `base32`, `basenc`, `xxd`, `od`, `hexdump`, `hd`, `strings`, `cp`, `mv`, `dd`, `install`, `rsync`, `scp`, `tar`, `zip`, `gzip`, `bzip2`, `xz`, `zstd`, `openssl`, `gpg`, `less`, `more`, `head`, `tail`, `nl`, `sort`, `uniq`, `rev`, `tac`, `split`, `ln`, `certutil` (Windows), plus the existing blocklist; and refuse a file token as argv[0] or as the script argument of a shell or interpreter (`sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`, `python*`, `perl`, `ruby`, `node`, `php`, `pwsh`, `powershell`, `cmd`, `lua`, `awk`/`gawk`/`mawk`, `sed`): the file is data for a tool, never a program. The list is a shallow guard, documented as such.
+- **One substitution pass on the raw template:** name tokens and file tokens are found in the command as typed; substituted values are never scanned again (a value containing `{{@…}}` is plain text).
+- **Every written form is redacted:** `Apply.ApplySecretsReporting` returns the exact strings it wrote into the file (raw value, the `"`-escaped form, the `'`-escaped form, whichever were written) per secret, and all of them go into the replacement list.
+- **Folder creation:** root = `$XDG_RUNTIME_DIR` when it is set, a directory owned by the current user and not group- or world-writable; else `Path.GetTempPath()`. The folder name is `tswap-run-` + 16 CSPRNG hex characters, created exclusively (`mkdir` with `0700`; an existing path is an error, retried with a new name); after creation verify it is a directory (not a symlink) owned by the user with mode `0700` before writing. Files are created with `FileMode.CreateNew` and `0600`.
+- **Same base name:** each source file gets its own subfolder (`<folder>/1/values.yaml`, `<folder>/2/values.yaml`), keeping the base name; the same resolved source path (case-sensitive comparison on Linux, case-insensitive on macOS and Windows) maps to one copy.
+- **Interruption:** SIGINT, SIGTERM and SIGHUP (and Ctrl+C on Windows) are handled: the child is signalled, the folder is zeroed and removed, then tswap exits with the child's or the signal's code. SIGKILL and power loss leave the folder until the next sweep; documented.
+- **Sweep:** at the start of each `run`, both roots (the XDG root and the temp root) are swept for `tswap-run-*` folders owned by the current user that are older than one hour **and** not live: each folder holds a `.lock` that the running tswap holds an exclusive lock on (`flock` on Unix, an open-without-sharing handle on Windows); a locked folder is never swept. Sharing violations on Windows are skipped, not fatal.
+- **Elevated:** `run` with a file token refuses to run as root (`sudo tswap run …{{@f}}`: "run it as your own user"); no secret file is ever created by root in a user's folder.
+- **Other refusals:** an empty `{{@}}`, nested braces in a token, an unreadable source (a `TswapException`, not a raw `UnauthorizedAccessException`). The verbose `Executing:` line masks file tokens too. `run`'s help and description mention `{{@file}}`.
+
 ## Review Focus
 
 1. **The child is killed or tswap is interrupted (Ctrl-C) while the filled file exists:** expected: the folder is removed by the `finally`, or at worst by the next `run`'s sweep; nothing else can read it meanwhile. Pinned by Task 1's `RunFileToken_ChildFails_FolderRemoved` and `RunFileToken_StaleFolders_Swept`.
@@ -57,8 +69,18 @@
   - `RunFileToken_PathForms` (relative from a subdirectory, spaces, the same file twice → one copy, two files → two copies, mixed with a `{{name}}` token),
   - `RunFileToken_Refusals_WriteNothing` (missing file, no markers, a marker naming a missing secret, an unknown marker suffix: refused, no child started, no folder created),
   - `RunFileToken_BlocklistStillApplies` (`run sh -c "cat {{@f}}"` refused as today),
-  - `RunFileToken_BurnedValueWarns` (stderr warning, as `apply` gives).
+  - `RunFileToken_BurnedValueWarns` (stderr warning, as `apply` gives),
+  - `RunFileToken_SingleQuotedAndDoubleQuotedFormsRedacted` (one secret written once as `"…"` and once as `'…'`, value containing `"`, `'` and `\`: none of the three forms appears in the output),
+  - `RunFileToken_EncodersAndCopiersRefused` (theory over the new list, and `run bash {{@f}}`, `run {{@f}}`, `run python3 {{@f}}`: refused, no folder created),
+  - `RunFileToken_ValueContainingFileTokenIsText` (a secret value `{{@/etc/passwd}}`: no second file is filled; the child gets the literal text),
+  - `RunFileToken_SameBaseNameTwoFiles` (`a/values.yaml` and `b/values.yaml`: two distinct copies, each with its own content),
+  - `RunFileToken_PrecreatedFolderOrSymlinkRefused` (a pre-created `tswap-run-` path or a symlink at the chosen name: never written through; a hostile `$XDG_RUNTIME_DIR` (group-writable or another owner) falls back to the temp root),
+  - `RunFileToken_SweepSkipsLiveFolder` (a locked folder older than an hour is kept; an unlocked one is removed; both roots swept),
+  - `RunFileToken_InterruptRemovesFolder` (a fake SIGINT path: child signalled, folder gone),
+  - `RunFileToken_AsRootRefused` (euid 0 seam: refused before anything is written),
+  - `RunFileToken_EmptyOrNestedTokenRefused`.
 - [ ] **Step 2: Run them** (`dotnet test TswapTests --filter "FullyQualifiedName~RunFileToken"`) → fail to compile.
+  (`RunFileToken_FolderIsPrivate` also asserts the folder is not a symlink and is owned by the user.)
 - [ ] **Step 3: Implement.** In `RunCommand`: extract name tokens and file tokens; "no tokens" only when both are empty; resolve and fill every file (in memory) before creating anything on disk; then create the `FilledFiles` set, substitute both token kinds in argv, re-run the post-substitution blocklist, add the applied values (and changed escaped forms) to the replacements, run, dispose in `finally`. Create folder and file with their final modes at creation (`UnixCreateMode`).
 - [ ] **Step 4: Run them** → pass; then `~/RiderProjects/tswap-wt/tools/with-suite-lock.sh ./runtests.sh` → all green. Break-it-once: leave the applied values out of the replacements → `RunFileToken_ChildOutputIsRedacted` fails.
 - [ ] **Step 5: Commit** "run: {{@file}} hands the child a filled copy of the file, output redacted".
@@ -75,6 +97,6 @@
   - `Prompt_NeverSuggestsApplyForAgents` (the skill text lists `apply` among the sudo commands, contains the `run … {{@file}}` form, and contains no `<(` + `apply`),
   - the docs guard tests pass with the regenerated `docs/commands.md`.
 - [ ] **Step 2: Run them** → fail.
-- [ ] **Step 3: Implement.** Prompt: move `apply` to "Commands you must NEVER use"; replace the Helm line with `%CMD% run helm upgrade app ./chart -f {{@values.yaml}}`; keep `check`/`tocomment` as they are. Docs: every `<(tswap apply …)` becomes the `run` form; the Windows note says the `run` form works in cmd and PowerShell. Release notes: the breaking change and the one-line migration.
+- [ ] **Step 3: Implement.** Prompt: move `apply` to "Commands you must NEVER use"; replace the Helm line with `%CMD% run helm upgrade app ./chart -f {{@values.yaml}}`; keep `check`/`tocomment` as they are. Docs: every `<(tswap apply …)` becomes the `run` form; `docs/security-model.md` gains the file token's limits (a same-user agent can read the copy while the child runs; encoders/copiers are blocked as a shallow guard; a NOPASSWD sudo grant voids the `apply` gate; SIGKILL leaves the copy until the next sweep); the Windows note says the `run` form works in cmd and PowerShell. Release notes: the breaking change and the one-line migration.
 - [ ] **Step 4: Run them** → pass; whole suite through the lock → green. Break-it-once: set `RequiresSudo` back to false → `Apply_WithoutSudo_RefusedNamingRunForm` fails.
 - [ ] **Step 5: Commit** "apply needs sudo; the agent prompt and docs use run {{@file}}".
