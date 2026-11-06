@@ -5,6 +5,7 @@ using TswapCore.Keyring;
 using TswapCore.Vault;
 using TswapCore.Vault.Fido2;
 using Xunit;
+using Yubico.Core.Iso7816;
 using Yubico.PlatformInterop;
 using Yubico.YubiKey;
 using Yubico.YubiKey.Fido2;
@@ -73,6 +74,8 @@ public class SdkFido2KeysTests
         { new SecurityException("something else"), Fido2Failure.Other, "SecurityException" },
         { new InvalidOperationException("The YubiKey does not have a PIN set."), Fido2Failure.NoPin, "PinNotSet" },
         { new SdkFido2Exception("status lost"), Fido2Failure.Other, "Fido2Exception" },
+        // A CTAPHID error frame read as a CTAP status: SW 0x6F00 (or 0x6700/0x6900/0x6A00) has a low byte of Ok.
+        { new SdkFido2Exception(CtapStatus.Ok, "status Ok, yet an exception"), Fido2Failure.Other, "CtapHidError" },
         // macOS: another program holds the key's HID device exclusively (kIOReturnExclusiveAccess).
         { new PlatformApiException("IOHIDDeviceOpen", unchecked((int)0xE00002C5), "Can't open IOKit device."), Fido2Failure.Busy, "ExclusiveAccess" },
         { new PlatformApiException("No IOKit registry entry was found for the device."), Fido2Failure.NotPluggedIn, "RegistryEntryNotFound" },
@@ -236,10 +239,47 @@ public class SdkFido2KeysTests
     [Fact]
     public void SdkFido2Keys_KeyCollector_CapturedRefusalWinsOverTheSdksException()
     {
-        var refusal = new Fido2DeviceException(Fido2Failure.PinWrong, 2, "PinRetryRefused");
         var session = new FakeSession
         {
-            // The SDK asks the collector for a PIN, the collector refuses, and the SDK gives up with its own exception.
+            // The SDK asks the collector again after a wrong PIN, the collector refuses, and the SDK gives up with its
+            // own exception (Fido2Session.VerifyPin: OperationCanceledException).
+            OnAssertion = collector =>
+            {
+                collector.Collect(new KeyEntryData { Request = KeyEntryRequest.VerifyFido2Pin, IsRetry = true, RetriesRemaining = 2 });
+                throw new OperationCanceledException("The user cancelled the PIN collection operation.");
+            },
+        };
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys(session).GetHmacSecret(Key, [(CredentialId, PrfInput)], _ => Pin.ToArray()));
+
+        Assert.Equal(Fido2Failure.PinWrong, e.Kind);
+        Assert.Equal(2, e.RetriesLeft);
+    }
+
+    [Fact]
+    public void SdkFido2Keys_KeyCollector_CapturedRefusalWinsOverADeviceException()
+    {
+        var session = new FakeSession
+        {
+            OnAssertion = collector =>
+            {
+                collector.Collect(new KeyEntryData { Request = KeyEntryRequest.VerifyFido2Pin, IsRetry = true, RetriesRemaining = 2 });
+                throw new Fido2DeviceException(Fido2Failure.Other, null, "PinAuthInvalid");
+            },
+        };
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys(session).GetHmacSecret(Key, [(CredentialId, PrfInput)], _ => Pin.ToArray()));
+
+        Assert.Equal(Fido2Failure.PinWrong, e.Kind);
+        Assert.Equal(2, e.RetriesLeft);
+    }
+
+    [Fact]
+    public void SdkFido2Keys_KeyCollector_SecondPinRequestRefusedWithoutCallingTheDelegate()
+    {
+        var session = new FakeSession
+        {
+            // The SDK asks for a PIN after tswap's own verification used it.
             OnAssertion = collector =>
             {
                 collector.Collect(new KeyEntryData { Request = KeyEntryRequest.VerifyFido2Pin });
@@ -247,10 +287,12 @@ public class SdkFido2KeysTests
             },
         };
         var calls = 0;
-        var keys = Keys(session);
 
-        var e = Assert.Throws<Fido2DeviceException>(() => keys.GetHmacSecret(Key, [(CredentialId, PrfInput)], _ =>
-            ++calls == 1 ? Pin.ToArray() : throw refusal));
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys(session).GetHmacSecret(Key, [(CredentialId, PrfInput)], _ =>
+        {
+            calls++;
+            return Pin.ToArray();
+        }));
 
         Assert.Equal(Fido2Failure.Other, e.Kind);
         Assert.Equal("PinRequestedTwice", e.Detail);
@@ -447,13 +489,90 @@ public class SdkFido2KeysTests
     [InlineData(CtapStatus.NoCredentials, false)]
     [InlineData((CtapStatus)0x22, false)]
     public void SdkFido2Keys_ProbeAnswer_HoldsOrNot(CtapStatus status, bool holds) =>
-        Assert.Equal(holds, SdkFido2Keys.ProbeHolds(status));
+        Assert.Equal(holds, SdkFido2Keys.ProbeHolds(CtapAnswer(status)));
 
     [Theory]
     [InlineData(CtapStatus.PinRequired, Fido2Failure.Other)]
     [InlineData(CtapStatus.ChannelBusy, Fido2Failure.Busy)]
     public void SdkFido2Keys_ProbeAnswer_OtherStatusesFail(CtapStatus status, Fido2Failure expected) =>
-        Assert.Equal(expected, Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.ProbeHolds(status)).Kind);
+        Assert.Equal(expected, Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.ProbeHolds(CtapAnswer(status))).Kind);
+
+    public static TheoryData<byte, Fido2Failure, string> CtapHidErrors => new()
+    {
+        // ERR_CHANNEL_BUSY: another process is mid-transaction on the shared hidraw node.
+        { 0x06, Fido2Failure.Busy, "ChannelBusy" },
+        // ERR_MSG_TIMEOUT.
+        { 0x05, Fido2Failure.TimedOut, "MessageTimeout" },
+        { 0x7F, Fido2Failure.Other, "CtapHidError0x7F" },
+        // ERR_INVALID_CMD, ERR_INVALID_PAR, ERR_INVALID_LEN: the SDK gives these SW 0x6900, 0x6A00, 0x6700 (low byte 0 too).
+        { 0x01, Fido2Failure.Other, "CtapHidError0x01" },
+        { 0x02, Fido2Failure.Other, "CtapHidError0x02" },
+        { 0x03, Fido2Failure.Other, "CtapHidError0x03" },
+    };
+
+    /// <summary>
+    /// A CTAPHID error frame reaches tswap as the SDK's FidoTransform turns it into an APDU (SW 0x6F00 or 0x6700/0x6900/
+    /// 0x6A00, data the one error byte), which <see cref="Fido2Response"/> reads as <see cref="CtapStatus.Ok"/>. The
+    /// probe must never take such a key for the holder.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(CtapHidErrors))]
+    public void SdkFido2Keys_ProbeAnswer_CtapHidErrorIsNeverTheHolder(byte error, Fido2Failure expected, string detail)
+    {
+        var apdu = CtapHidErrorAnswer(error);
+        Assert.Equal(CtapStatus.Ok, new GetAssertionResponse(apdu).CtapStatus);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.ProbeHolds(apdu));
+
+        Assert.Equal(expected, e.Kind);
+        Assert.Equal(detail, e.Detail);
+    }
+
+    [Theory]
+    [MemberData(nameof(CtapHidErrors))]
+    public void SdkFido2Keys_CeremonyAnswer_CtapHidErrorFails(byte error, Fido2Failure expected, string detail)
+    {
+        var e = Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.RequireOk(CtapHidErrorAnswer(error)));
+
+        Assert.Equal(expected, e.Kind);
+        Assert.Equal(detail, e.Detail);
+    }
+
+    [Theory]
+    [InlineData(CtapStatus.CredentialExcluded, Fido2Failure.CredentialExcluded)]
+    [InlineData(CtapStatus.OperationDenied, Fido2Failure.Cancelled)]
+    [InlineData(CtapStatus.NoCredentials, Fido2Failure.NoCredential)]
+    public void SdkFido2Keys_CeremonyAnswer_CtapStatusFails(CtapStatus status, Fido2Failure expected) =>
+        Assert.Equal(expected, Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.RequireOk(CtapAnswer(status))).Kind);
+
+    [Fact]
+    public void SdkFido2Keys_CeremonyAnswer_OkPasses() => SdkFido2Keys.RequireOk(CtapAnswer(CtapStatus.Ok));
+
+    // ---- an assertion that leaves out the credential ----
+
+    [Fact]
+    public void SdkFido2Keys_AssertionWithoutCredential_IsTheRequestedOne()
+    {
+        var withoutCredential = AssertionCbor(credentialId: null);
+
+        using var data = new GetAssertionData(SdkFido2Keys.WithCredential(withoutCredential, CredentialId));
+
+        Assert.Equal(CredentialId, data.CredentialId.Id.ToArray());
+        Assert.Equal("public-key", data.CredentialId.Type);
+        Assert.True(data.AuthenticatorData.UserVerification);
+        Assert.Equal(new byte[] { 0x51, 0x52 }, data.Signature.ToArray());
+    }
+
+    [Fact]
+    public void SdkFido2Keys_AssertionWithCredential_IsLeftAsTheKeySentIt()
+    {
+        byte[] answered = [.. Enumerable.Repeat((byte)0xEE, 48)];
+        var withCredential = AssertionCbor(answered);
+
+        Assert.Equal(withCredential, SdkFido2Keys.WithCredential(withCredential, CredentialId).ToArray());
+        using var data = new GetAssertionData(SdkFido2Keys.WithCredential(withCredential, CredentialId));
+        Assert.Equal(answered, data.CredentialId.Id.ToArray());
+    }
 
     [Fact]
     public void SdkFido2Keys_CanList() => Assert.True(Keys(new FakeSession()).CanList);
@@ -461,6 +580,44 @@ public class SdkFido2KeysTests
     // ---- helpers ----
 
     private static SdkFido2Keys Keys(FakeSession session) => new(new FakeDevices(session));
+
+    /// <summary>A CTAP2 answer as the SDK's FidoErrorTransform builds it: 0x9000 and the CBOR, or 0x6F00 | status.</summary>
+    private static ResponseApdu CtapAnswer(CtapStatus status) =>
+        status == CtapStatus.Ok
+            ? new ResponseApdu([0xA0], unchecked((short)0x9000))
+            : new ResponseApdu([], (short)(0x6F00 | (byte)status));
+
+    /// <summary>A CTAPHID error frame as the SDK's CtapToApduResponse.ToCtap1ResponseApdu builds it.</summary>
+    private static ResponseApdu CtapHidErrorAnswer(byte error) =>
+        new([error], error switch { 1 => (short)0x6900, 2 => (short)0x6A00, 3 => (short)0x6700, _ => (short)0x6F00 });
+
+    /// <summary>
+    /// A GetAssertion answer's CBOR (canonical, integer keys): the credential (key 1) when given, authenticator data
+    /// (key 2: an RP id hash, flags UP|UV, a counter) and a signature (key 3).
+    /// </summary>
+    private static byte[] AssertionCbor(byte[]? credentialId)
+    {
+        var authData = new byte[37];
+        authData[32] = 0x05;
+        var writer = new CborWriter(CborConformanceMode.Ctap2Canonical);
+        writer.WriteStartMap(credentialId is null ? 2 : 3);
+        if (credentialId is not null)
+        {
+            writer.WriteInt32(1);
+            writer.WriteStartMap(2);
+            writer.WriteTextString("id");
+            writer.WriteByteString(credentialId);
+            writer.WriteTextString("type");
+            writer.WriteTextString("public-key");
+            writer.WriteEndMap();
+        }
+        writer.WriteInt32(2);
+        writer.WriteByteString(authData);
+        writer.WriteInt32(3);
+        writer.WriteByteString([0x51, 0x52]);
+        writer.WriteEndMap();
+        return writer.Encode();
+    }
 
     /// <summary>
     /// The salt the hmac-secret extension carries: encoded with a PIN protocol of the test's own (as the session's

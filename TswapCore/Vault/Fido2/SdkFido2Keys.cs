@@ -1,7 +1,9 @@
+using System.Formats.Cbor;
 using System.Runtime.ExceptionServices;
 using System.Security;
 using System.Security.Cryptography;
 using TswapCore.Keyring;
+using Yubico.Core.Iso7816;
 using Yubico.PlatformInterop;
 using Yubico.YubiKey;
 using Yubico.YubiKey.Fido2;
@@ -121,8 +123,8 @@ public sealed class SdkFido2Keys : IFido2Keys
 
     /// <summary>
     /// Runs <paramref name="operation"/>; anything but a <see cref="Fido2DeviceException"/> becomes one. A refusal the
-    /// collector captured (the SDK asked it for a PIN, a retry, a fingerprint) wins over the exception the SDK then
-    /// threw, and is rethrown unchanged.
+    /// collector captured (the SDK asked it for a PIN, a retry, a fingerprint) wins over whatever the operation then
+    /// threw, a <see cref="Fido2DeviceException"/> included, and is rethrown unchanged.
     /// </summary>
     private static T Guarded<T>(SdkPinCollector? collector, Func<T> operation)
     {
@@ -130,9 +132,11 @@ public sealed class SdkFido2Keys : IFido2Keys
         {
             return operation();
         }
-        catch (Exception e) when (e is not Fido2DeviceException)
+        catch (Exception e)
         {
             collector?.ThrowIfCaptured();
+            if (e is Fido2DeviceException)
+                throw;
             throw Classify(e);
         }
     }
@@ -195,13 +199,88 @@ public sealed class SdkFido2Keys : IFido2Keys
         return parameters;
     }
 
-    /// <summary>The probe's answer: the key holds the credential (true), doesn't (false), or failed (thrown).</summary>
-    internal static bool ProbeHolds(CtapStatus status) => status switch
+    /// <summary>
+    /// The probe's answer: the key holds the credential (true), doesn't (false), or failed (thrown), a CTAPHID error
+    /// frame included (<see cref="Status"/>): a busy key is never taken for the holder.
+    /// </summary>
+    internal static bool ProbeHolds(ResponseApdu answer) => Status(answer) switch
     {
         CtapStatus.Ok => true,
         CtapStatus.NoCredentials or InvalidCredential => false,
-        _ => throw FromStatus(status),
+        var status => throw FromStatus(status),
     };
+
+    /// <summary>A ceremony's answer (make-credential, the assertion): anything but a CTAP <c>Ok</c> throws.</summary>
+    internal static void RequireOk(ResponseApdu answer)
+    {
+        if (Status(answer) is not CtapStatus.Ok and var status)
+            throw FromStatus(status);
+    }
+
+    /// <summary>
+    /// The CTAP status of an answer, as <c>Fido2Response</c> reads it (the status word's low byte), after ruling out a
+    /// CTAPHID error frame. The SDK's <c>FidoTransform</c> turns one (ERR_CHANNEL_BUSY when another process is
+    /// mid-transaction on the shared hidraw node, ERR_MSG_TIMEOUT, ...) into status word 0x6F00 (0x6900, 0x6A00, 0x6700
+    /// for errors 1 to 3) with the error byte as data, whose low byte <c>Fido2Response</c> reads as <c>Ok</c>. A CTAP2
+    /// answer is 0x9000 or 0x6F00 | status, so a status word other than 0x9000 with a zero low byte is that frame.
+    /// </summary>
+    private static CtapStatus Status(ResponseApdu answer)
+    {
+        var word = (ushort)answer.SW;
+        if (word != SuccessWord && (word & 0xFF) == 0)
+            throw CtapHidError(answer.Data.Length == 1 ? answer.Data.Span[0] : null);
+        return (CtapStatus)(word & 0xFF);
+    }
+
+    private const ushort SuccessWord = 0x9000;
+
+    /// <summary>A CTAPHID error (its code, when the frame carried one) as a failure.</summary>
+    private static Fido2DeviceException CtapHidError(byte? code) => code switch
+    {
+        0x06 => new(Fido2Failure.Busy, null, "ChannelBusy"),
+        0x05 => new(Fido2Failure.TimedOut, null, "MessageTimeout"),
+        { } other => new(Fido2Failure.Other, null, $"CtapHidError0x{other:X2}"),
+        null => new(Fido2Failure.Other, null, "CtapHidError"),
+    };
+
+    /// <summary>
+    /// A GetAssertion answer's CBOR with the credential (key 1) filled in as <paramref name="requestedId"/> when the key
+    /// left it out, which CTAP allows when the allow list held one credential; the SDK's <c>GetAssertionData</c> needs
+    /// it. An answer with a credential is returned unchanged.
+    /// </summary>
+    internal static ReadOnlyMemory<byte> WithCredential(ReadOnlyMemory<byte> answer, byte[] requestedId)
+    {
+        var reader = new CborReader(answer, CborConformanceMode.Ctap2Canonical);
+        var count = reader.ReadStartMap() ?? throw new Fido2DeviceException(Fido2Failure.Other, null, "MalformedAssertion");
+        List<(int Key, ReadOnlyMemory<byte> Value)> entries = [];
+        for (var i = 0; i < count; i++)
+        {
+            var key = reader.ReadInt32();
+            if (key == CredentialKey)
+                return answer;
+            entries.Add((key, reader.ReadEncodedValue()));
+        }
+
+        var writer = new CborWriter(CborConformanceMode.Ctap2Canonical);
+        writer.WriteStartMap(count + 1);
+        writer.WriteInt32(CredentialKey);
+        writer.WriteStartMap(2);
+        writer.WriteTextString("id");
+        writer.WriteByteString(requestedId);
+        writer.WriteTextString("type");
+        writer.WriteTextString("public-key");
+        writer.WriteEndMap();
+        foreach (var (key, value) in entries)
+        {
+            writer.WriteInt32(key);
+            writer.WriteEncodedValue(value.Span);
+        }
+        writer.WriteEndMap();
+        return writer.Encode();
+    }
+
+    /// <summary>The GetAssertion answer's <c>credential</c> member (CTAP 2.1, authenticatorGetAssertion response).</summary>
+    private const int CredentialKey = 1;
 
     private const int ClientDataHashSize = 32;
 
@@ -258,6 +337,8 @@ public sealed class SdkFido2Keys : IFido2Keys
     internal static Fido2DeviceException Classify(Exception e) => e switch
     {
         Fido2DeviceException mine => mine,
+        // Status Ok in an exception: a CTAPHID error frame the SDK read as a CTAP status (see Status); its code is gone.
+        SdkFido2Exception { Status: CtapStatus.Ok } => CtapHidError(null),
         SdkFido2Exception { Status: { } status } => FromStatus(status),
         // Fido2Session's high-level calls: a refused or missed touch, a cancelled collector, no tries left, no PIN.
         TimeoutException => new(Fido2Failure.TimedOut, null, nameof(TimeoutException)),
