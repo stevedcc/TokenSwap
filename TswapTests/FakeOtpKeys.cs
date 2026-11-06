@@ -28,6 +28,9 @@ internal sealed class FakeOtpKeys : IOtpKeys
     /// <summary>What the read-only probe of the raw keyboard interfaces finds (default: none listed).</summary>
     public List<KeyboardInterfaceState> Interfaces { get; } = [];
 
+    /// <summary>Set: <see cref="Find"/> fails with an <see cref="OtpKeysException"/> of this kind (the SDK's listing threw).</summary>
+    public OtpFailure? FindFails { get; set; }
+
     /// <summary>The probe itself fails (the SDK's HID listing threw).</summary>
     public bool ProbeFails { get; init; }
 
@@ -54,7 +57,8 @@ internal sealed class FakeOtpKeys : IOtpKeys
     /// <summary>The secret the fake answers with for a serial (deterministic).</summary>
     public static byte[] SecretFor(int serial) => SHA1.HashData(BitConverter.GetBytes(serial));
 
-    public IReadOnlyList<OtpKeyInfo> Find() => Keys.ToList();
+    public IReadOnlyList<OtpKeyInfo> Find() =>
+        FindFails is { } kind ? throw new OtpKeysException(kind, null, $"fake {kind} listing") : Keys.ToList();
 
     public OtpChallengeResult Challenge(int serial, ReadOnlySpan<byte> challenge64, Action onTouchRequested)
     {
@@ -82,6 +86,8 @@ internal sealed class FakeOtpKeys : IOtpKeys
     public void ProgramSlot2(int serial, bool requireTouch)
     {
         Programs.Add((serial, requireTouch));
+        if (Busy.Contains(serial))
+            throw new OtpKeysException(OtpFailure.Busy, serial, "the key did not accept the command");
         if (ProgramOutcome.TryGetValue(serial, out var kind))
             throw new OtpKeysException(kind, serial, $"fake {kind}");
         Slot2Empty.Remove(serial);

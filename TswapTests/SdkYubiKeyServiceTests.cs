@@ -74,6 +74,37 @@ public sealed class SdkYubiKeyServiceTests
         Assert.DoesNotContain("udev", ex.Message);
     }
 
+    /// <summary>
+    /// Final review item 6 (p2-I-1): the SDK's listing itself fails as busy (another program mid-command): the busy
+    /// kind and text, never "no YubiKey".
+    /// </summary>
+    [Fact]
+    public void ListSerials_KeyBusy_SaysBusy()
+    {
+        var keys = new FakeOtpKeys { FindFails = OtpFailure.Busy }.WithKey(33060005);
+
+        var ex = Assert.Throws<YubiKeyDeviceException>(() => Service(keys).ListSerials());
+
+        Assert.Equal(OtpFailure.Busy, ex.Kind);
+        Assert.Equal("A YubiKey is busy (another tswap or app is using it); try again.", ex.Message);
+        Assert.DoesNotContain("No YubiKey", ex.Message);
+    }
+
+    /// <summary>Final review item 6 (p2-M-1): the fake's busy key fails a program call too, as its doc says.</summary>
+    [Fact]
+    public void ProgramSlot2_KeyBusy_SaysBusyAndProgramsNothing()
+    {
+        var keys = new FakeOtpKeys().WithKey(33060005);
+        keys.Slot2Empty.Add(33060005);
+        keys.Busy.Add(33060005);
+
+        var ex = Assert.Throws<YubiKeyDeviceException>(() => Service(keys).ProgramSlot2(33060005, requireTouch: true));
+
+        Assert.Equal(OtpFailure.Busy, ex.Kind);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is using it); try again.", ex.Message);
+        Assert.Contains(33060005, keys.Slot2Empty); // nothing was programmed
+    }
+
     [Fact]
     public void ListSerials_OneReachableOneHidden_ReturnsTheReachableOne()
     {
