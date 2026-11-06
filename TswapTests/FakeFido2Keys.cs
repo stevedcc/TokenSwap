@@ -85,6 +85,9 @@ internal sealed class FakeFido2Keys : IFido2Keys
     /// <summary>Every call, in order.</summary>
     public List<FakeFido2Call> Calls { get; } = [];
 
+    /// <summary>Runs as each call is logged, before the fake answers it (task 6: what was on disk at that moment).</summary>
+    public Action<FakeFido2Call>? OnCall { get; set; }
+
     /// <summary>Every call the fake made to a <see cref="Fido2DevicePin"/>, with the retries it passed.</summary>
     public List<int?> DevicePinCalls { get; } = [];
 
@@ -155,7 +158,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
     public IReadOnlyList<Fido2KeyInfo> Find()
     {
         RequireCanList();
-        Calls.Add(new FakeFido2Call(FakeFido2Op.Find, null, []));
+        Log(new FakeFido2Call(FakeFido2Op.Find, null, []));
         ThrowInjected(FakeFido2Op.Find, afterPin: false);
         return [.. Keys.Where(k => k.PluggedIn).Select(Info)];
     }
@@ -163,7 +166,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
     public Fido2KeyInfo? FindHolder(byte[] credentialId)
     {
         RequireCanList();
-        Calls.Add(new FakeFido2Call(FakeFido2Op.FindHolder, null, [Copy(credentialId)]));
+        Log(new FakeFido2Call(FakeFido2Op.FindHolder, null, [Copy(credentialId)]));
         ThrowInjected(FakeFido2Op.FindHolder, afterPin: false);
         var holder = Keys.FirstOrDefault(k => k.PluggedIn && Holds(k, credentialId));
         return holder is null ? null : Info(holder);
@@ -171,7 +174,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
 
     public Fido2Made MakeCredential(Fido2KeyRef? key, byte[] userId, IReadOnlyList<byte[]> excludeCredentialIds, Fido2DevicePin pin)
     {
-        Calls.Add(new FakeFido2Call(FakeFido2Op.MakeCredential, key, [.. excludeCredentialIds.Select(Copy)], Copy(userId)));
+        Log(new FakeFido2Call(FakeFido2Op.MakeCredential, key, [.. excludeCredentialIds.Select(Copy)], Copy(userId)));
         var target = Target(key);
         ThrowInjected(FakeFido2Op.MakeCredential, afterPin: false);
         Verify(target, pin);
@@ -185,7 +188,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
 
     public Fido2Output GetHmacSecret(Fido2KeyRef? key, IReadOnlyList<(byte[] CredentialId, byte[] PrfInput)> allowed, Fido2DevicePin pin)
     {
-        Calls.Add(new FakeFido2Call(FakeFido2Op.GetHmacSecret, key, [.. allowed.Select(a => Copy(a.CredentialId))]));
+        Log(new FakeFido2Call(FakeFido2Op.GetHmacSecret, key, [.. allowed.Select(a => Copy(a.CredentialId))]));
         var target = Target(key);
         ThrowInjected(FakeFido2Op.GetHmacSecret, afterPin: false);
         Verify(target, pin);
@@ -206,7 +209,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
     public void SetPin(Fido2KeyRef key, Fido2DevicePin newPin)
     {
         RequireCanList();
-        Calls.Add(new FakeFido2Call(FakeFido2Op.SetPin, key, []));
+        Log(new FakeFido2Call(FakeFido2Op.SetPin, key, []));
         var target = Target(key);
         ThrowInjected(FakeFido2Op.SetPin, afterPin: false);
         if (target.Pin is not null)
@@ -216,6 +219,12 @@ internal sealed class FakeFido2Keys : IFido2Keys
         PinBuffers.Add(bytes);
         target.Pin = Encoding.UTF8.GetString(bytes);
         CryptographicOperations.ZeroMemory(bytes);
+    }
+
+    private void Log(FakeFido2Call call)
+    {
+        Calls.Add(call);
+        OnCall?.Invoke(call);
     }
 
     private Key Target(Fido2KeyRef? key)

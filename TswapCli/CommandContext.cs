@@ -134,6 +134,13 @@ public sealed record CommandContext(
     /// </summary>
     public IFido2Service? Fido2 { get; init; }
 
+    /// <summary>
+    /// Opens the controlling terminal (FIDO2 plan, task 6: <see cref="ControllingTerminal.Open"/> in the binary, a
+    /// script in tests); null, or a null result, means there is none. The FIDO2 PIN is read there
+    /// (<see cref="Fido2PinPrompt"/>), never from stdin. The caller disposes what it opened.
+    /// </summary>
+    public Func<ITerminal?>? Terminal { get; init; }
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

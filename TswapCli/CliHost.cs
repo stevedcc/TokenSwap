@@ -77,6 +77,8 @@ internal static class CliHost
             {
                 Time = time,
                 Fido2 = Fido2Service(testKey),
+                // Test mode has no FIDO2 service, so it needs no terminal either (a test's own may never answer).
+                Terminal = testKey is null ? ControllingTerminal.Open : null,
             };
             return CliRunner.Run(ctx, env.CommandArgs);
         }
