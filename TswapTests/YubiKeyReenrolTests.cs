@@ -377,6 +377,38 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal([newA.Blob.ChallengeString], ChallengesOf(m, SerialA)); // the remembered slot, and it opened
     }
 
+    /// <summary>
+    /// Final review item 10 (p6-I3, p1-M3): an unlock that leaves a key out (UnlockExcluding, for its re-enrolment) never
+    /// challenges it through a legacy pair slot either. Only the excluded key plugged in: refused, the key not
+    /// challenged, and the text says it is left out because it's being enrolled again (not "not authorized, expected:
+    /// it"). Both plugged in: the pair's other key alone opens the vault.
+    /// </summary>
+    [Fact]
+    public void UnlockExcluding_PairVault_ExcludedKeyNeverChallenged()
+    {
+        var m = ConvertedPairVault();
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        var excludingA = YubiKeySelection.Unattended with { ExcludeSerial = PairA };
+        m.Keys.PluggedIn = [PairA, PairB];
+        var expected = new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended);
+        m.Keys.Challenges.Clear();
+
+        m.Keys.PluggedIn = [PairA];
+        var ex = Assert.ThrowsAny<TswapException>(() => new VaultUnlocker(m.Keys).Unlock(config, excludingA));
+
+        Assert.Contains($"YubiKey {PairA} is left out of this unlock because it's being enrolled again, and the pair's " +
+            $"other key ({PairB}) isn't plugged in.", ex.Message);
+        Assert.DoesNotContain("not authorized", ex.Message);
+        Assert.Empty(m.Keys.Challenges);
+
+        m.Keys.PluggedIn = [PairA, PairB];
+        var key = new VaultUnlocker(m.Keys).Unlock(config, excludingA);
+
+        Assert.Equal(expected, key);
+        Assert.Empty(ChallengesOf(m, PairA));
+        Assert.NotEmpty(ChallengesOf(m, PairB));
+    }
+
     [Fact]
     public void SlotAdd_LegacyPairSlotsOnly_FirstEnrolment_NoPairLabelled()
     {

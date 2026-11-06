@@ -56,6 +56,13 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
 
         // Task 4b: a key being re-enrolled is never used (the pair's other key alone opens it with the share).
         var enrolled = connected.Where(config.YubiKeySerials.Contains).Where(s => s != selection.ExcludeSerial).Distinct().ToList();
+        // Final review (p1-M3): the excluded key is plugged in and enrolled, so "not authorized, expected: it" would be
+        // wrong: say it is left out, and that the pair's other key is missing.
+        if (enrolled.Count == 0 && selection.Serial is null && selection.ExcludeSerial is int excluded
+            && connected.Contains(excluded) && config.YubiKeySerials.Contains(excluded))
+            throw new TswapException(
+                $"YubiKey {excluded} is left out of this unlock because it's being enrolled again, and the pair's other key " +
+                $"({string.Join(", ", config.YubiKeySerials.Where(s => s != excluded))}) isn't plugged in.");
         if (enrolled.Count == 0 && selection.Serial is null)
             throw new TswapException(connected.Count == 1
                 ? $"YubiKey {connected[0]} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}"
