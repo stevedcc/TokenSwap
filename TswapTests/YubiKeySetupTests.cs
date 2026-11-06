@@ -659,11 +659,57 @@ public sealed partial class YubiKeySetupTests : IDisposable
         const string password = "correct horse battery staple";
         var m = VaultOnAAndB(password); // B's slot has the vault password, A's doesn't
 
+        var before = VaultFiles(m);
+
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n{password}\n", terminal: true);
 
         Assert.True(r.Exit == 0, r.All);
         Assert.Contains("Vault password:", r.Err);
         Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        AssertUnchanged(before, VaultFiles(m)); // final review item 7: setup never writes the vault
+    }
+
+    /// <summary>
+    /// Final review item 7 (p5-I-1): a plain setup of an empty slot 2, in a vault's config folder, writes nothing there.
+    /// </summary>
+    [Fact]
+    public void Setup_EmptySlot_InVaultFolder_WritesNothing()
+    {
+        var m = VaultOnAAndB("correct horse battery staple");
+        m.Keys.Slot2States[SerialA] = Slot2State.Empty;
+        var before = VaultFiles(m);
+
+        var r = Setup(m.Keys, ["--touch", "--serial", $"{SerialA}"], m.Dir, "", terminal: false);
+
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        AssertUnchanged(before, VaultFiles(m));
+    }
+
+    /// <summary>
+    /// Final review item 7: every file of the machine's config folder and its vault folder, by path. The named ones
+    /// must be there: config.json, the keyring, the vault-password file, and the machine-local remembered-slots file
+    /// (slot add wrote it). Setup only reads the remembered slots (to order its check, which doesn't remember the slot
+    /// that opened), so that file stays as it was too.
+    /// </summary>
+    private static Dictionary<string, byte[]> VaultFiles(FleetMachine m)
+    {
+        var files = new[] { m.Dir, m.VaultDir! }
+            .SelectMany(d => Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories))
+            .Select(Path.GetFullPath).Distinct()
+            .ToDictionary(f => f, File.ReadAllBytes);
+        Assert.Contains(Path.GetFullPath(m.ConfigPath), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.VaultDir!, RecordVaultStore.KeyringFileName)), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName)), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.Dir, RememberedYubiKeySlots.FileName)), files.Keys);
+        return files;
+    }
+
+    private static void AssertUnchanged(Dictionary<string, byte[]> before, Dictionary<string, byte[]> after)
+    {
+        Assert.Equal(before.Keys.Order(), after.Keys.Order());
+        foreach (var (path, bytes) in before)
+            Assert.True(bytes.AsSpan().SequenceEqual(after[path]), $"{path} changed");
     }
 
     [Fact]
