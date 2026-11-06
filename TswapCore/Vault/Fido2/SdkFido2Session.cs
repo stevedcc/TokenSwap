@@ -11,31 +11,69 @@ namespace TswapCore.Vault.Fido2;
 /// for a key while it stays plugged in, so a <see cref="Fido2KeyRef"/> is a handle to that object, valid for this
 /// process: a key unplugged since it was listed is not plugged in, even when plugged in again.
 /// </summary>
-internal sealed class SdkFido2Devices : ISdkFido2Devices
+internal sealed class SdkFido2Devices(TextWriter? notices = null) : ISdkFido2Devices
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<IYubiKeyDevice, Fido2KeyRef> _refs = new(ReferenceEqualityComparer.Instance);
     private int _next;
 
-    public IReadOnlyList<Fido2KeyInfo> Find() => [.. Listed().Select(Read)];
+    /// <summary>
+    /// Every key that can be read (<see cref="ReadEach"/>); one that can't is left out, said on
+    /// <paramref name="notices"/> (stderr) with its problem.
+    /// </summary>
+    public IReadOnlyList<Fido2KeyInfo> Find() => ReadEach(Listed(), Read, e => notices?.WriteLine(Fido2Texts.KeyLeftOut(e.Detail ?? e.Kind.ToString())));
 
     /// <summary>
     /// The silent probe on every plugged-in key (<see cref="SdkFido2Keys.BuildProbeParameters"/>, sent as the raw
-    /// GetAssertion command: no PIN token, user presence off). The first key holding the credential wins; when none
-    /// does, a key that failed to answer makes the probe fail (it might have been the holder), otherwise none.
+    /// GetAssertion command: no PIN token, user presence off), through <see cref="FirstHolder"/>.
     /// </summary>
-    public Fido2KeyInfo? FindHolder(byte[] credentialId)
+    public Fido2KeyInfo? FindHolder(byte[] credentialId) => FirstHolder(Listed(), device =>
     {
-        Fido2DeviceException? failure = null;
-        foreach (var device in Listed())
+        using var connection = device.Connect(YubiKeyApplication.Fido2);
+        return SdkFido2Keys.ProbeHolds(SdkAnswer.Of(connection, new GetAssertionCommand(SdkFido2Keys.BuildProbeParameters(credentialId))));
+    }, Read);
+
+    /// <summary>
+    /// The listing's loop: each device read with <paramref name="read"/>; a device that can't be read is left out and
+    /// passed to <paramref name="leftOut"/>. When none could be read and one failed, that failure is thrown.
+    /// </summary>
+    internal static IReadOnlyList<Fido2KeyInfo> ReadEach<TDevice>(IEnumerable<TDevice> devices, Func<TDevice, Fido2KeyInfo> read,
+        Action<Fido2DeviceException>? leftOut)
+    {
+        List<Fido2KeyInfo> keys = [];
+        List<Fido2DeviceException> failures = [];
+        foreach (var device in devices)
         {
             try
             {
-                bool holds;
-                using (var connection = device.Connect(YubiKeyApplication.Fido2))
-                    holds = SdkFido2Keys.ProbeHolds(SdkAnswer.Of(connection, new GetAssertionCommand(SdkFido2Keys.BuildProbeParameters(credentialId))));
-                if (holds)
-                    return Read(device);
+                keys.Add(read(device));
+            }
+            catch (Exception e)
+            {
+                failures.Add(SdkFido2Keys.Classify(e));
+            }
+        }
+        if (keys.Count == 0 && failures.Count > 0)
+            throw failures[0];
+        foreach (var failure in failures)
+            leftOut?.Invoke(failure);
+        return keys;
+    }
+
+    /// <summary>
+    /// The probe's loop: the first device <paramref name="holds"/> says holds the credential wins (read with
+    /// <paramref name="read"/>); when none does, a device that failed to answer makes the probe fail (it might have been
+    /// the holder), otherwise none.
+    /// </summary>
+    internal static Fido2KeyInfo? FirstHolder<TDevice>(IEnumerable<TDevice> devices, Func<TDevice, bool> holds, Func<TDevice, Fido2KeyInfo> read)
+    {
+        Fido2DeviceException? failure = null;
+        foreach (var device in devices)
+        {
+            try
+            {
+                if (holds(device))
+                    return read(device);
             }
             catch (Exception e)
             {

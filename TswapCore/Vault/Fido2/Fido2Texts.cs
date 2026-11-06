@@ -105,6 +105,10 @@ public static class Fido2Texts
 
     public static string NotPluggedIn(string name) => $"{name} is not plugged in.";
 
+    /// <summary>A plugged-in key the listing couldn't read (Linux, macOS): left out, with its problem's status name.</summary>
+    public static string KeyLeftOut(string problem) =>
+        $"A plugged-in key's FIDO2 interface couldn't be read ({problem}), so it is left out of the list.";
+
     /// <summary><paramref name="detail"/>: the API version Windows reported, when the device layer knows it.</summary>
     public static string Unsupported(string? detail) => detail is null
         ? "Windows' WebAuthn API on this machine is too old for FIDO2 slots (needs version 4)."

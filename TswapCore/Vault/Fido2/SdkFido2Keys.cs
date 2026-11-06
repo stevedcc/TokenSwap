@@ -35,8 +35,9 @@ public sealed class SdkFido2Keys : IFido2Keys
 {
     private readonly ISdkFido2Devices _devices;
 
-    public SdkFido2Keys()
-        : this(new SdkFido2Devices())
+    /// <param name="notices">Where a plugged-in key left out of a listing (it couldn't be read) is said: stderr.</param>
+    public SdkFido2Keys(TextWriter? notices = null)
+        : this(new SdkFido2Devices(notices))
     {
     }
 

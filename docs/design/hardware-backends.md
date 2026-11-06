@@ -250,7 +250,9 @@ device implementations:
   make-credential, for the rp id) rather than the SDK's high-level `Fido2Session` calls, which hide
   CTAP statuses such as an excluded credential. The silent probe is an assertion with user presence
   off, no PIN token and no extension: no PIN and no touch. CTAPHID error frames (busy,
-  timeout) are read from the raw answer, since the SDK reports them as success.
+  timeout) are read from the raw answer, since the SDK reports them as success. A plugged-in key
+  that can't be read is left out of the listing, said on stderr with its problem (the listing fails
+  only when no key could be read); the probe's first holder wins over another key's failure.
 - `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
   FIDO2 credential of the vault in its allow list, each with its own salt
   (`pCredWithHmacSecretSaltList`, `Fido2Prf.Salt` of its PRF input, passed raw); the credential
