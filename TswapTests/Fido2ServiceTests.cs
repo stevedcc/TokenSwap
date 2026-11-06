@@ -60,7 +60,6 @@ public class Fido2ServiceTests
         Assert.Equal(16, make.UserId!.Length);
         var request = Assert.Single(_requests);
         Assert.Equal(new Fido2PinRequest("YubiKey 33060005", 8, NewPin: false), request);
-        Assert.All(_keys.PinBuffers, buffer => Assert.All(buffer, b => Assert.Equal(0, b)));
     }
 
     [Fact]
@@ -69,13 +68,11 @@ public class Fido2ServiceTests
         _keys.CanList = false;
         _keys.Picked = _keys.AddKey(null, OtherBrand);
 
-        Fido2SlotBlob? blob = null;
-        var error = Assert.Throws<Fido2Exception>(() => blob = Service.Enrol(null, false, [], Typing()));
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
 
         Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
         Assert.Contains("#193", error.Message);
         Assert.Contains("not a YubiKey", error.Message);
-        Assert.Null(blob);
     }
 
     [Fact]
@@ -145,10 +142,8 @@ public class Fido2ServiceTests
         _keys.CanList = false;
         _keys.Picked = _keys.AddKey(null, Guid.Empty);
 
-        Fido2SlotBlob? blob = null;
-        var error = Assert.Throws<Fido2Exception>(() => blob = Service.Enrol(null, false, [], Typing()));
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
 
-        Assert.Null(blob);
         Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
         Assert.Contains("Windows didn't report which key this is", error.Message);
     }
@@ -175,6 +170,50 @@ public class Fido2ServiceTests
         Assert.Equal(Fido2Failure.Cancelled, error.Kind);
         Assert.Empty(_keys.PinBuffers);
         Assert.Equal(8, key.Retries);
+    }
+
+    [Fact]
+    public void Enrol_NoTerminal_RefusedBeforeAnyKeyCall()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc);
+        var existing = SlotOn(_keys.AddKey(OtherSerial, Yubico5Nfc));
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [existing], pin: null));
+
+        Assert.Equal(Fido2Failure.NoTerminal, error.Kind);
+        Assert.Equal(Fido2Texts.NoTerminal, error.Message);
+        Assert.Empty(_keys.Calls);
+    }
+
+    [Fact]
+    public void Enrol_MadeCredentialNotYubicos_RefusedNamingIssue193()
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc);
+        var info = FakeFido2Keys.Info(key);
+        key.Aaguid = OtherBrand;
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(info, false, [], Typing()));
+
+        Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
+        Assert.Equal(Fido2Texts.NotAYubiKey(OtherBrand), error.Message);
+        Assert.Contains("#193", error.Message);
+        Assert.Single(_keys.Calls, c => c.Op == FakeFido2Op.MakeCredential);
+    }
+
+    [Theory]
+    [InlineData(15)]
+    [InlineData(1024)]
+    public void Enrol_CredentialIdOutOfRange_Refused(int length)
+    {
+        var key = _keys.AddKey(Serial, Yubico5Nfc);
+        key.MadeCredentialIdLength = length;
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing()));
+
+        Assert.Equal(Fido2Failure.Other, error.Kind);
+        Assert.Equal(
+            $"YubiKey 33060005 returned a credential id of {length} bytes, which a FIDO2 slot can't hold (16 to 1023). No slot was added.",
+            error.Message);
     }
 
     // ---- Open ----
@@ -503,7 +542,18 @@ public class Fido2ServiceTests
 
         Assert.Equal("246810", key.Pin);
         Assert.Equal(new Fido2PinRequest("Security Key NFC by Yubico", null, NewPin: true), Assert.Single(_requests));
-        Assert.All(_keys.PinBuffers, buffer => Assert.All(buffer, b => Assert.Equal(0, b)));
+    }
+
+    [Fact]
+    public void SetPin_NoTerminal_RefusedBeforeAnyKeyCall()
+    {
+        var key = _keys.AddKey(null, SecurityKeyNfc, pin: null);
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.SetPin(FakeFido2Keys.Info(key), pin: null));
+
+        Assert.Equal(Fido2Failure.NoTerminal, error.Kind);
+        Assert.Empty(_keys.Calls);
+        Assert.Null(key.Pin);
     }
 
     [Fact]

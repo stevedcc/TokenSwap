@@ -61,6 +61,9 @@ internal sealed class FakeFido2Keys : IFido2Keys
         /// <summary>The assertion answers with the non-UV output and says it did not verify the user.</summary>
         public bool AnswersWithoutUv { get; set; }
 
+        /// <summary>Make-credential returns a credential id of this many bytes (default 64, like a YubiKey's).</summary>
+        public int MadeCredentialIdLength { get; set; } = 64;
+
         /// <summary>The assertion's output is cut to this many bytes (0: no output).</summary>
         public int? OutputLength { get; set; }
     }
@@ -109,9 +112,11 @@ internal sealed class FakeFido2Keys : IFido2Keys
     public static Fido2KeyInfo Info(Key key) => new(key.Ref, key.Serial, key.Aaguid, key.Pin is not null, key.Retries);
 
     /// <summary>A credential made on <paramref name="key"/> earlier (64 random bytes, like a YubiKey's id).</summary>
-    public byte[] AddCredential(Key key)
+    public byte[] AddCredential(Key key) => AddCredential(key, 64);
+
+    private byte[] AddCredential(Key key, int length)
     {
-        var id = RandomNumberGenerator.GetBytes(64);
+        var id = RandomNumberGenerator.GetBytes(length);
         _credentials[Convert.ToHexString(id)] = new Credential(key, RandomNumberGenerator.GetBytes(32), RandomNumberGenerator.GetBytes(32));
         return id;
     }
@@ -174,7 +179,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
         if (excludeCredentialIds.Any(id => Holds(target, id)))
             throw new Fido2DeviceException(Fido2Failure.CredentialExcluded, null, "CredentialExcluded");
 
-        var id = AddCredential(target);
+        var id = AddCredential(target, target.MadeCredentialIdLength);
         return new Fido2Made(id, target.Aaguid, CanList ? target.Serial : null, UserVerified: !target.MakesWithoutUv);
     }
 
