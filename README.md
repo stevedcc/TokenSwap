@@ -143,8 +143,9 @@ All pages, one line each: [docs/README.md](docs/README.md).
 
 MIT
 
-<details>
-<summary>Moved sections</summary>
+## Moved sections
+
+Old links to these sections land here.
 
 | Old section | Now |
 |---|---|
@@ -202,5 +203,3 @@ MIT
 | <a id="files"></a>Files | [Files](docs/commands.md#files), in the command reference |
 | <a id="environment-variables"></a>Environment variables | [Environment variables](docs/commands.md#environment-variables), in the command reference |
 | <a id="prerequisites"></a>Prerequisites | [Prerequisites](docs/install.md#prerequisites), in Installing tswap |
-
-</details>
