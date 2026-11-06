@@ -73,8 +73,8 @@ reach the key's OTP interface (the one tswap uses):
 - **macOS:** Input Monitoring for the app that runs tswap (your terminal), in System Settings →
   Privacy & Security → Input Monitoring. Allowing it may need an administrator. Without it, tswap
   says macOS is blocking the key's OTP interface, and the Secure Enclave is the alternative.
-- **Windows:** the OTP interface is a keyboard device that a normal user can reach; no setting is
-  needed.
+- **Windows:** the OTP interface is a keyboard device that a normal user can reach, so no setting
+  should be needed. That was checked in a spike, not yet with a release build.
 
 A key another tswap (or another app) is using, for example one waiting for a touch in another
 terminal, is reported as busy: try again when that command is done.

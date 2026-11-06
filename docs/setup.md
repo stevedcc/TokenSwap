@@ -45,6 +45,13 @@ So `tswap yubikey setup` guards an occupied slot:
   vault when tswap checks it. If tswap can't read a vault there, it warns and goes on. An empty
   slot 2 is programmed without these checks: there is nothing on it to lose.
 
+The check keeps the vault from being lost outright, not you from being stuck on this machine:
+setup can't tell whether you still hold the recovery key, or whether a TPM or Secure Enclave slot
+belongs to this machine or another one. Before `--replace`, make sure you have a way in that you
+can use here (another enrolled key you can plug in, this machine's TPM or Secure Enclave, or the
+recovery key at hand). It checks only the vault tswap is pointed at: a slot this key has in another
+vault (another `TSWAP_CONFIG_DIR`) isn't looked at, and stops opening that vault too.
+
 If setup is interrupted, slot 2 may be left programmed but unchecked: `slot add --yubikey` checks
 a key before it enrols it, or run setup again with `--replace`.
 
@@ -136,9 +143,11 @@ What `init` makes:
   offline; `--no-recovery` leaves it out).
 - A key's serial, challenge and salt live in its slot, so the vault files plus any one enrolled key
   open the vault on any machine.
-- `slot add --yubikey` refuses a key that already has a working slot, and backs up `config.json`
-  before it writes. A key whose slots no longer open the vault (its slot 2 was reprogrammed) is
-  enrolled again instead: see [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
+- `slot add --yubikey` enrols a plugged-in key that has no slot yet, and backs up `config.json`
+  before it writes. Only when every plugged-in key already has a slot does it pick one of them and
+  check it: a key with a working slot is refused, and one whose slots no longer open the vault (its
+  slot 2 was reprogrammed) is enrolled again: see
+  [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
 
 ### Several YubiKeys plugged in
 

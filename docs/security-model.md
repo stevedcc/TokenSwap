@@ -195,22 +195,34 @@ sudo tswap slot add --yubikey                      # enrol key N again (pick it 
 tswap names                                        # with only key N plugged in: it opens the vault alone
 ```
 
-Finish and check one key before you start the next.
+Finish and check one key before you start the next. A vault whose keys still share a pair slot
+(made by 0.1's `init --keyring`) first needs each key's own slot:
+[upgrading-from-0.1.md](upgrading-from-0.1.md#a-classic-vault-without-touch).
 
+- **Other copies of the vault: before you start.** Reprogramming kills the key's slot in every copy
+  of the vault at once, but the new slot goes only into the keyring of the vault you enrol it in.
+  Machines that share that vault folder get it with the folder. A machine with its own copy
+  doesn't, and there the key no longer opens the vault until the slot is brought in, with
+  `sudo tswap vault merge <a copy of this vault folder>` on that machine (or `slot merge`, for a
+  vault that keeps its keyring in `config.json`). That merge unlocks the copy first, so the machine
+  needs another way in that it can use. How:
+  [Copying the folder](multi-machine.md#copying-the-folder-scp-rsync-or-a-usb-stick) and
+  [What `slot merge` adds](multi-machine.md#what-slot-merge-adds).
 - **Reprogramming kills the key's old slot.** The new secret replaces slot 2's old one, so the
   key's existing slot no longer opens the vault. `tswap slots` still lists that dead slot: slots are
   kept, since keyrings merge as a union and a removed slot would come back from another copy.
   `setup --replace` asks you to type the key's serial, and refuses when the key's slot would be
   the vault's only way in ([Preparing a YubiKey](setup.md#preparing-a-yubikey)).
 - **Enrolling it again.** With every plugged-in key already enrolled, `slot add --yubikey` asks
-  which key to enrol (without a terminal it takes the first). It reads the key's slot 2 first (an
+  which key to enrol (with nothing on stdin it takes the first; with `--recovery-key-stdin`, stdin
+  carries the recovery key, so plug in only the key being enrolled). It reads the key's slot 2 first (an
   empty one points you to `tswap yubikey setup`, and nothing is challenged), then challenges the
   key against each of its slots in this vault. If one still opens the vault, it refuses: there is
   nothing to enrol again. If the key is busy or doesn't answer, it stops and changes nothing. Only
   when every slot answers wrongly does it open the vault another way (another enrolled YubiKey,
   this machine's TPM or Secure Enclave slot, or a running `tswap agent`) and enrol the key as a
   new slot. A touch key needs up to one touch per old slot for the check, plus two for the new
-  slot. On this machine, unlocks then try the key's new slot first.
+  slot; when the way in is another key that needs a touch, add its touch. On this machine, unlocks then try the key's new slot first.
 - **The vault password is asked at most once.** When a step is known to need it (one of the key's
   slots needs it, or the new slot will get it), `slot add` asks before any challenge. Otherwise it
   asks only if the unlock needs it, which is after the key's checks. When the vault has a vault

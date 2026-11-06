@@ -76,6 +76,16 @@ To move a classic vault's YubiKeys to a touch requirement:
    sudo tswap migrate --to-records
    ```
 
+   **A keyring vault made by 0.1's `init --keyring`** (a YubiKey pair) keeps its pair slot instead,
+   which belongs to both keys together. Give each key its own slot first, with both keys plugged
+   in, running this once per key (each run enrols a key that has no slot of its own yet):
+
+   ```bash
+   sudo tswap slot add --yubikey
+   ```
+
+   `tswap migrate` prints these steps with your keys' serials (below).
+
 2. Give each key a touch requirement, one key at a time, with both keys plugged in. For the key
    with serial N:
 
@@ -89,8 +99,14 @@ To move a classic vault's YubiKeys to a touch requirement:
    (`tswap slots` still lists that dead slot). `slot add --yubikey` checks that, opens the vault
    with the other key, and enrols key N as a new slot. Finish and check one key before you start
    the next, so the other key still opens the vault while you do. What `slot add` checks and asks
-   for: [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch). If neither key
-   opens the vault any more, the recovery key from step 1 is the fallback:
+   for: [YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch).
+
+   **Other machines with their own copy of this vault:** reprogramming kills key N's slot in every
+   copy, but the new slot is only in the vault you enrol it in. On such a machine, key N opens the
+   vault again only after you bring the slot in there, which needs another way in on that machine
+   ([YubiKey: touch or no touch](security-model.md#yubikey-touch-or-no-touch) says how). If neither key
+   opens the vault any more, the vault's recovery key (step 1 printed one for a classic vault) is
+   the fallback:
    [adding a key with the recovery key](multi-machine.md#appendix-adding-a-key-with-the-recovery-key).
 
 `tswap slots` then shows each slot's touch setting.
