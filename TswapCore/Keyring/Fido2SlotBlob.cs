@@ -21,6 +21,10 @@ namespace TswapCore.Keyring;
 ///
 /// <para>The key is sent <see cref="Fido2Prf.Salt"/> of <see cref="PrfInput"/>; its output becomes
 /// <c>KEK_slot</c> through <see cref="Fido2SlotKek"/>, with <see cref="PrfInput"/> as the HKDF salt.</para>
+///
+/// <para><b>Equality:</b> this is a record, but <see cref="PrfInput"/> and <see cref="CredentialId"/> are arrays,
+/// so the generated <c>Equals</c> compares them by reference: two blobs decoded from the same bytes are not
+/// equal. Compare field by field (<c>SequenceEqual</c> for the arrays).</para>
 /// </summary>
 public sealed record Fido2SlotBlob
 {
@@ -44,7 +48,8 @@ public sealed record Fido2SlotBlob
     /// <summary>magic, version, flags, PRF version, serial, AAGUID and PRF input: everything before the rp id length.</summary>
     private const int FixedSize = MagicSize + 1 + 1 + 1 + 4 + AaguidSize + PrfInputSize;
 
-    private static ReadOnlySpan<byte> TswapRpIdUtf8 => "tswap.crawford.dev"u8;
+    /// <summary><see cref="TswapRpId"/> as UTF-8 (a test pins the two equal).</summary>
+    internal static ReadOnlySpan<byte> TswapRpIdUtf8 => "tswap.crawford.dev"u8;
 
     public Fido2SlotBlob(int? serial, Guid aaguid, byte[] prfInput, string rpId, byte[] credentialId, bool requiresPassword)
     {

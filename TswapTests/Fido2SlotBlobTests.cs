@@ -230,6 +230,97 @@ public class Fido2SlotBlobTests
         Assert.Equal(SlotPassword.NeedsNewerTswapText(3), error);
     }
 
+    [Fact]
+    public void Fido2Blob_Parse_RefusesWrongMagic()
+    {
+        byte[] bytes = [.. "TSTP"u8.ToArray(), .. Raw()[4..]];
+
+        AssertMalformed(bytes);
+        Assert.Equal("Malformed FIDO2 slot blob: wrong magic. Restore config.json from backup.", Fido2SlotBlob.Parse(bytes).Error);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Fido2Blob_Parse_RefusesAnOtpVersionAsCorrupt(byte version)
+    {
+        var bytes = Raw(version: version);
+
+        AssertMalformed(bytes);
+        Assert.Equal(
+            $"Malformed FIDO2 slot blob: version {version} is not a FIDO2 slot's. Restore config.json from backup.",
+            Fido2SlotBlob.Parse(bytes).Error);
+    }
+
+    [Fact]
+    public void Fido2Blob_Parse_VersionFourNeedsANewerTswap() =>
+        AssertNeedsNewer(Raw(version: 4), SlotPassword.NeedsNewerTswapText(4));
+
+    // --- constructor and Create guards ---
+
+    [Fact]
+    public void Fido2Blob_Constructor_RefusesAnotherRpId()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new Fido2SlotBlob(
+            OwnersSerial, OwnersAaguid, FixedPrfInput, "evil.example.com", FixedCredentialId, requiresPassword: false));
+        Assert.Equal("rpId", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Fido2Blob_Constructor_RefusesASerialThatIsNotPositive(int serial)
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new Fido2SlotBlob(
+            serial, OwnersAaguid, FixedPrfInput, Fido2SlotBlob.TswapRpId, FixedCredentialId, requiresPassword: false));
+        Assert.Equal("serial", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Fido2Blob_Create_RefusesASerialThatIsNotPositive(int serial)
+    {
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Fido2SlotBlob.Create(serial, OwnersAaguid, FixedCredentialId, requiresPassword: false));
+        Assert.Equal("serial", ex.ParamName);
+    }
+
+    [Fact]
+    public void Fido2Blob_Constructor_RefusesAPrfInputOf31Bytes()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new Fido2SlotBlob(
+            OwnersSerial, OwnersAaguid, new byte[31], Fido2SlotBlob.TswapRpId, FixedCredentialId, requiresPassword: false));
+        Assert.Equal("prfInput", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(15)]
+    [InlineData(1024)]
+    public void Fido2Blob_Constructor_RefusesACredentialIdOutOfRange(int length)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new Fido2SlotBlob(
+            OwnersSerial, OwnersAaguid, FixedPrfInput, Fido2SlotBlob.TswapRpId, new byte[length], requiresPassword: false));
+        Assert.Equal("credentialId", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData(15)]
+    [InlineData(1024)]
+    public void Fido2Blob_Create_RefusesACredentialIdOutOfRange(int length)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            Fido2SlotBlob.Create(OwnersSerial, OwnersAaguid, new byte[length], requiresPassword: false));
+        Assert.Equal("credentialId", ex.ParamName);
+    }
+
+    [Fact]
+    public void Fido2Blob_RpIdBytesAreTheUtf8OfTheRpId()
+    {
+        // The encoder and Parse use a u8 literal beside the string constant; this keeps the two equal.
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(Fido2SlotBlob.TswapRpId), Fido2SlotBlob.TswapRpIdUtf8.ToArray());
+    }
+
     // --- the PRF transform ---
 
     [Fact]
@@ -274,6 +365,17 @@ public class Fido2SlotBlobTests
 
         Assert.False(YubicoAaguids.IsYubico(guid));
         Assert.Null(YubicoAaguids.ModelName(guid));
+    }
+
+    [Fact]
+    public void YubicoAaguids_ListsEachOfTheArticles70AaguidsOnce()
+    {
+        // The article's two tables hold 70 distinct AAGUIDs (retrieved 2026-11-06). A duplicate line would
+        // otherwise overwrite another silently when the lookup is built.
+        var aaguids = YubicoAaguids.Entries.Select(entry => Guid.Parse(entry.Aaguid)).ToList();
+
+        Assert.Equal(70, aaguids.Count);
+        Assert.Equal(aaguids.Count, aaguids.Distinct().Count());
     }
 
     [Fact]
