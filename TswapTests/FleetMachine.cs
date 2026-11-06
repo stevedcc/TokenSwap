@@ -58,6 +58,15 @@ public sealed class FleetMachine : IDisposable
     /// <summary>Brief T6: the test seams of <c>migrate --to-records</c> (null: none).</summary>
     public RecordMigrationSeams? MigrationSeams { get; set; }
 
+    /// <summary>FIDO2 plan, task 8: this machine's FIDO2 keys (null: no FIDO2 service, as in test mode).</summary>
+    internal FakeFido2Keys? Fido2Keys { get; set; }
+
+    /// <summary>FIDO2 plan, task 8: the controlling terminal its commands see (null: none).</summary>
+    internal FakeTerminal? Terminal { get; set; }
+
+    /// <summary>FIDO2 plan, task 8: the OS the guided init words and orders its list for (null: this one).</summary>
+    public System.Runtime.InteropServices.OSPlatform? Os { get; set; }
+
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
     public Func<DateTimeOffset>? Clock { get; set; }
 
@@ -146,7 +155,8 @@ public sealed class FleetMachine : IDisposable
         var backends = new List<IHardwareKeyService>();
         if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
-        var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
+        var fido2 = Fido2Keys is null ? null : new TswapCore.Vault.Fido2.Fido2Service(Fido2Keys);
+        var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends, fido2: fido2);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
         var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
         return new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
@@ -154,6 +164,9 @@ public sealed class FleetMachine : IDisposable
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
             ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
+            Fido2 = fido2,
+            Terminal = Terminal is { } terminal ? terminal.Open : null,
+            Os = Os ?? YubiKeyAccessTexts.CurrentOs(),
         };
     }
 

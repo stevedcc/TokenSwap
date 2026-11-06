@@ -1146,6 +1146,23 @@ public sealed class VaultUnlocker
         }
     }
 
+    /// <summary>
+    /// FIDO2 plan, task 8 (<c>yubikey setup --replace</c>): whether one of <paramref name="slots"/> (the vault's FIDO2
+    /// slots) opens the vault now, as pass 4 opens them: the key's PIN and a touch (<see cref="UnlockSources.Fido2Pin"/>;
+    /// null, no terminal: no key call), the vault password from <see cref="UnlockSources.Prompt"/> for a password slot,
+    /// then the slot unwrapped. The vault key is zeroed at once. Null when a slot opened, else why none did (a wrong
+    /// PIN, a cancelled prompt, no terminal, the key not plugged in), in pass 4's words.
+    /// </summary>
+    public string? Fido2SlotOpens(Keyring.Keyring keyring, IReadOnlyList<(Slot Slot, Fido2SlotBlob Blob)> slots, UnlockSources sources)
+    {
+        using var password = new RunPassword(sources.Prompt);
+        var vaultKey = TryFido2Slots(keyring, [.. slots], sources, password, out var outcome);
+        if (vaultKey is null)
+            return outcome.Message;
+        CryptographicOperations.ZeroMemory(vaultKey);
+        return null;
+    }
+
     /// <summary>Unwraps one machine slot under <paramref name="kekSlot"/> and returns <c>K_v</c>.</summary>
     private static byte[] UnwrapSlot(Keyring.Keyring keyring, Slot slot, byte[] kekSlot)
     {

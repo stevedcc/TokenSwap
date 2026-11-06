@@ -116,7 +116,8 @@ internal static class Fido2SlotEnrollment
         return keys[choice - 1];
     }
 
-    private static Fido2KeyInfo OfferPin(CommandContext ctx, IFido2Service fido2, Fido2KeyInfo key)
+    /// <summary>A key without a FIDO2 PIN: offers to set one (asked twice), the one PIN write tswap makes; "no" stops.</summary>
+    internal static Fido2KeyInfo OfferPin(CommandContext ctx, IFido2Service fido2, Fido2KeyInfo key)
     {
         var name = fido2.KeyName(key);
         using (var terminal = ctx.Terminal?.Invoke() ?? throw new Fido2Exception(Fido2Failure.NoTerminal, key.Serial, null, Fido2Texts.NoTerminal))

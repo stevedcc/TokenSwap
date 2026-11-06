@@ -88,10 +88,7 @@ public sealed class BrokerCommand : ICliCommand
         // Brief T17 ruling 14: this machine's slot decides. A password slot starts locked; a slot this
         // build can't use (newer tswap, corrupt) refuses to start.
         var vaultConfig = records.LoadConfig();
-        var own = VaultUnlocker.OwnSlotPassword(vaultConfig);
-        if (own.Kind is SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt)
-            throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
-        var withPassword = own.Kind == SlotPasswordKind.Password;
+        var withPassword = ServeStartsLocked(vaultConfig);
 
         // Decision 1: no same-uid ptrace, no core dumps holding secrets. Brief T17 ruling 12: a password
         // broker is dumpable only while locked with nothing held (so 'broker unlock' can check it).
@@ -204,6 +201,55 @@ public sealed class BrokerCommand : ICliCommand
             CurrentKeys = () => deferred!.Current,
             KeySource = source,
         };
+    }
+
+    /// <summary>FIDO2 plan, task 8: <c>broker serve</c> on a machine whose own slot is FIDO2, with no YubiKey OTP slot besides.</summary>
+    public const string Fido2OnlyText =
+        "This machine's slot of the vault is a FIDO2 slot: it needs the key's PIN and a touch on every unlock, so the " +
+        "broker can't use it. A broker opens the vault with a TPM, Secure Enclave or YubiKey OTP slot (no PIN): add a " +
+        "YubiKey OTP slot with 'sudo tswap slot add --yubikey', or run the broker on a machine whose own slot is a TPM " +
+        "or Secure Enclave slot.";
+
+    /// <summary>
+    /// Whether <c>broker serve</c> starts locked, decided before anything is created. Brief T17 ruling 14: this
+    /// machine's slot decides; a password slot starts locked, and a slot this build can't use (newer tswap, corrupt)
+    /// refuses to start. FIDO2 plan, task 8: a broker never uses a FIDO2 slot (its unlocks have no terminal, so they
+    /// skip FIDO2 slots without a key call). A FIDO2 own slot with no YubiKey OTP slot in the vault is refused
+    /// (<see cref="Fido2OnlyText"/>); with OTP slots, those decide: locked only when every one needs the password.
+    /// </summary>
+    internal static bool ServeStartsLocked(Config vaultConfig)
+    {
+        var own = VaultUnlocker.OwnSlotPassword(vaultConfig);
+        if (own.Kind is SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt)
+            throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
+        if (OwnFido2AndOtpSlots(vaultConfig) is not { } otpSlots)
+            return own.Kind == SlotPasswordKind.Password;
+        if (otpSlots.Count == 0)
+            throw new TswapException(Fido2OnlyText);
+        return otpSlots.All(blob => blob.RequiresPassword);
+    }
+
+    /// <summary>The vault's one-key OTP slots when this machine's own slot is a FIDO2 slot; null otherwise (or unreadable: the unlock says why).</summary>
+    private static List<YubiKeySlotBlob>? OwnFido2AndOtpSlots(Config config)
+    {
+        if (config.Keyring is null)
+            return null;
+        TswapCore.Keyring.Keyring keyring;
+        try
+        {
+            keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+        }
+        catch (Exception e) when (e is TswapException or FormatException)
+        {
+            return null;
+        }
+        var machine = keyring.Slots.Where(s => s.Kind == SlotKind.Machine).ToList();
+        var own = config.KeyringSlotId is { } id
+            ? machine.FirstOrDefault(s => Convert.ToBase64String(s.SlotId) == id)
+            : machine.FirstOrDefault();
+        if (own is null || YubiKeySlotKinds.Classify(own.HwBlob) is not YubiKeySlotKind.Fido2)
+            return null;
+        return [.. machine.Select(s => YubiKeySlotKinds.Classify(s.HwBlob)).OfType<YubiKeySlotKind.Otp>().Select(o => o.Blob)];
     }
 
     // ------------------------------------------------------------------ unlock, lock, status (brief T17 ruling 14)

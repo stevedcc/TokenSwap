@@ -141,6 +141,12 @@ public sealed record CommandContext(
     /// </summary>
     public Func<ITerminal?>? Terminal { get; init; }
 
+    /// <summary>
+    /// The OS whose order and wording the guided <c>init</c> uses for its list (FIDO2 plan, task 8): this one, unless a
+    /// test words another's (as <see cref="YubiKeyAccessTexts.ExplainHidden"/> takes the OS).
+    /// </summary>
+    public System.Runtime.InteropServices.OSPlatform Os { get; init; } = YubiKeyAccessTexts.CurrentOs();
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 
