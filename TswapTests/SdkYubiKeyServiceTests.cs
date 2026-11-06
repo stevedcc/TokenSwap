@@ -74,6 +74,37 @@ public sealed class SdkYubiKeyServiceTests
         Assert.DoesNotContain("udev", ex.Message);
     }
 
+    /// <summary>
+    /// Final review item 6 (p2-I-1): the SDK's listing itself fails as busy (another program mid-command): the busy
+    /// kind and text, never "no YubiKey".
+    /// </summary>
+    [Fact]
+    public void ListSerials_KeyBusy_SaysBusy()
+    {
+        var keys = new FakeOtpKeys { FindFails = OtpFailure.Busy }.WithKey(33060005);
+
+        var ex = Assert.Throws<YubiKeyDeviceException>(() => Service(keys).ListSerials());
+
+        Assert.Equal(OtpFailure.Busy, ex.Kind);
+        Assert.Equal("A YubiKey is busy (another tswap or app is using it); try again.", ex.Message);
+        Assert.DoesNotContain("No YubiKey", ex.Message);
+    }
+
+    /// <summary>Final review item 6 (p2-M-1): the fake's busy key fails a program call too, as its doc says.</summary>
+    [Fact]
+    public void ProgramSlot2_KeyBusy_SaysBusyAndProgramsNothing()
+    {
+        var keys = new FakeOtpKeys().WithKey(33060005);
+        keys.Slot2Empty.Add(33060005);
+        keys.Busy.Add(33060005);
+
+        var ex = Assert.Throws<YubiKeyDeviceException>(() => Service(keys).ProgramSlot2(33060005, requireTouch: true));
+
+        Assert.Equal(OtpFailure.Busy, ex.Kind);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is using it); try again.", ex.Message);
+        Assert.Contains(33060005, keys.Slot2Empty); // nothing was programmed
+    }
+
     [Fact]
     public void ListSerials_OneReachableOneHidden_ReturnsTheReachableOne()
     {
@@ -261,9 +292,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
-        Assert.Contains("tswap yubikey setup", ex.Message);
-        Assert.Contains("33060005", ex.Message);
-        Assert.Contains("slot 2", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Slot 2 of YubiKey 33060005 isn't set up for challenge-response; run `tswap yubikey setup`.", ex.Message);
     }
 
     [Fact]
@@ -385,7 +414,8 @@ public sealed class SdkYubiKeyServiceTests
         { new MalformedYubiKeyResponseException("The status report must be the first and only report returned by the YubiKey."), OtpFailure.Busy },
         // KeyboardTransform.WaitFor: the touch wasn't given in time → passed through.
         { new KeyboardConnectionException("Timed out waiting for user interaction."), OtpFailure.Other },
-        { new KeyboardConnectionException("Tried writing a keyboard report and unexpectedly recieved no reply."), OtpFailure.Other },
+        // KeyboardTransform: the write got no reply at all → no answer, like the missing acknowledgement (final review p2-M-6).
+        { new KeyboardConnectionException("Tried writing a keyboard report and unexpectedly recieved no reply."), OtpFailure.NoAnswer },
         // LinuxHidFeatureReportConnection: the hidraw node can't be opened (no udev rule) → not reachable.
         { new PlatformApiException("Could not open HID node on Linux."), OtpFailure.NotReachable },
         { new PlatformApiException("A HIDRAW operation failed."), OtpFailure.Other },
@@ -402,10 +432,38 @@ public sealed class SdkYubiKeyServiceTests
         { new MalformedYubiKeyResponseException("bad"), OtpFailure.Other },
     };
 
+    /// <summary>Final review p1-M1: a serial the SDK doesn't list is reported as not plugged in, not as Other.</summary>
+    [Fact]
+    public void KeyboardDevice_SerialNotListed_IsNotPluggedIn()
+    {
+        var e = Assert.Throws<OtpKeysException>(() => YubicoOtpKeys.KeyboardDevice([], 33060005));
+
+        Assert.Equal(OtpFailure.NotPluggedIn, e.Kind);
+        Assert.Equal(33060005, e.Serial);
+    }
+
     [Theory]
     [MemberData(nameof(SdkExceptions))]
     public void Classify_MapsSdkExceptions(Exception sdkException, OtpFailure expected) =>
         Assert.Equal(expected, YubicoOtpKeys.Classify(sdkException));
+
+    /// <summary>
+    /// Final review item 4 (p1-I1): the probe's open failure is classified like a challenge's: macOS's exclusive-access
+    /// refusal is a busy key, any other open failure an interface tswap can't open.
+    /// </summary>
+    public static TheoryData<Exception, string> ProbeOpenFailures => new()
+    {
+        { new PlatformApiException("IOHIDDeviceOpen", unchecked((int)0xE00002C5), "Can't open IOKit device."), nameof(KeyboardInterfaceState.Busy) },
+        { new PlatformApiException("IOHIDDeviceOpen", unchecked((int)0xE00002E2), "Can't open IOKit device."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new PlatformApiException("Can't open IOKit device."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new PlatformApiException("Could not open HID node on Linux."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new UnauthorizedAccessException("Access is denied."), nameof(KeyboardInterfaceState.Unopenable) },
+    };
+
+    [Theory]
+    [MemberData(nameof(ProbeOpenFailures))]
+    public void ProbeStateFor_OpenFailure(Exception openFailure, string expected) =>
+        Assert.Equal(expected, YubicoOtpKeys.ProbeStateFor(openFailure).ToString()); // the enum is internal
 
     // ── Task 4 review fix round, item 2: the failure's kind travels with its text ──
 
@@ -491,6 +549,30 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
 
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
+    /// <summary>Final review item 5: several hidden keys and a busy interface: each readable serial is named.</summary>
+    [Fact]
+    public void ListSerials_TwoHiddenKeys_ProbeSeesBusy_NamesEachSerial()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(33060005).WithHiddenKey(33060006).WithHiddenKey(null);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
+
+        Assert.Equal("YubiKey 33060005 or YubiKey 33060006 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+    }
+
+    /// <summary>Final review item 5: a hidden key without a readable serial keeps the generic sentence.</summary>
+    [Fact]
+    public void ListSerials_HiddenKeyWithoutSerial_ProbeSeesBusy_SaysAYubiKeyIsBusy()
+    {
+        var keys = new FakeOtpKeys().WithHiddenKey(null);
+        keys.Interfaces.Add(KeyboardInterfaceState.Busy);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).ListSerials());
+
         Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }
 
@@ -550,7 +632,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
-        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
         Assert.Empty(keys.Challenges);
     }
 
@@ -663,7 +745,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys, OSPlatform.Linux).Challenge(33060005, "abc"));
 
-        Assert.Equal("A YubiKey is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
+        Assert.Equal("YubiKey 33060005 is busy (another tswap or app is waiting for a touch); try again when it's done.", ex.Message);
     }
 
     /// <summary>One reachable key whose every operation fails with one exception.</summary>

@@ -1604,7 +1604,7 @@ password2: """"  # tswap: missing-mixed-secret");
 
     // Regression test for issue #39: migrate must not hang when stdin is piped.
     // Synthetic init leaves RequiresTouch=null → needsTouchMigration=true → the
-    // "Show detailed re-initialization instructions? (yes/no):" prompt is shown.
+    // "Show detailed conversion instructions? (yes/no):" prompt is shown.
     // Piped "no\n" must answer it without blocking and the command must exit 0.
     [Fact]
     public void Migrate_PipedNo_DoesNotHang()

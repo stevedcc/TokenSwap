@@ -156,12 +156,17 @@ public sealed record CommandContext(
     /// YubiKey <paramref name="excludeSerial"/>, with <paramref name="prompt"/> as pass 3's password (the command's one
     /// password, asked before its challenges or on first use).
     /// </summary>
-    internal byte[] UnlockExcluding(Config config, int excludeSerial, TswapCore.VaultPassword.VaultPasswordProvider prompt)
+    /// <remarks>
+    /// Round 2: the slot that opened the vault isn't remembered here; it is handed to <paramref name="rememberLater"/>, so
+    /// the caller writes the hint only after its own write (an abort before it leaves the machine-local file alone).
+    /// </remarks>
+    internal byte[] UnlockExcluding(Config config, int excludeSerial, TswapCore.VaultPassword.VaultPasswordProvider prompt,
+        Action<byte[], int, byte[]> rememberLater)
     {
         if (TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots });
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots, RememberLater = rememberLater });
     }
 
     /// <summary>

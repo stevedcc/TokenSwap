@@ -207,6 +207,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA];
 
         var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n", "slot", "add", "--yubikey", "--recovery-key-stdin");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, _recoveryKey);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
@@ -376,6 +377,82 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal([newA.Blob.ChallengeString], ChallengesOf(m, SerialA)); // the remembered slot, and it opened
     }
 
+    /// <summary>
+    /// Final review item 10 (p6-I3, p1-M3): an unlock that leaves a key out (UnlockExcluding, for its re-enrolment) never
+    /// challenges it through a legacy pair slot either. Only the excluded key plugged in: refused, the key not
+    /// challenged, and the text says it is left out because it's being enrolled again (not "not authorized, expected:
+    /// it"). Both plugged in: the pair's other key alone opens the vault.
+    /// </summary>
+    [Fact]
+    public void UnlockExcluding_PairVault_ExcludedKeyNeverChallenged()
+    {
+        var m = ConvertedPairVault();
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        var excludingA = YubiKeySelection.Unattended with { ExcludeSerial = PairA };
+        m.Keys.PluggedIn = [PairA, PairB];
+        var expected = new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended);
+        m.Keys.Challenges.Clear();
+
+        m.Keys.PluggedIn = [PairA];
+        var ex = Assert.ThrowsAny<TswapException>(() => new VaultUnlocker(m.Keys).Unlock(config, excludingA));
+
+        Assert.Contains($"YubiKey {PairA} is left out of this unlock because it's being enrolled again, and the pair's " +
+            $"other key ({PairB}) isn't plugged in.", ex.Message);
+        Assert.DoesNotContain("not authorized", ex.Message);
+        Assert.Empty(m.Keys.Challenges);
+
+        m.Keys.PluggedIn = [PairA, PairB];
+        var key = new VaultUnlocker(m.Keys).Unlock(config, excludingA);
+
+        Assert.Equal(expected, key);
+        Assert.Empty(ChallengesOf(m, PairA));
+        Assert.NotEmpty(ChallengesOf(m, PairB));
+    }
+
+    /// <summary>
+    /// Round 2, B (MiMo M-1): the excluded key isn't plugged in, another key is: the "not authorized" refusal doesn't ask
+    /// for the key being enrolled again as one to plug in.
+    /// </summary>
+    [Fact]
+    public void UnlockExcluding_PairVault_ExcludedKeyNotPlugged_DoesNotAskForIt()
+    {
+        var m = ConvertedPairVault(SerialT);
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        m.Keys.PluggedIn = [SerialT];
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = PairA }));
+
+        Assert.Contains($"YubiKey {SerialT} not authorized. Expected: {PairB} (YubiKey {PairA} is left out because it's " +
+            "being enrolled again).", ex.Message);
+        Assert.DoesNotContain($"{PairA}, {PairB}", ex.Message);
+        Assert.Empty(m.Keys.Challenges);
+    }
+
+    /// <summary>Round 2, B: a classic config whose two serials are the excluded key (damaged): no "other key ()".</summary>
+    [Fact]
+    public void UnlockExcluding_ClassicConfigOnlyTheExcludedKey_SaysNoOtherKey()
+    {
+        var keys = SimulatedYubiKeyService.WithKeys(SerialA);
+        var config = new Config([SerialA, SerialA], new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+
+        var ex = Assert.ThrowsAny<TswapException>(() => new YubiKeyHardwareService(keys)
+            .Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = SerialA }));
+
+        Assert.Equal($"YubiKey {SerialA} is left out of this unlock because it's being enrolled again, and the vault has " +
+            "no other enrolled key.", ex.Message);
+        Assert.Empty(keys.Challenges);
+    }
+
+    /// <summary>Round 2, B: the left-out text for every count of other enrolled keys (several can't happen today: a classic
+    /// config has exactly two serials, but the wording doesn't assume it).</summary>
+    [Theory]
+    [InlineData(new int[0], "YubiKey 1 is left out of this unlock because it's being enrolled again, and the vault has no other enrolled key.")]
+    [InlineData(new[] { 2 }, "YubiKey 1 is left out of this unlock because it's being enrolled again, and the pair's other key (2) isn't plugged in.")]
+    [InlineData(new[] { 2, 3 }, "YubiKey 1 is left out of this unlock because it's being enrolled again, and none of the other enrolled keys (2, 3) is plugged in.")]
+    public void LeftOutText_EveryCountOfOtherKeys(int[] others, string expected) =>
+        Assert.Equal(expected, YubiKeyHardwareService.LeftOutText(1, others));
+
     [Fact]
     public void SlotAdd_LegacyPairSlotsOnly_FirstEnrolment_NoPairLabelled()
     {
@@ -460,7 +537,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var (exit, stdout, stderr) = SlotAdd(m);
 
         Assert.True(exit == 0, stderr + stdout);
-        AssertNoKeyMaterial(stdout + stderr);
+        KeyMaterial.AssertNone(stdout + stderr);
         // tswap's slot fingerprint is the short grouped form, below both thresholds.
         Assert.Matches(@"\(fingerprint [0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}\)", stdout);
     }
@@ -526,6 +603,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var backupsBefore = m.Backups.Order().ToArray();
 
         var (exit, stdout, stderr) = m.RunOnTerminal(WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -554,6 +632,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var text = console.OutText;
         Assert.True(exit == 0, text);
         Assert.Equal(1, Regex.Count(text, Regex.Escape(TerminalPasswordProvider.PromptText)));
+        KeyMaterial.AssertNotEchoed(text, Password);
         Assert.NotNull(atFirstChallenge);
         var prompt = atFirstChallenge.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal);
         var count = atFirstChallenge.IndexOf(TouchCount(1), StringComparison.Ordinal);
@@ -568,31 +647,39 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal("s3cret", getOut.Trim());
     }
 
-    [Fact]
-    public void SlotAdd_PasswordSlot_MistypedPassword_WarnsBeforeReenrolling()
+    [Theory]
+    [InlineData("--no-password")]
+    [InlineData("--password")]
+    public void SlotAdd_PasswordSlot_MistypedPassword_Aborts(string flag)
     {
         // A's slot has the password, B's doesn't. A isn't reprogrammed: the mistyped password makes it look dead.
+        // Final review (owner decision): one mistyped password stops the command, whatever the new slot gets.
         var m = PasswordVaultOnAAndB(bPassword: false);
         m.Keys.Challenges.Clear();
         m.Keys.PluggedIn = [SerialA, SerialB];
-        var console = new FakeConsole("1\n" + WrongPassword + "\n") { IsInputRedirected = false, Interleaved = true };
-        string? atEnrolment = null;
-        var challengesOfA = 0;
-        m.Keys.OnChallenge = s =>
-        {
-            if (s == SerialA && ++challengesOfA == 2)
-                atEnrolment = console.OutText;
-        };
-        string[] args = ["slot", "add", "--yubikey", "--no-password"];
+        var passwordFile = Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName);
+        var keyringBefore = File.ReadAllBytes(KeyringPath(m));
+        var configBefore = File.ReadAllBytes(m.ConfigPath);
+        var passwordFileBefore = File.ReadAllBytes(passwordFile);
+        var hintBefore = File.Exists(HintPath(m)) ? File.ReadAllBytes(HintPath(m)) : null; // machine-local, still "nothing"
+        var checkChallenges = SlotsOf(m, SerialA).Count;
 
-        var exit = CliRunner.Run(m.Context(console, args), args);
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", flag);
+        KeyMaterial.AssertNotEchoed(stdout + stderr, WrongPassword);
 
-        var text = console.OutText;
-        Assert.True(exit == 0, text);
-        Assert.NotNull(atEnrolment);
-        Assert.Contains(MistypedLine, atEnrolment); // printed before the enrolment's challenges, so before the write
-        Assert.Contains(ReenrolledLine(SerialA), text);
-        Assert.NotEmpty(ChallengesOf(m, SerialB)); // the unlock went through B
+        Assert.NotEqual(0, exit);
+        Assert.Contains(
+            $"YubiKey {SerialA} isn't enrolled again: the vault password didn't match this vault's (checked against the " +
+            "vault's password verifier), so tswap can't tell whether its slot(s) that need the password still open the vault. " +
+            "Nothing was changed.", stderr);
+        Assert.DoesNotContain(MistypedLine, stdout + stderr);
+        Assert.DoesNotContain(ReenrolledLine(SerialA), stdout + stderr);
+        Assert.Equal(keyringBefore, File.ReadAllBytes(KeyringPath(m)));
+        Assert.Equal(configBefore, File.ReadAllBytes(m.ConfigPath));
+        Assert.Equal(passwordFileBefore, File.ReadAllBytes(passwordFile));
+        Assert.Equal(hintBefore, File.Exists(HintPath(m)) ? File.ReadAllBytes(HintPath(m)) : null); // round 2, D
+        Assert.Equal(checkChallenges, ChallengesOf(m, SerialA).Count); // the check only: no enrolment challenge
+        Assert.Empty(m.Keys.Programmed);
     }
 
     /// <summary>
@@ -616,6 +703,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -683,6 +771,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
         var (wrongExit, wrongOut, wrongErr) = m.Run(_recoveryKey + "\n" + WrongPassword + "\n",
             "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+        KeyMaterial.AssertNotEchoed(wrongOut + wrongErr, _recoveryKey, WrongPassword);
 
         Assert.NotEqual(0, wrongExit);
         Assert.Contains("the vault password didn't match", wrongErr);
@@ -691,6 +780,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
         var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n" + Password + "\n",
             "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, _recoveryKey, Password);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
@@ -722,6 +812,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--no-password");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password may have been mistyped", stderr);
@@ -879,6 +970,73 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
+    /// Final review item 2 (p6-I2): the deferred password-free slot's failure isn't discarded. A's remembered slot needs
+    /// the password, its password-free slot is deferred, A is busy and there is no terminal: the error names the busy
+    /// key, not only the missing terminal.
+    /// </summary>
+    [Fact]
+    public void Unlock_DeferredSlotKeyBusy_NoTerminal_ErrorNamesBusyKey()
+    {
+        var (m, _) = StaleRememberedPasswordSlotOfA();
+        m.Keys.Busy.Add(SerialA);
+
+        var (exit, stdout, stderr) = m.Run("", "get", "db");
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.Contains(VaultPasswordMessages.NoTerminal, stderr);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is using it); try again.", stderr);
+    }
+
+    /// <summary>
+    /// Final review item 2 (p6-I2), the same with no prompt source at all (no agent, no password provider): the
+    /// deferred slot's busy text is part of the error.
+    /// </summary>
+    [Fact]
+    public void Unlock_DeferredSlotKeyBusy_NoPromptSource_ErrorNamesBusyKey()
+    {
+        var (m, _) = StaleRememberedPasswordSlotOfA();
+        m.Keys.Busy.Add(SerialA);
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        var remembered = new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default);
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended, new UnlockSources(null, null) { Remembered = remembered }));
+
+        Assert.Contains(VaultPasswordMessages.NoTerminal, ex.Message);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is using it); try again.", ex.Message);
+    }
+
+    /// <summary>
+    /// Final review items 2 and 3 (p6-I2, p6-M2): A's slots are all dead (its remembered one needs the password, its
+    /// password-free one is deferred), B's password-free slot is dead, a wrong password is typed. Pass 1 tries B only
+    /// (A has no password-free slot left there, so no "A opened none of its slots" line for a key never challenged in
+    /// it); the deferred slot's failure is part of the combined error.
+    /// </summary>
+    [Fact]
+    public void Unlock_AllDead_CombinedErrorHasDeferredFailure_NoSpuriousPass1Line()
+    {
+        var (m, slotsOfA) = StaleRememberedPasswordSlotOfA();
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        Reprogram(m, SerialA);
+        Reprogram(m, SerialB);
+        m.Keys.Challenges.Clear();
+
+        var (exit, _, stderr) = m.RunOnTerminal(WrongPassword + "\n", "get", "db");
+
+        Assert.NotEqual(0, exit);
+        // Round 2, C: A is named exactly twice (pass 3 and the deferred slot): a pass-1 line for A, in any wording, or a
+        // key prompt listing it, would add a mention. And the error opens with pass 1's single-key sentence for B.
+        Assert.Equal(2, Regex.Count(stderr, SerialA.ToString()));
+        var error = stderr[(stderr.IndexOf("Error: ", StringComparison.Ordinal) + "Error: ".Length)..];
+        Assert.StartsWith($"YubiKey {SerialB} did not open any of its slots in this vault:", error);
+        Assert.Contains($"YubiKey {SerialB} did not open any of its slots in this vault", stderr); // pass 1: B alone
+        Assert.Contains($"YubiKey {SerialA}: {VaultPasswordMessages.WrongPasswordKdf}", stderr); // pass 3
+        Assert.Contains($"YubiKey {SerialA} did not open any of its slots in this vault", stderr); // the deferred slot
+        Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
+    }
+
+    /// <summary>
     /// Fix round 2, item 1a: B's remembered slot is a dead password slot and its password-free slot is live, so the
     /// unlock uses the mistyped password (its password pass fails), then opens through B's deferred password-free slot.
     /// The unlock using the password is no proof of it: the verifier aborts A's re-enrolment with the password, and
@@ -910,6 +1068,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -934,10 +1093,14 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        KeyMaterial.AssertNotEchoed(stdout + stderr, Password);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
         Assert.DoesNotContain(MistypedLine, stdout + stderr);
+        // Round 2, D: the way in is still remembered, after the keyring write, beside the new slot.
+        Assert.Equal(SlotsOf(m, SerialB).Single().Slot.SlotId, Remembered(m)[SerialB]);
+        Assert.Equal(SlotsOf(m, SerialA)[^1].Slot.SlotId, Remembered(m)[SerialA]);
     }
 
     /// <summary>Fix round 2, item 3: the one-key keyring vault's touch note uses the flow, with the elevated recover fallback.</summary>
@@ -1145,8 +1308,8 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     {
         var (exit, stdout, stderr) = m.Run("yes\n", "migrate");
         Assert.True(exit == 0, stderr);
-        Assert.Contains("RE-INITIALIZATION GUIDE", stdout);
-        return stdout[stdout.IndexOf("RE-INITIALIZATION GUIDE", StringComparison.Ordinal)..];
+        Assert.Contains("CONVERSION GUIDE", stdout);
+        return stdout[stdout.IndexOf("CONVERSION GUIDE", StringComparison.Ordinal)..];
     }
 
     [Fact]
@@ -1256,20 +1419,4 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         _agents.Add(server);
         return server;
     }
-
-    /// <summary>No whitespace-delimited token of 32 or more hex characters, or of 24 or more base64 characters.</summary>
-    private static void AssertNoKeyMaterial(string output)
-    {
-        foreach (var token in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-        {
-            Assert.True(!HexToken().IsMatch(token), $"hex-like token in the output: {token}");
-            Assert.True(!Base64Token().IsMatch(token), $"base64-like token in the output: {token}");
-        }
-    }
-
-    [GeneratedRegex("^[0-9A-Fa-f]{32,}$")]
-    private static partial Regex HexToken();
-
-    [GeneratedRegex("^[A-Za-z0-9+/]{24,}={0,2}$")]
-    private static partial Regex Base64Token();
 }

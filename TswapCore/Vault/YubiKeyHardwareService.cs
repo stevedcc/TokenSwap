@@ -56,10 +56,22 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
 
         // Task 4b: a key being re-enrolled is never used (the pair's other key alone opens it with the share).
         var enrolled = connected.Where(config.YubiKeySerials.Contains).Where(s => s != selection.ExcludeSerial).Distinct().ToList();
+        // Final review (p1-M3): the excluded key is plugged in and enrolled, so "not authorized, expected: it" would be
+        // wrong: say it is left out, and that the pair's other key is missing.
+        // Round 2: the key being enrolled again is never listed as one to plug in.
+        var excluded = selection.ExcludeSerial is int e && config.YubiKeySerials.Contains(e) ? e : (int?)null;
+        var others = excluded is null ? config.YubiKeySerials.ToList() : config.YubiKeySerials.Where(s => s != excluded).Distinct().ToList();
+        if (enrolled.Count == 0 && selection.Serial is null && excluded is int left && connected.Contains(left))
+            throw new TswapException(LeftOutText(left, others));
         if (enrolled.Count == 0 && selection.Serial is null)
+        {
+            var expected = string.Join(", ", others) +
+                (excluded is int x ? $" (YubiKey {x} is left out because it's being enrolled again)" : "");
             throw new TswapException(connected.Count == 1
-                ? $"YubiKey {connected[0]} not authorized. Expected: {string.Join(", ", config.YubiKeySerials)}"
-                : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {string.Join(", ", config.YubiKeySerials)}");
+                ? $"YubiKey {connected[0]} not authorized. Expected: {expected}" + (excluded is null ? "" : ".")
+                : $"None of the plugged-in YubiKeys ({string.Join(", ", connected)}) is authorized. Expected: {expected}" +
+                    (excluded is null ? "" : "."));
+        }
 
         var order = selection.Order(enrolled, enrolled.Select(_ => config.RequiresTouch).ToList(), connected);
         List<string> failures = [];
@@ -82,6 +94,18 @@ public sealed class YubiKeyHardwareService(IYubiKeyService yubiKeys, byte[]? ove
         throw new TswapException(
             $"None of the plugged-in YubiKeys ({string.Join(", ", order)}) answered: {string.Join("; ", failures)}");
     }
+
+    /// <summary>
+    /// The refusal when the only enrolled key plugged in is <paramref name="excluded"/>, left out because it's being
+    /// enrolled again; <paramref name="others"/> are the vault's other enrolled keys (any count).
+    /// </summary>
+    internal static string LeftOutText(int excluded, IReadOnlyList<int> others) =>
+        $"YubiKey {excluded} is left out of this unlock because it's being enrolled again, and " + others.Count switch
+        {
+            0 => "the vault has no other enrolled key.",
+            1 => $"the pair's other key ({others[0]}) isn't plugged in.",
+            _ => $"none of the other enrolled keys ({string.Join(", ", others)}) is plugged in.",
+        };
 
     private static byte[] DeriveMasterKey(Config config, int serial, byte[] k_current)
     {

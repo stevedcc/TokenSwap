@@ -65,7 +65,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains($"YubiKey {SerialA}", err);
+        Assert.Contains(Slot2EmptyText(SerialA), err); // the service's cause phrase reaches the user whole
         Assert.Contains(SetupHint, err);
     }
 
@@ -79,7 +79,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains($"YubiKey {SerialA} is busy", err);
+        Assert.Contains(BusyText(SerialA), err);
         Assert.DoesNotContain("No YubiKey detected", err);
     }
 
@@ -111,7 +111,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "slot", "add", "--yubikey");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains($"YubiKey {SerialB}", err);
+        Assert.Contains(Slot2EmptyText(SerialB), err);
         Assert.Contains(SetupHint, err);
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(_dir, "vault", "keyring")));
     }
@@ -130,12 +130,19 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "names");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains($"YubiKey {SerialA} is busy", err);
-        Assert.Contains($"YubiKey {SerialB}", err);
+        Assert.Contains(BusyText(SerialA), err);
+        Assert.Contains(Slot2EmptyText(SerialB), err);
         Assert.Contains(SetupHint, err);
     }
 
     private const int SerialC = 63333333;
+
+    /// <summary>Final review item 9: the service's slot-2-empty sentence (SdkYubiKeyService.Describe), whole.</summary>
+    private static string Slot2EmptyText(int serial) =>
+        $"Slot 2 of YubiKey {serial} isn't set up for challenge-response; run `tswap yubikey setup`.";
+
+    /// <summary>Final review item 9: the service's busy sentence, whole, with its cause.</summary>
+    private static string BusyText(int serial) => $"YubiKey {serial} is busy (another tswap or app is using it); try again.";
 
     [Fact]
     public void Unlock_BusyHiddenKeyAndUnrelatedReachableKey_SaysBusy()
@@ -153,7 +160,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("No plugged-in YubiKey matches", err);
-        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is waiting for a touch); try again when it's done.", err);
     }
 
     [Fact]
@@ -167,7 +174,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("already has a working slot", err);
-        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is waiting for a touch); try again when it's done.", err);
     }
 
     [Fact]
@@ -179,7 +186,7 @@ public sealed class YubiKeyErrorMessageTests : IDisposable
         var (exit, _, err) = Run(Service(fake), "", false, "yubikey", "setup", "--touch", "--serial", $"{SerialA}");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(SdkYubiKeyService.ProbeBusyMessage, err);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is waiting for a touch); try again when it's done.", err);
         Assert.Empty(fake.Programs);
     }
 }

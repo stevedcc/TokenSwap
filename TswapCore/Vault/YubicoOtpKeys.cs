@@ -64,7 +64,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         }
         catch (Exception e) when (e is PlatformApiException or UnauthorizedAccessException)
         {
-            return KeyboardInterfaceState.Unopenable;
+            return ProbeStateFor(e);
         }
 
         using (connection)
@@ -79,6 +79,13 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             }
         }
     }
+
+    /// <summary>
+    /// The state of a keyboard interface the probe couldn't open: busy when <see cref="Classify"/> would call the
+    /// failure busy (macOS's exclusive-access refusal), otherwise one tswap can't open.
+    /// </summary>
+    internal static KeyboardInterfaceState ProbeStateFor(Exception openFailure) =>
+        IsMacExclusiveAccess(openFailure) ? KeyboardInterfaceState.Busy : KeyboardInterfaceState.Unopenable;
 
     /// <summary>
     /// Whether a keyboard status report shows a command in progress. Its last byte holds the flags (SDK
@@ -356,6 +363,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     // The SDK's messages (Yubico.NET.SDK 1.18.1, Resources/ExceptionMessages.resx of each assembly). The SDK ships no
     // satellite resource assemblies, so these are the texts it throws on every system.
     private const string KeyboardTimeoutMessage = "The YubiKey did not acknowledge a write to the keyboard interface within the alloted time.";
+    private const string KeyboardNoReplyMessage = "Tried writing a keyboard report and unexpectedly recieved no reply.";
     private const string InvalidStatusReportMessage = "The status report must be the first and only report returned by the YubiKey.";
     private const string LinuxHidOpenFailedMessage = "Could not open HID node on Linux.";
     private const string IOKitCannotOpenDeviceMessage = "Can't open IOKit device.";
@@ -363,6 +371,15 @@ internal sealed class YubicoOtpKeys : IOtpKeys
 
     /// <summary>kIOReturnExclusiveAccess, as <c>PlatformApiException</c> prints the code of a failed IOHIDDeviceOpen.</summary>
     private const string MacExclusiveAccess = "IOHIDDeviceOpen = 0xE00002C5.";
+
+    /// <summary>
+    /// macOS refused to open the key's IOKit device because another program holds it exclusively (a busy key), as
+    /// <c>MacOSHidFeatureReportConnection</c> reports it. Shared by <see cref="Classify"/> and the probe.
+    /// </summary>
+    private static bool IsMacExclusiveAccess(Exception e) =>
+        e is PlatformApiException p
+        && p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
+        && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal);
 
     /// <summary>
     /// The SDK's exceptions as <see cref="OtpFailure"/>s (the table with the SDK source lines is in the stage 1 task 2
@@ -374,10 +391,11 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         // process's command is in progress, or slot 2 holds a configuration that doesn't answer HMAC challenges (a
         // static password, Yubico OTP): IsLongPressConfigured is true for those too. Both causes are named.
         KeyboardConnectionException { Message: KeyboardTimeoutMessage } => OtpFailure.NoAnswer,
+        // KeyboardTransform: the write got no reply at all; the same two causes.
+        KeyboardConnectionException { Message: KeyboardNoReplyMessage } => OtpFailure.NoAnswer,
         // KeyboardFrameReader.AddStatusReport, at the session's status read: the report shows a command in progress.
         MalformedYubiKeyResponseException { Message: InvalidStatusReportMessage } => OtpFailure.Busy,
-        PlatformApiException p when p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
-            && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal) => OtpFailure.Busy,
+        PlatformApiException p when IsMacExclusiveAccess(p) => OtpFailure.Busy,
         PlatformApiException { Message: LinuxHidOpenFailedMessage } => OtpFailure.NotReachable,
         PlatformApiException p when p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal) => OtpFailure.NotReachable,
         UnauthorizedAccessException => OtpFailure.NotReachable,
@@ -389,8 +407,14 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     private static IYubiKeyDevice KeyboardDevice(int serial)
     {
         YubicoSdk.EnsureInitialized();
-        var device = YubiKeyDevice.FindAll().FirstOrDefault(d => d.SerialNumber == serial)
-            ?? throw new OtpKeysException(OtpFailure.Other, serial, "it is not plugged in");
+        return KeyboardDevice(YubiKeyDevice.FindAll(), serial);
+    }
+
+    /// <summary><see cref="KeyboardDevice(int)"/> among <paramref name="devices"/> (the SDK's listing).</summary>
+    internal static IYubiKeyDevice KeyboardDevice(IEnumerable<IYubiKeyDevice> devices, int serial)
+    {
+        var device = devices.FirstOrDefault(d => d.SerialNumber == serial)
+            ?? throw new OtpKeysException(OtpFailure.NotPluggedIn, serial, "it is not plugged in");
         if (!device.AvailableTransports.HasFlag(Transport.HidKeyboard))
             throw new OtpKeysException(OtpFailure.NotReachable, serial, $"found over {device.AvailableTransports} only");
         return device;

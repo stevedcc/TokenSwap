@@ -42,8 +42,11 @@ So `tswap yubikey setup` guards an occupied slot:
 - With `--replace` you type the key's serial to confirm, and it refuses if the vault tswap is
   pointed at would be left without a way in that doesn't need this key. A TPM, Secure Enclave or
   recovery slot counts, or another YubiKey's slot, if that key is plugged in and its slot opens the
-  vault when tswap checks it. If tswap can't read a vault there, it warns and goes on. An empty
-  slot 2 is programmed without these checks: there is nothing on it to lose.
+  vault when tswap checks it. A legacy pair slot never counts (it doesn't open the vault with one
+  key), a classic two-key vault that uses this key is always refused, and a slot this tswap can't
+  read (for example one written by a newer tswap) doesn't count. If tswap can't read a vault there,
+  it warns and goes on. An empty slot 2 is programmed without these checks: there is nothing on it
+  to lose.
 
 The check keeps the vault from being lost outright, not you from being stuck on this machine:
 setup can't tell whether you still hold the recovery key, or whether a TPM or Secure Enclave slot

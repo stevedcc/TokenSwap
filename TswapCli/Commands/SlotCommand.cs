@@ -1086,7 +1086,9 @@ public sealed class SlotCommand : ICliCommand
             if (noAnswer is not null)
                 throw new TswapException($"{noAnswer} YubiKey {serial}'s slots couldn't all be checked, so it isn't enrolled again. Nothing was changed.");
 
-            // Every slot answered wrongly: open the vault another way.
+            // Every slot answered wrongly: open the vault another way. The slot that opened it is remembered only after
+            // the keyring write (round 2: an abort before it leaves the machine-local hint file as it was).
+            (byte[] VaultId, int Serial, byte[] SlotId)? openedBy = null;
             var unlockUsedPassword = false;
             VaultPasswordProvider prompt = () =>
             {
@@ -1103,7 +1105,9 @@ public sealed class SlotCommand : ICliCommand
             };
             try
             {
-                vaultKey = withRecoveryKey ? RecoveryKeyUnlock.Unlock(keyring, recoveryKey!) : ctx.UnlockExcluding(config, serial, prompt);
+                vaultKey = withRecoveryKey
+                    ? RecoveryKeyUnlock.Unlock(keyring, recoveryKey!)
+                    : ctx.UnlockExcluding(config, serial, prompt, (id, s, slotId) => openedBy = (id, s, slotId));
             }
             catch (TswapException e) when (!withRecoveryKey && e is not OwnerSwitchException)
             {
@@ -1113,15 +1117,13 @@ public sealed class SlotCommand : ICliCommand
             // The typed password is checked against the vault's verifier whatever opened the vault (a password slot
             // that opened proves it as well; the verifier also covers the agent, the chip, the recovery key, and a
             // password-free slot tried after the password pass).
-            var verified = typed is not null && file is not null && file.Verifies(vaultKey, typed);
-            if (newSlotPassword && file is not null && !verified)
+            // Final review (owner decision): a typed password that fails the verifier stops the command whatever the new
+            // slot gets; with a mistyped password, this key's password slots can't be told dead from alive.
+            if (typed is not null && file is not null && !file.Verifies(vaultKey, typed))
                 throw new TswapException(
                     $"YubiKey {serial} isn't enrolled again: the vault password didn't match this vault's (checked against the " +
-                    "vault's password verifier). Nothing was changed.");
-            if (typed is not null && !newSlotPassword && !verified)
-                c.Error.WriteLine(
-                    $"None of YubiKey {serial}'s slots opened with the vault password typed: if you mistyped the vault password, " +
-                    $"stop now (Ctrl-C); otherwise YubiKey {serial} is enrolled again, as a new slot without the password.");
+                    "vault's password verifier), so tswap can't tell whether its slot(s) that need the password still open the " +
+                    "vault. Nothing was changed.");
 
             var (newSlot, blob2) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, newSlotPassword ? typed : null);
             var newFile = firstPasswordFile is { } f ? VaultPasswordFile.Create(vaultKey, keyring.VaultId, typed!, f.Salt, f.Params) : null;
@@ -1144,7 +1146,10 @@ public sealed class SlotCommand : ICliCommand
             c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
             c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
 
-            // A hint, written after the keyring: a failure is a note, never a failed re-enrolment.
+            // Hints, written after the keyring: the way in the unlock used (silently, as an unlock does), then the new
+            // slot; a failure of the latter is a note, never a failed re-enrolment.
+            if (openedBy is { } way)
+                remembered.TryRemember(way.VaultId, way.Serial, way.SlotId);
             if (remembered.TryRemember(keyring.VaultId, serial, newSlot.SlotId) is { } failure)
                 c.Error.WriteLine($"Note: couldn't remember YubiKey {serial}'s new slot on this machine ({failure}); its next unlock " +
                     "here may cost an extra challenge.");

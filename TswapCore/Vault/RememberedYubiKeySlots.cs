@@ -5,8 +5,10 @@ namespace TswapCore.Vault;
 /// <summary>
 /// YubiKey SDK stage 1, task 4b: which one-key slot each YubiKey last opened the vault with on this machine (or was
 /// just re-enrolled as), kept in <c>yubikey-slots.json</c> in the config folder, beside <c>config.json</c>: never in
-/// the vault folder, so it never travels with a synced or copied vault and is never merged. Entries are keyed by the
-/// keyring's vault id and the key's serial, so another vault's entry is never taken for this one's.
+/// the vault folder, so it doesn't travel with a synced or copied vault folder, and it is never merged. (A config
+/// folder that is itself synced or copied takes it along; that's harmless: it only orders the slots tried, and its
+/// reader checks the folder's owner.) Entries are keyed by the keyring's vault id and the key's serial, so another
+/// vault's entry is never taken for this one's.
 /// <para>
 /// A hint, not state: reading it never fails (a missing, unreadable, malformed or foreign-owned file reads as nothing
 /// remembered, and the caller keeps keyring order), and the caller of a write decides what a failure means

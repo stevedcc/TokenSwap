@@ -209,7 +209,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion, slots, yubikey)
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`SdkYubiKeyService` implements it over `IOtpKeys`: `YubicoOtpKeys` makes the SDK calls, and `YubicoSdk.EnsureInitialized` sets the SDK's crypto creators, the Linux `libudev.so.1` resolver and silent logging; on Linux the SDK's PC/SC calls go through tswap's own loader, `TswapCli/Native/pcsc-loader.c`, which forwards to `libpcsclite.so.1` when it is present and otherwise uses a stand-in that answers `SCARD_E_NO_SERVICE` (`PcscStrategy.Describe()`); `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
 
@@ -238,7 +238,10 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 
 ### Prerequisites
 
-- On Linux, Yubico's udev rule (access to the key's hidraw device); no ykman and no `libpcsclite` needed
+- YubiKey access, per OS (no ykman and no `libpcsclite` needed anywhere; details in
+  [docs/install.md](docs/install.md)):
+  - Linux: Yubico's udev rule (access to the key's hidraw device)
+  - macOS: Input Monitoring for the app that runs tswap (System Settings → Privacy & Security → Input Monitoring)
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
   setting; a key without touch (less secure: no button press) is for CI/automation only.

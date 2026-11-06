@@ -15,7 +15,7 @@ namespace TswapTests;
 /// <see cref="SimulatedYubiKeyService"/> (per-serial slot 2 state and program outcome), or against
 /// <see cref="SdkYubiKeyService"/> over <see cref="FakeOtpKeys"/> where a key without a serial or a failing slot read
 /// is needed. Vaults come from <see cref="FleetMachine"/> (<c>init</c>) or are written by hand (keyrings the
-/// commands can't make). Every setup run's output is checked for key material (<see cref="AssertNoKeyMaterial"/>).
+/// commands can't make). Every setup run's output is checked for key material (<see cref="KeyMaterial.AssertNone"/>).
 /// </summary>
 public sealed partial class YubiKeySetupTests : IDisposable
 {
@@ -54,7 +54,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
             new VaultUnlocker(keys), testKey: null, sudoBypass: false);
         var exit = CliRunner.Run(ctx, full);
         var result = new Result(exit, console.OutText, console.ErrorText, console);
-        AssertNoKeyMaterial(result.All);
+        KeyMaterial.AssertNone(result.All);
         return result;
     }
 
@@ -282,6 +282,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _empty, Verbose = false, CommandArgs = full };
         var ctx = new CommandContext(console, env, () => VaultStores.Open(_empty), keys2, new VaultUnlocker(keys2), null, false);
         var exit = CliRunner.Run(ctx, full);
+        KeyMaterial.AssertNone(console.OutText + console.ErrorText); // final review item 8: this run bypasses Setup()
 
         Assert.NotEqual(0, exit);
         Assert.Contains("terminal", console.ErrorText);
@@ -363,7 +364,10 @@ public sealed partial class YubiKeySetupTests : IDisposable
 
     // Amended 2026-11-05: another key's YubiKey slot counts only when that key is plugged in and its slot opens now.
 
-    /// <summary>A vault with one-key slots on A and B, made by init (A) and slot add (B), so B's slot really opens it.</summary>
+    /// <summary>
+    /// A vault with one-key slots on B and A, made by init (B, with the vault password when one is given) and slot add
+    /// (A, without it), so B's slot really opens it.
+    /// </summary>
     private FleetMachine VaultOnAAndB(string? password = null)
     {
         var m = Machine(Keys(SerialA, SerialB));
@@ -659,11 +663,57 @@ public sealed partial class YubiKeySetupTests : IDisposable
         const string password = "correct horse battery staple";
         var m = VaultOnAAndB(password); // B's slot has the vault password, A's doesn't
 
+        var before = VaultFiles(m);
+
         var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n{password}\n", terminal: true);
 
         Assert.True(r.Exit == 0, r.All);
         Assert.Contains("Vault password:", r.Err);
         Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        AssertUnchanged(before, VaultFiles(m)); // final review item 7: setup never writes the vault
+    }
+
+    /// <summary>
+    /// Final review item 7 (p5-I-1): a plain setup of an empty slot 2, in a vault's config folder, writes nothing there.
+    /// </summary>
+    [Fact]
+    public void Setup_EmptySlot_InVaultFolder_WritesNothing()
+    {
+        var m = VaultOnAAndB("correct horse battery staple");
+        m.Keys.Slot2States[SerialA] = Slot2State.Empty;
+        var before = VaultFiles(m);
+
+        var r = Setup(m.Keys, ["--touch", "--serial", $"{SerialA}"], m.Dir, "", terminal: false);
+
+        Assert.True(r.Exit == 0, r.All);
+        Assert.Equal([(SerialA, true)], m.Keys.Programmed);
+        AssertUnchanged(before, VaultFiles(m));
+    }
+
+    /// <summary>
+    /// Final review item 7: every file of the machine's config folder and its vault folder, by path. The named ones
+    /// must be there: config.json, the keyring, the vault-password file, and the machine-local remembered-slots file
+    /// (slot add wrote it). Setup only reads the remembered slots (to order its check, which doesn't remember the slot
+    /// that opened), so that file stays as it was too.
+    /// </summary>
+    private static Dictionary<string, byte[]> VaultFiles(FleetMachine m)
+    {
+        var files = new[] { m.Dir, m.VaultDir! }
+            .SelectMany(d => Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories))
+            .Select(Path.GetFullPath).Distinct()
+            .ToDictionary(f => f, File.ReadAllBytes);
+        Assert.Contains(Path.GetFullPath(m.ConfigPath), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.VaultDir!, RecordVaultStore.KeyringFileName)), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.VaultDir!, RecordVaultStore.VaultPasswordFileName)), files.Keys);
+        Assert.Contains(Path.GetFullPath(Path.Combine(m.Dir, RememberedYubiKeySlots.FileName)), files.Keys);
+        return files;
+    }
+
+    private static void AssertUnchanged(Dictionary<string, byte[]> before, Dictionary<string, byte[]> after)
+    {
+        Assert.Equal(before.Keys.Order(), after.Keys.Order());
+        foreach (var (path, bytes) in before)
+            Assert.True(bytes.AsSpan().SequenceEqual(after[path]), $"{path} changed");
     }
 
     [Fact]
@@ -1136,7 +1186,8 @@ public sealed partial class YubiKeySetupTests : IDisposable
     [Fact]
     public void Setup_OutputHasNoKeyMaterial()
     {
-        // Every run in this class is checked (Setup → AssertNoKeyMaterial); here the paths that print the most.
+        // Every run in this class is checked (Setup → KeyMaterial.AssertNone, self-tested in KeyMaterialTests); here the
+        // paths that print the most.
         foreach (var flag in new[] { "--touch", "--no-touch" })
         {
             var keys = EmptySlot(SerialA, SerialB);
@@ -1144,10 +1195,6 @@ public sealed partial class YubiKeySetupTests : IDisposable
             var r = Setup(keys, [flag, "--serial", $"{SerialA}"], verbose: true);
             Assert.True(r.Exit == 0, r.All);
         }
-
-        // The check itself catches what it looks for.
-        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + Convert.ToHexString(RandomNumberGenerator.GetBytes(20))));
-        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + Convert.ToBase64String(RandomNumberGenerator.GetBytes(20))));
     }
 
     [Fact]
@@ -1159,6 +1206,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var ctx = new CommandContext(console, env, () => VaultStores.Open(_empty), keys, new VaultUnlocker(keys), null, false);
 
         Assert.Equal(0, CliRunner.Run(ctx, ["--help"]));
+        KeyMaterial.AssertNone(console.OutText + console.ErrorText); // final review item 8: this run bypasses Setup()
 
         var line = Assert.Single(console.OutText.Split('\n'), l => l.Contains("yubikey setup ("));
         Assert.Contains("tswap yubikey setup (--touch|--no-touch) [--serial N] [--replace]", line);
@@ -1172,24 +1220,6 @@ public sealed partial class YubiKeySetupTests : IDisposable
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// No whitespace-delimited token of 32 or more hex characters, or of 24 or more base64 characters: what a slot
-    /// secret (20 bytes) would look like printed either way.
-    /// </summary>
-    private static void AssertNoKeyMaterial(string output)
-    {
-        foreach (var token in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-        {
-            Assert.True(!HexToken().IsMatch(token), $"hex-like token in setup's output: {token}");
-            Assert.True(!Base64Token().IsMatch(token), $"base64-like token in setup's output: {token}");
-        }
-    }
-
-    [GeneratedRegex("^[0-9A-Fa-f]{32,}$")]
-    private static partial Regex HexToken();
-
-    [GeneratedRegex("^[A-Za-z0-9+/]{24,}={0,2}$")]
-    private static partial Regex Base64Token();
 
     private static Slot YubiKeySlot(int serial, bool? requiresTouch = true) =>
         MachineSlot(YubiKeySlotBlob.Create(serial, requiresTouch).Encode());

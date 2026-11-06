@@ -110,7 +110,12 @@ public sealed class VaultUnlocker
         var trace = new SlotTrace(sources.Remembered);
         var key = Unlock(config, selection, sources, trace);
         if (trace.Opened is { } opened)
-            sources.Remembered?.TryRemember(opened.VaultId, opened.Serial, opened.SlotId);
+        {
+            if (sources.RememberLater is { } later)
+                later(opened.VaultId, opened.Serial, opened.SlotId);
+            else
+                sources.Remembered?.TryRemember(opened.VaultId, opened.Serial, opened.SlotId);
+        }
         return key;
     }
 
@@ -191,6 +196,9 @@ public sealed class VaultUnlocker
         // can't run, so they stay reachable.
         var deferred = DeferredPasswordFreeSlots(keyring, plan.YubiKeyCandidates, trace);
         var pass1Candidates = deferred.Count == 0 ? plan.YubiKeyCandidates : plan.YubiKeyCandidates.Where(c => !deferred.Contains(c)).ToList();
+        // Final review (p6-I2): the deferred slots' failure (a busy, hidden or unplugged key, a dead slot) is kept and
+        // becomes part of the error when the unlock fails overall.
+        TswapException? deferredError = null;
         byte[]? TryDeferred()
         {
             if (deferred.Count == 0)
@@ -201,9 +209,11 @@ public sealed class VaultUnlocker
             }
             catch (TswapException ex) when (ex is not OwnerSwitchException)
             {
+                deferredError = ex;
                 return null;
             }
         }
+        string DeferredSuffix() => deferredError is null ? "" : " " + deferredError.Message;
         if (plan.YubiKeySlotCount > 0)
         {
             try
@@ -245,7 +255,7 @@ public sealed class VaultUnlocker
             if (TryDeferred() is { } deferredKey)
                 return deferredKey;
             throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal +
-                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)));
+                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix());
         }
         StretchedPassword prompted;
         try
@@ -256,10 +266,12 @@ public sealed class VaultUnlocker
         {
             if (TryDeferred() is { } deferredKey)
                 return deferredKey;
-            if (agentFailure is null)
+            if (agentFailure is null && deferredError is null)
                 throw;
-            // No password to be had (no terminal, no vault-password file): still say why the agent failed.
-            throw new VaultPasswordUnavailableException(ex.Message + " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure));
+            // No password to be had (no terminal, no vault-password file): still say why the agent and the deferred
+            // slots failed.
+            throw new VaultPasswordUnavailableException(ex.Message +
+                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix());
         }
         using var original = prompted;
         var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, original.Clone, out var pass3Error, trace)
@@ -268,13 +280,15 @@ public sealed class VaultUnlocker
             return opened;
 
         // A pass 1 failure is shown only now, when the later passes failed too.
-        if (pass1Error is null && agentFailure is null && plan.SetAsideSuffix.Length == 0 && pass3Error is not null)
+        if (pass1Error is null && agentFailure is null && deferredError is null && plan.SetAsideSuffix.Length == 0 && pass3Error is not null)
             throw pass3Error;
         List<string> parts = [];
         if (pass1Error is not null)
             parts.Add(pass1Error.Message);
         if (pass3Error is not null)
             parts.Add(pass3Error.Message);
+        if (deferredError is not null)
+            parts.Add(deferredError.Message);
         if (agentFailure is not null)
             parts.Add(VaultPasswordMessages.AgentAlsoFailed(agentFailure));
         if (parts.Count == 0)
