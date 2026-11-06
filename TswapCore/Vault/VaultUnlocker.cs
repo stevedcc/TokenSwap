@@ -110,7 +110,12 @@ public sealed class VaultUnlocker
         var trace = new SlotTrace(sources.Remembered);
         var key = Unlock(config, selection, sources, trace);
         if (trace.Opened is { } opened)
-            sources.Remembered?.TryRemember(opened.VaultId, opened.Serial, opened.SlotId);
+        {
+            if (sources.RememberLater is { } later)
+                later(opened.VaultId, opened.Serial, opened.SlotId);
+            else
+                sources.Remembered?.TryRemember(opened.VaultId, opened.Serial, opened.SlotId);
+        }
         return key;
     }
 

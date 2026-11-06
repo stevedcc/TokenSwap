@@ -617,6 +617,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var keyringBefore = File.ReadAllBytes(KeyringPath(m));
         var configBefore = File.ReadAllBytes(m.ConfigPath);
         var passwordFileBefore = File.ReadAllBytes(passwordFile);
+        var hintBefore = File.Exists(HintPath(m)) ? File.ReadAllBytes(HintPath(m)) : null; // machine-local, still "nothing"
         var checkChallenges = SlotsOf(m, SerialA).Count;
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", flag);
@@ -632,6 +633,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal(keyringBefore, File.ReadAllBytes(KeyringPath(m)));
         Assert.Equal(configBefore, File.ReadAllBytes(m.ConfigPath));
         Assert.Equal(passwordFileBefore, File.ReadAllBytes(passwordFile));
+        Assert.Equal(hintBefore, File.Exists(HintPath(m)) ? File.ReadAllBytes(HintPath(m)) : null); // round 2, D
         Assert.Equal(checkChallenges, ChallengesOf(m, SerialA).Count); // the check only: no enrolment challenge
         Assert.Empty(m.Keys.Programmed);
     }
@@ -1048,6 +1050,9 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
         Assert.DoesNotContain(MistypedLine, stdout + stderr);
+        // Round 2, D: the way in is still remembered, after the keyring write, beside the new slot.
+        Assert.Equal(SlotsOf(m, SerialB).Single().Slot.SlotId, Remembered(m)[SerialB]);
+        Assert.Equal(SlotsOf(m, SerialA)[^1].Slot.SlotId, Remembered(m)[SerialA]);
     }
 
     /// <summary>Fix round 2, item 3: the one-key keyring vault's touch note uses the flow, with the elevated recover fallback.</summary>
