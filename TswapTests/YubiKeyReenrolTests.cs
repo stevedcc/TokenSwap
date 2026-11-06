@@ -884,6 +884,67 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
+    /// Final review item 2 (p6-I2): the deferred password-free slot's failure isn't discarded. A's remembered slot needs
+    /// the password, its password-free slot is deferred, A is busy and there is no terminal: the error names the busy
+    /// key, not only the missing terminal.
+    /// </summary>
+    [Fact]
+    public void Unlock_DeferredSlotKeyBusy_NoTerminal_ErrorNamesBusyKey()
+    {
+        var (m, _) = StaleRememberedPasswordSlotOfA();
+        m.Keys.Busy.Add(SerialA);
+
+        var (exit, stdout, stderr) = m.Run("", "get", "db");
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.Contains(VaultPasswordMessages.NoTerminal, stderr);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is using it); try again.", stderr);
+    }
+
+    /// <summary>
+    /// Final review item 2 (p6-I2), the same with no prompt source at all (no agent, no password provider): the
+    /// deferred slot's busy text is part of the error.
+    /// </summary>
+    [Fact]
+    public void Unlock_DeferredSlotKeyBusy_NoPromptSource_ErrorNamesBusyKey()
+    {
+        var (m, _) = StaleRememberedPasswordSlotOfA();
+        m.Keys.Busy.Add(SerialA);
+        var config = VaultStores.Open(m.Dir).LoadConfig();
+        var remembered = new RememberedYubiKeySlots(m.Dir, DirectoryOwnerMatcher.Default);
+
+        var ex = Assert.ThrowsAny<TswapException>(() =>
+            new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended, new UnlockSources(null, null) { Remembered = remembered }));
+
+        Assert.Contains(VaultPasswordMessages.NoTerminal, ex.Message);
+        Assert.Contains($"YubiKey {SerialA} is busy (another tswap or app is using it); try again.", ex.Message);
+    }
+
+    /// <summary>
+    /// Final review item 2 (p6-I2): A's slots are all dead (its remembered one needs the password, its password-free one
+    /// is deferred), B's password-free slot is dead, a wrong password is typed: the deferred slot's failure is part of
+    /// the combined error.
+    /// </summary>
+    [Fact]
+    public void Unlock_AllDead_CombinedErrorHasDeferredFailure()
+    {
+        var (m, slotsOfA) = StaleRememberedPasswordSlotOfA();
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        Reprogram(m, SerialA);
+        Reprogram(m, SerialB);
+        m.Keys.Challenges.Clear();
+
+        var (exit, _, stderr) = m.RunOnTerminal(WrongPassword + "\n", "get", "db");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialB} did not open any of its slots in this vault", stderr); // pass 1: B alone
+        Assert.Contains($"YubiKey {SerialA}: {VaultPasswordMessages.WrongPasswordKdf}", stderr); // pass 3
+        Assert.Contains($"YubiKey {SerialA} did not open any of its slots in this vault", stderr); // the deferred slot
+        Assert.Equal([slotsOfA[0].Blob.ChallengeString, slotsOfA[1].Blob.ChallengeString], ChallengesOf(m, SerialA));
+    }
+
+    /// <summary>
     /// Fix round 2, item 1a: B's remembered slot is a dead password slot and its password-free slot is live, so the
     /// unlock uses the mistyped password (its password pass fails), then opens through B's deferred password-free slot.
     /// The unlock using the password is no proof of it: the verifier aborts A's re-enrolment with the password, and
