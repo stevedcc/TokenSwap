@@ -424,20 +424,25 @@ public sealed class VaultUnlocker
         }
     }
 
-    /// <summary>The candidates of one unlock, classified before any pass runs (brief T17 ruling 3).</summary>
-    private sealed record UnlockPlan(
+    /// <summary>
+    /// The candidates of one unlock, classified before any pass runs (brief T17 ruling 3). FIDO2 plan, task 2: FIDO2
+    /// slots are <see cref="Fido2Candidates"/> only (task 7 tries them), never OTP candidates, never counted in
+    /// <see cref="YubiKeySlotCount"/> and never set aside as needing a newer tswap.
+    /// </summary>
+    internal sealed record UnlockPlan(
         bool OwnPath,
         SlotPasswordKind OwnKind,
         int YubiKeySlotCount,
         List<(Slot Slot, YubiKeySlotBlob Blob)> YubiKeyCandidates,
         HashSet<int> PasswordSerials,
-        string SetAsideSuffix)
+        string SetAsideSuffix,
+        List<(Slot Slot, Fido2SlotBlob Blob)> Fido2Candidates)
     {
         public bool HasPasswordCandidates => (OwnPath && OwnKind == SlotPasswordKind.Password) || PasswordSerials.Count > 0;
     }
 
     /// <param name="excludeSerial">Task 4b: a key whose one-key slots are left out (<see cref="YubiKeySelection.ExcludeSerial"/>).</param>
-    private static UnlockPlan Classify(Config config, Keyring.Keyring keyring, int? excludeSerial)
+    internal static UnlockPlan Classify(Config config, Keyring.Keyring keyring, int? excludeSerial)
     {
         List<string> corrupt = [];
         List<string> newer = [];
@@ -457,7 +462,7 @@ public sealed class VaultUnlocker
             {
                 own = null; // the own backend reports the damaged slot id itself, as before
             }
-            if (own is not null && !YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob))
+            if (own is not null && !YubiKeySlotKinds.IsYubiKey(own.HwBlob))
             {
                 (ownKind, var error) = SlotPassword.Describe(own);
                 if (ownKind == SlotPasswordKind.Corrupt)
@@ -467,33 +472,44 @@ public sealed class VaultUnlocker
             }
         }
 
-        var yubiKeySlots = keyring.Slots
-            .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
-            .ToList();
         List<(Slot Slot, YubiKeySlotBlob Blob)> candidates = [];
+        List<(Slot Slot, Fido2SlotBlob Blob)> fido2Candidates = [];
+        var yubiKeySlotCount = 0;
         var excluded = 0;
-        foreach (var s in yubiKeySlots)
+        foreach (var s in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
             // A slot whose blob doesn't decode is set aside (security review of T4: one bad slot must
             // not block the others) and named in the final error only if no other slot unlocks.
-            var (blob, kind, error) = YubiKeySlotBlob.Parse(s.HwBlob!);
-            if (blob is not null && blob.Serial == excludeSerial)
-                excluded++; // task 4b: the key being re-enrolled
-            else if (blob is not null)
-                candidates.Add((s, blob));
-            else if (kind == SlotPasswordKind.NeedsNewerTswap)
-                newer.Add($"Slot {Id8(s)}: {error}");
-            else
-                corrupt.Add(Id8(s));
+            switch (YubiKeySlotKinds.Classify(s.HwBlob))
+            {
+                case YubiKeySlotKind.None:
+                    continue;
+                case YubiKeySlotKind.Fido2(var fido2):
+                    fido2Candidates.Add((s, fido2)); // whatever excludeSerial says: it names OTP slots only
+                    continue;
+                case YubiKeySlotKind.Otp(var blob) when blob.Serial == excludeSerial:
+                    excluded++; // task 4b: the key being re-enrolled
+                    break;
+                case YubiKeySlotKind.Otp(var blob):
+                    candidates.Add((s, blob));
+                    break;
+                case YubiKeySlotKind.NeedsNewerTswap(var error):
+                    newer.Add($"Slot {Id8(s)}: {error}");
+                    break;
+                default:
+                    corrupt.Add(Id8(s));
+                    break;
+            }
+            yubiKeySlotCount++;
         }
 
         var suffix = (corrupt.Count == 0 ? "" :
                 $" Skipped slot(s) {string.Join(", ", corrupt)}: their slot blob is corrupt; restore config.json from backup.") +
             string.Concat(newer.Select(n => " " + n));
         return new UnlockPlan(
-            ownPath, ownKind, yubiKeySlots.Count - excluded, candidates,
+            ownPath, ownKind, yubiKeySlotCount - excluded, candidates,
             candidates.Where(c => c.Blob.RequiresPassword).Select(c => c.Blob.Serial).ToHashSet(),
-            suffix);
+            suffix, fido2Candidates);
     }
 
     private static string Id8(Slot slot) => Convert.ToHexString(slot.SlotId).ToLowerInvariant()[..8];
@@ -573,7 +589,8 @@ public sealed class VaultUnlocker
 
     /// <summary>
     /// True for a YubiKey vault whose own machine slot (by <see cref="Config.KeyringSlotId"/>, or
-    /// the first machine slot when that is null) carries a <see cref="YubiKeySlotBlob"/>. A
+    /// the first machine slot when that is null) carries a <c>TSYK</c> blob: a <see cref="YubiKeySlotBlob"/>, or a
+    /// <see cref="Fido2SlotBlob"/> (<c>init --fido2</c>, FIDO2 plan task 2), or one this build can't read. A
     /// YubiKey machine slot without one is a legacy pair slot, unlocked through
     /// <see cref="YubiKeyHardwareService"/> and the per-machine pair fields.
     /// </summary>
@@ -582,7 +599,7 @@ public sealed class VaultUnlocker
         if ((config.Backend ?? HardwareBackend.YubiKey) != HardwareBackend.YubiKey)
             return false;
         var own = FindOwnMachineSlot(config, keyring);
-        return own is not null && YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob);
+        return own is not null && YubiKeySlotKinds.IsYubiKey(own.HwBlob);
     }
 
     /// <summary>

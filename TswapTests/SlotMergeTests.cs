@@ -455,6 +455,73 @@ public class SlotMergeTests : IDisposable
         Assert.Contains("is neither a slot receipt", stderr);
     }
 
+    /// <summary>FIDO2 plan, task 2 row 1: a config whose keyring has a FIDO2 slot merges it; the listing names it.</summary>
+    [Fact]
+    public void Merge_KeyringWithFido2Slot_Accepted()
+    {
+        RouterVault();
+        var copy = Another("copy", _router.Tpm);
+        _router.CopyVaultTo(copy);
+        var blob = Fido2TestSlots.Blob();
+        var withFido2 = Fido2TestSlots.WithFido2Slot(copy.Keyring, blob);
+        File.WriteAllText(copy.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            copy.Config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(withFido2)) }, TswapCore.TswapJsonContext.Default.Config));
+
+        var stdout = _router.Ok("", "slot", "merge", copy.ConfigPath, "--yes");
+
+        var merged = _router.Keyring.Slots.Single(s => s.SlotId.AsSpan().SequenceEqual(withFido2.Slots[^1].SlotId));
+        Assert.Equal(blob.Encode(), merged.HwBlob);
+        Assert.Contains($"(YubiKey {Fido2TestSlots.Fido2Serial}, FIDO2)", stdout);
+        Assert.Equal("router-pw", GetWith(_router)); // the TPM slot still opens it
+    }
+
+    /// <summary>FIDO2 plan, task 2 row 1: a damaged FIDO2 blob is refused with the FIDO2 text, a newer one as needing a newer tswap.</summary>
+    [Theory]
+    [InlineData("truncated", "Malformed FIDO2 slot blob")]
+    [InlineData("version 4", "needs a newer tswap (blob version 4")]
+    [InlineData("flag bits", "needs a newer tswap (FIDO2 slot flags 0x02)")]
+    [InlineData("PRF version", "needs a newer tswap (FIDO2 slot PRF version 2)")]
+    public void ValidateHwBlob_Fido2_RefusesDamagedOrNewer(string defect, string expected)
+    {
+        var bytes = Fido2TestSlots.Blob().Encode();
+        switch (defect)
+        {
+            case "truncated":
+                bytes = bytes[..^1];
+                break;
+            case "version 4":
+                bytes[4] = 4;
+                break;
+            case "flag bits":
+                bytes[5] = 0x02;
+                break;
+            case "PRF version":
+                bytes[6] = 2;
+                break;
+        }
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => SlotReceiptCodec.ValidateHwBlob(bytes, "slot receipt"));
+
+        Assert.Contains(expected, ex.Message);
+    }
+
+    /// <summary>FIDO2 plan, task 2 row 17: the merge listing names a FIDO2 slot's key, by its model when the serial is unknown.</summary>
+    [Fact]
+    public void MergeListing_DescribesFido2()
+    {
+        var slots = new Fido2TestSlots();
+        var withSerial = slots.AddFido2(Fido2TestSlots.Blob());
+        var withoutSerial = slots.AddFido2(Fido2TestSlots.Blob(serial: null));
+
+        var line = TswapCli.Commands.SlotCommand.DescribeSlot(withSerial);
+        var modelLine = TswapCli.Commands.SlotCommand.DescribeSlot(withoutSerial);
+
+        Assert.Equal(
+            $"slot {Fido2TestSlots.Id8(withSerial)} (YubiKey {Fido2TestSlots.Fido2Serial}, FIDO2), fingerprint {SlotFingerprint.Compute(withSerial.PublicKey)}",
+            line);
+        Assert.Contains($"({Fido2TestSlots.ModelName}, FIDO2)", modelLine);
+    }
+
     [Theory]
     [InlineData("slot", "merge")]
     [InlineData("slot", "merge", "a.json", "b.json")]

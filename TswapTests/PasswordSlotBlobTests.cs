@@ -362,4 +362,16 @@ public class PasswordSlotBlobTests
             "did not authenticate (the key's HMAC secret was reprogrammed, its slot's password flag was removed, or config.json is damaged)",
             ex.Message);
     }
+
+    /// <summary>FIDO2 plan, task 2 row 4: a FIDO2 slot's password standing comes from its own flags byte.</summary>
+    [Fact]
+    public void Describe_Fido2_ReadsItsFlags()
+    {
+        var slots = new Fido2TestSlots();
+        var free = slots.AddFido2(Fido2TestSlots.Blob(requiresPassword: false));
+        var withPassword = slots.AddFido2(Fido2TestSlots.Blob(requiresPassword: true));
+
+        Assert.Equal((SlotPasswordKind.None, (string?)null), SlotPassword.Describe(free));
+        Assert.Equal((SlotPasswordKind.Password, (string?)null), SlotPassword.Describe(withPassword));
+    }
 }

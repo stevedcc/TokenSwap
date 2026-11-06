@@ -250,13 +250,20 @@ public static class SlotEnrollmentFileCodec
     /// The new slot's blob in a request or approve file, checked against the backend the file
     /// names (brief T5 decision 2): none or YubiKey ⇒ a strictly decoded <see cref="YubiKeySlotBlob"/>
     /// (brief T4); TPM or Secure Enclave ⇒ an opaque blob within <see cref="KeyringFormat.MaxHwBlobSize"/>
-    /// that is not a YubiKey blob (a mislabelled request is refused rather than guessed at).
+    /// that is not a YubiKey blob (a mislabelled request is refused rather than guessed at). A FIDO2 slot
+    /// (FIDO2 plan, task 2) is never requested or approved: <see cref="Fido2SlotNotEnrolledText"/>.
     /// </summary>
+    /// <summary>FIDO2 plan, task 2: a request or approve file whose new slot is a FIDO2 slot.</summary>
+    public const string Fido2SlotNotEnrolledText =
+        "A FIDO2 slot isn't requested or approved; add it with 'tswap slot add --fido2' on a machine that can open the vault.";
+
     private static void ValidateNewSlotBlob(HardwareBackend? backend, byte[] hwBlob, string what)
     {
         if ((backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey)
         {
-            YubiKeySlotBlob.Decode(hwBlob);
+            if (YubiKeySlotKinds.Classify(hwBlob) is YubiKeySlotKind.Fido2)
+                throw new TswapException(Fido2SlotNotEnrolledText);
+            YubiKeySlotBlob.Decode(hwBlob); // not FIDO2: an OTP blob, or the error its parser gives
             return;
         }
         if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))

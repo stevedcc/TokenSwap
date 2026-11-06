@@ -118,8 +118,8 @@ public sealed class SlotsCommand : ICliCommand
             var protection = slot.Kind == SlotKind.Machine
                 ? DescribeMachineProtection(config, slot)
                 : DescribeRecoveryProtection();
-            if (slot.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-                && YubiKeySlotBlob.TryDecode(slot.HwBlob!) is { } blob
+            // Only OTP slots are remembered (FIDO2 plan, task 2: a FIDO2 slot is never marked).
+            if (slot.Kind == SlotKind.Machine && YubiKeySlotKinds.Classify(slot.HwBlob) is YubiKeySlotKind.Otp(var blob)
                 && lastOpened.TryGetValue(blob.Serial, out var last) && !last.AsSpan().SequenceEqual(slot.SlotId))
                 protection += $" — {OtherSlotOfKeyMark}";
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
@@ -193,12 +193,16 @@ public sealed class SlotsCommand : ICliCommand
     /// <summary>Brief T17: the PROTECTION of a slot whose blob is corrupt.</summary>
     internal const string CorruptMark = "corrupt (restore config.json from backup)";
 
-    private static string DescribeHardware(Config config, Slot slot) =>
+    private static string DescribeHardware(Config config, Slot slot) => YubiKeySlotKinds.Classify(slot.HwBlob) switch
+    {
         // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
         // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
-        YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-            ? DescribeYubiKeySlot(YubiKeySlotBlob.Decode(slot.HwBlob!))
-            : DescribeMachineProtection(config);
+        YubiKeySlotKind.Otp(var blob) => DescribeYubiKeySlot(blob),
+        // FIDO2 plan, task 2: the key (its model when the serial is unknown); task 8 gives the final text.
+        YubiKeySlotKind.Fido2(var blob) => $"{Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid)}, FIDO2",
+        // Not reached for a TSYK blob this build can't read: DescribeMachineProtection names it first.
+        _ => DescribeMachineProtection(config),
+    };
 
     private static string DescribeYubiKeySlot(YubiKeySlotBlob blob) =>
         $"YubiKey {blob.Serial}, " + blob.RequiresTouch switch

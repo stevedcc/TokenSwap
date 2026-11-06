@@ -404,7 +404,7 @@ public sealed class SlotCommand : ICliCommand
                 throw new TswapException(
                     "This slot request carries no YubiKey slot blob, so it names no key to enroll. On the requesting " +
                     "machine, run 'tswap slot request <file>' again with one YubiKey plugged in.");
-            var requestedKey = YubiKeySlotBlob.Decode(
+            var requestedKey = RequestedOtpBlob(
                 SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's YubiKey slot blob"));
             enrolled = $"YubiKey {requestedKey.Serial}";
         }
@@ -635,7 +635,7 @@ public sealed class SlotCommand : ICliCommand
                 (backend == HardwareBackend.YubiKey ? "This approve file's YubiKey slot blob" : "This approve file's hardware blob") +
                 " does not match this machine's pending request. " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
-        var blob = backend == HardwareBackend.YubiKey ? YubiKeySlotBlob.Decode(pendingHwBlob) : null;
+        var blob = backend == HardwareBackend.YubiKey ? RequestedOtpBlob(pendingHwBlob) : null;
 
         var vaultId = SlotEnrollmentFileCodec.DecodeFixed(approve.VaultId, KeyringFormat.VaultIdSize, "approve file's vault id");
         var ephemeralPublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
@@ -974,13 +974,16 @@ public sealed class SlotCommand : ICliCommand
         return 0;
     }
 
-    /// <summary>Task 4b: each key's one-key slots (decodable YubiKey slot blobs), in keyring order; legacy pair slots are left out.</summary>
-    private static Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> OneKeySlotsBySerial(TswapCore.Keyring.Keyring keyring)
+    /// <summary>
+    /// Task 4b: each key's one-key OTP slots (decodable OTP blobs), in keyring order; legacy pair slots are left out, and
+    /// so are FIDO2 slots (FIDO2 plan, task 2: <c>slot add --fido2</c> checks a key's FIDO2 slots itself).
+    /// </summary>
+    internal static Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> OneKeySlotsBySerial(TswapCore.Keyring.Keyring keyring)
     {
         Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> bySerial = [];
-        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)))
+        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
-            if (YubiKeySlotBlob.TryDecode(slot.HwBlob!) is not { } blob)
+            if (YubiKeySlotKinds.Classify(slot.HwBlob) is not YubiKeySlotKind.Otp(var blob))
                 continue;
             if (!bySerial.TryGetValue(blob.Serial, out var slots))
                 bySerial[blob.Serial] = slots = [];
@@ -1415,16 +1418,38 @@ public sealed class SlotCommand : ICliCommand
 
     private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
-    /// <summary>One line naming a slot for a merge: kind, device, fingerprint.</summary>
+    /// <summary>
+    /// One line naming a slot for a merge: kind, device, fingerprint. A FIDO2 slot is "YubiKey N, FIDO2" (its model when
+    /// the serial is unknown; FIDO2 plan, task 2). Every YubiKey blob here passed <see cref="SlotReceiptCodec.ValidateHwBlob"/>.
+    /// </summary>
     internal static string DescribeSlot(Slot slot)
     {
         var device = slot.Kind == SlotKind.Recovery
             ? "recovery slot"
-            : YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-                ? $"YubiKey {YubiKeySlotBlob.Decode(slot.HwBlob!).Serial}"
-                : "TPM / Secure Enclave machine slot";
+            : YubiKeySlotKinds.Classify(slot.HwBlob) switch
+            {
+                YubiKeySlotKind.Otp(var otp) => $"YubiKey {otp.Serial}",
+                YubiKeySlotKind.Fido2(var fido2) => $"{Fido2SlotBlob.DisplayName(fido2.Serial, fido2.Aaguid)}, FIDO2",
+                YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
+                YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
+                _ => "TPM / Secure Enclave machine slot",
+            };
         return $"slot {ShortId(slot.SlotId)} ({device}), fingerprint {SlotFingerprint.Compute(slot.PublicKey)}";
     }
+
+    /// <summary>
+    /// The OTP blob of a slot request (or this machine's pending one): never a FIDO2 slot's, which
+    /// <see cref="SlotEnrollmentFileCodec"/> refuses before this is reached (FIDO2 plan, task 2); a damaged or newer
+    /// blob throws its parser's text, as <see cref="YubiKeySlotBlob.Decode"/> does.
+    /// </summary>
+    private static YubiKeySlotBlob RequestedOtpBlob(byte[] hwBlob) => YubiKeySlotKinds.Classify(hwBlob) switch
+    {
+        YubiKeySlotKind.Otp(var blob) => blob,
+        YubiKeySlotKind.Fido2 => throw new TswapException(SlotEnrollmentFileCodec.Fido2SlotNotEnrolledText),
+        YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
+        YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
+        _ => YubiKeySlotBlob.Decode(hwBlob), // not a TSYK blob: throws "wrong magic" or "truncated", as before
+    };
 
     // --- the recovery key (brief T5 decision 3, issue #187) ---
 

@@ -360,7 +360,8 @@ public sealed class InitCommand : ICliCommand
         if (fileStore.Owner.FileExists(fileStore.SecretsFile))
             c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
 
-        var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));
+        // FIDO2 plan, task 2: a FIDO2 slot is a YubiKey's too.
+        var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotKinds.IsYubiKey(s.HwBlob));
         c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
         c.Out.WriteLine("It opens with any YubiKey that has a slot there, or the recovery key. To give this machine's TPM or Secure");
         c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'sudo {ctx.Prefix} slot approve' on an enrolled");

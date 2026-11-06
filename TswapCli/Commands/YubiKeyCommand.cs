@@ -230,13 +230,15 @@ public sealed class YubiKeyCommand : ICliCommand
         List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys = [];
         foreach (var slot in keyring.Slots)
         {
-            switch (Classify(slot, serial))
+            switch (Classify(slot, serial, out var otherKey))
             {
                 case WayIn.ByItself:
                     return;
                 case WayIn.OtherYubiKey:
-                    otherKeys.Add((slot, YubiKeySlotBlob.Decode(slot.HwBlob!)));
+                    otherKeys.Add((slot, otherKey!));
                     break;
+                case WayIn.Fido2:
+                    break; // FIDO2 plan, task 2: not counted as a way in until task 8 checks that it opens now
             }
         }
         if (otherKeys.Count == 0)
@@ -247,7 +249,11 @@ public sealed class YubiKeyCommand : ICliCommand
         CheckAnotherKey(ctx, config, keyring, serial, otherKeys, keys);
     }
 
-    private enum WayIn { No, ByItself, OtherYubiKey }
+    /// <summary>
+    /// What a slot is for <c>--replace</c>. <see cref="Fido2"/> (FIDO2 plan, task 2): a FIDO2 slot, of any key
+    /// (reprogramming OTP slot 2 never touches the key's FIDO2 credentials); not a way in until task 8 decides.
+    /// </summary>
+    private enum WayIn { No, ByItself, OtherYubiKey, Fido2 }
 
     /// <summary>
     /// A blob recognised as a TPM or Secure Enclave slot's, as their unlockers read it: a <c>TSTP</c>/<c>TSSE</c> header
@@ -271,24 +277,21 @@ public sealed class YubiKeyCommand : ICliCommand
     /// Whether <paramref name="slot"/> may be a slot on YubiKey <paramref name="serial"/>: a one-key YubiKey slot of this
     /// serial, or one whose serial can't be read (fail closed); this machine's legacy pair slot when its pair (the
     /// config's pair serials) includes this key; another machine's legacy pair slot, whose pair isn't known here (fail
-    /// closed). Recovery, TPM and Secure Enclave slots and other keys' slots are not.
+    /// closed). Recovery, TPM and Secure Enclave slots and other keys' slots are not, and neither is a FIDO2 slot, even of
+    /// this key: reprogramming OTP slot 2 never touches the key's FIDO2 credentials (FIDO2 plan, task 2).
     /// </summary>
-    private static bool MayBeThisKeys(Config config, Keyring keyring, Slot slot, int serial)
+    internal static bool MayBeThisKeys(Config config, Keyring keyring, Slot slot, int serial)
     {
         if (slot.Kind == SlotKind.Recovery)
             return false;
         if (slot.HwBlob is not { Length: > 0 })
             return IsOwnSlot(config, keyring, slot) ? config.YubiKeySerials?.Contains(serial) == true : true;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
-            return false;
-        try
+        return YubiKeySlotKinds.Classify(slot.HwBlob) switch
         {
-            return YubiKeySlotBlob.Decode(slot.HwBlob).Serial == serial;
-        }
-        catch (TswapException)
-        {
-            return true;
-        }
+            YubiKeySlotKind.None or YubiKeySlotKind.Fido2 => false,
+            YubiKeySlotKind.Otp(var blob) => blob.Serial == serial,
+            _ => true, // needs a newer tswap or corrupt: its serial can't be read (fail closed)
+        };
     }
 
     /// <summary>This machine's own slot: by <see cref="Config.KeyringSlotId"/>, or the first machine slot when that is null (as the unlocker finds it).</summary>
@@ -302,23 +305,27 @@ public sealed class YubiKeyCommand : ICliCommand
     /// with a hardware blob that isn't a YubiKey's (a TPM or Secure Enclave of any machine), opens the vault by itself;
     /// a one-key YubiKey slot of another serial (compared as integers) does if its key answers. Never this serial's
     /// slots, never a YubiKey slot whose serial can't be read (fail closed), never a legacy pair slot (a machine slot
-    /// without a hardware blob: it needs both keys of the pair).
+    /// without a hardware blob: it needs both keys of the pair). A FIDO2 slot is <see cref="WayIn.Fido2"/>, whatever its
+    /// key. <paramref name="otherKey"/> is the blob of an <see cref="WayIn.OtherYubiKey"/> slot.
     /// </summary>
-    private static WayIn Classify(Slot slot, int serial)
+    private static WayIn Classify(Slot slot, int serial, out YubiKeySlotBlob? otherKey)
     {
+        otherKey = null;
         if (slot.Kind == SlotKind.Recovery)
             return WayIn.ByItself;
         if (slot.HwBlob is not { Length: > 0 })
             return WayIn.No;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
-            return IsTpmOrSecureEnclaveSlot(slot) ? WayIn.ByItself : WayIn.No;
-        try
+        switch (YubiKeySlotKinds.Classify(slot.HwBlob))
         {
-            return YubiKeySlotBlob.Decode(slot.HwBlob).Serial != serial ? WayIn.OtherYubiKey : WayIn.No;
-        }
-        catch (TswapException)
-        {
-            return WayIn.No;
+            case YubiKeySlotKind.None:
+                return IsTpmOrSecureEnclaveSlot(slot) ? WayIn.ByItself : WayIn.No;
+            case YubiKeySlotKind.Fido2:
+                return WayIn.Fido2;
+            case YubiKeySlotKind.Otp(var blob) when blob.Serial != serial:
+                otherKey = blob;
+                return WayIn.OtherYubiKey;
+            default:
+                return WayIn.No; // this key's own OTP slot, or one whose serial can't be read (fail closed)
         }
     }
 

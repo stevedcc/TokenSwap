@@ -1271,4 +1271,20 @@ public sealed partial class YubiKeySetupTests : IDisposable
             config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(pairOnly)) }, TswapJsonContext.Default.Config));
         return dir;
     }
+
+    /// <summary>
+    /// FIDO2 plan, task 2 row 15: reprogramming OTP slot 2 never touches the key's FIDO2 credentials, so a FIDO2
+    /// slot of the same key is not "this key's" for <c>setup --replace</c>; its OTP slot still is.
+    /// </summary>
+    [Fact]
+    public void MayBeThisKeys_Fido2OfSameKey_False()
+    {
+        var slots = new Fido2TestSlots();
+        var otp = slots.AddOtp(SimulatedYubiKeyService.WithKeys(Fido2TestSlots.Fido2Serial), Fido2TestSlots.Fido2Serial);
+        var fido2 = slots.AddFido2(Fido2TestSlots.Blob(Fido2TestSlots.Fido2Serial));
+        var config = slots.Config(own: otp);
+
+        Assert.False(TswapCli.Commands.YubiKeyCommand.MayBeThisKeys(config, slots.Keyring, fido2, Fido2TestSlots.Fido2Serial));
+        Assert.True(TswapCli.Commands.YubiKeyCommand.MayBeThisKeys(config, slots.Keyring, otp, Fido2TestSlots.Fido2Serial));
+    }
 }

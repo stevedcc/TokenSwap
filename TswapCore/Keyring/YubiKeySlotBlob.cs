@@ -131,7 +131,7 @@ public sealed record YubiKeySlotBlob
     };
 
     /// <summary>True when <paramref name="hwBlob"/> starts with this format's magic.</summary>
-    public static bool IsYubiKeyBlob(byte[]? hwBlob) =>
+    internal static bool IsYubiKeyBlob(byte[]? hwBlob) =>
         hwBlob is { Length: >= MagicSize } && hwBlob.AsSpan(0, MagicSize).SequenceEqual(Magic);
 
     /// <summary>Version 1 (74 bytes) unless <see cref="RequiresPassword"/>, then version 2 (75 bytes, flags <c>0x01</c>).</summary>
