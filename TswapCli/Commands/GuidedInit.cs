@@ -34,13 +34,15 @@ internal static class GuidedInit
         "with no prompt at all (anyone using this Mac as you can open it).";
 
     /// <summary>
-    /// FIDO2 plan, task 8: under the list on every OS (people use one key on several OSes, and the vault folder travels):
-    /// what each slot type needs elsewhere.
+    /// FIDO2 plan, task 8: under the list on every OS when a FIDO2 slot is offered (people use one key on several OSes,
+    /// and the vault folder travels): what each slot type needs elsewhere, as docs/install.md says it.
     /// </summary>
     internal const string MultiOsNote =
         "Using a key on other machines too? An OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev " +
-        "rule on Linux. A FIDO2 slot needs neither: it asks for the key's FIDO2 PIN and a touch on every unlock, and works " +
-        "the same on Linux, macOS and Windows. Pick both for one key to give it two slots; either opens the vault.";
+        "rule on Linux. A FIDO2 slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd " +
+        "distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every unlock, and a " +
+        "FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to give it two slots; either " +
+        "opens the vault.";
 
     /// <summary>FIDO2 plan, task 8: Windows' one FIDO2 entry (its dialog picks the key, so tswap can't list them).</summary>
     internal const string WindowsFido2Entry = "a YubiKey's FIDO2 slot (Windows' dialog: pick the key, PIN, touch)";
@@ -137,7 +139,7 @@ internal static class GuidedInit
         var chipReason = chip.UnavailableReason ?? "reason unknown";
         if (chip.Backend is null)
             c.Out.WriteLine($"  {chipName} (not available: {chipReason})");
-        if (fido2 is not null && devices.Any(d => d.Kind != DeviceKind.Chip))
+        if (fido2Problem is null && devices.Any(d => d.Kind == DeviceKind.Fido2))
         {
             c.Out.WriteLine();
             c.Out.WriteLine(MultiOsNote);

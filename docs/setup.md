@@ -306,10 +306,12 @@ both gives one key two slots; either opens the vault.
   twice per slot (making the credential, then opening it).
 - A FIDO-only key (the Security Key series has no OTP interface) is offered as a FIDO2 slot only,
   after the others, by its model name when it reports no serial.
-- Under the list, on every OS: `Using a key on other machines too? An OTP slot needs Input
-  Monitoring for the terminal on a Mac and Yubico's udev rule on Linux. A FIDO2 slot needs neither:
-  it asks for the key's FIDO2 PIN and a touch on every unlock, and works the same on Linux, macOS
-  and Windows. Pick both for one key to give it two slots; either opens the vault.`
+- Under the list, on every OS, when a FIDO2 slot is offered: `Using a key on other machines too? An
+  OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev rule on Linux. A FIDO2
+  slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd
+  distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every
+  unlock, and a FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to
+  give it two slots; either opens the vault.`
 - FIDO2 slots are made after the chip and the OTP slots. Without a terminal for the PIN, the list
   says `FIDO2 slots: not offered (...)` with the reason.
 

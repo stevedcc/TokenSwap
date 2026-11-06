@@ -191,9 +191,36 @@ public sealed class GuidedInitFido2Tests : IDisposable
         Assert.Contains(GuidedInit.MultiOsNote, stdout);
         Assert.Equal(
             "Using a key on other machines too? An OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev " +
-            "rule on Linux. A FIDO2 slot needs neither: it asks for the key's FIDO2 PIN and a touch on every unlock, and works " +
-            "the same on Linux, macOS and Windows. Pick both for one key to give it two slots; either opens the vault.",
+            "rule on Linux. A FIDO2 slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd " +
+            "distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every unlock, and a " +
+            "FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to give it two slots; either " +
+            "opens the vault.",
             GuidedInit.MultiOsNote);
+    }
+
+    // Final review (carry-forward 3): the note is about FIDO2 slots, so it is shown only when one is offered.
+    [Fact]
+    public void GuidedInit_MultiOsNote_NotShownWithoutAFido2Entry()
+    {
+        var m = Machine(OSPlatform.Linux, Serial); // an OTP key, no FIDO2 key listed
+
+        var (_, stdout, _) = m.RunOnTerminal("\n", "init", "--no-password");
+
+        Assert.Contains(LinuxOtp, Entries(stdout));
+        Assert.DoesNotContain(GuidedInit.MultiOsNote, stdout);
+    }
+
+    [Fact]
+    public void GuidedInit_MultiOsNote_NotShownWithAFido2ListingProblem()
+    {
+        var m = Machine(OSPlatform.Linux, Serial);
+        m.Fido2Keys!.AddKey(Serial, Fido2TestSlots.Aaguid);
+        m.Fido2Keys.FailNext(FakeFido2Op.Find, TswapCore.Vault.Fido2.Fido2Failure.Busy);
+
+        var (_, stdout, _) = m.RunOnTerminal("\n", "init", "--no-password");
+
+        Assert.Contains("  FIDO2 keys: ", stdout);
+        Assert.DoesNotContain(GuidedInit.MultiOsNote, stdout);
     }
 
     [Fact]
