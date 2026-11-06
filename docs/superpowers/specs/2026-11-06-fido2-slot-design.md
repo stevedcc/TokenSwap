@@ -61,6 +61,13 @@ Yubico's SDK only finds Yubico devices; Fido2Net binds libfido2 (small, quiet pr
   - Windows: FIDO2 after the TPM and the OTP slot, noting Windows' three-step dialog (spike consequence).
   - Linux: OTP first (no PIN), then FIDO2.
   Picking both for one key gives two slots; either opens the vault.
+- **Many people use one key on several OSes (owner, 2026-11-06: "people may often live multi-OS lives").** On every
+  OS, not only macOS, guided `init` and an OTP enrolment (`init --yubikey`, `slot add --yubikey`) say what each slot
+  type needs elsewhere: the OTP slot needs Input Monitoring for the terminal on a Mac (and Yubico's udev rule on
+  Linux); the FIDO2 slot needs neither, asks for the key's PIN and a touch everywhere, and works the same on Linux,
+  macOS and Windows. The OTP enrolment ends with a one-line hint: if this key will also be used on a Mac, add a FIDO2
+  slot too (`tswap slot add --fido2`). The vault folder travels between machines, so the slot a key gets on one OS
+  is what the user meets on the others.
 - **`tswap slots`** lists FIDO2 slots with the key's serial (where the SDK can read it) and "FIDO2: PIN + touch".
 - **A FIDO2 reset kills the slot:** resetting the key's FIDO2 application (for example to clear website passkeys)
   deletes the credential, the same way reprogramming slot 2 kills an OTP slot. The docs and the enrolment message
