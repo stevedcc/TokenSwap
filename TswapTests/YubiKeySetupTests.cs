@@ -282,6 +282,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _empty, Verbose = false, CommandArgs = full };
         var ctx = new CommandContext(console, env, () => VaultStores.Open(_empty), keys2, new VaultUnlocker(keys2), null, false);
         var exit = CliRunner.Run(ctx, full);
+        AssertNoKeyMaterial(console.OutText + console.ErrorText); // final review item 8: this run bypasses Setup()
 
         Assert.NotEqual(0, exit);
         Assert.Contains("terminal", console.ErrorText);
@@ -1194,6 +1195,11 @@ public sealed partial class YubiKeySetupTests : IDisposable
         // The check itself catches what it looks for.
         Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + Convert.ToHexString(RandomNumberGenerator.GetBytes(20))));
         Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + Convert.ToBase64String(RandomNumberGenerator.GetBytes(20))));
+        var secret = RandomNumberGenerator.GetBytes(20);
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret)));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret).Replace('-', ':')));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret).Replace('-', ' ')));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key q83v-EjRW-eJCr-ze8S-NFZ4-kKvN-7xI=")); // grouped base64
     }
 
     [Fact]
@@ -1205,6 +1211,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var ctx = new CommandContext(console, env, () => VaultStores.Open(_empty), keys, new VaultUnlocker(keys), null, false);
 
         Assert.Equal(0, CliRunner.Run(ctx, ["--help"]));
+        AssertNoKeyMaterial(console.OutText + console.ErrorText); // final review item 8: this run bypasses Setup()
 
         var line = Assert.Single(console.OutText.Split('\n'), l => l.Contains("yubikey setup ("));
         Assert.Contains("tswap yubikey setup (--touch|--no-touch) [--serial N] [--replace]", line);
@@ -1228,8 +1235,25 @@ public sealed partial class YubiKeySetupTests : IDisposable
         {
             Assert.True(!HexToken().IsMatch(token), $"hex-like token in setup's output: {token}");
             Assert.True(!Base64Token().IsMatch(token), $"base64-like token in setup's output: {token}");
+            // Final review item 8: also with the separators of a grouped secret stripped.
+            // For base64, path segments are matched one by one and only those mixing upper case, lower case and digits
+            // (random base64 of 24+ characters does, all but certainly), so a hyphenated file path isn't taken for one.
+            var joined = token.Replace("-", "").Replace(":", "");
+            Assert.True(!HexToken().IsMatch(joined) && !joined.Split('/').Any(LooksLikeBase64Key), $"grouped key-like token in setup's output: {token}");
         }
+        foreach (Match run in SeparatedHexRun().Matches(output))
+            Assert.True(SeparatorChars().Replace(run.Value, "").Length < 32, $"grouped hex in setup's output: {run.Value}");
     }
+
+    private static bool LooksLikeBase64Key(string segment) =>
+        Base64Token().IsMatch(segment) && segment.Any(char.IsAsciiLetterUpper) && segment.Any(char.IsAsciiLetterLower)
+        && segment.Any(char.IsAsciiDigit);
+
+    [GeneratedRegex("[0-9A-Fa-f]+(?:[-: ]+[0-9A-Fa-f]+)+")]
+    private static partial Regex SeparatedHexRun();
+
+    [GeneratedRegex("[-: ]")]
+    private static partial Regex SeparatorChars();
 
     [GeneratedRegex("^[0-9A-Fa-f]{32,}$")]
     private static partial Regex HexToken();

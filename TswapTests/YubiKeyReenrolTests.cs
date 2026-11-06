@@ -207,6 +207,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA];
 
         var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n", "slot", "add", "--yubikey", "--recovery-key-stdin");
+        AssertNotEchoed(stdout + stderr, _recoveryKey);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
@@ -526,6 +527,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var backupsBefore = m.Backups.Order().ToArray();
 
         var (exit, stdout, stderr) = m.RunOnTerminal(WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -554,6 +556,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var text = console.OutText;
         Assert.True(exit == 0, text);
         Assert.Equal(1, Regex.Count(text, Regex.Escape(TerminalPasswordProvider.PromptText)));
+        AssertNotEchoed(text, Password);
         Assert.NotNull(atFirstChallenge);
         var prompt = atFirstChallenge.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal);
         var count = atFirstChallenge.IndexOf(TouchCount(1), StringComparison.Ordinal);
@@ -585,6 +588,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var checkChallenges = SlotsOf(m, SerialA).Count;
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", flag);
+        AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains(
@@ -621,6 +625,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -688,6 +693,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
         var (wrongExit, wrongOut, wrongErr) = m.Run(_recoveryKey + "\n" + WrongPassword + "\n",
             "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+        AssertNotEchoed(wrongOut + wrongErr, _recoveryKey, WrongPassword);
 
         Assert.NotEqual(0, wrongExit);
         Assert.Contains("the vault password didn't match", wrongErr);
@@ -696,6 +702,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
         var (exit, stdout, stderr) = m.Run(_recoveryKey + "\n" + Password + "\n",
             "slot", "add", "--yubikey", "--password", "--recovery-key-stdin");
+        AssertNotEchoed(stdout + stderr, _recoveryKey, Password);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
@@ -727,6 +734,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--no-password");
+        AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password may have been mistyped", stderr);
@@ -978,6 +986,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + WrongPassword + "\n", "slot", "add", "--yubikey", "--password");
+        AssertNotEchoed(stdout + stderr, WrongPassword);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("the vault password didn't match", stderr);
@@ -1002,6 +1011,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         m.Keys.PluggedIn = [SerialA, SerialB];
 
         var (exit, stdout, stderr) = m.RunOnTerminal("1\n" + Password + "\n", "slot", "add", "--yubikey", "--no-password");
+        AssertNotEchoed(stdout + stderr, Password);
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Contains(ReenrolledLine(SerialA), stdout);
@@ -1325,15 +1335,55 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         return server;
     }
 
-    /// <summary>No whitespace-delimited token of 32 or more hex characters, or of 24 or more base64 characters.</summary>
+    /// <summary>
+    /// No whitespace-delimited token of 32 or more hex characters, or of 24 or more base64 characters, also once
+    /// <c>-</c> and <c>:</c> are stripped from it; and no run of hex groups separated by <c>-</c>, <c>:</c> or spaces
+    /// that adds up to 32 hex characters or more (a secret printed grouped).
+    /// </summary>
     private static void AssertNoKeyMaterial(string output)
     {
         foreach (var token in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             Assert.True(!HexToken().IsMatch(token), $"hex-like token in the output: {token}");
             Assert.True(!Base64Token().IsMatch(token), $"base64-like token in the output: {token}");
+            // For base64, path segments are matched one by one and only those mixing upper case, lower case and digits
+            // (random base64 of 24+ characters does, all but certainly), so a hyphenated file path isn't taken for one.
+            var joined = token.Replace("-", "").Replace(":", "");
+            Assert.True(!HexToken().IsMatch(joined) && !joined.Split('/').Any(LooksLikeBase64Key), $"grouped key-like token in the output: {token}");
         }
+        foreach (Match run in SeparatedHexRun().Matches(output))
+            Assert.True(SeparatorChars().Replace(run.Value, "").Length < 32, $"grouped hex in the output: {run.Value}");
     }
+
+    /// <summary>Final review item 8: a value typed on stdin (the recovery key, the vault password) is never printed.</summary>
+    private static void AssertNotEchoed(string output, params string[] typed)
+    {
+        foreach (var value in typed)
+            Assert.False(output.Contains(value, StringComparison.Ordinal), "a typed secret appears in the output");
+        AssertNoKeyMaterial(output);
+    }
+
+    [Fact]
+    public void AssertNoKeyMaterial_CatchesGroupedForms()
+    {
+        var secret = RandomNumberGenerator.GetBytes(20);
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret)));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret).Replace('-', ':')));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key " + BitConverter.ToString(secret).Replace('-', ' ')));
+        Assert.Throws<Xunit.Sdk.TrueException>(() => AssertNoKeyMaterial("key q83v-EjRW-eJCr-ze8S-NFZ4-kKvN-7xI=")); // grouped base64
+        Assert.Throws<Xunit.Sdk.FalseException>(() => AssertNotEchoed("the key was " + Password, Password));
+        AssertNoKeyMaterial("(fingerprint ABCD-EF01-2345-6789) slot add --yubikey --recovery-key-stdin");
+    }
+
+    private static bool LooksLikeBase64Key(string segment) =>
+        Base64Token().IsMatch(segment) && segment.Any(char.IsAsciiLetterUpper) && segment.Any(char.IsAsciiLetterLower)
+        && segment.Any(char.IsAsciiDigit);
+
+    [GeneratedRegex("[0-9A-Fa-f]+(?:[-: ]+[0-9A-Fa-f]+)+")]
+    private static partial Regex SeparatedHexRun();
+
+    [GeneratedRegex("[-: ]")]
+    private static partial Regex SeparatorChars();
 
     [GeneratedRegex("^[0-9A-Fa-f]{32,}$")]
     private static partial Regex HexToken();
