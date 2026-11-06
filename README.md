@@ -51,8 +51,9 @@ Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive pe
 `tswap-win-x64.zip`. Unpack it into a folder of your own, and keep that folder writable only by you (tswap runs code
 from it). Run `tswap` from there, or install it with `installscript` (below).
 
-You need one hardware backend: a YubiKey (with the `ykman` CLI), a TPM 2.0 (Windows, or Linux with
-`tpm2-tools`), or a Mac's Secure Enclave. Prerequisites, building from source and notes for Windows
+You need one hardware backend: a YubiKey (tswap prepares it with `tswap yubikey setup`; on Linux
+it needs Yubico's udev rule), a TPM 2.0 (Windows, or Linux with `tpm2-tools`), or a Mac's Secure
+Enclave. Prerequisites, building from source and notes for Windows
 are in [Installing tswap](docs/install.md).
 
 **macOS.** The archive holds `tswap` and `libtswapse.dylib` (the Secure Enclave support): keep them

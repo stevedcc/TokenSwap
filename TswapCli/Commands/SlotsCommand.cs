@@ -57,16 +57,23 @@ public sealed class SlotsCommand : ICliCommand
                 : "Acknowledged the touch setting of: " + string.Join("; ", postures.Select(p => $"{p.Label} ({p.Posture})")));
             return 0;
         }
-        ctx.Console.Out.WriteLine(Format(config));
+        ctx.Console.Out.WriteLine(Format(config, ctx.RememberedSlots));
         return 0;
     }
+
+    /// <summary>
+    /// Task 4b: the mark of a key's slot that isn't the one this machine remembers it last opened the vault with. Not
+    /// "dead" or "older": that can't be known without a challenge, and a merge can bring in newer slots.
+    /// </summary>
+    internal const string OtherSlotOfKeyMark = "another slot of this key (not the one it last opened with)";
 
     /// <summary>
     /// Pure formatting, factored out from <see cref="Execute"/> so it's unit-testable without
     /// spinning up a full <see cref="CommandContext"/>. Never returns a bare "unprotected" or
     /// "insecure" for a no-touch machine slot — see this class's doc comment.
     /// </summary>
-    internal static string Format(Config config)
+    /// <param name="remembered">Task 4b: this machine's remembered slots (null: nothing is marked).</param>
+    internal static string Format(Config config, TswapCore.Vault.RememberedYubiKeySlots? remembered = null)
     {
         if (config.Keyring is null)
         {
@@ -102,6 +109,8 @@ public sealed class SlotsCommand : ICliCommand
         sb.Append($"{"SLOT".PadRight(slotColumnWidth)}  {"KIND".PadRight(kindColumnWidth)}  PROTECTION\n");
         sb.Append(new string('-', slotColumnWidth + 2 + kindColumnWidth + 2 + 40) + "\n");
 
+        // Task 4b: only one-key slots are remembered; nothing marks a legacy pair slot, or a key nothing is remembered for.
+        var lastOpened = remembered?.ForVault(keyring.VaultId) ?? new Dictionary<int, byte[]>();
         foreach (var slot in keyring.Slots)
         {
             var shortId = AbbreviateSlotId(slot.SlotId);
@@ -109,6 +118,10 @@ public sealed class SlotsCommand : ICliCommand
             var protection = slot.Kind == SlotKind.Machine
                 ? DescribeMachineProtection(config, slot)
                 : DescribeRecoveryProtection();
+            if (slot.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
+                && YubiKeySlotBlob.TryDecode(slot.HwBlob!) is { } blob
+                && lastOpened.TryGetValue(blob.Serial, out var last) && !last.AsSpan().SequenceEqual(slot.SlotId))
+                protection += $" — {OtherSlotOfKeyMark}";
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
         }
 

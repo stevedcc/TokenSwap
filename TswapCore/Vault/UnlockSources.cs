@@ -16,6 +16,19 @@ namespace TswapCore.Vault;
 /// <param name="Prompt">Pass 3: the stretched password, asked for once per unlock.</param>
 public sealed record UnlockSources(Func<byte[]?>? AskAgent, VaultPasswordProvider? Prompt)
 {
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b: this machine's remembered slots (<see cref="RememberedYubiKeySlots"/>), or null for
+    /// none. With it, each key's remembered slot is tried first, and the one-key slot that opened the vault is remembered.
+    /// </summary>
+    public RememberedYubiKeySlots? Remembered { get; init; }
+
+    /// <summary>
+    /// Final review, round 2: when set, the one-key slot that opened the vault is handed here (vault id, serial, slot
+    /// id) instead of being written to <see cref="Remembered"/>, so a caller that may still abort (re-enrolment)
+    /// writes the hint only once it has written its own change.
+    /// </summary>
+    public Action<byte[], int, byte[]>? RememberLater { get; init; }
+
     /// <summary>No agent and no prompt: a slot that needs the password can't be opened.</summary>
     public static UnlockSources None { get; } = new(null, null);
 }

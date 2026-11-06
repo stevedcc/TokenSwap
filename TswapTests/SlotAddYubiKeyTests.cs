@@ -104,7 +104,8 @@ public class SlotAddYubiKeyTests : IDisposable
         var (exit, _, stderr) = Run("", null, "slot", "add", "--yubikey");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("already has a slot", stderr);
+        // Task 4b: a key with a slot is checked first (one challenge); one that still opens is refused as before.
+        Assert.Contains("already has a working slot", stderr);
         Assert.Contains(SerialA.ToString(), stderr);
         Assert.Equal(before, File.ReadAllText(ConfigPath));
         Assert.Empty(Directory.GetFiles(_dir, "config.json.bak-*"));

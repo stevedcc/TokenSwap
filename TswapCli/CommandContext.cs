@@ -146,9 +146,37 @@ public sealed record CommandContext(
         if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
+        // Task 4b: each key's remembered slot first, and the slot that opens is remembered.
         return Unlocker.Unlock(config, UnlockSelection(),
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)));
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)) { Remembered = RememberedSlots });
     }
+
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b (<c>slot add --yubikey</c> re-enrolling a key): <see cref="Unlock"/> without
+    /// YubiKey <paramref name="excludeSerial"/>, with <paramref name="prompt"/> as pass 3's password (the command's one
+    /// password, asked before its challenges or on first use).
+    /// </summary>
+    /// <remarks>
+    /// Round 2: the slot that opened the vault isn't remembered here; it is handed to <paramref name="rememberLater"/>, so
+    /// the caller writes the hint only after its own write (an abort before it leaves the machine-local file alone).
+    /// </remarks>
+    internal byte[] UnlockExcluding(Config config, int excludeSerial, TswapCore.VaultPassword.VaultPasswordProvider prompt,
+        Action<byte[], int, byte[]> rememberLater)
+    {
+        if (TestKey is null)
+            SecurityWarnings.NoticeIfChanged(Console, config);
+        return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots, RememberLater = rememberLater });
+    }
+
+    /// <summary>
+    /// Task 4b: this machine's remembered YubiKey slots (<c>yubikey-slots.json</c> in the config folder, beside
+    /// <c>config.json</c>), written through the store's owner-preserving file layer. The store as it is opened (not
+    /// through <see cref="Storage"/>): a hint beside the config is no reason for the classic-vault refusal.
+    /// </summary>
+    internal RememberedYubiKeySlots RememberedSlots => _storage.Value is TswapCore.IFileVaultStore fileStore
+        ? new(fileStore.ConfigDir, fileStore.Owner)
+        : new(Env.ConfigDir, TswapCore.DirectoryOwnerMatcher.Default);
 
     /// <summary>
     /// Brief T17 task 11: how <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's pass 2,
@@ -264,11 +292,26 @@ public sealed record CommandContext(
         return serials.Count == 1 ? serials[0] : ChooseSerial(serials);
     }
 
-    private int ChooseSerial(IReadOnlyList<int> serials)
+    /// <summary>
+    /// The same prompt, always shown (even for one key), with <paramref name="note"/> under the list: <c>yubikey
+    /// setup</c> offers only the keyboard-reachable keys and says which other keys are plugged in but not offered.
+    /// </summary>
+    public int PromptForSerial(IReadOnlyList<int> serials, string? note)
+    {
+        if (serials.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
+        return ChooseSerial(serials, note);
+    }
+
+    private int ChooseSerial(IReadOnlyList<int> serials) => ChooseSerial(serials, note: null);
+
+    private int ChooseSerial(IReadOnlyList<int> serials, string? note)
     {
         Console.Error.WriteLine("\nMultiple YubiKeys detected:");
         for (int i = 0; i < serials.Count; i++)
             Console.Error.WriteLine($"  {i + 1}. Serial: {serials[i]}");
+        if (note is not null)
+            Console.Error.WriteLine(note);
         Console.Error.Write($"Select YubiKey (1-{serials.Count}): ");
         var input = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))

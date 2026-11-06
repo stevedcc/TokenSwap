@@ -9,7 +9,7 @@ namespace TswapCore.Keyring;
 /// </summary>
 public enum YubiKeyTouchPolicy : byte
 {
-    /// <summary>Detection failed at enrollment (for example ykman could not read the slot).</summary>
+    /// <summary>Detection failed at enrollment (for example the slot could not be read).</summary>
     Unknown = 0,
     NotRequired = 1,
     Required = 2,
@@ -97,7 +97,7 @@ public sealed record YubiKeySlotBlob
 
     /// <summary>
     /// What is sent to the key through <see cref="Vault.IYubiKeyService.Challenge"/>: the challenge
-    /// as 64 hex characters, which the ykman driver sends as exactly 64 bytes, the same shape as
+    /// as 64 hex characters, which the YubiKey service sends as exactly 64 bytes, the same shape as
     /// a pair vault's <c>UnlockChallenge</c>.
     /// </summary>
     public string ChallengeString => Convert.ToHexString(Challenge);
@@ -157,6 +157,9 @@ public sealed record YubiKeySlotBlob
         var (blob, _, error) = Parse(bytes);
         return blob ?? throw new TswapException(error!);
     }
+
+    /// <summary>The blob, or null when <paramref name="bytes"/> don't decode (corrupt, or from a newer tswap).</summary>
+    public static YubiKeySlotBlob? TryDecode(byte[] bytes) => Parse(bytes).Blob;
 
     /// <summary>
     /// Never throws: the blob and its <see cref="SlotPasswordKind"/> (None or Password), or null with the

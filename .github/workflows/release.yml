@@ -36,7 +36,7 @@ jobs:
         run: |
           set -o pipefail
           TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx \
-            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows" | tee "$RUNNER_TEMP/test.log"
+            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey" | tee "$RUNNER_TEMP/test.log"
           # A filter that matches no tests exits 0: require one summary line with tests in it.
           grep -qE '^Passed! +- Failed: +0, Passed: +[1-9][0-9]*,' "$RUNNER_TEMP/test.log" \
             || { echo "::error::no 'Passed!' summary with tests in it: no tests ran, or some failed" >&2; exit 1; }
@@ -123,6 +123,17 @@ jobs:
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
           & (Join-Path $check 'tswap.exe') prompt-hash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The YubiKey smoke package.sh runs on Linux and macOS (YubiKey SDK stage 1, task 4): a serial no YubiKey has,
+          # never --replace, so the only expected outcome is the refusal.
+          $ErrorActionPreference = 'Continue'
+          $out = (& (Join-Path $check 'tswap.exe') yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -eq 0 -or -not $out.Contains('YubiKey 2147483647 is not plugged in')) {
+            Write-Output "::error::tswap yubikey setup --touch --serial 2147483647 should refuse with 'YubiKey 2147483647 is not plugged in' (exit $code)"
+            exit 1
+          }
+          exit 0
 
       - name: Upload archive
         uses: actions/upload-artifact@v4

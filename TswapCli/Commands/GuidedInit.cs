@@ -1,6 +1,4 @@
-using System.ComponentModel;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
@@ -70,8 +68,8 @@ internal static class GuidedInit
         if (GuidedPrompts.ReadAnswer(c) is null)
             throw EndOfInput();
 
-        // Step 2: what this machine has. One ykman call lists the keys; each key's own calls come at
-        // enrolment, each announced first, so ykman's retries never make a silent wait.
+        // Step 2: what this machine has. One call lists the keys; each key's own calls come at
+        // enrolment, each announced first, so a retry never makes a silent wait.
         IReadOnlyList<int> serials = [];
         string? yubiKeyProblem = null;
         c.Out.WriteLine("Looking for YubiKeys…");
@@ -79,10 +77,10 @@ internal static class GuidedInit
         {
             serials = ctx.YubiKeys.ListSerials();
         }
-        catch (Exception ex) when (ex is TswapException or Win32Exception or FormatException)
+        catch (Exception ex) when (ex is TswapException or FormatException)
         {
-            // Listed as a line, not left out silently: the chip stays offered (a Mac without ykman).
-            yubiKeyProblem = ex is Win32Exception ? $"ykman can't be run ({ex.Message})" : ex.Message;
+            // Listed as a line, not left out silently: the chip stays offered (a key the OS hides).
+            yubiKeyProblem = ex.Message;
         }
         var chip = ctx.ChipProbe();
         var chipName = chip.Backend is { } usable ? VaultPasswordChoice.HardwareName(usable) : ThisOsChipName();
@@ -221,7 +219,7 @@ internal static class GuidedInit
                 byte[]? kekSlot = null;
                 Slot? added = null;
                 // The carry-on offer covers only this key's enrolment (EnrollSerial / EnrollAsSlot: its
-                // ykman calls, the double challenge, the slot's own wrap), the failures leaving out a key can
+                // device calls, the double challenge, the slot's own wrap), the failures leaving out a key can
                 // fix. Decoding the keyring and AssembleKeyring are outside it: they work on what this run
                 // built in memory, so a failure there is a bug, not a key problem, and propagates (exit 1,
                 // nothing written) instead of being offered as "carry on without this key".
@@ -234,10 +232,10 @@ internal static class GuidedInit
                 }
                 catch (TswapException ex)
                 {
-                    // A key ykman can't reach (macOS blocking its OTP interface, unplugged, slot 2 not
+                    // A key tswap can't reach (macOS blocking its OTP interface, unplugged, slot 2 not
                     // configured): explain, then carry on without it or stop. Nothing is written either way;
                     // K_v, the vault id and every slot built so far stay in memory, and no key is asked again.
-                    c.Out.WriteLine(YubiKeyAccess.ExplainBlocked(ex.Message, serial, ThisOs()) ?? ex.Message);
+                    c.Out.WriteLine(ex.Message);
                     if (!AskYesNo(c, $"Carry on without YubiKey {serial}? (y/N): ", defaultAnswer: false))
                         throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
                     continue;
@@ -414,11 +412,4 @@ internal static class GuidedInit
 
     /// <summary>The chip this OS would offer, for naming it when it isn't usable.</summary>
     private static string ThisOsChipName() => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
-
-    /// <summary>This OS, for <see cref="YubiKeyAccess.ExplainBlocked"/> (any other OS gets its generic wording).</summary>
-    private static OSPlatform ThisOs() =>
-        OperatingSystem.IsMacOS() ? OSPlatform.OSX
-        : OperatingSystem.IsLinux() ? OSPlatform.Linux
-        : OperatingSystem.IsWindows() ? OSPlatform.Windows
-        : OSPlatform.FreeBSD;
 }

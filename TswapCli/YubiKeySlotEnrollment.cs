@@ -46,10 +46,14 @@ internal static class YubiKeySlotEnrollment
         if (eligible.Count == 0)
             throw new TswapException(
                 $"Every plugged-in YubiKey ({string.Join(", ", pluggedIn)}) already has a slot in this vault. " +
-                "Plug in a YubiKey that has no slot yet; each key needs only one slot.");
+                "Plug in a YubiKey that has no slot yet; each key needs only one slot." + UnreachableNote(ctx));
 
         return ctx.ChooseSerialAmong(eligible);
     }
+
+    /// <summary>A plugged-in key that can't be reached (busy, hidden) may be the one the user means: its reason, after a space ("" when none).</summary>
+    public static string UnreachableNote(CommandContext ctx) =>
+        ctx.YubiKeys.DescribeUnreachable() is { } why ? " " + why : "";
 
     /// <summary>
     /// Builds a new one-key YubiKey slot for the keyring in memory (shared by <c>slot add
@@ -85,8 +89,8 @@ internal static class YubiKeySlotEnrollment
     {
         var c = ctx.Console;
         c.Out.WriteLine($"\nEnrolling YubiKey {serial} (touch it each time it flashes; it is asked twice)...");
-        // Brief T7 item 5: the posture is whether the first challenge asked for a touch (ykman can't
-        // read a slot's touch setting); a service that can't tell falls back to its own detection.
+        // Brief T7 item 5: the posture is whether the first challenge asked for a touch (a slot's touch
+        // setting can't be read back); a service that can't tell falls back to its own detection.
         var probe = YubiKeySlotBlob.Create(serial, requiresTouch: null);
         var answer = ctx.YubiKeys.ChallengeReportingTouch(serial, probe.ChallengeString);
         var first = answer.Response;

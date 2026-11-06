@@ -8,6 +8,19 @@
 # `tswap prompt-hash` (needs no vault) and, on macOS, a Secure Enclave vault in a throwaway config folder (init with
 # no touch, password or recovery prompt, then `names` to unlock it): that loads the shipped dylib through tswap's own
 # resolver. Needs a Mac with a Secure Enclave (GitHub's macOS runners have one, see ci.yml's probe).
+# On Linux, --smoke also checks that libpcsclite is used when present and never required (YubiKey SDK, design
+# docs/superpowers/specs/2026-11-04-yubikey-sdk-portable-design.md "Constraints"): `readelf -d` of the unpacked tswap
+# has no libpcsclite entry, and tswap runs `prompt-hash` once more in a bubblewrap sandbox where every path
+# `ldconfig -p` lists for libpcsclite.so.1 is /dev/null (TswapCli/Native/pcsc-loader.c then takes its stand-in).
+# Without bwrap or without the library, or when bwrap can't make its sandbox (nested user namespaces), that run is
+# skipped with a loud "SKIP: stand-in run (<reason>)" line.
+# Every --smoke also runs `tswap yubikey setup --touch --serial 2147483647` (YubiKey SDK stage 1, task 4): 2147483647
+# is outside the range YubiKey serials use (assumed), so it can never select, let alone program, a key that happens to
+# be plugged in, and the smoke never passes --replace. Its only expected outcome is the refusal "YubiKey 2147483647 is
+# not plugged in" (a per-OS explanation may follow), which also proves the --serial path is consulted and the YubiKey
+# SDK starts in the shipped binary. On Linux it runs again with -v, whose PC/SC strategy line must name the system
+# library when ldconfig lists libpcsclite.so.1 (the stand-in otherwise), and in the sandbox, where it must name the
+# stand-in.
 # Make the archive on the binary's own platform: upload-artifact doesn't keep the execute bit.
 set -euo pipefail
 
@@ -40,12 +53,89 @@ tar czf "$archive.partial" -C "$publish" "${files[@]}"
 mv -f "$archive.partial" "$archive"
 echo "packed $archive: ${files[*]}"
 
+# Runs "$@" yubikey setup --touch --serial 2147483647 ("$@": the binary, or bwrap ... -- binary, then tswap's global
+# flags) and requires the refusal; with $1 set to an expected PC/SC strategy, also that strategy line.
+yubikey_smoke() {
+  local strategy=$1 out status=0
+  shift
+  out=$("$@" yubikey setup --touch --serial 2147483647 2>&1) || status=$?
+  printf '%s\n' "$out"
+  if [ "$status" -eq 0 ] || ! grep -qF 'YubiKey 2147483647 is not plugged in' <<<"$out"; then
+    echo "package.sh: 'tswap yubikey setup --touch --serial 2147483647' should refuse with 'YubiKey 2147483647 is not plugged in' (exit $status)" >&2
+    exit 1
+  fi
+  if [ -n "$strategy" ] && ! grep -qF "PC/SC (smart-card) access: $strategy" <<<"$out"; then
+    echo "package.sh: expected the PC/SC strategy '$strategy' in the -v output above" >&2
+    exit 1
+  fi
+}
+
+# Linux: the unpacked tswap needs no libpcsclite, and starts with it hidden.
+linux_pcsc_smoke() {
+  local bin=$1 dynamic
+  if ! dynamic=$(readelf -d "$bin" 2>&1); then
+    echo "package.sh: readelf -d failed on $bin: $dynamic" >&2
+    exit 1
+  fi
+  if grep -q 'libpcsclite' <<<"$dynamic"; then
+    echo "package.sh: $bin has a NEEDED entry for libpcsclite; without pcsc-lite installed it would not start:" >&2
+    grep 'libpcsclite' <<<"$dynamic" >&2
+    exit 1
+  fi
+  echo "no NEEDED entry for libpcsclite: $(grep -o 'Shared library: \[[^]]*\]' <<<"$dynamic" | tr '\n' ' ')"
+
+  local ldconfig libs=() hide=() lib
+  ldconfig=$(command -v ldconfig || command -v /sbin/ldconfig || true)
+  if [ -n "$ldconfig" ]; then
+    # A read loop, not mapfile: the tests run this function on macOS too, whose bash is 3.2.
+    while IFS= read -r lib; do libs+=("$lib"); done < <("$ldconfig" -p | awk '$1 == "libpcsclite.so.1" { print $NF }' | LC_ALL=C sort -u)
+  fi
+  # Without ldconfig there is no telling whether the loader finds the library: any strategy line will do.
+  local expected=
+  if [ -n "$ldconfig" ]; then
+    if [ ${#libs[@]} -gt 0 ]; then expected='system library'; else expected='stand-in'; fi
+  fi
+  yubikey_smoke "$expected" "$bin" -v
+  if ! command -v bwrap > /dev/null; then
+    echo "SKIP: stand-in run (bwrap is not installed)"
+    return
+  fi
+  if [ -z "$ldconfig" ]; then
+    echo "SKIP: stand-in run (no ldconfig to list libpcsclite.so.1)"
+    return
+  fi
+  if [ ${#libs[@]} -eq 0 ]; then
+    echo "SKIP: stand-in run (ldconfig -p lists no libpcsclite.so.1: the run above already had no library)"
+    return
+  fi
+  if ! bwrap --dev-bind / / -- true 2> /dev/null; then
+    echo "SKIP: stand-in run (bwrap can't create its sandbox here, e.g. nested user namespaces)"
+    return
+  fi
+  for lib in "${libs[@]}"; do
+    hide+=(--ro-bind /dev/null "$lib")
+  done
+  # Inside the sandbox, every listed path must read as empty, or the run below proves nothing.
+  # shellcheck disable=SC2016 # the script runs inside the sandbox, with the paths as its arguments
+  if ! bwrap --dev-bind / / "${hide[@]}" -- sh -c 'for f; do [ ! -s "$f" ] || exit 1; done' sh "${libs[@]}"; then
+    echo "package.sh: bwrap did not hide ${libs[*]}" >&2
+    exit 1
+  fi
+  bwrap --dev-bind / / "${hide[@]}" -- "$bin" prompt-hash
+  yubikey_smoke 'stand-in' bwrap --dev-bind / / "${hide[@]}" -- "$bin" -v
+  echo "stand-in run passed: prompt-hash and yubikey setup with ${libs[*]} hidden"
+}
+
 if [ "$smoke" = --smoke ]; then
   check=$(mktemp -d)
   trap 'rm -rf "$check"' EXIT
   tar xzf "$archive" -C "$check"
   "$check/tswap" prompt-hash
+  yubikey_smoke '' "$check/tswap"
   case "$rid" in
+    linux-*)
+      linux_pcsc_smoke "$check/tswap"
+      ;;
     osx-*)
       mkdir -m 700 "$check/config"
       TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery

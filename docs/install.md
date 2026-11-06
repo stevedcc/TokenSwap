@@ -20,11 +20,19 @@ You need the .NET 10 SDK at build time only. The compiled binary needs no .NET r
 
 ### YubiKey prerequisites
 
-- The `ykman` CLI (YubiKey Manager), version 5 or later. Touch detection was checked against
-  yubikey-manager 5.9.2.
-- Install it with your system's package manager, or with `pip install yubikey-manager`.
-- Each key's slot 2 is set up for HMAC-SHA1 challenge-response before you use it: see
+- **No YubiKey tool to install.** tswap talks to the key itself, through Yubico's .NET SDK built into
+  the binary, and prepares its slot 2 with `tswap yubikey setup`: see
   [Preparing a YubiKey](setup.md#preparing-a-yubikey).
+- **Linux: the YubiKey udev rule.** tswap reaches the key's OTP interface through its hidraw
+  device, which a normal user can open only with Yubico's udev rule (often installed by the
+  `ykpers` or `yubikey-personalization` package; installing it needs an administrator). Without
+  it, tswap says the key's OTP interface can't be reached; there is no smart-card fallback for this
+  slot type. tswap loads `libudev.so.1` itself, so no `libudev.so` link is needed.
+- **Linux: `libpcsclite` is used if it is installed, and not needed.** Without it, tswap starts as
+  usual and finds the key over its OTP interface; only the key's smart-card interface is not
+  listed, and tswap uses no smart-card feature.
+- **macOS:** the app that runs tswap (your terminal) needs Input Monitoring, in System Settings →
+  Privacy & Security → Input Monitoring: [portable.md](portable.md#yubikeys).
 
 ## Download a release
 

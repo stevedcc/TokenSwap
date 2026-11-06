@@ -111,6 +111,14 @@ tswap slots [--ack]
 
 List the vault's slots and what protects each one (--ack: acknowledge the YubiKeys' touch settings)
 
+### yubikey
+
+```
+tswap yubikey setup (--touch|--no-touch) [--serial N] [--replace]
+```
+
+Prepare a YubiKey's slot 2 for challenge-response (a configured slot is overwritten only with --replace)
+
 ### agent
 
 ```

@@ -12,8 +12,7 @@ namespace TswapCore.Vault.Interop;
 
 /// <summary>
 /// Shellout bridge to the <c>tpm2-tools</c> CLI (<c>tpm2_createprimary</c>/<c>tpm2_create</c>/
-/// <c>tpm2_load</c>/<c>tpm2_unseal</c>) — matching <see cref="YkmanYubiKeyService"/>'s shellout
-/// pattern rather than P/Invoking <c>libtss2-esys</c>/<c>libtss2-fapi</c> directly. See
+/// <c>tpm2_load</c>/<c>tpm2_unseal</c>) — a shellout rather than P/Invoking <c>libtss2-esys</c>/<c>libtss2-fapi</c> directly. See
 /// <c>docs/design/hardware-backends.md</c>'s Linux TPM section for why (well-packaged CLI across distros,
 /// avoids a large P/Invoke surface against opaque TSS2 structs). Every invocation uses
 /// <see cref="ProcessStartInfo.ArgumentList"/> (an argument array), never a shell string.

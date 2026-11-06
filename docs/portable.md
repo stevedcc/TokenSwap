@@ -59,5 +59,22 @@ quarantine mark, which you can do as yourself (no admin needed): see
 
 ## YubiKeys
 
-This page has no YubiKey notes yet; they arrive with v0.3.0's YubiKey work. Setting up a key:
-[Preparing a YubiKey](setup.md#preparing-a-yubikey).
+tswap needs no other YubiKey tool: it talks to the key through Yubico's .NET SDK, built into the
+binary, and `tswap yubikey setup` prepares a key's slot 2 without sudo
+([Preparing a YubiKey](setup.md#preparing-a-yubikey)). What each OS needs before a normal user can
+reach the key's OTP interface (the one tswap uses):
+
+- **Linux:** the YubiKey udev rule, which gives the logged-in user access to the key's hidraw
+  device. It is often installed by the `ykpers` or `yubikey-personalization` package; installing
+  it needs an administrator, once. Without it, tswap explains that the key's OTP interface can't be
+  reached (the key is seen on its FIDO interface only); there is no smart-card fallback for this
+  slot type, so use a TPM slot or another machine. `libpcsclite` is not needed
+  ([install.md](install.md#yubikey-prerequisites)).
+- **macOS:** Input Monitoring for the app that runs tswap (your terminal), in System Settings →
+  Privacy & Security → Input Monitoring. Allowing it may need an administrator. Without it, tswap
+  says macOS is blocking the key's OTP interface, and the Secure Enclave is the alternative.
+- **Windows:** the OTP interface is a keyboard device that a normal user can reach, so no setting
+  should be needed. That was checked in a spike, not yet with a release build.
+
+A key another tswap (or another app) is using, for example one waiting for a touch in another
+terminal, is reported as busy: try again when that command is done.

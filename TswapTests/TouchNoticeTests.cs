@@ -183,14 +183,13 @@ public class TouchNoticeTests : IDisposable
         Assert.DoesNotContain("not acknowledged", stdout);
     }
 
-    // The posture comes from whether the challenge asked for a touch (ykman prints "Touch your
-    // YubiKey..." on stderr), not from `ykman otp info`, which can't read it.
+    // The posture comes from whether the challenge asked for a touch, not from a separate slot read.
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
     public void Enrolment_RecordsWhetherTheChallengeAskedForATouch(bool askedForTouch, bool expectedRequiresTouch)
     {
-        _m.Keys.DetectionWorks = false; // like real ykman: otp info can't tell
+        _m.Keys.DetectionWorks = false; // like the real service: a slot read can't tell
         Init(SerialA, touch: askedForTouch);
 
         var blob = YubiKeySlotBlob.Decode(_m.Keyring.Slots.Single(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)).HwBlob!);
@@ -205,20 +204,10 @@ public class TouchNoticeTests : IDisposable
         var (_, _, stderr) = Init(SerialA, touch: null);
 
         Assert.Equal(1, Count(stderr, "Couldn't check"));
-        Assert.Contains("ykman", stderr);
+        Assert.DoesNotContain("ykman", stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("unknown", _m.Config.AcknowledgedTouch![SlotIdOf(SerialA)]);
         Assert.Equal("", _m.Run("", "names").Err);
     }
-
-    [Theory]
-    [InlineData("Touch your YubiKey...\n", true)]
-    [InlineData("", false)]
-    [InlineData("WARNING: something else\n", false)]
-    public void Ykman_TouchPromptOnStderr_MeansTouchRequired(string stderr, bool expected)
-    {
-        Assert.Equal(expected, YkmanYubiKeyService.AskedForTouch(stderr));
-    }
-
 
     [Fact]
     public void Migrate_ExplainsAClassicVaultsPostureOnce_AndAcknowledgesIt()

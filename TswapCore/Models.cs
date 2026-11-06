@@ -371,6 +371,7 @@ public record ExportFile(string Version, DateTime Created, string Salt, string C
 [JsonSerializable(typeof(SlotApproveFile))]
 [JsonSerializable(typeof(SlotDto))]
 [JsonSerializable(typeof(SlotReceiptFile))]
+[JsonSerializable(typeof(Vault.RememberedYubiKeySlotsFile))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 public partial class TswapJsonContext : JsonSerializerContext { }
 

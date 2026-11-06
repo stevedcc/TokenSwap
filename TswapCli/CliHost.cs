@@ -60,7 +60,7 @@ internal static class CliHost
 
             IYubiKeyService yubiKeys = testKey is not null
                 ? new TestKeyYubiKeyService(testKey)
-                : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
+                : new SdkYubiKeyService(env.Verbose ? console.Out : null);
             // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or
             // their simulated stand-ins in test mode) register via the additionalBackends argument;
             // the YubiKey backend is always present and VaultUnlocker picks the right one from

@@ -89,7 +89,7 @@ deployment.
 |----------|-----|
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
 | Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
-| Compromised YubiKey firmware | tswap trusts `ykman` and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
+| Compromised YubiKey firmware | tswap trusts Yubico's .NET SDK (built into the binary) and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
@@ -111,7 +111,7 @@ means no source states it.
 
 | Slot | What unlocks it | Presence needed | Vault password | Reviewed / verified | Sources |
 |---|---|---|---|---|---|
-| YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection checked against the yubikey-manager 5.9.2 source | [1] [2] [3] |
+| YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection: Yubico's .NET SDK 1.18.1 reports when the key waits for a touch (with this SDK, not yet checked on a real touch key) | [1] [2] [3] |
 | YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
 | Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [3] [4] [5] |
 | Windows TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [3] [5] [6] |
@@ -157,8 +157,8 @@ else is open before it should be trusted as a primary vault backend.
 
 ### YubiKey: touch or no touch
 
-tswap recommends configuring a YubiKey's slot 2 with a touch requirement (the commands are in
-[Preparing a YubiKey](setup.md#preparing-a-yubikey)). That means:
+tswap recommends configuring a YubiKey's slot 2 with a touch requirement
+(`tswap yubikey setup --touch`: [Preparing a YubiKey](setup.md#preparing-a-yubikey)). That means:
 
 - **Physical presence required:** touching the YubiKey confirms intent.
 - **Protection from local malware:** processes can't silently unlock the vault.
@@ -171,11 +171,12 @@ it on every command**.
 
 - **At enrolment** (`init`, `slot add`, `slot request`, `migrate --to-records`, `recover`) tswap
   records each key's posture in its slot and explains it on stderr.
-- **How it knows:** it detects the posture from whether `ykman otp calculate` asked for a touch.
-  ykman prints "Touch your YubiKey..." on stderr exactly when the key waits for one (checked against
-  the yubikey-manager **5.9.2** source). `ykman otp info` can't read a slot's touch setting, so
-  slots enrolled before v0.1.0 show as "unknown". Over USB only (tswap's only transport for
-  `calculate`). If tswap couldn't check, it says so, with the fix.
+- **How it knows:** it detects the posture from whether the key asked for a touch while it
+  answered tswap's challenge, which Yubico's .NET SDK reports. A key can't be asked for a
+  configured slot's touch setting (Yubico's tools can't read it either), so slots enrolled before
+  v0.1.0 show as "unknown", and `tswap yubikey setup` says "touch: unknown" for a slot 2 that is
+  already set up. Over USB only (tswap reaches the key's OTP interface over USB). If
+  tswap couldn't check, it says so, with the fix.
 - **`tswap slots`** shows each slot's posture at any time.
 - **Everyday commands** print nothing about it, except one line on stderr when a slot's posture
   differs from what this machine last acknowledged (for example a no-touch key's slot arriving from
@@ -184,23 +185,54 @@ it on every command**.
   (`AcknowledgedTouch`). That file is writable by you and by any process running as you. For a
   YubiKey slot, `tswap slots`, which reads the posture from the slot itself, is the reliable view.
 
-**Moving a key to touch-required:** in a keyring vault, reprogram the key's slot 2 with ykman's
-`--touch` ([Preparing a YubiKey](setup.md#preparing-a-yubikey)), then enroll it again as a new slot.
+**Moving a key to touch-required:** in a keyring vault, one key at a time, with another way into
+the vault available (another enrolled YubiKey plugged in, this machine's TPM or Secure Enclave
+slot, or the recovery key):
 
-- **Warning:** reprogramming gives the key a new secret, so its existing slot no longer opens the
-  vault. `tswap slots` still lists that dead slot (tswap can't remove slots). Make sure another
-  slot, or the recovery key, opens the vault before you start.
-- **Enrolling it again:** `slot add --yubikey` refuses a key that already has a slot, so the step
-  is `recover --yubikey`, with the vault's recovery key on stdin (more ways to pipe it:
-  [The recovery key](setup.md#the-recovery-key)):
+```bash
+tswap yubikey setup --replace --touch --serial N   # reprogram key N's slot 2, with a touch requirement
+sudo tswap slot add --yubikey                      # enrol key N again (pick it if asked)
+tswap names                                        # with only key N plugged in: it opens the vault alone
+```
 
-  ```bash
-  read -rs RECOVERY_KEY          # paste the recovery key; it isn't shown or kept in history
-  printf '%s\n' "$RECOVERY_KEY" | sudo tswap recover --yubikey
-  unset RECOVERY_KEY
-  ```
+Finish and check one key before you start the next. A vault whose keys still share a pair slot
+(made by 0.1's `init --keyring`) first needs each key's own slot:
+[upgrading-from-0.1.md](upgrading-from-0.1.md#a-classic-vault-without-touch).
 
-  v0.3.0's YubiKey work changes this step.
+- **Other copies of the vault: before you start.** Reprogramming kills the key's slot in every copy
+  of the vault at once, but the new slot goes only into the keyring of the vault you enrol it in.
+  Machines that share that vault folder get it with the folder. A machine with its own copy
+  doesn't, and there the key no longer opens the vault until the slot is brought in, with
+  `sudo tswap vault merge <a copy of this vault folder>` on that machine (or `slot merge`, for a
+  vault that keeps its keyring in `config.json`). That merge unlocks the copy first, so the machine
+  needs another way in that it can use. How:
+  [Copying the folder](multi-machine.md#copying-the-folder-scp-rsync-or-a-usb-stick) and
+  [What `slot merge` adds](multi-machine.md#what-slot-merge-adds).
+- **Reprogramming kills the key's old slot.** The new secret replaces slot 2's old one, so the
+  key's existing slot no longer opens the vault. `tswap slots` still lists that dead slot: slots are
+  kept, since keyrings merge as a union and a removed slot would come back from another copy.
+  `setup --replace` asks you to type the key's serial, and refuses when the key's slot would be
+  the vault's only way in ([Preparing a YubiKey](setup.md#preparing-a-yubikey)).
+- **Enrolling it again.** With every plugged-in key already enrolled, `slot add --yubikey` asks
+  which key to enrol (with nothing on stdin it takes the first; with `--recovery-key-stdin`, stdin
+  carries the recovery key, so plug in only the key being enrolled). It reads the key's slot 2 first (an
+  empty one points you to `tswap yubikey setup`, and nothing is challenged), then challenges the
+  key against each of its slots in this vault. If one still opens the vault, it refuses: there is
+  nothing to enrol again. If the key is busy or doesn't answer, it stops and changes nothing. Only
+  when every slot answers wrongly does it open the vault another way (another enrolled YubiKey,
+  this machine's TPM or Secure Enclave slot, or a running `tswap agent`) and enrol the key as a
+  new slot. A touch key needs up to one touch per old slot for the check, plus two for the new
+  slot; when the way in is another key that needs a touch, add its touch. On this machine, unlocks then try the key's new slot first.
+- **The vault password is asked at most once.** When a step is known to need it (one of the key's
+  slots needs it, or the new slot will get it), `slot add` asks before any challenge. Otherwise it
+  asks only if the unlock needs it, which is after the key's checks. When the vault has a vault
+  password, the password typed before the checks is compared with the vault's password verifier
+  before anything is written: a mismatch always stops the command with nothing written, whether
+  or not the new slot was to get the password (with a mistyped password, tswap can't tell whether
+  the key's slots that need it still open the vault).
+- **When nothing else opens the vault**, `slot add` lists the ways in it looked for and changes
+  nothing. The recovery key is then the fallback:
+  [adding a key with the recovery key](multi-machine.md#appendix-adding-a-key-with-the-recovery-key).
 
 A classic vault from 0.1 is covered in [upgrading-from-0.1.md](upgrading-from-0.1.md).
 
@@ -216,7 +248,8 @@ and `recover` alike; there is no default.
   `tswap slots` shows that record. The record only changes what tswap says, never what the Secure
   Enclave enforces.
 - **No recurring banner.** There is no per-command banner for a no-touch Secure Enclave slot: you
-  chose it with the flag. (A YubiKey's posture is set outside tswap, with ykman.)
+  chose it with the flag. (A YubiKey's posture is set when its slot 2 is programmed, with
+  `tswap yubikey setup --touch` or `--no-touch`.)
 - `slot approve` on the approving machine can't see a requesting Mac's choice; `slot request
   --no-touch` says so.
 

@@ -238,7 +238,7 @@ public sealed class GuidedInitTests : IDisposable
     public void Guided_BlockedKey_IsExplained_AndCanBeLeftOut()
     {
         var m = Machine(11);
-        var failure = "ykman failed: ERROR: " + YubiKeyAccess.OtpBlockedLine;
+        var failure = YubiKeyAccessTexts.ExplainHidden(11, ThisOs());
         m.Keys.FailWith[11] = failure;
         m.SecureEnclave = RandomNumberGenerator.GetBytes(32);
 
@@ -246,7 +246,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\ny\n\ny\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Contains(YubiKeyAccess.ExplainBlocked(failure, 11, ThisOs())!, stdout);
+        Assert.Contains(failure, stdout);
         Assert.Contains("Carry on without YubiKey 11? (y/N): ", stdout);
         Assert.Empty(YubiKeySerials(m));
         Assert.Equal(HardwareBackend.SecureEnclave, m.Config.Backend);
@@ -257,12 +257,12 @@ public sealed class GuidedInitTests : IDisposable
     public void Guided_KeyUnpluggedBeforeEnrolment_OffersToCarryOn()
     {
         var m = Machine(11, 12);
-        m.Keys.FailWith[12] = "ykman failed: device 12 not found";
+        m.Keys.FailWith[12] = "YubiKey 12 not found";
 
         var (exit, stdout, _) = m.RunOnTerminal("\n1 2\n\nn\n", "init", "--no-password");
 
         Assert.Equal(1, exit);
-        Assert.Contains("ykman failed: device 12 not found", stdout);
+        Assert.Contains("YubiKey 12 not found", stdout);
         Assert.Contains("Carry on without YubiKey 12? (y/N): ", stdout);
         AssertNothingWritten(m);
     }
@@ -271,7 +271,7 @@ public sealed class GuidedInitTests : IDisposable
     public void Guided_CarryOnWithoutAKey_EnrolsTheRestOnce()
     {
         var m = Machine(11, 12, 13);
-        m.Keys.FailWith[12] = "ykman failed: device 12 not found";
+        m.Keys.FailWith[12] = "YubiKey 12 not found";
 
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2 3\n\ny\nn\n", "init", "--no-password");
 
@@ -391,7 +391,7 @@ public sealed class GuidedInitTests : IDisposable
     public void Guided_DroppingTheOnlyPasswordSlot_MakesNoPassword()
     {
         var m = Machine(11, 12);
-        m.Keys.FailWith[11] = "ykman failed: device 11 not found";
+        m.Keys.FailWith[11] = "YubiKey 11 not found";
 
         // Password on slot 1 (key 11) only; key 11 fails; carry on.
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\nyes\n{Password}\n{Password}\n1\n\ny\nn\n", "init");
@@ -588,7 +588,7 @@ public sealed class GuidedInitTests : IDisposable
     public void Guided_StrayOtpLine_AtTheCarryOnPrompt_IsSkipped()
     {
         var m = Machine(11, 12);
-        m.Keys.FailWith[12] = "ykman failed: device 12 not found";
+        m.Keys.FailWith[12] = "YubiKey 12 not found";
 
         var (exit, stdout, stderr) = m.RunOnTerminal($"\n1 2\n\n{Otp}\ny\nn\n", "init", "--no-password");
 
