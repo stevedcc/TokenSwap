@@ -214,7 +214,7 @@ public class VaultUnlockerFido2Tests
         var key = Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), Sources());
 
         Assert.Equal(vault.VaultKey, key);
-        Assert.Equal([nameof(FakeFido2Op.FindHolder), "notice: " + Fido2Texts.TouchLine, nameof(FakeFido2Op.GetHmacSecret), "pin"], _log);
+        Assert.Equal([nameof(FakeFido2Op.FindHolder), nameof(FakeFido2Op.GetHmacSecret), "pin", "notice: " + Fido2Texts.TouchLine], _log);
         Assert.Equal($"YubiKey {KeyA}", Assert.Single(_pinRequests).KeyName);
         // The output is zeroed once the KEK is derived.
         Assert.All(_fido2.LastOutput!, b => Assert.Equal(0, b));
@@ -392,7 +392,7 @@ public class VaultUnlockerFido2Tests
         var config = vault.Config(HardwareBackend.YubiKey, own);
 
         Assert.Equal(vault.VaultKey, Unlock(Unlocker(), config, Sources(Prompt(Password))));
-        Assert.Equal([nameof(FakeFido2Op.FindHolder), "prompt", "notice: " + Fido2Texts.TouchLine, nameof(FakeFido2Op.GetHmacSecret), "pin"], _log);
+        Assert.Equal([nameof(FakeFido2Op.FindHolder), "prompt", nameof(FakeFido2Op.GetHmacSecret), "pin", "notice: " + Fido2Texts.TouchLine], _log);
 
         // The key absent: no password prompt, no PIN.
         _log.Clear();

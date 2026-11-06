@@ -476,11 +476,10 @@ public sealed class VaultUnlocker
             return null;
         }
 
-        notice?.Invoke(Fido2Texts.TouchLine);
         Fido2Opened opened;
         try
         {
-            opened = fido2.Open([pickBlob], pickKey, pin);
+            opened = fido2.Open([pickBlob], pickKey, TouchLineAfterPin(pin, notice));
         }
         catch (Fido2Exception ex)
         {
@@ -502,6 +501,19 @@ public sealed class VaultUnlocker
         outcome = new("", PasswordUnavailable: false);
         return vaultKey;
     }
+
+    /// <summary>
+    /// Linux and macOS (FIDO2 plan, task 8): <see cref="Fido2Texts.TouchLine"/> said once the PIN is typed, so it comes
+    /// after the PIN prompt, as the key then waits for the touch; nothing when the prompt was cancelled. (Windows' dialog
+    /// asks for the PIN itself: its line comes before the ceremony.)
+    /// </summary>
+    public static Fido2Pin TouchLineAfterPin(Fido2Pin pin, Action<string>? notice) => request =>
+    {
+        var answer = pin(request);
+        if (answer.Length > 0)
+            notice?.Invoke(Fido2Texts.TouchLine);
+        return answer;
+    };
 
     /// <summary>
     /// Windows: one ceremony with every remaining FIDO2 slot in the allow list; the credential that answers picks the

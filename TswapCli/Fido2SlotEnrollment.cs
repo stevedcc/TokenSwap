@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
+using TswapCore.Vault;
 using TswapCore.Vault.Fido2;
 using TswapCore.VaultPassword;
 
@@ -18,7 +19,7 @@ internal static class Fido2SlotEnrollment
 {
     public const string SerialFlag = "--serial";
 
-    /// <summary>Said before each key operation on Linux and macOS (the device layer has no touch callback).</summary>
+    /// <summary>Said after each PIN prompt on Linux and macOS (the device layer has no touch callback).</summary>
     public const string TouchLine = Fido2Texts.TouchLine;
 
     /// <summary>Said once on Windows, before the first key operation.</summary>
@@ -170,17 +171,22 @@ internal static class Fido2SlotEnrollment
         CommandContext ctx, Fido2KeyInfo? key, byte[] slotId, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, StretchedPassword? password)
     {
         var fido2 = ctx.Fido2 ?? throw new TswapException(Unavailable);
-        var pin = Fido2PinPrompt.For(ctx);
         var c = ctx.Console;
-        var touch = fido2.CanList ? TouchLine : WindowsTouchLine;
+        var pin = Fido2PinPrompt.For(ctx);
+        // Linux and macOS: the touch line once each PIN is typed (task 8), as the key then waits for the touch.
+        // Windows: its dialog line before each operation (the dialog asks for the PIN).
+        if (fido2.CanList && pin is not null)
+            pin = VaultUnlocker.TouchLineAfterPin(pin, c.Out.WriteLine);
 
         c.Out.WriteLine(key is null
             ? "\nEnrolling a FIDO2 credential on the key you pick in Windows' dialog..."
             : $"\nEnrolling a FIDO2 credential on {fido2.KeyName(key)} (its PIN and a touch, twice)...");
-        c.Out.WriteLine(touch);
+        if (!fido2.CanList)
+            c.Out.WriteLine(WindowsTouchLine);
         var blob = fido2.Enrol(key, password is not null, vaultFido2Slots, pin);
 
-        c.Out.WriteLine(touch);
+        if (!fido2.CanList)
+            c.Out.WriteLine(WindowsTouchLine);
         Fido2Opened opened;
         try
         {

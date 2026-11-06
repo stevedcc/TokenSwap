@@ -34,6 +34,9 @@ internal sealed class FakeTerminal(params string[] lines) : ITerminal
         return this;
     }
 
+    /// <summary>Runs at each read, before it is answered (e.g. to see what the command had printed by then).</summary>
+    public Action? OnRead { get; set; }
+
     public void Enqueue(params string[] more)
     {
         foreach (var line in more)
@@ -50,6 +53,7 @@ internal sealed class FakeTerminal(params string[] lines) : ITerminal
 
     private string? Next(bool secret)
     {
+        OnRead?.Invoke();
         Reads.Add((secret, _text.ToString(_promptStart, _text.Length - _promptStart)));
         _promptStart = _text.Length;
         return _lines.TryDequeue(out var line) ? line : null;

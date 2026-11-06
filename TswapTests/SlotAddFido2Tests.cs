@@ -145,6 +145,38 @@ public class SlotAddFido2Tests : IDisposable
     }
 
     [Fact]
+    public void SlotAddFido2_TouchLineAfterEachPinPrompt()
+    {
+        // FIDO2 plan, task 8 (carry-forward 5): on Linux and macOS the PIN prompt comes first, then the touch line.
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        var console = new FakeConsole("");
+        List<int> touchLinesAtEachRead = [];
+        _terminal.OnRead = () => touchLinesAtEachRead.Add(CountOf(console.OutText, Fido2SlotEnrollment.TouchLine));
+        string[] args = ["slot", "add", "--fido2"];
+
+        var exit = CliRunner.Run(Context(console, args), args);
+
+        Assert.True(exit == 0, console.ErrorText);
+        Assert.Equal([0, 1], touchLinesAtEachRead);
+        Assert.Equal(2, CountOf(console.OutText, Fido2SlotEnrollment.TouchLine));
+    }
+
+    [Fact]
+    public void SlotAddFido2_CancelledPin_NoTouchLine()
+    {
+        OtpVault();
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal("");
+
+        var (exit, stdout, _) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain(Fido2SlotEnrollment.TouchLine, stdout);
+    }
+
+    [Fact]
     public void SlotAddFido2_NoTerminal_RefusedBeforeAnyKeyCall()
     {
         OtpVault();

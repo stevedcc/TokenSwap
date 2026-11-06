@@ -19,7 +19,7 @@ public static class Fido2Texts
     public const string NoTerminal =
         "A FIDO2 slot needs a person at a terminal to type the key's PIN and touch the key; there is no terminal here, so the key was not used.";
 
-    /// <summary>Said before each FIDO2 key operation on Linux and macOS (the device layer has no touch callback).</summary>
+    /// <summary>Said after the PIN is typed for each FIDO2 key operation on Linux and macOS (the device layer has no touch callback).</summary>
     public const string TouchLine = "Touch your YubiKey when it blinks.";
 
     /// <summary>Said before each FIDO2 key operation on Windows.</summary>
