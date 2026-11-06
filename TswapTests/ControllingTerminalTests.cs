@@ -36,6 +36,48 @@ public class ControllingTerminalTests : IDisposable
         }
     }
 
+    // Final review (GLM p6a I1): tcgetattr succeeds but switching the echo off fails: nothing is read with the echo
+    // on; the saved settings are put back and the read is a cancel.
+    [Fact]
+    public void UnixTty_EchoOffFails_RestoresAndCancels()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        File.WriteAllText(_file, "123456\nsecond line\n");
+        var calls = new FailingSetAttr();
+
+        using (var tty = ControllingTerminal.UnixTty.OpenPath(_file, calls))
+        {
+            Assert.NotNull(tty);
+            Assert.Null(tty.ReadSecret());
+            Assert.Equal("123456", tty.ReadLine()); // not consumed: nothing was read with the echo on
+        }
+
+        Assert.Equal(2, calls.Sets.Count);
+        Assert.False(calls.Sets[0].EchoOn); // the echo-off attempt, which failed
+        Assert.True(calls.Sets[1].EchoOn);  // the saved settings, put back
+    }
+
+    /// <summary>tcgetattr gives settings with ECHO on; every tcsetattr that clears ECHO fails.</summary>
+    private sealed class FailingSetAttr : ControllingTerminal.UnixTty.ITermiosCalls
+    {
+        public List<(int When, bool EchoOn)> Sets { get; } = [];
+
+        public int Get(int fd, Span<byte> termios)
+        {
+            termios.Clear();
+            termios[ControllingTerminal.UnixTty.LflagOffset] = 0x8; // ECHO
+            return 0;
+        }
+
+        public int Set(int fd, int when, ReadOnlySpan<byte> termios)
+        {
+            var echoOn = (termios[ControllingTerminal.UnixTty.LflagOffset] & 0x8) != 0;
+            Sets.Add((when, echoOn));
+            return echoOn ? 0 : -1;
+        }
+    }
+
     [Fact]
     public void UnixTty_MissingDevice_IsNoTerminal()
     {

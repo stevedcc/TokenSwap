@@ -264,7 +264,9 @@ device implementations:
 `CliHost` builds one service per process (none in test mode) and hands it to the unlocker and to
 `CommandContext.Fido2`. The PIN comes from `Fido2PinPrompt` over `CommandContext.Terminal`
 (`ControllingTerminal`: `/dev/tty` with echo off on Linux and macOS, restored on SIGINT, SIGTERM,
-SIGQUIT and SIGTSTP; on Windows only the console check, it never reads). No terminal: no delegate,
+SIGQUIT and SIGHUP, which still end the process; SIGTSTP is not intercepted, so Ctrl+Z really stops
+it, and SIGCONT turns the echo off again; a failed echo switch is a cancel. On Windows only the
+console check, it never reads). No terminal: no delegate,
 and the service refuses before any key call.
 
 **Unlock: pass 4.** `VaultUnlocker.Unlock` tries FIDO2 slots last, after pass 1 (password-free

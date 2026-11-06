@@ -9,8 +9,9 @@ namespace TswapCli;
 /// <c>/dev/tty</c> opens (the process has a controlling terminal, whatever stdin, stdout and stderr are); on Windows
 /// stdin, stdout or stderr is a console (<c>GetConsoleMode</c> succeeds on its handle). <see cref="Open"/> returns
 /// null otherwise. On Linux and macOS secrets are read from <c>/dev/tty</c> with its echo off, so a PIN typed there
-/// works while stdin carries <c>--recovery-key-stdin</c>; the echo comes back on after the line, and on SIGINT or
-/// SIGTERM during the read. On Windows the FIDO2 PIN is Windows' dialog's: this console terminal is only there to say
+/// works while stdin carries <c>--recovery-key-stdin</c>; the echo comes back on after the line, and on SIGINT,
+/// SIGTERM, SIGQUIT or SIGHUP during the read (Ctrl+Z stops the process as usual; <c>fg</c> turns the echo off
+/// again). On Windows the FIDO2 PIN is Windows' dialog's: this console terminal is only there to say
 /// one is present, and it refuses every read.
 /// </summary>
 internal static partial class ControllingTerminal
@@ -39,16 +40,45 @@ internal static partial class ControllingTerminal
         // byte 24). Both structs are well under this size; only c_lflag's ECHO bit is changed.
         private const int TermiosBufferSize = 256;
 
-        private readonly int _fd;
+        /// <summary>Where c_lflag sits in struct termios on this OS.</summary>
+        internal static int LflagOffset => OperatingSystem.IsMacOS() ? 24 : 12;
 
-        private UnixTty(int fd) => _fd = fd;
+        /// <summary><c>tcgetattr</c> and <c>tcsetattr</c> (a seam: a test makes the echo switch fail).</summary>
+        internal interface ITermiosCalls
+        {
+            int Get(int fd, Span<byte> termios);
+
+            int Set(int fd, int when, ReadOnlySpan<byte> termios);
+        }
+
+        private sealed unsafe class LibcTermios : ITermiosCalls
+        {
+            public static readonly LibcTermios Instance = new();
+
+            public int Get(int fd, Span<byte> termios)
+            {
+                fixed (byte* p = termios)
+                    return tcgetattr(fd, p);
+            }
+
+            public int Set(int fd, int when, ReadOnlySpan<byte> termios)
+            {
+                fixed (byte* p = termios)
+                    return tcsetattr(fd, when, p);
+            }
+        }
+
+        private readonly int _fd;
+        private readonly ITermiosCalls _termios;
+
+        private UnixTty(int fd, ITermiosCalls termios) => (_fd, _termios) = (fd, termios);
 
         /// <summary><paramref name="path"/> opened for reading and writing (<c>/dev/tty</c>; a test opens a plain file), or null.</summary>
-        internal static UnixTty? OpenPath(string path)
+        internal static UnixTty? OpenPath(string path, ITermiosCalls? termios = null)
         {
             var flags = ORdWr | (OperatingSystem.IsMacOS() ? 0x1000000 : 0x80000); // O_CLOEXEC
             var fd = open(path, flags);
-            return fd < 0 ? null : new UnixTty(fd);
+            return fd < 0 ? null : new UnixTty(fd, termios ?? LibcTermios.Instance);
         }
 
         public void Write(string text)
@@ -81,34 +111,41 @@ internal static partial class ControllingTerminal
             }
         }
 
-        public unsafe byte[]? ReadSecret()
+        public byte[]? ReadSecret()
         {
             var saved = new byte[TermiosBufferSize];
-            fixed (byte* p = saved)
-            {
-                // Fail closed: echo that can't be switched off would show the secret, so nothing is read (a cancel).
-                if (tcgetattr(_fd, p) != 0)
-                    return null;
-            }
+            // Fail closed: echo that can't be switched off would show the secret, so nothing is read (a cancel).
+            if (_termios.Get(_fd, saved) != 0)
+                return null;
             var quiet = (byte[])saved.Clone();
             ClearEcho(quiet);
 
-            void Apply(byte[] termios, int when)
-            {
-                fixed (byte* p = termios)
-                    tcsetattr(_fd, when, p);
-            }
+            int Apply(byte[] termios, int when) => _termios.Set(_fd, when, termios);
 
             void Restore() => Apply(saved, TcsaNow);
 
-            // The echo comes back whenever the process leaves the read: ended (SIGINT, SIGTERM, SIGQUIT) or stopped
-            // (SIGTSTP, Ctrl+Z); on SIGCONT the read goes on, so the echo goes off again.
+            // Signals during the read (final review; measured on .NET 10, see the fix report): a handler registered
+            // for SIGINT, SIGTERM, SIGQUIT or SIGHUP keeps the signal's default action, so the process still ends
+            // (Ctrl+C exits 130) and the handler only puts the echo back first. SIGTSTP (Ctrl+Z) is deliberately not
+            // intercepted: a handler for it swallows the stop, so the read went on with the echo restored and a PIN
+            // typed after Ctrl+Z was echoed. With the default action the process really stops (the shell puts its own
+            // terminal settings back while it is stopped), and on SIGCONT (fg) the echo goes off again. That handler
+            // cancels .NET's own SIGCONT handling, which would otherwise run after it and put back the terminal
+            // settings .NET holds, echo on (measured: the PIN typed after fg was echoed).
             using var interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, _ => Restore());
             using var terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => Restore());
             using var quit = PosixSignalRegistration.Create(PosixSignal.SIGQUIT, _ => Restore());
-            using var stop = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, _ => Restore());
-            using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, _ => Apply(quiet, TcsaNow));
-            Apply(quiet, TcsaFlush);
+            using var hangup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, _ => Restore());
+            using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, context =>
+            {
+                Apply(quiet, TcsaNow);
+                context.Cancel = true;
+            });
+            if (Apply(quiet, TcsaFlush) != 0)
+            {
+                Restore(); // fail closed: nothing is read with the echo on, so this is a cancel
+                return null;
+            }
             try
             {
                 return ReadBytesLine();
@@ -123,9 +160,9 @@ internal static partial class ControllingTerminal
         private static void ClearEcho(byte[] termios)
         {
             if (OperatingSystem.IsMacOS())
-                BitConverter.TryWriteBytes(termios.AsSpan(24), BitConverter.ToUInt64(termios, 24) & ~Echo);
+                BitConverter.TryWriteBytes(termios.AsSpan(LflagOffset), BitConverter.ToUInt64(termios, LflagOffset) & ~Echo);
             else
-                BitConverter.TryWriteBytes(termios.AsSpan(12), BitConverter.ToUInt32(termios, 12) & ~(uint)Echo);
+                BitConverter.TryWriteBytes(termios.AsSpan(LflagOffset), BitConverter.ToUInt32(termios, LflagOffset) & ~(uint)Echo);
         }
 
         /// <summary>One line (without its line ending) as bytes; null at the end of input with nothing typed.</summary>
