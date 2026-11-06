@@ -42,8 +42,8 @@
 
 ## Review Focus
 
-1. **The child is killed or tswap is interrupted (Ctrl-C) while the filled file exists:** expected: the folder is removed by the `finally`, or at worst by the next `run`'s sweep; nothing else can read it meanwhile. Pinned by Task 1's `RunFileToken_ChildFails_FolderRemoved` and `RunFileToken_StaleFolders_Swept`.
-2. **A secret value containing a quote or backslash:** the filled file holds the escaped form, and a child that prints the file (`cat {{@f}}`) must show `[REDACTED: …]`, not the escaped value. Pinned by Task 1's `RunFileToken_EscapedValueIsRedacted`.
+1. **The child is killed or tswap is interrupted (Ctrl-C) while the filled file exists:** expected: the folder is removed after the child has exited (signal handling and `finally`), or after SIGKILL by the next `run`'s sweep, which never touches a live run's folder; no other user can read it meanwhile. Pinned by Task 1's `RunFileToken_ChildFails_FolderRemoved`, `RunFileToken_InterruptRemovesFolder`, `RunFileToken_StaleFolders_Swept` and `RunFileToken_SweepSkipsLiveFolder`.
+2. **A secret value containing a quote or backslash, a multi-line value, or a chart that base64-encodes it (`helm template` of a Secret):** every written, escaped and base64 form shows as `[REDACTED: …]`. Pinned by Task 1's `RunFileToken_EscapedValueIsRedacted`, `RunFileToken_SingleQuotedAndDoubleQuotedFormsRedacted`, `RunFileToken_MultiLineValueRedacted` and `RunFileToken_Base64OfValueRedacted`.
 3. **A relative path from another directory, a path with spaces, the same file twice, two different files:** each resolves against the current directory; the same file twice gives one filled copy; two files give two. Pinned by Task 1's `RunFileToken_PathForms`.
 4. **A marker naming a missing secret, or no markers at all:** refused before any child starts or any file is written. Pinned by Task 1's `RunFileToken_Refusals_WriteNothing`.
 5. **An agent following the old prompt** (`tswap apply f` without sudo): refused with a message that names the `run` form. Pinned by Task 2's `Apply_WithoutSudo_RefusedNamingRunForm`.
