@@ -64,7 +64,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         }
         catch (Exception e) when (e is PlatformApiException or UnauthorizedAccessException)
         {
-            return KeyboardInterfaceState.Unopenable;
+            return ProbeStateFor(e);
         }
 
         using (connection)
@@ -79,6 +79,13 @@ internal sealed class YubicoOtpKeys : IOtpKeys
             }
         }
     }
+
+    /// <summary>
+    /// The state of a keyboard interface the probe couldn't open: busy when <see cref="Classify"/> would call the
+    /// failure busy (macOS's exclusive-access refusal), otherwise one tswap can't open.
+    /// </summary>
+    internal static KeyboardInterfaceState ProbeStateFor(Exception openFailure) =>
+        IsMacExclusiveAccess(openFailure) ? KeyboardInterfaceState.Busy : KeyboardInterfaceState.Unopenable;
 
     /// <summary>
     /// Whether a keyboard status report shows a command in progress. Its last byte holds the flags (SDK
@@ -365,6 +372,15 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     private const string MacExclusiveAccess = "IOHIDDeviceOpen = 0xE00002C5.";
 
     /// <summary>
+    /// macOS refused to open the key's IOKit device because another program holds it exclusively (a busy key), as
+    /// <c>MacOSHidFeatureReportConnection</c> reports it. Shared by <see cref="Classify"/> and the probe.
+    /// </summary>
+    private static bool IsMacExclusiveAccess(Exception e) =>
+        e is PlatformApiException p
+        && p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
+        && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal);
+
+    /// <summary>
     /// The SDK's exceptions as <see cref="OtpFailure"/>s (the table with the SDK source lines is in the stage 1 task 2
     /// report). Anything unmapped is <see cref="OtpFailure.Other"/>, its message passed through.
     /// </summary>
@@ -376,8 +392,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         KeyboardConnectionException { Message: KeyboardTimeoutMessage } => OtpFailure.NoAnswer,
         // KeyboardFrameReader.AddStatusReport, at the session's status read: the report shows a command in progress.
         MalformedYubiKeyResponseException { Message: InvalidStatusReportMessage } => OtpFailure.Busy,
-        PlatformApiException p when p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
-            && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal) => OtpFailure.Busy,
+        PlatformApiException p when IsMacExclusiveAccess(p) => OtpFailure.Busy,
         PlatformApiException { Message: LinuxHidOpenFailedMessage } => OtpFailure.NotReachable,
         PlatformApiException p when p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal) => OtpFailure.NotReachable,
         UnauthorizedAccessException => OtpFailure.NotReachable,

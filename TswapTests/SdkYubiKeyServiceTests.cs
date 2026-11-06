@@ -407,6 +407,24 @@ public sealed class SdkYubiKeyServiceTests
     public void Classify_MapsSdkExceptions(Exception sdkException, OtpFailure expected) =>
         Assert.Equal(expected, YubicoOtpKeys.Classify(sdkException));
 
+    /// <summary>
+    /// Final review item 4 (p1-I1): the probe's open failure is classified like a challenge's: macOS's exclusive-access
+    /// refusal is a busy key, any other open failure an interface tswap can't open.
+    /// </summary>
+    public static TheoryData<Exception, string> ProbeOpenFailures => new()
+    {
+        { new PlatformApiException("IOHIDDeviceOpen", unchecked((int)0xE00002C5), "Can't open IOKit device."), nameof(KeyboardInterfaceState.Busy) },
+        { new PlatformApiException("IOHIDDeviceOpen", unchecked((int)0xE00002E2), "Can't open IOKit device."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new PlatformApiException("Can't open IOKit device."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new PlatformApiException("Could not open HID node on Linux."), nameof(KeyboardInterfaceState.Unopenable) },
+        { new UnauthorizedAccessException("Access is denied."), nameof(KeyboardInterfaceState.Unopenable) },
+    };
+
+    [Theory]
+    [MemberData(nameof(ProbeOpenFailures))]
+    public void ProbeStateFor_OpenFailure(Exception openFailure, string expected) =>
+        Assert.Equal(expected, YubicoOtpKeys.ProbeStateFor(openFailure).ToString()); // the enum is internal
+
     // ── Task 4 review fix round, item 2: the failure's kind travels with its text ──
 
     [Fact]
