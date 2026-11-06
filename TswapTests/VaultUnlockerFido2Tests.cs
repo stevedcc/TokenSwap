@@ -220,6 +220,64 @@ public class VaultUnlockerFido2Tests
         Assert.All(_fido2.LastOutput!, b => Assert.Equal(0, b));
     }
 
+    // Final review: a vault whose only usable ways in are FIDO2 slots asks a running agent before spending a PIN and a
+    // touch (exit (a)), as pass 2 does.
+    [Fact]
+    public void Unlock_Fido2Only_AgentFirst_NoPinNoKeyCall()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid), password: true);
+        var asked = 0;
+        var sources = new UnlockSources(() => { asked++; return vault.VaultKey.ToArray(); }, Prompt(Password))
+        {
+            Fido2Pin = PinAnswer(),
+            Fido2Notice = text => _log.Add("notice: " + text),
+        };
+
+        var key = Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), sources);
+
+        Assert.Equal(vault.VaultKey, key);
+        Assert.Equal(1, asked);
+        Assert.Empty(_pinRequests);
+        Assert.Empty(_fido2.Calls);
+        Assert.Equal(0, Prompts);
+    }
+
+    [Fact]
+    public void Unlock_Fido2Only_AgentFails_SaidWithTheFido2Failure()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid), password: true);
+        var sources = new UnlockSources(() => throw new AgentUnlockFailedException("the agent's key said no."), Prompt(Password))
+        {
+            Fido2Pin = PinAnswer("000000"),
+            Fido2Notice = text => _log.Add("notice: " + text),
+        };
+
+        var ex = Assert.ThrowsAny<TswapException>(() => Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), sources));
+
+        Assert.Contains(Fido2Texts.PinWrong($"YubiKey {KeyA}", 7), ex.Message);
+        Assert.Contains(VaultPasswordMessages.AgentAlsoFailed("the agent's key said no."), ex.Message);
+    }
+
+    // Goal 4 still holds: a vault without password slots never contacts an agent.
+    [Fact]
+    public void Unlock_Fido2Only_NoPasswordSlot_NeverAsksTheAgent()
+    {
+        var vault = new Vault();
+        var (own, _) = vault.AddFido2(_fido2, _fido2.AddKey(KeyA, Fido2TestSlots.Aaguid));
+        var sources = new UnlockSources(() => throw new InvalidOperationException("the agent was asked"), null)
+        {
+            Fido2Pin = PinAnswer(),
+            Fido2Notice = text => _log.Add("notice: " + text),
+        };
+
+        var key = Unlock(Unlocker(), vault.Config(HardwareBackend.YubiKey, own), sources);
+
+        Assert.Equal(vault.VaultKey, key);
+        Assert.Equal(1, Count(FakeFido2Op.GetHmacSecret));
+    }
+
     /// <summary>One vault-password prompt in the run: pass 3 asks it for the TPM slot, pass 4 reuses it.</summary>
     [Fact]
     public void Unlock_Fido2PasswordSlot_ReusesTypedPassword()

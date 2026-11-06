@@ -262,6 +262,25 @@ public sealed class VaultUnlocker
         }
         string Pass4Suffix() => pass4 is null ? "" : " " + pass4.Message;
 
+        // Pass 2's agent request, made at most once: the vault key, or null with agentFailure set when the agent
+        // refused (AgentUnlockFailedException: that is the agent failing, not the unlock).
+        string? agentFailure = null;
+        byte[]? AskAgent()
+        {
+            if (sources.AskAgent is not { } askAgent)
+                return null;
+            try
+            {
+                return askAgent();
+            }
+            catch (AgentUnlockFailedException ex)
+            {
+                agentFailure = ex.Message;
+                return null;
+            }
+        }
+        string AgentSuffix() => agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure);
+
         var couldNeedPassword = (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
             || (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains));
         if (!couldNeedPassword)
@@ -269,30 +288,24 @@ public sealed class VaultUnlocker
             if (!hasFido2)
                 throw WithSuffix(pass1Error ?? new TswapException("No slot of this vault can be used on this machine."), plan.SetAsideSuffix);
             // (a) No deferred slot can open here: a deferred key has a password slot, and no such key is plugged in.
+            // Final review: a running agent first, as pass 2, so it saves the PIN and touch it can. Only for a vault
+            // with a password slot (an agent can't have been started for one without): Goal 4, a vault without
+            // password slots never contacts an agent.
+            if ((plan.HasPasswordCandidates || plan.Fido2Candidates.Any(c => c.Blob.RequiresPassword)) && AskAgent() is { } agentKey)
+                return agentKey;
             if (Pass4() is { } fido2Key)
                 return fido2Key;
             // Review Focus 3: a vault whose only way in is FIDO2 (or a FIDO2 password slot), with no terminal or no
             // password, refuses as a missing vault password does.
             if (pass1Error is null && pass4!.PasswordUnavailable)
-                throw new VaultPasswordUnavailableException(pass4.Message + plan.SetAsideSuffix);
+                throw new VaultPasswordUnavailableException(pass4.Message + AgentSuffix() + plan.SetAsideSuffix);
             throw new TswapException(
-                string.Join(" ", new[] { pass1Error?.Message, pass4!.Message }.OfType<string>()) + plan.SetAsideSuffix);
+                string.Join(" ", new[] { pass1Error?.Message, pass4!.Message }.OfType<string>()) + AgentSuffix() + plan.SetAsideSuffix);
         }
 
         // ---- Pass 2: the agent.
-        string? agentFailure = null;
-        if (sources.AskAgent is { } askAgent)
-        {
-            try
-            {
-                if (askAgent() is { } agentKey)
-                    return agentKey;
-            }
-            catch (AgentUnlockFailedException ex)
-            {
-                agentFailure = ex.Message;
-            }
-        }
+        if (AskAgent() is { } passwordAgentKey)
+            return passwordAgentKey;
 
         // ---- Pass 3: the prompt, called once.
         if (sources.Prompt is null)
@@ -302,8 +315,7 @@ public sealed class VaultUnlocker
                 return deferredKey;
             if (Pass4() is { } fido2Key)
                 return fido2Key;
-            throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal +
-                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix() + Pass4Suffix());
+            throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal + AgentSuffix() + DeferredSuffix() + Pass4Suffix());
         }
         if (runPassword.Get() is not { } typed)
         {
@@ -316,8 +328,7 @@ public sealed class VaultUnlocker
             if (agentFailure is null && deferredError is null && pass4 is null)
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unavailable);
             // Still say why the agent, the deferred slots and the FIDO2 slots failed.
-            throw new VaultPasswordUnavailableException(unavailable.Message +
-                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix() + Pass4Suffix());
+            throw new VaultPasswordUnavailableException(unavailable.Message + AgentSuffix() + DeferredSuffix() + Pass4Suffix());
         }
         var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, typed.Clone, out var pass3Error, out var refuted, trace)
             ?? TryDeferred();
