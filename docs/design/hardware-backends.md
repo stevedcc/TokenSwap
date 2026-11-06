@@ -32,6 +32,7 @@ This matters because the backends do **not** share a primitive:
 | Backend | Recovery primitive | Notes |
 |---|---|---|
 | YubiKey | HMAC-SHA1 challenge-response. Keyring slot: HKDF-SHA256 over one key's response (one key per slot, brief T4). Plain vault and legacy pair slot: XOR-reconstruct + PBKDF2 | Removable tokens. Keyring vault: each key is its own slot. Plain vault: two keys, either unlocks |
+| YubiKey FIDO2 (v0.3.0) | hmac-secret output (PRF) of a non-discoverable FIDO2 credential, under user verification (PIN) and a touch; HKDF-SHA256 into the slot key | One credential per slot, rp id `tswap.crawford.dev`. Linux/macOS: Yubico's .NET SDK; Windows: `webauthn.dll`. See [YubiKey FIDO2 slots](#yubikey-fido2-slots-v030-issue-193) |
 | TPM 2.0 | seal/unseal (Linux) or RSA-OAEP wrap/unwrap (Windows) a machine-bound key | Linux: `tpm2-tools` shellout, verified on a physical Intel PTT (#155). Windows: CNG Platform Crypto Provider, verified on a Parallels virtual TPM; also run on a physical TPM (Dell XPS 17 9710) during development, not recorded; a v0.1.0 re-check is open (#156) |
 | Secure Enclave | ECIES wrap/unwrap against a non-extractable P-256 key | **Cannot** do HMAC or export key bytes; presence via the key's access control, chosen at enrolment (`--with-touch` / `--no-touch`, brief T11) and fixed in the key |
 
@@ -165,6 +166,111 @@ against the yubikey-manager 5.9.2 source** (`ykman/_cli/otp.py` `calculate`, whi
 `prompt_for_touch` in `ykman/_cli/util.py`; `yubikit/core/otp.py` signals it on
 `RESP_TIMEOUT_WAIT_FLAG`). `ykman otp info` can't read a slot's touch setting, so slots enrolled
 before this stay "unknown". Over USB only (tswap's only transport for `calculate`).
+
+### YubiKey FIDO2 slots (v0.3.0, issue #193)
+
+The design and the owner's decisions are in
+[the FIDO2 slot design](../superpowers/specs/2026-11-06-fido2-slot-design.md); what a user sees is
+in [setup.md, FIDO2 slots](../setup.md#fido2-slots). This section records the format and the seam.
+
+**The blob.** A FIDO2 slot is a machine slot whose hardware blob is a `Fido2SlotBlob`
+(`TswapCore/Keyring/Fido2SlotBlob.cs`) under the YubiKey magic with **version 3**, so v0.2.x reads
+it as "needs a newer tswap" (`YubiKeySlotBlob.Parse` refuses any version above 2) and never
+misreads it; `init --fido2` writes `Backend = YubiKey` for the same reason. Integers are
+little-endian:
+
+| Field | Bytes | Notes |
+|---|---|---|
+| magic `TSYK` | 4 | shared with `YubiKeySlotBlob` (versions 1 and 2) |
+| version | 1 | 3 |
+| flags | 1 | bit 0: the slot needs the vault password; always present, so `0x00` is a valid password-free slot; other bits: needs a newer tswap |
+| PRF version | 1 | 1 (the transform below); 0 is corrupt, above 1 needs a newer tswap |
+| serial | 4 | int32, 0 = unknown (Windows, or a key that reports none); never negative |
+| AAGUID | 16 | the key's model id from the attestation, RFC 4122 byte order (`Guid.ToByteArray(bigEndian: true)`) |
+| PRF input | 32 | random per slot (CSPRNG) |
+| rp id length | 1 | 18 |
+| rp id | n | UTF-8 `tswap.crawford.dev`; any other value is corrupt |
+| credential id length | 2 | uint16, 16 to 1023 |
+| credential id | n | as the key returned it |
+
+So a blob is 80 bytes plus the credential id. Decoding is strict: truncation, trailing bytes, an
+out-of-range length or a negative serial is `Malformed FIDO2 slot blob: .... Restore config.json
+from backup.`; unknown flags or a newer PRF version is `needs a newer tswap (FIDO2 slot flags 0xNN)`
+(or `PRF version N`). `YubiKeySlotKinds.Classify` routes a `TSYK` blob by version (1-2 OTP, 3
+FIDO2, above 3 needs a newer tswap, 0 corrupt), and every reader of YubiKey slot blobs goes through
+it. Layout pin: `Fido2SlotBlobTests.Fido2Blob_LayoutIsPinned`; the v0.2.0 parser pin:
+`Fido2Blob_V020ParserSaysNeedsNewer`.
+
+**The salt and the KEK.** The key is sent the WebAuthn PRF transform of the slot's PRF input,
+`salt = SHA-256(UTF-8("WebAuthn PRF") || 0x00 || input)` (`Fido2Prf.Salt`, pinned by the spike's
+vector). On Linux and macOS tswap applies it and sends the salt through the SDK; on Windows
+`webauthn.dll` applies it to the PRF input itself (`dwFlags = 0`, never the raw-salt flag), so the
+key gets the same salt on every OS. The key's 32-byte hmac-secret output (with user verification;
+a key keeps separate outputs with and without it) becomes the slot key:
+
+```
+KEK_slot = HKDF-SHA256(ikm  = output(32),
+                       salt = PRF input(32),
+                       info = "tswap/fido2-slot/v1" || slotId,      32 bytes)
+
+password slot:
+KEK_slot = HKDF-SHA256(ikm  = output(32) || stretched vault password(32),
+                       salt = PRF input(32),
+                       info = "tswap/fido2-slot/v2" || slotId,      32 bytes)
+```
+
+(`TswapCore/Keyring/Fido2SlotKek.cs`.) HKDF, not PBKDF2, as for `YubiKeySlotKek`: the output is a
+uniformly random MAC under a secret that never leaves the key. The output, the concatenated input
+and the KEK are zeroed after use. At enrolment the output comes from an assertion of the
+just-made credential (a second PIN and touch), never from make-credential, so the KEK is derived
+exactly as at unlock (`SlotAddFido2_KekIsDerivedFromOpenOutput`).
+
+**The credential.** Relying-party id `tswap.crawford.dev` (owner decision: a domain the owner holds,
+so a later phone app can be associated with it), non-discoverable (`rk = false`: nothing stored on
+the key), user verification required, hmac-secret on, a small user entity (16 random bytes as the
+user id, name `tswap`, no display name). Every make-credential carries the vault's FIDO2 credential
+ids as its exclude list, so a key that already holds one of them refuses (on Windows the only
+duplicate check; on Linux and macOS a silent probe refuses earlier). Enrolment refuses an AAGUID
+outside Yubico's published list (`YubicoAaguids`); on Windows it asks for direct attestation,
+because under "none" `webauthn.dll` zeroes the AAGUID.
+
+**The seam.** `IFido2Service` (`TswapCore/Vault/Fido2/`) is what commands and the unlocker use:
+list the YubiKeys, enrol, open, locate a slot's key silently, set a first PIN. `Fido2Service`
+implements it over the device seam `IFido2Keys`, maps every device failure to a `Fido2Exception`
+with a text from `Fido2Texts` (every FIDO2 message is there), and asks for a PIN only through the
+caller's `Fido2Pin` delegate, at most once per operation, so it never retries a wrong PIN. The
+device implementations:
+
+- `SdkFido2Keys` (Linux, macOS): Yubico's .NET SDK 1.18.1. It sends raw `MakeCredential` and
+  `GetAssertion` commands under a PIN token from `TryVerifyPin` (permissions get-assertion or
+  make-credential, for the rp id) rather than the SDK's high-level `Fido2Session` calls, which hide
+  CTAP statuses such as an excluded credential. The silent probe is an assertion with user presence
+  off, no PIN token and no extension: no PIN and no touch. CTAPHID error frames (busy,
+  timeout) are read from the raw answer, since the SDK reports them as success.
+- `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
+  FIDO2 credential of the vault in its allow list, each with its own PRF input
+  (`pCredWithHmacSecretSaltList`); the credential that answers picks the slot. Transports USB and
+  NFC. Windows' dialog asks for the PIN, so the `Fido2Pin` delegate is never called there; it is
+  still required, as the no-terminal gate. HRESULTs are mapped by a table (`NTE_EXISTS`: the key
+  already has a slot; `NTE_NOT_FOUND` at an assertion: the key picked holds none of the
+  credentials; cancel and timeout; anything else is reported with its HRESULT).
+- `FakeFido2Keys` (tests): credentials, PIN state and retries, and different outputs with and
+  without user verification, so every path is tested without hardware.
+
+`CliHost` builds one service per process (none in test mode) and hands it to the unlocker and to
+`CommandContext.Fido2`. The PIN comes from `Fido2PinPrompt` over `CommandContext.Terminal`
+(`ControllingTerminal`: `/dev/tty` with echo off on Linux and macOS, restored on SIGINT, SIGTERM,
+SIGQUIT and SIGTSTP; on Windows only the console check, it never reads). No terminal: no delegate,
+and the service refuses before any key call.
+
+**Unlock: pass 4.** `VaultUnlocker.Unlock` tries FIDO2 slots last, after pass 1 (password-free
+slots), pass 2 (the agent) and pass 3 (the vault-password prompt for other password slots). On
+Linux and macOS it locates each slot's key silently, asks for the PIN only for a key that holds
+the credential, and opens one slot per run; on Windows it runs one ceremony over the remaining
+slots. A FIDO2 password slot reuses the password typed in this run, or asks for it before the PIN;
+when a TPM or Secure Enclave password slot refused that password in pass 3, the FIDO2 password
+slots are left out. `UnlockWithPasswordSlots` (`agent start`, `broker unlock`) never sees FIDO2
+slots, and `broker serve` refuses a FIDO2 own slot.
 
 ### A TPM or Secure Enclave machine joins a fleet (brief T5, issue #152)
 
