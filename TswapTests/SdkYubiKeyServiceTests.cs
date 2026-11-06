@@ -292,9 +292,7 @@ public sealed class SdkYubiKeyServiceTests
 
         var ex = Assert.ThrowsAny<TswapException>(() => Service(keys).Challenge(33060005, "abc"));
 
-        Assert.Contains("tswap yubikey setup", ex.Message);
-        Assert.Contains("33060005", ex.Message);
-        Assert.Contains("slot 2", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Slot 2 of YubiKey 33060005 isn't set up for challenge-response; run `tswap yubikey setup`.", ex.Message);
     }
 
     [Fact]
