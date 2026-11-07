@@ -34,10 +34,10 @@ public static class Redact
     /// fingerprinting its values under a random key. No command uses it (they never decrypt the
     /// values for this); it keeps the engine's tests written against plain values.
     /// </summary>
-    public static string RedactContent(string content, SecretsDb db) => WithMatcher(db, m => m.Redact(content));
+    internal static string RedactContent(string content, SecretsDb db) => WithMatcher(db, m => m.Redact(content));
 
     /// <summary>Brief T16-S2: <see cref="ToComment(string, SecretMatcher)"/> over a loaded database (see <see cref="RedactContent(string, SecretsDb)"/>).</summary>
-    public static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db) =>
+    internal static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db) =>
         WithMatcher(db, m => m.ToComment(content));
 
     private static T WithMatcher<T>(SecretsDb db, Func<SecretMatcher, T> use)

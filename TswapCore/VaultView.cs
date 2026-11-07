@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 
 namespace TswapCore;
@@ -83,6 +84,26 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
         var metadata = _metadata ?? LoadAll(FormatTwoRecords.Skip);
         if (metadata.Unreadable.Count > 0)
             throw new TswapException(SecretsDb.AnyUnreadableText(command, metadata.Unreadable));
+    }
+
+    /// <summary>
+    /// The fingerprints <c>redact</c> and <c>tocomment</c> match with: every retained value version
+    /// (current as <c>name</c>, previous as <c>name:previous</c>) of every record that still holds
+    /// value sections, i.e. every non-tombstone record, burned ones included (burned values stay
+    /// masked). Versions without a fingerprint set are left out; the commands refuse before that
+    /// (<see cref="VaultMetadata.NotFingerprinted"/>). From <see cref="LoadAll"/>'s metadata
+    /// (loaded with <see cref="FormatTwoRecords.Skip"/> when nothing is loaded yet); decrypts nothing.
+    /// The index refers to <paramref name="keys"/>, which the caller keeps undisposed while it is used.
+    /// </summary>
+    public FingerprintIndex BuildIndex(FingerprintKeys keys)
+    {
+        var metadata = _metadata ?? LoadAll(FormatTwoRecords.Skip);
+        return FingerprintIndex.Build(
+            from record in metadata.Records
+            from version in record.RetainedVersions()
+            where version.Fingerprints is not null
+            select (record.Name, version.IsPrevious, version.Fingerprints!),
+            keys);
     }
 
     /// <summary>True when <paramref name="name"/>'s current value has an outstanding burn (from metadata).</summary>

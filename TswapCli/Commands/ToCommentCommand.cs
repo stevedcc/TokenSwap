@@ -1,4 +1,5 @@
 using TswapCore;
+using TswapCore.Fingerprints;
 
 namespace TswapCli.Commands;
 
@@ -20,11 +21,13 @@ public sealed class ToCommentCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-        db.ThrowIfAnyUnreadable("tocomment");
+        // Brief T16-S2: metadata only, no value decrypted; refuses before the file is opened.
+        using var view = ctx.OpenVault(key);
+        using var keys = FingerprintKeys.Derive(key);
+        var matcher = FingerprintRedaction.Matcher(ctx, view, keys, "tocomment", changesFile: true);
 
         var content = File.ReadAllText(filePath);
-        var (newContent, changes) = Redact.ToComment(content, db);
+        var (newContent, changes) = Redact.ToComment(content, matcher);
 
         if (changes.Count == 0)
         {
@@ -32,10 +35,10 @@ public sealed class ToCommentCommand : ICliCommand
             return 0;
         }
 
-        // Pre-compute redacted forms in a single pass so BuildMatchList is called once.
+        // Redact the "before" lines in a single pass, with the same matcher.
         var normalDiffs = changes.Where(d => d.After != "").ToList();
         var redactedBefores = Redact.RedactContent(
-            string.Join('\n', normalDiffs.Select(d => d.Before)), db).Split('\n');
+            string.Join('\n', normalDiffs.Select(d => d.Before)), matcher).Split('\n');
         var redactedByLineNumber = normalDiffs
             .Select((d, idx) => (d.LineNumber, Redacted: redactedBefores[idx]))
             .ToDictionary(x => x.LineNumber, x => x.Redacted);
