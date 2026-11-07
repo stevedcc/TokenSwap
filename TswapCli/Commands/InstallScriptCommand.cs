@@ -30,7 +30,30 @@ public sealed class InstallScriptCommand : ICliCommand
             }
         }
 
-        ctx.Console.Out.WriteLine(InstallScript.GetScript(binaryPath, secureEnclaveDylib));
+        var script = OperatingSystem.IsMacOS()
+            ? MacOSScript(binaryPath, secureEnclaveDylib, new UnixFileIds(), ctx.Console.Error)
+            : InstallScript.GetScript(binaryPath, secureEnclaveDylib);
+        ctx.Console.Out.WriteLine(script);
         return 0;
+    }
+
+    /// <summary>
+    /// macOS (issue #240): run from the copy the installer package put in /usr/local/bin (the same file, by device and
+    /// inode), the script does only the per-user steps. If the dylib beside that copy is missing or isn't the one this
+    /// binary embeds, a warning goes to stderr; the script still never installs it (that would need sudo).
+    /// </summary>
+    internal static string MacOSScript(string binaryPath, byte[]? embeddedDylib, IInstalledFiles files, TextWriter error)
+    {
+        var running = files.Of(binaryPath);
+        var binaryInstalled = running is { } id && InstalledCopy.IsSame(id, files.Of(InstalledCopy.MacOSInstallPath));
+        if (binaryInstalled && embeddedDylib is not null)
+        {
+            var dylib = files.Read(InstalledCopy.MacOSDylibPath);
+            var problem = dylib is null ? "is missing" : dylib.AsSpan().SequenceEqual(embeddedDylib) ? null : "is not the one this tswap was built with";
+            if (problem is not null)
+                error.WriteLine($"Warning: {InstalledCopy.MacOSDylibPath} {problem}, so Secure Enclave slots won't open: " +
+                                "reinstall tswap-osx-arm64.pkg, or run installscript from the unpacked release folder.");
+        }
+        return InstallScript.GetMacOSScript(binaryPath, embeddedDylib, binaryInstalled);
     }
 }
