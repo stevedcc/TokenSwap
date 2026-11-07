@@ -407,7 +407,9 @@ and report it.
   the `VaultView` are disposed (`finally`).
 - `TswapCli/TswapCli.csproj`: RedactingPty 1.1.0. Before G2, develop against
   `1.1.0-local.N` from a local pack (`-p:RestoreAdditionalProjectSources=<dir>`), never a local
-  `1.1.0` (it would shadow the real one in the NuGet cache); the last task sets 1.1.0.
+  `1.1.0` (it would shadow the real one in the NuGet cache); the last task sets 1.1.0. **Done (2026-11-07):** v1.1.0
+  is on nuget.org (G2); `TswapCli.csproj` references 1.1.0 from nuget.org, and the local packs and
+  their feed are gone.
 - `TswapTests/RunFileTokenTests.cs`: `FakePty` also implements the `RedactionOptions` overload
   (`new StreamRedactor(replacements, options.Matchers)`); no assertion changes.
 - Docs (Task T6).
