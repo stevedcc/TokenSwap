@@ -875,6 +875,33 @@ public class CommandTests : IDisposable
         Assert.DoesNotContain("printenv", stdout);
     }
 
+    // A literal refused word is refused before substitution and named as typed: no token is blamed.
+    [Fact]
+    public void Run_LiteralBlockedWordWithAToken_RefusalNamesTheWord()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "innocent");
+
+        var (exit, _, stderr) = RunTswap("run", "printenv", "{{innocent}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'printenv'", stderr);
+        Assert.DoesNotContain("{{innocent}}", stderr);
+    }
+
+    // rotating-and-burning.md: run warns about a burned {{name}} value too, not only file markers.
+    [Fact]
+    public void Run_BurnedNameToken_Warns()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "seen");
+        Assert.Equal(0, RunTswap("burn", "seen", "in a log").exitCode);
+
+        var (_, _, stderr) = RunTswap("run", "true", "{{seen}}");
+
+        Assert.Contains("Warning: 'seen' is a burned value", stderr);
+    }
+
     [Fact]
     public void Run_InlineCodeFlagFromATokenAfterSubstitution_RefusalDoesNotRepeatTheFlag()
     {

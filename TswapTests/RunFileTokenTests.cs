@@ -848,6 +848,7 @@ public sealed class RunFileTokenTests : IDisposable
     [InlineData("find . -execdir install -m 644 {{@f}} /tmp/x +")]
     [InlineData("nice find . -ok /usr/bin/install {{@f}} /tmp/x ;")]
     [InlineData("find . -exec nice install {{@f}} /tmp/x ;")]
+    [InlineData("find . -okdir install {{@f}} /tmp/x ;")]
     public void RunFileToken_InstallAsProgramRefused(string command)
     {
         WriteFile("f", ValuesYaml);
@@ -923,32 +924,29 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    // A path the OS can't take (NUL everywhere; < > | " on Windows) is a refusal naming the token,
-    // never an unhandled exception.
+    // A path the OS can't take is a refusal naming the token, never an unhandled exception. NUL is
+    // refused on every OS, so it is the case tested here; < > | " on Windows reach the same catch.
     [Fact]
     public void RunFileToken_InvalidPathRefused()
     {
         var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@bad\0name.yaml}}");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("is not a valid path", err);
+        Assert.Contains("'{{@bad\0name.yaml}}' is not a valid path: ", err);
         Assert.DoesNotContain("Unhandled", err);
         Assert.DoesNotContain("   at ", err);
         Assert.Equal(0, _pty.Starts);
         Assert.Empty(RunFolders());
     }
 
-    // A one- or two-character value has no base64 form of its own in SecretVariants: the value is
-    // still redacted, and nothing throws.
+    // Short values: the plain form first, then base64 padded and unpadded (base64url equals base64
+    // here), no empty form, and nothing throws.
     [Theory]
-    [InlineData("a")]
-    [InlineData("ab")]
-    public void Redaction_ShortValue_HasItsPlainForm(string value)
+    [InlineData("a", new[] { "a", "YQ==", "YQ" })]
+    [InlineData("ab", new[] { "a" + "b", "YWI=", "YWI" })]
+    public void Redaction_ShortValue_AllItsForms(string value, string[] expected)
     {
-        var variants = Redaction.Variants(value);
-
-        Assert.Equal(value, variants[0]);
-        Assert.DoesNotContain("", variants);
+        Assert.Equal(expected, Redaction.Variants(value));
     }
 
     [Fact]

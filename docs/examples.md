@@ -130,7 +130,7 @@ This works in bash, cmd and PowerShell. `run` refuses a command containing a pri
 copier, shell or interpreter (`cat`, `cp`, `base64`, `sh`, `python`, … as any word of the command)
 when it has a file token: the file is data for a tool, never a program. `helm install app ./chart
 -f {{@values.yaml}}` is fine, because `install` is refused only as the program itself (also behind a wrapper, or as
-the command `find -exec` runs). The limits
+the command of `find -exec`, `-execdir`, `-ok` or `-okdir`). The limits
 are in [Files with secrets](security-model.md#files-with-secrets-run-with-file).
 
 **Note:** the `# tswap: <secret-name>` comments remain in the filled copy, so secret *names*

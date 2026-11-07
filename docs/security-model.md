@@ -109,7 +109,7 @@ command ends, also after Ctrl+C, and removes stale folders of crashed runs at th
 file token. Before anything is written, `run` refuses a command with a printer, encoder, copier,
 shell or interpreter as any word (`cat`, `cp`, `base64`, `sh`, `python`, … see the blocklist in
 `Validation.cs`); `install` is refused only as the program (also behind a wrapper such as `nice`,
-or as the command `find -exec` runs), so `helm install` works. The check runs again on what the
+or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`), so `helm install` works. The check runs again on what the
 `{{name}}` tokens expand to, before anything is written; that refusal names the token, not the
 word. A refusal can be a false one, for a file named like a refused word: rename the file, or pass
 the secret with a plain `{{name}}` token.

@@ -168,7 +168,7 @@ The install path varies by agent — Claude Code uses `.claude/skills/`, other t
 
 ### Token Substitution (`run` command)
 
-Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators. With a `{{@file}}` token (below) it also refuses any word of the command that is a printer, encoder, copier, shell or interpreter (`cp`, `base64`, `sh`, `python`, `sed`, …; `install` only as the program, behind a wrapper such as `nice`, or as the command `find -exec` runs, so `helm install` works).
+Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators. With a `{{@file}}` token (below) it also refuses any word of the command that is a printer, encoder, copier, shell or interpreter (`cp`, `base64`, `sh`, `python`, `sed`, …; `install` only as the program, behind a wrapper such as `nice`, or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`, so `helm install` works).
 
 ### Files with secrets: `run` with `{{@file}}`
 
