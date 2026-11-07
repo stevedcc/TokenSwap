@@ -156,7 +156,7 @@ exits; `run` keeps working (owner decision).
 | Output contains | Masked |
 |---|---|
 | A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes |
-| Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes |
+| Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes (a value made only of whitespace: when it arrives in one read, see below) |
 | … base64url with padding | the unpadded core; the `=` stay visible |
 | … base64 with its padding removed; a `\r\n` value printed with `\n` only; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
 | … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes |
@@ -169,7 +169,12 @@ Limits:
   would be a prefix oracle). Text that lies in no complete occurrence is written when it leaves the
   redactor's hold window, when held output is released at a prompt, or at exit. So a secret printed
   only in part (cut short, split by an input wait, completed later by another thread or a
-  background job) shows that part. The same held before 0.3.
+  background job) shows that part. The same was true before 0.3.
+- **A value made only of whitespace** (spaces, tabs, line breaks) is masked when it arrives in one
+  read, also through a terminal, but not when a read boundary splits it: tswap can't tell such a
+  record from a single-line one by its fingerprints, and holding back every read's trailing
+  whitespace for that would hold every line end. Such a value can only be stored with
+  `sudo tswap add` (`ingest` trims trailing whitespace).
 - **A secret split between stdout and stderr** is not recognised when output is redirected
   (RedactingPty's pipe runner redacts each stream on its own).
 - **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end
@@ -189,7 +194,8 @@ Limits:
   256-byte record buckets already show, and nothing about a guess's prefix.
 - **A guessing oracle, as `redact` already is:** a child can test a guess against every vault value
   by printing it and watching for a label; the labels show secret names, which `names` lists anyway.
-- **A redaction failure fails closed:** the held text and the rest of the output are discarded, a
+- **A redaction failure fails closed:** the held text and the rest of the output (of that stream, when
+  output is redirected and stdout and stderr are redacted on their own) are discarded, a
   marker `[output truncated: redaction failed]` is written, and `run` ends with an error whose text
   holds no output.
 

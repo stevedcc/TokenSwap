@@ -326,7 +326,8 @@ builder pins today's behaviour with tests first, see Stage 2).
   > version verbatim, whitespace-stripped, base64 padded, base64url unpadded, multi-line through a
   > pipe or a PTY (`\r\n` folded to `\n`). Not masked: padded base64url's `=`, unpadded base64, a
   > `\r\n` value printed with `\n`, wrapped or re-indented values, JSON/URL/hex encodings, records not
-  > fully fingerprinted or unreadable (warned twice), secrets added during the run
+  > fully fingerprinted or unreadable (warned twice), secrets added during the run, a value of
+  > whitespace only split across reads
   > ([security-model.md](../../security-model.md#what-run-masks)).
 
 ## Stage 4: `extract`, the import

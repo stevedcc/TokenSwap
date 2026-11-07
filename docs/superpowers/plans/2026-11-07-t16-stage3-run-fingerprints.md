@@ -13,7 +13,7 @@ read-only here; GLM N2 T2 starts after R1 is packed; GLM N4 accepted as is (the 
 2's S6, reviewed there). Not taken: GLM N5. The test host *is* the process that builds the runner
 (`RedactingPty.TestHost` constructs a real runner and runs the child under it; the test assembly
 starts the test host), and it is the assembly with `InternalsVisibleTo`, so the wording stands.
-macOS ICANON stays **pending owner confirmation**.
+macOS ICANON stays **pending owner confirmation** (the owner confirmed it on 2026-11-07: release only with ECHO off and ICANON on).
 
 **Plan review round 1** (GLM, MiMo: request changes). All findings addressed in place:
 contract gate and fingerprint-set source aligned with Stage 2's approved plan (3457dbc: tasks 1-4,
@@ -112,7 +112,7 @@ builds the fast one.
     (coordinator, after MiMo B1: `getpass` reads fd 5 = `/dev/tty`). Any running thread, or anything
     unreadable: keep holding.
   - **macOS:** no `/proc`; release when the terminal's ECHO flag is off (password and passphrase
-    prompts: ssh, sudo, gpg), and (my call, **pending owner confirmation**) ICANON on. A plain `y/N`
+    prompts: ssh, sudo, gpg), and (my call, **owner-confirmed 2026-11-07**) ICANON on. A plain `y/N`
     prompt behind a held multi-line tail stays hidden until more output or exit.
   - **Windows (ConPTY), and `FallbackPty` (no terminal):** no signal; hold, no timer.
   - Released text goes through the matchers and replacements first, like `Flush`: only text that no
@@ -321,7 +321,7 @@ hold the master fd; the public surface is `RedactionOptions.ReleaseWhenAwaitingI
     Any read error (a process exiting mid-scan, Yama `ptrace_scope` ≥ 2, `hidepid`) → false.
     `IProcFs` (read a file, list a folder, `stat` a path) is the seam the fake-tree tests use.
   - `MacInputWaitProbe(masterFd)`: `tcgetattr` on the master; true when ECHO is off and (my call,
-    **pending owner confirmation**, GLM I4 / MiMo I7) ICANON is on: password prompts are expected to
+    **owner-confirmed 2026-11-07**, GLM I4 / MiMo I7) ICANON is on: password prompts are expected to
     keep canonical mode, while raw-mode programs such as `vim` or `less` clear both and would otherwise
     release on every pause; without it, D2 as written (ECHO off alone). R2b checks that `tcgetattr` on
     the master reports the slave's flags on macOS; if not, the parent opens `slavePath` with
@@ -711,6 +711,6 @@ blocks for D1 (overrules `:247-251`), D2 (prompt release, residual limit), D3, D
   property test keeps them aligned; Stage 2 may adopt the scanner later.
 - **Stage 2's contract drifts** after its approval: S1-S7 are what `run` relies on; a change goes to
   the owner before either brief continues.
-- **macOS ICANON** (pending owner confirmation): if a D2-named prompt (ssh, sudo, gpg) clears ICANON,
+- **macOS ICANON** (owner-confirmed 2026-11-07): if a D2-named prompt (ssh, sudo, gpg) clears ICANON,
   R2b's report shows it and the condition is dropped.
 - **Default interface member and package validation** (fallback above).
