@@ -287,6 +287,9 @@ sudo tswap vault reindex     # rewrites every record in format 3 with fingerprin
   leaves the vault reported this way until a write of that record, a `vault merge` or another
   `vault reindex`. In a folder that writes format 3, `vault merge` rewrites every record it can read
   that isn't format 3 yet, so merging a reindexed copy leaves the folder fully fingerprinted.
+  Since 0.3, `redact` and `tocomment` refuse on such a vault, and the other reading commands warn
+  when they read a format 2 record
+  ([commands.md](commands.md#fingerprints-format-2-records-and-vault-reindex)).
 - **What a sync provider sees in format 3:** the number of sections per record (retained values
   + 1) and a size bucket per section, where format 2 showed one bucket per record. Since a value
   section stays identical across writes, it can tell a metadata-only write (a burn, a merge) from a

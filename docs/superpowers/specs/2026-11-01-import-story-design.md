@@ -186,10 +186,24 @@ HMAC comparisons are fixed-time; the rolling-hash base is the HKDF output mapped
 dedupe and every match decision confirm on the HMAC, never on the rolling hash alone (a rolling-hash
 collision only costs an extra HMAC).
 
+> **Owner amendment, 2026-11-07** (brief T16-S2, plan amendment 3): "A rolling-hash collision only
+> costs an extra HMAC" and `FingerprintIndex`'s "never a false match" hold only with one more rule:
+> the HMAC is taken over UTF-8, which is not injective on UTF-16 windows that split a surrogate
+> pair (a lone surrogate encodes as U+FFFD's bytes; measured in Stage 2 task 1), so a window that
+> starts on a low surrogate or ends on a high one is never confirmed
+> (`FingerprintIndex.SplitsASurrogatePair`, applied by Stage 3's scanner too). Without the rule a
+> false hit also needs a keyed 61-bit rolling-hash collision, so this is hardening.
+
 Scan: for each distinct stored length L, slide a window over the text, update the rolling hash,
 look the value up; on a hit, compute the HMAC of the window and compare. A confirmed hit yields
 (name, version, variant, span). Overlapping hits resolve **longest first, then leftmost** (the
 builder pins today's behaviour with tests first, see Stage 2).
+
+> **Owner amendment, 2026-11-07** (brief T16-S2, plan amendment 2): the overlap order is today's,
+> which Stage 2 pins: matched length descending, then the matched text ordinally, then live before
+> burned, then name, then match type (`SecretProcessor`'s sort); each entry's occurrences left to
+> right. "Longest first, then leftmost" was a simplification that would have changed which name
+> wins an equal-length tie.
 
 ### Reindex, sudo only **(owner: refuse and reindex; sudo: owner accepted the recommendation)**
 
@@ -215,6 +229,13 @@ builder pins today's behaviour with tests first, see Stage 2).
   state: `redact`, `tocomment` and `extract` refuse, and `run` degrades (Stage 3). The store's
   existing highest-stamp bookkeeping is checked to reject older writes where it can.
 
+  > **Owner amendment, 2026-11-07** (brief T16-S2, plan amendment 4): the reindex is a **mandatory**
+  > upgrade step, not an optional one, for every vault holding format 2 records (record vaults made
+  > before v0.2 and never reindexed, or written since by a v0.1.x machine on a shared folder): until
+  > then `redact` and `tocomment` refuse, and the reading commands (`names`, `list`, `burned`, and
+  > `check`, `get`, `apply` on a record they name) decrypt each format 2 record whole, wipe what they
+  > don't use and warn with the count and the fix (owner decision 1: "keep working with warning").
+
 ### Classic vaults become migration-only **(owner: "Refuse, force a migration. Only supported for migration")**
 
 - Every command except `migrate --to-records` (and `export`, so a user can always get their data
@@ -236,6 +257,12 @@ builder pins today's behaviour with tests first, see Stage 2).
   differ, the difference is listed and justified.
 - Tests prove zero decryption by counting decrypted value sections (the record store already has a
   `RecordDecrypted` hook used by the broker tests).
+
+  > **Owner amendment, 2026-11-07** (brief T16-S2, plan amendment 1): the counter is the
+  > `ValueDecrypted` hook, which fires at the store's two value-decryption sites only.
+  > `RecordDecrypted` fires for every metadata section too, so it can't prove zero value
+  > decryptions; the tests use it to show that the metadata *was* read, so a zero count can't pass
+  > on a command that read nothing.
 
 ## Stage 3: `run` redacts everything it knows
 
@@ -439,6 +466,12 @@ Four briefs, each released on its own, in this order: Stage 1 (v0.2.0), then Sta
 are independent and may run in parallel; Stage 3 includes RedactingPty 1.1), then Stage 4. Each
 brief gets the usual external brief and code review; Stage 1, as a vault format change, also gets
 a dedicated security review of the format and key derivations.
+
+> **Owner amendment, 2026-11-07** (brief T16-S2): Stage 2 ships in v0.3.0 and widens to every
+> reading command (`check`, `names`, `list`, `burned` decrypt no value; `get` and `apply` only the
+> versions they output; owner: "unlocking all secrets is bad practice"). The write commands follow
+> as Stage 2b, a separate brief in v0.3.0 after Stage 2. The v0.3.0 release notes lead with
+> `sudo tswap vault reindex` (amendment 4 above).
 
 ## Left to the builder
 

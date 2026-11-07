@@ -84,6 +84,7 @@ deployment.
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
+| A command decrypting values it doesn't use | Since 0.3 each command decrypts only the value versions it prints or substitutes: `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output ([what each command decrypts](#what-each-command-decrypts)) |
 
 ### What tswap does not protect against
 
@@ -96,6 +97,43 @@ deployment.
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
+
+### What each command decrypts
+
+Since 0.3 a command decrypts only the values it uses (owner: "unlocking all secrets is bad
+practice"). A format 3 record keeps its value versions in separate encrypted sections, so a
+command can read a record's name, burns and fingerprints without opening a value. A **format 2**
+record (written by tswap 0.1, and kept until `sudo tswap vault reindex` rewrites it) holds name and
+both value versions in one encrypted block: a command that must read it decrypts it whole, wipes
+the values it doesn't use at once, and prints a warning with the number of such records and the
+reindex command.
+
+| Command | Format 3 record | Format 2 record |
+|---|---|---|
+| `redact`, `tocomment` | No value: metadata sections only, values recognised by their fingerprints | None: the command refuses before it opens the file, and asks for `sudo tswap vault reindex` |
+| `names`, `burned`, `list` | No value | Decrypted whole to read its name and burn state; the values are wiped unused; a warning |
+| `check` | No value | Only a record a marker names, decrypted whole; a warning |
+| `get` | The one value it prints (the current version of that secret) | That record, decrypted whole; a warning |
+| `apply` | The value versions it fills in, each once; none for a line already filled | Each record a marker names, decrypted whole; a warning |
+| `create`, `ingest`, `burn`, `rotate`, `restore`, `add`, `delete`, `import` | Still every record for now (a later 0.3 change makes them read only the records they write) | The same |
+| `export`, `vault merge`, `vault reindex`, `migrate` | Every value, by definition | The same |
+
+What the warning and the refusal say: the count of records and the fix only, never a secret name
+(a format 2 tombstone's would reveal a deleted secret), a hashed file name, a value or its length.
+The count is what anyone who can list the vault folder can tell anyway: a record's format is a
+cleartext byte of its file.
+
+Limits of reading metadata only:
+
+- `redact` and `tocomment` find what the fingerprints describe. A record whose fingerprints don't
+  describe its stored value (only a write bug, or someone holding the vault key, can make one) has
+  its stored value printed unmasked by `redact`. Detecting that needs the value, which these
+  commands must not decrypt; `get` and `apply` still check it and refuse that record.
+- `check`, `names`, `list` and `burned` don't open value sections, so they don't notice a damaged
+  value section: they list the record as sound. The command that uses the value fails closed,
+  naming the file.
+- Strings are not zeroed: a value `get` or `apply` prints lives in memory as a string until the
+  process exits, as before (there are just fewer of them).
 
 ### Files with secrets: `run` with `{{@file}}`
 
