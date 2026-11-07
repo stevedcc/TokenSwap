@@ -63,37 +63,40 @@ builds the fast one.
 - Zeroing the vault key inside `run`, ConPTY's re-rendering of long lines (pre-existing), classic
   vaults (already refused: `ICliCommand.WorksOnClassicVault`).
 
-## Owner decisions needed
+## Owner decisions (2026-11-07)
 
-- **D1, partly fingerprinted vault.** The spec says `run` then "redacts only its own tokens, as
-  today, and warns" (`:247-251`). **Recommend:** also mask every record that *has* fingerprints, and
-  warn as the spec says (twice, keep working). Throwing away 199 records' coverage because one was
-  replayed has no upside. The warning wording is the same either way.
-- **D2, hold-back (the spec doesn't cover it).** To catch a match split across reads, the redactor
-  holds back the end of the output until more arrives or the child exits. Today that is the longest
-  substituted form − 1 (about 43 chars for a 32-char secret; enough to hide a short `Password:`
-  prompt). With `MaxMatchLength` taken from the whole vault it becomes the longest vault variant
-  (about 4.4 K chars for a base64'd PEM). The 1.1 API adds `PendingFrom` (below), and tswap's matcher
-  uses character classes, so for single-line secrets only the trailing word (a run of non-whitespace
-  or base64 characters) is held, which is **less than today**. A vault holding a **multi-line**
-  secret (PEM, kubeconfig) is different: its verbatim form may contain any text, so the matcher must
-  hold up to that value's raw length on every pause, and interactive prompts can stay hidden. Options:
-  **(a)** accept and document (full coverage); **(b)** match multi-line values' verbatim form
-  vault-wide only when stdout is not a terminal (agents; humans in an interactive session keep the
-  stripped and base64 forms); **(c)** never match multi-line verbatim forms vault-wide; **(d)** flush
-  the held text after an idle time (leaks part of a value whose printing stalls). **Recommend (a)**,
-  with the owner's interactive check in Task T6; (b) if that check is unacceptable. Substituted
-  multi-line values stay fully masked by their plaintext forms in every option.
-- **D3, throughput targets.** Proposed (my call, Task T5): realistic vault on log text ≥ 20 Mchars/s,
-  2,000 secrets ≥ 5, base64-heavy output ≥ 1. A miss is reported, never loosened by the builder.
-- **D4, RedactingPty release order.** `main` holds R1's P/Invoke refactor, not yet released.
-  **Recommend** tagging `v1.0.3` from b4fda29 first, then `v1.1.0`, so a regression bisects to one of
-  them. Alternative: 1.1.0 ships both.
+- **D1, partly fingerprinted vault: approved.** `run` masks its own tokens **and every record that
+  has fingerprints**; the same warning before and after the child; it keeps working. (The spec's
+  "only its own tokens", `:247-251`, is overruled.)
+- **D2, hold-back: interactive prompts are detected (owner design).** To catch a match split across
+  reads, the redactor holds back the end of the output. With `PendingFrom` and tswap's character
+  classes, single-line secrets hold only the trailing word (less than today's longest form − 1). A
+  **multi-line** vault secret (PEM, kubeconfig) may contain any text, so up to its raw length is held
+  on every pause, which would hide prompts. Therefore:
+  - When the redactor holds a non-empty tail and the output has been quiet for ~50 ms, the relay
+    checks the child's state, then re-checks every ~100 ms while output stays quiet. **Time alone
+    never releases held text; only a positive check does.**
+  - **Linux:** release when the PTY's foreground process group (`tcgetpgrp` on the master) waits for
+    terminal input: no thread of any process in that group is running
+    (`/proc/<pid>/task/*/syscall`), and at least one is blocked in `read()` on the PTY slave (its fd
+    resolved through `/proc/<pid>/fd`). Any running thread, or anything unreadable: keep holding.
+  - **macOS:** no `/proc`; release when the terminal's ECHO flag is off (password and passphrase
+    prompts: ssh, sudo, gpg). A plain `y/N` prompt behind a held multi-line tail stays hidden until
+    more output or exit.
+  - **Windows (ConPTY), and `FallbackPty` (no terminal):** no signal; hold, no timer.
+  - Released text goes through the matchers and replacements first, like `Flush`: only text that no
+    complete secret occupies is released. **Residual limit** (documented with the other limits): a
+    program that prints the first part of a secret and then waits for input, or whose other thread
+    completes it later, has that part released unmasked.
+- **D3, throughput targets: approved.** Realistic vault on log text ≥ 20 Mchars/s, 2,000 secrets ≥ 5,
+  base64-heavy output ≥ 1 (Task T5). A miss is reported, never loosened by the builder.
+- **D4, release order: approved.** Tag RedactingPty `v1.0.3` from b4fda29 (R1's refactor alone), then
+  `v1.1.0`; both are owner gates.
 
 ## Outward gates (owner)
 
 - **G1** Merge the RedactingPty PR (CI: 9 legs green).
-- **G2** Tags `v1.0.3` (per D4) and `v1.1.0`: each publishes to nuget.org. tswap's PR CI can't pass
+- **G2** Tags `v1.0.3`, then `v1.1.0` (D4): each publishes to nuget.org. tswap's PR CI can't pass
   until 1.1.0 is there.
 - **G3** Merge the tswap PR (`Closes #106`, `Refs #220`).
 - **G4** v0.3.0 tag, with the rest of v0.3.0.
@@ -169,17 +172,32 @@ public sealed class StreamRedactor
     public StreamRedactor(IReadOnlyList<StreamReplacement> replacements);             // unchanged
     public StreamRedactor(IReadOnlyList<StreamReplacement> replacements,
                           IReadOnlyList<IStreamMatcher> matchers);                    // new
+    public bool HasHeld { get; }      // a non-empty tail is held back
+    public string Release();          // resolves the tail like Flush (complete matches masked) and
+                                      // returns it; the redactor stays usable
+}
+
+public sealed record RedactionOptions
+{
+    public IReadOnlyList<IStreamMatcher> Matchers { get; init; } = [];
+    /// Release held text when the child waits for terminal input (D2): Linux and macOS PTYs only;
+    /// ignored by WindowsPty and FallbackPty. Off by default.
+    public bool ReleaseWhenAwaitingInput { get; init; }
 }
 
 public interface IPtyRunner
 {
     int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements);            // unchanged
     int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements,
-            IReadOnlyList<IStreamMatcher> matchers)                                   // new, default:
-        => matchers.Count == 0 ? Run(argv, replacements)
-         : throw new NotSupportedException("This IPtyRunner does not support stream matchers.");
+            RedactionOptions options)                                                 // new, default:
+        => options.Matchers.Count == 0 && !options.ReleaseWhenAwaitingInput
+            ? Run(argv, replacements)
+            : throw new NotSupportedException("This IPtyRunner does not support RedactionOptions.");
 }
 ```
+
+`RedactionOptions` rather than a matcher list parameter (my call: one more setting already exists,
+and later ones need no new overload).
 
 `ICollection<StreamMatch>` rather than a return value (my call): spans can't be captured by an
 iterator, and matches are rare, so the interface call costs nothing. The default overload throws
@@ -199,11 +217,54 @@ rather than drops matchers: a third-party runner must not silently redact less.
   one pass, so replacement text is never matched again. `Flush` resolves the tail the same way.
   Overlap = max(longest `Find`, every `MaxMatchLength`) − 1.
 - Truncation after the 30 s drain timeout still discards the tail (unchanged).
+- `Release()` masks complete matches in the tail and emits the rest, including a partial match
+  (D2's residual limit); the next chunk starts with an empty tail.
+
+### Input-wait release (D2), inside RedactingPty
+
+**Where (my call): RedactingPty.** It owns the relay loop, its timing and the PTY master; tswap sees
+neither (it gets one `Run` call). The platform probes are internal, not public API: only the runners
+hold the master fd; the public surface is `RedactionOptions.ReleaseWhenAwaitingInput` plus
+`HasHeld`/`Release` for custom runners.
+
+- `internal interface IInputWaitProbe { bool ChildAwaitsInput(); }`, built by the runner in the
+  **parent** after `forkpty` returns (never in the child):
+  - `LinuxInputWaitProbe(masterFd, slavePath, procRoot = "/proc")`: `slavePath` from `ptsname` of the
+    master; `tcgetpgrp(masterFd)`; members of the group from `/proc/[0-9]*/stat` (the pgrp field after
+    the `)` of the command name); for each thread of each member, `/proc/<pid>/task/<tid>/syscall`:
+    `running` → false; true only if every thread is blocked and at least one is in `read` (syscall
+    number per architecture: x86-64 0, arm64 63; any other architecture: no probe) with its first
+    argument an fd whose `/proc/<pid>/fd/<n>` link is `slavePath`. Any read error (a process exiting
+    mid-scan, Yama `ptrace_scope` ≥ 2, `hidepid`) → false.
+  - `MacInputWaitProbe(masterFd)`: `tcgetattr` on the master; true when ECHO is off **and** ICANON is
+    on (my call: password prompts keep canonical mode; raw-mode programs such as `vim` or `less` clear
+    both and would otherwise release on every pause). R2b checks that `tcgetattr` on the master
+    reports the slave's flags on macOS; if not, the parent opens `slavePath` with `O_NOCTTY` for it.
+  - `WindowsPty`, `FallbackPty`: no probe.
+- `internal sealed class HoldReleaser(TimeProvider time, IInputWaitProbe? probe)`: tracks quiet time
+  since the last output; with `HasHeld` and a probe, a first check at 50 ms of quiet, then every
+  100 ms; `Release()` only when the check returns true. No probe, no held text, or the option off: no
+  checks. An internal check counter is the test seam (tests wait for N checks, never for time).
+- `UnixPty`'s read loop (parent code after the fork, outside the frozen spans) takes its `poll`
+  timeout from the releaser (50 / 100 ms while holding, 200 ms otherwise, as today) and on a timeout
+  asks it whether to write `redactor.Release()`. The options travel to the frozen `Run` in the same
+  internal carrier as the matchers.
+- Measured 2026-11-07 on Linux x86-64 with a real PTY (the same probe as D2's): `python3 input()`
+  waits in `read` on fd 0 and `getpass` in `read` on fd 5 (`/dev/tty`), both detected; an
+  interactive `bash --norc -i` (readline) waits in `pselect6` (syscall 270), not detected: a bash
+  prompt behind a held multi-line tail stays hidden until more output. Accepted as a safe-side miss
+  (agents run commands, not shells); telling which descriptors a `pselect6` waits on would mean
+  reading the process's memory, out of scope.
+- Known misses, all on the safe side (held, not released): programs that wait in `poll`/`select`/
+  `epoll` on the terminal instead of `read` (R2b reports which of `bash`, `python3 input()`, `ssh`,
+  `sudo` are detected); terminal output from processes outside the foreground group is not checked
+  (a background job printing part of a secret while the foreground waits is released: part of the
+  residual limit).
 
 ### Runners, without touching the frozen spans
 
-`UnixPty.Run(argv, replacements)` keeps its frozen signature. The new overload wraps both lists in an
-internal `MatcherCarrier : IReadOnlyList<StreamReplacement>` (it enumerates the replacements) and calls
+`UnixPty.Run(argv, replacements)` keeps its frozen signature. The new overload wraps the replacements
+and the options in an internal `MatcherCarrier : IReadOnlyList<StreamReplacement>` (it enumerates the replacements) and calls
 the frozen `Run`; the one parent-code line `UnixPty.cs:148` becomes `StreamRedactor.ForRunner(replacements)`
 (internal: unwraps a carrier, else the 1.0 constructor). Same in `WindowsPty.cs:284` and
 `FallbackPty.Drain` (`:82`). (My call: no instance state, so concurrent `Run` calls stay safe, and the
@@ -212,8 +273,8 @@ frozen-span diff stays empty.)
 ### Release
 
 Version 1.1.0; `PackageValidationBaselineVersion` 1.0.2 (my call: proves nothing changed since the
-latest release); README gets "Custom matchers" (contract, thread safety, hold-back); "Fork safety"
-unchanged. If package validation flags the default interface member (expected not to: it has a
+latest release); README gets "Custom matchers" (contract, thread safety, hold-back) and "Releasing
+held output at a prompt" (per platform, the residual limit); "Fork safety" unchanged. If package validation flags the default interface member (expected not to: it has a
 body), fall back to a public `IMatchingPtyRunner : IPtyRunner` implemented by the built-in runners,
 and report it.
 
@@ -226,14 +287,15 @@ and report it.
 - `TswapCli/RunCoverage.cs` (new): the warning text from a `VaultMetadata`.
 - `TswapCli/Commands/RunCommand.cs`: `ctx.OpenVault(key)` replaces `LoadSecrets` (`:72`); tokens (`:78-85`)
   and files (`:110`) resolve through it; `LoadAll(Skip)` → scanner → matcher; warnings before and after
-  the child; `runner.Run(argv, replacements, [matcher])` (`:186`), always with the matcher (empty index:
+  the child; `runner.Run(argv, replacements, new RedactionOptions { Matchers = [matcher],
+  ReleaseWhenAwaitingInput = true })` (`:186`), always with the matcher (empty index:
   `MaxMatchLength` 1, no matches), so `run` uses one resolution path. The plaintext list (`:87-96`) is
   unchanged. `FingerprintKeys` are disposed after the child exits.
 - `TswapCli/TswapCli.csproj`: RedactingPty 1.1.0. Before G2, develop against
   `1.1.0-local.N` from a local pack (`-p:RestoreAdditionalProjectSources=<dir>`), never a local
   `1.1.0` (it would shadow the real one in the NuGet cache); the last task sets 1.1.0.
-- `TswapTests/RunFileTokenTests.cs`: `FakePty` also implements the three-argument `Run`
-  (`new StreamRedactor(replacements, matchers)`); no assertion changes.
+- `TswapTests/RunFileTokenTests.cs`: `FakePty` also implements the `RedactionOptions` overload
+  (`new StreamRedactor(replacements, options.Matchers)`); no assertion changes.
 - Docs (Task T6).
 
 ## What `run` masks, before and after
@@ -250,6 +312,7 @@ and report it.
 | … `\r\n` value printed with `\n` only; wrapped base64; re-indented PEM (YAML block); JSON/URL/hex encodings; inside a larger base64 blob | no | **no** (later variant set) |
 | Records without fingerprints (format 2, replayed) or unreadable | no | no; warned twice (D1) |
 | Secrets added while the child runs | no | no (index built at start) |
+| The first part of a secret printed just before the child waits for input (Linux, macOS) | held | released unmasked (D2 residual limit) |
 | Values in memory during the child run | every value of the vault | substituted values + fingerprints + `K_fp` |
 
 A `run` child can now test guesses against any vault secret by printing them; `redact` (no sudo)
@@ -280,18 +343,46 @@ says what production change makes it fail.
   `MaxMatchLength`), `Matcher_MaxMatchLengthBelowOne_Throws`, `Matcher_PendingFromOutOfRange_Throws`:
   fail if bad spans are clamped.
 - `Matcher_Flush_Masks`, `Matcher_SurrogatePairNotSplit`.
+- `Release_MasksCompleteMatchesInTail` (fails if `Release` skips resolution),
+  `Release_PartialPrefixReleasedUnmasked` (pins the residual limit), `Release_ThenNextChunk_Continues`,
+  `HasHeld_TracksTail`.
 - `NoMatchers_SameAsOneDotZero` (random finds, texts, chunkings: every emitted piece identical to the
   1.0 constructor's): fails if `[]` takes the new path.
 
 **R2. Runners.** Files: `IPtyRunner.cs`, `UnixPty.cs` (new overload + line 148 only), `WindowsPty.cs`,
 `FallbackPty.cs`, `MatcherCarrier.cs` (new, internal), `RedactingPty.TestHost/Program.cs` (a test
-matcher mode); tests in `PtyRunnerTests.cs`, `FallbackPtyTests.cs`.
+matcher mode); tests in `PtyRunnerTests.cs`, `FallbackPtyTests.cs`. The `RedactionOptions` overload
+on every runner.
 - `Run_WithMatcher_MasksChildOutput` (each real runner through the test host, and `FallbackPty`):
   fails if an overload calls `Run(argv, replacements)` without the carrier.
 - `Fallback_OneMatcher_StdoutAndStderr_BothMasked`: fails if only one stream gets the matcher.
 - `CustomRunner_DefaultOverload_EmptyDelegates` / `_WithMatchersThrows`: fail if the default ignores
   matchers.
 - Report: R1's frozen-span diff against 5d9a8fa, empty (`docs/briefs/r1-dotnet10-idioms.md:45-65`).
+
+**R2b. Input-wait release (D2).** Files: `HoldReleaser.cs`, `IInputWaitProbe.cs`,
+`LinuxInputWaitProbe.cs`, `MacInputWaitProbe.cs` (new, internal), `UnixPty.cs` (read loop, after the
+fork only), `LinuxPty.cs`/`MacOSPty.cs` untouched; TestHost child modes (`prompt`, `password`, `busy`,
+`two-threads`); tests `HoldReleaserTests.cs`, `InputWaitProbeTests.cs`, `PtyRunnerTests.cs`.
+- `HoldReleaser`, fake clock and probe: `NoHeldText_NoCheck`, `FirstCheckAt50msQuiet_ThenEvery100ms`,
+  `OutputResetsQuiet`, `OptionOff_NoCheck`, `ProbeFalse_NeverReleases` (fails if a timeout releases:
+  the option (d) the owner rejected).
+- `LinuxInputWaitProbe` over a fake `/proc` tree: `AllThreadsBlockedInReadOnSlave_True`,
+  `OneThreadRunning_False`, `ReadOnAnotherFd_False`, `SleepingInClockNanosleep_False`,
+  `UnreadableSyscallFile_False`, `NotInForegroundGroup_Ignored`, `UnknownArchitecture_NoProbe`.
+- Real PTY through the test host, a matcher with `MaxMatchLength` 5000 and `PendingFrom` 0 standing in
+  for a multi-line vault secret (tests wait on concrete conditions: text in the output, a check count,
+  a `/proc` state; a deadline only fails the test):
+  - `RealPty_YesNoPrompt_ReachesOutput` (Linux): `Continue? [y/N] ` appears before any input is sent;
+    fails without the release.
+  - `RealPty_PasswordPrompt_ReachesOutput` (Linux, macOS): `stty -echo; read`.
+  - `RealPty_BusyChildPaused_TailHeld` (Linux): after the child is in `clock_nanosleep` and 3 checks
+    ran, the held text is absent; fails if quiet time alone releases.
+  - `RealPty_TwoThreads_OneReadsTtyOneRuns_Held` (Linux): fails if one blocked reader suffices.
+  - `RealPty_MacOS_YesNoPrompt_StaysHeld` (macOS, pins the stated limit), and
+    `WindowsPty_NoProbe_HeldUntilExit` (Windows).
+- Report: the frozen-span diff, empty; which of `bash`, `python3 input()`, `ssh`, `sudo` prompts are
+  detected on Linux and macOS.
 
 **R3. Package.** Baseline 1.0.2, `dotnet pack` output (validation passes), NativeAOT publish of the
 test host with 0 warnings, README section, CI's nine legs green. Then G1, G2.
@@ -377,6 +468,9 @@ built `VaultMetadata`). If the process ends through the signal path, the second 
   fails if the warning appears once, if `run` refuses, or (D1) if the fingerprinted secret is shown.
 - `Run_UnreadableRecord_InWarning`, `Run_FullyFingerprinted_NoWarning`,
   `Run_ChildFails_WarningStillAfterOutput`.
+- `EndToEnd_Run_PromptVisible_WithPemInVault` (Linux, the same harness: `run ./prompt.sh {{token}}`
+  with a script at `printf "Continue? [y/N] "; read x` and a multi-line secret in the vault; the
+  prompt appears before input is sent): fails if `run` doesn't set `ReleaseWhenAwaitingInput`.
 - `EndToEnd_Run_OtherSecretMasked_RealPty` in `EndToEndTests` (the outer-PTY harness at
   `EndToEndTests.cs:341`, built NativeAOT binary): fails if trimming or default-interface dispatch
   breaks the matcher under AOT.
@@ -397,9 +491,11 @@ reported to the owner with the profile, not tuned away silently.
 
 **T6. Docs, version, owner check.** `docs/security-model.md` (`:79` row and the `run` limits, the
 table above in short), `docs/commands.md` (`run`), `docs/release-notes/v0.3.0.md` (run section:
-minimum decryption, vault-wide masking, the warning, the gaps, D2's hold-back); `TswapCli.csproj` to
-1.1.0 after G2 (clear the local feed from the restore). Prompt text unchanged (`prompt-hash` stable).
-Owner check (D2): `tswap run ssh <host>` with a PEM in the vault, prompt visible or not.
+minimum decryption, vault-wide masking, the warning, the gaps, D2's prompt release per platform);
+`docs/security-model.md` states D2's residual limit with the other limits (a partial secret printed
+before an input wait is released unmasked; macOS releases only no-echo prompts; Windows holds).
+`TswapCli.csproj` to 1.1.0 after G2 (clear the local feed from the restore). Prompt text unchanged
+(`prompt-hash` stable). Owner check: `tswap run ssh <host>` with a PEM in the vault, on Linux and macOS.
 
 ## Review focus
 
@@ -413,13 +509,19 @@ Owner check (D2): `tswap run ssh <host>` with a PEM in the vault, prompt visible
 5. Thread safety under `FallbackPty`; `FingerprintKeys` disposed after the child.
 6. Coverage claims in the docs match the table and the tests (including the pinned gaps).
 7. Warning text, twice, `run` keeps working (D1).
-8. `writing-dotnet10-code` defaults in new code.
+8. D2: time never releases held text; every probe failure holds; probes and `ptsname` run only in
+   the parent; `Release` masks complete matches first; the residual limit is documented as stated.
+9. `writing-dotnet10-code` defaults in new code.
 
 ## Risks
 
 - **Throughput on base64-heavy output** (probe: about 1 Mchar/s): a 100 MB dump takes minutes;
   backpressure slows the child, nothing is lost. D3.
-- **Hold-back with multi-line vault secrets** (D2): interactive prompts can stay hidden.
+- **Prompt detection misses** (D2): programs waiting in `poll`/`select` on the terminal, macOS
+  `y/N` prompts, Windows, and kernels where `/proc/<pid>/syscall` is unreadable keep their prompt
+  hidden behind a held multi-line tail (safe, not silent: R2b reports which programs are detected).
+- **Partial release** (D2 residual limit): a secret split by an input wait, or by another thread or
+  a background job, has its first part shown.
 - **Release coupling:** tswap's PR waits for G2; local packs must never use the release version.
 - **Two scanners** (`FingerprintIndex` for Stage 2, `FingerprintScanner` here): the equality
   property test keeps them aligned; Stage 2 may adopt the scanner later.
