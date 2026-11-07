@@ -22,7 +22,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
 
     public RecordStoreMetadataTests()
     {
-        _key = VaultKey(_m, InitRecordVault(_m));
+        _key = VaultKey(_m, InitFormatTwoVault(_m));
     }
 
     public void Dispose() => _m.Dispose();

@@ -19,7 +19,7 @@ public sealed class RecordStoreTests : IDisposable
 
     public RecordStoreTests()
     {
-        _recoveryKey = InitRecordVault(_m);
+        _recoveryKey = InitFormatTwoVault(_m);
         _vaultKey = VaultKey(_m, _recoveryKey);
     }
 
@@ -151,7 +151,7 @@ public sealed class RecordStoreConfigGuardTests : IDisposable
     [Fact]
     public void InitOnARecordStoreMachine_IsRefused_AndTheConfigKeepsTheStore()
     {
-        RecordVaultTestSupport.InitRecordVault(_m);
+        RecordVaultTestSupport.InitFormatTwoVault(_m);
         _m.Ok("v", "ingest", "s");
 
         var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
