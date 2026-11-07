@@ -67,6 +67,10 @@ The other reading commands keep working on format 2 records: `names`, `list`, `b
 `check`, `get` or `apply` on a record they name, decrypt such a record whole (the only way to read
 format 2), wipe the values they don't use, and print one line on stderr after their output, with
 the number of records and the same fix (when they fail, before the error). Exit codes don't change.
+The write commands (`create`, `ingest`, `rotate`, `burn`, `restore`, `add`, `delete`, `import`; since
+0.3 each reads only the record it writes) do the same for a format 2 record they read: they decrypt it
+whole, wipe the value versions they don't need, and print the warning after their output, also when
+they then write nothing (`create` of an existing name, `add` of the same value).
 None of these texts (the refusal, the note, the warning) ever names a secret, a file or a value.
 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
