@@ -430,7 +430,7 @@ public sealed class SlotCommand : ICliCommand
         if (config.Keyring is null)
             throw new TswapException(
                 "This machine has no keyring vault to approve from. Run 'tswap init' here first " +
-                "(a classic, non-keyring vault has no K_v to share — see MULTI_MACHINE_KEYING.md).");
+                "(a classic, non-keyring vault has no K_v to share — see docs/multi-machine.md).");
 
         var keyring = DecodeKeyringOrCorrupt(config);
         RequireKeyringThatTakesYubiKeySlots(keyring);

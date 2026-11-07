@@ -118,7 +118,7 @@ internal static partial class Tpm2ToolsInterop
         if (exitCode != 0)
             throw new TswapException(
                 "No usable TPM detected. This requires a TPM 2.0 device (or a reachable " +
-                $"simulator in dev/test — see HARDWARE_BACKENDS.md). tpm2_getcap failed: {stderr.Trim()}");
+                $"simulator in dev/test — see docs/portable.md#linux-tpm). tpm2_getcap failed: {stderr.Trim()}");
     }
 
     /// <summary>Enrollment: seals <paramref name="plaintextKey"/> to a freshly (re)created TPM-bound primary key.</summary>

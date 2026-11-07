@@ -437,7 +437,7 @@ internal static class GuidedInit
                 // Brief T7 item 8 (#159), as init --secure-enclave says it.
                 c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
                 c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
-                c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+                c.Out.WriteLine("has not had an independent cryptographic review. See docs/security-model.md#the-secure-enclaves-wrapping-has-not-been-reviewed.");
             }
             InitCommand.PrintVaultFolder(c, fileStore, vaultDir);
             InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, JoinAnd(enrolled.Select(p => p.Device.Chip is { } b

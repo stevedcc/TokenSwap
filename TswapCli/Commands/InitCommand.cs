@@ -270,7 +270,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("║  tswap - Keyring Initialization        ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's slot");
-        c.Out.WriteLine("(k = 1) — see MULTI_MACHINE_KEYING.md. Add more keys later, each as its own");
+        c.Out.WriteLine("(k = 1) — see docs/multi-machine.md. Add more keys later, each as its own");
         c.Out.WriteLine($"slot that opens the vault alone: sudo {ctx.Prefix} slot add --yubikey\n");
 
         // Test mode (TSWAP_TEST_KEY, Debug builds only) asks nothing, as its init always did: there is
@@ -695,7 +695,7 @@ public sealed class InitCommand : ICliCommand
             // Brief T7 item 8 (#159): said where the user sees it, in proportion (docs/design/hardware-backends.md).
             c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
             c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
-            c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+            c.Out.WriteLine("has not had an independent cryptographic review. See docs/security-model.md#the-secure-enclaves-wrapping-has-not-been-reviewed.");
         }
         PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
         return 0;
