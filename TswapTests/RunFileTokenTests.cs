@@ -917,6 +917,21 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
+    // A path the OS can't take (NUL everywhere; < > | " on Windows) is a refusal naming the token,
+    // never an unhandled exception.
+    [Fact]
+    public void RunFileToken_InvalidPathRefused()
+    {
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@bad\0name.yaml}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("is not a valid path", err);
+        Assert.DoesNotContain("Unhandled", err);
+        Assert.DoesNotContain("   at ", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
     [Fact]
     public void SubstituteAllTokensInArgs_NulValueIsATswapRefusal()
     {

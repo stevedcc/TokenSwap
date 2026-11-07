@@ -104,7 +104,7 @@ public sealed class RunCommand : ICliCommand
             Dictionary<string, string> bySource = new(FilledFiles.SourcePathComparer);
             foreach (var token in fileTokens)
             {
-                var source = Path.GetFullPath(token, filesEnv.CurrentDirectory);
+                var source = FullSourcePath(token, filesEnv.CurrentDirectory);
                 if (!bySource.TryGetValue(source, out var content))
                 {
                     var (text, applied) = Apply.ApplySecretsReporting(ReadSource(token, source), db, ctx.Console.Error);
@@ -192,6 +192,18 @@ public sealed class RunCommand : ICliCommand
     }
 
     // A source file's text, or a refusal naming it (never a raw IO exception).
+    private static string FullSourcePath(string token, string currentDirectory)
+    {
+        try
+        {
+            return Path.GetFullPath(token, currentDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new TswapException($"'{{{{@{token}}}}}' is not a valid path: {ex.Message}");
+        }
+    }
+
     private static string ReadSource(string token, string path)
     {
         string content;
@@ -203,7 +215,7 @@ public sealed class RunCommand : ICliCommand
         {
             throw new TswapException($"File '{token}' ({path}) not found.");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             throw new TswapException($"Can't read '{token}' ({path}): {ex.Message}");
         }
