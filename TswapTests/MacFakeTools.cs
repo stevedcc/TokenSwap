@@ -265,8 +265,12 @@ internal sealed class MacFakeTools : IDisposable
         WriteTool("xattr", """
             echo "$*" >> "$FAKE_DIR/xattr.log"
             case "$1" in
-              -w) exit 0 ;;
-              -p) [ -f "$FAKE_DIR/quarantine.propagates" ] && { echo '0083;6740a1b2;Safari;'; exit 0; }; echo "xattr: ${@: -1}: No such xattr: $2" >&2; exit 1 ;;
+              -w) echo "${@: -1}" >> "$FAKE_DIR/xattr.marked"; exit 0 ;;
+              -p)
+                if [ -f "$FAKE_DIR/quarantine.propagates" ] || grep -qxF "${@: -1}" "$FAKE_DIR/xattr.marked" 2>/dev/null; then
+                  echo '0083;6740a1b2;Safari;'; exit 0
+                fi
+                echo "xattr: ${@: -1}: No such xattr: $2" >&2; exit 1 ;;
             esac
             exit 0
 

@@ -147,6 +147,7 @@ public class ReleasePackagingTests : IDisposable
             case " $* " in
               *" installscript "*)
                 # The macOS script's dylib step: the embedded bytes (embedded.dylib overrides the archive's own).
+                [ -f "$FAKE_DIR/installscript.out" ] && { cat "$FAKE_DIR/installscript.out"; exit 0; }
                 dylib="$(dirname "$0")/libtswapse.dylib"
                 [ -f "$FAKE_DIR/embedded.dylib" ] && dylib="$FAKE_DIR/embedded.dylib"
                 echo '#!/usr/bin/env bash'
@@ -625,10 +626,12 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.True(exitCode == 0, output);
         var codesign = _mac.Log("codesign");
+        // The unpacked archive's files, not the publish folder's.
+        var unpacked = Runs(output)[0]["ran from ".Length..Runs(output)[0].IndexOf(" with: ", StringComparison.Ordinal)];
         foreach (var file in new[] { "tswap", "libtswapse.dylib" })
         {
-            Assert.Single(codesign, line => line.StartsWith("--verify --strict --verbose=2 ", StringComparison.Ordinal) && line.EndsWith("/" + file, StringComparison.Ordinal));
-            Assert.Single(codesign, line => line.StartsWith("-dvvv ", StringComparison.Ordinal) && line.EndsWith("/" + file, StringComparison.Ordinal));
+            Assert.Single(codesign, line => line == $"--verify --strict --verbose=2 {unpacked}/{file}");
+            Assert.Single(codesign, line => line == $"-dvvv {unpacked}/{file}");
             Assert.Single(NotarisationChecks(file));
         }
         Assert.Contains("notarisation: ok", output);
@@ -776,7 +779,7 @@ public class ReleasePackagingTests : IDisposable
     }
 
     [Fact]
-    public void MacOsSmoke_QuarantineNotPropagated_SaysSkip()
+    public void MacOsSmoke_QuarantineNotPropagated_MarksTheFilesItself()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -785,8 +788,15 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = MacOsSmoke();
 
         Assert.True(exitCode == 0, output);
-        Assert.Contains("SKIP: quarantine did not propagate", output);
-        Assert.Single(_mac.Log("xattr"), line => line.StartsWith("-w com.apple.quarantine 0083;", StringComparison.Ordinal) && line.Contains(";Safari; "));
+        Assert.Contains("tar did not carry the quarantine mark to tswap; marking the unpacked files, as Archive Utility does", output);
+        var marks = _mac.Log("xattr").Where(line => line.StartsWith("-w com.apple.quarantine 0083;", StringComparison.Ordinal) && line.Contains(";Safari; ")).ToList();
+        Assert.Equal(3, marks.Count); // the archive, then each unpacked file
+        Assert.EndsWith("/download.tar.gz", marks[0]);
+        Assert.EndsWith("/quarantined/tswap", marks[1]);
+        Assert.EndsWith("/quarantined/libtswapse.dylib", marks[2]);
+        // The run then happens from the marked copy, as with a propagated mark.
+        Assert.Equal(3, LoggedRuns().Count(run => run.Contains("/quarantined with: ")));
+        Assert.DoesNotContain("SKIP: quarantine", output);
     }
 
     [Fact]
@@ -953,5 +963,46 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("    runs-on: macos-15\n", job);
         Assert.Contains("    needs: build-test-publish\n", job);
         Assert.DoesNotContain(Workflow("ci.yml").Split('\n'), line => line.TrimStart().StartsWith("runs-on: macos-14", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The smoke's decode of the dylib step against the real generator's text, not the fake's: a rewording of
+    /// InstallScript's dylib step must fail here, not on the macOS leg.
+    /// </summary>
+    [Fact]
+    public void MacOsSmoke_DecodesTheRealInstallScript()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var publish = PublishFakeBinary(exitCode: 0, "libtswapse.dylib");
+        _mac.Write("installscript.out", TswapCore.InstallScript.GetMacOSScript("/tmp/download/tswap", File.ReadAllBytes(Path.Combine(publish, "libtswapse.dylib"))));
+
+        var (exitCode, output) = Package("osx-arm64", publish, "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("the dylib installscript writes is the archive's", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_RealInstallScriptOfOtherBytes_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _mac.Write("installscript.out", TswapCore.InstallScript.GetMacOSScript("/tmp/download/tswap", [9, 9, 9]));
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("the dylib installscript writes is not the archive's", output);
+    }
+
+    /// <summary>ci.yml's old-macOS job recognises the dylib's own "no Secure Enclave" answer by this text.</summary>
+    [Fact]
+    public void Workflows_OldMacOsCheck_MatchesTheInteropsMessage()
+    {
+        var expected = System.Text.RegularExpressions.Regex.Match(Job(Workflow("ci.yml"), "macos-older"), @"grep -qF '([^']+)'").Groups[1].Value;
+
+        Assert.Equal("does not have a usable Secure Enclave", expected);
+        Assert.Contains(expected, File.ReadAllText(RepoFile("TswapCore", "Vault", "Interop", "AppleSecureEnclaveInterop.cs")));
     }
 }

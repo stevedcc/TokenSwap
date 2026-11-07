@@ -29,7 +29,8 @@
 # --check-notarization), asked again every TSWAP_NOTARY_CHECK_INTERVAL seconds (20) while it answers 3 (the ticket
 # isn't visible yet), at most TSWAP_NOTARY_CHECK_TRIES times (30: ten minutes); the same check, once, on an ad-hoc
 # re-signed copy that must fail (the control); then a simulated browser download (the archive quarantined, unpacked
-# with tar) run from Terminal where Gatekeeper assessments are enabled, else a SKIP line. The notarisation checks are
+# with tar, each file marked as Archive Utility would if tar didn't) run from Terminal where Gatekeeper assessments
+# are enabled, else a SKIP line. The notarisation checks are
 # report-only until TSWAP_MACOS_GATE_RUNNER_CHECKS=1 (macos/runner-checks.sh).
 # Make the archive on the binary's own platform: upload-artifact doesn't keep the execute bit.
 set -euo pipefail
@@ -235,16 +236,23 @@ macos_smoke_signing() {
 
 # macOS with TSWAP_EXPECT_TEAM_ID: the archive as a browser download (quarantined), unpacked and run from Terminal.
 macos_smoke_quarantine() {
-  local q f status
+  local q f status mark
   q="$check.download"
   mkdir -p "$q/quarantined"
   cp "$archive" "$q/download.tar.gz"
-  xattr -w com.apple.quarantine "0083;$(printf '%x' "$(date +%s)");Safari;" "$q/download.tar.gz"
+  mark="0083;$(printf '%x' "$(date +%s)");Safari;"
+  xattr -w com.apple.quarantine "$mark" "$q/download.tar.gz"
   tar xzf "$q/download.tar.gz" -C "$q/quarantined"
   for f in tswap libtswapse.dylib; do
+    # Archive Utility (a double-click in Finder) gives every unpacked file the archive's mark; tar may not. Where it
+    # didn't, mark the file as Archive Utility would, so the run below is a quarantined download's either way.
     if ! xattr -p com.apple.quarantine "$q/quarantined/$f" > /dev/null 2>&1; then
-      echo "SKIP: quarantine did not propagate (tar left $f unmarked), so there is no browser download to simulate"
-      return
+      echo "tar did not carry the quarantine mark to $f; marking the unpacked files, as Archive Utility does"
+      xattr -w com.apple.quarantine "$mark" "$q/quarantined/$f"
+    fi
+    if ! xattr -p com.apple.quarantine "$q/quarantined/$f" > /dev/null 2>&1; then
+      echo "package.sh: $f carries no quarantine mark even after xattr -w" >&2
+      exit 1
     fi
   done
   status=$(spctl --status 2>&1 || true)
