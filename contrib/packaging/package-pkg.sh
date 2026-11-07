@@ -37,7 +37,7 @@ require_env() {
 }
 
 new_work() {
-  work=$(mktemp -d)
+  work=$(mktemp -d "${TMPDIR:-/tmp}/tswap-pkg.XXXXXX")
   trap 'rm -rf "$work"' EXIT
 }
 
@@ -158,7 +158,8 @@ cmd_install_test() {
   pkgutil --pkg-info "$pkg_id"
   "$bin/tswap" prompt-hash
 
-  t=$(mktemp -d) # global: the EXIT trap removes it
+  # A template, so TMPDIR is honoured on macOS too (with none, its mktemp takes the Darwin temp folder first).
+  t=$(mktemp -d "${TMPDIR:-/tmp}/tswap-install-test.XXXXXX") # global: the EXIT trap removes it
   trap 'rm -rf "$t"' EXIT
   mkdir -m 700 "$t/config" "$t/home"
   TSWAP_CONFIG_DIR="$t/config" "$bin/tswap" init --secure-enclave --no-touch --no-password --no-recovery

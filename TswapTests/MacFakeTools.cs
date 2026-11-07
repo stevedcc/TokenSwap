@@ -289,6 +289,25 @@ internal sealed class MacFakeTools : IDisposable
             exit 0
 
             """);
+        // mktemp as macOS's behaves: with no template it takes the Darwin user temp folder before $TMPDIR (Apple's
+        // shell_cmds mktemp.c, confstr _CS_DARWIN_USER_TEMP_DIR), here $FAKE_DIR/darwin-user-temp; with a template it
+        // is the real mktemp. So a bare "mktemp -d" ignores a test's TMPDIR on Linux exactly as it does on a Mac.
+        WriteTool("mktemp", """
+            self=$(cd "$(dirname "$0")" && pwd)
+            real=
+            IFS=:
+            for d in $PATH; do
+              [ "$d" = "$self" ] && continue
+              if [ -x "$d/mktemp" ]; then real="$d/mktemp"; break; fi
+            done
+            unset IFS
+            for a in "$@"; do
+              case "$a" in -*) ;; *) exec "$real" "$@" ;; esac
+            done
+            mkdir -p "$FAKE_DIR/darwin-user-temp"
+            TMPDIR="$FAKE_DIR/darwin-user-temp" exec "$real" "$@"
+
+            """);
         // ditto: -c -k <dir> <zip> writes the folder's listing (the fake zip); ditto <src> <dest> copies.
         WriteTool("ditto", """
             echo "$*" >> "$FAKE_DIR/ditto.log"

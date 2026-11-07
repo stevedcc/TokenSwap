@@ -638,6 +638,23 @@ public sealed class MacSigningScriptTests : IDisposable
         });
     }
 
+    /// <summary>
+    /// macOS's mktemp, given no template, takes the user's Darwin temp folder (confstr _CS_DARWIN_USER_TEMP_DIR) before
+    /// $TMPDIR (Apple's shell_cmds mktemp.c), so a bare <c>mktemp -d</c> ignores the TMPDIR a caller or test sets (the
+    /// macOS CI failure of InstallTest_RunsTheInstalledCopyAndThePerUserScript). Every temporary folder the scripts make
+    /// names its place from TMPDIR, which mktemp honours on every OS.
+    /// </summary>
+    [Fact]
+    public void Scripts_TempFoldersFollowTmpdir()
+    {
+        var calls = Directory.GetFiles(RepoFile("contrib", "packaging"), "*.sh", SearchOption.AllDirectories)
+            .SelectMany(path => File.ReadAllLines(path).Where(line => !line.TrimStart().StartsWith('#') && line.Contains("mktemp -d"))
+                .Select(line => (File: Path.GetFileName(path), Line: line.Trim())))
+            .ToList();
+        Assert.NotEmpty(calls);
+        Assert.All(calls, call => Assert.Matches(@"mktemp -d ""(\$\{TMPDIR:-/tmp\}|\$RUNNER_TEMP)/[A-Za-z0-9.-]+\.XXXXXX""", call.Line));
+    }
+
     [Fact]
     public void Scripts_HaveNoSetX()
     {

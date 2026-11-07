@@ -272,7 +272,7 @@ macos_smoke_quarantine() {
 }
 
 if [ "$smoke" = --smoke ]; then
-  check=$(mktemp -d)
+  check=$(mktemp -d "${TMPDIR:-/tmp}/tswap-check.XXXXXX")
   trap 'rm -rf "$check" "$check".*' EXIT
   tar xzf "$archive" -C "$check"
   "$check/tswap" prompt-hash

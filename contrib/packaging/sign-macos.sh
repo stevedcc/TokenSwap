@@ -194,7 +194,7 @@ cmd_verify() {
 
 cmd_zip_for_notary() {
   local dir=${1:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} out=${2:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} f
-  stage=$(mktemp -d)
+  stage=$(mktemp -d "${TMPDIR:-/tmp}/tswap-notary-zip.XXXXXX")
   trap 'rm -rf "$stage"' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
