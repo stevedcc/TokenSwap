@@ -21,7 +21,7 @@ internal static class TerminalPasswordProvider
     /// unlock a password slot without it, so this message comes before the no-terminal one;</item>
     /// <item>refuses with <see cref="VaultPasswordMessages.NoTerminal"/> when stdin is not a terminal;</item>
     /// <item>prompts <see cref="PromptText"/> once on stderr (stdout stays the command's output) and
-    /// stretches the answer with the file's salt and parameters.</item>
+    /// stretches the answer with the file's salt and parameters; an empty answer cancels (<see cref="ReadNonEmpty"/>).</item>
     /// </list>
     /// The brief names <c>For(CommandContext)</c>; the config is passed too, because the vault id that
     /// <see cref="VaultPasswordFile.Decode"/> checks comes from the keyring being unlocked.
@@ -32,10 +32,19 @@ internal static class TerminalPasswordProvider
         var c = ctx.Console;
         if (c.IsInputRedirected)
             throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+        return VaultPasswordKdf.Stretch(ReadNonEmpty(c), file.Salt, file.Params, c.Error);
+    };
+
+    /// <summary>
+    /// Prompts <see cref="PromptText"/> on stderr and reads the vault password once. An empty answer cancels the
+    /// command (<see cref="VaultPasswordCancelledException"/>) before anything is stretched.
+    /// </summary>
+    public static string ReadNonEmpty(IConsole c)
+    {
         c.Error.Write(PromptText);
         var password = c.ReadPassword(c.Error);
-        return VaultPasswordKdf.Stretch(password, file.Salt, file.Params, c.Error);
-    };
+        return password.Length == 0 ? throw new VaultPasswordCancelledException() : password;
+    }
 
     /// <summary>The vault folder's <c>vault-password</c> file for <paramref name="config"/>'s keyring, or null.</summary>
     internal static VaultPasswordFile? ReadFile(CommandContext ctx, Config config)

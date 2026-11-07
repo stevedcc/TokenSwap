@@ -6,7 +6,7 @@ namespace TswapTests.Docs;
 /// Guards for the docs restructure (#244): every relative link in the repo's Markdown resolves, every
 /// anchor the docs used to have still resolves, and nothing links to a redirect.
 /// </summary>
-public class DocLinkTests
+public partial class DocLinkTests
 {
     private static readonly string Root = MarkdownLinks.RepoRoot();
 
@@ -360,5 +360,65 @@ public class DocLinkTests
         // Old links to the two "Setup" headings (redirect rows after Task 4).
         foreach (var id in new[] { "setup", "setup-1" })
             Assert.Contains(broker, a => a.Id == id);
+    }
+
+    // --- #250: doc references printed by the program ---
+
+    /// <summary>The string literals of the program's sources (TswapCli, TswapCore), skipping bin/obj and comment lines.</summary>
+    private static IEnumerable<(string File, int Line, string Literal)> ProgramStringLiterals()
+    {
+        foreach (var project in new[] { "TswapCli", "TswapCore" })
+            foreach (var file in Directory.EnumerateFiles(Path.Combine(Root, project), "*.cs", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(Root, file).Replace('\\', '/');
+                if (relative.Split('/').Any(s => s is "bin" or "obj"))
+                    continue;
+                var lines = MarkdownLinks.ReadText(file).Split('\n');
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    if (lines[i].TrimStart().StartsWith("//", StringComparison.Ordinal))
+                        continue;
+                    foreach (System.Text.RegularExpressions.Match m in StringLiteral().Matches(lines[i]))
+                        yield return (relative, i + 1, m.Value);
+                }
+            }
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex("\"(?:[^\"\\\\]|\\\\.)*\"")]
+    private static partial System.Text.RegularExpressions.Regex StringLiteral();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"docs/[A-Za-z0-9_./-]+\.md(?:#[A-Za-z0-9_-]+)?")]
+    private static partial System.Text.RegularExpressions.Regex DocReference();
+
+    [Fact]
+    public void ProgramText_NamesNoRootDesignStub()
+    {
+        var offenders = ProgramStringLiterals()
+            .Where(l => DesignFiles.Any(stub => l.Literal.Contains(stub, StringComparison.Ordinal)))
+            .Select(l => $"{l.File}:{l.Line}")
+            .ToList();
+
+        Assert.True(offenders.Count == 0, "program text names a root design stub:\n" + string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void ProgramText_DocPathsExist()
+    {
+        var offenders = new List<string>();
+        var references = 0;
+        foreach (var (file, line, literal) in ProgramStringLiterals())
+            foreach (System.Text.RegularExpressions.Match m in DocReference().Matches(literal))
+            {
+                references++;
+                var parts = m.Value.Split('#', 2);
+                var page = Path.Combine(Root, parts[0]);
+                if (!File.Exists(page))
+                    offenders.Add($"{file}:{line}: {m.Value} (no such page)");
+                else if (parts.Length == 2 && !AnchorsOf(parts[0]).Contains(parts[1]))
+                    offenders.Add($"{file}:{line}: {m.Value} (no such section)");
+            }
+
+        Assert.True(offenders.Count == 0, "program text names a missing doc:\n" + string.Join('\n', offenders));
+        Assert.True(references >= 5, $"expected the five #250 references, found {references}");
     }
 }

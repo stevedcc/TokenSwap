@@ -10,3 +10,9 @@ public delegate StretchedPassword VaultPasswordProvider();
 
 /// <summary>No vault password can be had for this unlock (for example, there is no terminal to ask on).</summary>
 public sealed class VaultPasswordUnavailableException(string message) : TswapException(message);
+
+/// <summary>
+/// #259: the user pressed Enter at the vault password prompt. That cancels the command: unlike
+/// <see cref="VaultPasswordUnavailableException"/>, no other slot is tried after it.
+/// </summary>
+public sealed class VaultPasswordCancelledException() : TswapException(VaultPasswordMessages.NoPasswordEntered);

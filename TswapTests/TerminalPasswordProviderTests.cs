@@ -150,4 +150,58 @@ public class TerminalPasswordProviderTests
             StretchedPassword.ResetLockWarning();
         }
     }
+
+    // --- #259: an empty answer cancels ---
+
+    private const string NoPasswordEnteredText = "No vault password was entered, so nothing was unlocked.";
+
+    [Fact]
+    public void EmptyPassword_AtUnlock_CancelsWithoutStretching()
+    {
+        using var m = TpmPasswordMachine();
+        var stretched = false;
+        VaultPasswordKdf.PasswordBytesObserver = _ => stretched = true;
+        try
+        {
+            var (exit, stdout, stderr) = m.RunOnTerminal("\n", "get", "db");
+
+            Assert.Equal(1, exit);
+            Assert.Equal("", stdout);
+            Assert.Contains(NoPasswordEnteredText, stderr);
+            Assert.DoesNotContain("Argon2", stderr);
+            Assert.Equal(1, m.LastConsole!.Reads);
+            Assert.False(stretched);
+        }
+        finally
+        {
+            VaultPasswordKdf.PasswordBytesObserver = null;
+        }
+    }
+
+    /// <summary>The empty answer cancels the unlock: no slot is tried after it, so a FIDO2 slot asks no PIN.</summary>
+    [Fact]
+    public void EmptyPassword_OnVaultWithFido2Slot_NoPinAsked()
+    {
+        using var m = new FleetMachine("tpp-fido2")
+        {
+            Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32),
+            Fido2Keys = new FakeFido2Keys(),
+            Terminal = new FakeTerminal(),
+        };
+        PasswordVaultTestSupport.InitTpmPasswordVault(m, Password);
+        m.Fido2Keys!.AddKey(Fido2TestSlots.Fido2Serial, Fido2TestSlots.Aaguid);
+        m.Terminal!.Enqueue(FakeFido2Keys.DefaultPin, FakeFido2Keys.DefaultPin);
+        var (addExit, _, addErr) = m.RunOnTerminal(Password + "\n", "slot", "add", "--fido2");
+        Assert.True(addExit == 0, addErr);
+        m.Fido2Keys.Calls.Clear();
+        var pinReads = m.Terminal.Reads.Count;
+        m.Terminal.Enqueue(FakeFido2Keys.DefaultPin);
+
+        var (exit, _, stderr) = m.RunOnTerminal("\n", "names");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(NoPasswordEnteredText, stderr);
+        Assert.Equal(pinReads, m.Terminal.Reads.Count);
+        Assert.Empty(m.Fido2Keys.Calls);
+    }
 }
