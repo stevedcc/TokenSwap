@@ -56,7 +56,7 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
         // and its blob the TSTP header (ruling 3).
         return password is null
             ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
-            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password)));
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password), TpmSlotBlob.Password));
     }
 
     /// <summary>

@@ -194,7 +194,7 @@ public sealed class LinuxTpmPasswordTests
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         using var password = Password(0x44);
         var (_, hwBlob) = enrollment.Enroll(password);
-        var (_, package) = TpmSlotBlob.Split(hwBlob);
+        var (_, _, package) = TpmSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
             new LinuxTpmHardwareService().Unlock(ConfigWith(package), _ => 0, password: null));

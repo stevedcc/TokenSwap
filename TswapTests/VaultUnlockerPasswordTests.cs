@@ -731,9 +731,11 @@ public class VaultUnlockerPasswordTests
 
         Assert.True(TpmSlotBlob.HasHeader(tpmBlob));
         Assert.True(SecureEnclaveSlotBlob.HasHeader(seBlob));
-        Assert.False(TpmSlotBlob.HasHeader(plainBlob));
+        // Issue #261: a simulated TPM slot has the Linux layout, so the password-free one has a TSTP header too,
+        // with only the ECC-primary bit.
+        Assert.Equal([.. "TSTP"u8, 1, TpmSlotBlob.EccPrimary], plainBlob[..6]);
         // The package is a password-free one plus the simulated "object needs a password" marker.
-        Assert.Equal(plainBlob.Length + 1, TpmSlotBlob.Split(tpmBlob).Package.Length);
+        Assert.Equal(TpmSlotBlob.Split(plainBlob).Package.Length + 1, TpmSlotBlob.Split(tpmBlob).Package.Length);
     }
 
     [Fact]
@@ -759,7 +761,7 @@ public class VaultUnlockerPasswordTests
         // Brief T17 task 8 replaced task 3's NotImplementedException placeholder: an unsplit TSTP blob is
         // still refused before tpm2-tools is touched, now with ruling 3's legacy-parser text
         // (Tpm2ArgvTests.UnsplitTstpBlob_SaysNewerTswap pins it in full).
-        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6]);
+        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.Password);
 #pragma warning disable CA1416 // guarded by the IsLinux return above; the analyzer doesn't follow it into the lambda
         var ex = Assert.Throws<TswapException>(() => TswapCore.Vault.Interop.Tpm2ToolsInterop.Unseal(tstp));
 #pragma warning restore CA1416

@@ -251,7 +251,7 @@ public class Tpm2ArgvTests
             return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
-        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6]);
+        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.Password);
         tstp[4] = version;
         tstp[5] = flags;
 

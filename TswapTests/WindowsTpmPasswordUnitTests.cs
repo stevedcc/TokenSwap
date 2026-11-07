@@ -158,7 +158,7 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
     public void UnsplitTstpBlob_SaysNewerTswap(byte version, byte flags)
     {
         var package = PlatformCryptoProviderInterop.Wrap(RandomNumberGenerator.GetBytes(32));
-        var tstp = TpmSlotBlob.Wrap(package);
+        var tstp = TpmSlotBlob.Wrap(package, TpmSlotBlob.Password);
         tstp[4] = version;
         tstp[5] = flags;
         var opensBefore = _store.Opens.Count;

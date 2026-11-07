@@ -219,6 +219,9 @@ public sealed class SlotsCommand : ICliCommand
         // FIDO2 plan, task 8: the key (its model from the AAGUID when the serial is unknown); always PIN and touch.
         YubiKeySlotKind.Fido2(var blob) => $"{Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid)}, {Fido2Protection}",
         // Not reached for a TSYK blob this build can't read: DescribeMachineProtection names it first.
+        // Issue #261: only a TSTP header with the ECC-primary bit says which primary; a legacy package can't be told
+        // apart from a Windows one, so no other row names an algorithm.
+        _ when TpmSlotBlob.SealedUnderEccPrimary(slot.HwBlob) => "TPM (ECC P-256), sealed to this machine's TPM",
         _ => DescribeMachineProtection(config),
     };
 

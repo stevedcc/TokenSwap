@@ -53,7 +53,7 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         return password is null
             ? new HardwareEnrollment(kekSlot, Seal(kekSlot))
-            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password)));
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password), TpmSlotBlob.Password));
     }
 
     /// <summary>

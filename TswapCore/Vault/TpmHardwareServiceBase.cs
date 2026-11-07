@@ -41,7 +41,7 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
         var sealedBlob = HardwareBlobLocator.Read(config, HardwareBackend.Tpm);
 
         // Brief T17: a password slot's blob carries the TSTP header; the provider is called only then.
-        var (needsPassword, package) = TpmSlotBlob.Split(sealedBlob);
+        var (needsPassword, _, package) = TpmSlotBlob.Split(sealedBlob);
         byte[] key;
         if (needsPassword)
         {

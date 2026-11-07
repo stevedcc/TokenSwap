@@ -328,9 +328,13 @@ public sealed partial class YubiKeySetupTests : IDisposable
     public static TheoryData<string, byte[], bool> HardwareBlobs => new()
     {
         { "headerless TPM / Secure Enclave package", LegacyPackage(), true },
-        { "TSTP password header", TpmSlotBlob.Wrap(LegacyPackage()), true },
+        { "TSTP password header", TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.Password), true },
         { "TSSE password header", SecureEnclaveSlotBlob.Wrap(LegacyPackage()), true },
-        { "TSTP header without the password flag (corrupt)", WithFlags(TpmSlotBlob.Wrap(LegacyPackage()), 0x00), false },
+        // Issue #261: a Linux TPM slot sealed under the ECC primary, with or without the password, is a way in.
+        { "TSTP ECC-primary header", TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.EccPrimary), true },
+        { "TSTP ECC-primary password header", TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.EccPrimary | TpmSlotBlob.Password), true },
+        { "TSTP header with an unknown flag (needs a newer tswap)", WithFlags(TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.Password), 0x04), false },
+        { "TSTP header without the password flag (corrupt)", WithFlags(TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.Password), 0x00), false },
         { "TSSE header with unknown flags (needs a newer tswap)", WithFlags(SecureEnclaveSlotBlob.Wrap(LegacyPackage()), 0x03), false },
         { "unknown magic", "TSFD"u8.ToArray().Concat(RandomNumberGenerator.GetBytes(40)).ToArray(), false },
         { "length prefix past the end", BitConverter.GetBytes(4000).Concat(RandomNumberGenerator.GetBytes(40)).ToArray(), false },
