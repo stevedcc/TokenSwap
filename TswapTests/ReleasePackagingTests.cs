@@ -824,4 +824,119 @@ public class ReleasePackagingTests : IDisposable
         Assert.StartsWith(" with: names (config: ", quarantined[2]);
         Assert.Contains("the quarantined copy ran", output);
     }
+
+    // ---- Issue #240: release.yml's signing job, and ci.yml stays unsigned. ----
+
+    private static string Workflow(string name) => File.ReadAllText(RepoFile(".github", "workflows", name));
+
+    /// <summary>The lines of one job (from <c>  name:</c> to the next job) in a workflow's text.</summary>
+    private static string Job(string workflow, string job)
+    {
+        var lines = workflow.Split('\n');
+        var start = Array.IndexOf(lines, $"  {job}:");
+        Assert.True(start >= 0, $"no job {job}");
+        var end = Array.FindIndex(lines, start + 1, line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^  [A-Za-z0-9_-]+:\s*$"));
+        return string.Join('\n', lines[start..(end < 0 ? lines.Length : end)]);
+    }
+
+    /// <summary>ci.yml (every push and PR, forks included) never names a signing secret, variable or environment.</summary>
+    private static void AssertUnsigned(string ci)
+    {
+        Assert.DoesNotContain("secrets.MACOS_", ci);
+        Assert.DoesNotContain("vars.MACOS_", ci);
+        Assert.DoesNotContain("environment:", ci);
+        Assert.DoesNotContain("TswapMacSignIdentity", ci);
+    }
+
+    [Fact]
+    public void Workflows_CiReferencesNoSigningSecretsOrEnvironment() => AssertUnsigned(Workflow("ci.yml"));
+
+    [Fact]
+    public void Workflows_SigningSecretsAndEnvironmentOnlyInBuildMacos()
+    {
+        var release = Workflow("release.yml");
+        var buildMacos = Job(release, "build-macos");
+        var outside = release.Replace(buildMacos, "");
+
+        Assert.Contains("secrets.MACOS_", buildMacos);
+        Assert.DoesNotContain("secrets.MACOS_", outside);
+        Assert.DoesNotContain("vars.MACOS_", outside);
+        Assert.DoesNotContain("environment:", outside);
+        Assert.Contains("    environment: macos-signing\n", buildMacos);
+        // Secrets reach steps through env:, never through a run: line (no value in the command echo).
+        Assert.DoesNotContain(buildMacos.Split('\n'), line => line.Contains("secrets.") && !System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s+[A-Z0-9_]+: \$\{\{ secrets\.MACOS_[A-Z0-9_]+( != '')? \}\}$"));
+        foreach (var secret in new[] { "MACOS_SIGN_APP_P12_BASE64", "MACOS_SIGN_INSTALLER_P12_BASE64", "MACOS_SIGN_P12_PASSWORD", "MACOS_NOTARY_KEY_P8_BASE64", "MACOS_NOTARY_ISSUER_ID" })
+            Assert.Contains($"secrets.{secret}", buildMacos);
+        foreach (var variable in new[] { "MACOS_TEAM_ID", "MACOS_NOTARY_KEY_ID" })
+            Assert.Contains($"vars.{variable}", buildMacos);
+    }
+
+    [Fact]
+    public void Workflows_BuildMacos_WaitsForTestsAndAVersionCheck()
+    {
+        var buildMacos = Job(Workflow("release.yml"), "build-macos");
+
+        Assert.Contains("    needs: [test, verify-version]\n", buildMacos);
+        Assert.Contains("    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')\n", buildMacos);
+        Assert.Contains("    runs-on: macos-latest\n", buildMacos);
+        Assert.Contains("    timeout-minutes: 120\n", buildMacos);
+        Assert.Contains("    permissions:\n      contents: read\n", buildMacos);
+        Assert.Contains("      SIGNING_REQUIRED: ${{ github.repository == 'stevedcc/TokenSwap' }}\n", buildMacos);
+        Assert.DoesNotContain("osx-arm64\n            os:", Job(Workflow("release.yml"), "build"));
+    }
+
+    /// <summary>The signing steps in the plan's order: the shim is signed by the build, tswap after it, then checks.</summary>
+    [Fact]
+    public void Workflows_BuildMacos_StepsInOrder()
+    {
+        var buildMacos = Job(Workflow("release.yml"), "build-macos");
+        string[] order =
+        [
+            "sign-macos.sh keychain-setup",
+            "-p:TswapMacSignIdentity=${{ steps.kc.outputs.app_identity }}",
+            "sign-macos.sh sign ",
+            "sign-macos.sh verify ",
+            "sign-macos.sh zip-for-notary ",
+            "sign-macos.sh notarise ",
+            "TSWAP_EXPECT_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}",
+            "package-pkg.sh build ",
+            "package-pkg.sh notarise ",
+            "package-pkg.sh check ",
+            "package-pkg.sh install-test ",
+            "sign-macos.sh keychain-cleanup",
+        ];
+        var positions = order.Select(text => (text, at: buildMacos.IndexOf(text, StringComparison.Ordinal))).ToList();
+        Assert.All(positions, p => Assert.True(p.at >= 0, $"build-macos lacks {p.text}"));
+        Assert.Equal(positions.Select(p => p.text), positions.OrderBy(p => p.at).Select(p => p.text));
+        Assert.Contains("-p:TswapMacSignKeychain=${{ steps.kc.outputs.keychain }}", buildMacos);
+        var cleanup = buildMacos[buildMacos.LastIndexOf("- name:", buildMacos.IndexOf("sign-macos.sh keychain-cleanup", StringComparison.Ordinal), StringComparison.Ordinal)..];
+        Assert.Contains("if: always()", cleanup.Split("- name:")[1]);
+    }
+
+    [Fact]
+    public void Workflows_ReleaseOnlyOnATagPush_AndListsThePkg()
+    {
+        var release = Workflow("release.yml");
+        var job = Job(release, "release");
+
+        Assert.Contains("    needs: [build, build-macos]\n", job);
+        Assert.Contains("    if: github.event_name == 'push'\n", job);
+        Assert.Contains("artifacts/tswap-osx-arm64.pkg", job);
+        Assert.Contains("artifacts/tswap-osx-arm64.tar.gz", job);
+        Assert.Contains("fail_on_unmatched_files: true", job);
+        // Upstream the pkg is required; a fork's release lists no pkg (its macOS build is unsigned).
+        Assert.Contains("if: github.repository == 'stevedcc/TokenSwap'", job);
+        Assert.Contains("if: github.repository != 'stevedcc/TokenSwap'", job);
+        Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
+        Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
+    }
+
+    /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>
+    [Fact]
+    public void Workflows_UnsignedCheck_CatchesASecretInCi()
+    {
+        var ci = Workflow("ci.yml").Replace("  TSWAP_TEST_KEY:", "  MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}\n  TSWAP_TEST_KEY:");
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertUnsigned(ci));
+    }
 }
