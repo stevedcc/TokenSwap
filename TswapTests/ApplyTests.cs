@@ -1,5 +1,6 @@
 using TswapCore;
 using Xunit;
+using static TswapTests.RecordVaultTestSupport;
 
 namespace TswapTests;
 
@@ -253,5 +254,71 @@ redis:
         Assert.Contains("Warning", stderr);
         Assert.Contains("already populated", stderr);
         Assert.Contains("db-password", stderr);
+    }
+}
+
+/// <summary>Issue #251: <c>apply</c> prints plaintext, so it is a sudo command like <c>get</c>; agents use <c>run … {{@file}}</c>.</summary>
+public sealed class ApplySudoTests : IDisposable
+{
+    private readonly FleetMachine _m = new("apply-sudo", SimulatedYubiKeyService.WithKeys(SerialA));
+
+    public ApplySudoTests() => RecordVaultTestSupport.InitRecordVault(_m);
+
+    public void Dispose() => _m.Dispose();
+
+    private string Template()
+    {
+        _m.Ok("hunter2", "ingest", "db-pw");
+        var template = _m.PathOf("values.yaml");
+        File.WriteAllText(template, "password: \"\" # tswap: db-pw\nname: plain\n");
+        return template;
+    }
+
+    [Fact]
+    public void Apply_WithoutSudo_RefusedNamingRunForm()
+    {
+        if (Environment.IsPrivilegedProcess)
+            return; // only meaningful when this process is unprivileged (Windows CI runs elevated; see SlotCommandTests)
+        var template = Template();
+        _m.Sudo = false;
+
+        var result = _m.Run("", "apply", template);
+
+        Assert.NotEqual(0, result.Exit);
+        Assert.Contains("requires", result.Err);
+        Assert.Contains("tswap run … {{@file}}", result.Err);
+        Assert.DoesNotContain("hunter2", result.Out + result.Err);
+        Assert.Equal("", result.Out);
+    }
+
+    [Fact]
+    public void Apply_WithSudo_UnchangedOutput()
+    {
+        var template = Template();
+
+        var result = _m.Run("", "apply", template);
+
+        Assert.Equal(0, result.Exit);
+        Assert.Equal("password: \"hunter2\" # tswap: db-pw\nname: plain\n", result.Out);
+    }
+
+    [Fact]
+    public void Apply_IsListedAmongTheSudoCommands()
+    {
+        var help = _m.Ok("", "--help");
+
+        var line = help.Split('\n').Single(l => l.Contains("apply <file>"));
+        Assert.StartsWith("  [sudo]", line);
+    }
+
+    [Fact]
+    public void Help_NeverSuggestsApplyWithoutSudoOrThroughProcessSubstitution()
+    {
+        var help = _m.Ok("", "--help");
+
+        Assert.DoesNotContain("<(", help);
+        Assert.Contains("run helm upgrade --install app ./chart -f {{@values.yaml}}", help);
+        foreach (var line in help.Split('\n').Where(l => l.Contains("tswap apply") || l.Contains("apply <file>")))
+            Assert.True(line.TrimStart().StartsWith("sudo ") || line.TrimStart().StartsWith("[sudo]"), $"apply without sudo: {line}");
     }
 }

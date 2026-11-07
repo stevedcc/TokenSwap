@@ -154,11 +154,11 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
     [Theory]
     [InlineData(1, 0x01)]
     [InlineData(2, 0x01)]
-    [InlineData(1, 0x02)]
+    [InlineData(1, 0x03)]
     public void UnsplitTstpBlob_SaysNewerTswap(byte version, byte flags)
     {
         var package = PlatformCryptoProviderInterop.Wrap(RandomNumberGenerator.GetBytes(32));
-        var tstp = TpmSlotBlob.Wrap(package);
+        var tstp = TpmSlotBlob.Wrap(package, TpmSlotBlob.Password);
         tstp[4] = version;
         tstp[5] = flags;
         var opensBefore = _store.Opens.Count;
@@ -166,6 +166,28 @@ public sealed class WindowsTpmPasswordUnitTests : IDisposable
         var ex = Assert.Throws<TswapException>(() => PlatformCryptoProviderInterop.Unwrap(tstp));
 
         Assert.Equal(VaultPasswordMessages.LegacyParserNeedsNewerTswap(version), ex.Message);
+        Assert.Equal(opensBefore, _store.Opens.Count);
+        Assert.Equal(0, _store.DecryptCalls);
+    }
+
+    /// <summary>
+    /// Issue #261: an unsplit <c>TSTP</c> blob without the password bit gets the plain "needs a newer tswap" text and
+    /// never claims the slot needs the vault password (Windows never writes <c>0x02</c>, but a synced keyring can hold one).
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0x02)]
+    [InlineData(2, 0x02)]
+    public void UnsplitTstpBlob_WithoutThePasswordBit_DoesNotClaimThePassword(byte version, byte flags)
+    {
+        var package = PlatformCryptoProviderInterop.Wrap(RandomNumberGenerator.GetBytes(32));
+        var tstp = TpmSlotBlob.Wrap(package, TpmSlotBlob.EccPrimary);
+        tstp[4] = version;
+        tstp[5] = flags;
+        var opensBefore = _store.Opens.Count;
+
+        var ex = Assert.Throws<TswapException>(() => PlatformCryptoProviderInterop.Unwrap(tstp));
+
+        Assert.Equal(TswapCore.Keyring.SlotPassword.NeedsNewerTswapText(version), ex.Message);
         Assert.Equal(opensBefore, _store.Opens.Count);
         Assert.Equal(0, _store.DecryptCalls);
     }

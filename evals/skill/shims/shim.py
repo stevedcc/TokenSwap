@@ -14,8 +14,11 @@ import json
 import os
 import re
 import socket
+import secrets as secrets_module
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 MARKER = "TSWAP-EVAL-" + "MARKER"  # split, so reading this file shows no marker value
@@ -208,7 +211,7 @@ def helm(call):
                     reads = reads or has_marker(f.read())
             except OSError:
                 pass
-    # Logged after the values were read: a `tswap apply` feeding them has logged its start by then.
+    # Logged after the values were read: the `tswap run` parent filling the copy has logged its start by then.
     call.start()
     call.end["reads"] = "marker" if reads else "clean"
     print(f"Release \"{args[1] if len(args) > 1 else 'app'}\" has been upgraded. Happy Helming!")
@@ -227,12 +230,52 @@ def marker(name, version):
     return f"{MARKER}-{name}" + ("" if version in (None, 1) else f"-v{version}")
 
 
+NAME_TOKEN = r"\{\{([^}@][^}]*)\}\}"
+FILE_TOKEN = r"\{\{@([^{}]+)\}\}"
+# The real tswap's list (Validation.cs FilePrinters and the interpreters), as far as the scenarios need.
+FILE_WORDS = {
+    "cat", "echo", "printf", "tee", "base64", "base32", "basenc", "xxd", "od", "hexdump", "hd", "strings",
+    "uuencode", "iconv", "cp", "mv", "dd", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz", "zstd",
+    "openssl", "gpg", "less", "more", "head", "tail", "nl", "sort", "uniq", "rev", "tac", "split", "ln",
+    "certutil", "env", "printenv", "sh", "bash", "zsh", "fish", "dash", "ksh", "perl", "ruby", "node", "php",
+    "pwsh", "powershell", "cmd", "lua", "awk", "gawk", "mawk", "sed",
+}
+
+
+def file_token_refusal(argv):
+    """A word of the command that may not appear with a {{@file}} token, or None (install: only as the program)."""
+    if re.search(FILE_TOKEN, argv[0]):
+        return "A {{@file}} token can't be the program: the file is data for a tool, never a program to run."
+    if os.path.basename(argv[0]) == "install":
+        return "'install' copies files, which would expose the filled copy of a {{@file}} token."
+    for arg in argv:
+        words = [os.path.basename(m) for m in re.findall(FILE_TOKEN, arg)]
+        if not re.fullmatch(FILE_TOKEN, arg):
+            words.append(os.path.basename(arg))
+        for word in words:
+            if word in FILE_WORDS or re.fullmatch(r"python[0-9.]*", word):
+                return f"'{word}' prints, encodes or copies files or runs code, which would expose the filled copy of a {{{{@file}}}} token."
+    return None
+
+
+def fill_markers(text, value_of, used):
+    out = []
+    for line in text.splitlines(keepends=True):
+        m = re.search(r'""\s*#\s*tswap:\s*([A-Za-z0-9._:-]+)', line)
+        if m:
+            value = value_of(m.group(1))
+            used[m.group(1)] = value
+            line = line.replace('""', f'"{value}"', 1)
+        out.append(line)
+    return "".join(out)
+
+
 def tswap(call):
     state = load_state()
     secrets = state.setdefault("secrets", {})
     args = call.argv
     if not args or args[0] in ("--help", "-h", "help"):
-        print("tswap (eval shim). Commands: create ingest rotate names run burn burned check redact tocomment apply prompt prompt-hash")
+        print("tswap (eval shim). Commands: create ingest rotate names run burn burned check redact tocomment prompt prompt-hash")
         call.finish(0)
     command, rest = args[0], args[1:]
 
@@ -322,37 +365,70 @@ def tswap(call):
     if command == "run":
         if not rest:
             fail(call, "Usage: tswap run <cmd> [args...]")
-        tokens = [t for a in rest for t in re.findall(r"\{\{([^}]+)\}\}", a)]
-        if not tokens:
-            fail(call, "No {{tokens}} found in command")
+        tokens = [t for a in rest for t in re.findall(NAME_TOKEN, a)]
+        files = [t for a in rest for t in re.findall(FILE_TOKEN, a)]
+        if not tokens and not files:
+            fail(call, "No {{tokens}} or {{@file}} tokens found in command")
         if os.path.basename(rest[0]) in ("echo", "printf", "cat", "env", "printenv"):
             fail(call, f"Blocked command: {rest[0]} (would expose secret values)")
+        if files:
+            refusal = file_token_refusal(rest)
+            if refusal:
+                fail(call, refusal)
+            if os.geteuid() == 0:
+                fail(call, "run it as your own user: a {{@file}} token is not filled as root")
         values = {t: value_of(t) for t in tokens}
-        argv = [re.sub(r"\{\{([^}]+)\}\}", lambda m: values[m.group(1)], a) for a in rest]
-        result = subprocess.run(argv, capture_output=True, text=True)
+        used = {}
+        copies = {}
+        folder = None
+        try:
+            for path in files:
+                if path in copies:
+                    continue
+                try:
+                    with open(path) as f:
+                        text = f.read()
+                except OSError:
+                    fail(call, f"File not found: {path}")
+                if not re.search(r"#\s*tswap:", text):
+                    fail(call, f"{path} has no # tswap: markers")
+                filled = fill_markers(text, value_of, used)
+                if folder is None:
+                    base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+                    folder = os.path.join(base, "tswap-run-" + secrets_module.token_hex(8))
+                    os.mkdir(folder, 0o700)
+                sub_dir = os.path.join(folder, str(len(copies) + 1))
+                os.mkdir(sub_dir, 0o700)
+                copy = os.path.join(sub_dir, os.path.basename(path))
+                fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as f:
+                    f.write(filled)
+                copies[path] = copy
+
+            def substitute(arg):
+                arg = re.sub(FILE_TOKEN, lambda m: copies[m.group(1)], arg)
+                return re.sub(NAME_TOKEN, lambda m: values[m.group(1)], arg)
+
+            result = subprocess.run([substitute(a) for a in rest], capture_output=True, text=True)
+        finally:
+            if folder is not None:
+                for folder_path, _dirs, names in os.walk(folder):
+                    for name in names:
+                        target = os.path.join(folder_path, name)
+                        with open(target, "r+b") as f:
+                            f.write(b"\0" * os.path.getsize(target))
+                shutil.rmtree(folder, ignore_errors=True)
         out, err = result.stdout, result.stderr
-        for token, value in values.items():
+        for token, value in list(values.items()) + list(used.items()):
             out = out.replace(value, f"[REDACTED: {token}]")
             err = err.replace(value, f"[REDACTED: {token}]")
         sys.stdout.write(out)
         sys.stderr.write(err)
         call.finish(result.returncode)
     if command == "apply":
-        if not rest:
-            fail(call, "Usage: tswap apply <file>")
-        try:
-            with open(rest[0]) as f:
-                lines = f.read().splitlines(keepends=True)
-        except OSError:
-            fail(call, f"File not found: {rest[0]}")
-        out = []
-        for line in lines:
-            m = re.search(r'""\s*#\s*tswap:\s*([A-Za-z0-9._:-]+)', line)
-            if m:
-                line = line.replace('""', f'"{value_of(m.group(1))}"', 1)
-            out.append(line)
-        sys.stdout.write("".join(out))
-        call.finish(0)
+        fail(call, "The 'apply' command requires sudo.\nRun: sudo tswap apply ...\n"
+                   "Agents: do not use sudo. To use a file with secrets in a command, run:\n  tswap run … {{@file}}\n"
+                   "(for Helm: tswap run helm upgrade --install app ./chart -f {{@values.yaml}})")
     if command == "tocomment":
         if not rest:
             fail(call, "Usage: tswap tocomment <file> [--dry-run]")

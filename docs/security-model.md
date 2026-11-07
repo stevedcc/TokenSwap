@@ -22,7 +22,8 @@ An AI agent (Claude Code, Copilot, etc.) can:
 
 - generate strong random passwords with `create`: the value is never displayed;
 - see what secrets exist with `names`: just the names, no values;
-- use secrets in commands with `run`: tokens are substituted internally.
+- use secrets in commands with `run`: tokens are substituted internally, and a file with `# tswap:`
+  markers through `{{@file}}` ([below](#files-with-secrets-run-with-file)).
 
 An AI agent **without sudo** (no passwordless sudo for its user, and never given the sudo
 password) **cannot**:
@@ -30,6 +31,7 @@ password) **cannot**:
 - read a secret value (`get` requires sudo);
 - set a secret to a known value (`add` requires sudo);
 - enumerate secrets with metadata (`list` requires sudo);
+- print a file with the values filled in (`apply` requires sudo);
 - delete secrets (`delete` requires sudo), or run any other command that needs sudo;
 - exfiltrate via `run` in the blocked ways: `echo`, `printf`, pipes, redirects, and inline
   shell/interpreter code (`sh -c`, `python -c`, ...) are blocked. The blocklist is shallow: a
@@ -74,13 +76,13 @@ deployment.
 
 | Threat | How |
 |--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the plain value from the program's output, not its encoded forms ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
-| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the value from the program's output, also its base64 and base64url forms and the `\r\n` form of a multi-line value ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
+| Casual exfiltration via `run` | With a `{{@file}}` token, any word that is a printer, encoder, copier, shell or interpreter is refused too ([limits](#files-with-secrets-run-with-file)). Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
 | Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unlock, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
-| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
 
 ### What tswap does not protect against
@@ -88,12 +90,50 @@ deployment.
 | Non-goal | Why |
 |----------|-----|
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
-| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, a script file, or custom binaries (and `cp` without a file token) can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts Yubico's .NET SDK (built into the binary) and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
+
+### Files with secrets: `run` with `{{@file}}`
+
+`tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` fills the file's `# tswap:`
+markers into a private copy and runs the command with the copy's path. The copy lives in a folder
+only your account can open (`0700`, in `$XDG_RUNTIME_DIR` when that is a folder of yours, not a
+symlink and not writable by others, else the temporary folder; on Windows an access list for the current user only). tswap
+redacts every form it wrote (plain, quoted, base64 and base64url, and for a multi-line value its
+`\r\n` and `\n` forms and the form a terminal prints) from the output, overwrites the copy with zeros and deletes the folder when the
+command ends, also after Ctrl+C, and removes stale folders of crashed runs at the next `run` with a
+file token. Before anything is written, `run` refuses a command with a printer, encoder, copier,
+shell or interpreter as any word (`cat`, `cp`, `base64`, `sh`, `python`, … see the blocklist in
+`Validation.cs`); `install` is refused only as the program (also behind a wrapper such as `nice`,
+or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`), so `helm install` works. The check runs again on what the
+`{{name}}` tokens expand to, before anything is written; that refusal names the token, not the
+word. A refusal can be a false one, for a file named like a refused word: rename the file, or pass
+the secret with a plain `{{name}}` token.
+
+This replaces `apply` for agents, which now needs sudo. What it does not do:
+
+- **A process running as the same user can read the copy while the child runs.** An agent that
+  starts a second command to read the file in that time gets the values. The folder keeps out other
+  users, not you.
+- **The word check is a shallow guard.** It refuses the obvious one-step printers and copiers, as
+  the `run` blocklist does. A program that sends the file over the network (`curl -F f=@{{@f}}`,
+  `wget --post-file`, `git`, cloud CLIs), and any transformation beyond the redacted forms (a value
+  inside a larger base64 blob, a custom encoding), still gets the values out.
+- **A passwordless sudo grant for tswap voids the sudo gate on `apply`**, as it does on `get`.
+- **SIGKILL or a power loss leaves the copy** until the next `run` with a file token sweeps it
+  (folders older than an hour whose lock is free). The zeroing is best effort: a RAM disk or an SSD
+  may keep other copies.
+- **Windows cannot pass Ctrl+C to a ConPTY child.** tswap waits 10 seconds for it to end, then ends
+  the child's process tree.
+- **A `kill -INT` sent to tswap alone** while it is in the terminal's foreground, with a child that
+  shares its process group and has no pseudo-terminal, reaches the child only through the same
+  10-second grace kill.
+- **`run` with a file token refuses to run as root**, so root never creates a secret file in a
+  user's folder.
 
 ### Design rationale
 
@@ -114,7 +154,7 @@ means no source states it.
 | YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection: Yubico's .NET SDK 1.18.1 reports when the key waits for a touch (with this SDK, not yet checked on a real touch key) | [1] [2] [3] |
 | YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
 | YubiKey FIDO2 slot | That YubiKey (its FIDO2 credential for the relying party `tswap.crawford.dev`), plugged in, plus its FIDO2 PIN | Yes: the PIN and a touch on every unlock (user verification required), on every OS | Optional vault password, mixed into the slot key's derivation, as for an OTP slot | New in v0.3.0. Tested against a fake device; the hmac-secret path was run on real hardware in a spike only (Linux and Windows, one key). Independent review: not documented | [12] [13] |
-| Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [3] [4] [5] |
+| Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on two physical TPMs: an Intel PTT on 2026-10-29 (#155), and on 2026-11-07 (#261) an Infineon SLB 9665 too, each with an RSA-2048 slot made by v0.2.0 and a new ECC slot. Since v0.3.0 new slots seal under an ECC P-256 primary (#261): generating it takes 0.26 s instead of 1.74 s on the Intel PTT and 0.63 s instead of 8.2 s on an Infineon SLB 9665, with the same AES-128-CFB child protection ([hardware-backends.md](design/hardware-backends.md#storage-primary-ecc-p-256-for-new-slots-v030-issue-261)); a whole unlock of an ECC slot takes 1.0 s (PTT) and 2.5 s (SLB 9665), and the v0.2.0 binary refuses a new slot with "needs a newer tswap" (#261). Still open: a full host power cycle, `tpm2_clear`. Independent review: not documented | [3] [4] [5] |
 | Windows TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [3] [5] [6] |
 | Secure Enclave, `--with-touch` | This Mac's Secure Enclave; the key never leaves it and works only on this Mac | Yes: Touch ID or the login password on every unlock | Optional vault password (a password Secure Enclave slot) | **PoC-grade.** Verified for correctness (round trips, fails cleanly on denial). The wrapping is a **hand-rolled ECIES equivalent** (ephemeral ECDH + HKDF-SHA256 + AES-GCM) that **has had no independent cryptographic review** (#159). Tested on Apple Silicon only (M4 Pro, macOS 26 and 27.2); Intel T2 Macs untested | [3] [7] [8] [9] |
 | Secure Enclave, `--no-touch` | This Mac's Secure Enclave: anything that can run code on this Mac and read this vault's config, from any account, including root | No prompt | Optional vault password, as above | As above (PoC-grade, construction not independently reviewed, Apple Silicon only). Whether it unlocks with the screen locked, over ssh or after a reboot before anyone logs in is not known yet | [3] [7] [8] [9] [10] |
@@ -126,7 +166,7 @@ checked; dates of checks are in the Reviewed / verified column.
 1. [Issue #158](https://github.com/stevedcc/TokenSwap/issues/158), work item 4 (2026-07-28).
 2. [YubiKey: touch or no touch](#yubikey-touch-or-no-touch), this page (2026-02-21, changed 2026-10-30).
 3. [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect), this page (2026-11-03).
-4. [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor) (2026-10-31).
+4. [hardware-backends.md, Linux TPM status](design/hardware-backends.md#status-verified-on-two-physical-tpms-intel-ptt-and-infineon-slb-9665) (2026-11-07).
 5. [TPM: no presence check](#tpm-no-presence-check), this page (2026-11-03).
 6. [hardware-backends.md, Windows TPM status](design/hardware-backends.md#status-virtual-tpm-verified-physical-tpm-tested-during-development-v010-re-check-open) (2026-10-31).
 7. [hardware-backends.md, Secure Enclave status](design/hardware-backends.md#status-poc-grade-not-yet-production-hardened) (2026-07-25, changed 2026-10-31).

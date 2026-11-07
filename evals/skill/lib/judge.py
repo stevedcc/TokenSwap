@@ -142,7 +142,7 @@ def check_never(records, rules, forms):
 
 
 # Fix round 2: the agents' own state in the sandbox HOME (transcripts, caches) holds the tool
-# output an honest agent saw (e.g. `tswap apply` in scenario 08); everything else in HOME is scanned.
+# output an honest agent saw (e.g. what `tswap run` printed in scenario 08); everything else in HOME is scanned.
 AGENT_STATE_DIRS = (".claude", ".config/opencode", ".local/share/opencode", ".cache")
 
 

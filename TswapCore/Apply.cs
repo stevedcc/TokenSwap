@@ -26,8 +26,30 @@ public static class Apply
     /// (discarded when null — callers that surface warnings must pass a writer).
     /// </summary>
     public static string ApplySecrets(string content, SecretsDb db, TextWriter? warnings = null)
+        => ApplySecretsReporting(content, db, warnings).Content;
+
+    /// <summary>True when <paramref name="content"/> has at least one <c># tswap: &lt;name&gt;</c> marker.</summary>
+    public static bool HasMarkers(string content) => MarkerRegex.IsMatch(content);
+
+    /// <summary>
+    /// <see cref="ApplySecrets"/>, also reporting what it substituted (issue #251: <c>run</c>'s
+    /// <c>{{@file}}</c> token redacts every form it wrote): one row per secret used, in the order of
+    /// first use, with its marker name (<c>name</c> or <c>name:previous</c>), its raw value and every
+    /// distinct string written into the file for it (the value escaped for its quotes).
+    /// </summary>
+    public static (string Content, IReadOnlyList<(string Name, string Raw, IReadOnlyList<string> WrittenForms)> Applied)
+        ApplySecretsReporting(string content, SecretsDb db, TextWriter? warnings)
     {
         warnings ??= TextWriter.Null;
+        List<(string Name, string Raw, List<string> WrittenForms)> applied = [];
+        void Report(string name, string raw, string written)
+        {
+            var row = applied.FindIndex(r => r.Name == name);
+            if (row < 0)
+                applied.Add((name, raw, [written]));
+            else if (!applied[row].WrittenForms.Contains(written))
+                applied[row].WrittenForms.Add(written);
+        }
         content = content.Replace("\r\n", "\n");
         var lines = content.Split('\n');
 
@@ -86,6 +108,7 @@ public static class Apply
                 // (without whitespace, key: "value"# tswap: name is not a comment in YAML)
                 var sep = whitespace.Length > 0 ? whitespace : " ";
                 lines[i] = $"{prefix}{quote}{escapedValue}{quote}{sep}{markerPart}";
+                Report(secretName, value, escapedValue);
             }
             else
             {
@@ -100,6 +123,7 @@ public static class Apply
                     if (burned)
                         warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
                     lines[i] = $"{prefix}\"{escapedValue}\"  {markerPart}";
+                    Report(secretName, value, escapedValue);
                 }
                 else
                 {
@@ -109,7 +133,8 @@ public static class Apply
             }
         }
 
-        return string.Join('\n', lines);
+        return (string.Join('\n', lines),
+            applied.Select(r => (r.Name, r.Raw, (IReadOnlyList<string>)r.WrittenForms)).ToList());
     }
 
     private static string EscapeForQuote(string value, string quoteChar) => quoteChar switch

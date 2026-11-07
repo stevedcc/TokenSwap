@@ -154,9 +154,8 @@ public static class CommandRegistry
         o.WriteLine($"  {p} redact values.yaml");
         o.WriteLine($"  {p} tocomment values.yaml --dry-run");
         o.WriteLine($"  {p} tocomment values.yaml");
-        o.WriteLine($"  {p} apply values.yaml");
-        o.WriteLine($"  {p} apply values.yaml > deployed.yaml");
-        o.WriteLine($"  helm upgrade app ./chart -f <({p} apply secrets.yaml)");
+        o.WriteLine($"  {p} run helm upgrade --install app ./chart -f {{{{@values.yaml}}}}");
+        o.WriteLine($"  sudo {p} apply values.yaml > deployed.yaml");
         o.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         o.WriteLine($"  sudo {p} get storj-pass");
         o.WriteLine($"  sudo {p} list");
