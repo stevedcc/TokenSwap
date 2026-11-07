@@ -40,9 +40,24 @@ internal static partial class AppleSecureEnclaveInterop
                     "so unpack all of it. Or run 'tswap installscript', review it, then run the generated " +
                     "script, which installs this file alongside the binary.");
 
-            return NativeLibrary.Load(dylibPath);
+            try
+            {
+                return NativeLibrary.Load(dylibPath);
+            }
+            catch (DllNotFoundException ex)
+            {
+                // The file is there but dyld refused it: with the hardened runtime (signed releases from v0.3.0),
+                // library validation refuses a dylib of another build, e.g. "different Team IDs".
+                throw new TswapException(LoadFailureMessage(dylibPath, ex.Message));
+            }
         });
     }
+
+    /// <summary>The message for a <c>libtswapse.dylib</c> that exists but won't load: dyld's reason, then what to do.</summary>
+    internal static string LoadFailureMessage(string dylibPath, string reason) =>
+        $"tswap's Secure Enclave support library {dylibPath} could not be loaded: {reason.TrimEnd('.', ' ')}. " +
+        "tswap and libtswapse.dylib must come from the same release (from v0.3.0 they are signed together): " +
+        "reinstall the package, or replace both from one archive.";
 
     [LibraryImport(Lib)]
     [return: MarshalAs(UnmanagedType.I1)]
