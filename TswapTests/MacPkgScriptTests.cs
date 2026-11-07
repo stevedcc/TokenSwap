@@ -73,7 +73,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
 
             """);
         _fake.WriteTool("stat", """
-            if [ -f "$FAKE_DIR/stat.out" ]; then cat "$FAKE_DIR/stat.out"; else echo 'root:wheel 755'; fi
+            echo "$*" >> "$FAKE_DIR/stat.log"
+            name=$(basename "${@: -1}")
+            if [ -f "$FAKE_DIR/stat.out-$name" ]; then cat "$FAKE_DIR/stat.out-$name"; else echo 'root:wheel 755'; fi
 
             """);
         // sudo: logs; installer puts the payload under the test root and writes the receipt; rm removes under the
@@ -228,6 +230,11 @@ public sealed partial class MacPkgScriptTests : IDisposable
     public void Distribution_LocalSystemOnly_NoCustomise()
     {
         var xml = System.Xml.Linq.XDocument.Parse(Distribution).Root!;
+        // Installer applies the minimum only from volume-check/allowed-os-versions.
+        var osVersion = Assert.Single(xml.Descendants("os-version"));
+        Assert.Equal(["allowed-os-versions", "volume-check", "installer-gui-script"],
+            osVersion.Ancestors().Select(element => element.Name.LocalName));
+        Assert.Equal(ShimMinOs(), (string?)osVersion.Attribute("min"));
         var options = Assert.Single(xml.Elements("options"));
         Assert.Equal("never", (string?)options.Attribute("customize"));
         Assert.Equal("false", (string?)options.Attribute("require-scripts"));
@@ -452,11 +459,15 @@ public sealed partial class MacPkgScriptTests : IDisposable
         echo skill > "$HOME/.agents/skills/tswap/SKILL.md"
         ln -sfn "$HOME/.agents/skills/tswap" "$HOME/.claude/skills/tswap"
         echo completion > "${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/tswap"
+        echo "$HOME" > "$FAKE_DIR/peruser-home"
+        ( cd "$HOME" && find . | LC_ALL=C sort ) > "$FAKE_DIR/peruser-files"
 
         """;
 
     private (int ExitCode, string Output) InstallTest(bool onGitHubRunner = true)
     {
+        Directory.CreateDirectory(Path.Combine(_fake.Dir, "tmp"));
+        _fake.Environment["TMPDIR"] = Path.Combine(_fake.Dir, "tmp");
         if (onGitHubRunner)
         {
             _fake.Environment["CI"] = "true";
@@ -479,6 +490,31 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.NotEqual(0, exitCode);
         Assert.Contains("install-test writes to /usr/local/bin with sudo: it runs only on a GitHub-hosted runner", output);
         Assert.Empty(_fake.Log("sudo"));
+    }
+
+    [Fact]
+    public void InstallTest_GitHubRunnerWithoutCi_Refuses()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        FakeInstalledBinary(PerUserScript);
+        _fake.Environment["RUNNER_ENVIRONMENT"] = "github-hosted";
+
+        var (exitCode, output) = InstallTest(onGitHubRunner: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("it runs only on a GitHub-hosted runner", output);
+        Assert.Empty(_fake.Log("sudo"));
+    }
+
+    /// <summary>The text install-test requires of the installed copy's script is the generator's own first line.</summary>
+    [Fact]
+    public void InstallTest_RequiresTheGeneratorsPerUserLine()
+    {
+        var required = Regex.Match(File.ReadAllText(_script), @"grep -qF '(tswap is already installed[^']*)'").Groups[1].Value;
+
+        Assert.Equal("tswap is already installed at /usr/local/bin/tswap", required);
+        Assert.Contains(required, TswapCore.InstallScript.GetMacOSScript(TswapCore.InstalledCopy.MacOSInstallPath, [1], binaryInstalled: true));
     }
 
     [Fact]
@@ -532,7 +568,19 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.StartsWith("init --secure-enclave --no-touch --no-password --no-recovery (config: ", runs[1]);
         Assert.StartsWith("names (config: ", runs[2]);
         Assert.Equal("installscript (config: unset)", runs[3]);
-        Assert.Contains("per-user install wrote the skill, the Claude Code symlink and the bash completion", output);
+        // The per-user script ran with a throwaway HOME next to the throwaway config (both under the runner's
+        // temp folder, here the harness's), never the caller's own, and wrote the three things there.
+        var temp = Path.Combine(_fake.Dir, "tmp");
+        var home = File.ReadAllText(Path.Combine(_fake.Dir, "peruser-home")).Trim();
+        var config = runs[1][(runs[1].IndexOf("(config: ", StringComparison.Ordinal) + "(config: ".Length)..^1];
+        Assert.StartsWith(temp + "/", home);
+        Assert.NotEqual(Environment.GetEnvironmentVariable("HOME"), home);
+        Assert.Equal(Path.GetDirectoryName(config), Path.GetDirectoryName(home));
+        var written = File.ReadAllLines(Path.Combine(_fake.Dir, "peruser-files"));
+        Assert.Contains("./.agents/skills/tswap/SKILL.md", written);
+        Assert.Contains("./.claude/skills/tswap", written);
+        Assert.Contains("./.local/share/bash-completion/completions/tswap", written);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(home)), "the throwaway folder is removed afterwards");
         Assert.Contains("--pkg-info dev.crawford.tswap.pkg", _fake.Log("pkgutil"));
     }
 
@@ -555,12 +603,13 @@ public sealed partial class MacPkgScriptTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
         FakeInstalledBinary(PerUserScript);
-        _fake.Write("stat.out", "runner:staff 755\n");
+        _fake.Write("stat.out-libtswapse.dylib", "runner:staff 755\n");
 
         var (exitCode, output) = InstallTest();
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("is runner:staff 755, expected root:wheel 755", output);
+        Assert.Contains("/usr/local/bin/libtswapse.dylib is runner:staff 755, expected root:wheel 755", output);
+        Assert.Equal(2, _fake.Log("stat").Count(line => line.StartsWith("-f %Su:%Sg %Lp ", StringComparison.Ordinal)));
     }
     private static string RepoFile(params string[] parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
@@ -596,6 +645,27 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("--identifier dev.crawford.tswap.libtswapse", codesign);
         Assert.DoesNotContain("--entitlements", codesign);
         Assert.DoesNotContain("--deep", codesign);
+    }
+
+    /// <summary>
+    /// The dylib is signed in the same target, right after swiftc, and that target runs before the build (so before
+    /// the compiler embeds the file); the signing step runs only when an identity is given, so every other build
+    /// keeps the linker's ad-hoc signature.
+    /// </summary>
+    [Fact]
+    public void Csproj_SignsInTheShimTarget_AfterSwiftc_OnlyWithAnIdentity()
+    {
+        var project = System.Xml.Linq.XDocument.Parse(Csproj).Root!;
+        var target = Assert.Single(project.Elements("Target"), t => (string?)t.Attribute("Name") == "BuildSecureEnclaveShim");
+        Assert.Equal("BeforeBuild", (string?)target.Attribute("BeforeTargets"));
+        var execs = target.Elements("Exec").ToList();
+        Assert.Equal(2, execs.Count);
+        Assert.StartsWith("swiftc ", (string?)execs[0].Attribute("Command"));
+        Assert.StartsWith("codesign ", (string?)execs[1].Attribute("Command"));
+        Assert.Null(execs[0].Attribute("Condition"));
+        Assert.Equal("'$(TswapMacSignIdentity)' != ''", (string?)execs[1].Attribute("Condition"));
+        Assert.All(project.Descendants("EmbeddedResource").Where(e => ((string?)e.Attribute("Include") ?? "").Contains("SecureEnclaveShimOutput")),
+            e => Assert.Equal("$(SecureEnclaveShimOutput)", (string?)e.Attribute("Include")));
     }
 
     [GeneratedRegex(@"<SecureEnclaveShimMinOS>([^<]*)</SecureEnclaveShimMinOS>")]
