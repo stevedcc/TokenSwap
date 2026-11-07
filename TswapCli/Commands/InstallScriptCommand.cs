@@ -49,7 +49,7 @@ public sealed class InstallScriptCommand : ICliCommand
         if (binaryInstalled && embeddedDylib is not null)
         {
             var dylib = files.Read(InstalledCopy.MacOSDylibPath);
-            var problem = dylib is null ? "is missing" : dylib.AsSpan().SequenceEqual(embeddedDylib) ? null : "is not the one this tswap was built with";
+            var problem = dylib is null ? "is missing or unreadable" : dylib.AsSpan().SequenceEqual(embeddedDylib) ? null : "is not the one this tswap was built with";
             if (problem is not null)
                 error.WriteLine($"Warning: {InstalledCopy.MacOSDylibPath} {problem}, so Secure Enclave slots won't open: " +
                                 "reinstall tswap-osx-arm64.pkg, or run installscript from the unpacked release folder.");

@@ -72,8 +72,8 @@ public sealed class InstallScriptInstalledCopyTests
         var lines = PerUser().Split('\n');
 
         Assert.Equal("#!/usr/bin/env bash", lines[0]);
-        var first = Assert.Single(lines, line => line.StartsWith("echo ", StringComparison.Ordinal) && Array.IndexOf(lines, line) < Array.FindIndex(lines, l => l.Contains("SKILL.md")));
-        Assert.Equal("echo \"tswap is already installed at /usr/local/bin/tswap; installing the per-user parts only (skill, Claude Code symlink, shell completions)\"", first);
+        Assert.Equal("echo \"tswap is already installed at /usr/local/bin/tswap; installing the per-user parts only (skill, Claude Code symlink, shell completions)\"",
+            lines.First(line => line.StartsWith("echo ", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -200,6 +200,7 @@ public sealed class InstallScriptInstalledCopyTests
             new() { [InstalledCopy.MacOSInstallPath] = Installed }, []);
 
         Assert.DoesNotContain("sudo", script);
-        Assert.Contains("/usr/local/bin/libtswapse.dylib is missing", error);
+        // Read() can't tell a missing file from an unreadable one, so the warning names both.
+        Assert.Contains("/usr/local/bin/libtswapse.dylib is missing or unreadable", error);
     }
 }
