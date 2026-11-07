@@ -112,6 +112,14 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain(AppP12, output);
         Assert.DoesNotContain(Base64(AppP12), output);
         Assert.DoesNotContain(InstallerP12, output);
+        Assert.DoesNotContain(Base64(InstallerP12), output);
+        // No argv either: the .p12s' bytes and base64 never reach a command line, and the .p12 password only
+        // security import's -P (which has no other way to take it).
+        var argv = _fake.AllLogs();
+        foreach (var material in new[] { AppP12, InstallerP12, Base64(AppP12), Base64(InstallerP12) })
+            Assert.DoesNotContain(material, argv);
+        Assert.All(argv.Split('\n').Where(line => line.Contains(P12Password)),
+            line => Assert.StartsWith("import ", line));
         // The keychain's own password is random per run and masked before anything could print it.
         var mask = Assert.Single(output.Split('\n'), line => line.StartsWith("::add-mask::", StringComparison.Ordinal));
         var keychainPassword = mask["::add-mask::".Length..];
@@ -460,9 +468,12 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.EndsWith(" --key-id KEYID12345 --issuer 00000000-1111-2222-3333-444444444444 --wait --timeout 40m --output-format json", submit);
         // The key went to notarytool as a file (present while it ran), never as an argument.
         Assert.Single(File.ReadAllLines(Path.Combine(_fake.Dir, "key.log")));
-        Assert.DoesNotContain("marker-notary-key", string.Join('\n', _fake.Log("xcrun")));
-        Assert.DoesNotContain("marker-notary-key", output);
-        Assert.True(File.Exists(Path.Combine(_fake.RunnerTemp, "notary-log-tswap.json")), "the log is always fetched");
+        foreach (var material in new[] { "marker-notary-key", Base64(NotaryKey) })
+        {
+            Assert.DoesNotContain(material, _fake.AllLogs());
+            Assert.DoesNotContain(material, output);
+        }
+        Assert.True(File.Exists(Path.Combine(_fake.RunnerTemp, "notary-log-tswap.zip.json")), "the log is always fetched");
     }
 
     [Fact]
@@ -637,5 +648,143 @@ public sealed class MacSigningScriptTests : IDisposable
             var lines = File.ReadAllLines(path).Where(line => !line.TrimStart().StartsWith('#'));
             Assert.DoesNotContain(lines, line => System.Text.RegularExpressions.Regex.IsMatch(line, @"\bset\s+(-[a-wyz]*x|-o\s+xtrace)|\bbash\s+-x\b"));
         });
+    }
+
+    // ---- code review fixes (2026-11-07) ----
+
+    /// <summary>The key file notarytool reads is the owner's only (0600, in a 0700 folder) while it exists.</summary>
+    [Fact]
+    public void Notarise_KeyFileIsOwnerOnly()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = Notarise(Zip());
+
+        Assert.True(exitCode == 0, output);
+        var key = Assert.Single(File.ReadAllLines(Path.Combine(_fake.Dir, "key.log")));
+        Assert.EndsWith(" -rw------- drwx------", key);
+    }
+
+    /// <summary>The zip's and the pkg's submissions share a stem (tswap-osx-arm64): each keeps its own log.</summary>
+    [Fact]
+    public void Notarise_ZipAndPkg_KeepTwoLogs()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var zip = Path.Combine(_fake.Dir, "tswap-osx-arm64.zip");
+        var pkg = Path.Combine(_fake.Dir, "tswap-osx-arm64.pkg");
+        File.WriteAllText(zip, "zip");
+        File.WriteAllText(pkg, "pkg");
+
+        _fake.Write("notary-log.json", "{ \"jobId\": \"zip\" }\n");
+        var first = Notarise(zip);
+        _fake.Write("notary-log.json", "{ \"jobId\": \"pkg\" }\n");
+        var second = Notarise(pkg);
+
+        Assert.True(first.ExitCode == 0 && second.ExitCode == 0, first.Output + second.Output);
+        Assert.Contains("\"zip\"", File.ReadAllText(Path.Combine(_fake.RunnerTemp, "notary-log-tswap-osx-arm64.zip.json")));
+        Assert.Contains("\"pkg\"", File.ReadAllText(Path.Combine(_fake.RunnerTemp, "notary-log-tswap-osx-arm64.pkg.json")));
+    }
+
+    /// <summary>"1048" inside a submission id is not Apple's agreements error.</summary>
+    [Fact]
+    public void Notarise_IdContaining1048_SaysNothingAboutAgreements()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _fake.Write("notary-submit.out", """{"message":"Processing complete","id":"10481048-1048-1048-1048-104810481048","status":"Accepted"}""");
+
+        var (exitCode, output) = Notarise(Zip());
+
+        Assert.True(exitCode == 0, output);
+        Assert.DoesNotContain("error 1048", output);
+    }
+
+    [Fact]
+    public void ZipForNotary_Failure_LeavesNoStagingFolder()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var temp = Path.Combine(_fake.Dir, "tmp");
+        Directory.CreateDirectory(temp);
+        _fake.Environment["TMPDIR"] = temp;
+        _fake.Write("ditto-fails-libtswapse.dylib", "");
+
+        var (exitCode, _) = _fake.Run(_script, "zip-for-notary", Publish(), Path.Combine(_fake.Dir, "out", "tswap.zip"));
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(temp));
+    }
+
+    /// <summary>codesign failing to show the entitlements is reported as that, not as "has entitlements".</summary>
+    [Fact]
+    public void Verify_EntitlementsCheckFails_SaysSo()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _fake.Write("entitlements-tswap.exit", "1");
+
+        var (exitCode, output) = Verify(Publish());
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("tswap: codesign -d --entitlements failed", output);
+        Assert.DoesNotContain("has entitlements", output);
+    }
+
+    [Fact]
+    public void Verify_NoTimestampOnTswap_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", timestamp: false));
+
+        var (exitCode, output) = Verify(Publish());
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("tswap: no Timestamp= line (no secure timestamp)", output);
+    }
+
+    [Fact]
+    public void Verify_WrongIdentifierOnTswap_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _fake.Write("details-tswap", MacFakeTools.Details("tswap"));
+
+        var (exitCode, output) = Verify(Publish());
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("tswap: Identifier is tswap, expected dev.crawford.tswap", output);
+    }
+
+    /// <summary>Without vtool, minos comes from otool -l, and a difference still fails.</summary>
+    [Fact]
+    public void Verify_WithoutVtool_ReadsOtool()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _fake.OtoolInsteadOfVtool();
+        _fake.Write("minos-libtswapse.dylib", "26.0");
+
+        var (exitCode, output) = Verify(Publish());
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("minos differs: tswap 12.0, libtswapse.dylib 26.0", output);
+        Assert.Equal(2, _fake.Log("otool").Count);
+    }
+
+    /// <summary>Task 10 records the identities' subjects: keychain-setup prints them (never a key).</summary>
+    [Fact]
+    public void KeychainSetup_PrintsTheSubjects()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = KeychainSetup();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains($"Developer ID Application identity: {MacFakeTools.AppHash} \"Developer ID Application: Test Person ({MacFakeTools.Team})\"", output);
+        Assert.Contains($"Developer ID Installer identity: {MacFakeTools.InstallerHash} \"Developer ID Installer: Test Person ({MacFakeTools.Team})\"", output);
     }
 }

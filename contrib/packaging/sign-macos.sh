@@ -87,8 +87,8 @@ cmd_keychain_setup() {
   echo "Developer ID Application identity: $app"
   echo "Developer ID Installer identity: $installer"
   {
-    echo "app_identity=$app"
-    echo "installer_identity=$installer"
+    echo "app_identity=${app%% *}"
+    echo "installer_identity=${installer%% *}"
     echo "keychain=$kc"
   } >> "$GITHUB_OUTPUT"
   setup_done=1
@@ -115,7 +115,8 @@ pick_identity() {
     printf '%s\n' "$listing" | sed -nE 's/^ *[0-9]+\) [0-9A-F]{40} (".*")$/  \1/p' >&2
     return 1
   fi
-  printf '%s\n' "$matches" | sed -E 's/^ *[0-9]+\) ([0-9A-F]{40}) .*/\1/'
+  # The hash and the subject (task 10 records the subjects); never a key.
+  printf '%s\n' "$matches" | sed -E 's/^ *[0-9]+\) ([0-9A-F]{40}) (".*")$/\1 \2/'
 }
 
 cmd_sign() {
@@ -171,8 +172,9 @@ cmd_verify() {
   verify_file "$dir/libtswapse.dylib" dev.crawford.tswap.libtswapse
   verify_file "$dir/tswap" dev.crawford.tswap
   if [ -f "$dir/tswap" ]; then
-    entitlements=$(codesign -d --entitlements - "$dir/tswap" 2> /dev/null) || entitlements="(codesign -d --entitlements failed)"
-    if [ -n "$(printf '%s' "$entitlements" | tr -d '[:space:]')" ]; then
+    if ! entitlements=$(codesign -d --entitlements - "$dir/tswap" 2> /dev/null); then
+      failures="$failures"$'\n'"tswap: codesign -d --entitlements failed"
+    elif [ -n "$(printf '%s' "$entitlements" | tr -d '[:space:]')" ]; then
       printf '%s\n' "$entitlements"
       failures="$failures"$'\n'"tswap: has entitlements; it must have none"
     fi
@@ -191,15 +193,17 @@ cmd_verify() {
 }
 
 cmd_zip_for_notary() {
-  local dir=${1:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} out=${2:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} stage f
+  local dir=${1:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} out=${2:?usage: sign-macos.sh zip-for-notary <dir> <out.zip>} f
   stage=$(mktemp -d)
+  trap 'rm -rf "$stage"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   for f in tswap libtswapse.dylib; do
-    [ -f "$dir/$f" ] || { rm -rf "$stage"; die "$dir/$f is missing"; }
+    [ -f "$dir/$f" ] || die "$dir/$f is missing"
     ditto "$dir/$f" "$stage/$f"
   done
   mkdir -p "$(dirname "$out")"
   ditto -c -k "$stage" "$out"
-  rm -rf "$stage"
   echo "zipped tswap and libtswapse.dylib into $out"
 }
 
@@ -216,14 +220,16 @@ cmd_notarise() {
   printf '%s' "$MACOS_NOTARY_KEY_P8_BASE64" | base64 --decode > "$key" || die "MACOS_NOTARY_KEY_P8_BASE64 is not base64"
   local auth=(--key "$key" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID")
 
+  # The whole file name: the zip and the pkg share the stem tswap-osx-arm64, and each keeps its own log.
   name=$(basename "$file")
-  name=${name%.*}
   err="$key_dir/submit.err"
   echo "submitting $file to Apple's notary service (waits up to 40 minutes)"
   out=$(xcrun notarytool submit "$file" "${auth[@]}" --wait --timeout 40m --output-format json 2> "$err") || status=$?
   printf '%s\n' "$out"
   cat "$err" >&2
-  if grep -q '1048' <<< "$out$(cat "$err")"; then
+  # Apple's code, not any 1048 (a submission id can hold those digits): as a word of its own, outside the JSON's id.
+  if grep -qE '(^|[^0-9A-Za-z-])1048([^0-9A-Za-z-]|$)' "$err" \
+    || printf '%s\n' "$out" | sed 's/"id" *: *"[^"]*"//' | grep -qE '(^|[^0-9A-Za-z-])1048([^0-9A-Za-z-]|$)'; then
     echo "::error::notarytool answered error 1048: the Account Holder must accept Apple's current developer agreements at https://appstoreconnect.apple.com, then rerun the job"
   fi
   id=$(printf '%s\n' "$out" | sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' | head -n 1)

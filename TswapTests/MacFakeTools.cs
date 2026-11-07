@@ -70,6 +70,28 @@ internal sealed class MacFakeTools : IDisposable
     }
 
     /// <summary>The lines a fake logged (one call per line), or none when it never ran.</summary>
+    /// <summary>Every fake's logged arguments, all tools together (one call per line).</summary>
+    public string AllLogs() =>
+        string.Join('\n', Directory.GetFiles(Dir, "*.log").Order().Select(File.ReadAllText));
+
+    /// <summary>
+    /// A fake <c>otool -l</c> answering the minos of <c>minos-&lt;name&gt;</c> (default 12.0), for runs without
+    /// <c>vtool</c>: removes the <c>vtool</c> fake (a real one later on PATH fails on the fake files, so the script
+    /// falls back to <c>otool</c> either way).
+    /// </summary>
+    public void OtoolInsteadOfVtool()
+    {
+        File.Delete(Path.Combine(Tools, "vtool"));
+        WriteTool("otool", """
+            echo "$*" >> "$FAKE_DIR/otool.log"
+            name=$(basename "${@: -1}")
+            minos=12.0
+            [ -f "$FAKE_DIR/minos-$name" ] && minos=$(cat "$FAKE_DIR/minos-$name")
+            printf '%s:\nLoad command 8\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos %s\n      sdk 26.5\n   ntools 1\n' "${@: -1}" "$minos"
+
+            """);
+    }
+
     public List<string> Log(string tool)
     {
         var path = Path.Combine(Dir, $"{tool}.log");
@@ -180,6 +202,7 @@ internal sealed class MacFakeTools : IDisposable
                 ;;
               *" --entitlements "*)
                 echo "Executable=$file" >&2
+                [ -f "$FAKE_DIR/entitlements-$name.exit" ] && { echo "$file: code object is not signed at all" >&2; exit "$(cat "$FAKE_DIR/entitlements-$name.exit")"; }
                 [ -f "$FAKE_DIR/entitlements-$name" ] && cat "$FAKE_DIR/entitlements-$name"
                 exit 0
                 ;;
@@ -214,7 +237,7 @@ internal sealed class MacFakeTools : IDisposable
               "notarytool submit")
                 prev=
                 for a in "$@"; do
-                  [ "$prev" = --key ] && { [ -f "$a" ] && echo "key present: $a" >> "$FAKE_DIR/key.log"; }
+                  [ "$prev" = --key ] && { [ -f "$a" ] && echo "key present: $a $(ls -ld "$a" | cut -c1-10) $(ls -ld "$(dirname "$a")" | cut -c1-10)" >> "$FAKE_DIR/key.log"; }
                   prev=$a
                 done
                 if [ -f "$FAKE_DIR/notary-submit.out" ]; then cat "$FAKE_DIR/notary-submit.out"
@@ -269,6 +292,7 @@ internal sealed class MacFakeTools : IDisposable
               ( cd "$3" && find . -type f | LC_ALL=C sort ) > "$4"
               exit 0
             fi
+            [ -f "$FAKE_DIR/ditto-fails-$(basename "$1")" ] && { echo "ditto: $1: Input/output error" >&2; exit 1; }
             mkdir -p "$(dirname "$2")"
             cp -p "$1" "$2"
 
