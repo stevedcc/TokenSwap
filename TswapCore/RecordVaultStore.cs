@@ -14,12 +14,13 @@ namespace TswapCore;
 /// (the <see cref="KeyringCodec"/> bytes) and <c>records/&lt;HMAC(K_names, name) hex&gt;</c>, one
 /// file per secret (<see cref="SecretRecordCodec"/>).
 /// <para>
-/// Commands keep using <see cref="IVaultStore"/>'s whole-database calls: <see cref="LoadConfig"/>
-/// composes <see cref="Config.Keyring"/> from the vault folder, <see cref="LoadSecrets"/> reads and
-/// merges every record, and <see cref="SaveSecrets"/> writes only the records whose secret changed
-/// (a value write, a tombstone for a removed name, or a burn), each with a fresh
-/// <see cref="Hlc"/> stamp. Before each write it re-reads the file and refuses when it changed
-/// since this command loaded it (decision 6).
+/// <see cref="LoadConfig"/> composes <see cref="Config.Keyring"/> from the vault folder,
+/// <see cref="LoadSecrets"/> reads and merges every record, and <see cref="SaveSecrets"/> writes
+/// only the records whose secret changed (a value write, a tombstone for a removed name, or a
+/// burn), each with a fresh <see cref="Hlc"/> stamp. Before each write it re-reads the file and
+/// refuses when it changed since this command loaded it (decision 6). Brief T16-S2b: the write
+/// commands no longer use those two; they open one record at a time (<see cref="OpenForWrite"/>)
+/// and write through <see cref="CommitWrites"/>, under the same guard and rules.
 /// </para>
 /// <para>Every file goes through <see cref="DirectoryOwnerMatcher"/> (decision 10).</para>
 /// <para>
