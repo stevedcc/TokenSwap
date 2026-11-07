@@ -48,12 +48,13 @@ public class RedactBehaviourPinTests
     [Fact]
     public void EqualLengthTies_DecidedByText_NotPosition()
     {
-        var db = Db(("xab-secret", S("xab")), ("abz-secret", S("abz")));
-        AssertRedact("x[REDACTED: abz-secret]", "xabz", db);
+        // The names sort the other way round ("a-…" before "z-…"), so only the text decides.
+        var db = Db(("a-xab-secret", S("xab")), ("z-abz-secret", S("abz")));
+        AssertRedact("x[REDACTED: z-abz-secret]", "xabz", db);
 
-        var spaced = Db(("xab-secret", S("x ab")), ("abz-secret", S("ab z")));
-        AssertToComment("k: x \"\"  # tswap: abz-secret", "k: x ab z", spaced,
-            new LineDiff(1, "k: x ab z", "k: x \"\"  # tswap: abz-secret"));
+        var spaced = Db(("a-xab-secret", S("x ab")), ("z-abz-secret", S("ab z")));
+        AssertToComment("k: x \"\"  # tswap: z-abz-secret", "k: x ab z", spaced,
+            new LineDiff(1, "k: x ab z", "k: x \"\"  # tswap: z-abz-secret"));
     }
 
     [Fact]

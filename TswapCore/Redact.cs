@@ -1,10 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
+using TswapCore.Fingerprints;
 
 namespace TswapCore;
 
 /// <summary>
-/// Static facade over <see cref="SecretProcessor"/> subclasses, plus the standalone
-/// heuristic scanner for unrecognized secrets.
+/// Static facade over <see cref="SecretMatcher"/>, plus the standalone heuristic scanner for
+/// unrecognized secrets.
 /// </summary>
 public static class Redact
 {
@@ -14,18 +17,50 @@ public static class Redact
         RegexOptions.IgnoreCase);
 
     /// <summary>
-    /// Returns a copy of <paramref name="content"/> with all known secret values (and their
-    /// Base64 variants) replaced by <c>[REDACTED: name]</c> labels.
+    /// <c>redact</c>: a copy of <paramref name="content"/> with every value <paramref name="matcher"/>
+    /// recognises replaced by its <c>[REDACTED: name]</c> label.
     /// </summary>
-    public static string RedactContent(string content, SecretsDb db)
-        => new RedactProcessor().Process(content, db).Content;
+    public static string RedactContent(string content, SecretMatcher matcher) => matcher.Redact(content);
 
     /// <summary>
-    /// Returns a copy of <paramref name="content"/> with inline secret values replaced by
+    /// <c>tocomment</c>: a copy of <paramref name="content"/> with inline secret values replaced by
     /// <c>""  # tswap: name</c>, plus the list of changed lines for dry-run display.
     /// </summary>
-    public static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db)
-        => new ToCommentProcessor().Process(content, db);
+    public static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretMatcher matcher) =>
+        matcher.ToComment(content);
+
+    /// <summary>
+    /// Brief T16-S2: <see cref="RedactContent(string, SecretMatcher)"/> over a loaded database, by
+    /// fingerprinting its values under a random key. No command uses it (they never decrypt the
+    /// values for this); it keeps the engine's tests written against plain values.
+    /// </summary>
+    public static string RedactContent(string content, SecretsDb db) => WithMatcher(db, m => m.Redact(content));
+
+    /// <summary>Brief T16-S2: <see cref="ToComment(string, SecretMatcher)"/> over a loaded database (see <see cref="RedactContent(string, SecretsDb)"/>).</summary>
+    public static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db) =>
+        WithMatcher(db, m => m.ToComment(content));
+
+    private static T WithMatcher<T>(SecretsDb db, Func<SecretMatcher, T> use)
+    {
+        var key = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            using var keys = FingerprintKeys.Derive(key);
+            List<(string, bool, FingerprintSet)> sets = [];
+            foreach (var (name, secret) in db.Secrets)
+            {
+                sets.Add((name, false, Fingerprinter.Compute(Encoding.UTF8.GetBytes(secret.Value), keys)));
+                if (secret.PreviousValue is { } previous)
+                    sets.Add((name, true, Fingerprinter.Compute(Encoding.UTF8.GetBytes(previous), keys)));
+            }
+            var burned = db.Secrets.Where(kv => kv.Value.BurnedAt.HasValue).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
+            return use(new SecretMatcher(FingerprintIndex.Build(sets, keys), burned));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+    }
 
     /// <summary>
     /// Replaces secret values in <paramref name="line"/> with <c>[REDACTED: name]</c>.
