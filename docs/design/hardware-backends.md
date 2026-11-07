@@ -643,12 +643,17 @@ released parser against the blobs this build writes.
 
 **Existing slots stay RSA.** Nothing converts them, and they keep opening as before. On Linux,
 `tswap slots` ends with a note when this machine's own TPM slot (the one the unlock reads: the TPM
-vault's machine slot named by `KeyringSlotId`) is a header-less package or `TSTP 0x01`: it uses
-RSA-2048, a slot made by v0.3.0 or later unlocks several times faster, and re-enrolling a slot in
-place isn't supported yet ([#264](https://github.com/stevedcc/TokenSwap/issues/264)). Other machines'
-slots, ECC slots and Windows (no primary to choose) get no note. `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
+vault's machine slot named by `KeyringSlotId`, or its first machine slot when that is unset, as
+`HardwareBlobLocator` does) is a header-less package or `TSTP 0x01`: it uses RSA-2048, a slot made
+by v0.3.0 or later unlocks two to four times faster (2.4× on the Intel PTT, 4× on the SLB 9665,
+below), and re-enrolling a slot in place isn't supported yet
+([#264](https://github.com/stevedcc/TokenSwap/issues/264)). There is no note for an ECC slot, for
+another machine's slot, for a YubiKey or Secure Enclave blob, or when `slots` runs on Windows or
+macOS (a Windows TPM slot has no primary to choose). `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
 slot whose header has bit 1, and today's `TPM, sealed to this machine's TPM, …` for every other TPM
-row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048).
+row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048; for
+the same reason the note would also fire for a Windows-made own slot, which needs a TPM vault's
+config copied from Windows to Linux, where that slot can't unlock anyway: an accepted ambiguity).
 
 **On real hardware (2026-11-07, #261).** tswap built from this branch and the released v0.2.0
 binary, each machine with a throwaway vault (`--no-password --no-recovery`):

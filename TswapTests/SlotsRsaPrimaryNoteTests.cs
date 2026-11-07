@@ -20,11 +20,16 @@ public class SlotsRsaPrimaryNoteTests
 
     private static string Note(byte[] slotId) =>
         $"Note: this machine's TPM slot ({Convert.ToHexStringLower(slotId)[..8]}) was made before tswap 0.3.0 and uses an " +
-        "RSA-2048 key, so each unlock takes seconds longer than it needs to. A TPM slot made by tswap 0.3.0 or later uses " +
-        "ECC P-256 and unlocks several times faster; re-enrolling a slot in place isn't supported yet (issue #264).";
+        "RSA-2048 key, so every unlock is slower than it needs to be. A TPM slot made by tswap 0.3.0 or later uses " +
+        "ECC P-256 and unlocks two to four times faster (measured on two TPMs); re-enrolling a slot in place isn't " +
+        "supported yet (issue #264).";
 
     /// <summary>A TPM keyring vault whose machine slots carry <paramref name="hwBlobs"/>; the first is this machine's.</summary>
-    private static (Config Config, List<Slot> Slots) Vault(HardwareBackend? backend, params byte[][] hwBlobs)
+    private static (Config Config, List<Slot> Slots) Vault(HardwareBackend? backend, params byte[][] hwBlobs) =>
+        Vault(backend, nameOwnSlot: true, hwBlobs);
+
+    /// <summary>As above; without <paramref name="nameOwnSlot"/> the config has no <see cref="Config.KeyringSlotId"/>.</summary>
+    private static (Config Config, List<Slot> Slots) Vault(HardwareBackend? backend, bool nameOwnSlot, params byte[][] hwBlobs)
     {
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
@@ -37,7 +42,7 @@ public class SlotsRsaPrimaryNoteTests
         }
         var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, 1, slots);
         var config = new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System, Backend: backend,
-            Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)), KeyringSlotId: Convert.ToBase64String(slots[0].SlotId));
+            Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)), KeyringSlotId: nameOwnSlot ? Convert.ToBase64String(slots[0].SlotId) : null);
         return (config, slots);
     }
 
@@ -100,6 +105,28 @@ public class SlotsRsaPrimaryNoteTests
         // A YubiKey v1 blob classifies as password-free and has no ECC bit, but it is no TPM slot; another machine's
         // RSA TPM slot in the keyring gets no note either.
         var (config, _) = Vault(HardwareBackend.Tpm, YubiKeySlotBlob.Create(11111111, requiresTouch: true).Encode(), LegacyPackage());
+
+        Assert.DoesNotContain("RSA-2048", SlotsCommand.Format(config, os: OSPlatform.Linux));
+    }
+
+    [Fact]
+    public void KeyringSlotIdUnset_TheFirstMachineSlotIsThisMachines_AsTheUnlockReadsIt()
+    {
+        // HardwareBlobLocator, with no KeyringSlotId, reads the first machine slot; the note follows the same rule.
+        var (rsaFirst, rsaFirstSlots) = Vault(HardwareBackend.Tpm, nameOwnSlot: false,
+            LegacyPackage(), TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.EccPrimary));
+        var (eccFirst, _) = Vault(HardwareBackend.Tpm, nameOwnSlot: false,
+            TpmSlotBlob.Wrap(LegacyPackage(), TpmSlotBlob.EccPrimary), LegacyPackage());
+
+        Assert.Contains(Note(rsaFirstSlots[0].SlotId), Lines(SlotsCommand.Format(rsaFirst, os: OSPlatform.Linux)));
+        Assert.DoesNotContain("RSA-2048", SlotsCommand.Format(eccFirst, os: OSPlatform.Linux));
+    }
+
+    [Fact]
+    public void OwnSlotIsASecureEnclaveSlot_NoNote()
+    {
+        // A TSSE header classifies as a password slot without the TPM ECC bit, but it is no TPM slot.
+        var (config, _) = Vault(HardwareBackend.Tpm, SecureEnclaveSlotBlob.Wrap(LegacyPackage()));
 
         Assert.DoesNotContain("RSA-2048", SlotsCommand.Format(config, os: OSPlatform.Linux));
     }

@@ -167,15 +167,18 @@ public sealed class SlotsCommand : ICliCommand
     /// is the slot's short id.
     /// </summary>
     internal static string RsaPrimaryNote(string id8) =>
-        $"Note: this machine's TPM slot ({id8}) was made before tswap 0.3.0 and uses an RSA-2048 key, so each unlock " +
-        "takes seconds longer than it needs to. A TPM slot made by tswap 0.3.0 or later uses ECC P-256 and unlocks " +
-        "several times faster; re-enrolling a slot in place isn't supported yet (issue #264).";
+        $"Note: this machine's TPM slot ({id8}) was made before tswap 0.3.0 and uses an RSA-2048 key, so every unlock " +
+        "is slower than it needs to be. A TPM slot made by tswap 0.3.0 or later uses ECC P-256 and unlocks two to four " +
+        "times faster (measured on two TPMs); re-enrolling a slot in place isn't supported yet (issue #264).";
 
     /// <summary>
     /// This machine's own TPM slot when it is a usable one sealed under the RSA-2048 primary (a header-less package or
     /// a <c>TSTP</c> header without the ECC bit); otherwise null. Found as the unlock finds it
     /// (<c>HardwareBlobLocator</c>): a TPM vault's machine slot named by <see cref="Config.KeyringSlotId"/>, or its
-    /// only machine slot when that is unset. A corrupt slot or one from a newer tswap gets no note: it is already marked.
+    /// first machine slot when that is unset. A corrupt slot or one from a newer tswap gets no note: it is already
+    /// marked. YubiKey and Secure Enclave blobs are told apart by their magic; a header-less or <c>TSTP 0x01</c> package
+    /// a Windows machine wrote can't be told from a Linux RSA one, an accepted ambiguity: this machine's own slot in a
+    /// TPM vault on Linux is a Linux one unless the config was copied from Windows, and then the unlock fails anyway.
     /// </summary>
     private static Slot? OwnRsaTpmSlot(Config config, Keyring keyring)
     {
@@ -193,7 +196,7 @@ public sealed class SlotsCommand : ICliCommand
         var own = ownId is null
             ? keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
             : keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownId));
-        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob))
+        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob) || SecureEnclaveSlotBlob.HasHeader(hwBlob))
             return null;
         if (SlotPassword.Classify(own) is not (SlotPasswordKind.None or SlotPasswordKind.Password))
             return null;
