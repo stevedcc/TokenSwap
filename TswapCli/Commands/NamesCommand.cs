@@ -1,4 +1,5 @@
 using System.Text.Json;
+using TswapCore;
 
 namespace TswapCli.Commands;
 
@@ -15,33 +16,44 @@ public sealed class NamesCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config, warnIfNoTouch: false);
-        var db = ctx.LoadSecrets(key);
-
-        if (json)
+        // Brief T16-S2: metadata only (a format 2 record is decoded whole, its values wiped, and warned about).
+        using var view = ctx.OpenVault(key);
+        try
         {
-            var entries = db.Secrets
-                .OrderBy(kv => kv.Key)
-                .Select(kv => new NameEntry(kv.Key, kv.Value.BurnedAt.HasValue, kv.Value.BurnedAt))
-                .ToList();
-            ctx.Console.Out.WriteLine(JsonSerializer.Serialize(entries, CliJsonContext.Default.ListNameEntry));
+            Write(ctx, view.LoadAll(FormatTwoRecords.Decode).Secrets, json);
             return 0;
         }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
+        }
+    }
 
-        if (db.Secrets.Count == 0)
+    private static void Write(CommandContext ctx, IReadOnlyList<SecretInfo> secrets, bool json)
+    {
+        if (json)
+        {
+            var entries = secrets
+                .OrderBy(s => s.Name)
+                .Select(s => new NameEntry(s.Name, s.BurnedAt.HasValue, s.BurnedAt))
+                .ToList();
+            ctx.Console.Out.WriteLine(JsonSerializer.Serialize(entries, CliJsonContext.Default.ListNameEntry));
+            return;
+        }
+
+        if (secrets.Count == 0)
         {
             ctx.Console.Out.WriteLine("No secrets stored.");
-            return 0;
+            return;
         }
 
         // Brief T6 decision 3: the time shown is when the current value was written (for a record
         // store, its HLC's physical part; "far future" when a bad clock put it beyond DateTime).
-        var width = Math.Min(40, db.Secrets.Keys.Max(n => n.Length));
-        foreach (var name in db.Secrets.Keys.OrderBy(n => n))
+        var width = Math.Min(40, secrets.Max(s => s.Name.Length));
+        foreach (var secret in secrets.OrderBy(s => s.Name))
         {
-            var secret = db.Secrets[name];
             var burned = secret.BurnedAt.HasValue ? " [BURNED]" : "";
-            ctx.Console.Out.WriteLine($"{name.PadRight(width)}  {TswapCore.Keyring.Hlc.Display(secret.Modified)}{burned}");
+            ctx.Console.Out.WriteLine($"{secret.Name.PadRight(width)}  {TswapCore.Keyring.Hlc.Display(secret.Modified)}{burned}");
         }
-        return 0;
     }
 }

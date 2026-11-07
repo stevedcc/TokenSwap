@@ -77,6 +77,12 @@ public sealed class FleetMachine : IDisposable
     /// </summary>
     public TimeProvider? Time { get; set; }
 
+    /// <summary>
+    /// Brief T16-S2: run on the record store of each command this machine runs, before the command,
+    /// so a test can watch what it decrypts (<c>ValueDecrypted</c>, <c>RecordDecrypted</c>). Null: none.
+    /// </summary>
+    public Action<RecordVaultStore>? StoreOpened { get; set; }
+
     /// <summary>Brief T6: the record store's vault folder (from config.json), or null for a classic vault.</summary>
     public string? VaultDir => File.Exists(ConfigPath) ? Config.VaultDir : null;
 
@@ -159,7 +165,10 @@ public sealed class FleetMachine : IDisposable
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends, fido2: fido2);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
         var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
-        return new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        var store = VaultStores.Open(Dir, Ownership, storeTime, console.Error);
+        if (store is RecordVaultStore records)
+            StoreOpened?.Invoke(records);
+        return new CommandContext(console, env, store, Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,

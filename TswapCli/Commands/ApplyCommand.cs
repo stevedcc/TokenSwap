@@ -22,12 +22,19 @@ public sealed class ApplyCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-
-        var content = File.ReadAllText(filePath);
-        var applied = Apply.ApplySecrets(content, db, warnings: ctx.Console.Error);
-
-        ctx.Console.Out.Write(applied);
-        return 0;
+        // Brief T16-S2: only the records its markers name, and only the value versions it fills in.
+        using var view = ctx.OpenVault(key);
+        try
+        {
+            var content = File.ReadAllText(filePath);
+            var applied = Apply.ApplySecrets(content, view, warnings: ctx.Console.Error);
+            ctx.Console.Out.Write(applied);
+            return 0;
+        }
+        finally
+        {
+            // Also when a later marker fails: the records used so far were decrypted (owner decision 1).
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
+        }
     }
 }
