@@ -4,6 +4,22 @@
 > superpowers:executing-plans). Every task is TDD: the named tests first, watched failing for the
 > stated reason, then the production change.
 
+**Plan review round 3** (MiMo: request changes, one Important). Every finding is fixed in place,
+none declined:
+- *I-1, `restore` on an unreadable target:* checked in the code. Today `RestoreCommand.cs:28` calls
+  `SecretsDb.ResolveToken(name:previous)`, which for a name `LoadSecrets` left out calls
+  `ThrowIfUnreadable` before "not found" (`TswapCore/Models.cs:277-280`). So today's `restore`
+  **names the file**, at once, before any write. My call: keep that. `Restore` throws
+  `UnreadableRecordText` at call time; it does not defer to `Commit`. It joins the "keep today's
+  calls" sentence, "(same errors)" is now literally true, and no behaviour difference is needed.
+  Pinned by `Restore_UnreadableTarget_NamesTheFile_WritesNothing` (task 7). `Lookups_MatchSecretsDb`
+  now states what it asserts for every lookup state, unreadable included, and checks that the
+  random vault holds one.
+- *M-6:* decision 1's pins are listed exactly, adding `IngestRotate_DamagedValueSection_Succeeds`.
+- *M-7:* "`delete`, then `add`".
+- *M-8:* the `add` soundness claim is qualified, and the fingerprint-mismatch, same-value case is
+  pinned.
+
 **Plan review round 2** (DeepSeek: approve; MiMo: request changes). Every finding is fixed in place,
 none declined:
 - *MiMo I-1:* the plan now says what happens when the one value an exception must decrypt is itself
@@ -123,10 +139,14 @@ stamp, `:889`), and the codec copies a held section byte for byte (`EncodeV3`, `
   `RecordVaultStore.cs:710-718`). The replaced current value's section moves to the previous slot.
 - **add over an existing secret** must know whether the value changed (`SaveSecrets`, `:1122`: same
   value, no write). Answered from the stored fingerprints (my call): equal when the stored current set
-  is of `SecretVariants.CurrentSetVersion` and equals `Fingerprinter.Compute(newValue)`. Sound because
+  is of `SecretVariants.CurrentSetVersion` and equals `Fingerprinter.Compute(newValue)`. Sound, for a
+  record whose set describes its value, because
   every stored value is the UTF-8 encoding of a .NET string (`:1120`, `:1204`), on which UTF-8
   decoding (what `Fingerprinter.Compute` hashes, `Fingerprinter.cs:19`) is injective, and the plain
-  variant's 128-bit HMAC decides. A set of another variant-set version (older: written by an older
+  variant's 128-bit HMAC decides. On a record whose fingerprints don't describe its value (difference
+  2), a match means only that the set matches: `add` then writes nothing and prints its success line
+  without the stored value having been checked. This is decision 1's rule, and it is pinned by
+  `Add_FingerprintMismatch_SameValue_WritesNothing` (task 5). A set of another variant-set version (older: written by an older
   build in a mixed fleet, which Stage 2's `OlderVariantSet` note exists for; or newer: a later build),
   or none: that one current value section is decrypted and compared (1 value, only that record). A
   reindex removes the older case. Owner decision 6: accepted. **If that section can't be opened** (it
@@ -201,12 +221,17 @@ opaque sections, not unreadable (difference 2); only a decryption of that sectio
 - `Find` returns null, as `SecretsDb` does (`LoadSecrets` leaves unreadable records out,
   `RecordVaultStore.cs:494-496`), and `ThrowIfUnreadable` throws `SecretsDb.UnreadableRecordText`
   naming the file.
-- `SetValue`, `Burn`, `Delete` and `Restore` stage **nothing** for that name and record the error.
+- `SetValue`, `Burn` and `Delete` stage **nothing** for that name and record the error. `Restore`
+  throws `UnreadableRecordText` at once instead. That is today's order: `SecretsDb.ResolveToken`
+  calls `ThrowIfUnreadable` before "not found" (`Models.cs:277-280`), and `restore` resolves before
+  writing (`RestoreCommand.cs:28`).
 - `Commit` throws the first recorded error in ordinal name order **before** any guard check or write,
   exactly as `SaveSecrets` throws `Unreadable` while building its writes (`:1117-1118`).
 So an unreadable record is never skipped as absent and never overwritten. Commands keep today's
 calls: `create`, `ingest`, `delete`, `burn` and `rotate` call `ThrowIfUnreadable` where they do
-today, so they name the file before "not found" or "already exists"; `add` and `import`, which
+today, so they name the file before "not found" or "already exists". `restore` names it through
+`Restore`, as `ResolveToken` does today (my call, MiMo r3 I-1: today's behaviour, consistent with
+those five). `add` and `import`, which
 today learn it only at the save, learn it at `Commit`.
 
 **Staging, then one commit (my call).** Operations stage; `Commit` assigns stamps and writes. This
@@ -294,7 +319,7 @@ target is format 3, so the target is absent or format 2 and its plaintext is in 
 | `ingest --rotate`, `rotate` | full load; `SecretRotation.Check` on `SecretsDb` (`SecretRotation.cs:20-40`) | `Check` on the writer's `Find`/`ThrowIfUnreadable` (same texts and order: not found, classic branch, sudo unless burned) → `SetValue(always: true)`. 0 values |
 | `burn` | full load; already-burned check (`BurnCommand.cs:23-34`) | `Find`; null → `ThrowIfUnreadable` → "not found" (as today) → already burned? → `Burn`. 0 values |
 | `delete` | full load; tombstone pass over every record | `Find` → `ThrowIfUnreadable` → `Delete`. 0 values; one tombstone by construction |
-| `restore` | full load, `ResolveToken(name:previous)`, save, **second full load** for the burn line | `Restore` (same errors) → `Commit`; the burn line from the written state. 1 value (2 under the copy-conflict fallback) |
+| `restore` | full load, `ResolveToken(name:previous)`, save, **second full load** for the burn line | `Restore` (same errors as `SecretsDb.ResolveToken(name:previous)`: an unreadable record named at once, then "not found", then "no previous value") → `Commit`; the burn line from the written state. 1 value (2 under the copy-conflict fallback) |
 | `add` | full load; save writes only if the value changed; an unreadable target refused at the save with the file named (`:1117-1118`) | `SetValue` (fingerprint comparison) → `Commit` (an unreadable target refused there, same text). 0 values; 1 (that current value) when the stored set is of another variant-set version or missing (owner decision 6); that value damaged: refuses naming the file (decision 8) |
 | `import` | full load; skip existing live names; save | per name in today's order: `Find` (skip as today when non-null) → `SetValue(importedBurnAt…)` (stages nothing for an unreadable name) → one `Commit` (throws the first unreadable name). 0 vault values (the export file's values are read, by nature) |
 
@@ -452,8 +477,17 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `TimeProviderTests` green. Breaks: `CommitWrites` without `CheckUnchanged` (the guard tests); `OpenForWrite`
    through `LoadRecords` (the first test); the probe skipped (`AnyV3RecordRead_WritesV3EvenWithoutMarker`).
 4. **`VaultWriter`, `OpenVaultForWrite`, the write warning** (`VaultWriter.cs`, `CommandContext.cs`,
-   `FingerprintTexts.cs`). New `VaultWriterTests`: `Lookups_MatchSecretsDb` (random vaults: `Find`,
-   `ThrowIfUnreadable` and `Restore`'s error texts equal `SecretsDb`'s from `LoadSecrets`);
+   `FingerprintTexts.cs`). New `VaultWriterTests`: `Lookups_MatchSecretsDb`. Random vaults, each of which the test **asserts** holds at least one
+   name in each state: live with a previous value, live without one, tombstone, absent, and
+   unreadable (a truncated main file). For every name it compares the writer with `SecretsDb` from
+   `LoadSecrets`:
+   - `Find` is null exactly where `Secrets` lacks the name (unreadable included);
+   - `ThrowIfUnreadable` throws, with an equal message, exactly where `SecretsDb.ThrowIfUnreadable`
+     does;
+   - `Restore` throws the same message as `SecretsDb.ResolveToken(name:previous)`: the file-naming
+     text for unreadable, "not found" for tombstone and absent, the no-previous text for live
+     without a previous. For live with a previous, neither throws.
+   It runs no write.
    `Add_SameValue_ByFingerprints_DecryptsNothing_WritesNothing`;
    `Add_SetOfAnotherVariantVersion_DecryptsOnlyThatCurrentValue`;
    `Restore_DecryptsOnlyThePreviousSection` (exactly `(file, previousVersion)`);
@@ -472,6 +506,9 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    the value through `get`, `Modified` through `names`, and for `add` the old value now under
    `name:previous`. Further tests:
    - `Add_UnreadableTarget_RefusesNamingTheFile_WritesNothing`.
+   - `Add_FingerprintMismatch_SameValue_WritesNothing` (MiMo r3 M-8: a planted record whose current
+     set is of value A but whose section holds B. `add` of A exits 0, every record file is
+     byte-identical, `ValueDecrypted` is empty, and `get` still fails naming the file).
    - `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting` and
      `Add_DamagedValueSection_NewVersion_KeepsItAsPrevious` (difference 2; the current set is
      current, so the fingerprints decide and nothing is decrypted).
@@ -498,13 +535,17 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `name:previous`); `Burn_UnreadableTarget_NamesTheFile` (command-level text); difference 2:
    `Burn_DamagedValueSection_Succeeds_GetStillFailsNamingTheFile`,
    `Rotate_FingerprintMismatch_KeepsItAsPrevious_RestoreFailsClosed`,
-   `Delete_DamagedValueSection_WritesATombstone`. Existing `RotateTests` (sudo unless burned, nothing
+   `Delete_DamagedValueSection_WritesATombstone`, `IngestRotate_DamagedValueSection_Succeeds` (its own
+   pin, though it shares `rotate`'s `SetValue(always: true)` path). Existing `RotateTests` (sudo unless burned, nothing
    written on refusal, `LastHlc` unchanged), `EmptySaveGuardTests.Deleting*`, `RecordConflictTests`,
    `RecordStoreV3Tests.Burn_CopiesValueSectionsByteForByte` green. Measure `burn` on a 1,000-record
    vault before/after and record both times in the commit (no test). Break: `burn` opens its record
    through `OpenFull`.
 7. **`restore`** (`RestoreCommand.cs`). `Restore_DecryptsOnlyThePreviousValue` (one `ValueDecrypted`,
    `RecordDecrypted` only the target, `get` returns the restored value);
+   `Restore_UnreadableTarget_NamesTheFile_WritesNothing` (a truncated target: exit 1, stderr equals
+   `UnreadableRecordText` naming the hashed file, as today's `ResolveToken` gives; every record file
+   and `config.json` byte-identical; `ValueDecrypted` empty);
    `Restore_CopiesOnlyPlaintextCanMerge_DecryptsThatRecordsTwoVersions` (exactly two, both of that file); `Restore_BurnLine_FromTheWrittenState` (output equal to today's
    for a burned and an unburned previous). `PreviousValueTests`, `RecordStoreV3Tests.Restore_KeepsTheRestoredSectionBytes`,
    `TimeProviderTests.Restore_WritesTheNewVersionsTime_FromTheTimeProvider` green. Break: the burn line
@@ -607,7 +648,11 @@ and the new write row; release notes: one section per brief).
    and `delete` on such a record **succeed** and carry the damage forward byte for byte; no value is
    decrypted to check it; `create`/`ingest` on its name refuse as "already exists". Later users of
    that value (`get`, `apply`, `run`, `restore`) still fail closed, naming the file. Difference 2,
-   pinned by task 6's four tests and task 5's `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting`.
+   pinned by task 6's `Burn_DamagedValueSection_Succeeds_GetStillFailsNamingTheFile`,
+   `Rotate_FingerprintMismatch_KeepsItAsPrevious_RestoreFailsClosed`,
+   `Delete_DamagedValueSection_WritesATombstone` and `IngestRotate_DamagedValueSection_Succeeds`, and
+   task 5's `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting`,
+   `Add_DamagedValueSection_NewVersion_KeepsItAsPrevious` and `Add_FingerprintMismatch_SameValue_WritesNothing`.
 2. **`vault merge` and `vault reindex` are out of 2b:** follow-up issue #271 (metadata-only merge of
    format 3 folders; reindex without decoding records already current).
 3. **AGENTS.md `:203-207`** is updated in task 10. The last sentence ("`LoadSecrets`, which decrypts
@@ -645,7 +690,8 @@ and the new write row; release notes: one section per brief).
    current set is of another variant-set version or missing, and that current value section can't be
    decrypted or doesn't match its set, `add` refuses with `SecretsDb.UnreadableRecordText` naming the
    file and writes nothing. This narrows decision 1 for `add` in that one state. `rotate`,
-   `ingest --rotate` and `delete` + `add` still work on the record. Pinned by
+   `ingest --rotate` and `delete` still work on the record, as does `delete` followed by `add`
+   (which then writes a fresh version over the tombstone). Pinned by
    `Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing`.
 9. **A retained version without a set whose section can't be decrypted** (the implementer's
    recommendation, accepted within decision 1): it is carried forward byte for byte, still without
