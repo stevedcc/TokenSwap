@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -127,6 +128,25 @@ public sealed record CommandContext(
     /// </summary>
     public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
 
+    /// <summary>
+    /// The FIDO2 slots' key service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS
+    /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it.
+    /// </summary>
+    public IFido2Service? Fido2 { get; init; }
+
+    /// <summary>
+    /// Opens the controlling terminal (FIDO2 plan, task 6: <see cref="ControllingTerminal.Open"/> in the binary, a
+    /// script in tests); null, or a null result, means there is none. The FIDO2 PIN is read there
+    /// (<see cref="Fido2PinPrompt"/>), never from stdin. The caller disposes what it opened.
+    /// </summary>
+    public Func<ITerminal?>? Terminal { get; init; }
+
+    /// <summary>
+    /// The OS whose order and wording the guided <c>init</c> uses for its list (FIDO2 plan, task 8): this one, unless a
+    /// test words another's (as <see cref="YubiKeyAccessTexts.ExplainHidden"/> takes the OS).
+    /// </summary>
+    public System.Runtime.InteropServices.OSPlatform Os { get; init; } = YubiKeyAccessTexts.CurrentOs();
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 
@@ -147,9 +167,21 @@ public sealed record CommandContext(
             SecurityWarnings.NoticeIfChanged(Console, config);
         // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
         // Task 4b: each key's remembered slot first, and the slot that opens is remembered.
+        // FIDO2 plan, task 7: pass 4's PIN at the terminal and its touch line on stderr.
         return Unlocker.Unlock(config, UnlockSelection(),
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config)) { Remembered = RememberedSlots });
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config))
+            {
+                Remembered = RememberedSlots,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
     }
+
+    /// <summary>
+    /// FIDO2 plan, task 7: the terminal's PIN source for an unlock of <paramref name="config"/>, opened only when the
+    /// vault has a FIDO2 slot (so no other unlock looks for a terminal); null when there is none.
+    /// </summary>
+    private Fido2Pin? Fido2PinFor(Config config) => VaultUnlocker.HasFido2Slots(config) ? Fido2PinPrompt.For(this) : null;
 
     /// <summary>
     /// YubiKey SDK stage 1, task 4b (<c>slot add --yubikey</c> re-enrolling a key): <see cref="Unlock"/> without
@@ -166,7 +198,13 @@ public sealed record CommandContext(
         if (TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
         return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
-            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt) { Remembered = RememberedSlots, RememberLater = rememberLater });
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt)
+            {
+                Remembered = RememberedSlots,
+                RememberLater = rememberLater,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
     }
 
     /// <summary>

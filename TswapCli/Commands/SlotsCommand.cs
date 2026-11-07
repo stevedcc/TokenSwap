@@ -118,18 +118,29 @@ public sealed class SlotsCommand : ICliCommand
             var protection = slot.Kind == SlotKind.Machine
                 ? DescribeMachineProtection(config, slot)
                 : DescribeRecoveryProtection();
-            if (slot.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-                && YubiKeySlotBlob.TryDecode(slot.HwBlob!) is { } blob
+            // Only OTP slots are remembered (FIDO2 plan, task 2: a FIDO2 slot is never marked).
+            if (slot.Kind == SlotKind.Machine && YubiKeySlotKinds.Classify(slot.HwBlob) is YubiKeySlotKind.Otp(var blob)
                 && lastOpened.TryGetValue(blob.Serial, out var last) && !last.AsSpan().SequenceEqual(slot.SlotId))
                 protection += $" — {OtherSlotOfKeyMark}";
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
         }
 
-        // Brief T17 ruling 3 / task 6: with at least one password slot, say how many open without it.
-        var kinds = keyring.Slots.Where(s => s.Kind == SlotKind.Machine).Select(SlotPassword.Classify).ToList();
-        var withoutPassword = kinds.Count(k => k == SlotPasswordKind.None);
-        if (kinds.Contains(SlotPasswordKind.Password) && withoutPassword > 0)
-            sb.Append($"\n{withoutPassword} slot(s) open without the password: keep them away from shared machines.\n");
+        // Brief T17 ruling 3 / task 6: with at least one password slot, say how many open without it. FIDO2 plan,
+        // task 8: a password-free FIDO2 slot still needs its key's PIN and a touch, so it is counted apart.
+        var kinds = keyring.Slots.Where(s => s.Kind == SlotKind.Machine)
+            .Select(s => (Password: SlotPassword.Classify(s), Fido2: YubiKeySlotKinds.Classify(s.HwBlob) is YubiKeySlotKind.Fido2))
+            .ToList();
+        if (kinds.Any(k => k.Password == SlotPasswordKind.Password))
+        {
+            var withoutPassword = kinds.Count(k => k is { Password: SlotPasswordKind.None, Fido2: false });
+            var fido2WithoutPassword = kinds.Count(k => k is { Password: SlotPasswordKind.None, Fido2: true });
+            if (withoutPassword > 0 || fido2WithoutPassword > 0)
+                sb.Append('\n');
+            if (withoutPassword > 0)
+                sb.Append($"{withoutPassword} slot(s) open without the password: keep them away from shared machines.\n");
+            if (fido2WithoutPassword > 0)
+                sb.Append(Fido2WithoutPasswordLine(fido2WithoutPassword) + "\n");
+        }
 
         var changed = SecurityWarnings.Changed(config);
         if (changed.Count > 0)
@@ -187,18 +198,29 @@ public sealed class SlotsCommand : ICliCommand
         var kind => DescribeHardware(config, slot) + (kind == SlotPasswordKind.Password ? ", vault password" : ", no password"),
     };
 
+    /// <summary>FIDO2 plan, task 8: what protects a FIDO2 slot, after its key's name.</summary>
+    internal const string Fido2Protection = "FIDO2: PIN + touch";
+
+    /// <summary>FIDO2 plan, task 8: the password-free FIDO2 slots of a vault that has a password slot.</summary>
+    internal static string Fido2WithoutPasswordLine(int count) =>
+        $"{count} FIDO2 slot(s) open without the vault password (each still needs its key's FIDO2 PIN and a touch).";
+
     /// <summary>Brief T17: the PROTECTION of a slot whose blob needs a newer tswap.</summary>
     internal const string NeedsNewerTswapMark = "needs a newer tswap";
 
     /// <summary>Brief T17: the PROTECTION of a slot whose blob is corrupt.</summary>
     internal const string CorruptMark = "corrupt (restore config.json from backup)";
 
-    private static string DescribeHardware(Config config, Slot slot) =>
+    private static string DescribeHardware(Config config, Slot slot) => YubiKeySlotKinds.Classify(slot.HwBlob) switch
+    {
         // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
         // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
-        YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-            ? DescribeYubiKeySlot(YubiKeySlotBlob.Decode(slot.HwBlob!))
-            : DescribeMachineProtection(config);
+        YubiKeySlotKind.Otp(var blob) => DescribeYubiKeySlot(blob),
+        // FIDO2 plan, task 8: the key (its model from the AAGUID when the serial is unknown); always PIN and touch.
+        YubiKeySlotKind.Fido2(var blob) => $"{Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid)}, {Fido2Protection}",
+        // Not reached for a TSYK blob this build can't read: DescribeMachineProtection names it first.
+        _ => DescribeMachineProtection(config),
+    };
 
     private static string DescribeYubiKeySlot(YubiKeySlotBlob blob) =>
         $"YubiKey {blob.Serial}, " + blob.RequiresTouch switch

@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using TswapCore.Keyring;
+using TswapCore.Vault.Fido2;
 using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
@@ -25,19 +27,23 @@ public sealed class VaultUnlocker
     private readonly Dictionary<HardwareBackend, IHardwareKeyService> _backends;
     private readonly YubiKeyHardwareService _yubiKey;
     private readonly IYubiKeyService _yubiKeys;
+    private readonly IFido2Service? _fido2;
 
     /// <summary>
     /// Builds an unlocker with the YubiKey backend always registered, plus any
     /// <paramref name="additionalBackends"/> (TPM, Secure Enclave) supplied by the
-    /// composition root. <paramref name="overrideKey"/> is the test-mode master key.
+    /// composition root. <paramref name="overrideKey"/> is the test-mode master key. <paramref name="fido2"/> (FIDO2
+    /// plan, task 7) opens FIDO2 slots in pass 4; without it they fail with <see cref="Fido2Texts.Unavailable"/>.
     /// </summary>
     public VaultUnlocker(
         IYubiKeyService yubiKeys,
         byte[]? overrideKey = null,
-        IEnumerable<IHardwareKeyService>? additionalBackends = null)
+        IEnumerable<IHardwareKeyService>? additionalBackends = null,
+        IFido2Service? fido2 = null)
     {
         _yubiKey = new YubiKeyHardwareService(yubiKeys, overrideKey);
         _yubiKeys = yubiKeys;
+        _fido2 = fido2;
         _backends = new Dictionary<HardwareBackend, IHardwareKeyService>
         {
             [HardwareBackend.YubiKey] = _yubiKey,
@@ -82,7 +88,7 @@ public sealed class VaultUnlocker
     public byte[] Unlock(Config config, YubiKeySelection selection) => Unlock(config, selection, UnlockSources.None);
 
     /// <summary>
-    /// Unlocks in three passes (brief T17 ruling 13). Before any pass, every candidate slot is classified
+    /// Unlocks in four passes (brief T17 ruling 13; FIDO2 plan, task 7). Before any pass, every candidate slot is classified
     /// with <see cref="SlotPassword.Classify"/>; slots that need a newer tswap or are corrupt are set aside
     /// and only named in the error (ruling 3).
     /// <list type="number">
@@ -94,10 +100,18 @@ public sealed class VaultUnlocker
     /// <item><b>Pass 3:</b> only if the agent gave nothing: <see cref="UnlockSources.Prompt"/>, called once;
     /// every password candidate gets a provider of clones of that one password, which is disposed when the
     /// pass ends.</item>
+    /// <item><b>Pass 4</b> (FIDO2 plan, task 7): the FIDO2 slots, last, because PIN tries are limited. Every exit
+    /// that would end the unlock reaches it while the vault has one (after the deferred OTP slots, which need no PIN).
+    /// No terminal (<see cref="UnlockSources.Fido2Pin"/> null): skipped with no key call. Linux and macOS probe each
+    /// slot silently and ask one PIN for a found one; Windows runs one ceremony over every FIDO2 slot. A FIDO2 password
+    /// slot reuses the password typed in pass 3 or asks for it (at most one prompt per run); it is left out when a TPM
+    /// or Secure Enclave password slot refused that password in pass 3 (controller ruling A). One PIN request per run.
+    /// Pass 3 still prompts only for non-FIDO2 password candidates.</item>
     /// </list>
-    /// A vault without password slots runs pass 1 only, with today's calls and today's errors (Goal 4).
+    /// A vault without password or FIDO2 slots runs pass 1 only, with today's calls and today's errors (Goal 4).
     /// When every pass fails, the error is pass 1's (the own backend's message with
-    /// <see cref="ForeignHardwareSlotHint"/>, the YubiKey slots' failures), then pass 3's, then the agent's.
+    /// <see cref="ForeignHardwareSlotHint"/>, the YubiKey slots' failures), then pass 3's, the deferred slots', pass 4's,
+    /// then the agent's.
     /// </summary>
     /// <remarks>
     /// YubiKey SDK stage 1, task 4b: with <see cref="UnlockSources.Remembered"/>, each key's slots are tried with the
@@ -161,13 +175,17 @@ public sealed class VaultUnlocker
         var plan = Classify(config, keyring, selection.ExcludeSerial);
         var plugged = new PluggedInKeys(_yubiKeys);
 
+        // FIDO2 plan, task 7: FIDO2 slots are pass 4's, tried last (PIN tries are limited). Every exit below that
+        // would end the unlock reaches pass 4 first while the vault has one.
+        var hasFido2 = plan.Fido2Candidates.Count > 0;
+
         // ---- Pass 1: password-free candidates only.
         TswapException? ownError = null;
         if (plan.OwnKind == SlotPasswordKind.None && plan.OwnPath)
         {
             // With no one-key slots to fall back to this is exactly the path (and the errors) of
             // every keyring vault before brief T4.
-            if (plan.YubiKeySlotCount == 0)
+            if (plan.YubiKeySlotCount == 0 && !hasFido2)
                 return OwnBackend(config, selection, password: null);
             try
             {
@@ -183,13 +201,15 @@ public sealed class VaultUnlocker
         }
         else if (plan.OwnPath && plan.OwnKind != SlotPasswordKind.Password && plan.YubiKeySlotCount == 0)
         {
-            // The own slot is set aside (newer tswap, corrupt) and nothing else could open the vault.
-            throw new TswapException("This machine's slot of this vault can't be used." + plan.SetAsideSuffix);
+            // The own slot is set aside (newer tswap, corrupt); without FIDO2 slots nothing else could open the vault.
+            if (!hasFido2)
+                throw new TswapException(OwnSlotSetAsideText + plan.SetAsideSuffix);
+            ownError = new TswapException(OwnSlotSetAsideText);
         }
 
-        // Without password candidates, pass 1 is today's whole unlock, so its errors carry the
+        // Without password or FIDO2 candidates, pass 1 is today's whole unlock, so its errors carry the
         // set-aside suffix themselves; otherwise it goes at the very end of the combined error.
-        var pass1Suffix = plan.HasPasswordCandidates ? "" : plan.SetAsideSuffix;
+        var pass1Suffix = plan.HasPasswordCandidates || hasFido2 ? "" : plan.SetAsideSuffix;
         TswapException? pass1Error = ownError;
         // Task 4b fix round: a key whose remembered slot needs the password keeps its password-free slots (older,
         // likely dead since it was re-enrolled) out of pass 1; they are tried last, only if the password pass fails or
@@ -223,64 +243,106 @@ public sealed class VaultUnlocker
                 if (key is not null)
                     return key;
             }
-            catch (TswapException ex) when (plan.HasPasswordCandidates && ex is not OwnerSwitchException)
+            catch (TswapException ex) when ((plan.HasPasswordCandidates || hasFido2) && ex is not OwnerSwitchException)
             {
                 pass1Error = ex;
             }
         }
 
-        var couldNeedPassword = (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
-            || (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains));
-        if (!couldNeedPassword)
-            throw WithSuffix(pass1Error ?? new TswapException("No slot of this vault can be used on this machine."), plan.SetAsideSuffix);
-
-        // ---- Pass 2: the agent.
-        string? agentFailure = null;
-        if (sources.AskAgent is { } askAgent)
+        // The vault password of this run: asked at most once, by pass 3 or (for a FIDO2 password slot) by pass 4.
+        using var runPassword = new RunPassword(sources.Prompt);
+        Fido2Outcome? pass4 = null;
+        byte[]? Pass4()
         {
+            if (!hasFido2)
+                return null;
+            var key = TryFido2Slots(keyring, plan.Fido2Candidates, sources, runPassword, out var outcome);
+            pass4 = outcome;
+            return key;
+        }
+        string Pass4Suffix() => pass4 is null ? "" : " " + pass4.Message;
+
+        // Pass 2's agent request, made at most once: the vault key, or null with agentFailure set when the agent
+        // refused (AgentUnlockFailedException: that is the agent failing, not the unlock).
+        string? agentFailure = null;
+        byte[]? AskAgent()
+        {
+            if (sources.AskAgent is not { } askAgent)
+                return null;
             try
             {
-                if (askAgent() is { } agentKey)
-                    return agentKey;
+                return askAgent();
             }
             catch (AgentUnlockFailedException ex)
             {
                 agentFailure = ex.Message;
+                return null;
             }
         }
+        string AgentSuffix() => agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure);
+
+        var couldNeedPassword = (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
+            || (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains));
+        if (!couldNeedPassword)
+        {
+            if (!hasFido2)
+                throw WithSuffix(pass1Error ?? new TswapException("No slot of this vault can be used on this machine."), plan.SetAsideSuffix);
+            // (a) No deferred slot can open here: a deferred key has a password slot, and no such key is plugged in.
+            // Final review: a running agent first, as pass 2, so it saves the PIN and touch it can. Only for a vault
+            // with a password slot (an agent can't have been started for one without): Goal 4, a vault without
+            // password slots never contacts an agent.
+            if ((plan.HasPasswordCandidates || plan.Fido2Candidates.Any(c => c.Blob.RequiresPassword)) && AskAgent() is { } agentKey)
+                return agentKey;
+            if (Pass4() is { } fido2Key)
+                return fido2Key;
+            // Review Focus 3: a vault whose only way in is FIDO2 (or a FIDO2 password slot), with no terminal or no
+            // password, refuses as a missing vault password does.
+            if (pass1Error is null && pass4!.PasswordUnavailable)
+                throw new VaultPasswordUnavailableException(pass4.Message + AgentSuffix() + plan.SetAsideSuffix);
+            throw new TswapException(
+                string.Join(" ", new[] { pass1Error?.Message, pass4!.Message }.OfType<string>()) + AgentSuffix() + plan.SetAsideSuffix);
+        }
+
+        // ---- Pass 2: the agent.
+        if (AskAgent() is { } passwordAgentKey)
+            return passwordAgentKey;
 
         // ---- Pass 3: the prompt, called once.
         if (sources.Prompt is null)
         {
+            // (b)
             if (TryDeferred() is { } deferredKey)
                 return deferredKey;
-            throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal +
-                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix());
+            if (Pass4() is { } fido2Key)
+                return fido2Key;
+            throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal + AgentSuffix() + DeferredSuffix() + Pass4Suffix());
         }
-        StretchedPassword prompted;
-        try
+        if (runPassword.Get() is not { } typed)
         {
-            prompted = sources.Prompt();
-        }
-        catch (VaultPasswordUnavailableException ex)
-        {
+            // (c) No password to be had (no terminal, no vault-password file).
+            var unavailable = runPassword.Failure!;
             if (TryDeferred() is { } deferredKey)
                 return deferredKey;
-            if (agentFailure is null && deferredError is null)
-                throw;
-            // No password to be had (no terminal, no vault-password file): still say why the agent and the deferred
-            // slots failed.
-            throw new VaultPasswordUnavailableException(ex.Message +
-                (agentFailure is null ? "" : " " + VaultPasswordMessages.AgentAlsoFailed(agentFailure)) + DeferredSuffix());
+            if (Pass4() is { } fido2Key)
+                return fido2Key;
+            if (agentFailure is null && deferredError is null && pass4 is null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unavailable);
+            // Still say why the agent, the deferred slots and the FIDO2 slots failed.
+            throw new VaultPasswordUnavailableException(unavailable.Message + AgentSuffix() + DeferredSuffix() + Pass4Suffix());
         }
-        using var original = prompted;
-        var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, original.Clone, out var pass3Error, trace)
+        var opened = TryPasswordCandidates(config, selection, keyring, plan, plugged, typed.Clone, out var pass3Error, out var refuted, trace)
             ?? TryDeferred();
         if (opened is not null)
             return opened;
+        // Controller ruling A (task 7): a TPM or Secure Enclave password slot's definite "wrong password" refutes the
+        // typed password for this run, so pass 4 spends no PIN or touch on FIDO2 password slots.
+        runPassword.Refuted = refuted;
+        // (d)
+        if (Pass4() is { } fido2Opened)
+            return fido2Opened;
 
         // A pass 1 failure is shown only now, when the later passes failed too.
-        if (pass1Error is null && agentFailure is null && deferredError is null && plan.SetAsideSuffix.Length == 0 && pass3Error is not null)
+        if (pass1Error is null && agentFailure is null && deferredError is null && pass4 is null && plan.SetAsideSuffix.Length == 0 && pass3Error is not null)
             throw pass3Error;
         List<string> parts = [];
         if (pass1Error is not null)
@@ -289,6 +351,8 @@ public sealed class VaultUnlocker
             parts.Add(pass3Error.Message);
         if (deferredError is not null)
             parts.Add(deferredError.Message);
+        if (pass4 is not null)
+            parts.Add(pass4.Message);
         if (agentFailure is not null)
             parts.Add(VaultPasswordMessages.AgentAlsoFailed(agentFailure));
         if (parts.Count == 0)
@@ -296,15 +360,262 @@ public sealed class VaultUnlocker
         throw new TswapException(string.Join(" ", parts) + plan.SetAsideSuffix, pass3Error?.ExitCode ?? 1);
     }
 
+    private const string OwnSlotSetAsideText = "This machine's slot of this vault can't be used.";
+
+    /// <summary>
+    /// The vault password of one unlock (FIDO2 plan, task 7): <see cref="UnlockSources.Prompt"/> called at most once,
+    /// by pass 3 or by pass 4, and the answer kept for both; disposed when the unlock ends.
+    /// </summary>
+    private sealed class RunPassword(VaultPasswordProvider? prompt) : IDisposable
+    {
+        private StretchedPassword? _typed;
+
+        public bool Asked { get; private set; }
+
+        /// <summary>Why no password could be had, once <see cref="Get"/> returned null.</summary>
+        public VaultPasswordUnavailableException? Failure { get; private set; }
+
+        /// <summary>Controller ruling A: a TPM or Secure Enclave password slot refused the typed password in pass 3.</summary>
+        public bool Refuted { get; set; }
+
+        /// <summary>The typed password (asked on the first call), or null with <see cref="Failure"/>.</summary>
+        public StretchedPassword? Get()
+        {
+            if (Asked)
+                return _typed;
+            Asked = true;
+            if (prompt is null)
+            {
+                Failure = new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+                return null;
+            }
+            try
+            {
+                return _typed = prompt();
+            }
+            catch (VaultPasswordUnavailableException ex)
+            {
+                Failure = ex;
+                return null;
+            }
+        }
+
+        public void Dispose() => _typed?.Dispose();
+    }
+
+    /// <summary>
+    /// Why pass 4 opened nothing: its text, and whether that is only a missing terminal or vault password (the
+    /// refusal of a vault whose only way in is FIDO2 is then a <see cref="VaultPasswordUnavailableException"/>).
+    /// </summary>
+    private sealed record Fido2Outcome(string Message, bool PasswordUnavailable);
+
+    /// <summary>
+    /// Pass 4 (FIDO2 plan, task 7): the vault's FIDO2 slots, with at most one PIN request in the run. No terminal
+    /// (<see cref="UnlockSources.Fido2Pin"/> null): no key call. Password slots are left out when
+    /// <paramref name="password"/> was refuted (ruling A). Linux and macOS probe each slot silently first and ask a PIN
+    /// only for a found one; Windows runs one ceremony over every remaining slot. The KEK is the global constraints':
+    /// <c>Fido2SlotKek.Derive(output, blob.PrfInput, slotId)</c>, or <c>DeriveV2</c> with the vault password; the
+    /// output is zeroed after.
+    /// </summary>
+    private byte[]? TryFido2Slots(Keyring.Keyring keyring, List<(Slot Slot, Fido2SlotBlob Blob)> candidates,
+        UnlockSources sources, RunPassword password, out Fido2Outcome outcome)
+    {
+        if (_fido2 is not { } fido2)
+        {
+            outcome = new(Fido2Texts.Unavailable, PasswordUnavailable: false);
+            return null;
+        }
+        if (sources.Fido2Pin is not { } pin)
+        {
+            outcome = new(Fido2Texts.NoTerminal, PasswordUnavailable: true);
+            return null;
+        }
+
+        List<string> notes = [];
+        var tryable = candidates;
+        if (password.Refuted)
+        {
+            notes.AddRange(candidates.Where(c => c.Blob.RequiresPassword).Select(c => Fido2Texts.LeftOutPasswordRefused(fido2.KeyName(c.Blob))));
+            tryable = [.. candidates.Where(c => !c.Blob.RequiresPassword)];
+        }
+
+        return fido2.CanList
+            ? TryLocatedFido2Slot(fido2, keyring, tryable, pin, sources.Fido2Notice, password, notes, out outcome)
+            : TryFido2Ceremony(fido2, keyring, tryable, pin, sources.Fido2Notice, password, notes, out outcome);
+    }
+
+    /// <summary>
+    /// Linux and macOS: <see cref="IFido2Service.Locate"/> each slot (no PIN, no touch); a probe that fails (a busy key)
+    /// ends the pass. Of the found slots, one is opened, the password-free ones first.
+    /// </summary>
+    private static byte[]? TryLocatedFido2Slot(IFido2Service fido2, Keyring.Keyring keyring, List<(Slot Slot, Fido2SlotBlob Blob)> tryable,
+        Fido2Pin pin, Action<string>? notice, RunPassword password, List<string> notes, out Fido2Outcome outcome)
+    {
+        List<(Slot Slot, Fido2SlotBlob Blob, Fido2KeyInfo Key)> found = [];
+        foreach (var (slot, blob) in tryable)
+        {
+            Fido2Locate located;
+            try
+            {
+                located = fido2.Locate(blob);
+            }
+            catch (Fido2Exception ex)
+            {
+                notes.Add(ex.Message);
+                outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+                return null;
+            }
+            if (located is Fido2Locate.Found hit)
+                found.Add((slot, blob, hit.Key));
+            else if (Fido2Texts.Describe(located) is { } text)
+                notes.Add(text);
+        }
+        if (found.Count == 0)
+        {
+            outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+            return null;
+        }
+
+        var (pickSlot, pickBlob, pickKey) = found.OrderBy(f => f.Blob.RequiresPassword ? 1 : 0).First();
+        var name = fido2.KeyName(pickKey);
+        var othersFound = found.Count > 1;
+        StretchedPassword? typed = null;
+        if (pickBlob.RequiresPassword && (typed = password.Get()) is null)
+        {
+            notes.Add(Fido2Texts.PasswordUnavailable(name, password.Failure!.Message));
+            outcome = new(string.Join(" ", notes), PasswordUnavailable: notes.Count == 1);
+            return null;
+        }
+
+        Fido2Opened opened;
+        try
+        {
+            opened = fido2.Open([pickBlob], pickKey, TouchLineAfterPin(pin, notice));
+        }
+        catch (Fido2Exception ex)
+        {
+            notes.Add(ex.Message);
+            if (othersFound)
+                notes.Add(Fido2Texts.OtherSlotNotTried);
+            outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+            return null;
+        }
+        var vaultKey = UnwrapFido2Slot(keyring, pickSlot, opened, typed);
+        if (vaultKey is null)
+        {
+            notes.Add(Fido2Texts.UnwrapFailed(name, pickBlob.RequiresPassword));
+            if (othersFound)
+                notes.Add(Fido2Texts.OtherSlotNotTried);
+            outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+            return null;
+        }
+        outcome = new("", PasswordUnavailable: false);
+        return vaultKey;
+    }
+
+    /// <summary>
+    /// Linux and macOS (FIDO2 plan, task 8): <see cref="Fido2Texts.TouchLine"/> said once the PIN is typed, so it comes
+    /// after the PIN prompt, as the key then waits for the touch; nothing when the prompt was cancelled. (Windows' dialog
+    /// asks for the PIN itself: its line comes before the ceremony.)
+    /// </summary>
+    public static Fido2Pin TouchLineAfterPin(Fido2Pin pin, Action<string>? notice) => request =>
+    {
+        var answer = pin(request);
+        if (answer.Length > 0)
+            notice?.Invoke(Fido2Texts.TouchLine);
+        return answer;
+    };
+
+    /// <summary>
+    /// Windows: one ceremony with every remaining FIDO2 slot in the allow list; the credential that answers picks the
+    /// slot. A password slot's vault password is asked before the dialog; without one, the password slots are left out.
+    /// </summary>
+    private static byte[]? TryFido2Ceremony(IFido2Service fido2, Keyring.Keyring keyring, List<(Slot Slot, Fido2SlotBlob Blob)> tryable,
+        Fido2Pin pin, Action<string>? notice, RunPassword password, List<string> notes, out Fido2Outcome outcome)
+    {
+        var allowed = tryable;
+        StretchedPassword? typed = null;
+        if (allowed.Any(c => c.Blob.RequiresPassword) && (typed = password.Get()) is null)
+        {
+            notes.AddRange(allowed.Where(c => c.Blob.RequiresPassword)
+                .Select(c => Fido2Texts.PasswordUnavailable(fido2.KeyName(c.Blob), password.Failure!.Message)));
+            allowed = [.. allowed.Where(c => !c.Blob.RequiresPassword)];
+        }
+        if (allowed.Count == 0)
+        {
+            // Only password slots, and no password: the dialog is skipped.
+            outcome = new(string.Join(" ", notes), PasswordUnavailable: !password.Refuted);
+            return null;
+        }
+
+        notice?.Invoke(Fido2Texts.WindowsTouchLine);
+        Fido2Opened opened;
+        try
+        {
+            opened = fido2.Open([.. allowed.Select(c => c.Blob)], null, pin);
+        }
+        catch (Fido2Exception ex)
+        {
+            // The left-out slots are named too, so a key holding only such a slot isn't just told it holds none.
+            outcome = new(string.Join(" ", [ex.Message, .. notes]), PasswordUnavailable: false);
+            return null;
+        }
+        var (slot, blob) = allowed.First(c => c.Blob.CredentialId.AsSpan().SequenceEqual(opened.Blob.CredentialId));
+        var vaultKey = UnwrapFido2Slot(keyring, slot, opened, blob.RequiresPassword ? typed : null);
+        if (vaultKey is null)
+        {
+            outcome = new(string.Join(" ", [Fido2Texts.UnwrapFailed(fido2.KeyName(blob), blob.RequiresPassword), .. notes]), PasswordUnavailable: false);
+            return null;
+        }
+        outcome = new("", PasswordUnavailable: false);
+        return vaultKey;
+    }
+
+    /// <summary>
+    /// <c>KEK_slot</c> from the opened key's output (zeroed here) and the slot's unwrap: <c>K_v</c>, or null when the
+    /// slot didn't authenticate under it. <paramref name="typed"/> is the vault password for a password slot.
+    /// </summary>
+    private static byte[]? UnwrapFido2Slot(Keyring.Keyring keyring, Slot slot, Fido2Opened opened, StretchedPassword? typed)
+    {
+        byte[] kekSlot;
+        try
+        {
+            kekSlot = opened.Blob.RequiresPassword
+                ? Fido2SlotKek.DeriveV2(opened.Output, typed ?? throw new InvalidOperationException("a FIDO2 password slot needs the vault password"),
+                    opened.Blob.PrfInput, slot.SlotId)
+                : Fido2SlotKek.Derive(opened.Output, opened.Blob.PrfInput, slot.SlotId);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(opened.Output);
+        }
+        try
+        {
+            return UnwrapSlot(keyring, slot, kekSlot);
+        }
+        catch (TswapException)
+        {
+            return null;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
+    }
+
     /// <summary>
     /// Pass 3's candidates (ruling 13): the own backend's slot if it has the password, then the password
     /// YubiKey slots whose key is plugged in, each with <paramref name="provider"/>. The vault key, or null
-    /// with the last failure in <paramref name="error"/>.
+    /// with the last failure in <paramref name="error"/>. <paramref name="refuted"/> (FIDO2 plan, task 7, controller
+    /// ruling A): the own TPM or Secure Enclave slot definitely refused the password (a wrong password); an OTP password
+    /// slot's failed unwrap is ambiguous and never refutes it.
     /// </summary>
     private byte[]? TryPasswordCandidates(Config config, YubiKeySelection selection, Keyring.Keyring keyring,
-        UnlockPlan plan, PluggedInKeys plugged, VaultPasswordProvider provider, out TswapException? error, SlotTrace? trace = null)
+        UnlockPlan plan, PluggedInKeys plugged, VaultPasswordProvider provider, out TswapException? error, out bool refuted,
+        SlotTrace? trace = null)
     {
         error = null;
+        refuted = false;
         if (plan.OwnPath && plan.OwnKind == SlotPasswordKind.Password)
         {
             try
@@ -314,6 +625,8 @@ public sealed class VaultUnlocker
             catch (TswapException ex) when (ex is not OwnerSwitchException)
             {
                 error = ex;
+                refuted = config.Backend is HardwareBackend.Tpm or HardwareBackend.SecureEnclave
+                    && ex is VaultPasswordRefusedException { Reason: VaultPasswordRefusal.WrongPassword };
             }
         }
         if (plan.PasswordSerials.Count > 0 && plugged.TryGet().Any(plan.PasswordSerials.Contains))
@@ -354,7 +667,7 @@ public sealed class VaultUnlocker
         if (!reachable)
             throw WithSuffix(new TswapException(NoPasswordSlotHereText), plan.SetAsideSuffix);
 
-        var key = TryPasswordCandidates(config, selection, keyring, plan, plugged, password.Clone, out var error);
+        var key = TryPasswordCandidates(config, selection, keyring, plan, plugged, password.Clone, out var error, out _);
         return key ?? throw WithSuffix(error ?? new TswapException(NoPasswordSlotHereText), plan.SetAsideSuffix);
     }
 
@@ -399,6 +712,24 @@ public sealed class VaultUnlocker
     }
 
     /// <summary>
+    /// FIDO2 plan, task 7: whether the vault's keyring holds a FIDO2 slot (so an unlock may reach pass 4 and need the
+    /// terminal's PIN source). Never throws: no keyring, or one it can't read, is false.
+    /// </summary>
+    public static bool HasFido2Slots(Config config)
+    {
+        if (config.Keyring is null)
+            return false;
+        try
+        {
+            return DecodeKeyring(config).Slots.Any(s => s.Kind == SlotKind.Machine && YubiKeySlotKinds.Classify(s.HwBlob) is YubiKeySlotKind.Fido2);
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Brief T17 ruling 14: how this machine's own slot of the vault (by <see cref="Config.KeyringSlotId"/>,
     /// or the first machine slot) classifies, for <c>broker serve</c> (locked at start on
     /// <see cref="SlotPasswordKind.Password"/>) and <c>broker unlock|lock|status</c> (refused before
@@ -424,20 +755,25 @@ public sealed class VaultUnlocker
         }
     }
 
-    /// <summary>The candidates of one unlock, classified before any pass runs (brief T17 ruling 3).</summary>
-    private sealed record UnlockPlan(
+    /// <summary>
+    /// The candidates of one unlock, classified before any pass runs (brief T17 ruling 3). FIDO2 plan, task 2: FIDO2
+    /// slots are <see cref="Fido2Candidates"/> only (task 7 tries them), never OTP candidates, never counted in
+    /// <see cref="YubiKeySlotCount"/> and never set aside as needing a newer tswap.
+    /// </summary>
+    internal sealed record UnlockPlan(
         bool OwnPath,
         SlotPasswordKind OwnKind,
         int YubiKeySlotCount,
         List<(Slot Slot, YubiKeySlotBlob Blob)> YubiKeyCandidates,
         HashSet<int> PasswordSerials,
-        string SetAsideSuffix)
+        string SetAsideSuffix,
+        List<(Slot Slot, Fido2SlotBlob Blob)> Fido2Candidates)
     {
         public bool HasPasswordCandidates => (OwnPath && OwnKind == SlotPasswordKind.Password) || PasswordSerials.Count > 0;
     }
 
     /// <param name="excludeSerial">Task 4b: a key whose one-key slots are left out (<see cref="YubiKeySelection.ExcludeSerial"/>).</param>
-    private static UnlockPlan Classify(Config config, Keyring.Keyring keyring, int? excludeSerial)
+    internal static UnlockPlan Classify(Config config, Keyring.Keyring keyring, int? excludeSerial)
     {
         List<string> corrupt = [];
         List<string> newer = [];
@@ -457,7 +793,7 @@ public sealed class VaultUnlocker
             {
                 own = null; // the own backend reports the damaged slot id itself, as before
             }
-            if (own is not null && !YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob))
+            if (own is not null && !YubiKeySlotKinds.IsYubiKey(own.HwBlob))
             {
                 (ownKind, var error) = SlotPassword.Describe(own);
                 if (ownKind == SlotPasswordKind.Corrupt)
@@ -467,33 +803,44 @@ public sealed class VaultUnlocker
             }
         }
 
-        var yubiKeySlots = keyring.Slots
-            .Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
-            .ToList();
         List<(Slot Slot, YubiKeySlotBlob Blob)> candidates = [];
+        List<(Slot Slot, Fido2SlotBlob Blob)> fido2Candidates = [];
+        var yubiKeySlotCount = 0;
         var excluded = 0;
-        foreach (var s in yubiKeySlots)
+        foreach (var s in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
             // A slot whose blob doesn't decode is set aside (security review of T4: one bad slot must
             // not block the others) and named in the final error only if no other slot unlocks.
-            var (blob, kind, error) = YubiKeySlotBlob.Parse(s.HwBlob!);
-            if (blob is not null && blob.Serial == excludeSerial)
-                excluded++; // task 4b: the key being re-enrolled
-            else if (blob is not null)
-                candidates.Add((s, blob));
-            else if (kind == SlotPasswordKind.NeedsNewerTswap)
-                newer.Add($"Slot {Id8(s)}: {error}");
-            else
-                corrupt.Add(Id8(s));
+            switch (YubiKeySlotKinds.Classify(s.HwBlob))
+            {
+                case YubiKeySlotKind.None:
+                    continue;
+                case YubiKeySlotKind.Fido2(var fido2):
+                    fido2Candidates.Add((s, fido2)); // whatever excludeSerial says: it names OTP slots only
+                    continue;
+                case YubiKeySlotKind.Otp(var blob) when blob.Serial == excludeSerial:
+                    excluded++; // task 4b: the key being re-enrolled
+                    break;
+                case YubiKeySlotKind.Otp(var blob):
+                    candidates.Add((s, blob));
+                    break;
+                case YubiKeySlotKind.NeedsNewerTswap(var error):
+                    newer.Add($"Slot {Id8(s)}: {error}");
+                    break;
+                default:
+                    corrupt.Add(Id8(s));
+                    break;
+            }
+            yubiKeySlotCount++;
         }
 
         var suffix = (corrupt.Count == 0 ? "" :
                 $" Skipped slot(s) {string.Join(", ", corrupt)}: their slot blob is corrupt; restore config.json from backup.") +
             string.Concat(newer.Select(n => " " + n));
         return new UnlockPlan(
-            ownPath, ownKind, yubiKeySlots.Count - excluded, candidates,
+            ownPath, ownKind, yubiKeySlotCount - excluded, candidates,
             candidates.Where(c => c.Blob.RequiresPassword).Select(c => c.Blob.Serial).ToHashSet(),
-            suffix);
+            suffix, fido2Candidates);
     }
 
     private static string Id8(Slot slot) => Convert.ToHexString(slot.SlotId).ToLowerInvariant()[..8];
@@ -573,7 +920,8 @@ public sealed class VaultUnlocker
 
     /// <summary>
     /// True for a YubiKey vault whose own machine slot (by <see cref="Config.KeyringSlotId"/>, or
-    /// the first machine slot when that is null) carries a <see cref="YubiKeySlotBlob"/>. A
+    /// the first machine slot when that is null) carries a <c>TSYK</c> blob: a <see cref="YubiKeySlotBlob"/>, or a
+    /// <see cref="Fido2SlotBlob"/> (<c>init --fido2</c>, FIDO2 plan task 2), or one this build can't read. A
     /// YubiKey machine slot without one is a legacy pair slot, unlocked through
     /// <see cref="YubiKeyHardwareService"/> and the per-machine pair fields.
     /// </summary>
@@ -582,7 +930,7 @@ public sealed class VaultUnlocker
         if ((config.Backend ?? HardwareBackend.YubiKey) != HardwareBackend.YubiKey)
             return false;
         var own = FindOwnMachineSlot(config, keyring);
-        return own is not null && YubiKeySlotBlob.IsYubiKeyBlob(own.HwBlob);
+        return own is not null && YubiKeySlotKinds.IsYubiKey(own.HwBlob);
     }
 
     /// <summary>
@@ -775,9 +1123,10 @@ public sealed class VaultUnlocker
 
     /// <summary>
     /// This machine's own machine slot: by <see cref="Config.KeyringSlotId"/>, or the first machine
-    /// slot when that is null; null when there is none. Throws for a non-base64 slot id.
+    /// slot when that is null; null when there is none. Compared by the id's bytes (a non-canonical base64 form still
+    /// matches; <c>broker serve</c> uses it too). Throws for a non-base64 slot id.
     /// </summary>
-    private static Slot? FindOwnMachineSlot(Config config, Keyring.Keyring keyring)
+    public static Slot? FindOwnMachineSlot(Config config, Keyring.Keyring keyring)
     {
         if (config.KeyringSlotId is null)
             return keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);
@@ -819,6 +1168,23 @@ public sealed class VaultUnlocker
         {
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(kekSlot);
         }
+    }
+
+    /// <summary>
+    /// FIDO2 plan, task 8 (<c>yubikey setup --replace</c>): whether one of <paramref name="slots"/> (the vault's FIDO2
+    /// slots) opens the vault now, as pass 4 opens them: the key's PIN and a touch (<see cref="UnlockSources.Fido2Pin"/>;
+    /// null, no terminal: no key call), the vault password from <see cref="UnlockSources.Prompt"/> for a password slot,
+    /// then the slot unwrapped. The vault key is zeroed at once. Null when a slot opened, else why none did (a wrong
+    /// PIN, a cancelled prompt, no terminal, the key not plugged in), in pass 4's words.
+    /// </summary>
+    public string? Fido2SlotOpens(Keyring.Keyring keyring, IReadOnlyList<(Slot Slot, Fido2SlotBlob Blob)> slots, UnlockSources sources)
+    {
+        using var password = new RunPassword(sources.Prompt);
+        var vaultKey = TryFido2Slots(keyring, [.. slots], sources, password, out var outcome);
+        if (vaultKey is null)
+            return outcome.Message;
+        CryptographicOperations.ZeroMemory(vaultKey);
+        return null;
     }
 
     /// <summary>Unwraps one machine slot under <paramref name="kekSlot"/> and returns <c>K_v</c>.</summary>

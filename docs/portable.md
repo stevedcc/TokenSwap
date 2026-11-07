@@ -76,5 +76,11 @@ reach the key's OTP interface (the one tswap uses):
 - **Windows:** the OTP interface is a keyboard device that a normal user can reach, so no setting
   should be needed. That was checked in a spike, not yet with a release build.
 
+A key's [FIDO2 slot](setup.md#fido2-slots) uses its FIDO interface instead, which is not a
+keyboard: on macOS it needs no Input Monitoring, so no administrator either. On Windows it goes
+through Windows' own security key dialog, which a normal user can use; adding the slot
+(`slot add --fido2`) needs an elevated prompt like every `[sudo]` command, but `init --fido2` and
+unlocking don't. On Linux see [YubiKey prerequisites](install.md#yubikey-prerequisites).
+
 A key another tswap (or another app) is using, for example one waiting for a touch in another
 terminal, is reported as busy: try again when that command is done.

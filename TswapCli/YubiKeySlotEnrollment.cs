@@ -125,7 +125,11 @@ internal static class YubiKeySlotEnrollment
     /// <summary>
     /// The touch posture of a key just enrolled, explained once on stderr (brief T7 item 5): this is
     /// where it is chosen. The caller acknowledges it in config (<see cref="SecurityWarnings.Acknowledge"/>).
+    /// FIDO2 plan, task 6: then, on every OS, the multi-OS hint (<see cref="Fido2SlotEnrollment.MultiOsHint"/>).
     /// </summary>
     public static void PrintTouchPolicy(IConsole c, YubiKeySlotBlob blob)
-        => SecurityWarnings.ExplainTouch(c, $"YubiKey {blob.Serial}", blob.RequiresTouch);
+    {
+        SecurityWarnings.ExplainTouch(c, $"YubiKey {blob.Serial}", blob.RequiresTouch);
+        c.Error.WriteLine(Fido2SlotEnrollment.MultiOsHint);
+    }
 }

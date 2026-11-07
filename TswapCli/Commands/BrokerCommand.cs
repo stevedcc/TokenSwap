@@ -88,10 +88,7 @@ public sealed class BrokerCommand : ICliCommand
         // Brief T17 ruling 14: this machine's slot decides. A password slot starts locked; a slot this
         // build can't use (newer tswap, corrupt) refuses to start.
         var vaultConfig = records.LoadConfig();
-        var own = VaultUnlocker.OwnSlotPassword(vaultConfig);
-        if (own.Kind is SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt)
-            throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
-        var withPassword = own.Kind == SlotPasswordKind.Password;
+        var withPassword = ServeStartsLocked(vaultConfig);
 
         // Decision 1: no same-uid ptrace, no core dumps holding secrets. Brief T17 ruling 12: a password
         // broker is dumpable only while locked with nothing held (so 'broker unlock' can check it).
@@ -204,6 +201,56 @@ public sealed class BrokerCommand : ICliCommand
             CurrentKeys = () => deferred!.Current,
             KeySource = source,
         };
+    }
+
+    /// <summary>FIDO2 plan, task 8: <c>broker serve</c> on a machine whose own slot is FIDO2 (whatever other slots the vault has).</summary>
+    public const string Fido2OnlyText =
+        "This machine's slot of the vault is a FIDO2 slot, and FIDO2 slots need a PIN and a touch on every unlock, so the " +
+        "broker can't use it. The broker needs this machine's own slot to be a TPM or Secure Enclave slot: give it one " +
+        "with 'tswap slot request --tpm' (or '--secure-enclave'), or run the broker on a machine that has one.";
+
+    /// <summary>
+    /// Whether <c>broker serve</c> starts locked, decided before anything is created. Brief T17 ruling 14: this
+    /// machine's slot decides; a password slot starts locked, and a slot this build can't use (newer tswap, corrupt)
+    /// refuses to start. FIDO2 plan, task 8 (fix round 1 ruling): a FIDO2 own slot refuses to start
+    /// (<see cref="Fido2OnlyText"/>), whatever other slots the vault has, so the locked state and
+    /// <c>broker unlock|lock|status</c> always key on the same own slot. A broker's unlocks have no terminal, so they
+    /// skip the vault's other FIDO2 slots without a key call.
+    /// </summary>
+    internal static bool ServeStartsLocked(Config vaultConfig)
+    {
+        var own = VaultUnlocker.OwnSlotPassword(vaultConfig);
+        if (own.Kind is SlotPasswordKind.NeedsNewerTswap or SlotPasswordKind.Corrupt)
+            throw new TswapException($"Slot {own.SlotId8}: {own.Error}");
+        if (OwnSlotIsFido2(vaultConfig))
+            throw new TswapException(Fido2OnlyText);
+        return own.Kind == SlotPasswordKind.Password;
+    }
+
+    /// <summary>Whether this machine's own slot (by <see cref="Config.KeyringSlotId"/>, else the first machine slot) is a FIDO2 slot; unreadable: false (the unlock says why).</summary>
+    private static bool OwnSlotIsFido2(Config config)
+    {
+        if (config.Keyring is null)
+            return false;
+        TswapCore.Keyring.Keyring keyring;
+        try
+        {
+            keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring));
+        }
+        catch (Exception e) when (e is TswapException or FormatException)
+        {
+            return false;
+        }
+        Slot? own;
+        try
+        {
+            own = VaultUnlocker.FindOwnMachineSlot(config, keyring); // by the id's bytes, as the unlocker finds it
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
+        return own is not null && YubiKeySlotKinds.Classify(own.HwBlob) is YubiKeySlotKind.Fido2;
     }
 
     // ------------------------------------------------------------------ unlock, lock, status (brief T17 ruling 14)

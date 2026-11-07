@@ -36,6 +36,10 @@ public sealed class YubiKeyCommand : ICliCommand
 
     internal const string TouchPrompt = "touch the key when it flashes (to check the new slot)";
 
+    /// <summary>FIDO2 plan, task 8: said before a FIDO2 slot is checked for <c>--replace</c>.</summary>
+    internal const string CheckingFido2Text =
+        "Checking that the vault's FIDO2 slot still opens it (the key's FIDO2 PIN and a touch)...";
+
     internal const string CouldNotCheck = "couldn't check whether a vault depends on this key";
 
     private string Usage(CommandContext ctx) => $"{ctx.Prefix} {HelpUsage} (exactly one of --touch and --no-touch)";
@@ -228,26 +232,97 @@ public sealed class YubiKeyCommand : ICliCommand
             return;
 
         List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys = [];
+        List<(Slot Slot, Fido2SlotBlob Blob)> fido2Slots = [];
         foreach (var slot in keyring.Slots)
         {
-            switch (Classify(slot, serial))
+            switch (Classify(slot, serial, out var otherKey, out var fido2))
             {
                 case WayIn.ByItself:
                     return;
                 case WayIn.OtherYubiKey:
-                    otherKeys.Add((slot, YubiKeySlotBlob.Decode(slot.HwBlob!)));
+                    otherKeys.Add((slot, otherKey!));
+                    break;
+                case WayIn.Fido2:
+                    fido2Slots.Add((slot, fido2!)); // FIDO2 plan, task 8: a way in only if it opens now
                     break;
             }
         }
-        if (otherKeys.Count == 0)
+        if (otherKeys.Count == 0 && fido2Slots.Count == 0)
             throw new TswapException(
                 $"Refusing: YubiKey {serial} is the only way into the vault in {ctx.Env.ConfigDir} (its keyring has no slot " +
                 "that opens it without this key), so replacing its slot 2 would lock the vault. Add another way in first " +
                 "(another YubiKey, a TPM or Secure Enclave slot, or a recovery slot), then run this again. Nothing was changed.");
-        CheckAnotherKey(ctx, config, keyring, serial, otherKeys, keys);
+
+        // The vault password is asked at most once (only a password slot asks), and dropped at the end.
+        StretchedPasswordCache password = new(TerminalPasswordProvider.For(ctx, config));
+        try
+        {
+            // Other keys' OTP slots first (no PIN); the FIDO2 slots after, since PIN tries are limited.
+            string? otpFailure = null;
+            if (otherKeys.Count > 0
+                && (otpFailure = CheckAnotherKey(ctx, keyring, serial, otherKeys, keys, password, fido2Follows: fido2Slots.Count > 0)) is null)
+                return;
+            CheckFido2Slots(ctx, keyring, serial, fido2Slots, password, otpFailure);
+        }
+        finally
+        {
+            password.Dispose();
+        }
     }
 
-    private enum WayIn { No, ByItself, OtherYubiKey }
+    /// <summary>
+    /// FIDO2 plan, task 8: the vault's FIDO2 slots count as another way in only if one opens now (the key's PIN and a
+    /// touch, through the unlocker's pass 4). A wrong PIN, a cancelled prompt or no terminal refuses, naming them and
+    /// why, after <paramref name="otpFailure"/> (why the other keys' OTP slots didn't count) when there were any.
+    /// </summary>
+    private static void CheckFido2Slots(CommandContext ctx, Keyring keyring, int serial,
+        List<(Slot Slot, Fido2SlotBlob Blob)> fido2Slots, StretchedPasswordCache password, string? otpFailure)
+    {
+        ctx.Console.Error.WriteLine(CheckingFido2Text);
+        string? why;
+        try
+        {
+            why = ctx.Unlocker.Fido2SlotOpens(keyring, fido2Slots, new UnlockSources(AskAgent: null, Prompt: password.Provide)
+            {
+                Fido2Pin = Fido2PinPrompt.For(ctx),
+                Fido2Notice = ctx.Console.Error.WriteLine,
+            });
+        }
+        catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
+        {
+            // As CheckAnotherKey does. (Pass 4 turns a password it can't have into its own text today; this keeps the
+            // composed refusal if that ever lets the exception through.)
+            why = e.Message;
+        }
+        if (why is null)
+            return;
+        var names = string.Join(", ", fido2Slots.Select(f => Fido2SlotBlob.DisplayName(f.Blob.Serial, f.Blob.Aaguid)).Distinct());
+        var slots = fido2Slots.Count == 1 ? $"the vault's FIDO2 slot ({names})" : $"the vault's FIDO2 slots ({names})";
+        throw new TswapException(Fido2Refusal(serial, ctx.Env.ConfigDir, slots, fido2Slots.Count, why, otpFailure));
+    }
+
+    /// <summary>
+    /// <see cref="CheckFido2Slots"/>'s refusal: why the FIDO2 slots didn't count, after <paramref name="otpFailure"/>.
+    /// Each reason ends as a sentence, whether or not its own text has a full stop.
+    /// </summary>
+    internal static string Fido2Refusal(int serial, string configDir, string slots, int count, string why, string? otpFailure) =>
+        otpFailure is null
+            ? $"Refusing: apart from YubiKey {serial}, only {slots} can open the vault in {configDir}, and " +
+              $"{(count == 1 ? "it didn't" : "none of them did")} open now: {Sentence(why)} Nothing was changed."
+            : $"Refusing: {Sentence(otpFailure)} {char.ToUpperInvariant(slots[0])}{slots[1..]} didn't open now: {Sentence(why)} " +
+              "Nothing was changed.";
+
+    private static string Sentence(string text)
+    {
+        var trimmed = text.TrimEnd();
+        return trimmed.EndsWith('.') || trimmed.EndsWith('!') || trimmed.EndsWith('?') ? trimmed : trimmed + ".";
+    }
+
+    /// <summary>
+    /// What a slot is for <c>--replace</c>. <see cref="Fido2"/> (FIDO2 plan, task 2): a FIDO2 slot, of any key
+    /// (reprogramming OTP slot 2 never touches the key's FIDO2 credentials); a way in only if it opens now (task 8).
+    /// </summary>
+    private enum WayIn { No, ByItself, OtherYubiKey, Fido2 }
 
     /// <summary>
     /// A blob recognised as a TPM or Secure Enclave slot's, as their unlockers read it: a <c>TSTP</c>/<c>TSSE</c> header
@@ -271,24 +346,21 @@ public sealed class YubiKeyCommand : ICliCommand
     /// Whether <paramref name="slot"/> may be a slot on YubiKey <paramref name="serial"/>: a one-key YubiKey slot of this
     /// serial, or one whose serial can't be read (fail closed); this machine's legacy pair slot when its pair (the
     /// config's pair serials) includes this key; another machine's legacy pair slot, whose pair isn't known here (fail
-    /// closed). Recovery, TPM and Secure Enclave slots and other keys' slots are not.
+    /// closed). Recovery, TPM and Secure Enclave slots and other keys' slots are not, and neither is a FIDO2 slot, even of
+    /// this key: reprogramming OTP slot 2 never touches the key's FIDO2 credentials (FIDO2 plan, task 2).
     /// </summary>
-    private static bool MayBeThisKeys(Config config, Keyring keyring, Slot slot, int serial)
+    internal static bool MayBeThisKeys(Config config, Keyring keyring, Slot slot, int serial)
     {
         if (slot.Kind == SlotKind.Recovery)
             return false;
         if (slot.HwBlob is not { Length: > 0 })
             return IsOwnSlot(config, keyring, slot) ? config.YubiKeySerials?.Contains(serial) == true : true;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
-            return false;
-        try
+        return YubiKeySlotKinds.Classify(slot.HwBlob) switch
         {
-            return YubiKeySlotBlob.Decode(slot.HwBlob).Serial == serial;
-        }
-        catch (TswapException)
-        {
-            return true;
-        }
+            YubiKeySlotKind.None or YubiKeySlotKind.Fido2 => false,
+            YubiKeySlotKind.Otp(var blob) => blob.Serial == serial,
+            _ => true, // needs a newer tswap or corrupt: its serial can't be read (fail closed)
+        };
     }
 
     /// <summary>This machine's own slot: by <see cref="Config.KeyringSlotId"/>, or the first machine slot when that is null (as the unlocker finds it).</summary>
@@ -302,23 +374,30 @@ public sealed class YubiKeyCommand : ICliCommand
     /// with a hardware blob that isn't a YubiKey's (a TPM or Secure Enclave of any machine), opens the vault by itself;
     /// a one-key YubiKey slot of another serial (compared as integers) does if its key answers. Never this serial's
     /// slots, never a YubiKey slot whose serial can't be read (fail closed), never a legacy pair slot (a machine slot
-    /// without a hardware blob: it needs both keys of the pair).
+    /// without a hardware blob: it needs both keys of the pair). A FIDO2 slot is <see cref="WayIn.Fido2"/>, whatever its
+    /// key. <paramref name="otherKey"/> is the blob of an <see cref="WayIn.OtherYubiKey"/> slot, <paramref name="fido2"/>
+    /// that of a <see cref="WayIn.Fido2"/> slot.
     /// </summary>
-    private static WayIn Classify(Slot slot, int serial)
+    private static WayIn Classify(Slot slot, int serial, out YubiKeySlotBlob? otherKey, out Fido2SlotBlob? fido2)
     {
+        otherKey = null;
+        fido2 = null;
         if (slot.Kind == SlotKind.Recovery)
             return WayIn.ByItself;
         if (slot.HwBlob is not { Length: > 0 })
             return WayIn.No;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
-            return IsTpmOrSecureEnclaveSlot(slot) ? WayIn.ByItself : WayIn.No;
-        try
+        switch (YubiKeySlotKinds.Classify(slot.HwBlob))
         {
-            return YubiKeySlotBlob.Decode(slot.HwBlob).Serial != serial ? WayIn.OtherYubiKey : WayIn.No;
-        }
-        catch (TswapException)
-        {
-            return WayIn.No;
+            case YubiKeySlotKind.None:
+                return IsTpmOrSecureEnclaveSlot(slot) ? WayIn.ByItself : WayIn.No;
+            case YubiKeySlotKind.Fido2(var blob):
+                fido2 = blob;
+                return WayIn.Fido2;
+            case YubiKeySlotKind.Otp(var blob) when blob.Serial != serial:
+                otherKey = blob;
+                return WayIn.OtherYubiKey;
+            default:
+                return WayIn.No; // this key's own OTP slot, or one whose serial can't be read (fail closed)
         }
     }
 
@@ -326,10 +405,12 @@ public sealed class YubiKeyCommand : ICliCommand
     /// The only other ways in are other keys' YubiKey slots: one of those keys must be plugged in (reachable over the
     /// keyboard interface) and one of its slots must open the vault now (challenged and unwrapped; a password slot asks
     /// for the vault password at the terminal). A definite wrong answer, or no such key plugged in, refuses; so does a
-    /// key that is busy or doesn't answer (the device's own wording).
+    /// key that is busy or doesn't answer (the device's own wording). FIDO2 plan, task 8: with <paramref name="fido2Follows"/>
+    /// (the vault has FIDO2 slots, checked next) nothing is thrown: the reason is returned (null when a slot opened).
     /// </summary>
-    private static void CheckAnotherKey(CommandContext ctx, Config config, Keyring keyring, int serial,
-        List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys, IReadOnlyList<YubiKeyInfo> keys)
+    private static string? CheckAnotherKey(CommandContext ctx, Keyring keyring, int serial,
+        List<(Slot Slot, YubiKeySlotBlob Blob)> otherKeys, IReadOnlyList<YubiKeyInfo> keys, StretchedPasswordCache password,
+        bool fido2Follows)
     {
         var otherSerials = otherKeys.Select(k => k.Blob.Serial).Distinct().ToList();
         var names = string.Join(" or ", otherSerials.Select(s => $"YubiKey {s}"));
@@ -343,60 +424,58 @@ public sealed class YubiKeyCommand : ICliCommand
         {
             // Carried from task 4: a key that is plugged in but hidden from the keyboard interface gets the per-OS text.
             var os = YubiKeyAccessTexts.CurrentOs();
-            var hidden = keys.Where(k => !k.KeyboardReachable && k.Serial is { } s && otherSerials.Contains(s))
-                .Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, os) + Environment.NewLine);
+            var hidden = string.Concat(keys.Where(k => !k.KeyboardReachable && k.Serial is { } s && otherSerials.Contains(s))
+                .Select(k => YubiKeyAccessTexts.ExplainHidden(k.Serial, os) + Environment.NewLine));
+            if (fido2Follows)
+                return hidden + $"{names} can't be checked here: plug {(otherSerials.Count == 1 ? "it" : "one")} in so its slot can be checked.";
             throw new TswapException(
-                string.Concat(hidden) +
+                hidden +
                 $"Refusing: apart from YubiKey {serial}, only {names} can open the vault in {ctx.Env.ConfigDir}, and none of " +
                 $"them can be checked here: plug in {names} so its slot can be checked, or leave this key as it is. Nothing was changed.");
         }
 
-        // The vault password is asked at most once (only a password slot asks), and dropped at the end.
-        StretchedPasswordCache password = new(TerminalPasswordProvider.For(ctx, config));
-        try
+        // The remembered slot first, then keyring order (task 4b). A definite wrong answer is kept
+        // apart from a key that was busy or didn't answer: when no slot opens, the latter decides the message,
+        // since that key may still open the vault.
+        string? didntOpen = null, transient = null;
+        foreach (var (slot, blob) in candidates)
         {
-            // The remembered slot first, then keyring order (task 4b). A definite wrong answer is kept
-            // apart from a key that was busy or didn't answer: when no slot opens, the latter decides the message,
-            // since that key may still open the vault.
-            string? didntOpen = null, transient = null;
-            foreach (var (slot, blob) in candidates)
+            ctx.Console.Error.WriteLine($"Checking that YubiKey {blob.Serial}'s slot still opens the vault (touch it if it flashes)...");
+            try
             {
-                ctx.Console.Error.WriteLine($"Checking that YubiKey {blob.Serial}'s slot still opens the vault (touch it if it flashes)...");
-                try
+                if (ctx.Unlocker.YubiKeySlotOpens(keyring, slot, blob, password.Provide))
+                    return null;
+                didntOpen ??= DidntOpen(blob);
+            }
+            catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
+            {
+                var needs = $"YubiKey {blob.Serial}'s slot needs the vault password to be checked: {e.Message}";
+                if (fido2Follows)
+                    return needs;
+                throw new TswapException($"Refusing: {needs} Nothing was changed.");
+            }
+            catch (TswapException e)
+            {
+                // By the failure's kind: busy keeps the device's text (Task 2's wording); an empty slot 2 was
+                // reprogrammed or cleared, so its slot didn't open; anything else (a touch that timed out, the key
+                // pulled mid-check, no answer) is "didn't answer", with the device's message after it.
+                switch ((e as YubiKeyDeviceException)?.Kind)
                 {
-                    if (ctx.Unlocker.YubiKeySlotOpens(keyring, slot, blob, password.Provide))
-                        return;
-                    didntOpen ??= DidntOpen(blob);
-                }
-                catch (TswapCore.VaultPassword.VaultPasswordUnavailableException e)
-                {
-                    throw new TswapException($"Refusing: YubiKey {blob.Serial}'s slot needs the vault password to be checked: {e.Message} Nothing was changed.");
-                }
-                catch (TswapException e)
-                {
-                    // By the failure's kind: busy keeps the device's text (Task 2's wording); an empty slot 2 was
-                    // reprogrammed or cleared, so its slot didn't open; anything else (a touch that timed out, the key
-                    // pulled mid-check, no answer) is "didn't answer", with the device's message after it.
-                    switch ((e as YubiKeyDeviceException)?.Kind)
-                    {
-                        case OtpFailure.Busy:
-                            transient ??= e.Message;
-                            break;
-                        case OtpFailure.Slot2Empty:
-                            didntOpen ??= DidntOpen(blob);
-                            break;
-                        default:
-                            transient ??= $"YubiKey {blob.Serial} didn't answer; plug it in and touch it when it flashes. ({e.Message})";
-                            break;
-                    }
+                    case OtpFailure.Busy:
+                        transient ??= e.Message;
+                        break;
+                    case OtpFailure.Slot2Empty:
+                        didntOpen ??= DidntOpen(blob);
+                        break;
+                    default:
+                        transient ??= $"YubiKey {blob.Serial} didn't answer; plug it in and touch it when it flashes. ({e.Message})";
+                        break;
                 }
             }
-            throw new TswapException($"Refusing: {transient ?? didntOpen} Nothing was changed.");
         }
-        finally
-        {
-            password.Dispose();
-        }
+        if (fido2Follows)
+            return transient ?? didntOpen;
+        throw new TswapException($"Refusing: {transient ?? didntOpen} Nothing was changed.");
     }
 
     /// <summary>A definite wrong answer (or an emptied slot 2); a password slot may also have had the wrong password.</summary>

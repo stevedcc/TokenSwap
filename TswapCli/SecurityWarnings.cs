@@ -79,8 +79,10 @@ public static class SecurityWarnings
         {
             var key = Convert.ToBase64String(slot.SlotId);
             var shortId = Convert.ToHexStringLower(slot.SlotId)[..8];
-            if (YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
+            if (YubiKeySlotKinds.IsYubiKey(slot.HwBlob))
             {
+                // FIDO2 plan, task 2: a FIDO2 slot always asks for the PIN and a touch, so it has no posture to warn
+                // about; a slot this build can't read has none either.
                 if (TryDecodeBlob(slot.HwBlob, out var blob))
                     result.Add(new(key, PostureName(blob.RequiresTouch), $"YubiKey {blob.Serial} (slot {shortId})"));
             }
@@ -105,20 +107,16 @@ public static class SecurityWarnings
         }
     }
 
+    /// <summary>True for an OTP slot's blob (the only kind with a touch posture), which <paramref name="blob"/> then holds.</summary>
     private static bool TryDecodeBlob(byte[]? hwBlob, out YubiKeySlotBlob blob)
     {
-        blob = null!;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
-            return false;
-        try
+        if (YubiKeySlotKinds.Classify(hwBlob) is YubiKeySlotKind.Otp(var otp))
         {
-            blob = YubiKeySlotBlob.Decode(hwBlob!);
+            blob = otp;
             return true;
         }
-        catch (TswapException)
-        {
-            return false;
-        }
+        blob = null!;
+        return false;
     }
 
     /// <summary>

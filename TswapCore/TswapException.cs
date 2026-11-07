@@ -6,7 +6,7 @@ namespace TswapCore;
 /// modes (bad input, missing secrets, locked vault); unexpected exceptions still
 /// surface as generic errors.
 /// </summary>
-public class TswapException(string message, int exitCode = 1) : Exception(message)
+public class TswapException(string message, int exitCode = 1, Exception? inner = null) : Exception(message, inner)
 {
     public int ExitCode { get; } = exitCode;
 }

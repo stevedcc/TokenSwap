@@ -153,7 +153,11 @@ internal static class AgentUnlock
         return suffix;
     }
 
-    /// <summary>The serials of this vault's one-key YubiKey slots that have the vault password.</summary>
+    /// <summary>
+    /// The serials of this vault's one-key OTP YubiKey slots that have the vault password. FIDO2 slots are left out
+    /// (the agent never uses one: each unlock needs the key's PIN and a touch), and so are slots that need a newer
+    /// tswap or are corrupt (the unlocker sets those aside).
+    /// </summary>
     internal static List<int> PasswordYubiKeySerials(Config config)
     {
         if (config.Keyring is null)
@@ -168,18 +172,11 @@ internal static class AgentUnlock
             return [];
         }
         List<int> serials = [];
-        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)))
+        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
-            try
-            {
-                var blob = YubiKeySlotBlob.Decode(slot.HwBlob!);
-                if (blob.RequiresPassword && !serials.Contains(blob.Serial))
-                    serials.Add(blob.Serial);
-            }
-            catch (TswapException)
-            {
-                // A slot that needs a newer tswap or is corrupt: the unlocker sets it aside.
-            }
+            if (YubiKeySlotKinds.Classify(slot.HwBlob) is YubiKeySlotKind.Otp(var blob)
+                && blob.RequiresPassword && !serials.Contains(blob.Serial))
+                serials.Add(blob.Serial);
         }
         return serials;
     }

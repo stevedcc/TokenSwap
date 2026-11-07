@@ -22,6 +22,8 @@ public enum SlotPasswordKind
 /// <list type="bullet">
 /// <item><c>TSYK</c> version 1 → None; <c>TSYK</c> version 2, <c>TSTP</c> version 1, <c>TSSE</c> version 1 by
 /// flags: exactly <c>0x01</c> → Password, any other bit set → NeedsNewerTswap, <c>0x00</c> → Corrupt.</item>
+/// <item><c>TSYK</c> version 3 (a FIDO2 slot, <see cref="Fido2SlotBlob"/>) by its always-present flags byte: <c>0x01</c> →
+/// Password, <c>0x00</c> → None; its other checks are <see cref="Fido2SlotBlob.Decode"/>'s (FIDO2 plan, task 2).</item>
 /// <item>A higher version → NeedsNewerTswap; a known magic that is truncated or has trailing bytes → Corrupt.</item>
 /// <item>A legacy blob without magic, no blob at all, or a recovery slot → None.</item>
 /// </list>
@@ -55,10 +57,16 @@ public static class SlotPassword
     {
         if (slot.Kind != SlotKind.Machine || slot.HwBlob is not { } hwBlob)
             return (SlotPasswordKind.None, null);
-        if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
+        switch (YubiKeySlotKinds.Classify(hwBlob))
         {
-            var (_, kind, error) = YubiKeySlotBlob.Parse(hwBlob);
-            return (kind, error);
+            case YubiKeySlotKind.Otp(var otp):
+                return (otp.RequiresPassword ? SlotPasswordKind.Password : SlotPasswordKind.None, null);
+            case YubiKeySlotKind.Fido2(var fido2):
+                return (fido2.RequiresPassword ? SlotPasswordKind.Password : SlotPasswordKind.None, null);
+            case YubiKeySlotKind.NeedsNewerTswap(var error):
+                return (SlotPasswordKind.NeedsNewerTswap, error);
+            case YubiKeySlotKind.Corrupt(var error):
+                return (SlotPasswordKind.Corrupt, error);
         }
         if (TpmSlotBlob.HasHeader(hwBlob))
         {

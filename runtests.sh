@@ -14,7 +14,8 @@
 #                                  virtual TPM required — see docs/design/hardware-backends.md's Windows
 #                                  TPM section)
 #   ./runtests.sh --yubikey        YubiKey tests through Yubico's SDK (a real key plugged in;
-#                                  TSWAP_TEST_YUBIKEY_SERIAL names it)
+#                                  TSWAP_TEST_YUBIKEY_SERIAL names it; TSWAP_TEST_FIDO2=1 runs
+#                                  the read-only FIDO2 ones)
 set -eo pipefail
 
 # Array so the xUnit '&' (AND) in a compound filter isn't treated as a shell operator.

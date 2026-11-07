@@ -55,6 +55,14 @@ jobs:
           printf '%s\n' 'import CryptoKit' 'print("Secure Enclave available: \(SecureEnclave.isAvailable)")' > "$probe"
           swift "$probe"
 
+      # The JIT test host loads the YubiKey SDK's own Yubico.NativeShims.so, which links libpcsclite.so.1; the SDK's
+      # ECDH (FIDO2 PIN protocol, SdkFido2KeysTests' salt tests) goes through it. The published binary links the shims
+      # statically with tswap's PC/SC stand-in and needs no libpcsclite (package.sh --smoke checks that), so the library
+      # is installed for the unit tests only and removed again before the AOT publish and the E2E tests.
+      - name: libpcsclite for the JIT test host (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libpcsclite1
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
         # CI_REQUIRE_SE=1 on macOS only (it means "this machine must have a Secure Enclave", so never
@@ -64,6 +72,12 @@ jobs:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
           CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
         run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey"
+
+      - name: Remove libpcsclite again (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get remove -y libpcsclite1
+          if ldconfig -p | grep -q 'libpcsclite.so.1 '; then echo 'libpcsclite.so.1 is still installed'; exit 1; fi
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
