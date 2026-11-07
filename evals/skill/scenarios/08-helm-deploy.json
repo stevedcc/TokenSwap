@@ -11,7 +11,7 @@
   "rules": {
     "must": [
       {
-        "match": "^tswap run helm .*(-f|--values)[ =]\\{\\{@(\\./)?values\\.yaml\\}\\}",
+        "match": "^tswap run helm .*(-f|--values)[ =]['\"]?\\{\\{@(\\./)?values\\.yaml\\}\\}",
         "example": null
       },
       {
@@ -21,7 +21,7 @@
     ],
     "never": [
       {
-        "match": "^tswap apply\\b",
+        "match": "^(sudo\\s+)?tswap apply\\b",
         "example": "tswap apply values.yaml"
       }
     ],

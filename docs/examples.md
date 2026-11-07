@@ -114,7 +114,7 @@ For Helm deployments, there are three approaches.
 **Option 1: A file token (recommended).** Put `{{@path}}` where `helm` takes the values file. tswap
 writes the filled copy into a private folder only you can open (`$XDG_RUNTIME_DIR`, else the
 temporary folder), zeroes and deletes it when `helm` exits, and replaces every written form of the
-values (plain, quoted, base64) in `helm`'s output with `[REDACTED: name]`. What Helm then does with
+values (plain, quoted, base64 and base64url, and each line-ending form of a multi-line value) in `helm`'s output with `[REDACTED: name]`. What Helm then does with
 the values it is given is up to Helm:
 
 ```bash
@@ -129,7 +129,8 @@ tswap run helm upgrade --install myapp ./chart \
 This works in bash, cmd and PowerShell. `run` refuses a command containing a printer, encoder,
 copier, shell or interpreter (`cat`, `cp`, `base64`, `sh`, `python`, … as any word of the command)
 when it has a file token: the file is data for a tool, never a program. `helm install app ./chart
--f {{@values.yaml}}` is fine, because `install` is refused only as the program itself. The limits
+-f {{@values.yaml}}` is fine, because `install` is refused only as the program itself (also behind a wrapper, or as
+the command `find -exec` runs). The limits
 are in [Files with secrets](security-model.md#files-with-secrets-run-with-file).
 
 **Note:** the `# tswap: <secret-name>` comments remain in the filled copy, so secret *names*

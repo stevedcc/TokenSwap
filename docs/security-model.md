@@ -101,14 +101,18 @@ deployment.
 
 `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` fills the file's `# tswap:`
 markers into a private copy and runs the command with the copy's path. The copy lives in a folder
-only your account can open (`0700`, in `$XDG_RUNTIME_DIR` when that is yours and not writable by
-others, else the temporary folder; on Windows an access list for the current user only). tswap
-redacts every form it wrote (plain, quoted, base64 and base64url, and the `\r\n` form of a
-multi-line value) from the output, overwrites the copy with zeros and deletes the folder when the
+only your account can open (`0700`, in `$XDG_RUNTIME_DIR` when that is a folder of yours, not a
+symlink and not writable by others, else the temporary folder; on Windows an access list for the current user only). tswap
+redacts every form it wrote (plain, quoted, base64 and base64url, and for a multi-line value its
+`\r\n` and `\n` forms and the form a terminal prints) from the output, overwrites the copy with zeros and deletes the folder when the
 command ends, also after Ctrl+C, and removes stale folders of crashed runs at the next `run` with a
 file token. Before anything is written, `run` refuses a command with a printer, encoder, copier,
 shell or interpreter as any word (`cat`, `cp`, `base64`, `sh`, `python`, … see the blocklist in
-`Validation.cs`); `install` is refused only as the program, so `helm install` works. The check runs again on what the `{{name}}` tokens expand to, before anything is written; that refusal names the token, not the word.
+`Validation.cs`); `install` is refused only as the program (also behind a wrapper such as `nice`,
+or as the command `find -exec` runs), so `helm install` works. The check runs again on what the
+`{{name}}` tokens expand to, before anything is written; that refusal names the token, not the
+word. A refusal can be a false one, for a file named like a refused word: rename the file, or pass
+the secret with a plain `{{name}}` token.
 
 This replaces `apply` for agents, which now needs sudo. What it does not do:
 

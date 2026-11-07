@@ -83,8 +83,8 @@ Mark the secret as compromised. This is the **first** action, before anything el
 tswap burn <name> "<how it was exposed>"
 ```
 
-This records a timestamp and reason. `names` shows `[BURNED]` next to the secret, and `run` (with a
-`{{@file}}` token), `apply` and `check` warn about it. Burning a secret that is already burned is rejected: the original incident
+This records a timestamp and reason. `names` shows `[BURNED]` next to the secret, and `run`, `sudo tswap apply`
+and `check` warn about it. Burning a secret that is already burned is rejected: the original incident
 record is kept.
 
 ### Step 2: Assess scope
