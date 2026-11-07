@@ -582,4 +582,77 @@ public sealed class WriteCommandDecryptionTests : IDisposable
             burned);
         Assert.Equal("leaked", Db().Secrets["a"].BurnReason);
     }
+
+    // ------------------------------------------------------------------ task 8: import
+
+    /// <summary>An export file of <paramref name="secrets"/>, made on a machine of its own (passphrase "pass").</summary>
+    private string ExportOf(params (string Name, string Value)[] secrets)
+    {
+        using var source = new FleetMachine("write-decryption-export", SimulatedYubiKeyService.WithKeys(SerialA));
+        InitRecordVault(source);
+        foreach (var (name, value) in secrets)
+            source.Ok(value, "ingest", name);
+        var export = _m.PathOf($"export-{Guid.NewGuid():N}.json");
+        source.Ok("pass\npass\n", "export", export);
+        return export;
+    }
+
+    [Fact]
+    public void Import_DecryptsNoVaultValue()
+    {
+        var export = ExportOf(("x", "x-exported"), ("y", "y-exported"), ("z", "z-exported"));
+        _m.Ok("x-here", "ingest", "x");
+        _m.Ok("y-here", "ingest", "y");
+        _m.Ok("", "delete", "y");
+        var before = Snapshot();
+        Watch();
+
+        var output = _m.Ok("pass\n", "import", export);
+
+        Assert.Empty(_values);
+        // The three names' records only; z has no file to read.
+        Assert.Equal(new[] { FileOf("x"), FileOf("y") }.Order(StringComparer.Ordinal), _records.Order(StringComparer.Ordinal));
+        AssertOthersUnchanged(before, "y", "z");
+        Assert.Equal(before[FileOf("x")], Snapshot()[FileOf("x")]);
+        Assert.Contains("Skipped 'x' (already exists)", output);
+        Assert.Contains("Imported 2 secret(s)", output);
+        Assert.Equal("x-here", _m.Get("x"));
+        Assert.Equal("y-exported", _m.Get("y"));
+        Assert.Equal("z-exported", _m.Get("z"));
+    }
+
+    [Fact]
+    public void Import_UnreadableTarget_RefusesWritingNothing()
+    {
+        // q comes before the unreadable r: a per-name write would have written it before refusing.
+        var export = ExportOf(("b", "b-exported"), ("q", "q-exported"), ("r", "r-exported"));
+        _m.Ok("r-here", "ingest", "r");
+        var path = RecordFile(_m, _key, "r");
+        File.WriteAllBytes(path, File.ReadAllBytes(path)[..150]);
+        var before = Snapshot();
+        Watch();
+
+        var (exit, stdout, err) = _m.Run("pass\n", "import", export);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Skipped 'b' (already exists)", stdout);
+        Assert.Equal($"Import passphrase: \n\n❌ Error: {SecretsDb.UnreadableRecordText("r", FileOf("r"))}\n".ReplaceLineEndings(), err.ReplaceLineEndings());
+        Assert.Equal(before, Snapshot());
+        Assert.False(File.Exists(RecordFile(_m, _key, "q")));
+        Assert.Empty(_values);
+    }
+
+    /// <summary>import goes through the export in culture order (its "Skipped" lines too), while the stamps follow ordinal order (task 4).</summary>
+    [Fact]
+    public void Import_SkippedLinesInCultureOrder()
+    {
+        var export = ExportOf(("B-x", "1"), ("a-x", "2"));
+        _m.Ok("here", "ingest", "B-x");
+        _m.Ok("here", "ingest", "a-x");
+
+        var output = _m.Ok("pass\n", "import", export);
+
+        var skipped = output.Split('\n').Where(l => l.Contains("Skipped '", StringComparison.Ordinal)).Select(l => l.Trim()).ToList();
+        Assert.Equal(["⚠ Skipped 'a-x' (already exists)", "⚠ Skipped 'B-x' (already exists)"], skipped);
+    }
 }
