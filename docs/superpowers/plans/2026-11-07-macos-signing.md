@@ -2,6 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Plan review round 1 (2026-11-07; GLM approve, MiMo request changes; reviews in `tswap-wt/tools/sign-plan-{glm,mimo}.md`).**
+> Every finding is folded in:
+> MiMo 1: `--sign` now comes before `--options runtime` in every `codesign` line (codesign(1)'s TROUBLESHOOTING note,
+> as MiMo quotes it: `--options` before `--sign` is ignored silently; not re-checked here, there is no Mac on this
+> side, and the new order is right either way); `verify` asserts the runtime flag, and two text tests pin the order (script
+> and csproj).
+> MiMo 2: `-R='=notarized'` everywhere (a leading `=` makes it requirement text; without it codesign reads a file named
+> `notarized`), retries keyed on exit 3 (requirement unmet) vs failing at once on exit 1, and the dry run proves pass
+> on the notarised file and fail on an unnotarised control.
+> GLM I1: `build-macos` has `needs: [test, verify-version]` with the skipped-result `if:`.
+> Minors: GLM M1 (assert the `runtime` token, not the exact hex; this also covers MiMo 1's "assert
+> `flags=0x10000(runtime)`"), GLM M2 (M4 leaves root-owned files: own folder, checked and removed with sudo), GLM M3
+> and MiMo 7 (secrets go to `gh` on stdin, not argv: see G5; this changes D2's "via `tswap run`" wording, flagged
+> for the owner), GLM M4 (`package.sh` reads `SecureEnclaveShimMinOS` from the csproj), GLM M5 (D7 substitution needs
+> the owner's ack: listed), GLM M6 and MiMo 4 (job 120 min, each notary wait 40 min), MiMo 3 (`keychain-setup` traps
+> its own failures), MiMo 5 (runner strings confirmed by the dry run before they gate), MiMo 6 (cleanup, success-path
+> and csproj tests; task 1 red-first), MiMo 8 (import hint names wrong password too; single-line password).
+
 **Goal:** every macOS release ships two downloads made from the same signed bytes:
 
 - `tswap-osx-arm64.pkg`: a signed (Developer ID Installer), notarised and **stapled** installer that puts `tswap` and
@@ -40,7 +58,7 @@ Xcode's `codesign`, `security`, `notarytool`, `stapler`, `pkgbuild`, `productbui
 | D4 | Code signing identifiers `dev.crawford.tswap` and `dev.crawford.tswap.libtswapse`. (Pkg identifier: `dev.crawford.tswap.pkg`, my call, below.) |
 | D5 | A signing or notarisation failure blocks the whole release. No unsigned fallback. |
 | D6 | v0.2.x stays as it is, with the `xattr` note. |
-| D7 | Whether to ship if Secure Enclave slots made by unsigned builds don't open under the signed build: decided after check M5. (The decision said "on the owner's real vault"; under the Mac boundary below, M5 uses a throwaway vault made on the same Mac by the unsigned v0.2.0 release, which asks the same question: does a Secure Enclave key made without a Team ID open under the signed build? Whether the owner also tries a real vault is outside the runbook.) |
+| D7 | Whether to ship if Secure Enclave slots made by unsigned builds don't open under the signed build: decided after check M5. (The decision said "on the owner's real vault"; under the Mac boundary below, M5 uses a throwaway vault made on the same Mac by the unsigned v0.2.0 release, which asks the same question: does a Secure Enclave key made without a Team ID open under the signed build? Whether the owner also tries a real vault is outside the runbook. **Needs the owner's ack** of this substitution when D7 is decided.) |
 | D8 | Team ID as an environment **variable**, not a secret. |
 | #265 | Fold in: build the shim with an explicit target (the lowest the CryptoKit Secure Enclave calls need, at most tswap's 12.0) and check in the release that both Mach-Os, and the pkg's contents, carry the same minimum. Closes #265. |
 | Mac boundary | The owner's only Mac is a work machine. It may be used for the hands-on checks (M0–M10; "open source work is not an issue"), but **nothing that touches distribution goes on it**: no certificates, private keys or `.p12`, no notarisation credentials, no `codesign`/`notarytool`/`productsign`/`pkgbuild` runs, no uploads, tags or publishing. Certificates come from CSRs made with `openssl` on the owner's Linux workstation; private keys and `.p12`s go straight into the owner's tswap vault by `ingest`, verified, with no loose key files. On the Mac the runbook only downloads the dry run's artifacts like any user and runs checks against throwaway vaults, removed afterwards. |
@@ -78,7 +96,7 @@ My calls within those decisions, with reasons:
    checks that the dylib `installscript` would write is byte-for-byte the archive's (task 4).
 2. **`spctl -a -t exec` doesn't apply to bare Mach-Os.** It answers "rejected (the code is valid but does not seem to be
    an app)" even for Apple's own `/usr/bin/ssh` (Apple forums 696235, 658054; Gregory Szorc's apple-codesign notes). For
-   the loose files the smoke uses Apple DTS's check for "other code", `codesign -vvvv -R="notarized"
+   the loose files the smoke uses Apple DTS's check for "other code", `codesign -vvvv -R='=notarized'
    --check-notarization` (Quinn, "Testing a Notarised Product", forums 130560). For the pkg, `spctl -a -t install -vv`
    and `xcrun stapler validate` do apply, and are used.
 3. **The tarball's notarisation input is a zip.** `notarytool` accepts UDIF disk images, signed flat packages and zip
@@ -169,12 +187,13 @@ The signed Mach-O files are `libtswapse.dylib` and `tswap`; nothing else from th
 if present, is neither shipped nor signed).
 
 1. **`libtswapse.dylib`, inside `BuildSecureEnclaveShim`, right after `swiftc`** (task 1):
-   `codesign --force --timestamp --options runtime --identifier dev.crawford.tswap.libtswapse --keychain "$KC" --sign
-   "$APP_IDENTITY" libtswapse.dylib`. `--options runtime` has no effect on a library (the flag belongs to the process)
+   `codesign --sign "$APP_IDENTITY" --options runtime --timestamp --force --identifier dev.crawford.tswap.libtswapse
+   --keychain "$KC" libtswapse.dylib`. **`--sign` comes before `--options`** in every `codesign` line: codesign(1)
+   says `--options` given before `--sign` is ignored silently. `--options runtime` has no effect on a library (the flag belongs to the process)
    but notarisation tooling expects it on every Mach-O and it costs nothing. Signing here makes the publish folder's
    copy and the `EmbeddedResource` inside `tswap` the same signed bytes.
-2. **`tswap`, after `dotnet publish`** (task 3): `codesign --force --timestamp --options runtime --identifier
-   dev.crawford.tswap --keychain "$KC" --sign "$APP_IDENTITY" tswap`. `--force` replaces the linker's ad-hoc signature.
+2. **`tswap`, after `dotnet publish`** (task 3): `codesign --sign "$APP_IDENTITY" --options runtime --timestamp --force
+   --identifier dev.crawford.tswap --keychain "$KC" tswap`. `--force` replaces the linker's ad-hoc signature.
    **No `--entitlements`**, no `--deep` (nothing is nested).
 3. **The pkg, after both are signed, notarised and packed into the tarball** (task 5): `productsign --timestamp
    --keychain "$KC" --sign "$INSTALLER_IDENTITY" unsigned.pkg tswap-osx-arm64.pkg`.
@@ -218,8 +237,9 @@ The smoke asserts `codesign -d --entitlements - tswap` prints no entitlements.
   unsigned.pkg`, then `productsign` (above).
 - **Notarise and staple:** `notarytool submit tswap-osx-arm64.pkg --wait …`, `xcrun stapler staple
   tswap-osx-arm64.pkg`, `xcrun stapler validate tswap-osx-arm64.pkg`.
-- **Checks:** `pkgutil --check-signature` (first certificate "Developer ID Installer: … (<TEAMID>)", "Signed with a
-  trusted timestamp"); `spctl -a -t install -vv` ("accepted", "source=Notarized Developer ID"); `pkgutil
+- **Checks:** `pkgutil --check-signature` (first certificate "Developer ID Installer: … (<TEAMID>)", and a trusted
+  timestamp: the exact wording, "Signed with a trusted timestamp" on current macOS, is copied from the dry run's output
+  into the check and its fake before it gates); `spctl -a -t install -vv` ("accepted", "source=Notarized Developer ID"); `pkgutil
   --payload-files` lists exactly the two files (plus the directories); `pkgutil --expand-full` into a temp folder: the
   payload's SHA-256s equal the tarball's files, `lsbom` of the component's Bom shows `0755` and `0/0` for both, and both
   pass the same `verify` and minos checks.
@@ -335,18 +355,24 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
 - **G5 Environment, secrets and variables.** Settings → Environments → New environment `macos-signing`:
   - Required reviewers: `stevedcc`; "Prevent self-review" **off** (the owner is the only reviewer).
   - Deployment branches and tags: *Selected*: branch `main` (for the dry run) and tag pattern `v*`.
-  - Secrets and variables, values from the vault through `tswap run` (it substitutes inside the `gh` process only):
+  - Secrets and variables, values from the vault **on `gh`'s stdin** (`gh secret set NAME` without `--body` reads the
+    value from stdin and trims a trailing newline). Review round 1 chose this over `tswap run … --body {{…}}` (D2's
+    wording): with `--body` the value sits in `gh`'s argv, readable through `/proc/<pid>/cmdline` by every process of
+    the owner's user, AI agents included, which is exactly what tswap exists to avoid; on stdin it is in a pipe only.
+    Owner: veto this if you prefer the `tswap run` form, which also works.
     ```bash
-    tswap run gh secret set MACOS_SIGN_APP_P12_BASE64 --env macos-signing -R stevedcc/TokenSwap --body {{macos-sign-app-p12-base64}}
-    tswap run gh secret set MACOS_SIGN_INSTALLER_P12_BASE64 --env macos-signing -R stevedcc/TokenSwap --body {{macos-sign-installer-p12-base64}}
-    tswap run gh secret set MACOS_SIGN_P12_PASSWORD --env macos-signing -R stevedcc/TokenSwap --body {{macos-sign-p12-password}}
-    tswap run gh secret set MACOS_NOTARY_KEY_P8_BASE64 --env macos-signing -R stevedcc/TokenSwap --body {{macos-notary-p8-base64}}
+    sudo -v
+    sudo tswap get macos-sign-app-p12-base64       | gh secret set MACOS_SIGN_APP_P12_BASE64 --env macos-signing -R stevedcc/TokenSwap
+    sudo tswap get macos-sign-installer-p12-base64 | gh secret set MACOS_SIGN_INSTALLER_P12_BASE64 --env macos-signing -R stevedcc/TokenSwap
+    sudo tswap get macos-sign-p12-password         | gh secret set MACOS_SIGN_P12_PASSWORD --env macos-signing -R stevedcc/TokenSwap
+    sudo tswap get macos-notary-p8-base64          | gh secret set MACOS_NOTARY_KEY_P8_BASE64 --env macos-signing -R stevedcc/TokenSwap
     gh secret set MACOS_NOTARY_ISSUER_ID --env macos-signing -R stevedcc/TokenSwap          # prompts
     gh variable set MACOS_NOTARY_KEY_ID --env macos-signing -R stevedcc/TokenSwap --body WD7R2PS725
     gh variable set MACOS_TEAM_ID --env macos-signing -R stevedcc/TokenSwap --body <TEAMID>
     ```
-    If `tswap run` refuses a line (for example a value too long for an argument), stop and record it; don't pipe the
-    value another way without deciding that explicitly.
+    If a line fails, stop and record it; don't move the value another way without deciding that explicitly. The
+    `.p12` password must be a single line: `openssl -passin/-passout file:` read only the first (G2b's verify step
+    would catch a mismatch).
   - Optional, recommended: a tag ruleset so only the owner can create `v*` tags (the environment trusts `v*` tags).
 - **G6 Approve the dry run** (task 10), then run the hardware checks (task 11) on the work Mac, within its boundary.
 - **G7 Approve the real `v0.3.0` tag run.**
@@ -402,8 +428,12 @@ pushed with the default `GITHUB_TOKEN` starts no workflow, so such a bot needs a
   version in one MSBuild property, `SecureEnclaveShimMinOS`, with a comment: it must equal tswap's own minimum
   (NativeAOT's), which the release check compares.
 - [ ] Properties `TswapMacSignIdentity` (empty by default) and `TswapMacSignKeychain`. After `swiftc`, when the
-  identity is set: `codesign --force --timestamp --options runtime --identifier dev.crawford.tswap.libtswapse --sign
-  "$(TswapMacSignIdentity)"`, plus `--keychain` when set.
+  identity is set: `codesign --sign "$(TswapMacSignIdentity)" --options runtime --timestamp --force --identifier
+  dev.crawford.tswap.libtswapse`, plus `--keychain` when set (`--sign` before `--options`).
+- [ ] Red first: a text test, `Csproj_ShimTarget_SignsBeforeOptionsAndSetsTheTarget` (beside task 5's
+  `Distribution_MinOsEqualsTheShimTarget`, which reads the same csproj), requires the `swiftc` line to carry `-target
+  arm64-apple-macos$(SecureEnclaveShimMinOS)` and the `codesign` line to have `--sign` before `--options runtime` and to
+  carry `--timestamp` and the D4 identifier. It fails on today's csproj; then make the change.
 - [ ] Incremental builds: when the identity is set, delete `$(SecureEnclaveShimOutput)` first so an earlier unsigned
   build in the same tree is never embedded; comment why. The release job builds a clean checkout, and the smoke
   (task 4) catches any mismatch regardless.
@@ -442,18 +472,26 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   `set-keychain-settings -lut 21600`, `unlock-keychain`, for each file `import … -f pkcs12 -k "$KC" -P … -T
   /usr/bin/codesign -T /usr/bin/productsign` (not `-A`), then `set-key-partition-list -S apple-tool:,apple:,codesign:
   -s -k … "$KC"`, `list-keychains -d user -s "$KC" <existing>`; delete the decoded `.p12`s at once. An import that
-  fails prints `security`'s message and the hint "the .p12 must use PBE-SHA1-3DES and a SHA-1 MAC (plan G2b)". Identities: exactly one "Developer ID Application" (`find-identity -v -p codesigning`) and exactly one
+  fails prints `security`'s message and the hint "MAC verification failed means a wrong password or a .p12 not made
+  with PBE-SHA1-3DES and a SHA-1 MAC (plan G2b)". `keychain-setup` has its own `trap` (EXIT, INT, TERM) that removes
+  the decoded `.p12`s and, on failure, deletes the keychain, so a failed or cancelled run leaves no key material even
+  if the job-level cleanup never runs. Identities: exactly one "Developer ID Application" (`find-identity -v -p codesigning`) and exactly one
   "Developer ID Installer" (`-p basic`), each with OU `$MACOS_TEAM_ID`; else fail, printing the subjects found (never a
   key). Writes `app_identity`, `installer_identity`, `keychain` to `$GITHUB_OUTPUT`.
 - [ ] `sign <publish-dir>`: signs `tswap` only, with the flags above, after checking that the dylib already carries
   `TeamIdentifier=$MACOS_TEAM_ID` (else "libtswapse.dylib was not signed by the build (TswapMacSignIdentity)").
 - [ ] `verify <dir>`: for both files `codesign --verify --strict --verbose=2`; from `codesign -dvvv`: `TeamIdentifier`
-  equals `$MACOS_TEAM_ID`, `flags=0x10000(runtime)`, a `Timestamp=` line, first `Authority=` starts with `Developer ID
+  equals `$MACOS_TEAM_ID`, the `flags=` line names `runtime` (match the token, e.g.
+  `flags=0x10000(runtime)`, not the exact hex: other flag bits may be present), a `Timestamp=` line, first `Authority=` starts with `Developer ID
   Application:`, `Identifier=` as D4; `codesign -d --entitlements -` prints none for `tswap`; **minos** (`vtool
-  -show-build`) is the same for both files (#265). Each failure names the file and the field.
+  -show-build`) is the same for both files (#265). Each failure names the file and the field. A missing runtime flag
+  fails CI: that is the regression guard for the `--sign`/`--options` order. Whether `codesign` records `runtime` on
+  the **dylib** is confirmed by the dry run's printed output before that half of the check gates (it must on `tswap`,
+  which notarisation requires); if the dry run shows it doesn't, the dylib's runtime assertion is dropped with that
+  output as the evidence, and the plan says so.
 - [ ] `notarise <file>` (a zip or a pkg): requires `MACOS_NOTARY_KEY_P8_BASE64`, `MACOS_NOTARY_KEY_ID`,
   `MACOS_NOTARY_ISSUER_ID`; decodes the key to `$RUNNER_TEMP` (umask 077); `xcrun notarytool submit "$file" --key …
-  --key-id … --issuer … --wait --timeout 45m --output-format json`; parses `id` and `status`; **always** `notarytool
+  --key-id … --issuer … --wait --timeout 40m --output-format json`; parses `id` and `status`; **always** `notarytool
   log <id>` into `$RUNNER_TEMP/notary-log-<name>.json` and prints its `issues`; a status other than `Accepted` fails;
   the key file is removed on every exit path (`trap`). A helper `zip-for-notary <dir> <out.zip>` makes the tarball's
   submission with `ditto -c -k` of exactly the two files.
@@ -468,7 +506,11 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   `Sign_UsesRuntimeTimestampAndIdentifierAndNoEntitlements`, `Sign_UnsignedDylib_FailsBeforeSigningTswap`,
   `Verify_WrongTeam_Fails`, `Verify_NoRuntimeFlag_Fails`, `Verify_NoTimestamp_Fails`, `Verify_Entitlements_Fails`,
   `Verify_DifferentMinOs_Fails`, `Notarise_Invalid_PrintsLogIssuesAndFails`, `Notarise_PassesIssuerAndKeyId`,
-  `ZipForNotary_HoldsExactlyTheTwoFiles`, `Notarise_RemovesTheKeyFileOnFailure`, `Scripts_HaveNoSetX`.
+  `ZipForNotary_HoldsExactlyTheTwoFiles`, `Notarise_RemovesTheKeyFileOnFailure`,
+  `Notarise_RemovesTheKeyFileOnSuccess`, `Notarise_Error1048_SaysToAcceptTheAgreements`,
+  `KeychainSetup_ImportFails_RemovesTheP12sAndTheKeychain`, `KeychainCleanup_RemovesKeychainAndFiles`,
+  `KeychainCleanup_NothingToClean_Succeeds`, `Sign_PutsSignBeforeOptions` (the fake codesign's logged argument order),
+  `Scripts_HaveNoSetX`.
   Break-it-once: drop the team check from `verify`, see `Verify_WrongTeam_Fails` fail, revert.
 
 ### Task 4: the tarball's smoke checks the signed bytes
@@ -478,12 +520,16 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
 - [ ] **Always on macOS** (so every PR runs them, unsigned): (a) decode the dylib from `"$check/tswap" installscript`
   output (the base64 line) and compare its SHA-256 with `"$check/libtswapse.dylib"`; differ → "the dylib installscript
   writes is not the archive's (was the shim signed after it was embedded?)". (b) Both Mach-Os declare the same minos
-  (`vtool -show-build`, falling back to `otool -l`), and it is not newer than the `SecureEnclaveShimMinOS` the build
-  used (#265).
+  (`vtool -show-build`, falling back to `otool -l`), and it equals `SecureEnclaveShimMinOS`, which `package.sh` reads
+  from `TswapCore/TswapCore.csproj` itself (one source; a test, `MacOsSmoke_ReadsShimMinOsFromTheCsproj`, pins the
+  lookup and fails when the property is missing) (#265).
 - [ ] **When `TSWAP_EXPECT_TEAM_ID` is set** (only the signing job sets it): per file `codesign --verify --strict`,
-  `TeamIdentifier`, runtime flag; then `codesign -vvvv -R="notarized" --check-notarization` per file, retried every
-  20 s for at most 10 minutes on the check's own exit status (waiting for the ticket to become visible, not a blind
-  sleep; interval and count are variables the tests shorten), printing the last answer on failure.
+  `TeamIdentifier`, runtime flag; then `codesign -vvvv -R='=notarized' --check-notarization` per file. Exit 0 passes; exit 3
+  (the requirement is not met: the ticket isn't visible yet) is retried every 20 s for at most 10 minutes (waiting on
+  the check's own answer, not a blind sleep; interval and count are variables the tests shorten); exit 1 (a bad
+  signature) or any other code fails at once. The last answer is printed on failure. In the dry run the same check
+  also runs on an **unnotarised control** (a copy of `tswap` re-signed ad hoc in `$RUNNER_TEMP`) and must fail there,
+  so a check that passes everything is caught.
 - [ ] **Simulated browser download** (same condition): copy the archive, set `com.apple.quarantine` (`0083;<hex
   now>;Safari;`), unpack with `tar` into a new folder, check the mark reached both files (else `SKIP: quarantine did not
   propagate`), print `spctl --status`; with assessments enabled run `tswap prompt-hash` and the Secure Enclave
@@ -571,9 +617,13 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
   never publishes, whatever the input: the input makes that explicit in the UI).
 - [ ] `verify-version` on tag pushes only; dependants use `if:` on `needs.<job>.result` (`success`, or `skipped` for
   `verify-version` on dispatch), since a skipped need otherwise skips them.
-- [ ] Remove `osx-arm64` from the matrix. New job `build-macos`: `macos-latest`, `timeout-minutes: 90`, `permissions:
+- [ ] Remove `osx-arm64` from the matrix. New job `build-macos`: `macos-latest`, `timeout-minutes: 120` (two 40-minute notary
+  waits plus build, smoke and install test), `permissions:
   contents: read`, `environment: macos-signing`, `env: SIGNING_REQUIRED: ${{ github.repository == 'stevedcc/TokenSwap'
-  }}`; secrets only in the `env:` of the steps that use them. Steps:
+  }}`, `needs: [test, verify-version]` with `if: always() && needs.test.result == 'success' &&
+  (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')`, so no approval click,
+  signing or notarisation is spent on a red commit (the environment's approval prompt appears only once the job can
+  start); secrets only in the `env:` of the steps that use them. Steps:
   1. checkout, setup-dotnet;
   2. required and a secret or variable missing → `::error::` naming them, exit 1; not required → `::warning::` and
      the unsigned path (publish, `package.sh --smoke`, upload; nothing else);
@@ -593,7 +643,7 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
 - [ ] Workflow-text test: `ci.yml` references no `secrets.MACOS_`, no `vars.MACOS_` and no `environment:`; every
   `secrets.MACOS_` in `release.yml` is inside `build-macos`; `release`'s `if:` requires a push event; the release file
   list names the pkg. Break-it-once: add `secrets.MACOS_TEAM_ID` to the test's copy of ci.yml, see it fail, revert.
-- [ ] Failure handling (D5): `notarytool --wait --timeout 45m`; a timeout, `Invalid` or `Rejected` fails the job and
+- [ ] Failure handling (D5): `notarytool --wait --timeout 40m`; a timeout, `Invalid` or `Rejected` fails the job and
   prints the submission id and the log's issues; a stapling failure fails it; timestamp-server or notary outages fail
   it, and the owner reruns the job later (a resubmission of the same bytes is harmless). Nothing is published until
   every build job passed.
@@ -637,6 +687,10 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
   (id, status, log issues), how long the loose files' ticket took to appear, `spctl --status`, the simulated-quarantine
   run or its SKIP, `stapler validate`, `spctl -a -t install`, `pkgutil --check-signature`, the install test (owners,
   modes, receipt, SE smoke from `/usr/local/bin`, per-user-only installscript, uninstall).
+- [ ] Also record, before the related checks may gate: `--check-notarization` passing on the notarised `tswap` and
+  failing (exit 3) on the unnotarised control; whether `codesign -dvvv` shows `runtime` in the dylib's `flags=` line;
+  `pkgutil --check-signature`'s exact timestamp line. Copy those strings into the fakes and checks (task 3–5) in the
+  follow-up commit, or drop a check with the output as evidence.
 - [ ] Anything red: fix on a branch, repeat. No tag until a dry run is green.
 
 ### Task 11: the owner's checks on the work Mac (runbook `docs/superpowers/macos-signing-owner-checks.md`)
@@ -675,14 +729,14 @@ caches assessments). Every command below runs with `TSWAP_CONFIG_DIR="$T/<check>
 | M1 | `init --secure-enclave --with-touch`, then `names`: Touch ID (or the login password) is asked, the vault opens. | throwaway vault |
 | M2 | `init --secure-enclave --no-touch`, then `names`: no prompt, opens. | throwaway vault |
 | M3 | The vault-password variant (an SE slot with the vault password): unlock through the prompt, and through `tswap agent start` (no `ptrace(PT_DENY_ATTACH)` warning); `tswap agent stop` after. | throwaway vault and agent |
-| M4 | The root path with the pkg copy: in a throwaway vault add a throwaway secret, then `sudo env TSWAP_CONFIG_DIR="$T/m4" /usr/local/bin/tswap get <name>` prints it. | throwaway vault, throwaway secret |
+| M4 | The root path with the pkg copy: in a throwaway vault `$T/m4` add a throwaway secret, then `sudo env TSWAP_CONFIG_DIR="$T/m4" /usr/local/bin/tswap get <name>` prints it. Then `find "$T" -user root` lists what root left (record it: a root-owned file in a user's vault folder is itself a finding) and `sudo rm -rf "$T/m4"` removes the folder. | throwaway vault, throwaway secret |
 | M5 | Keys made without a Team ID: with **v0.2.0's** tarball (unpacked in `$T/v020`, `xattr -dr com.apple.quarantine "$T/v020"` as its docs say), `init --secure-enclave --no-touch` and, in a second folder, `--with-touch`; then open both with the **signed** `/usr/local/bin/tswap names`. Decides D7 and the release note. | throwaway vaults; v0.2.0 is a public download |
 | M6 | A YubiKey OTP slot (with the terminal's existing Input Monitoring grant) and a FIDO2 slot, `init` + `names` with the signed build: unchanged behaviour. | throwaway vault, own key, non-destructive |
 | M7 | v0.2.0's `libtswapse.dylib` next to the signed `tswap` in `$T/m7`, then a Secure Enclave command: task 7's message, no crash. | scratch folder, throwaway vault |
 | M8 | Upgrade over a running agent: `tswap agent start` (throwaway vault from M3), install the pkg again, then: does the agent still answer, does a new `tswap names` work? Decides the docs' "stop the agent first" line. `tswap agent stop` after. | install like a user, throwaway vault |
 | M9 | Optional: the tarball on a macOS 12–14 machine if one is to hand (#265), under the same boundary. | as M0 |
 | M10 | The uninstall exactly as `docs/install.md` prints it; `pkgutil --pkgs` no longer lists `dev.crawford.tswap.pkg`; both files are gone. | documented uninstall |
-| M11 | Clean-up: `tswap agent status` shows none running; `rm -rf "$T"`; delete the downloads from `~/Downloads`. Record that it was done. | clean-up |
+| M11 | Clean-up: `tswap agent status` shows none running; `find "$T" -user root` prints nothing (else `sudo rm -rf` those); `rm -rf "$T"`; delete the downloads from `~/Downloads`. Record that it was done. | clean-up |
 
 The signature details (`codesign -dv` of both files, the notary logs) come from the dry run's log and artifacts, not
 from the Mac.
@@ -703,7 +757,7 @@ from the Mac.
   keychain exists but Apple's tools, `actions/*` and the repo's scripts. Apple can revoke a certificate, which can make
   released downloads fail Gatekeeper (depending on the revocation date): re-sign and re-release. Notarisation keeps an
   audit trail.
-- **Notary, staple or timestamp outages.** The job fails; rerun later. `--timeout 45m` bounds the wait; nothing is
+- **Notary, staple or timestamp outages.** The job fails; rerun later. `--timeout 40m` per submission and the job's 120 minutes bound the wait; nothing is
   published without both macOS downloads.
 - **Secure Enclave behaviour under a Team ID / hardened runtime.** If key creation or unwrap fails when signed (dry run
   or M1–M3), **stop**: no entitlements to make it pass; report with the evidence for an owner decision. If only M5 fails,
@@ -735,8 +789,9 @@ no signing on fork PRs). Two lessons taken:
    appstoreconnect.apple.com. The signing script recognises 1048 in the notary output and says so;
    the runbook's troubleshooting lists it.
 2. **Checking notarisation of an unstapled binary:** DDEV found `codesign --test-requirement="=notarized"`
-   doesn't work on a bare binary. This plan's check (`codesign -vvvv -R="notarized" --check-notarization`,
+   doesn't work on a bare binary. This plan's check (`codesign -vvvv -R='=notarized' --check-notarization`,
    Apple DTS) asks Apple online; the dry run must prove it succeeds on the notarised tarball binary and
    fails on an unnotarised control binary. If it doesn't, the fallback is `notarytool info <id>` /
-   `notarytool log <id>` status `Accepted` with an empty issues list, plus `spctl -a -t exec` on a
-   quarantined copy on the runner.
+   `notarytool log <id>` status `Accepted` with an empty issues list, plus running a
+   quarantined copy on the runner (not `spctl -a -t exec`, which rejects every bare Mach-O: see "What this plan
+   changes", item 2).
