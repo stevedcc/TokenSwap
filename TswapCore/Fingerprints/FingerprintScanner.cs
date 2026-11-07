@@ -8,7 +8,8 @@ namespace TswapCore.Fingerprints;
 /// <c>run</c>'s relay, and says how much of a chunk's end must be held back for a later chunk.
 /// <para>
 /// It finds what <see cref="FingerprintIndex.Scan"/> finds (the same (length, rolling hash) candidates,
-/// confirmed on the HMAC; a rolling-hash match alone is never a hit), but tries far fewer windows. Each
+/// confirmed on the HMAC; a rolling-hash match alone is never a hit; a window that cuts a surrogate pair,
+/// <see cref="FingerprintIndex.SplitsASurrogatePair"/>, is never confirmed), but tries far fewer windows. Each
 /// stored entry gets a class from data the set already holds: <em>whitespace-free</em> (a
 /// whitespace-stripped entry, or the plain entry of a set without one), <em>base64</em>,
 /// <em>base64url</em>, or <em>free</em> (the plain entry of a set that has a whitespace-stripped one: it may
@@ -355,8 +356,12 @@ public sealed class FingerprintScanner
         if (hash >= RollingHash.Modulus) hash -= RollingHash.Modulus;
         if (!FilterHas(length, hash) || !_candidates.TryGetValue((length, hash), out var candidates))
             return;
+        // A window that cuts a surrogate pair is never confirmed: UTF-8 is not injective on it.
+        var window = view.Slice(start, length);
+        if (FingerprintIndex.SplitsASurrogatePair(window))
+            return;
 
-        var mac = Fingerprinter.Hmac(view.Slice(start, length), _keys);
+        var mac = Fingerprinter.Hmac(window, _keys);
         try
         {
             foreach (var c in candidates)

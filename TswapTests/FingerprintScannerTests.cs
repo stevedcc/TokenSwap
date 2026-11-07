@@ -364,6 +364,28 @@ public class FingerprintScannerTests
         Assert.Single(hits, h => h.Kind == VariantKind.Plain);
     }
 
+    /// <summary>
+    /// Stage 2's case (a value with bytes 61 62 FF decodes to "ab\uFFFD"): UTF-8 encodes a lone high
+    /// surrogate as U+FFFD's bytes, so the window "ab\uD83D" that cuts the pair of "ab😀" has the same
+    /// HMAC. With the rolling-hash collision forced on top, it is still no hit
+    /// (<see cref="FingerprintIndex.SplitsASurrogatePair"/>).
+    /// </summary>
+    [Fact]
+    public void Scan_WindowSplittingASurrogatePair_NoHit()
+    {
+        using var keys = NewKeys();
+        const string window = "ab\uD83D";
+        var value = Set(Encoding.UTF8.GetString([0x61, 0x62, 0xFF]), keys).Entries[0];
+        Assert.Equal(Fingerprinter.Hmac(window, keys), value.Hmac);
+        var forged = value with { RollingHash = RollingHash.Of(window, keys.RollingBase) };
+        var scanner = FingerprintScanner.Build([("binary-secret", false, new FingerprintSet(SecretVariants.CurrentSetVersion, [forged]))], keys);
+
+        Assert.Empty(Scan(scanner, "ab\U0001F600"));
+        // Control: the genuine entry confirms the text it really describes.
+        Assert.Equal([new FingerprintHit("binary-secret", false, VariantKind.Plain, 0, 3)],
+            Scan(FingerprintScanner.Build([("binary-secret", false, new FingerprintSet(SecretVariants.CurrentSetVersion, [value]))], keys), "ab\uFFFD"));
+    }
+
     [Fact]
     public void Scan_EmptyIndex_NothingFoundNothingHeld()
     {
