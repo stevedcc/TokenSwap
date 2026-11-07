@@ -41,6 +41,9 @@ public static class VaultPasswordMessages
     public const string NoTerminal =
         "This vault's slot on this machine needs the vault password. Start the agent ('tswap agent start') or run this command in a terminal.";
 
+    /// <summary>#259: Enter at an empty vault password prompt cancels the command; no other slot is tried after it.</summary>
+    public const string NoPasswordEntered = "No vault password was entered, so nothing was unlocked.";
+
     /// <summary>Ruling 18: a YubiKey slot (or the simulated backend) that fails to unwrap with the password supplied.</summary>
     public const string WrongPasswordKdf = "Wrong vault password (or this slot's key changed).";
 

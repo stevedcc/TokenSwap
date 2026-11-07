@@ -31,6 +31,12 @@ public class VaultPasswordMessagesTests
     }
 
     [Fact]
+    public void NoPasswordEntered_IsTheCancelText()
+    {
+        Assert.Equal("No vault password was entered, so nothing was unlocked.", VaultPasswordMessages.NoPasswordEntered);
+    }
+
+    [Fact]
     public void Ruling3And13_Texts_AreTheBriefsWords()
     {
         Assert.Equal("This slot's hardware object needs a password, but its blob doesn't say so: restore config.json from backup, or upgrade tswap.",

@@ -33,6 +33,8 @@ public sealed class ExportCommand : ICliCommand
 
         ctx.Console.Error.Write("Export passphrase: ");
         var passphrase = ctx.Console.ReadPassword(ctx.Console.Error);
+        if (passphrase.Length == 0)
+            throw new TswapException($"An empty passphrase can't protect an export. Run 'sudo {ctx.Prefix} export' again.");
         ctx.Console.Error.Write("Confirm passphrase: ");
         var confirm = ctx.Console.ReadPassword(ctx.Console.Error);
         if (passphrase != confirm)

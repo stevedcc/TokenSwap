@@ -1303,6 +1303,41 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("argon2id", written);
     }
 
+    // #259: an empty passphrase is refused with a tswap message, not Argon2's exception.
+
+    [Fact]
+    public void Export_EmptyPassphrase_RefusedBeforeUnlock()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "empty.enc");
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n\n", "export", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("An empty passphrase can't protect an export. Run 'sudo tswap export' again.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.False(File.Exists(exportPath));
+    }
+
+    [Fact]
+    public void Import_EmptyPassphrase_Refused()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+        FreshVault();
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n", "import", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("No import passphrase was entered.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.DoesNotContain("my-secret", namesOut);
+    }
+
     [Fact]
     public void Export_Import_RoundTrip()
     {

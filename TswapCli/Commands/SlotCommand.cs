@@ -1195,7 +1195,7 @@ public sealed class SlotCommand : ICliCommand
                     ? RecoveryKeyUnlock.Unlock(keyring, recoveryKey!)
                     : ctx.UnlockExcluding(config, serial, prompt, (id, s, slotId) => openedBy = (id, s, slotId));
             }
-            catch (TswapException e) when (!withRecoveryKey && e is not OwnerSwitchException)
+            catch (TswapException e) when (!withRecoveryKey && e is not OwnerSwitchException and not VaultPasswordCancelledException)
             {
                 throw new TswapException(NoOtherWayInText(ctx, serial, e.Message, unlockUsedPassword), e.ExitCode);
             }
