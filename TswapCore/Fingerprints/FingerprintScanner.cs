@@ -1,0 +1,432 @@
+using System.Buffers;
+using System.Security.Cryptography;
+
+namespace TswapCore.Fingerprints;
+
+/// <summary>
+/// Brief T16-S3: finds indexed values in streamed output from their fingerprints alone, fast enough for
+/// <c>run</c>'s relay, and says how much of a chunk's end must be held back for a later chunk.
+/// <para>
+/// It finds what <see cref="FingerprintIndex.Scan"/> finds (the same (length, rolling hash) candidates,
+/// confirmed on the HMAC; a rolling-hash match alone is never a hit), but tries far fewer windows. Each
+/// stored entry gets a class from data the set already holds: <em>whitespace-free</em> (a
+/// whitespace-stripped entry, or the plain entry of a set without one), <em>base64</em>,
+/// <em>base64url</em>, or <em>free</em> (the plain entry of a set that has a whitespace-stripped one: it may
+/// hold line breaks, and exactly <c>W = L − S</c> of CR, LF, space and tab). A window is tried for an
+/// entry length only while the class allows it: a run of allowed characters at least that long, or for
+/// free entries exactly <c>W</c> of those four characters in the window. Window hashes come from prefix
+/// hashes of the text, and a bitset over (length, hash) skips most dictionary lookups.
+/// </para>
+/// <para>
+/// A PTY turns a value's <c>\n</c> into <c>\r\n</c> (and <c>\r\n</c> into <c>\r\r\n</c>), so free entries are
+/// also tried on a view of the text with each <c>\r\n</c> folded to <c>\n</c>; such a hit is reported as the
+/// raw span, folded <c>\r</c>s included. <see cref="MaxRawLength"/> allows for them.
+/// </para>
+/// <para>
+/// <see cref="PendingFrom"/> reads the text's characters and per-class aggregates only (each class's
+/// longest raw length and the largest whitespace count of a free entry), both rounded up to a multiple
+/// of 256, never a hash, bitset or HMAC: what it holds back is observable through timing, so it must not
+/// tell a guess that shares a secret's prefix from any other word of its class.
+/// </para>
+/// <para>
+/// Like <see cref="FingerprintIndex"/>, the scanner keeps a reference to the <see cref="FingerprintKeys"/>
+/// (no copy of the key or of anything derived from it) and works only while they stay undisposed. It is
+/// immutable after <see cref="Build"/>, so concurrent scans are safe.
+/// </para>
+/// </summary>
+public sealed class FingerprintScanner
+{
+    private const int Quantum = 256;
+    private const int FilterBits = 1 << 20;
+
+    private readonly FingerprintKeys _keys;
+    private readonly Dictionary<(int Length, ulong Hash), Candidate[]> _candidates;
+    private readonly ulong[] _filter = new ulong[FilterBits / 64];
+    // Pruned classes: distinct lengths ascending, each with the classes that have an entry that long.
+    private readonly (int Length, Classes Classes)[] _runLengths;
+    // Free entries: distinct (length, whitespace count); a count of -1 means any (an unknown kind).
+    private readonly (int Length, int Whitespace)[] _freeShapes;
+    private readonly int _capWhitespaceFree, _capBase64, _capBase64Url, _capFree, _maxFreeWhitespace;
+
+    [Flags]
+    private enum Classes : byte
+    {
+        None = 0,
+        WhitespaceFree = 1,
+        Base64 = 2,
+        Base64Url = 4,
+        // A plain entry of a set without a whitespace-stripped one is whitespace-free, or whitespace
+        // only (its stripped form would be empty): also tried inside runs of whitespace.
+        WhitespaceOnly = 8,
+    }
+
+    private sealed record Candidate(string Name, bool IsPrevious, VariantKind Kind, byte[] Hmac);
+
+    private FingerprintScanner(
+        FingerprintKeys keys,
+        Dictionary<(int, ulong), Candidate[]> candidates,
+        (int, Classes)[] runLengths,
+        (int, int)[] freeShapes)
+    {
+        _keys = keys;
+        _candidates = candidates;
+        _runLengths = runLengths;
+        _freeShapes = freeShapes;
+        foreach (var (length, hash) in candidates.Keys)
+            SetFilter(length, hash);
+
+        int Longest(Classes c) => runLengths.Where(r => (r.Item2 & c) != 0).Select(r => r.Item1).DefaultIfEmpty(0).Max();
+        _capWhitespaceFree = RoundUp(Longest(Classes.WhitespaceFree));
+        _capBase64 = RoundUp(Longest(Classes.Base64));
+        _capBase64Url = RoundUp(Longest(Classes.Base64Url));
+        _capFree = RoundUp(freeShapes.Select(f => f.Item1 + Math.Max(0, f.Item2)).DefaultIfEmpty(0).Max());
+        _maxFreeWhitespace = freeShapes.Any(f => f.Item2 < 0)
+            ? int.MaxValue
+            : RoundUp(freeShapes.Select(f => f.Item2).DefaultIfEmpty(0).Max());
+
+        MaxRawLength = Math.Max(
+            runLengths.Select(r => r.Item1).DefaultIfEmpty(0).Max(),
+            freeShapes.Select(f => f.Item1 + Math.Max(0, f.Item2)).DefaultIfEmpty(0).Max());
+    }
+
+    /// <summary>
+    /// The longest span <see cref="Scan"/> can report, in UTF-16 code units: the longest entry, or for a
+    /// free entry its length plus its whitespace count (each folded line break adds at most one raw
+    /// <c>\r</c>). 0 for an empty index.
+    /// </summary>
+    public int MaxRawLength { get; }
+
+    /// <summary>Indexes every entry of every set; sets computed under other keys simply never match.</summary>
+    public static FingerprintScanner Build(IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys)
+    {
+        ArgumentNullException.ThrowIfNull(sets);
+        ArgumentNullException.ThrowIfNull(keys);
+
+        Dictionary<(int, ulong), List<Candidate>> candidates = [];
+        Dictionary<int, Classes> runLengths = [];
+        HashSet<(int, int)> freeShapes = [];
+        foreach (var (name, isPrevious, set) in sets)
+        {
+            var stripped = set.Entries.FirstOrDefault(e => e.Kind == VariantKind.WhitespaceStripped && e.Length > 0);
+            foreach (var entry in set.Entries)
+            {
+                if (entry.Length <= 0) continue;
+                var key = (entry.Length, entry.RollingHash);
+                if (!candidates.TryGetValue(key, out var list))
+                    candidates[key] = list = [];
+                list.Add(new Candidate(name, isPrevious, entry.Kind, entry.Hmac));
+
+                switch (entry.Kind)
+                {
+                    case VariantKind.Plain when stripped is null:
+                        AddRun(runLengths, entry.Length, Classes.WhitespaceFree | Classes.WhitespaceOnly);
+                        break;
+                    case VariantKind.WhitespaceStripped:
+                        AddRun(runLengths, entry.Length, Classes.WhitespaceFree);
+                        break;
+                    case VariantKind.Base64:
+                        AddRun(runLengths, entry.Length, Classes.Base64);
+                        break;
+                    case VariantKind.Base64Url:
+                        AddRun(runLengths, entry.Length, Classes.Base64Url);
+                        break;
+                    case VariantKind.Plain:
+                        var whitespace = entry.Length - stripped!.Length;
+                        freeShapes.Add((entry.Length, whitespace > 0 ? whitespace : -1));
+                        break;
+                    default:
+                        // A kind this build doesn't know: tried at every start, nothing pruned.
+                        freeShapes.Add((entry.Length, -1));
+                        break;
+                }
+            }
+        }
+
+        return new FingerprintScanner(
+            keys,
+            candidates.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray()),
+            [.. runLengths.OrderBy(kv => kv.Key).Select(kv => (kv.Key, kv.Value))],
+            [.. freeShapes.OrderBy(f => f.Item1).ThenBy(f => f.Item2)]);
+
+        static void AddRun(Dictionary<int, Classes> runs, int length, Classes c) =>
+            runs[length] = runs.GetValueOrDefault(length) | c;
+    }
+
+    /// <summary>
+    /// Adds every confirmed hit in <paramref name="text"/> to <paramref name="hits"/>, in text
+    /// coordinates, ordered by start, then length descending. Hits with an equal span are reported once:
+    /// the first in tie order (name ordinal, current before previous, then kind).
+    /// </summary>
+    public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits)
+    {
+        ArgumentNullException.ThrowIfNull(hits);
+        var b = _keys.RollingBase;
+        if (text.Length == 0 || _candidates.Count == 0)
+            return;
+
+        List<FingerprintHit> found = [];
+        var prefix = ArrayPool<ulong>.Shared.Rent(text.Length + 1);
+        try
+        {
+            PrefixHashes(text, b, prefix);
+            if (_runLengths.Length > 0)
+                ScanRuns(text, prefix, b, found);
+            if (_freeShapes.Length > 0)
+            {
+                ScanFree(text, prefix, b, rawStart: null, rawEnd: null, found);
+                if (text.Contains("\r\n", StringComparison.Ordinal))
+                    ScanFolded(text, b, found);
+            }
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(prefix);
+        }
+
+        found.Sort(static (x, y) =>
+        {
+            var cmp = x.Start.CompareTo(y.Start);
+            if (cmp != 0) return cmp;
+            cmp = y.Length.CompareTo(x.Length);
+            if (cmp != 0) return cmp;
+            cmp = string.CompareOrdinal(x.Name, y.Name);
+            if (cmp != 0) return cmp;
+            cmp = x.IsPrevious.CompareTo(y.IsPrevious);
+            return cmp != 0 ? cmp : x.Kind.CompareTo(y.Kind);
+        });
+        for (var i = 0; i < found.Count; i++)
+        {
+            if (i > 0 && found[i].Start == found[i - 1].Start && found[i].Length == found[i - 1].Length)
+                continue;
+            hits.Add(found[i]);
+        }
+    }
+
+    /// <summary>
+    /// The smallest index from which an occurrence could still start in <paramref name="text"/> and end
+    /// past it, <c>text.Length</c> when none can. Per class, a start must lie in the trailing run of the
+    /// class's characters (whitespace-free, base64, base64url) or, for free entries, see at most the
+    /// largest whitespace count (CR, LF, space, tab, counted with <c>\r\n</c> folded), and no earlier than
+    /// <c>text.Length − (cap − 1)</c>; caps and the whitespace count are rounded up to a multiple of 256.
+    /// With free entries at least the last character is always held, so a <c>\r</c> waiting for its
+    /// <c>\n</c> is never emitted early.
+    /// </summary>
+    public int PendingFrom(ReadOnlySpan<char> text)
+    {
+        var n = text.Length;
+        var pending = n;
+        if (_capWhitespaceFree > 0)
+            pending = Math.Min(pending, Math.Max(TrailingRun(text, IsWhitespaceFree), n - (_capWhitespaceFree - 1)));
+        if (_capBase64 > 0)
+            pending = Math.Min(pending, Math.Max(TrailingRun(text, IsBase64), n - (_capBase64 - 1)));
+        if (_capBase64Url > 0)
+            pending = Math.Min(pending, Math.Max(TrailingRun(text, IsBase64Url), n - (_capBase64Url - 1)));
+        if (_capFree > 0)
+        {
+            var lower = Math.Max(0, n - (_capFree - 1));
+            var start = lower;
+            var whitespace = 0;
+            for (var i = n - 1; i >= lower; i--)
+            {
+                var c = text[i];
+                if (IsWhitespace(c) && !(c == '\r' && i + 1 < n && text[i + 1] == '\n') && ++whitespace > _maxFreeWhitespace)
+                {
+                    start = i + 1;
+                    break;
+                }
+            }
+            pending = Math.Min(pending, start);
+        }
+        return Math.Max(0, pending);
+    }
+
+    // ── scanning ─────────────────────────────────────────────────────────────────────
+
+    private void ScanRuns(ReadOnlySpan<char> text, ulong[] prefix, ulong b, List<FingerprintHit> found)
+    {
+        var powers = PowersOf(b, _runLengths.Select(r => r.Length));
+        var n = text.Length;
+        // The end of the current run of each class; recomputed when a start passes it.
+        int whitespaceFreeEnd = 0, base64End = 0, base64UrlEnd = 0, whitespaceEnd = 0;
+        for (var s = 0; s < n; s++)
+        {
+            if (IsWhitespace(text[s]))
+            {
+                if (whitespaceEnd <= s) whitespaceEnd = RunEnd(text, s, IsWhitespace);
+                for (var k = 0; k < _runLengths.Length && _runLengths[k].Length <= whitespaceEnd - s; k++)
+                {
+                    if ((_runLengths[k].Classes & Classes.WhitespaceOnly) != 0)
+                        Try(text, prefix, powers[k], s, _runLengths[k].Length, s, _runLengths[k].Length, found);
+                }
+                continue;
+            }
+            if (whitespaceFreeEnd <= s) whitespaceFreeEnd = RunEnd(text, s, IsWhitespaceFree);
+            if (base64End <= s) base64End = IsBase64(text[s]) ? RunEnd(text, s, IsBase64) : s;
+            if (base64UrlEnd <= s) base64UrlEnd = IsBase64Url(text[s]) ? RunEnd(text, s, IsBase64Url) : s;
+            int whitespaceFreeRun = whitespaceFreeEnd - s, base64Run = base64End - s, base64UrlRun = base64UrlEnd - s;
+
+            for (var k = 0; k < _runLengths.Length; k++)
+            {
+                var (length, classes) = _runLengths[k];
+                if (length > whitespaceFreeRun)
+                    break;
+                if ((classes & Classes.WhitespaceFree) != 0
+                    || ((classes & Classes.Base64) != 0 && length <= base64Run)
+                    || ((classes & Classes.Base64Url) != 0 && length <= base64UrlRun))
+                    Try(text, prefix, powers[k], s, length, s, length, found);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Free entries over one view. <paramref name="rawStart"/>/<paramref name="rawEnd"/> map a folded
+    /// view's indices back to the raw text (null: the view is the raw text).
+    /// </summary>
+    private void ScanFree(ReadOnlySpan<char> view, ulong[] prefix, ulong b, int[]? rawStart, int[]? rawEnd, List<FingerprintHit> found)
+    {
+        var powers = PowersOf(b, _freeShapes.Select(f => f.Length));
+        var n = view.Length;
+        var counts = ArrayPool<int>.Shared.Rent(n + 1);
+        try
+        {
+            counts[0] = 0;
+            for (var i = 0; i < n; i++)
+                counts[i + 1] = counts[i] + (IsWhitespace(view[i]) ? 1 : 0);
+            for (var s = 0; s < n; s++)
+            {
+                for (var k = 0; k < _freeShapes.Length; k++)
+                {
+                    var (length, whitespace) = _freeShapes[k];
+                    if (s + length > n)
+                        break;
+                    if (whitespace >= 0 && counts[s + length] - counts[s] != whitespace)
+                        continue;
+                    if (rawStart is null)
+                        Try(view, prefix, powers[k], s, length, s, length, found);
+                    else
+                        Try(view, prefix, powers[k], s, length, rawStart[s], rawEnd![s + length - 1] - rawStart[s], found);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(counts);
+        }
+    }
+
+    /// <summary>Free entries on the view with each <c>\r\n</c> folded to <c>\n</c>.</summary>
+    private void ScanFolded(ReadOnlySpan<char> text, ulong b, List<FingerprintHit> found)
+    {
+        var n = text.Length;
+        var folded = ArrayPool<char>.Shared.Rent(n);
+        var rawStart = ArrayPool<int>.Shared.Rent(n);
+        var rawEnd = ArrayPool<int>.Shared.Rent(n);
+        var prefix = ArrayPool<ulong>.Shared.Rent(n + 1);
+        try
+        {
+            var m = 0;
+            for (var i = 0; i < n; i++)
+            {
+                // A folded "\n" stands for the raw "\r\n": its raw span starts at the "\r".
+                var pair = text[i] == '\r' && i + 1 < n && text[i + 1] == '\n';
+                folded[m] = pair ? '\n' : text[i];
+                rawStart[m] = i;
+                if (pair) i++;
+                rawEnd[m] = i + 1;
+                m++;
+            }
+            var view = folded.AsSpan(0, m);
+            PrefixHashes(view, b, prefix);
+            ScanFree(view, prefix, b, rawStart, rawEnd, found);
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(folded, clearArray: true);
+            ArrayPool<int>.Shared.Return(rawStart);
+            ArrayPool<int>.Shared.Return(rawEnd);
+            ArrayPool<ulong>.Shared.Return(prefix);
+        }
+    }
+
+    private void Try(ReadOnlySpan<char> view, ulong[] prefix, ulong power, int start, int length, int hitStart, int hitLength, List<FingerprintHit> found)
+    {
+        // The window's hash from prefix hashes: H[s+L] − H[s]·b^L, the same value as RollingHash.Of.
+        var hash = prefix[start + length] + RollingHash.Modulus - Reduce((UInt128)prefix[start] * power);
+        if (hash >= RollingHash.Modulus) hash -= RollingHash.Modulus;
+        if (!FilterHas(length, hash) || !_candidates.TryGetValue((length, hash), out var candidates))
+            return;
+
+        var mac = Fingerprinter.Hmac(view.Slice(start, length), _keys);
+        try
+        {
+            foreach (var c in candidates)
+            {
+                if (CryptographicOperations.FixedTimeEquals(mac, c.Hmac))
+                    found.Add(new FingerprintHit(c.Name, c.IsPrevious, c.Kind, hitStart, hitLength));
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(mac);
+        }
+    }
+
+    private static void PrefixHashes(ReadOnlySpan<char> view, ulong b, ulong[] prefix)
+    {
+        prefix[0] = 0;
+        for (var i = 0; i < view.Length; i++)
+            prefix[i + 1] = Reduce((UInt128)prefix[i] * b + view[i]);
+    }
+
+    private static ulong[] PowersOf(ulong b, IEnumerable<int> lengths) => [.. lengths.Select(l => RollingHash.Power(b, l))];
+
+    /// <summary><c>x mod p</c> for <c>p = 2^61 − 1</c>, reduced as <see cref="RollingHash"/> does (inputs below 2^123).</summary>
+    private static ulong Reduce(UInt128 x)
+    {
+        var folded = (ulong)(x & RollingHash.Modulus) + (ulong)(x >> 61);
+        folded = (folded & RollingHash.Modulus) + (folded >> 61);
+        return folded >= RollingHash.Modulus ? folded - RollingHash.Modulus : folded;
+    }
+
+    private static int FilterIndex(int length, ulong hash) =>
+        (int)(((hash ^ ((ulong)length * 0x9E3779B97F4A7C15UL)) * 0xBF58476D1CE4E5B9UL) >> 44);
+
+    private void SetFilter(int length, ulong hash)
+    {
+        var i = FilterIndex(length, hash);
+        _filter[i >> 6] |= 1UL << (i & 63);
+    }
+
+    private bool FilterHas(int length, ulong hash)
+    {
+        var i = FilterIndex(length, hash);
+        return (_filter[i >> 6] & (1UL << (i & 63))) != 0;
+    }
+
+    // ── character classes ────────────────────────────────────────────────────────────
+
+    /// <summary>The whitespace <see cref="SecretVariants"/> strips: CR, LF, space, tab.</summary>
+    private static bool IsWhitespace(char c) => c is '\r' or '\n' or ' ' or '\t';
+
+    private static bool IsWhitespaceFree(char c) => !IsWhitespace(c);
+
+    private static bool IsBase64(char c) => char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '=';
+
+    private static bool IsBase64Url(char c) => char.IsAsciiLetterOrDigit(c) || c is '-' or '_';
+
+    private static int RunEnd(ReadOnlySpan<char> text, int from, Func<char, bool> allowed)
+    {
+        var end = from;
+        while (end < text.Length && allowed(text[end])) end++;
+        return end;
+    }
+
+    private static int TrailingRun(ReadOnlySpan<char> text, Func<char, bool> allowed)
+    {
+        var start = text.Length;
+        while (start > 0 && allowed(text[start - 1])) start--;
+        return start;
+    }
+
+    private static int RoundUp(int value) => value <= 0 ? 0 : (value + Quantum - 1) / Quantum * Quantum;
+}
