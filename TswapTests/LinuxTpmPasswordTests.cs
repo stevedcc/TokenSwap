@@ -74,7 +74,10 @@ public sealed class LinuxTpmPasswordTests
         return (p.ExitCode, stdout.ToArray(), stderr);
     }
 
-    /// <summary>Writes a package's public and private parts and loads them under a regenerated primary; returns the loaded context path.</summary>
+    /// <summary>
+    /// Writes a package's public and private parts and loads them under a regenerated primary (issue #261: the ECC
+    /// P-256 one, which every new package is sealed under); returns the loaded context path.
+    /// </summary>
     private static string LoadPackage(byte[] package, DirectoryInfo tmp)
     {
         var pubLen = BitConverter.ToInt32(package, 0);
@@ -85,7 +88,7 @@ public sealed class LinuxTpmPasswordTests
         var primary = Path.Combine(tmp.FullName, "primary.ctx");
         var loaded = Path.Combine(tmp.FullName, "loaded.ctx");
         Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-        Assert.Equal(0, Tool("tpm2_createprimary", null, "-C", "o", "-G", "rsa2048", "-c", primary).Exit);
+        Assert.Equal(0, Tool("tpm2_createprimary", null, "-C", "o", "-G", "ecc256", "-c", primary).Exit);
         Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
         Assert.Equal(0, Tool("tpm2_load", null, "-C", primary, "-u", pub, "-r", priv, "-c", loaded).Exit);
         Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
@@ -189,12 +192,28 @@ public sealed class LinuxTpmPasswordTests
     [Fact]
     public void StrippedHeader_StillNeedsThePassword()
     {
-        // Ruling 3: without the TSTP header the slot looks password-free; the unseal then has no auth, and the
-        // TPM refuses (TPM_RC_AUTH_FAIL), which tswap reports as the stripped header.
+        // Ruling 3: without the password bit the slot looks password-free; the unseal then has no auth, and the
+        // TPM refuses (TPM_RC_AUTH_FAIL), which tswap reports as the stripped header. Issue #261: the password bit
+        // is cleared and the ECC bit kept, so the right primary is rebuilt (the whole header removed is
+        // LinuxTpmEccPrimaryTests.EccPackage_ThroughTheRsaPath_Fails; a v0.2.0 RSA slot below).
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         using var password = Password(0x44);
         var (_, hwBlob) = enrollment.Enroll(password);
         var (_, _, package) = TpmSlotBlob.Split(hwBlob);
+
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
+            new LinuxTpmHardwareService().Unlock(ConfigWith(TpmSlotBlob.Wrap(package, TpmSlotBlob.EccPrimary)), _ => 0, password: null));
+
+        Assert.Equal(VaultPasswordMessages.StrippedHeader, ex.Message);
+    }
+
+    [Fact]
+    public void StrippedHeader_V020RsaSlot_StillNeedsThePassword()
+    {
+        // A v0.2.0 password slot (RSA, TSTP 0x01) with its header removed: read as a legacy package, the RSA
+        // primary is its parent, and the TPM refuses the missing auth as before.
+        using var password = Password(0x45);
+        var package = LinuxTpmEccPrimaryTests.V020Seal(RandomNumberGenerator.GetBytes(32), password);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
             new LinuxTpmHardwareService().Unlock(ConfigWith(package), _ => 0, password: null));

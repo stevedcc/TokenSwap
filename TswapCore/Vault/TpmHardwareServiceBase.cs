@@ -40,19 +40,20 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
         // in TpmSealedKey. Same "Config is corrupted" errors as before for the latter.
         var sealedBlob = HardwareBlobLocator.Read(config, HardwareBackend.Tpm);
 
-        // Brief T17: a password slot's blob carries the TSTP header; the provider is called only then.
-        var (needsPassword, _, package) = TpmSlotBlob.Split(sealedBlob);
+        // Brief T17: a password slot's blob carries the TSTP header; the provider is called only then. Issue #261: the
+        // header's ECC bit says which primary a Linux package was sealed under; RecoverKey gets it as is.
+        var (needsPassword, eccPrimary, package) = TpmSlotBlob.Split(sealedBlob);
         byte[] key;
         if (needsPassword)
         {
             if (password is null)
                 throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
             using var stretched = password();
-            key = RecoverKey(package, stretched);
+            key = RecoverKey(package, eccPrimary, stretched);
         }
         else
         {
-            key = RecoverKey(package, null);
+            key = RecoverKey(package, eccPrimary, null);
         }
         // RecoverKey is a generic primitive (Phase 6 will use it for Shamir shares of varying
         // size too — see docs/design/multi-machine-keying.md), so it doesn't itself enforce a length. This
@@ -73,6 +74,8 @@ public abstract class TpmHardwareServiceBase : IHardwareKeyService
     /// why: TPM2 sealed-object seal/unseal on Linux vs. RSA-OAEP wrap/unwrap on Windows).
     /// </summary>
     /// <remarks>Brief T17: <paramref name="password"/> is the stretched vault password of a password slot
-    /// (the <c>TSTP</c> header already removed from <paramref name="wrapped"/>), null for a password-free one.</remarks>
-    protected abstract byte[] RecoverKey(byte[] wrapped, StretchedPassword? password);
+    /// (the <c>TSTP</c> header already removed from <paramref name="wrapped"/>), null for a password-free one.
+    /// Issue #261: <paramref name="eccPrimary"/> is the header's bit 1, false for a header-less blob; the Linux
+    /// backend rebuilds the ECC P-256 primary when it is set and the RSA-2048 one otherwise.</remarks>
+    protected abstract byte[] RecoverKey(byte[] wrapped, bool eccPrimary, StretchedPassword? password);
 }

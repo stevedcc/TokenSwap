@@ -68,6 +68,10 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     /// <summary>Unlock side: unwraps a payload produced by <see cref="Wrap"/> using this machine's named TPM-backed key.</summary>
     public byte[] Unwrap(byte[] wrapped) => PlatformCryptoProviderInterop.Unwrap(wrapped);
 
-    protected override byte[] RecoverKey(byte[] wrapped, StretchedPassword? password) =>
+    /// <remarks>
+    /// <paramref name="eccPrimary"/> is ignored (issue #261): a Windows package's key is found by the name inside the
+    /// package, not by a primary, and Windows never writes the bit.
+    /// </remarks>
+    protected override byte[] RecoverKey(byte[] wrapped, bool eccPrimary, StretchedPassword? password) =>
         password is null ? Unwrap(wrapped) : PlatformCryptoProviderInterop.Unwrap(wrapped, password);
 }
