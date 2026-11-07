@@ -363,4 +363,30 @@ public sealed class RecordStoreSelectiveReadTests : IDisposable
         Assert.Equal("main-value", view.ResolveToken("a"));
         Assert.Equal(1, view.FormatTwoDecoded);
     }
+
+    /// <summary>
+    /// Code review (GLM B-4): the lifecycle the wiping rests on: a disposed entry (format 3 and format 2)
+    /// and a disposed view refuse to decrypt, so nothing reads values after they were wiped.
+    /// </summary>
+    [Fact]
+    public void DisposedEntriesAndViews_RefuseToDecrypt()
+    {
+        _m.Ok("a-value", "ingest", "a");
+        var entry = Store(_m).OpenSecret("a", _key)!;
+        entry.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => entry.DecryptValue(previous: false));
+
+        using var m2 = new FleetMachine("selective-dispose", SimulatedYubiKeyService.WithKeys(SerialA));
+        var key2 = VaultKey(m2, InitFormatTwoVault(m2));
+        m2.Ok("b-value", "ingest", "b");
+        var formatTwo = Store(m2).OpenSecret("b", key2)!;
+        Assert.True(formatTwo.IsFormatTwo);
+        formatTwo.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => formatTwo.DecryptValue(previous: false));
+
+        var view = new VaultView(Store(_m), _key, TextWriter.Null);
+        Assert.Equal("a-value", view.ResolveToken("a"));
+        view.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => view.ResolveToken("a"));
+    }
 }

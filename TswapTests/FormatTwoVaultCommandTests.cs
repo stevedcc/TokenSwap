@@ -263,6 +263,10 @@ public sealed class FormatTwoVaultCommandTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Equal("a: \"alpha-value\"  # tswap: alpha\nd: \"delta-value\"  # tswap: delta\n", stdout);
         Assert.Equal([UseWarning(1)], Lines(stderr));
+        // Code review (GLM B-3, MiMo B-M1): exactly its two markers' records: alpha decoded whole (one
+        // version), delta's current section; nothing of beta or gamma.
+        Assert.Equal(new[] { FileName("alpha"), FileName("delta") }.Order(StringComparer.Ordinal),
+            _values.Select(v => v.File).Order(StringComparer.Ordinal));
     }
 
     [Fact]
