@@ -27,8 +27,9 @@ namespace TswapCore.Vault;
 /// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
 /// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
-/// <para><b>Status:</b> verified on one physical TPM (an Intel PTT, #155) with the RSA-2048 primary;
-/// new slots seal under an ECC P-256 primary (issue #261), tested against swtpm. See
+/// <para><b>Status:</b> verified on two physical TPMs (an Intel PTT, #155, and an Infineon SLB 9665,
+/// #261), with RSA-2048 slots made by v0.2.0 and with new slots, which seal under an ECC P-256 primary
+/// (issue #261). See
 /// <c>docs/design/hardware-backends.md</c>'s Linux TPM section for what is verified on real hardware
 /// and what is still open.</para>
 ///

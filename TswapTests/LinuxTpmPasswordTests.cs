@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using TswapCore;
@@ -34,7 +33,7 @@ public sealed class LinuxTpmPasswordTests
     {
         _output = output;
         if (Environment.GetEnvironmentVariable("TPM2TOOLS_TCTI")?.StartsWith("swtpm", StringComparison.Ordinal) == true)
-            Tool("tpm2_dictionarylockout", null, "-c");
+            TpmTestTools.Run("tpm2_dictionarylockout", null, "-c");
     }
 
     private static StretchedPassword Password(byte first) =>
@@ -50,30 +49,6 @@ public sealed class LinuxTpmPasswordTests
     private static Config ConfigWith(byte[] hwBlob) =>
         new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
-    /// <summary>Runs a tpm2-tools command directly (test-only checks), returning exit code, stdout bytes and stderr.</summary>
-    private static (int Exit, byte[] Stdout, string Stderr) Tool(string command, byte[]? stdin, params string[] args)
-    {
-        var psi = new ProcessStartInfo(command)
-        {
-            RedirectStandardInput = stdin is not null, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-        };
-        foreach (var a in args)
-            psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        var stdout = new MemoryStream();
-        var copy = p.StandardOutput.BaseStream.CopyToAsync(stdout);
-        var err = p.StandardError.ReadToEndAsync();
-        if (stdin is not null)
-        {
-            p.StandardInput.BaseStream.Write(stdin);
-            p.StandardInput.Close();
-        }
-        copy.GetAwaiter().GetResult();
-        var stderr = err.GetAwaiter().GetResult();
-        p.WaitForExit();
-        return (p.ExitCode, stdout.ToArray(), stderr);
-    }
-
     /// <summary>
     /// Writes a package's public and private parts and loads them under a regenerated primary (issue #261: the ECC
     /// P-256 one, which every new package is sealed under); returns the loaded context path.
@@ -87,11 +62,11 @@ public sealed class LinuxTpmPasswordTests
         File.WriteAllBytes(priv, package.AsSpan(4 + pubLen).ToArray());
         var primary = Path.Combine(tmp.FullName, "primary.ctx");
         var loaded = Path.Combine(tmp.FullName, "loaded.ctx");
-        Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-        Assert.Equal(0, Tool("tpm2_createprimary", null, "-C", "o", "-G", "ecc256", "-c", primary).Exit);
-        Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-        Assert.Equal(0, Tool("tpm2_load", null, "-C", primary, "-u", pub, "-r", priv, "-c", loaded).Exit);
-        Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
+        Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
+        Assert.Equal(0, TpmTestTools.Run("tpm2_createprimary", null, "-C", "o", "-G", "ecc256", "-c", primary).Exit);
+        Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
+        Assert.Equal(0, TpmTestTools.Run("tpm2_load", null, "-C", primary, "-u", pub, "-r", priv, "-c", loaded).Exit);
+        Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
         return loaded;
     }
 
@@ -118,12 +93,12 @@ public sealed class LinuxTpmPasswordTests
         {
             var loaded = LoadPackage(package, tmp);
 
-            var withHex = Tool("tpm2_unseal", null, "-c", loaded, "-p", "hex:" + Convert.ToHexStringLower(Bytes(password)));
+            var withHex = TpmTestTools.Run("tpm2_unseal", null, "-c", loaded, "-p", "hex:" + Convert.ToHexStringLower(Bytes(password)));
             Assert.Equal(0, withHex.Exit);
             Assert.Equal(key, withHex.Stdout);
 
-            Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-            var empty = Tool("tpm2_unseal", null, "-c", loaded);
+            Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
+            var empty = TpmTestTools.Run("tpm2_unseal", null, "-c", loaded);
             _output.WriteLine($"empty auth: exit {empty.Exit}, {empty.Stderr.Trim()}");
             Assert.NotEqual(0, empty.Exit);
             Assert.Contains("0x98E", empty.Stderr, StringComparison.OrdinalIgnoreCase);
@@ -174,7 +149,7 @@ public sealed class LinuxTpmPasswordTests
             var pub = Path.Combine(tmp.FullName, "seal.pub");
             File.WriteAllBytes(pub, package.AsSpan(4, pubLen).ToArray());
 
-            var print = Tool("tpm2_print", null, "-t", "TPM2B_PUBLIC", pub);
+            var print = TpmTestTools.Run("tpm2_print", null, "-t", "TPM2B_PUBLIC", pub);
             var text = System.Text.Encoding.UTF8.GetString(print.Stdout);
             _output.WriteLine(text);
 
@@ -213,7 +188,7 @@ public sealed class LinuxTpmPasswordTests
         // A v0.2.0 password slot (RSA, TSTP 0x01) with its header removed: read as a legacy package, the RSA
         // primary is its parent, and the TPM refuses the missing auth as before.
         using var password = Password(0x45);
-        var package = LinuxTpmEccPrimaryTests.V020Seal(RandomNumberGenerator.GetBytes(32), password);
+        var package = TpmTestTools.V020Seal(RandomNumberGenerator.GetBytes(32), password);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
             new LinuxTpmHardwareService().Unlock(ConfigWith(package), _ => 0, password: null));
@@ -249,7 +224,7 @@ public sealed class LinuxTpmPasswordTests
             last = Assert.Throws<VaultPasswordRefusedException>(() => new LinuxTpmHardwareService().Unlock(config, _ => 0, () => wrong.Clone()));
 
         Assert.Equal(VaultPasswordMessages.TpmLockoutLinux, last?.Message);
-        Tool("tpm2_dictionarylockout", null, "-c");
+        TpmTestTools.Run("tpm2_dictionarylockout", null, "-c");
     }
 }
 

@@ -665,7 +665,13 @@ The rest of an unlock (loading and unsealing the sealed object, the flushes) is 
 SLB 9665 and 0.8 s on the PTT, so an ECC unlock is about 4× faster on the SLB 9665 and 2.4× on the
 PTT.
 
-### Status: verified on one physical TPM (Intel PTT), single vendor
+<a id="status-verified-on-one-physical-tpm-intel-ptt-single-vendor"></a>
+
+### Status: verified on two physical TPMs (Intel PTT and Infineon SLB 9665)
+
+**Second vendor (2026-11-07, #261):** an Infineon SLB 9665 (a discrete TPM in the owner's
+workstation) ran both paths with this build: a new ECC slot, and an RSA-2048 slot made by the
+released v0.2.0 binary, which the new build opened (table above). The Intel PTT ran both too.
 
 **Physical hardware (2026-10-29, #155):** the router's Proxmox host, a CWWK CW-MBX-AD12 with an
 Intel i3-1215U (firmware TPM: Intel PTT, Alder Lake, manufacturer `INTC`; model from #155's first
@@ -682,8 +688,8 @@ keyring vaults (`init --tpm` makes one since #151), with the lockout counter at 
 the checks are listed in the project's retros (remote enrolment, record store, the broker, sudo
 unlock as root and as a `tss` member).
 
-**Still open:** a full host power cycle (a VM reboot doesn't power-cycle the PTT), `tpm2_clear`
-(the TPM holds the router's vault), and a second TPM vendor. The paragraphs below are
+**Still open:** a full host power cycle (a VM reboot doesn't power-cycle the PTT; none was recorded
+on the SLB 9665 either) and `tpm2_clear` (the TPM holds the router's vault). The paragraphs below are
 from the simulator phase; their "no real hardware" points are superseded by this one.
 
 #### Simulator phase (before 2026-10-29)

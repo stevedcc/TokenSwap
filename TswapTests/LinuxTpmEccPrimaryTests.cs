@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using TswapCore;
@@ -74,7 +72,7 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     public void PinnedRsaTemplate_IsTheDefaultRsa2048PublicArea_AndTheCommittedTemplate()
     {
         var key = RandomNumberGenerator.GetBytes(32);
-        var package = V020Seal(key, password: null);
+        var package = TpmTestTools.V020Seal(key, password: null);
         var primaries = new List<(byte[] Template, byte[] Public)>();
         byte[] recovered;
         using (Tpm2ToolsInterop.UseRunner(CapturingPrimaries(primaries)))
@@ -132,7 +130,7 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     public void V020RsaSlot_WithoutPassword_StillUnseals()
     {
         var kek = RandomNumberGenerator.GetBytes(32);
-        var hwBlob = V020Seal(kek, password: null); // v0.2.0's password-free slot: the bare package
+        var hwBlob = TpmTestTools.V020Seal(kek, password: null); // v0.2.0's password-free slot: the bare package
 
         Assert.Equal(kek, new LinuxTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0,
             () => throw new InvalidOperationException("a password-free slot must not ask for the password")));
@@ -143,7 +141,7 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     {
         using var password = Password(0x00);
         var kek = RandomNumberGenerator.GetBytes(32);
-        var hwBlob = TpmSlotBlob.Wrap(V020Seal(kek, password), TpmSlotBlob.Password); // v0.2.0's header: 0x01
+        var hwBlob = TpmSlotBlob.Wrap(TpmTestTools.V020Seal(kek, password), TpmSlotBlob.Password); // v0.2.0's header: 0x01
         var provided = 0;
 
         var recovered = new LinuxTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0, () => { provided++; return password.Clone(); });
@@ -178,7 +176,7 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     [Fact]
     public void RsaPackage_ThroughTheEccPath_Fails()
     {
-        var package = V020Seal(RandomNumberGenerator.GetBytes(32), password: null);
+        var package = TpmTestTools.V020Seal(RandomNumberGenerator.GetBytes(32), password: null);
 
         var direct = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(package, eccPrimary: true));
         // A v0.2.0 slot given the ECC bit: the ECC primary isn't its parent.
@@ -196,46 +194,6 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
 
     // ------------------------------------------------------------------ helpers
 
-    /// <summary>
-    /// Seals <paramref name="key"/> exactly as v0.2.0 did (<c>v0.2.0:TswapCore/Vault/Interop/Tpm2ToolsInterop.cs</c>):
-    /// <c>tpm2_createprimary -C o -G rsa2048</c>, then <c>tpm2_create</c> with the key on stdin and, for a password slot,
-    /// <c>-a fixedtpm|fixedparent|userwithauth</c> and the auth <c>hex:&lt;64 hex&gt;</c> (v0.2.0 passed it through a
-    /// memfd; the auth value is the same). Returns the package <c>len(pub) LE32 | pub | priv</c>.
-    /// </summary>
-    internal static byte[] V020Seal(byte[] key, StretchedPassword? password)
-    {
-        var tmp = Directory.CreateTempSubdirectory("tswap-test-tpm-");
-        try
-        {
-            var primary = Path.Combine(tmp.FullName, "primary.ctx");
-            var pub = Path.Combine(tmp.FullName, "seal.pub");
-            var priv = Path.Combine(tmp.FullName, "seal.priv");
-            Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-            Assert.Equal(0, Tool("tpm2_createprimary", null, "-C", "o", "-G", "rsa2048", "-c", primary).Exit);
-            Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-            List<string> args = ["-C", primary, "-u", pub, "-r", priv, "-i", "-"];
-            if (password is not null)
-            {
-                var raw = new byte[StretchedPassword.Size];
-                password.CopyTo(raw);
-                args.AddRange(["-a", Tpm2ToolsInterop.PasswordObjectAttributes, "-p", "hex:" + Convert.ToHexStringLower(raw)]);
-            }
-            var create = Tool("tpm2_create", key, [.. args]);
-            Assert.True(create.Exit == 0, create.Stderr);
-            var pubBytes = File.ReadAllBytes(pub);
-            var privBytes = File.ReadAllBytes(priv);
-            var package = new byte[4 + pubBytes.Length + privBytes.Length];
-            BinaryPrimitives.WriteInt32LittleEndian(package, pubBytes.Length);
-            pubBytes.CopyTo(package, 4);
-            privBytes.CopyTo(package, 4 + pubBytes.Length);
-            return package;
-        }
-        finally
-        {
-            tmp.Delete(recursive: true);
-        }
-    }
-
     /// <summary>The public area tpm2-tools' default template for <paramref name="algorithm"/> gives on this TPM.</summary>
     private static byte[] DefaultPrimaryPublic(string algorithm)
     {
@@ -243,10 +201,10 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
         try
         {
             var publicPath = Path.Combine(tmp.FullName, "primary.pub");
-            Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
-            var run = Tool("tpm2_createprimary", null, "-C", "o", "-G", algorithm, "-c", Path.Combine(tmp.FullName, "primary.ctx"), "-o", publicPath);
+            Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
+            var run = TpmTestTools.Run("tpm2_createprimary", null, "-C", "o", "-G", algorithm, "-c", Path.Combine(tmp.FullName, "primary.ctx"), "-o", publicPath);
             Assert.True(run.Exit == 0, run.Stderr);
-            Assert.Equal(0, Tool("tpm2_flushcontext", null, "-t").Exit);
+            Assert.Equal(0, TpmTestTools.Run("tpm2_flushcontext", null, "-t").Exit);
             return File.ReadAllBytes(publicPath);
         }
         finally
@@ -271,27 +229,4 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
             primaries.Add((File.ReadAllBytes(templatePath), File.ReadAllBytes(publicPath)));
         return run;
     };
-
-    private static (int Exit, byte[] Stdout, string Stderr) Tool(string command, byte[]? stdin, params string[] args)
-    {
-        var psi = new ProcessStartInfo(command)
-        {
-            RedirectStandardInput = stdin is not null, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
-        };
-        foreach (var a in args)
-            psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        var stdout = new MemoryStream();
-        var copy = p.StandardOutput.BaseStream.CopyToAsync(stdout);
-        var err = p.StandardError.ReadToEndAsync();
-        if (stdin is not null)
-        {
-            p.StandardInput.BaseStream.Write(stdin);
-            p.StandardInput.Close();
-        }
-        copy.GetAwaiter().GetResult();
-        var stderr = err.GetAwaiter().GetResult();
-        p.WaitForExit();
-        return (p.ExitCode, stdout.ToArray(), stderr);
-    }
 }

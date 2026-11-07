@@ -44,7 +44,7 @@ Old links to these sections land here.
 
 <a id="linux-tpm-implemented-verified-on-a-software-simulator-and-on-a-physical-intel-ptt"></a> [linux-tpm-implemented-verified-on-a-software-simulator-and-on-a-physical-intel-ptt](docs/design/hardware-backends.md#linux-tpm-implemented-verified-on-a-software-simulator-and-on-a-physical-intel-ptt)
 
-<a id="status-verified-on-one-physical-tpm-intel-ptt-single-vendor"></a> [status-verified-on-one-physical-tpm-intel-ptt-single-vendor](docs/design/hardware-backends.md#status-verified-on-one-physical-tpm-intel-ptt-single-vendor)
+<a id="status-verified-on-one-physical-tpm-intel-ptt-single-vendor"></a> [status-verified-on-one-physical-tpm-intel-ptt-single-vendor](docs/design/hardware-backends.md#status-verified-on-two-physical-tpms-intel-ptt-and-infineon-slb-9665)
 
 <a id="simulator-phase-before-2026-10-29"></a> [simulator-phase-before-2026-10-29](docs/design/hardware-backends.md#simulator-phase-before-2026-10-29)
 
