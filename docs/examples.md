@@ -91,7 +91,7 @@ An AI agent can read this file without seeing secret values.
 
 - `check` verifies that every marker names a known secret.
 - `tocomment` annotates a file that already has inline secret values.
-- `apply` substitutes the secrets for deployment.
+- `run` with `{{@file}}` uses the filled file in a command (`sudo tswap apply` prints it, for a person).
 
 ```bash
 # Verify all # tswap: markers in a file reference secrets that exist

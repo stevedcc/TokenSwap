@@ -310,4 +310,15 @@ public sealed class ApplySudoTests : IDisposable
         var line = help.Split('\n').Single(l => l.Contains("apply <file>"));
         Assert.StartsWith("  [sudo]", line);
     }
+
+    [Fact]
+    public void Help_NeverSuggestsApplyWithoutSudoOrThroughProcessSubstitution()
+    {
+        var help = _m.Ok("", "--help");
+
+        Assert.DoesNotContain("<(", help);
+        Assert.Contains("run helm upgrade --install app ./chart -f {{@values.yaml}}", help);
+        foreach (var line in help.Split('\n').Where(l => l.Contains("tswap apply") || l.Contains("apply <file>")))
+            Assert.True(line.TrimStart().StartsWith("sudo ") || line.TrimStart().StartsWith("[sudo]"), $"apply without sudo: {line}");
+    }
 }

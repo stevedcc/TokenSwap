@@ -6,7 +6,7 @@ public sealed class ApplyCommand : ICliCommand
 {
     public string Name => "apply";
     public string HelpUsage => "apply <file>";
-    public string Description => "Output file with # tswap: markers substituted";
+    public string Description => "Print a file with # tswap: markers filled in (human use; agents: run … {{@file}})";
     public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)
@@ -15,7 +15,7 @@ public sealed class ApplyCommand : ICliCommand
             throw new UsageException($"{ctx.Prefix} apply <file>");
 
         ctx.RequireSudo("apply",
-            $"It prints the file with the secret values in it. To use a file with secrets in a command, run:\n  {ctx.Prefix} run … {{{{@file}}}}\n(for Helm: {ctx.Prefix} run helm upgrade --install app ./chart -f {{{{@values.yaml}}}})");
+            $"Agents: do not use sudo. To use a file with secrets in a command, run:\n  {ctx.Prefix} run … {{{{@file}}}}\n(for Helm: {ctx.Prefix} run helm upgrade --install app ./chart -f {{{{@values.yaml}}}})");
 
         if (!File.Exists(filePath))
             throw new TswapException($"File not found: {filePath}");

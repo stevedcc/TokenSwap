@@ -165,7 +165,7 @@ Replace inline secrets with # tswap: comments
 sudo tswap apply <file>
 ```
 
-Output file with # tswap: markers substituted
+Print a file with # tswap: markers filled in (human use; agents: run … {{@file}})
 
 ### burn
 

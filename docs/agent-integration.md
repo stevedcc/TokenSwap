@@ -54,6 +54,7 @@ These commands expose or modify secret values. Only human operators should use t
 | `list` | List secrets with metadata | Reveals creation/modification timestamps |
 | `delete <name>` | Remove a secret | Irreversible — requires operator judgment |
 | `rotate <name>` of a secret that isn't burned, `restore <name>`, `import <file>` | Replace a value that is still good | Services using the old value stop working |
+| `apply <file>` | Print a file with the values filled in | The output holds every value; agents use `run … {{@file}}` |
 | `export <file>` | Encrypted backup | The backup holds every value |
 | `slot approve` / `slot merge` / `slot add --yubikey`, `recover`, `migrate --to-records`, `vault merge`, `vault reindex` | Vault administration | Each adds a way to decrypt the vault, or decrypts everything |
 

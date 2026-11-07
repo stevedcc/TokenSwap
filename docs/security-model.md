@@ -76,7 +76,7 @@ deployment.
 
 | Threat | How |
 |--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the plain value from the program's output, not its encoded forms ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the value from the program's output, also its base64 and base64url forms and the `\r\n` form of a multi-line value ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
 | Casual exfiltration via `run` | With a `{{@file}}` token, any word that is a printer, encoder, copier, shell or interpreter is refused too ([limits](#files-with-secrets-run-with-file)). Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
@@ -108,7 +108,7 @@ multi-line value) from the output, overwrites the copy with zeros and deletes th
 command ends, also after Ctrl+C, and removes stale folders of crashed runs at the next `run` with a
 file token. Before anything is written, `run` refuses a command with a printer, encoder, copier,
 shell or interpreter as any word (`cat`, `cp`, `base64`, `sh`, `python`, … see the blocklist in
-`Validation.cs`); `install` is refused only as the program, so `helm install` works.
+`Validation.cs`); `install` is refused only as the program, so `helm install` works. The check runs again on what the `{{name}}` tokens expand to, before anything is written; that refusal names the token, not the word.
 
 This replaces `apply` for agents, which now needs sudo. What it does not do:
 

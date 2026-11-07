@@ -95,7 +95,7 @@ automated/silent unlocking by malicious processes.
 - For Helm deployments: `%CMD% run helm upgrade --install app ./chart -f {{@values.yaml}}`
 - With a `{{@file}}` token `run` refuses a command containing a printer, encoder, copier, shell or interpreter
   (`cat`, `cp`, `base64`, `sh`, `python`, …): the file is data for a tool, never a program. The refusal
-  names the word; rename the file, or pass a single secret with a plain `{{name}}` token instead
+  names the word (or, after `{{name}}` values are substituted, the token); rename the file, or pass a single secret with a plain `{{name}}` token instead
 - Alternatively, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
 - This allows agents to freely read config files without seeing secret values";
