@@ -1123,9 +1123,10 @@ public sealed class VaultUnlocker
 
     /// <summary>
     /// This machine's own machine slot: by <see cref="Config.KeyringSlotId"/>, or the first machine
-    /// slot when that is null; null when there is none. Throws for a non-base64 slot id.
+    /// slot when that is null; null when there is none. Compared by the id's bytes (a non-canonical base64 form still
+    /// matches; <c>broker serve</c> uses it too). Throws for a non-base64 slot id.
     /// </summary>
-    private static Slot? FindOwnMachineSlot(Config config, Keyring.Keyring keyring)
+    public static Slot? FindOwnMachineSlot(Config config, Keyring.Keyring keyring)
     {
         if (config.KeyringSlotId is null)
             return keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine);

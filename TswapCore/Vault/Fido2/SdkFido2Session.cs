@@ -167,16 +167,21 @@ internal sealed class SdkFido2Session(IYubiKeyDevice device, SdkPinCollector col
     {
         parameters.Protocol = _session.AuthProtocol.Protocol;
         parameters.PinUvAuthParam = Authorise(parameters.ClientDataHash);
+        // Checked before anything is sent (final review): the answer is read as the one credential asked for.
+        var requested = OnlyAllowed(parameters);
         parameters.EncodeHmacSecretExtension(_session.AuthProtocol);
         var answer = SdkAnswer.Of(_session.Connection, new GetAssertionCommand(parameters));
         SdkFido2Keys.RequireOk(answer);
-        var requested = parameters.AllowList is [var only] ? only.Id.ToArray()
-            : throw new ArgumentException("The assertion is for one credential", nameof(parameters));
         using var data = new GetAssertionData(SdkFido2Keys.WithCredential(answer.Data, requested));
         // Decrypted with the session's shared secret into a new array: the caller's to zero.
         var output = data.AuthenticatorData.GetHmacSecretExtension(_session.AuthProtocol);
         return new Fido2Output(data.CredentialId.Id.ToArray(), output, data.AuthenticatorData.UserVerification);
     }
+
+    /// <summary>The one credential <paramref name="parameters"/> allows; anything else is a caller error.</summary>
+    internal static byte[] OnlyAllowed(GetAssertionParameters parameters) =>
+        parameters.AllowList is [var only] ? only.Id.ToArray()
+            : throw new ArgumentException("The assertion is for one credential", nameof(parameters));
 
     public bool TrySetPin(byte[] newPin)
     {

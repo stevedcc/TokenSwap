@@ -241,10 +241,15 @@ public sealed class BrokerCommand : ICliCommand
         {
             return false;
         }
-        var machine = keyring.Slots.Where(s => s.Kind == SlotKind.Machine).ToList();
-        var own = config.KeyringSlotId is { } id
-            ? machine.FirstOrDefault(s => Convert.ToBase64String(s.SlotId) == id)
-            : machine.FirstOrDefault();
+        Slot? own;
+        try
+        {
+            own = VaultUnlocker.FindOwnMachineSlot(config, keyring); // by the id's bytes, as the unlocker finds it
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
         return own is not null && YubiKeySlotKinds.Classify(own.HwBlob) is YubiKeySlotKind.Fido2;
     }
 

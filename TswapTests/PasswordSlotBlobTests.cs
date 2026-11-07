@@ -283,6 +283,12 @@ public class PasswordSlotBlobTests
             bytes[4] = version;
             return bytes;
         }
+        byte[] Fido2Flag(byte flag)
+        {
+            var bytes = Fido2TestSlots.Blob().Encode();
+            bytes[5] |= flag;
+            return bytes;
+        }
         byte[] Header(string magic, byte version, byte flags) =>
             [.. System.Text.Encoding.ASCII.GetBytes(magic), version, flags, .. LegacyTpm];
 
@@ -293,7 +299,13 @@ public class PasswordSlotBlobTests
             { "TSYK v2 0x02", YubiKey(2, 0x02), SlotPasswordKind.NeedsNewerTswap },
             { "TSYK v2 0x03", YubiKey(2, 0x03), SlotPasswordKind.NeedsNewerTswap },
             { "TSYK v2 0x00", YubiKey(2, 0x00), SlotPasswordKind.Corrupt },
-            { "TSYK v3", YubiKey(3, 0x01), SlotPasswordKind.NeedsNewerTswap },
+            // A version-3 header over an OTP blob's bytes: read by the FIDO2 parser, whose field checks refuse it
+            // (final review: relabelled; the real FIDO2 rows follow).
+            { "TSYK v3 over an OTP blob's bytes", YubiKey(3, 0x01), SlotPasswordKind.NeedsNewerTswap },
+            { "FIDO2 slot, no password", Fido2TestSlots.Blob(requiresPassword: false).Encode(), SlotPasswordKind.None },
+            { "FIDO2 slot, password", Fido2TestSlots.Blob(requiresPassword: true).Encode(), SlotPasswordKind.Password },
+            { "FIDO2 slot, an unknown flag bit", Fido2Flag(0x80), SlotPasswordKind.NeedsNewerTswap },
+            { "FIDO2 slot, truncated", Fido2TestSlots.Blob().Encode()[..20], SlotPasswordKind.Corrupt },
             { "TSYK v2, 74 bytes", v2[..74], SlotPasswordKind.Corrupt },
             // Review T17 p4 MiMo M3: ruling 3's "trailing" half, for the fixed-length YubiKey blobs.
             { "TSYK v2, a trailing byte", [.. v2, 0x00], SlotPasswordKind.Corrupt },

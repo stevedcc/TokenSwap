@@ -105,4 +105,21 @@ public sealed class BrokerFido2Tests : IDisposable
         Assert.Empty(Fido2.Calls);
         Assert.Empty(_m.Terminal.Reads.Skip(2));
     }
+
+    // Final review (task 8 deferred minor): the own slot is found by its id's bytes, as the unlocker finds it, so a
+    // KeyringSlotId written in a non-canonical base64 form (here with a space in it) still names the FIDO2 slot.
+    [Fact]
+    public void ServeStartsLocked_NonCanonicalOwnSlotId_StillFindsTheFido2Slot()
+    {
+        var slots = new Fido2TestSlots();
+        slots.AddOtp(SimulatedYubiKeyService.WithKeys(OtpSerial), OtpSerial); // the first machine slot: not FIDO2
+        var own = slots.AddFido2(Fido2TestSlots.Blob());
+        var config = slots.Config(own: own);
+        config = config with { KeyringSlotId = config.KeyringSlotId!.Insert(4, " ") };
+        Assert.Equal(own.SlotId, Convert.FromBase64String(config.KeyringSlotId!)); // the same id
+
+        var e = Assert.Throws<TswapException>(() => BrokerCommand.ServeStartsLocked(config));
+
+        Assert.Contains("This machine's slot of the vault is a FIDO2 slot", e.Message);
+    }
 }

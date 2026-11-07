@@ -81,4 +81,17 @@ public class SdkFido2DevicesTests
     public void KeyLeftOut_NamesTheProblem() =>
         Assert.Equal("A plugged-in key's FIDO2 interface couldn't be read (ChannelBusy), so it is left out of the list.",
             Fido2Texts.KeyLeftOut("ChannelBusy"));
+
+    // Final review (task 4 deferred minor): the session's one-credential precondition, now checked before the
+    // assertion is sent.
+    [Fact]
+    public void Session_OnlyAllowed_OneCredential()
+    {
+        var one = SdkFido2Keys.BuildAssertionParameters([1, 2, 3], new byte[32]);
+        Assert.Equal([1, 2, 3], SdkFido2Session.OnlyAllowed(one));
+
+        var two = SdkFido2Keys.BuildAssertionParameters([1, 2, 3], new byte[32]);
+        two.AllowCredential(new Yubico.YubiKey.Fido2.CredentialId { Id = new byte[] { 4, 5 } });
+        Assert.Throws<ArgumentException>(() => SdkFido2Session.OnlyAllowed(two));
+    }
 }
