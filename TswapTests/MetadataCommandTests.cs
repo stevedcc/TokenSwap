@@ -169,29 +169,31 @@ public sealed class MetadataCommandTests : IDisposable
 
         Run($"\n{all}:\n  ✓ alpha (line 1)\n  ⚠ beta (line 2) — BURNED, needs rotation\n  ✓ gamma:previous (line 3)\n" +
             "  ✗ delta (line 4) — NOT FOUND\n\nSummary: 2 ok, 1 warning(s), 1 missing\n", 1, "check", all);
+        // check --json writes the path as a JSON string: Windows paths have their backslashes escaped.
+        var allJson = all.Replace("\\", "\\\\");
         Run($$"""
             {
               "results": [
                 {
-                  "file": "{{all}}",
+                  "file": "{{allJson}}",
                   "line": 1,
                   "name": "alpha",
                   "status": "ok"
                 },
                 {
-                  "file": "{{all}}",
+                  "file": "{{allJson}}",
                   "line": 2,
                   "name": "beta",
                   "status": "burned"
                 },
                 {
-                  "file": "{{all}}",
+                  "file": "{{allJson}}",
                   "line": 3,
                   "name": "gamma:previous",
                   "status": "ok"
                 },
                 {
-                  "file": "{{all}}",
+                  "file": "{{allJson}}",
                   "line": 4,
                   "name": "delta",
                   "status": "missing"
