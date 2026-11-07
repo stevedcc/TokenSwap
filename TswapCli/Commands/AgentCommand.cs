@@ -102,8 +102,7 @@ public sealed class AgentCommand : ICliCommand
         if (c.IsInputRedirected)
             throw new TswapException(StartNoTerminalText);
         PrintDisclosure(c, config);
-        c.Error.Write(TerminalPasswordProvider.PromptText);
-        var password = c.ReadPassword(c.Error);
+        var password = TerminalPasswordProvider.ReadNonEmpty(c);
 
         var psi = ChildStartInfo(ctx, timeoutText);
         var stretched = VaultPasswordKdf.Stretch(password, file.Salt, file.Params, c.Error);
@@ -358,8 +357,7 @@ public sealed class AgentCommand : ICliCommand
 
         host.Harden(line => c.Error.WriteLine(line));
         PrintDisclosure(c, config);
-        c.Error.Write(TerminalPasswordProvider.PromptText);
-        var held = VaultPasswordKdf.Stretch(c.ReadPassword(c.Error), file.Salt, file.Params, c.Error);
+        var held = VaultPasswordKdf.Stretch(TerminalPasswordProvider.ReadNonEmpty(c), file.Salt, file.Params, c.Error);
         var server = Listen(ctx, ownership, config, vaultId, file, location, held, timeout, out var expiresAt);
         c.Out.WriteLine($"The tswap agent is running for this vault at {server.SocketPath} " +
                         (expiresAt is null ? "with no timeout" : $"until {FormatExpiry(expiresAt)}") + "; Ctrl+C stops it.");

@@ -507,6 +507,47 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Empty(_children.Started);
     }
 
+    private const string NoPasswordEnteredText = "No vault password was entered, so nothing was unlocked.";
+
+    [Fact]
+    public void AgentStart_EmptyPassword_Cancels_NoChild()
+    {
+        var (m, _) = TpmPasswordVault("empty");
+
+        var (exit, _, stderr) = Start(m, password: "");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(NoPasswordEnteredText, stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.Empty(_children.Started);
+    }
+
+    /// <summary>Through <see cref="AgentCommand.Serve"/> with a host that only records, so the test process isn't hardened.</summary>
+    [Fact]
+    public void AgentServeForeground_EmptyPassword_Cancels()
+    {
+        var (m, _) = TpmPasswordVault("fg-empty");
+        var console = new FakeConsole("\n") { IsInputRedirected = false };
+        var ctx = m.Context(console, ["agent", "serve", "--foreground"]);
+        var listening = false;
+        var host = new AgentServeHost(Stream.Null, TextWriter.Null, Detach: () => { }, Harden: _ => { },
+            HandleSignals: _ => { listening = true; return new EmptyDisposable(); });
+
+        var ex = Assert.ThrowsAny<TswapException>(() => AgentCommand.Serve(ctx, ["--foreground"], host));
+
+        Assert.Equal(NoPasswordEnteredText, ex.Message);
+        Assert.Equal(1, console.Reads);
+        Assert.False(listening);
+        var (statusExit, _, statusErr) = m.Run("", "agent", "status");
+        Assert.Equal(1, statusExit);
+        Assert.Contains("No tswap agent is running for this vault", statusErr);
+    }
+
+    private sealed class EmptyDisposable : IDisposable
+    {
+        public void Dispose() { }
+    }
+
     // ------------------------------------------------------------------ agent serve, stop, status
 
     [Fact]
@@ -956,12 +997,38 @@ public sealed class AgentCommandTests : IDisposable
         public Action? BeforeReply { get; set; }
         public List<ProcessStartInfo> Started { get; } = [];
         public List<byte[]> ChildInputs { get; } = [];
-        public List<string> ChildOutputs { get; } = [];
+        /// <summary>
+        /// What each child wrote to its parent, in launch order. Recorded as it is written, before the bytes reach the
+        /// pipe (<see cref="TeeWriter"/>), so a line the parent has read is already here: a test may read this as soon
+        /// as the parent returns, without waiting for the child's task to finish.
+        /// </summary>
+        public List<string> ChildOutputs
+        {
+            get
+            {
+                lock (_recordings)
+                    return [.. _recordings.Select(recording => { lock (recording) return recording.ToString().TrimEnd('\n'); })];
+            }
+        }
+
+        private readonly List<StringBuilder> _recordings = [];
         public List<string> Events { get; } = [];
         private readonly List<(FleetMachine Machine, CommandContext Context)> _agents = [];
 
 
-        public int Running => _running.Count(t => !t.IsCompleted);
+        /// <summary>
+        /// How many in-process agents are still running, after giving each up to 10 s to finish: a child that has
+        /// written its last line (an error the parent has already read) may still be in its task's clean-up when the
+        /// parent returns, which is not "still running". One that serves on never finishes, so it is counted.
+        /// </summary>
+        public int Running
+        {
+            get
+            {
+                Task.WhenAll(_running).Wait(TimeSpan.FromSeconds(10));
+                return _running.Count(t => !t.IsCompleted);
+            }
+        }
 
         public IAgentChild Launch(ProcessStartInfo psi)
         {
@@ -973,11 +1040,13 @@ public sealed class AgentCommandTests : IDisposable
             var output = new StreamReader(fromChild);
             var args = psi.ArgumentList.ToArray();
             var machine = Machine!;
+            var recorded = new StringBuilder();
+            lock (_recordings)
+                _recordings.Add(recorded);
 
             var task = Task.Run(() =>
             {
                 var readyOut = new StreamWriter(childOut) { AutoFlush = true };
-                var recorded = new StringBuilder();
                 var tee = new TeeWriter(readyOut, recorded, text =>
                 {
                     if (text.StartsWith("ready", StringComparison.Ordinal))
@@ -1014,8 +1083,6 @@ public sealed class AgentCommandTests : IDisposable
                 }
                 finally
                 {
-                    lock (ChildOutputs)
-                        ChildOutputs.Add(recorded.ToString().TrimEnd('\n'));
                     try { readyOut.Dispose(); } catch (ObjectDisposedException) { }
                     childIn.Dispose();
                 }
@@ -1090,7 +1157,9 @@ public sealed class AgentCommandTests : IDisposable
 
             public override void Write(string? value)
             {
-                copy.Append(value);
+                // Recorded before the parent can read it (ChildOutputs).
+                lock (copy)
+                    copy.Append(value);
                 onText(value ?? "");
                 inner.Write(value);
             }

@@ -81,7 +81,9 @@ internal static class GuidedInit
     /// <param name="newFolder"><c>--folder</c>'s raw value, or null for the default folder (the guide tells a folder of the user's choosing from it).</param>
     /// <param name="noRecovery">True when <c>--no-recovery</c> was given; otherwise the question is asked.</param>
     /// <param name="passwordFlag"><c>--password</c> true, <c>--no-password</c> false, neither null (asked).</param>
-    internal static int Execute(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, string? newFolder, bool noRecovery, bool? passwordFlag)
+    /// <param name="keyFile">#253: <c>--recovery-key-out</c>'s checked full path, or null (the key is printed).</param>
+    internal static int Execute(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, string? newFolder, bool noRecovery, bool? passwordFlag,
+        string? keyFile)
     {
         var c = ctx.Console;
         // The config this run may replace: as it is now (after any "Reinitialize?" backup). Anything
@@ -212,7 +214,8 @@ internal static class GuidedInit
             }
 
             // Step 5: the recovery slot, recommended (the recovery slot never involves the password).
-            var includeRecovery = !noRecovery && AskYesNo(c, RecoveryPrompt, defaultAnswer: true);
+            // --recovery-key-out asks for one, so the question is skipped (review M7: never a silently unused flag).
+            var includeRecovery = !noRecovery && (keyFile is not null || AskYesNo(c, RecoveryPrompt, defaultAnswer: true));
 
             // Step 6: create, in memory. The chip first, then the YubiKeys' OTP slots in ListSerials order, then the
             // FIDO2 slots (PIN tries are limited, so last); the first slot built is the machine slot (the config's
@@ -405,7 +408,8 @@ internal static class GuidedInit
             if (!SameBytes(configAtStart, ReadConfig(fileStore)))
                 throw new TswapException(
                     $"config.json changed while init was waiting ({fileStore.ConfigFile}); no config or vault was written. Run init again.");
-            InitCommand.CreateRecordVault(ctx, fileStore, config, vaultDir, password is not null && !passwordDropped ? password.File : null);
+            InitCommand.CreateRecordVault(ctx, fileStore, config, vaultDir, password is not null && !passwordDropped ? password.File : null,
+                keyFile, recoveryPrivateKey);
 
             // Step 7: other machines. After the write, so an end of input here counts as "no".
             c.Out.WriteLine();
@@ -437,12 +441,12 @@ internal static class GuidedInit
                 // Brief T7 item 8 (#159), as init --secure-enclave says it.
                 c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
                 c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
-                c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+                c.Out.WriteLine("has not had an independent cryptographic review. See docs/security-model.md#the-secure-enclaves-wrapping-has-not-been-reviewed.");
             }
             InitCommand.PrintVaultFolder(c, fileStore, vaultDir);
             InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, JoinAnd(enrolled.Select(p => p.Device.Chip is { } b
                 ? $"this machine's {VaultPasswordChoice.HardwareName(b)}"
-                : p.Device.Label)));
+                : p.Device.Label)), keyFile);
             return 0;
         }
         finally

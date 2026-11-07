@@ -114,7 +114,11 @@ public sealed class RunFileTokenTests : IDisposable
         public int Starts { get; private set; }
         public StringBuilder Output { get; } = new();
 
-        public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements)
+        public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements) =>
+            Run(argv, replacements, new RedactionOptions());
+
+        // Brief T16-S3: run passes its fingerprint matcher; the redactor applies it with the plaintext.
+        public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements, RedactionOptions options)
         {
             Starts++;
             Argv = argv;
@@ -124,7 +128,7 @@ public sealed class RunFileTokenTests : IDisposable
                 raw = raw.Replace("\r\n", "\n").Replace("\n", "\r\n");
             if (Onlcr)
                 raw = raw.Replace("\n", "\r\n");
-            var redactor = new StreamRedactor(replacements);
+            var redactor = new StreamRedactor(replacements, options.Matchers);
             for (var i = 0; i < raw.Length; i += ChunkSize)
                 Output.Append(redactor.ProcessChunk(raw.Substring(i, Math.Min(ChunkSize, raw.Length - i))));
             Output.Append(redactor.Flush());
@@ -1427,7 +1431,7 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary, ITestOu
         File.WriteAllText(hold, "#!/bin/sh\nexec sleep 30\n");
         File.SetUnixFileMode(hold, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         File.WriteAllText(Path.Combine(_tempDir, "values.yaml"), "password: \"\"  # tswap: db-pw\n");
-        RunToEnd(Psi(config, xdg, "init", "--yubikey"));
+        RunToEnd(Psi(config, xdg, "init", "--yubikey", "--no-recovery"));
         RunToEnd(Psi(config, xdg, "ingest", "db-pw"), "sigint-test-value");
 
         using var tswap = Process.Start(Psi(config, xdg, "run", hold, "{{@values.yaml}}"))!;

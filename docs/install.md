@@ -50,26 +50,79 @@ Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive pe
 - `tswap-osx-arm64.tar.gz`
 - `tswap-win-x64.zip`
 
+and, from v0.3.0, the macOS installer package `tswap-osx-arm64.pkg` ([below](#macos-installer-package)).
+
 Unpack it into a folder of your own and run `tswap` from there, or install it with
 [`installscript`](#installing-with-installscript).
 
 **macOS: two files.** The macOS archive holds `tswap` and `libtswapse.dylib` (the Secure Enclave
-support).
+support). Both need macOS 12 or later (#265: before v0.3.0 the library said macOS 26).
 
 - Keep them in the same folder: tswap loads the library from next to itself.
 - A symlink to `tswap` (say from `~/bin`) works, since the folder is the real file's.
 - tswap runs code from that folder, so keep it writable only by you.
 
-### Unsigned binaries
+### macOS installer package
 
-The binaries are not signed. macOS refuses a browser download ("Apple cannot verify…"). Clear the
-quarantine mark on the unpacked folder, as yourself (no admin needed):
+From v0.3.0 each release also has `tswap-osx-arm64.pkg`, a signed, notarised and stapled installer. It
+installs `tswap` and `libtswapse.dylib` into `/usr/local/bin` for every user of the Mac (owned by root,
+mode 0755) and runs no scripts. It works offline: the notarisation ticket is stapled to it. Files an
+installer writes carry no quarantine mark, so nothing has to be cleared.
+
+After installing, the per-user parts (the agent skill, the Claude Code symlink, shell completions):
+
+```bash
+tswap installscript > installTswap.sh
+# Review installTswap.sh, then:
+bash installTswap.sh
+```
+
+Run from the installed copy, `installscript` writes only those per-user steps: no binary step and no
+`sudo`. If `/usr/local/bin/libtswapse.dylib` is missing, unreadable or isn't the one that copy was built
+with, it says so on stderr: install the package again, or run `installscript` from the unpacked release
+folder instead.
+
+**Upgrading:** stop a running `tswap agent` (`tswap agent stop`) and a broker (however you started it,
+see [BROKER.md](BROKER.md)) first, then open the new package. Whether Installer replaces a running tswap safely is not yet checked; until it is, stop them.
+
+#### Uninstall
+
+```bash
+sudo rm /usr/local/bin/tswap /usr/local/bin/libtswapse.dylib
+sudo pkgutil --forget dev.crawford.tswap.pkg
+```
+
+Neither installing nor uninstalling touches your vault. The per-user files `installscript` wrote are
+yours to remove: `~/.agents/skills/tswap`, the `~/.claude/skills/tswap` symlink, and the completion files
+it listed when it ran.
+
+### Signed binaries (macOS)
+
+From v0.3.0 the macOS release is signed with a Developer ID (hardened runtime, secure timestamp) and
+notarised by Apple, the archive's two files and the package alike. Run `tswap` from Terminal: a
+double-click in Finder on a downloaded command-line tool is refused however it is signed. The first run
+of a browser download needs a network connection, since Gatekeeper fetches the notarisation ticket
+(the package has it stapled and works offline).
+
+Keep `tswap` and `libtswapse.dylib` from the same release. With the hardened runtime, library
+validation lets tswap load only a library signed with the same Team ID (or Apple's own): a v0.2.x copy, a
+build of your own or anyone else's dylib is refused, and tswap says so. It checks the signer, not the
+release: a `libtswapse.dylib` from another signed v0.3+ release still loads, so keep both files from one
+archive. A build of your own (`dotnet publish`) stays ad-hoc signed, without the hardened runtime and so
+without library validation, as before.
+
+<a id="unsigned-binaries"></a>
+
+#### Older releases (unsigned)
+
+v0.2.x and earlier are not signed. macOS refuses a browser download ("Apple cannot verify…"). Clear
+the quarantine mark on the unpacked folder, as yourself (no admin needed):
 
 ```bash
 xattr -dr com.apple.quarantine <folder>
 ```
 
-`curl -LO <archive URL>` downloads carry no quarantine mark.
+`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries are not signed either.
 
 ## Building from source
 

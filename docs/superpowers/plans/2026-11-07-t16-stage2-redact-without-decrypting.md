@@ -244,11 +244,12 @@ sets differ by design, not by drift. Its requirements S1-S6 are met: S1 by
 | `Redact.cs`, `SecretProcessor.cs`, `RedactProcessor.cs`, `ToCommentProcessor.cs` | |
 | `Fingerprints/FingerprintIndex.cs` (task 1's rule, `SplitsASurrogatePair`; Stage 3 calls it, never edits the file) | `TswapCore/Fingerprints/FingerprintScanner.cs` (new) |
 | Commands `redact`, `tocomment`, `apply`, `check`, `get`, `names`, `list`, `burned`; `CommandContext.cs` (`OpenVault`) | |
+| `TswapCli/FingerprintTexts.cs` (new; Stage 3 reads it for the format 2 line, never edits it) | `TswapCli/RunCoverage.cs` (new, Stage 3's own texts) |
 | `TswapTests/FleetMachine.cs` (`StoreOpened` seam), `RecordVaultTestSupport.cs` (fixtures, task 2), new test files listed below | its own test files |
 | Docs/prompt: the sections on those commands; `docs/release-notes/v0.3.0.md` gets one Stage 2 section; the spec's Stage 1, Stage 2 and Delivery sections (task 10) | the `run` sections; its own release-notes section; the spec's Stage 3 section |
 
-Order: tasks 1-4 are the contract (Stage 3's plan says "tasks 1-3", written before the fixture task
-was inserted as task 2; it needs task 4's `ctx.OpenVault`). Stage 3 starts coding against them once
+Order: tasks 1-4 are the contract (Stage 3's plan, from its round 1 revision on, says the same; it
+needs task 4's `ctx.OpenVault`). Stage 3 starts coding against them once
 they are pushed and **merges** them into its branch (`git merge --no-edit`; this project never
 rebases). If Stage 3's plan defines a different API, the owner reconciles the two plans before
 either brief starts.

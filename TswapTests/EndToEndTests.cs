@@ -129,7 +129,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             return (process.ExitCode, stdout, stderr);
         }
 
-        var init = RunIn(initFolder, "init", "--yubikey");
+        var init = RunIn(initFolder, "init", "--yubikey", "--no-recovery");
         Assert.True(init.exit == 0, $"init failed: {init.stdout}{init.stderr}");
 
         Assert.True(File.Exists(Path.Combine(home, ".config", "tswap", "config.json")),
@@ -216,7 +216,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [Fact]
     public void Run_SubstitutesToken()
     {
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("hello-world", "ingest", "test-val");
 
         // A command that ignores its arguments and exits 0 — proving substitution worked.
@@ -235,7 +235,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [Fact]
     public void Run_SecretRedactedFromErrorOutput()
     {
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("abc123xyz", "ingest", "my-pass");
 
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
@@ -257,7 +257,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return; // POSIX sh/echo only
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         // Regression test for issue #74: the first line of the child's stdout must not be
@@ -290,7 +290,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [Fact]
     public void Run_CompoundCommandViaShellDashC_IsRefused()
     {
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         var (exit, stdout, stderr) = RunTswap(
@@ -320,7 +320,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         // The child is a script file printing before / the secret / after (#105 refuses
@@ -340,9 +340,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// Runs the tswap binary with <paramref name="tswapArgs"/> (a bash-quoted argument string) under
     /// an outer PTY, so isatty(0/1/2) is true and <c>PtyRunnerFactory.Create()</c> picks
     /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal, or null
-    /// where openpty isn't available.
+    /// where openpty isn't available. With <paramref name="reply"/>, its text is typed into the terminal
+    /// once (and only once) the output contains <c>WhenSeen</c>: input is sent only after a prompt shows.
     /// </summary>
-    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs)
+    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
     {
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
         // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
@@ -415,7 +416,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                     break; // poll error
                 }
                 int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
-                if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
+                if (n > 0)
+                {
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                    if (reply is var (whenSeen, type) && sb.ToString().Contains(whenSeen))
+                    {
+                        var typed = Encoding.UTF8.GetBytes(type);
+                        PtyWrite(masterFd, typed, typed.Length);
+                        reply = null;
+                    }
+                    continue;
+                }
                 if (n == 0) break; // EOF
                 var readErrno = Marshal.GetLastPInvokeError();
                 if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
@@ -436,6 +447,56 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T16-S3: through a real PTY and the published binary (NativeAOT in CI, so trimming and the
+    /// default-interface dispatch of RedactingPty's options overload are exercised), a vault secret the
+    /// command never named is masked by its fingerprints.
+    /// </summary>
+    [Fact]
+    public void EndToEnd_Run_OtherSecretMasked_RealPty()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+        RunTswapWithStdin("other-vault-value-42", "ingest", "other");
+        var childScript = Path.Combine(_tempDir, "print-other.sh");
+        File.WriteAllText(childScript, "echo \"got $1\"\necho \"log other-vault-value-42 end\"\n");
+
+        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("other-vault-value-42", output);
+        Assert.DoesNotContain("s3cr3t", output);
+        Assert.Contains("log [REDACTED: other] end", output);
+        Assert.Contains("got [REDACTED: my-secret]", output);
+    }
+
+    /// <summary>
+    /// Brief T16-S3 (owner decision D2), Linux: with a multi-line secret in the vault the redactor holds
+    /// back the end of the output, so a prompt would hide behind it; run releases it when the child waits
+    /// for terminal input. The answer is typed only after the prompt has shown; without the release the
+    /// child waits forever and the harness's deadline ends the test without the answer.
+    /// </summary>
+    [Fact]
+    public void EndToEnd_Run_PromptVisible_WithPemInVault()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin("token-value-7", "ingest", "token");
+        RunTswapWithStdin("-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END KEY-----", "ingest", "pem");
+        var prompt = Path.Combine(_tempDir, "prompt.sh");
+        File.WriteAllText(prompt, "printf 'Continue? [y/N] '\nread x\necho \"answer-$x\"\n");
+
+        if (RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n")) is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Contains("answer-y", output);
+        Assert.Equal(0, exitCode);
+    }
+
+    /// <summary>
     /// RedactingPty 1.0.0's forked child crashed (exit 139, no diagnostic) when the command didn't
     /// exist, on JIT hosts with W^X on (stevedcc/RedactingPty#3, fixed in 1.0.2). tswap's test
     /// binary is a JIT host and its tests used to set DOTNET_EnableWriteXorExecute=0, which hid it.
@@ -446,7 +507,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
         if (RunTswapUnderOuterPty("run tswap-test-no-such-command {{my-secret}}") is not var (exitCode, output))
@@ -492,7 +553,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     public void EndToEnd_CreateNamesBurnBurned()
     {
         // Full lifecycle: init → create → names → burn → burned
-        var (exit1, _, _) = RunTswap("init", "--yubikey");
+        var (exit1, _, _) = RunTswap("init", "--yubikey", "--no-recovery");
         Assert.Equal(0, exit1);
 
         var (exit2, _, _) = RunTswap("create", "e2e-secret");
@@ -519,7 +580,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     [Fact]
     public void EndToEnd_IngestAndRun()
     {
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("test-password-123", "ingest", "my-pass");
 
         // Verify the substituted value is non-empty (can't use redirect/pipe due to
@@ -746,7 +807,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
 
@@ -761,7 +822,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswap("create", "a-secret");
         var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
 
@@ -779,7 +840,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswap("create", "a-secret");
         var exportPath = Path.Combine(_tempDir, "ctrlc-import.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
@@ -807,7 +868,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) return; // ConPTY requires Win10 1809+
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t-conpty-value", "ingest", "my-secret");
 
         // The child prints everything and then stays alive briefly: Server 2022's

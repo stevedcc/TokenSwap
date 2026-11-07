@@ -39,6 +39,9 @@ public sealed class ImportCommand : ICliCommand
             throw new TswapException($"Export file is not valid JSON: {ex.Message}");
         }
 
+        // A version 1 file (PBKDF2) may have been made with an empty passphrase and still imports; Argon2id has none.
+        if (passphrase.Length == 0 && exportFile.Version != ExportFile.V1)
+            throw new TswapException("No import passphrase was entered.");
         var salt = Convert.FromBase64String(exportFile.Salt);
         var exportKey = ExportCrypto.DeriveKey(passphrase, salt, exportFile);
 

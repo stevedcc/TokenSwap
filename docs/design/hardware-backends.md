@@ -466,7 +466,13 @@ signer identities, identical failure. Adding the `keychain-access-groups` entitl
 (AMFI enforces a matching provisioning profile for that "restricted" entitlement, which a bare
 `codesign` invocation doesn't produce). This blocks *any* local testing without a paid Apple
 Developer Program membership and a **Developer ID Application** certificate specifically (not the
-free "Apple Development" kind) — untested here, since none was available.
+free "Apple Development" kind) — untested here, since none was available. (From v0.3.0 the
+releases are signed with a Developer ID Application certificate, issue #240, but the shim keeps the
+CryptoKit design below, which needs no entitlement; the raw `SecItem` path was not tried again.
+Whether CryptoKit's Secure Enclave keys work under Developer ID and the hardened runtime is checked by
+the release dry run, which makes and opens a no-presence key from the tarball and from the installed
+package on GitHub's runner, and by the owner's checks on a real Mac (presence, the vault password,
+keys made by unsigned builds): `docs/superpowers/macos-signing-owner-checks.md`. Results go here.)
 
 Real prior art pointed at a different design: [`age-plugin-se`](https://github.com/remko/age-plugin-se)
 (a Secure Enclave `age` plugin, plain CLI binary, no app bundle, no codesign step in its
@@ -538,9 +544,25 @@ silently dropping any companion file — now moot, since there is no companion f
 root-level `tswap.csproj` that hasn't existed since the CLI-decomposition refactor moved it to
 `TswapCli/TswapCli.csproj`; not fixed here.)
 
-Codesigning (Developer ID, notarization) still matters for eventually **distributing** tswap
-smoothly past Gatekeeper — that's a general macOS distribution concern, unrelated to whether this
-backend functions. It does not block building, testing, or using this backend locally today.
+**Signed releases (v0.3.0, issue #240).** Release builds sign the dylib inside the MSBuild target,
+right after `swiftc` and **before** it is embedded (`TswapMacSignIdentity`), so the copy next to
+`tswap` and the one `installscript` writes are the same signed bytes; signing the publish folder
+afterwards would leave the embedded copy unsigned, and the hardened runtime's library validation
+would refuse it. `package.sh --smoke` checks on every macOS build that the dylib `installscript`
+writes is byte-for-byte the archive's. Both Mach-Os are signed with the Developer ID Application
+identity, hardened runtime, secure timestamp, no entitlements, and notarised; library validation then
+loads only a `libtswapse.dylib` signed with the same Team ID (or by Apple), so a planted, unsigned,
+ad-hoc or older (v0.2) one is refused, with a message saying the two files must come from one release.
+It checks the signer, not the release: a dylib from another signed v0.3+ release loads (one too old for
+this `tswap` then fails on a missing entry point, since new shim functions get new names). Local builds stay ad hoc, as before.
+
+The installer package (`tswap-osx-arm64.pkg`, signed with Developer ID Installer, notarised and
+stapled) is a second channel to the same place `installscript` uses, `/usr/local/bin`; run from that
+installed copy, `installscript` writes only the per-user steps. The shim is built with an explicit
+deployment target, `SecureEnclaveShimMinOS` (12.0, tswap's own minimum; issue #265: without it the
+dylib said macOS 26.0), and the release checks that both Mach-Os and the package's distribution say
+the same minimum. Signing does not change how this backend functions locally: an unsigned build
+works as before.
 
 ## Linux TPM: implemented, verified on a software simulator and on a physical Intel PTT
 

@@ -821,6 +821,30 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Equal(backupsBefore, m.Backups.Order()); // no new backup: nothing was written
     }
 
+    /// <summary>#259: Enter at the unlock's vault password prompt cancels the re-enrolment; it isn't "no other way in".</summary>
+    [Fact]
+    public void SlotAdd_Reenrol_EmptyPasswordAtUnlock_Cancels()
+    {
+        // A's slot is password-free, B's needs the password; A is reprogrammed, so only B's slot can open the vault.
+        var m = Machine(SerialA, SerialB);
+        m.Keys.PluggedIn = [SerialA];
+        m.Ok("", "init", "--yubikey", "--no-recovery");
+        m.Keys.PluggedIn = [SerialA, SerialB];
+        var (addExit, _, addErr) = m.RunOnTerminal(Password + "\n" + Password + "\n", "slot", "add", "--yubikey", "--password");
+        Assert.True(addExit == 0, addErr);
+        Reprogram(m, SerialA);
+        var before = File.ReadAllBytes(KeyringPath(m));
+        m.Keys.PluggedIn = [SerialA, SerialB];
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("1\n\n", "slot", "add", "--yubikey", "--no-password");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("No vault password was entered, so nothing was unlocked.", stderr);
+        Assert.DoesNotContain("only once the vault opens another way", stderr);
+        Assert.Equal(1, Regex.Count(stdout + stderr, Regex.Escape(TerminalPasswordProvider.PromptText)));
+        Assert.Equal(before, File.ReadAllBytes(KeyringPath(m)));
+    }
+
     /// <summary>
     /// A record vault on A (a password slot; a recovery slot only with <paramref name="recovery"/>, its key in
     /// <c>_recoveryKey</c>) and B (a password slot or not), holding <c>db</c>.

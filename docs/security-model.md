@@ -76,7 +76,7 @@ deployment.
 
 | Threat | How |
 |--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the value from the program's output, also its base64 and base64url forms and the `\r\n` form of a multi-line value ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the value from the program's output, also its base64 and base64url forms and the `\r\n` form of a multi-line value ([redaction forms](broker-threat-model.md#redaction-is-best-effort)). Since 0.3 `run` also masks every other fingerprinted value in the vault (current and previous, burned ones included) by its keyed fingerprints ([what `run` masks](#what-run-masks)) |
 | Casual exfiltration via `run` | With a `{{@file}}` token, any word that is a printer, encoder, copier, shell or interpreter is refused too ([limits](#files-with-secrets-run-with-file)). Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
@@ -84,7 +84,7 @@ deployment.
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
-| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands decrypt only the value versions they print or substitute: `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands still decrypt every record until a later 0.3 change ([what each command decrypts](#what-each-command-decrypts)) |
+| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands and `run` decrypt only the value versions they print or substitute (`run`: its `{{name}}` / `{{name:previous}}` tokens and its files' markers): `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands still decrypt every record until a later 0.3 change ([what each command decrypts](#what-each-command-decrypts)) |
 
 ### What tswap does not protect against
 
@@ -118,6 +118,7 @@ and doesn't make the record format 2.
 | `check` | No value | Only a record a marker names, decrypted whole; a warning |
 | `get` | The one value it prints (the current version of that secret) | That record, decrypted whole; a warning |
 | `apply` | The value versions it fills in, each once; none for a line already filled | Each record a marker names, decrypted whole; a warning |
+| `run` | The value versions it substitutes (its tokens and its files' markers), each once; every other record's metadata only | Each record a token or marker names, decrypted whole; a warning after the child's output |
 | `create`, `ingest`, `burn`, `rotate`, `restore`, `add`, `delete`, `import` | Still every record for now (a later 0.3 change makes them read only the records they write) | The same |
 | `export`, `vault merge`, `vault reindex`, `migrate` | Every value, by definition | The same |
 
@@ -142,6 +143,61 @@ Limits of reading metadata only:
   (or `vault merge`, `vault reindex`) converges the copies.
 - Strings are not zeroed: a value `get` or `apply` prints lives in memory as a string until the
   process exits, as before (there are just fewer of them).
+
+### What `run` masks
+
+`run` masks its own substituted values in every form it wrote (as before), and since 0.3 every other
+value version in the vault that has fingerprints, by those fingerprints alone: during the child run
+only the substituted values, the fingerprints and the fingerprint key are in memory, not the rest of
+the vault. Records that can't be matched (format 2 records, a version without fingerprints, an
+unreadable record) are counted in a warning printed before the child starts and again after it
+exits; `run` keeps working (owner decision).
+
+| Output contains | Masked |
+|---|---|
+| A substituted value's forms (raw, escaped in a file, base64/base64url padded and unpadded, the `\r\n`, `\n` and PTY-printed forms of a multi-line value and their encodings) | yes |
+| Any other vault value, current or previous, burned included: verbatim, whitespace-stripped, base64 padded, base64url unpadded | yes (a value made only of whitespace: when it arrives in one read, see below) |
+| … base64url with padding | the unpadded core; the `=` stay visible |
+| … base64 with its padding removed; a `\r\n` value printed with `\n` only; wrapped base64; a re-indented PEM (YAML block); JSON, URL or hex encodings; inside a larger base64 blob | no (a later variant-set version) |
+| … multi-line, through a pipe (line endings as stored) or a PTY (`\n` printed as `\r\n`) | yes |
+| Records not fully fingerprinted, or unreadable | no; warned before and after the child |
+| A secret added while the child runs | no (the matcher is built at the start) |
+
+Limits:
+
+- **Only complete occurrences are recognised** (recognising prefixes is deliberately not done: it
+  would be a prefix oracle). Text that lies in no complete occurrence is written when it leaves the
+  redactor's hold window, when held output is released at a prompt, or at exit. So a secret printed
+  only in part (cut short, split by an input wait, completed later by another thread or a
+  background job) shows that part. The same was true before 0.3.
+- **A value made only of whitespace** (spaces, tabs, line breaks) is masked when it arrives in one
+  read, also through a terminal, but not when a read boundary splits it: tswap can't tell such a
+  record from a single-line one by its fingerprints, and holding back every read's trailing
+  whitespace for that would hold every line end. Such a value can only be stored with
+  `sudo tswap add` (`ingest` trims trailing whitespace).
+- **A secret split between stdout and stderr** is not recognised when output is redirected
+  (RedactingPty's pipe runner redacts each stream on its own).
+- **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end
+  of the output: for single-line secrets only the trailing word, but a multi-line secret (a PEM key)
+  could start anywhere, so up to its length is held on every pause. `run` releases held output
+  (masking complete occurrences first) when the child waits for terminal input. **Linux:** when no
+  thread of the terminal's foreground process group is running and one is blocked in `read` on the
+  terminal (`/proc`); programs that wait in `poll`/`select` (bash's readline prompt) stay held.
+  **macOS:** when the terminal's echo is off and canonical mode on (password and passphrase prompts);
+  a plain `y/N` prompt stays held until more output or exit. **Windows, and redirected output:**
+  never; held output waits for more output or exit. Time alone never releases held output.
+- **The hold-back is observable.** A child (or the agent reading the output) can see when output
+  appears, so how much is held. What is held depends on the text and on two vault-wide figures
+  only, each rounded up to a multiple of 256 characters: the longest value per character class, and
+  the largest whitespace count of a multi-line value. So it reveals a 256-character bucket of those
+  and whether the vault holds a secret with whitespace, nothing finer than the vault folder's
+  256-byte record buckets already show, and nothing about a guess's prefix.
+- **A guessing oracle, as `redact` already is:** a child can test a guess against every vault value
+  by printing it and watching for a label; the labels show secret names, which `names` lists anyway.
+- **A redaction failure fails closed:** the held text and the rest of the output (of that stream, when
+  output is redirected and stdout and stderr are redacted on their own) are discarded, a
+  marker `[output truncated: redaction failed]` is written, and `run` ends with an error whose text
+  holds no output.
 
 ### Files with secrets: `run` with `{{@file}}`
 
@@ -330,8 +386,7 @@ Finish and check one key before you start the next. A vault whose keys still sha
   of the vault at once, but the new slot goes only into the keyring of the vault you enrol it in.
   Machines that share that vault folder get it with the folder. A machine with its own copy
   doesn't, and there the key no longer opens the vault until the slot is brought in, with
-  `sudo tswap vault merge <a copy of this vault folder>` on that machine (or `slot merge`, for a
-  vault that keeps its keyring in `config.json`). That merge unlocks the copy first, so the machine
+  `sudo tswap vault merge <a copy of this vault folder>` on that machine. That merge unlocks the copy first, so the machine
   needs another way in that it can use. How:
   [Copying the folder](multi-machine.md#copying-the-folder-scp-rsync-or-a-usb-stick) and
   [What `slot merge` adds](multi-machine.md#what-slot-merge-adds).

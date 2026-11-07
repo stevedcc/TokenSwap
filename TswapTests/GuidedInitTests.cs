@@ -534,6 +534,48 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(keyExit == 0, keyErr);
     }
 
+    /// <summary>#253: guided init takes --recovery-key-out too: the key goes to the file, not to stdout.</summary>
+    [Fact]
+    public void Guided_RecoveryKeyOut_WritesFile()
+    {
+        var m = Machine(11);
+        m.Tpm = RandomNumberGenerator.GetBytes(32);
+        var folder = Folder();
+        Directory.CreateDirectory(folder);
+        var keyFile = Path.Combine(folder, "recovery-key");
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\n\nn\n", "init", "--no-password", "--recovery-key-out", keyFile);
+
+        Assert.True(exit == 0, stderr + stdout);
+        var key = File.ReadAllText(keyFile).TrimEnd('\n');
+        Assert.Equal(32, Convert.FromBase64String(key).Length);
+        Assert.DoesNotContain(key, stdout);
+        Assert.DoesNotContain("Recovery Private Key (base64):", stdout);
+        Assert.Contains($"Recovery private key written to {keyFile}", stdout);
+        m.Tpm = RandomNumberGenerator.GetBytes(32); // a cleared TPM: the file's key enrols the new one
+        var (recoverExit, _, recoverErr) = m.Run(key + "\n", "recover", "--tpm", "--no-password");
+        Assert.True(recoverExit == 0, recoverErr);
+    }
+
+    /// <summary>Review M7: --recovery-key-out asks for a recovery slot, so guided init doesn't ask whether to add one.</summary>
+    [Fact]
+    public void Guided_RecoveryKeyOut_SkipsTheRecoveryQuestion()
+    {
+        var m = Machine(11);
+        m.Tpm = RandomNumberGenerator.GetBytes(32);
+        var folder = Folder();
+        Directory.CreateDirectory(folder);
+        var keyFile = Path.Combine(folder, "recovery-key");
+
+        // Plug-in Enter, the pick, then the other-machines question: no answer for a recovery question.
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\nn\n", "init", "--no-password", "--recovery-key-out", keyFile);
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.RecoveryPrompt, stdout);
+        Assert.Equal(32, Convert.FromBase64String(File.ReadAllText(keyFile).TrimEnd('\n')).Length);
+        Assert.Contains(SlotKind.Recovery, m.Keyring.Slots.Select(s => s.Kind));
+    }
+
     [Fact]
     public void Guided_BadPick_WithOneEntry_SaysPick1()
     {
