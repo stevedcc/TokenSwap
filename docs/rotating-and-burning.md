@@ -53,7 +53,7 @@ it first, see [upgrading-from-0.1.md](upgrading-from-0.1.md).
 ### The previous value
 
 The record store keeps the previous value, one level back. Use `{{name:previous}}` in `run` (or
-`# tswap: name:previous` in `apply`) to change the credential at the service while the old one still
+`# tswap: name:previous` in a file given to `run` as `{{@file}}`) to change the credential at the service while the old one still
 authenticates. It is never displayed:
 
 ```bash
@@ -83,8 +83,8 @@ Mark the secret as compromised. This is the **first** action, before anything el
 tswap burn <name> "<how it was exposed>"
 ```
 
-This records a timestamp and reason. `names` shows `[BURNED]` next to the secret, and `apply` and
-`check` warn about it. Burning a secret that is already burned is rejected: the original incident
+This records a timestamp and reason. `names` shows `[BURNED]` next to the secret, and `run`, `sudo tswap apply`
+and `check` warn about it. Burning a secret that is already burned is rejected: the original incident
 record is kept.
 
 ### Step 2: Assess scope

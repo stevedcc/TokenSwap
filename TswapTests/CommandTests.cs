@@ -859,6 +859,64 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
+    // A word the post-substitution check refuses came from a secret's value, so
+    // the refusal names the token, never the word.
+    [Fact]
+    public void Run_ProgramFromATokenAfterSubstitution_RefusalNamesTheTokenNotTheValue()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("printenv", "ingest", "cmd");
+
+        var (exit, stdout, stderr) = RunTswap("run", "{{cmd}}", "PATH");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{cmd}}", stderr);
+        Assert.DoesNotContain("printenv", stderr);
+        Assert.DoesNotContain("printenv", stdout);
+    }
+
+    // A literal refused word is refused before substitution and named as typed: no token is blamed.
+    [Fact]
+    public void Run_LiteralBlockedWordWithAToken_RefusalNamesTheWord()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "innocent");
+
+        var (exit, _, stderr) = RunTswap("run", "printenv", "{{innocent}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'printenv'", stderr);
+        Assert.DoesNotContain("{{innocent}}", stderr);
+    }
+
+    // rotating-and-burning.md: run warns about a burned {{name}} value too, not only file markers.
+    [Fact]
+    public void Run_BurnedNameToken_Warns()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "seen");
+        Assert.Equal(0, RunTswap("burn", "seen", "in a log").exitCode);
+
+        var (_, _, stderr) = RunTswap("run", "true", "{{seen}}");
+
+        Assert.Contains("Warning: 'seen' is a burned value", stderr);
+    }
+
+    [Fact]
+    public void Run_InlineCodeFlagFromATokenAfterSubstitution_RefusalDoesNotRepeatTheFlag()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("-ec", "ingest", "opt");
+        var marker = Path.Combine(_tempDir, "ran");
+
+        var (exit, _, stderr) = RunTswap("run", "sh", "{{opt}}", $"touch {marker}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{opt}}", stderr);
+        Assert.DoesNotContain("-ec", stderr);
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
     [Fact]
     public void Run_ShellWithAScriptFile_RunsIt()
     {

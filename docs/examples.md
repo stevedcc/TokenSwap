@@ -91,7 +91,7 @@ An AI agent can read this file without seeing secret values.
 
 - `check` verifies that every marker names a known secret.
 - `tocomment` annotates a file that already has inline secret values.
-- `apply` substitutes the secrets for deployment.
+- `run` with `{{@file}}` uses the filled file in a command (`sudo tswap apply` prints it, for a person).
 
 ```bash
 # Verify all # tswap: markers in a file reference secrets that exist
@@ -102,28 +102,38 @@ tswap tocomment values.yaml --dry-run   # preview changes
 tswap tocomment values.yaml             # apply
 ```
 
-`tswap apply values.yaml` substitutes the values for deployment. Its output holds plaintext: send it
-straight to the tool that needs it, as in the Helm patterns below (Option 1), and write it to a file
-only as in Option 3.
+To use a file with markers in a command, give `run` a `{{@path}}` token where the command takes the
+file: tswap fills the markers into a private copy, passes the copy's path, hides the values in the
+output and deletes the copy when the command ends (Option 1 below). `sudo tswap apply values.yaml`
+prints the filled file to stdout for a person; an agent never runs it.
 
 ### Helm deployment patterns
 
 For Helm deployments, there are three approaches.
 
-**Option 1: Process substitution (recommended).** tswap writes no temporary file: the values reach
-`helm` over a pipe. What Helm then does with the values it is given is up to Helm:
+**Option 1: A file token (recommended).** Put `{{@path}}` where `helm` takes the values file. tswap
+writes the filled copy into a private folder only you can open (`$XDG_RUNTIME_DIR`, else the
+temporary folder), zeroes and deletes it when `helm` exits, and replaces every written form of the
+values (plain, quoted, base64 and base64url, and each line-ending form of a multi-line value) in `helm`'s output with `[REDACTED: name]`. What Helm then does with
+the values it is given is up to Helm:
 
 ```bash
-# Directly pipe applied secrets to helm via process substitution
-helm upgrade myapp ./chart -f <(tswap apply values.yaml)
+tswap run helm upgrade --install myapp ./chart -f {{@values.yaml}}
 
 # With multiple values files
-helm upgrade myapp ./chart \
+tswap run helm upgrade --install myapp ./chart \
   -f values.yaml \
-  -f <(tswap apply secrets.yaml)
+  -f {{@secrets.yaml}}
 ```
 
-**Note:** the `# tswap: <secret-name>` comments remain in the applied output, so secret *names*
+This works in bash, cmd and PowerShell. `run` refuses a command containing a printer, encoder,
+copier, shell or interpreter (`cat`, `cp`, `base64`, `sh`, `python`, … as any word of the command)
+when it has a file token: the file is data for a tool, never a program. `helm install app ./chart
+-f {{@values.yaml}}` is fine, because `install` is refused only as the program itself (also behind a wrapper, or as
+the command of `find -exec`, `-execdir`, `-ok` or `-okdir`). The limits
+are in [Files with secrets](security-model.md#files-with-secrets-run-with-file).
+
+**Note:** the `# tswap: <secret-name>` comments remain in the filled copy, so secret *names*
 appear in:
 
 - Helm's `--debug` output;
@@ -131,11 +141,7 @@ appear in:
 - audit logs and observability tools.
 
 This exposes which secrets your application uses (for example `db-password`, `api-key`). If secret names are sensitive in your threat model, use generic names (for example
-`secret-1`, `secret-2`) or strip the comments with `sed`:
-
-```bash
-helm upgrade myapp ./chart -f <(tswap apply values.yaml | sed 's/#.*tswap.*$//')
-```
+`secret-1`, `secret-2`).
 
 **Option 2: Individual secret substitution.** Use `{{token}}` syntax with `run`:
 
@@ -148,14 +154,12 @@ tswap run helm upgrade myapp ./chart \
 The values are on `helm`'s command line while it runs: see
 [What tswap does not protect against](security-model.md#what-tswap-does-not-protect-against).
 
-**Option 3: Temporary file.** When process substitution isn't available. The file holds every value
-in plaintext, so make it readable by you only and delete it straight after. This is an operator's
-pattern: an agent sends `apply` output to stdout or process substitution only
-([agent-integration.md](agent-integration.md#agent-role-no-sudo)).
+**Option 3: A temporary file, by hand.** This is a person's pattern, because `apply` needs sudo. The
+file holds every value in plaintext, so make it readable by you only and delete it straight after:
 
 ```bash
 f=$(mktemp)                     # a new file only you can read
-tswap apply values.yaml > "$f"
+sudo tswap apply values.yaml > "$f"
 helm upgrade myapp ./chart -f "$f"
 rm "$f"
 ```

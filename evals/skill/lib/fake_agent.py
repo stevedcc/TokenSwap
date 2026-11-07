@@ -20,7 +20,7 @@ fake and the judge can't drift apart.
 
 Each variant comes with the rule ids it breaks: none for "pass"; every must and says rule for
 "nothing"; for skip-must-<i>, must[i] and the must rules before it whose example is null (covered by
-must[i]'s example, e.g. `tswap apply` inside helm's process substitution); otherwise exactly one.
+must[i]'s example, e.g. scenario 08's `tswap run helm … {{@values.yaml}}`); otherwise exactly one.
 """
 import shlex
 

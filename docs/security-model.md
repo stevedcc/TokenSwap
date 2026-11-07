@@ -22,7 +22,8 @@ An AI agent (Claude Code, Copilot, etc.) can:
 
 - generate strong random passwords with `create`: the value is never displayed;
 - see what secrets exist with `names`: just the names, no values;
-- use secrets in commands with `run`: tokens are substituted internally.
+- use secrets in commands with `run`: tokens are substituted internally, and a file with `# tswap:`
+  markers through `{{@file}}` ([below](#files-with-secrets-run-with-file)).
 
 An AI agent **without sudo** (no passwordless sudo for its user, and never given the sudo
 password) **cannot**:
@@ -30,6 +31,7 @@ password) **cannot**:
 - read a secret value (`get` requires sudo);
 - set a secret to a known value (`add` requires sudo);
 - enumerate secrets with metadata (`list` requires sudo);
+- print a file with the values filled in (`apply` requires sudo);
 - delete secrets (`delete` requires sudo), or run any other command that needs sudo;
 - exfiltrate via `run` in the blocked ways: `echo`, `printf`, pipes, redirects, and inline
   shell/interpreter code (`sh -c`, `python -c`, ...) are blocked. The blocklist is shallow: a
@@ -74,13 +76,13 @@ deployment.
 
 | Threat | How |
 |--------|-----|
-| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the plain value from the program's output, not its encoded forms ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
-| Casual exfiltration via `run` | Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
+| AI agent sees plaintext secrets | Agents use `{{token}}` substitution via `run`; values never appear in the command the agent writes or in shell history, and `run` redacts the value from the program's output, also its base64 and base64url forms and the `\r\n` form of a multi-line value ([redaction forms](broker-threat-model.md#redaction-is-best-effort)) |
+| Casual exfiltration via `run` | With a `{{@file}}` token, any word that is a printer, encoder, copier, shell or interpreter is refused too ([limits](#files-with-secrets-run-with-file)). Blocklist rejects `echo`, `printf`, `cat`, `env`, `printenv`, `set`, `tee` (also by path, e.g. `/bin/echo`); pipes (`\|`) and redirects (`>`) are blocked; shells and interpreters given inline code or code from stdin are refused (`sh -c`, `bash -s`, `python -c`, `perl -e`, `node -e`, `bun -e`, `deno eval`, `php -r`, `julia -e`, `Rscript -e`, `osascript -e`, `expect -c`, `pwsh -Command`, `cmd /c`, `tclsh`/`jshell` reading stdin), as are `awk` without `-f`, `xargs`, `busybox`, `watch`, `parallel`, `script`, `ssh host <command>`, and `find -exec` running any of these, including behind wrappers and launchers (`timeout`, `nice`, `sudo`, `uv run`, `poetry run`, `npx`, `bundle exec`, `docker run`, `kubectl exec`), since inline code can transform a value past output redaction (#105). Script files stay allowed |
 | Secrets in config files / repos | `tocomment` replaces inline values with `# tswap:` markers; `redact` masks values for safe viewing |
 | Single YubiKey loss | Keyring vault: every enrolled key, machine and the recovery key opens it alone. Classic vault: XOR key reconstruction — either key derives the other via the XOR share stored in `config.json` ([how the classic vault worked](upgrading-from-0.1.md#how-the-classic-vault-worked)) |
 | Vault access without physical presence | Depends on the slot: a **touch-required YubiKey** needs a button press per unlock; a **`--with-touch` Secure Enclave** slot asks for Touch ID or the password per unlock, a **`--no-touch`** one never does; a **no-touch YubiKey** and a **TPM** slot without a vault password unlock for any process running as you while the key is plugged in / on that machine |
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
-| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
+| Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
 
 ### What tswap does not protect against
@@ -88,12 +90,50 @@ deployment.
 | Non-goal | Why |
 |----------|-----|
 | Determined local attacker with root | Root can attach debuggers, read `/proc/*/mem`, or intercept syscalls — no userspace tool can prevent this |
-| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, `cp`, a script file, or custom binaries can still exfiltrate secrets passed through token substitution |
+| Sophisticated exfiltration via `run` | The blocklist is shallow by design. Commands like `curl`, a script file, or custom binaries (and `cp` without a file token) can still exfiltrate secrets passed through token substitution |
 | Compromised YubiKey firmware | tswap trusts Yubico's .NET SDK (built into the binary) and the YubiKey's HMAC-SHA1 implementation; firmware-level attacks are out of scope |
 | Secrets in process memory | During `run`, the substituted command (with plaintext values) exists in the subprocess memory. Memory forensics or core dumps could recover it, and while it runs, its command line can be read through `/proc/<pid>/cmdline` (`ps`), as the broker guide notes for argv |
 | Network interception | Once a secret is passed to a legitimate program (e.g., `psql`, `rclone`), tswap has no control over how that program transmits it |
 | Silencing the touch notice | The acknowledged postures live in `config.json`, writable by any process running as you; the changed-posture notice is advisory. `tswap slots` shows each slot's recorded posture: a YubiKey's from its slot, a Secure Enclave's from `config.json` |
 | Brute-force on encrypted vault | A record vault's key is random (256 bits) and wrapped per slot. A classic vault (`secrets.json.enc`): AES-256-GCM + PBKDF2 (100k iterations) raises the cost, but the file could be attacked offline if both the file and the XOR share (in `config.json`) are obtained without a YubiKey |
+
+### Files with secrets: `run` with `{{@file}}`
+
+`tswap run helm upgrade --install app ./chart -f {{@values.yaml}}` fills the file's `# tswap:`
+markers into a private copy and runs the command with the copy's path. The copy lives in a folder
+only your account can open (`0700`, in `$XDG_RUNTIME_DIR` when that is a folder of yours, not a
+symlink and not writable by others, else the temporary folder; on Windows an access list for the current user only). tswap
+redacts every form it wrote (plain, quoted, base64 and base64url, and for a multi-line value its
+`\r\n` and `\n` forms and the form a terminal prints) from the output, overwrites the copy with zeros and deletes the folder when the
+command ends, also after Ctrl+C, and removes stale folders of crashed runs at the next `run` with a
+file token. Before anything is written, `run` refuses a command with a printer, encoder, copier,
+shell or interpreter as any word (`cat`, `cp`, `base64`, `sh`, `python`, … see the blocklist in
+`Validation.cs`); `install` is refused only as the program (also behind a wrapper such as `nice`,
+or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`), so `helm install` works. The check runs again on what the
+`{{name}}` tokens expand to, before anything is written; that refusal names the token, not the
+word. A refusal can be a false one, for a file named like a refused word: rename the file, or pass
+the secret with a plain `{{name}}` token.
+
+This replaces `apply` for agents, which now needs sudo. What it does not do:
+
+- **A process running as the same user can read the copy while the child runs.** An agent that
+  starts a second command to read the file in that time gets the values. The folder keeps out other
+  users, not you.
+- **The word check is a shallow guard.** It refuses the obvious one-step printers and copiers, as
+  the `run` blocklist does. A program that sends the file over the network (`curl -F f=@{{@f}}`,
+  `wget --post-file`, `git`, cloud CLIs), and any transformation beyond the redacted forms (a value
+  inside a larger base64 blob, a custom encoding), still gets the values out.
+- **A passwordless sudo grant for tswap voids the sudo gate on `apply`**, as it does on `get`.
+- **SIGKILL or a power loss leaves the copy** until the next `run` with a file token sweeps it
+  (folders older than an hour whose lock is free). The zeroing is best effort: a RAM disk or an SSD
+  may keep other copies.
+- **Windows cannot pass Ctrl+C to a ConPTY child.** tswap waits 10 seconds for it to end, then ends
+  the child's process tree.
+- **A `kill -INT` sent to tswap alone** while it is in the terminal's foreground, with a child that
+  shares its process group and has no pseudo-terminal, reaches the child only through the same
+  10-second grace kill.
+- **`run` with a file token refuses to run as root**, so root never creates a secret file in a
+  user's folder.
 
 ### Design rationale
 

@@ -129,6 +129,15 @@ public sealed record CommandContext(
     public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
 
     /// <summary>
+    /// How <c>run</c> starts its child: RedactingPty's runner for this console (tests substitute a fake
+    /// that streams its output through the same redactor).
+    /// </summary>
+    public Func<RedactingPty.IPtyRunner> PtyRunner { get; init; } = RedactingPty.PtyRunnerFactory.Create;
+
+    /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
+    internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }
+
+    /// <summary>
     /// The FIDO2 slots' key service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS
     /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it.
     /// </summary>
