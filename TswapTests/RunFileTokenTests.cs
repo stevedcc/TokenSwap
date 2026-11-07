@@ -521,7 +521,7 @@ public sealed class RunFileTokenTests : IDisposable
         List<IDisposable> locks = [];
         try
         {
-            foreach (var root in new[] { _xdg, _tmpRoot })
+            foreach (var root in RunRoots())
             {
                 foreach (var name in new[] { "tswap-run-1111111111111111", "tswap-run-2222222222222222" })
                 {
@@ -539,7 +539,7 @@ public sealed class RunFileTokenTests : IDisposable
             var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
 
             Assert.True(exit == 0, err);
-            foreach (var root in new[] { _xdg, _tmpRoot })
+            foreach (var root in RunRoots())
             {
                 Assert.True(File.Exists(Path.Combine(root, "tswap-run-1111111111111111", "1", "values.yaml")), $"live folder in {root} kept");
                 Assert.False(Directory.Exists(Path.Combine(root, "tswap-run-2222222222222222")), $"dead folder in {root} removed");
@@ -557,13 +557,21 @@ public sealed class RunFileTokenTests : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            Directory.CreateDirectory(Path.Combine(dir, "1"));
+            // As tswap makes it on Windows: a current-user-only access list (the sweep touches no other).
+            Assert.True(WindowsPrivateFolder.TryCreate(dir), $"couldn't create {dir}");
+            Assert.True(WindowsPrivateFolder.TryCreate(Path.Combine(dir, "1")), $"couldn't create {dir}\\1");
             return;
         }
         const UnixFileMode rwx = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
         Directory.CreateDirectory(dir, rwx);
         Directory.CreateDirectory(Path.Combine(dir, "1"), rwx);
     }
+
+    // The roots tswap uses and sweeps: Windows never uses $XDG_RUNTIME_DIR, only the temp folder.
+    private string[] RunRoots() => OperatingSystem.IsWindows() ? [_tmpRoot] : [_xdg, _tmpRoot];
+
+    // Where tswap makes its run folder: $XDG_RUNTIME_DIR when private (Unix), else the temp folder.
+    private string OwnRoot() => OperatingSystem.IsWindows() ? _tmpRoot : _xdg;
 
     private static IDisposable HoldLock(string path)
     {
@@ -579,7 +587,7 @@ public sealed class RunFileTokenTests : IDisposable
     public void RunFileToken_PrecreatedFolderOrSymlinkNeverWrittenThrough()
     {
         WriteFile("values.yaml", ValuesYaml);
-        var taken = Path.Combine(_xdg, "tswap-run-aaaaaaaaaaaaaaaa");
+        var taken = Path.Combine(OwnRoot(), "tswap-run-aaaaaaaaaaaaaaaa");
         Directory.CreateDirectory(taken);
         Queue<string> names = new(["tswap-run-aaaaaaaaaaaaaaaa", "tswap-run-bbbbbbbbbbbbbbbb"]);
         _env = _env with { NewFolderName = () => names.Dequeue() };
@@ -589,7 +597,7 @@ public sealed class RunFileTokenTests : IDisposable
         var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
 
         Assert.True(exit == 0, err);
-        Assert.Equal(Path.Combine(_xdg, "tswap-run-bbbbbbbbbbbbbbbb"), RunFolderOf(copy!));
+        Assert.Equal(Path.Combine(OwnRoot(), "tswap-run-bbbbbbbbbbbbbbbb"), RunFolderOf(copy!));
         Assert.Empty(Directory.EnumerateFileSystemEntries(taken));
 
         if (OperatingSystem.IsWindows())
