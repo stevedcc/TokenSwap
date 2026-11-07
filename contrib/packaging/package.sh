@@ -21,8 +21,21 @@
 # SDK starts in the shipped binary. On Linux it runs again with -v, whose PC/SC strategy line must name the system
 # library when ldconfig lists libpcsclite.so.1 (the stand-in otherwise), and in the sandbox, where it must name the
 # stand-in.
+# macOS, always (every PR, unsigned too; issues #240 and #265): the dylib `tswap installscript` writes (decoded from
+# its script) must be byte-for-byte the archive's libtswapse.dylib, and both Mach-Os must declare the same minimum
+# macOS as TswapCore.csproj's SecureEnclaveShimMinOS (read from the csproj itself: one source).
+# macOS with TSWAP_EXPECT_TEAM_ID set (release.yml's signing job only): per file codesign --verify --strict, the team,
+# the runtime flag; Apple's notarisation check for "other code" (codesign -vvvv --test-requirement='=notarized'
+# --check-notarization), asked again every TSWAP_NOTARY_CHECK_INTERVAL seconds (20) while it answers 3 (the ticket
+# isn't visible yet), at most TSWAP_NOTARY_CHECK_TRIES times (30: ten minutes); the same check, once, on an ad-hoc
+# re-signed copy that must fail (the control); then a simulated browser download (the archive quarantined, unpacked
+# with tar, each file marked as Archive Utility would if tar didn't) run from Terminal where Gatekeeper assessments
+# are enabled, else a SKIP line. The notarisation checks are
+# report-only until TSWAP_MACOS_GATE_RUNNER_CHECKS=1 (macos/runner-checks.sh).
 # Make the archive on the binary's own platform: upload-artifact doesn't keep the execute bit.
 set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
 
 if [ $# -lt 3 ] || [ $# -gt 4 ] || { [ $# -eq 4 ] && [ "$4" != --smoke ]; }; then
   echo "usage: $0 <rid> <publish-dir> <dist-dir> [--smoke]" >&2
@@ -126,9 +139,141 @@ linux_pcsc_smoke() {
   echo "stand-in run passed: prompt-hash and yubikey setup with ${libs[*]} hidden"
 }
 
+# macOS, always: the dylib installscript embeds is the shipped one, and the minimum macOS is the same everywhere (#265).
+macos_smoke_bytes() {
+  local dir=$1 script blob csproj want tswap_minos dylib_minos
+  # shellcheck source=macos/macho.sh
+  . "$here/macos/macho.sh"
+  script=$("$dir/tswap" installscript)
+  # shellcheck disable=SC2016 # $DYLIB_TMP is the generated script's own text
+  blob=$(printf '%s\n' "$script" | sed -n 's/^ *echo "\([A-Za-z0-9+/=]*\)" | base64 -D > "\$DYLIB_TMP"$/\1/p')
+  if [ -z "$blob" ]; then
+    echo "package.sh: '$dir/tswap installscript' wrote no Secure Enclave dylib step" >&2
+    exit 1
+  fi
+  printf '%s' "$blob" | base64 --decode > "$dir.installscript-dylib"
+  if ! cmp -s "$dir.installscript-dylib" "$dir/libtswapse.dylib"; then
+    echo "package.sh: the dylib installscript writes is not the archive's (was the shim signed after it was embedded?)" >&2
+    exit 1
+  fi
+  echo "the dylib installscript writes is the archive's libtswapse.dylib"
+
+  csproj="$here/../../TswapCore/TswapCore.csproj"
+  csproj=$(cd "$(dirname "$csproj")" && pwd)/$(basename "$csproj")
+  want=$(sed -n 's:.*<SecureEnclaveShimMinOS>\([^<]*\)</SecureEnclaveShimMinOS>.*:\1:p' "$csproj" 2> /dev/null || true)
+  if [ -z "$want" ] || [ "$(printf '%s\n' "$want" | grep -c .)" -ne 1 ]; then
+    echo "package.sh: no <SecureEnclaveShimMinOS> in $csproj (or more than one)" >&2
+    exit 1
+  fi
+  tswap_minos=$(macho_minos "$dir/tswap")
+  dylib_minos=$(macho_minos "$dir/libtswapse.dylib")
+  if [ -z "$tswap_minos" ] || [ "$tswap_minos" != "$want" ] || [ "$dylib_minos" != "$want" ]; then
+    echo "package.sh: minos: tswap ${tswap_minos:-unknown}, libtswapse.dylib ${dylib_minos:-unknown}, SecureEnclaveShimMinOS $want: they must be equal (#265)" >&2
+    exit 1
+  fi
+  echo "minos $want: tswap, libtswapse.dylib and SecureEnclaveShimMinOS agree"
+}
+
+# notarisation_check <file> <tries>: sets check_code, check_tries and check_answer (the last answer).
+notarisation_check() {
+  local file=$1 tries=$2 interval=${TSWAP_NOTARY_CHECK_INTERVAL:-20}
+  check_tries=0
+  while :; do
+    check_tries=$((check_tries + 1))
+    check_code=0
+    # The long option with a leading '=': requirement text, not a file path (never -R, which takes '==notarized').
+    check_answer=$(codesign -vvvv --test-requirement='=notarized' --check-notarization "$file" 2>&1) || check_code=$?
+    if [ "$check_code" -ne 3 ] || [ "$check_tries" -ge "$tries" ]; then
+      return 0
+    fi
+    echo "$(basename "$file"): the notarisation ticket isn't visible yet (attempt $check_tries of $tries); asking again in ${interval}s"
+    sleep "$interval"
+  done
+}
+
+# macOS with TSWAP_EXPECT_TEAM_ID: the signature, team and runtime flag of each file, and notarisation.
+macos_smoke_signing() {
+  local dir=$1 f d team flags control status
+  # shellcheck source=macos/runner-checks.sh
+  . "$here/macos/runner-checks.sh"
+  for f in tswap libtswapse.dylib; do
+    if ! codesign --verify --strict --verbose=2 "$dir/$f"; then
+      echo "package.sh: $f: codesign --verify --strict failed" >&2
+      exit 1
+    fi
+    d=$(codesign -dvvv "$dir/$f" 2>&1)
+    team=$(printf '%s\n' "$d" | sed -n 's/^TeamIdentifier=//p' | head -n 1)
+    if [ "$team" != "$TSWAP_EXPECT_TEAM_ID" ]; then
+      echo "package.sh: $f: TeamIdentifier is ${team:-missing}, expected $TSWAP_EXPECT_TEAM_ID" >&2
+      exit 1
+    fi
+    flags=0
+    printf '%s\n' "$d" | grep -qE 'flags=0x[0-9a-fA-F]+\(([^)]*,)?runtime(,[^)]*)?\)' || flags=1
+    if [ "$f" = libtswapse.dylib ]; then
+      runner_check dylib-runtime "$flags" "$f: flags= does not name runtime" || exit 1
+    elif [ "$flags" != 0 ]; then
+      echo "package.sh: $f: flags= does not name runtime (the hardened runtime)" >&2
+      exit 1
+    fi
+    echo "$f: signed by team $team with the hardened runtime"
+  done
+  for f in tswap libtswapse.dylib; do
+    notarisation_check "$dir/$f" "${TSWAP_NOTARY_CHECK_TRIES:-30}"
+    [ "$check_code" -eq 0 ] || printf '%s\n' "$check_answer"
+    runner_check notarisation "$check_code" "$f: codesign --check-notarization exit $check_code after $check_tries attempts" || exit 1
+  done
+  # The control: an unnotarised copy (re-signed ad hoc) must fail the same check, or the check proves nothing.
+  control="$dir.unnotarised-control"
+  cp "$dir/tswap" "$control"
+  codesign --force --sign - "$control"
+  notarisation_check "$control" 1
+  printf '%s\n' "$check_answer"
+  echo "the unnotarised control: exit $check_code (3 expected; 1 if the ad-hoc signature fails --verify first)"
+  status=0
+  [ "$check_code" -ne 0 ] || status=1
+  runner_check notarisation-control "$status" "the check passed an unnotarised binary: it proves nothing" || exit 1
+}
+
+# macOS with TSWAP_EXPECT_TEAM_ID: the archive as a browser download (quarantined), unpacked and run from Terminal.
+macos_smoke_quarantine() {
+  local q f status mark
+  q="$check.download"
+  mkdir -p "$q/quarantined"
+  cp "$archive" "$q/download.tar.gz"
+  mark="0083;$(printf '%x' "$(date +%s)");Safari;"
+  xattr -w com.apple.quarantine "$mark" "$q/download.tar.gz"
+  tar xzf "$q/download.tar.gz" -C "$q/quarantined"
+  for f in tswap libtswapse.dylib; do
+    # Archive Utility (a double-click in Finder) gives every unpacked file the archive's mark; tar may not. Where it
+    # didn't, mark the file as Archive Utility would, so the run below is a quarantined download's either way.
+    if ! xattr -p com.apple.quarantine "$q/quarantined/$f" > /dev/null 2>&1; then
+      echo "tar did not carry the quarantine mark to $f; marking the unpacked files, as Archive Utility does"
+      xattr -w com.apple.quarantine "$mark" "$q/quarantined/$f"
+    fi
+    if ! xattr -p com.apple.quarantine "$q/quarantined/$f" > /dev/null 2>&1; then
+      echo "package.sh: $f carries no quarantine mark even after xattr -w" >&2
+      exit 1
+    fi
+  done
+  status=$(spctl --status 2>&1 || true)
+  echo "spctl --status: $status"
+  case "$status" in
+    *enabled*) ;;
+    *)
+      echo "SKIP: Gatekeeper assessments are disabled on this runner"
+      return
+      ;;
+  esac
+  "$q/quarantined/tswap" prompt-hash
+  mkdir -m 700 "$q/config"
+  TSWAP_CONFIG_DIR="$q/config" "$q/quarantined/tswap" init --secure-enclave --no-touch --no-password --no-recovery
+  TSWAP_CONFIG_DIR="$q/config" "$q/quarantined/tswap" names
+  echo "the quarantined copy ran: prompt-hash and a Secure Enclave vault from a simulated browser download"
+}
+
 if [ "$smoke" = --smoke ]; then
-  check=$(mktemp -d)
-  trap 'rm -rf "$check"' EXIT
+  check=$(mktemp -d "${TMPDIR:-/tmp}/tswap-check.XXXXXX")
+  trap 'rm -rf "$check" "$check".*' EXIT
   tar xzf "$archive" -C "$check"
   "$check/tswap" prompt-hash
   yubikey_smoke '' "$check/tswap"
@@ -137,10 +282,17 @@ if [ "$smoke" = --smoke ]; then
       linux_pcsc_smoke "$check/tswap"
       ;;
     osx-*)
+      macos_smoke_bytes "$check"
+      if [ -n "${TSWAP_EXPECT_TEAM_ID:-}" ]; then
+        macos_smoke_signing "$check"
+      fi
       mkdir -m 700 "$check/config"
       TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery
       TSWAP_CONFIG_DIR="$check/config" "$check/tswap" names
       echo "Secure Enclave vault made and unlocked by the unpacked tswap (libtswapse.dylib loaded from the archive)"
+      if [ -n "${TSWAP_EXPECT_TEAM_ID:-}" ]; then
+        macos_smoke_quarantine
+      fi
       ;;
   esac
 fi
