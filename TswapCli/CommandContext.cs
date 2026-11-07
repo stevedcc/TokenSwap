@@ -317,6 +317,14 @@ public sealed record CommandContext(
     public VaultView OpenVault(byte[] key) => new(
         Storage as RecordVaultStore ?? throw new TswapException("This command needs a record vault."), key, Console.Error);
 
+    /// <summary>
+    /// Brief T16-S2b: the vault as a <see cref="VaultWriter"/> for the write commands (each record
+    /// read alone, from its metadata on format 3), its findings on stderr. Classic vaults were
+    /// refused when the store opened, as for <see cref="OpenVault"/>.
+    /// </summary>
+    public VaultWriter OpenVaultForWrite(byte[] key) => new(
+        Storage as RecordVaultStore ?? throw new TswapException("This command needs a record vault."), key, Console.Error);
+
     /// <summary>Resolves a connected YubiKey serial, prompting when several are present.</summary>
     public int SelectSerial(int? requiredSerial = null)
         => Unlocker.SelectConnectedSerial(ChooseSerial, requiredSerial);
