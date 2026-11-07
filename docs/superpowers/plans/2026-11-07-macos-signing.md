@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Code review (2026-11-07; MiMo and DeepSeek, `tswap-wt/tools/sign-code-p{A,B,C}-{mimo,deepseek}.md`).** The old-macOS
+> load check runs on `macos-15`: GitHub retired the `macos-14` images on 2 November 2026 (a job on that label never
+> starts), and 15 is the oldest arm64 label left, still older than the 26.0 the dylib declared before #265's fix.
+
 > **Plan review round 3 (2026-11-07; GLM approved round 2, MiMo approve with three Minors;
 > `tswap-wt/tools/sign-plan-r3-mimo.md`).** Folded in at implementation time:
 > N6: "report-only" now has one named mechanism, the `runner_check` function and the variable
@@ -63,7 +67,7 @@ throwaway runner followed by the documented uninstall. The signing and pkg logic
 `contrib/packaging/` that `TswapTests` exercises with fake tools on `PATH` (the existing `ReleasePackagingTests`
 pattern).
 
-**Tech stack:** bash (macOS's bash 3.2), GitHub Actions `macos-latest` (and `macos-14` for the old-macOS load check),
+**Tech stack:** bash (macOS's bash 3.2), GitHub Actions `macos-latest` (and `macos-15` for the old-macOS load check),
 Xcode's `codesign`, `security`, `notarytool`, `stapler`, `pkgbuild`, `productbuild`, `productsign`, `pkgutil`,
 `installer`, `vtool`; MSBuild (`TswapCore.csproj`'s `BuildSecureEnclaveShim`); xUnit (`TswapTests`).
 
@@ -190,7 +194,7 @@ Assumed, to be settled by the dry run (task 10) or the owner's hardware checks (
 - **The Developer role is enough to notarise.** Widely documented by third-party tooling, not found on an Apple page.
   If `notarytool` answers 401/403, the owner raises the key's role, and says so.
 - **The shim builds and loads with target macOS 12.0.** Expected (all its calls are 10.15+), but whether
-  `libswift_Builtin_float.dylib` is still linked, and is present on macOS 12–14, is unchecked: the `macos-14` CI leg
+  `libswift_Builtin_float.dylib` is still linked, and is present on macOS 12–15, is unchecked: the `macos-15` CI leg
   (task 2) loads the dylib on an older macOS, and `otool -L` after the change is recorded. macOS 12 and 13 themselves
   have no GitHub arm64 runner; the owner checks one if a machine is to hand (M9, optional).
 - **Gatekeeper on GitHub's runner** may have assessments disabled. The simulated-download run prints `spctl --status`
@@ -434,7 +438,7 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
 
 | Run | Signing |
 |---|---|
-| `ci.yml` (push to main, every PR, forks) | unchanged: unsigned, no secret or environment referenced (a test pins that: task 8). Fork PRs get no secrets anyway. The new `macos-14` load check (task 2) runs here, unsigned. |
+| `ci.yml` (push to main, every PR, forks) | unchanged: unsigned, no secret or environment referenced (a test pins that: task 8). Fork PRs get no secrets anyway. The new `macos-15` load check (task 2) runs here, unsigned. |
 | `release.yml` on a `v*.*.*` tag in `stevedcc/TokenSwap` | signs, notarises, builds and staples the pkg; waits for the owner's approval (D3); any missing secret, failed check or rejected submission fails the release before anything is published (D5). |
 | `release.yml` on a tag in a fork | builds the tarball **unsigned** with a `::warning::`, and no pkg (an unsigned pkg is refused by Gatekeeper anyway); the fork's release lists no `.pkg`. |
 | `release.yml` by `workflow_dispatch` (`dry_run`) | the same signed build as a tag; skips `verify-version` and the GitHub release; uploads the archive, the pkg and the notary logs as artifacts. Only from `main` (the environment's rule). |
@@ -461,7 +465,7 @@ pushed with the default `GITHUB_TOKEN` starts no workflow, so such a bot needs a
 - `TswapCore/InstallScript.cs`, `TswapCli/Commands/InstallScriptCommand.cs` — per-user-only script when run from the
   installed copy.
 - `TswapCore/Vault/Interop/AppleSecureEnclaveInterop.cs` — a clear message when the dylib exists but won't load.
-- `.github/workflows/release.yml`, `.github/workflows/ci.yml` (the `macos-14` load check only).
+- `.github/workflows/release.yml`, `.github/workflows/ci.yml` (the `macos-15` load check only).
 - Tests: `TswapTests/ReleasePackagingTests.cs`, new `TswapTests/MacSigningScriptTests.cs`, new
   `TswapTests/MacPkgScriptTests.cs`, `TswapTests/InstallScriptTests.cs`, a test for the load message.
 - Docs: `README.md`, `docs/install.md`, `docs/portable.md`, `docs/design/hardware-backends.md`,
@@ -509,9 +513,9 @@ pushed with the default `GITHUB_TOKEN` starts no workflow, so such a bot needs a
   --no-recovery` in a throwaway config, then `names`), which is what loads the dylib. If the runner's probe
   (`SecureEnclave.isAvailable`, as in ci.yml's existing probe step) says false, it still forces the dylib to load with
   a command that needs no Secure Enclave (the "not available" answer comes from the dylib), and says which it did.
-- [ ] Red first: run the job on today's main-built dylib (minos 26.0) and record that it fails on macOS 14 with dyld's
+- [ ] Red first: run the job on today's main-built dylib (minos 26.0) and record that it fails on macOS 15 with dyld's
   "built for macOS 26.0 which is newer than running OS" (or whatever it says: that is the evidence for #265); then green
-  with task 1. If the old dylib does load on macOS 14, record that too; the minos fix and the equality check stand on
+  with task 1. If the old dylib does load on macOS 15, record that too; the minos fix and the equality check stand on
   their own.
 
 ### Task 3: `contrib/packaging/sign-macos.sh`
@@ -746,7 +750,7 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
 ### Task 10: the dry run (owner gates G5, G6)
 
 - [ ] Merge the PR (inert until dispatched: ci.yml stays unsigned; the new scripts run in the suite with fakes; the
-  `macos-14` check runs unsigned).
+  `macos-15` check runs unsigned).
 - [ ] The owner starts `gh workflow run release.yml -R stevedcc/TokenSwap --ref main -f dry_run=true` and approves
   `macos-signing`. (`workflow_dispatch` needs the trigger in the default branch's file, hence after the merge; no
   release-candidate tag: `verify-version` would refuse it and a tag run publishes.)
@@ -805,7 +809,7 @@ caches assessments). Every command below runs with `TSWAP_CONFIG_DIR="$T/<check>
 | M6 | A YubiKey OTP slot (with the terminal's existing Input Monitoring grant) and a FIDO2 slot, `init` + `names` with the signed build: unchanged behaviour. | throwaway vault, own key, non-destructive |
 | M7 | v0.2.0's `libtswapse.dylib` next to the signed `tswap` in `$T/m7`, then a Secure Enclave command: task 7's message, no crash. | scratch folder, throwaway vault |
 | M8 | Upgrade over a running agent: `tswap agent start` (throwaway vault from M3), install the pkg again, then: does the agent still answer, does a new `tswap names` work? Decides the docs' "stop the agent first" line. `tswap agent stop` after. | install like a user, throwaway vault |
-| M9 | Optional: the tarball on a macOS 12–14 machine if one is to hand (#265), under the same boundary. | as M0 |
+| M9 | Optional: the tarball on a macOS 12–14 machine (older than CI's macos-15) if one is to hand (#265), under the same boundary. | as M0 |
 | M10 | The uninstall exactly as `docs/install.md` prints it; `pkgutil --pkgs` no longer lists `dev.crawford.tswap.pkg`; both files are gone. | documented uninstall |
 | M11 | Clean-up: `tswap agent status` shows none running; `find "$T" -user root` prints nothing (else `sudo rm -rf` those); `rm -rf "$T"`; delete the downloads from `~/Downloads`. Record that it was done. | clean-up |
 
@@ -842,7 +846,7 @@ from the Mac.
   the uninstall clears the receipt either way.
 - **Upgrading over a running agent or broker** (M8): until checked, the docs say to stop them first.
 - **#265 target too low or too high.** Too low: `swiftc` fails at build (loud). Too high: the minos equality check
-  fails the release. A Swift runtime library missing on old macOS (`libswift_Builtin_float`): the `macos-14` leg shows
+  fails the release. A Swift runtime library missing on old macOS (`libswift_Builtin_float`): the `macos-15` leg shows
   it for 14; 12 and 13 rest on M9 or a user report.
 - **Offline first run of the tarball** fails until online: the pkg is the offline route; documented.
 - **Runner image changes** (Xcode, `notarytool`, `pkgbuild` behaviour): the dry run can be re-run on `main` any time

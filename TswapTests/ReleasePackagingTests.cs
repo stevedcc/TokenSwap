@@ -939,4 +939,19 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertUnsigned(ci));
     }
+
+    /// <summary>
+    /// #265's old-macOS load check runs on a runner GitHub still serves: macos-14 (Sonoma) images were retired on
+    /// 2 November 2026, and a job whose label no runner offers waits forever. macos-15 is the oldest arm64 label left,
+    /// still older than the 26.0 the shim declared before the fix.
+    /// </summary>
+    [Fact]
+    public void Workflows_OldMacOsCheck_RunsOnAServedRunner()
+    {
+        var job = Job(Workflow("ci.yml"), "macos-older");
+
+        Assert.Contains("    runs-on: macos-15\n", job);
+        Assert.Contains("    needs: build-test-publish\n", job);
+        Assert.DoesNotContain(Workflow("ci.yml").Split('\n'), line => line.TrimStart().StartsWith("runs-on: macos-14", StringComparison.Ordinal));
+    }
 }
