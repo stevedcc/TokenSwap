@@ -39,7 +39,7 @@ public sealed class RecoverCommand : ICliCommand
     public int Execute(CommandContext ctx, string[] args)
     {
         var usage = $"{ctx.Prefix} recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} [{SlotCommand.RecoveryKeyFlag}] " +
-                    $"(the recovery key is read from stdin only, e.g. sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey; " +
+                    $"(the recovery key is read from stdin only: {RecoveryKeyUnlock.SourceHint(ctx.Prefix)}; " +
                     "with --password the key is stdin's first line and the vault password follows on the next)";
         // Brief T11: the touch choice first (--secure-enclave needs exactly one), then exactly one device.
         var (rest, _) = SlotCommand.SplitRecoveryKeyFlag(args);

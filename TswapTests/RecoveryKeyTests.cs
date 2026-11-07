@@ -167,6 +167,46 @@ public class RecoveryKeyTests : IDisposable
         Assert.Equal("router-pw", mac.Get("router"));
     }
 
+    /// <summary>#249: the hint reads the recovery key from somewhere else, never from the vault being recovered.</summary>
+    [Fact]
+    public void RecoverUsage_KeyComesFromAnotherVault()
+    {
+        var (exit, _, stderr) = _router.Run("", "recover");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Usage:", stderr);
+        Assert.Contains("TSWAP_CONFIG_DIR=", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
+    [Fact]
+    public void RecoveryKeyOnTerminal_HintNamesAnotherVault()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.RunOnTerminal("", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("stdin is a terminal", stderr);
+        Assert.Contains("TSWAP_CONFIG_DIR=", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
+    [Fact]
+    public void WrongKey_HintNamesAnotherVault()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.Run("not-a-key\n", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("did not open this vault", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
     // --- bad input ---
 
     public static TheoryData<string> Commands() =>

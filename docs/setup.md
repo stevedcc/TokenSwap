@@ -450,10 +450,10 @@ If the vault you recover isn't in the default config folder, set `TSWAP_CONFIG_D
 `recover` (or `slot add`) side too, to that vault's config folder: a different value from the
 `get` side's.
 
-tswap's own messages show the short form `sudo tswap get recovery-key | sudo tswap recover
---yubikey`, with no `TSWAP_CONFIG_DIR`. That form works only when the `get` side can still open the
-vault it reads. When that vault's hardware is lost, point the `get` side at another vault, as the
-examples do.
+tswap's own messages show the other-vault form, `sudo TSWAP_CONFIG_DIR=<another vault's config
+folder> tswap get recovery-key | sudo tswap recover --yubikey`, and say the key can come from
+anywhere but the vault being recovered (another vault, a file, a password manager): that vault's
+hardware is usually what was lost, so it can't give out its own recovery key.
 
 `slot approve` and `slot merge` take `--recovery-key-stdin` too. A wrong or malformed key is
 refused with one message and nothing is written; the recovery slot always stays.
