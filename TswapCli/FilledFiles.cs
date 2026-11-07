@@ -231,10 +231,12 @@ internal sealed class FilledFiles : IDisposable
             startForwarding = _childRunning && !_forwarding;
             forwardAgain = _childRunning && _forwarding;
             _forwarding |= startForwarding;
+            // Assigned under the gate, so Dispose (which reads it under the gate) can't miss a task
+            // that has started.
+            if (startForwarding)
+                _forwardTask = Task.Run(() => Forward(signal));
         }
-        if (startForwarding)
-            _forwardTask = Task.Run(() => Forward(signal));
-        else if (forwardAgain)
+        if (forwardAgain)
             _env.SignalChildren(signal);
         // No child running: RunChild never starts it (or it has exited), and Dispose cleans up.
     }
@@ -424,8 +426,13 @@ internal sealed class FilledFiles : IDisposable
         {
             CleanUp();
             // The forwarding task ends once the child has exited (RunChild has set the event).
-            _forwardTask?.Wait(_env.ChildGrace);
-            _childExited.Dispose();
+            Task? forwarding;
+            lock (_gate)
+                forwarding = _forwardTask;
+            forwarding?.Wait(_env.ChildGrace);
+            // _childExited is deliberately not disposed: a process-ending signal's handler (or a late
+            // forwarding task) may still wait on it after this returns, and a ManualResetEventSlim whose
+            // WaitHandle is never read holds no kernel handle, so there is nothing to release.
         }
         finally
         {

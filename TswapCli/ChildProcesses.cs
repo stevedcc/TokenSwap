@@ -39,9 +39,10 @@ internal static class ChildProcesses
     /// <summary>
     /// Whom a signal for child <paramref name="pid"/> goes to: its process group (<c>-pid</c>) when it
     /// leads one (a PTY child leads its own session), otherwise the child alone, never tswap's own group
-    /// (that would reach tswap's parent shell's pipeline). Null when it was already delivered: a SIGINT or
-    /// SIGQUIT while the child shares tswap's group and that group is the terminal's foreground group
-    /// came from the terminal (Ctrl+C, Ctrl+\), which sent it to the whole group; a second one makes
+    /// (that would reach tswap's parent shell's pipeline). Null when it was already delivered: a SIGINT
+    /// while the child shares tswap's group and that group is the terminal's foreground group came from
+    /// the terminal (Ctrl+C), which sent it to the whole group (SIGQUIT is registered only on Windows,
+    /// where this rule isn't used); a second one makes
     /// tools like helm or terraform abort their own cleanup. (A <c>kill -INT</c> of tswap alone at that
     /// moment then reaches only tswap; the child is killed after the grace period.)
     /// </summary>
@@ -49,7 +50,7 @@ internal static class ChildProcesses
     {
         if (childPgid == pid)
             return -pid;
-        if (childPgid == ownPgid && signal is 2 or 3 && foregroundPgid == ownPgid)
+        if (childPgid == ownPgid && signal == 2 && foregroundPgid == ownPgid)
             return null;
         return pid;
     }

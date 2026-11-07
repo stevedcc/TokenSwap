@@ -816,6 +816,7 @@ public sealed class RunFileTokenTests : IDisposable
     [Theory]
     [InlineData("{{prog}} {{@values.yaml}}")]
     [InlineData("mytool {{prog}} {{@values.yaml}}")]
+    [InlineData("mytool --pw={{db-pw}} {{prog}} {{@values.yaml}}")]
     public void RunFileToken_SubstitutedValueIsAPrinter_Refused(string command)
     {
         Ingest("prog", "base64");
@@ -824,8 +825,10 @@ public sealed class RunFileTokenTests : IDisposable
         var (exit, _, err) = Run(["run", .. command.Split(' ')]);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("value of a {{name}} token", err);
+        Assert.Contains("the value of {{prog}}", err); // the token that made the word, by name
+        Assert.DoesNotContain("{{db-pw}}", err);
         Assert.DoesNotContain("base64", err);
+        Assert.DoesNotContain(Value, err);
         Assert.Equal(0, _pty.Starts);
         Assert.Empty(RunFolders());
     }
@@ -968,6 +971,45 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(_forwarded);
     }
 
+    // Re-review minor 1: the close/logoff handler can still be running (it waits for the killed child)
+    // when the main thread, released by that kill, has finished Dispose. The handler must not fail, and
+    // tswap exits with the child's code.
+    [Fact]
+    public async Task RunFileToken_ProcessEndingSignal_ConcurrentWithDispose()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        using var killed = new ManualResetEventSlim();
+        using var runFinished = new ManualResetEventSlim();
+        _env = _env with
+        {
+            SignalEndsProcess = signal => signal == 1,
+            SignalChildren = signal =>
+            {
+                if (signal == 9)
+                {
+                    killed.Set();
+                    // Hold the handler here until the main thread is through Dispose.
+                    Assert.True(runFinished.Wait(TimeSpan.FromSeconds(10)), "the run never finished");
+                }
+                return 1;
+            },
+        };
+        Task? handler = null;
+        _pty.During = _ =>
+        {
+            handler = Task.Run(() => _signalHandler!(1));
+            Assert.True(killed.Wait(TimeSpan.FromSeconds(10)), "the handler never killed the child");
+        };
+        _pty.ExitCode = 7; // the killed child's code
+
+        var (exit, _, _) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+        runFinished.Set();
+
+        await handler!.WaitAsync(TimeSpan.FromSeconds(10)); // throws if the handler failed or never returned
+        Assert.Equal(7, exit);
+        Assert.Empty(RunFolders());
+    }
+
     // Review minor 4: on Windows the console's close, logoff and shutdown events end tswap once the
     // handler returns, so the handler kills the child and cleans up before it returns.
     [Fact]
@@ -1008,8 +1050,12 @@ public sealed class RunFileTokenTests : IDisposable
         File.WriteAllText(Path.Combine(open, "1", "values.yaml"), "left over");
         var victim = Path.Combine(_tempDir, "victim.txt");
         File.WriteAllText(victim, "precious");
-        using (var ln = Process.Start("ln", [victim, Path.Combine(linked, "1", "values.yaml")]))
+        using (var ln = Process.Start("ln", [victim, Path.Combine(linked, "1", "values.yaml")])!)
+        {
             ln.WaitForExit();
+            Assert.Equal(0, ln.ExitCode);
+        }
+        Assert.Equal(2, FilledFilesNative.LinkCount(victim)); // a real hard link, or the last assert proves nothing
         File.SetUnixFileMode(open, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
                                    | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
         File.SetUnixFileMode(linked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -1062,7 +1108,7 @@ public sealed class RunFileTokenChildSelectionTests
     [InlineData(300, 300, 2, null, -1)]   // shares tswap's group, no terminal: the child alone
     [InlineData(300, 300, 2, 999, -1)]    // shares tswap's group, which isn't in the foreground: the child alone
     [InlineData(300, 300, 2, 300, 0)]     // shares tswap's foreground group, SIGINT: already delivered
-    [InlineData(300, 300, 3, 300, 0)]     // ... SIGQUIT (Ctrl+\) likewise
+    [InlineData(300, 300, 3, 300, -1)]    // ... SIGQUIT is registered only on Windows (Ctrl+Break), where this rule isn't used: forwarded
     [InlineData(300, 300, 15, 300, -1)]   // ... SIGTERM never comes from the terminal: the child alone
     public void RunFileToken_SignalTarget(int childPgid, int ownPgid, int signal, int? foreground, int expected)
     {
