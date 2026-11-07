@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>tswap is installed</title>
+<style>
+  body { font-family: -apple-system, sans-serif; font-size: 13px; line-height: 1.45; }
+  code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  pre { background: rgba(127, 127, 127, 0.12); padding: 6px 8px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<p><strong>tswap is installed in /usr/local/bin</strong> (<code>tswap</code> and its Secure Enclave library,
+<code>libtswapse.dylib</code>), for every user of this Mac.</p>
+
+<p>To install the agent skill and the shell completions for your user, run in Terminal:</p>
+<pre>tswap installscript &gt; installTswap.sh</pre>
+<p>review <code>installTswap.sh</code>, then run:</p>
+<pre>bash installTswap.sh</pre>
+<p>Run <code>tswap</code> from Terminal: it is a command-line tool.</p>
+
+<p>To uninstall it later:</p>
+<pre>sudo rm /usr/local/bin/tswap /usr/local/bin/libtswapse.dylib
+sudo pkgutil --forget dev.crawford.tswap.pkg</pre>
+<p>Your vault is never touched by installing or uninstalling. Details: docs/install.md in
+<a href="https://github.com/stevedcc/TokenSwap/blob/main/docs/install.md">github.com/stevedcc/TokenSwap</a>.</p>
+</body>
+</html>

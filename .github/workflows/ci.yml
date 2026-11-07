@@ -125,6 +125,16 @@ jobs:
           rid=$(basename "$(dirname "$publish")")
           bash contrib/packaging/package.sh "$rid" "$publish" "$RUNNER_TEMP/dist" --smoke
 
+      # The macOS archive, for the old-macOS load check below (#265). Packed on the Mac, so the tarball keeps the
+      # execute bit; upload-artifact only zips it.
+      - name: Upload the macOS release archive
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tswap-macos-archive
+          path: ${{ runner.temp }}/dist/tswap-osx-*.tar.gz
+          if-no-files-found: error
+
       # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
       # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
       # the binary — this step tests NativeAOT-compiled behaviour on every OS. On macOS
@@ -154,3 +164,47 @@ jobs:
           path: TswapCli/bin/Release/net10.0/*/publish/tswap*
           if-no-files-found: error
 
+  # #265: the Secure Enclave dylib was built for the SDK's macOS (minos 26.0) while tswap itself needs 12.0, so on an
+  # older macOS dyld refused to load it. This job unpacks the archive the macOS leg packed and loads the dylib on the
+  # oldest arm64 macOS GitHub serves (15: the macos-14 images were retired on 2 November 2026; 12 and 13 never had an
+  # arm64 runner). Still older than the 26.0 the dylib declared before the fix. Unsigned, like the rest of ci.yml.
+  macos-older:
+    needs: build-test-publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tswap-macos-archive
+          path: ${{ runner.temp }}/archive
+
+      - name: Load the Secure Enclave dylib on macOS 15
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          check=$(mktemp -d)
+          tar xzf "$RUNNER_TEMP"/archive/tswap-osx-*.tar.gz -C "$check"
+          ls -l "$check"
+          "$check/tswap" prompt-hash
+          probe="$RUNNER_TEMP/se-probe.swift"
+          printf '%s\n' 'import CryptoKit' 'print(SecureEnclave.isAvailable)' > "$probe"
+          available=$(swift "$probe")
+          echo "Secure Enclave available: $available"
+          mkdir -m 700 "$check/config"
+          if [ "$available" = true ]; then
+            TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery
+            TSWAP_CONFIG_DIR="$check/config" "$check/tswap" names
+            echo "loaded libtswapse.dylib on $(sw_vers -productVersion): Secure Enclave vault made and unlocked"
+          else
+            # No Secure Enclave: init still loads the dylib to ask it, and the "no usable Secure Enclave" answer comes
+            # from the dylib; a dyld refusal (the #265 failure) says "Library not loaded" or "newer than running OS".
+            status=0
+            out=$(TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery 2>&1) || status=$?
+            printf '%s\n' "$out"
+            if ! grep -qF 'does not have a usable Secure Enclave' <<<"$out"; then
+              echo "::error::the dylib did not answer (exit $status); see the output above" >&2
+              exit 1
+            fi
+            echo "loaded libtswapse.dylib on $(sw_vers -productVersion): no Secure Enclave here, the dylib said so"
+          fi
