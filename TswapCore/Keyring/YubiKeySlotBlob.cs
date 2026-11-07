@@ -33,6 +33,10 @@ public enum YubiKeyTouchPolicy : byte
 /// password-free slot stays byte-identical to version 1. Flags <c>0x00</c> is damage, any other bit
 /// needs a newer tswap (<see cref="SlotPassword"/>).</para>
 ///
+/// <para><b>Version 3</b> belongs to <see cref="Fido2SlotBlob"/> (a FIDO2 hmac-secret slot under the same
+/// magic); <see cref="YubiKeySlotKinds.Classify"/> routes a <c>TSYK</c> blob by its version. <see cref="Parse"/>
+/// stays exactly as released in v0.2.0, so it answers "needs a newer tswap" for version 3, as v0.2.x does.</para>
+///
 /// <para>A YubiKey machine slot <em>without</em> such a blob is a <b>legacy pair slot</b>: its
 /// <c>KEK_slot</c> still comes from the two-key XOR scheme and the per-machine config fields
 /// (<c>YubiKeySerials</c>, <c>RedundancyXor</c>, <c>UnlockChallenge</c>, <c>MasterKeySalt</c>).
@@ -127,7 +131,7 @@ public sealed record YubiKeySlotBlob
     };
 
     /// <summary>True when <paramref name="hwBlob"/> starts with this format's magic.</summary>
-    public static bool IsYubiKeyBlob(byte[]? hwBlob) =>
+    internal static bool IsYubiKeyBlob(byte[]? hwBlob) =>
         hwBlob is { Length: >= MagicSize } && hwBlob.AsSpan(0, MagicSize).SequenceEqual(Magic);
 
     /// <summary>Version 1 (74 bytes) unless <see cref="RequiresPassword"/>, then version 2 (75 bytes, flags <c>0x01</c>).</summary>

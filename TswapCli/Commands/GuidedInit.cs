@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli.Commands;
 
@@ -31,13 +33,37 @@ internal static class GuidedInit
         "With touch: every unlock asks for Touch ID or your login password. Without: the Secure Enclave opens the vault " +
         "with no prompt at all (anyone using this Mac as you can open it).";
 
+    /// <summary>
+    /// FIDO2 plan, task 8: under the list on every OS when a FIDO2 slot is offered (people use one key on several OSes,
+    /// and the vault folder travels): what each slot type needs elsewhere, as docs/install.md says it.
+    /// </summary>
+    internal const string MultiOsNote =
+        "Using a key on other machines too? An OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev " +
+        "rule on Linux. A FIDO2 slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd " +
+        "distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every unlock, and a " +
+        "FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to give it two slots; either " +
+        "opens the vault.";
+
+    /// <summary>Final review: added to a stop once a FIDO2 credential was made in the run (nothing written uses it).</summary>
+    internal const string UnusedCredentialNote =
+        "A key used in this run may keep an unused FIDO2 credential: harmless, a YubiKey stores nothing for it.";
+
+    /// <summary>FIDO2 plan, task 8: Windows' one FIDO2 entry (its dialog picks the key, so tswap can't list them).</summary>
+    internal const string WindowsFido2Entry = "a YubiKey's FIDO2 slot (Windows' dialog: pick the key, PIN, touch)";
+
+    /// <summary>The short name of Windows' FIDO2 entry (summary, questions).</summary>
+    internal const string WindowsFido2Label = "a YubiKey's FIDO2 slot";
+
     internal const string PasswordDroppedLine = "Vault password: dropped (no remaining slot needed it)";
 
-    /// <summary>One device the guided flow can make a slot for: a YubiKey (by serial) or this machine's chip.</summary>
-    private sealed record Device(int? Serial, HardwareBackend? Chip)
-    {
-        public string Label => Serial is { } serial ? $"YubiKey {serial}" : VaultPasswordChoice.HardwareName(Chip!.Value);
-    }
+    private enum DeviceKind { Otp, Chip, Fido2 }
+
+    /// <summary>
+    /// One slot the guided flow can make: a YubiKey's OTP slot (by serial), this machine's chip, or (FIDO2 plan, task 8)
+    /// a YubiKey's FIDO2 slot (<see cref="Fido2Key"/>; null on Windows, where the dialog picks the key).
+    /// <see cref="Entry"/> is its line in the list, <see cref="Label"/> its short name everywhere else.
+    /// </summary>
+    private sealed record Device(DeviceKind Kind, int? Serial, HardwareBackend? Chip, Fido2KeyInfo? Fido2Key, string Entry, string Label);
 
     /// <summary>A picked device, its password choice, and what its enrolment gave.</summary>
     private sealed class PlannedSlot(Device device, int number)
@@ -82,23 +108,46 @@ internal static class GuidedInit
             // Listed as a line, not left out silently: the chip stays offered (a key the OS hides).
             yubiKeyProblem = ex.Message;
         }
+        // FIDO2 plan, task 8: the FIDO2 keys, one more listing call (no PIN, no touch); offered only where a person can
+        // type the PIN (a terminal), as every FIDO2 enrolment requires.
+        var fido2 = ctx.Fido2 is { } service && TswapCli.Fido2PinPrompt.HasTerminal(ctx) ? service : null;
+        IReadOnlyList<Fido2KeyInfo> fido2Keys = [];
+        string? fido2Problem = null;
+        if (fido2 is { CanList: true })
+        {
+            try
+            {
+                fido2Keys = fido2.ListYubiKeys();
+            }
+            catch (TswapException ex)
+            {
+                fido2Problem = ex.Message;
+            }
+        }
         var chip = ctx.ChipProbe();
-        var chipName = chip.Backend is { } usable ? VaultPasswordChoice.HardwareName(usable) : ThisOsChipName();
-        List<Device> devices = [.. serials.Select(s => new Device(s, null))];
-        if (chip.Backend is { } backend)
-            devices.Add(new Device(null, backend));
+        var chipName = chip.Backend is { } usable ? VaultPasswordChoice.HardwareName(usable) : ThisOsChipName(ctx.Os);
+        var devices = Offer(ctx.Os, serials, chip.Backend, fido2, fido2Keys);
 
         c.Out.WriteLine();
         c.Out.WriteLine("This machine has:");
         for (var i = 0; i < devices.Count; i++)
-            c.Out.WriteLine($"  {i + 1}. {devices[i].Label}");
+            c.Out.WriteLine($"  {i + 1}. {devices[i].Entry}");
         if (yubiKeyProblem is not null)
             c.Out.WriteLine($"  YubiKeys: {yubiKeyProblem}");
-        else if (serials.Count == 0)
+        else if (serials.Count == 0 && fido2Keys.Count == 0 && fido2Problem is null && fido2 is not { CanList: false })
             c.Out.WriteLine("  (no YubiKey plugged in)");
+        if (fido2Problem is not null)
+            c.Out.WriteLine($"  FIDO2 keys: {fido2Problem}");
+        else if (ctx.Fido2 is not null && fido2 is null)
+            c.Out.WriteLine($"  FIDO2 slots: not offered ({Fido2Texts.NoTerminal})");
         var chipReason = chip.UnavailableReason ?? "reason unknown";
         if (chip.Backend is null)
             c.Out.WriteLine($"  {chipName} (not available: {chipReason})");
+        if (fido2Problem is null && devices.Any(d => d.Kind == DeviceKind.Fido2))
+        {
+            c.Out.WriteLine();
+            c.Out.WriteLine(MultiOsNote);
+        }
 
         if (devices.Count == 0)
             throw new TswapException(
@@ -106,7 +155,7 @@ internal static class GuidedInit
                 $"machine's {chipName} (not available: {chipReason}). Plug in a YubiKey and run '{ctx.Prefix} init' again. " +
                 "No config or vault was written.");
 
-        // Step 3: pick. Kept in list order (YubiKeys in ListSerials order, then the chip): the order typed never matters.
+        // Step 3: pick. Kept in list order (Offer's, per OS): the order typed never matters.
         var picked = AskNumbers(c, PickPrompt, [.. Enumerable.Range(1, devices.Count)], emptyMeansAll: false)!
             .Select(n => new PlannedSlot(devices[n - 1], n)).ToList();
         var chipSlot = picked.SingleOrDefault(p => p.Device.Chip is not null);
@@ -165,8 +214,9 @@ internal static class GuidedInit
             // Step 5: the recovery slot, recommended (the recovery slot never involves the password).
             var includeRecovery = !noRecovery && AskYesNo(c, RecoveryPrompt, defaultAnswer: true);
 
-            // Step 6: create, in memory. The chip first, then the YubiKeys in ListSerials order; the first
-            // slot built is the machine slot (the config's KeyringSlotId).
+            // Step 6: create, in memory. The chip first, then the YubiKeys' OTP slots in ListSerials order, then the
+            // FIDO2 slots (PIN tries are limited, so last); the first slot built is the machine slot (the config's
+            // KeyringSlotId).
             Config? config = null;
             Keyring? keyring = null;
             List<Slot> addedSlots = [];
@@ -204,7 +254,7 @@ internal static class GuidedInit
                 newSlotIds.Add(config.KeyringSlotId!);
             }
 
-            foreach (var slot in picked.Where(p => p.Device.Serial is not null))
+            foreach (var slot in picked.Where(p => p.Device.Kind == DeviceKind.Otp))
             {
                 var serial = slot.Device.Serial!.Value;
                 var stretched = slot.NeedsPassword ? password!.Stretched : null;
@@ -271,8 +321,73 @@ internal static class GuidedInit
                 YubiKeySlotEnrollment.PrintTouchPolicy(c, blob); // explained here, acknowledged below
             }
 
+            // Set once a FIDO2 credential was made in this run: a stop then says the key may keep it, unused.
+            var madeCredential = false;
+            string StopNote() => madeCredential ? " " + UnusedCredentialNote : "";
+            foreach (var slot in picked.Where(p => p.Device.Kind == DeviceKind.Fido2))
+            {
+                var stretched = slot.NeedsPassword ? password!.Stretched : null;
+                if (config is not null)
+                    keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+                var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+                Fido2SlotBlob blob;
+                byte[]? kekSlot = null;
+                Slot? added = null;
+                // The carry-on offer covers this key's enrolment only (the PIN offer, both key operations, the wrap),
+                // as for an OTP key above.
+                try
+                {
+                    var key = slot.Device.Fido2Key;
+                    if (key is null)
+                        c.Out.WriteLine(Fido2SlotEnrollment.WindowsDialogLine);
+                    else if (!key.PinSet)
+                        key = Fido2SlotEnrollment.OfferPin(ctx, fido2!, key);
+                    if (keyring is null)
+                        (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], stretched, () => madeCredential = true);
+                    else
+                        (added, blob) = Fido2SlotEnrollment.EnrollAsSlot(
+                            ctx, key, vaultKey, keyring with { Slots = [.. keyring.Slots, .. addedSlots] }, stretched,
+                            () => madeCredential = true);
+                }
+                catch (TswapException ex)
+                {
+                    c.Out.WriteLine(ex.Message);
+                    if (!AskYesNo(c, $"Carry on without {slot.Device.Label}? (y/N): ", defaultAnswer: false))
+                        throw new TswapException($"Stopped without {slot.Device.Label}. No config or vault was written.{StopNote()}");
+                    continue;
+                }
+
+                if (kekSlot is not null)
+                {
+                    // The first slot built: the machine slot, as init --fido2 writes it (Backend YubiKey).
+                    try
+                    {
+                        var backendConfig = new Config(
+                            YubiKeySerials: [],
+                            RedundancyXor: "",
+                            Created: created,
+                            RngMode: RngMode.System,
+                            Backend: HardwareBackend.YubiKey);
+                        (config, assembledKey, recoveryPrivateKey) = InitCommand.AssembleKeyring(
+                            kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, vaultKey, vaultId);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(kekSlot);
+                    }
+                    newSlotIds.Add(Convert.ToBase64String(slotId));
+                }
+                else
+                {
+                    addedSlots.Add(added!);
+                    newSlotIds.Add(Convert.ToBase64String(added!.SlotId));
+                }
+                slot.Enrolled = true;
+                Fido2SlotEnrollment.PrintResetWarning(c, Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid));
+            }
+
             if (config is null)
-                throw new TswapException("Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.");
+                throw new TswapException($"Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.{StopNote()}");
             if (addedSlots.Count > 0)
             {
                 keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
@@ -410,6 +525,51 @@ internal static class GuidedInit
     private static bool SameBytes(byte[]? a, byte[]? b) =>
         a is null ? b is null : b is not null && a.AsSpan().SequenceEqual(b);
 
-    /// <summary>The chip this OS would offer, for naming it when it isn't usable.</summary>
-    private static string ThisOsChipName() => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
+    /// <summary>The chip <paramref name="os"/> would offer, for naming it when it isn't usable.</summary>
+    private static string ThisOsChipName(OSPlatform os) => os == OSPlatform.OSX ? "Secure Enclave" : "TPM";
+
+    /// <summary>
+    /// The list, in <paramref name="os"/>'s order. Without a FIDO2 service (or a terminal for its PIN): each YubiKey by
+    /// serial, then the chip, as before FIDO2. With one, each YubiKey is offered as an OTP slot and a FIDO2 slot, the
+    /// FIDO2 keys matched to the OTP keys by serial: Linux OTP then FIDO2; macOS FIDO2 first (no Input Monitoring
+    /// needed), the OTP entry noting Input Monitoring; a FIDO2 key without an OTP key of its serial (the Security Key
+    /// series has no OTP interface; a key without a serial can't be matched) is offered as FIDO2 only, after them; then
+    /// the chip. Windows can't list FIDO2 keys (its dialog picks one): the TPM, the OTP keys, then one FIDO2 entry.
+    /// </summary>
+    private static List<Device> Offer(OSPlatform os, IReadOnlyList<int> serials, HardwareBackend? chip, IFido2Service? fido2,
+        IReadOnlyList<Fido2KeyInfo> fido2Keys)
+    {
+        Device? chipDevice = chip is { } backend
+            ? new Device(DeviceKind.Chip, null, backend, null, VaultPasswordChoice.HardwareName(backend), VaultPasswordChoice.HardwareName(backend))
+            : null;
+        if (fido2 is null)
+            return [.. serials.Select(s => new Device(DeviceKind.Otp, s, null, null, $"YubiKey {s}", $"YubiKey {s}")), .. Optional(chipDevice)];
+
+        var mac = os == OSPlatform.OSX;
+        Device Otp(int serial) => new(DeviceKind.Otp, serial, null, null,
+            $"YubiKey {serial}, OTP slot (no PIN{(mac ? "; needs Input Monitoring for the terminal" : "")})", $"YubiKey {serial}, OTP");
+        Device Fido2(Fido2KeyInfo key)
+        {
+            var name = fido2.KeyName(key);
+            return new(DeviceKind.Fido2, key.Serial, null, key,
+                $"{name}, FIDO2 slot (PIN + touch{(mac ? "; preferred on a Mac: no Input Monitoring needed" : "")})", $"{name}, FIDO2");
+        }
+
+        if (!fido2.CanList)
+            return [.. Optional(chipDevice), .. serials.Select(Otp),
+                new Device(DeviceKind.Fido2, null, null, null, WindowsFido2Entry, WindowsFido2Label)];
+
+        List<Device> devices = [];
+        foreach (var serial in serials)
+        {
+            var key = fido2Keys.FirstOrDefault(k => k.Serial == serial);
+            Device[] both = key is null ? [Otp(serial)] : mac ? [Fido2(key), Otp(serial)] : [Otp(serial), Fido2(key)];
+            devices.AddRange(both);
+        }
+        devices.AddRange(fido2Keys.Where(k => k.Serial is not { } s || !serials.Contains(s)).Select(Fido2));
+        devices.AddRange(Optional(chipDevice));
+        return devices;
+    }
+
+    private static IEnumerable<Device> Optional(Device? device) => device is null ? [] : [device];
 }

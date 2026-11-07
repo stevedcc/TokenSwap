@@ -7,8 +7,8 @@ Every page about tswap, one line each. New to tswap? Start with the
 
 - [Installing tswap](install.md): prerequisites, downloading a release, building from source,
   `installscript`, Windows notes.
-- [Setting up a vault](setup.md): preparing a YubiKey, the guided `tswap init`, YubiKey, TPM and
-  Secure Enclave slots, the recovery key, the limits of this version.
+- [Setting up a vault](setup.md): preparing a YubiKey, the guided `tswap init`, YubiKey (OTP and
+  FIDO2), TPM and Secure Enclave slots, the recovery key, the limits of this version.
 - [Using tswap without installing it](portable.md): running from a folder without admin rights,
   `TSWAP_CONFIG_DIR`, what refuses without sudo, limits on each OS.
 - [Upgrading from 0.1](upgrading-from-0.1.md): converting a classic vault, `vault reindex`, what

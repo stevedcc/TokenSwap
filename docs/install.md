@@ -31,8 +31,15 @@ You need the .NET 10 SDK at build time only. The compiled binary needs no .NET r
 - **Linux: `libpcsclite` is used if it is installed, and not needed.** Without it, tswap starts as
   usual and finds the key over its OTP interface; only the key's smart-card interface is not
   listed, and tswap uses no smart-card feature.
-- **macOS:** the app that runs tswap (your terminal) needs Input Monitoring, in System Settings →
-  Privacy & Security → Input Monitoring: [portable.md](portable.md#yubikeys).
+- **macOS:** for a key's OTP slot, the app that runs tswap (your terminal) needs Input Monitoring,
+  in System Settings → Privacy & Security → Input Monitoring: [portable.md](portable.md#yubikeys).
+  A [FIDO2 slot](setup.md#fido2-slots) needs no Input Monitoring: the key's FIDO interface isn't a
+  keyboard.
+- **FIDO2 slots** reach the key through its FIDO interface instead: on Linux, through its hidraw
+  device, which current distributions open to the logged-in user with systemd's own rule
+  (`60-fido-id.rules`), and Yubico's udev rule covers the device too. On Windows, through Windows'
+  own WebAuthn API (no administrator needed, version 4 or later). Not yet checked on a Linux machine without
+  Yubico's rule, or on a Mac with a release build.
 
 ## Download a release
 

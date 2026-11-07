@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -70,9 +71,17 @@ internal static class CliHost
             // Secure Enclave's owner scope (brief T12) reads the same store, at call time.
             var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
-            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
+            // One FIDO2 service for enrolment (CommandContext.Fido2) and unlock (pass 4, FIDO2 plan task 7).
+            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error);
+            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
-            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass) { Time = time };
+            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
+            {
+                Time = time,
+                Fido2 = fido2,
+                // Test mode has no FIDO2 service, so it needs no terminal either (a test's own may never answer).
+                Terminal = testKey is null ? ControllingTerminal.Open : null,
+            };
             return CliRunner.Run(ctx, env.CommandArgs);
         }
         // CliRunner maps command errors; these catches cover composition failures only
@@ -87,6 +96,20 @@ internal static class CliHost
             console.Error.WriteLine($"\n❌ Error: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// The FIDO2 service (FIDO2 plan, tasks 4 and 5): Yubico's SDK on Linux and macOS, <c>webauthn.dll</c> on Windows;
+    /// none in test mode (a test that needs one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, or calls
+    /// into <c>webauthn.dll</c>, until a command calls it.
+    /// </summary>
+    internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null)
+    {
+        if (testKey is not null)
+            return null;
+        if (OperatingSystem.IsWindows())
+            return new Fido2Service(new WebAuthnFido2Keys(), verbose);
+        return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? new Fido2Service(new SdkFido2Keys(notices), verbose) : null;
     }
 
 #if DEBUG

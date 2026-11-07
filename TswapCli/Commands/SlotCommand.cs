@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 using TswapCore.VaultPassword;
 
 namespace TswapCli.Commands;
@@ -40,8 +41,8 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot; slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
+    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -78,7 +79,7 @@ public sealed class SlotCommand : ICliCommand
     }
 
     private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --yubikey";
+        $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --fido2 [--serial <n>] | {ctx.Prefix} slot add --yubikey";
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
@@ -404,7 +405,7 @@ public sealed class SlotCommand : ICliCommand
                 throw new TswapException(
                     "This slot request carries no YubiKey slot blob, so it names no key to enroll. On the requesting " +
                     "machine, run 'tswap slot request <file>' again with one YubiKey plugged in.");
-            var requestedKey = YubiKeySlotBlob.Decode(
+            var requestedKey = RequestedOtpBlob(
                 SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's YubiKey slot blob"));
             enrolled = $"YubiKey {requestedKey.Serial}";
         }
@@ -635,7 +636,7 @@ public sealed class SlotCommand : ICliCommand
                 (backend == HardwareBackend.YubiKey ? "This approve file's YubiKey slot blob" : "This approve file's hardware blob") +
                 " does not match this machine's pending request. " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
-        var blob = backend == HardwareBackend.YubiKey ? YubiKeySlotBlob.Decode(pendingHwBlob) : null;
+        var blob = backend == HardwareBackend.YubiKey ? RequestedOtpBlob(pendingHwBlob) : null;
 
         var vaultId = SlotEnrollmentFileCodec.DecodeFixed(approve.VaultId, KeyringFormat.VaultIdSize, "approve file's vault id");
         var ephemeralPublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
@@ -881,38 +882,21 @@ public sealed class SlotCommand : ICliCommand
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
         // Brief T11: slot add creates no Secure Enclave key; a touch choice here is refused with
         // where it belongs, never ignored.
-        var addUsage = $"{ctx.Prefix} slot add --yubikey {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}]";
+        var addUsage = $"{ctx.Prefix} slot add --yubikey|--fido2 [{Fido2SlotEnrollment.SerialFlag} <n>] {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}] " +
+                       $"({Fido2SlotEnrollment.SerialFlag} only with --fido2)";
         if (positional.Any(SecureEnclaveTouchChoice.IsSecureEnclaveFlag))
             throw new UsageException($"{addUsage}\n{SecureEnclaveTouchChoice.NotForSlotAdd}");
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
         (positional, var passwordFlag) = VaultPasswordChoice.Split(positional, addUsage);
-        if (positional is not ["--yubikey"])
+        // FIDO2 plan, task 6: --serial picks the FIDO2 key (Linux, macOS).
+        (positional, var serial) = Fido2SlotEnrollment.SplitSerial(positional, addUsage);
+        if (positional is ["--fido2"])
+            return ExecuteAddFido2(ctx, serial, passwordFlag, withRecoveryKey);
+        if (positional is not ["--yubikey"] || serial is not null)
             throw new UsageException(addUsage);
         var c = ctx.Console;
 
-        // The keyring's version is readable from config.json without K_v (config is not secret):
-        // refuse a vault that can never take the slot before sudo, before any unlock or touch
-        // (security review of T4).
-        var config = ctx.Storage.LoadConfig();
-        if (config.Keyring is null)
-            throw new TswapException(
-                "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
-                "('tswap init', or 'tswap init --yubikey', '--tpm' or '--secure-enclave') take extra slots.");
-        byte[] keyringBytes;
-        try
-        {
-            keyringBytes = Convert.FromBase64String(config.Keyring);
-        }
-        catch (FormatException)
-        {
-            throw new TswapException("Config is corrupted: Keyring is not valid base64. Restore config.json from backup.");
-        }
-        RequireKeyringThatTakesYubiKeySlots(KeyringCodec.Decode(keyringBytes));
-
-        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before any unlock.
-        ctx.RequireSudo("slot add");
-
-        var keyring = KeyringCodec.Decode(keyringBytes);
+        var (config, keyring) = LoadKeyringForAdd(ctx);
 
         // Task 4b: every plugged-in key already has one-key slots (pair slots don't count): the one picked is
         // checked, and re-enrolled if none of its slots opens any more.
@@ -920,8 +904,8 @@ public sealed class SlotCommand : ICliCommand
         var pluggedIn = ctx.YubiKeys.ListSerials();
         if (pluggedIn.Count > 0 && pluggedIn.All(oneKeySlots.ContainsKey))
         {
-            var serial = ctx.ChooseSerialAmong(pluggedIn);
-            return Reenrol(ctx, config, keyring, serial, oneKeySlots[serial], passwordFlag, withRecoveryKey);
+            var chosen = ctx.ChooseSerialAmong(pluggedIn);
+            return Reenrol(ctx, config, keyring, chosen, oneKeySlots[chosen], passwordFlag, withRecoveryKey);
         }
 
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
@@ -938,8 +922,8 @@ public sealed class SlotCommand : ICliCommand
             // Brief T17 ruling 15: a later password slot is checked against the verifier with K_v.
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
                 vaultKey, keyring.VaultId, "slot add --yubikey");
-            var serial = YubiKeySlotEnrollment.ChooseEligibleSerial(ctx, enrolled);
-            (newSlot, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, password?.Stretched);
+            var chosen = YubiKeySlotEnrollment.ChooseEligibleSerial(ctx, enrolled);
+            (newSlot, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, chosen, vaultKey, keyring, password?.Stretched);
         }
         finally
         {
@@ -947,9 +931,106 @@ public sealed class SlotCommand : ICliCommand
             CryptographicOperations.ZeroMemory(vaultKey);
         }
 
+        var extended = SaveWithNewSlot(ctx, config, keyring, newSlot, password);
+
+        c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
+        if (password is not null)
+            c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
+        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        PrintAddedSlotFooter(c, newSlot, extended);
+        return 0;
+    }
+
+    /// <summary>
+    /// FIDO2 plan, task 6: <c>slot add --fido2</c>, the FIDO2 twin of the first enrolment above. Refused before any
+    /// unlock or key call without a terminal (the PIN is typed there) or with <c>--serial</c> on Windows. On Linux and
+    /// macOS the key is picked (asked at the terminal when several are plugged in) and a key that already holds one of
+    /// this vault's FIDO2 credentials is refused by the silent probe, before the vault is unlocked (final review: no PIN
+    /// or touch spent); Windows can't list keys, so its exclude list refuses one after the unlock. Then the vault is
+    /// unlocked, the key is offered a PIN when it has none, two key operations make the slot, and the keyring is
+    /// written once, after both.
+    /// </summary>
+    private static int ExecuteAddFido2(CommandContext ctx, int? serial, bool? passwordFlag, bool withRecoveryKey)
+    {
+        var c = ctx.Console;
+        // The refusals that need no vault (no terminal, --serial on Windows) come before the sudo check, as in init.
+        var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+        var (config, keyring) = LoadKeyringForAdd(ctx);
+        Fido2KeyInfo? key = null;
+        if (fido2.CanList)
+        {
+            key = Fido2SlotEnrollment.PickKey(ctx, serial)!;
+            Fido2SlotEnrollment.RefuseIfEnrolled(fido2, key, Fido2SlotEnrollment.VaultFido2Slots(keyring));
+        }
+
+        var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
+
+        VaultPasswordChoice.Resolved? password = null;
+        Fido2SlotBlob blob;
+        Slot newSlot;
+        try
+        {
+            password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
+                vaultKey, keyring.VaultId, "slot add --fido2");
+            key = key is null ? Fido2SlotEnrollment.PickKey(ctx, serial) : Fido2SlotEnrollment.EnsurePin(ctx, key);
+            (newSlot, blob) = Fido2SlotEnrollment.EnrollAsSlot(ctx, key, vaultKey, keyring, password?.Stretched);
+        }
+        finally
+        {
+            password?.Dispose();
+            CryptographicOperations.ZeroMemory(vaultKey);
+        }
+
+        var extended = SaveWithNewSlot(ctx, config, keyring, newSlot, password);
+
+        var name = fido2.KeyName(blob);
+        c.Out.WriteLine($"\n✓ {name} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.");
+        if (password is not null)
+            c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
+        Fido2SlotEnrollment.PrintResetWarning(c, name);
+        PrintAddedSlotFooter(c, newSlot, extended);
+        return 0;
+    }
+
+    /// <summary>
+    /// <c>slot add</c>'s checks before any unlock: the vault has a keyring that takes YubiKey slots (readable from
+    /// config.json without K_v, so refused before sudo, any unlock or touch: security review of T4), then sudo.
+    /// </summary>
+    private static (Config Config, TswapCore.Keyring.Keyring Keyring) LoadKeyringForAdd(CommandContext ctx)
+    {
+        var config = ctx.Storage.LoadConfig();
+        if (config.Keyring is null)
+            throw new TswapException(
+                "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
+                "('tswap init', or 'tswap init --yubikey', 'tswap init --fido2', '--tpm' or '--secure-enclave') take extra slots.");
+        byte[] keyringBytes;
+        try
+        {
+            keyringBytes = Convert.FromBase64String(config.Keyring);
+        }
+        catch (FormatException)
+        {
+            throw new TswapException("Config is corrupted: Keyring is not valid base64. Restore config.json from backup.");
+        }
+        RequireKeyringThatTakesYubiKeySlots(KeyringCodec.Decode(keyringBytes));
+
+        // Same threat model as approve: a new slot is a new way to decrypt K_v. Before any unlock.
+        ctx.RequireSudo("slot add");
+
+        return (config, KeyringCodec.Decode(keyringBytes));
+    }
+
+    /// <summary>
+    /// <c>slot add</c>'s one write: the keyring with <paramref name="newSlot"/> appended, its posture acknowledged (an
+    /// OTP slot's is explained by the caller; a FIDO2 slot has none), config.json backed up first, and a first password
+    /// slot's vault-password file before the keyring that needs it. Returns the extended keyring.
+    /// </summary>
+    private static TswapCore.Keyring.Keyring SaveWithNewSlot(CommandContext ctx, Config config, TswapCore.Keyring.Keyring keyring,
+        Slot newSlot, VaultPasswordChoice.Resolved? password)
+    {
         var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
-        // Brief T7 item 5: the new slot's posture is explained below, so it is acknowledged; the
+        // Brief T7 item 5: the new slot's posture is explained by the caller, so it is acknowledged; the
         // other slots keep what was acknowledged before.
         newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(newSlot.SlotId)]);
 
@@ -957,30 +1038,32 @@ public sealed class SlotCommand : ICliCommand
         if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
             var backup = fileStore.BackupConfig();
-            c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
+            ctx.Console.Out.WriteLine($"\nPrevious config backed up to: {backup}");
         }
         // Brief T17: a first password slot's vault-password file goes in before the keyring that needs it.
         if (password is not null && ctx.Storage is RecordVaultStore recordStore)
             password.WriteNewFile(recordStore);
         ctx.Storage.SaveConfig(newConfig);
+        return extended;
+    }
 
-        c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
-        if (password is not null)
-            c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
-        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+    private static void PrintAddedSlotFooter(IConsole c, Slot newSlot, TswapCore.Keyring.Keyring extended)
+    {
         PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
         c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
-        return 0;
     }
 
-    /// <summary>Task 4b: each key's one-key slots (decodable YubiKey slot blobs), in keyring order; legacy pair slots are left out.</summary>
-    private static Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> OneKeySlotsBySerial(TswapCore.Keyring.Keyring keyring)
+    /// <summary>
+    /// Task 4b: each key's one-key OTP slots (decodable OTP blobs), in keyring order; legacy pair slots are left out, and
+    /// so are FIDO2 slots (FIDO2 plan, task 2: <c>slot add --fido2</c> checks a key's FIDO2 slots itself).
+    /// </summary>
+    internal static Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> OneKeySlotsBySerial(TswapCore.Keyring.Keyring keyring)
     {
         Dictionary<int, List<(Slot Slot, YubiKeySlotBlob Blob)>> bySerial = [];
-        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)))
+        foreach (var slot in keyring.Slots.Where(s => s.Kind == SlotKind.Machine))
         {
-            if (YubiKeySlotBlob.TryDecode(slot.HwBlob!) is not { } blob)
+            if (YubiKeySlotKinds.Classify(slot.HwBlob) is not YubiKeySlotKind.Otp(var blob))
                 continue;
             if (!bySerial.TryGetValue(blob.Serial, out var slots))
                 bySerial[blob.Serial] = slots = [];
@@ -1415,16 +1498,38 @@ public sealed class SlotCommand : ICliCommand
 
     private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
-    /// <summary>One line naming a slot for a merge: kind, device, fingerprint.</summary>
+    /// <summary>
+    /// One line naming a slot for a merge: kind, device, fingerprint. A FIDO2 slot is "YubiKey N, FIDO2" (its model when
+    /// the serial is unknown; FIDO2 plan, task 2). Every YubiKey blob here passed <see cref="SlotReceiptCodec.ValidateHwBlob"/>.
+    /// </summary>
     internal static string DescribeSlot(Slot slot)
     {
         var device = slot.Kind == SlotKind.Recovery
             ? "recovery slot"
-            : YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-                ? $"YubiKey {YubiKeySlotBlob.Decode(slot.HwBlob!).Serial}"
-                : "TPM / Secure Enclave machine slot";
+            : YubiKeySlotKinds.Classify(slot.HwBlob) switch
+            {
+                YubiKeySlotKind.Otp(var otp) => $"YubiKey {otp.Serial}",
+                YubiKeySlotKind.Fido2(var fido2) => $"{Fido2SlotBlob.DisplayName(fido2.Serial, fido2.Aaguid)}, FIDO2",
+                YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
+                YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
+                _ => "TPM / Secure Enclave machine slot",
+            };
         return $"slot {ShortId(slot.SlotId)} ({device}), fingerprint {SlotFingerprint.Compute(slot.PublicKey)}";
     }
+
+    /// <summary>
+    /// The OTP blob of a slot request (or this machine's pending one): never a FIDO2 slot's, which
+    /// <see cref="SlotEnrollmentFileCodec"/> refuses before this is reached (FIDO2 plan, task 2); a damaged or newer
+    /// blob throws its parser's text, as <see cref="YubiKeySlotBlob.Decode"/> does.
+    /// </summary>
+    private static YubiKeySlotBlob RequestedOtpBlob(byte[] hwBlob) => YubiKeySlotKinds.Classify(hwBlob) switch
+    {
+        YubiKeySlotKind.Otp(var blob) => blob,
+        YubiKeySlotKind.Fido2 => throw new TswapException(SlotEnrollmentFileCodec.Fido2SlotNotEnrolledText),
+        YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
+        YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
+        _ => YubiKeySlotBlob.Decode(hwBlob), // not a TSYK blob: throws "wrong magic" or "truncated", as before
+    };
 
     // --- the recovery key (brief T5 decision 3, issue #187) ---
 

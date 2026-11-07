@@ -374,9 +374,10 @@ internal sealed class YubicoOtpKeys : IOtpKeys
 
     /// <summary>
     /// macOS refused to open the key's IOKit device because another program holds it exclusively (a busy key), as
-    /// <c>MacOSHidFeatureReportConnection</c> reports it. Shared by <see cref="Classify"/> and the probe.
+    /// <c>MacOSHidFeatureReportConnection</c> reports it (and <c>MacOSHidIOReportConnection</c>, the FIDO2 interface's).
+    /// Shared by <see cref="Classify"/>, the probe and <see cref="Fido2.SdkFido2Keys.Classify"/>.
     /// </summary>
-    private static bool IsMacExclusiveAccess(Exception e) =>
+    internal static bool IsMacExclusiveAccess(Exception e) =>
         e is PlatformApiException p
         && p.Message.Contains(IOKitCannotOpenDeviceMessage, StringComparison.Ordinal)
         && p.Message.Contains(MacExclusiveAccess, StringComparison.Ordinal);

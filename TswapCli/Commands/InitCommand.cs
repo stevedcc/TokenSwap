@@ -25,18 +25,23 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
-    public string HelpUsage => $"init [--yubikey|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
-    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). Plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
+    /// <summary>Final review: <c>init --fido2</c> with a touch flag, refused as <c>slot add</c> refuses one.</summary>
+    internal const string Fido2TouchFlagRefusal =
+        "--with-touch and --no-touch are for --secure-enclave: a FIDO2 slot always asks for the key's PIN and a touch.";
+
+    public string HelpUsage => $"init [--yubikey|--fido2 [--serial <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
     /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
     public bool WorksOnClassicVault => true;
 
     /// <summary>The only arguments <c>init</c> accepts, each at most once (#177); <c>--folder</c> takes a value.</summary>
-    private static readonly string[] KnownFlags = [YubiKeyFlag, "--tpm", "--secure-enclave", "--no-recovery"];
+    private static readonly string[] KnownFlags = [YubiKeyFlag, Fido2Flag, "--tpm", "--secure-enclave", "--no-recovery"];
 
     private const string FolderFlag = "--folder";
     private const string YubiKeyFlag = "--yubikey";
+    private const string Fido2Flag = "--fido2";
 
     /// <summary>Guided init: the removed flag, refused before anything else (a no-op until v0.2.0).</summary>
     private const string KeyringFlag = "--keyring";
@@ -68,11 +73,15 @@ public sealed class InitCommand : ICliCommand
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
-                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {SecureEnclaveTouchChoice.WithTouch}, " +
+        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|{Fido2Flag} [{Fido2SlotEnrollment.SerialFlag} <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {Fido2SlotEnrollment.SerialFlag} <n>, {SecureEnclaveTouchChoice.WithTouch}, " +
                     $"{SecureEnclaveTouchChoice.NoTouch}, {VaultPasswordChoice.PasswordFlag}, {VaultPasswordChoice.NoPasswordFlag}; " +
-                    $"{YubiKeyFlag}, --tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password)";
+                    $"{YubiKeyFlag}, {Fido2Flag}, --tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password; " +
+                    $"{Fido2SlotEnrollment.SerialFlag} only with {Fido2Flag})";
         (args, var newFolder) = SplitFolder(args, usage);
+        (args, var serial) = Fido2SlotEnrollment.SplitSerial(args, usage);
+        if (args.Contains(Fido2Flag) && args.Any(a => a is SecureEnclaveTouchChoice.WithTouch or SecureEnclaveTouchChoice.NoTouch))
+            throw new UsageException($"{usage}\n{Fido2TouchFlagRefusal}");
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
         (args, var passwordFlag) = VaultPasswordChoice.Split(args, usage);
@@ -80,12 +89,13 @@ public sealed class InitCommand : ICliCommand
             throw new UsageException(usage);
 
         var yubiKey = args.Contains(YubiKeyFlag);
+        var fido2 = args.Contains(Fido2Flag);
         var tpm = args.Contains("--tpm");
         var secureEnclave = args.Contains("--secure-enclave");
         var noRecovery = args.Contains("--no-recovery");
 
         // Several methods at once is the guided flow's job.
-        if (new[] { yubiKey, tpm, secureEnclave }.Count(f => f) > 1)
+        if (new[] { yubiKey, fido2, tpm, secureEnclave }.Count(f => f) > 1 || (serial is not null && !fido2))
             throw new UsageException(usage);
 
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
@@ -94,7 +104,7 @@ public sealed class InitCommand : ICliCommand
         // Guided init: with no slot named, init asks; without a terminal it can't, so it says which
         // flags to use, before any store, refusal or hardware. Both ends: 'tswap init | tee log' would
         // run the interview into the pipe.
-        var guided = !yubiKey && !tpm && !secureEnclave;
+        var guided = !yubiKey && !fido2 && !tpm && !secureEnclave;
         if (guided && (c.IsInputRedirected || c.IsOutputRedirected))
             throw new TswapException(NoTerminalRefusal);
 
@@ -104,6 +114,11 @@ public sealed class InitCommand : ICliCommand
         // Checked before anything is printed or any hardware is touched, so a refusal enrolls nothing.
         var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
         RefuseExistingVault(ctx, fileStore, vaultDir);
+
+        // FIDO2 plan, task 6: no terminal (the PIN is typed there), or --serial on Windows: refused before any prompt
+        // or key call.
+        if (fido2)
+            Fido2SlotEnrollment.Require(ctx, serial);
 
         // Ruling 4: any other config.json (a pending 'slot request', say) gets what init always did:
         // ask, back it up. Read through GuidedPrompts so a stray Yubico OTP line is not an answer.
@@ -125,6 +140,9 @@ public sealed class InitCommand : ICliCommand
 
         if (yubiKey)
             return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag);
+
+        if (fido2)
+            return ExecuteFido2Keyring(ctx, fileStore, vaultDir, serial, includeRecovery: !noRecovery, passwordFlag);
 
         return GuidedInit.Execute(ctx, fileStore, vaultDir, newFolder, noRecovery, passwordFlag);
     }
@@ -317,6 +335,73 @@ public sealed class InitCommand : ICliCommand
         }
     }
 
+    /// <summary>
+    /// FIDO2 plan, task 6: <c>init --fido2</c>, a keyring vault whose machine slot is one YubiKey's FIDO2 credential
+    /// (<see cref="Fido2SlotEnrollment"/>: make-credential, then one assertion whose output gives <c>KEK_slot</c>),
+    /// plus the recovery slot unless <c>--no-recovery</c>. <see cref="Config.Backend"/> is written as YubiKey, not left
+    /// null, so tswap 0.2.x reads the slot as needing a newer tswap. The password is chosen first, as
+    /// <c>init --yubikey</c> does; the key is chosen like <c>slot add --fido2</c>'s; nothing is written before both
+    /// key operations succeeded.
+    /// </summary>
+    private static int ExecuteFido2Keyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, int? serial,
+        bool includeRecovery, bool? passwordFlag)
+    {
+        var c = ctx.Console;
+        var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+
+        c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+        c.Out.WriteLine("║  tswap - FIDO2 Keyring Initialization  ║");
+        c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+        c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's FIDO2 slot");
+        c.Out.WriteLine("(k = 1): every unlock asks for the key's FIDO2 PIN and a touch. Add more keys later,");
+        c.Out.WriteLine($"each as its own slot that opens the vault alone: sudo {ctx.Prefix} slot add --fido2\n");
+
+        using var password = NewVaultPassword(ctx, passwordFlag, HardwareBackend.YubiKey);
+        var key = Fido2SlotEnrollment.ChooseKey(ctx, serial);
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        var (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], password?.Stretched);
+        try
+        {
+            var backendConfig = new Config(
+                YubiKeySerials: [],
+                RedundancyXor: "",
+                Created: ctx.Time.GetUtcNow().UtcDateTime,
+                RngMode: RngMode.System,
+                Backend: HardwareBackend.YubiKey);
+
+            var (config, vaultKey, recoveryPrivateKey) = AssembleKeyring(
+                kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, password?.VaultKey, password?.VaultId);
+            try
+            {
+                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(vaultKey);
+            }
+
+            var name = fido2.KeyName(blob);
+            c.Out.WriteLine("\n╔════════════════════════════════════════╗");
+            c.Out.WriteLine("║  ✓ INITIALIZATION COMPLETE            ║");
+            c.Out.WriteLine("╚════════════════════════════════════════╝\n");
+            c.Out.WriteLine($"FIDO2 key:      {name}");
+            c.Out.WriteLine(includeRecovery
+                ? "Backend: YubiKey FIDO2 keyring (k = 1, 2 slots: this key + recovery)"
+                : "Backend: YubiKey FIDO2 keyring (k = 1, 1 slot: this key only)");
+            PrintPasswordLine(c, password);
+            Fido2SlotEnrollment.PrintResetWarning(c, name);
+            c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
+            c.Out.WriteLine($"  {ctx.Prefix} slot add --fido2 (with sudo, or from an elevated prompt on Windows)");
+            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"{name} and every key added later");
+            PrintVaultFolder(c, fileStore, vaultDir);
+            return 0;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
+    }
+
     /// <summary>Where the new vault went: the shareable folder, and the per-machine config.</summary>
     internal static void PrintVaultFolder(IConsole c, IFileVaultStore fileStore, string vaultDir)
     {
@@ -360,7 +445,8 @@ public sealed class InitCommand : ICliCommand
         if (fileStore.Owner.FileExists(fileStore.SecretsFile))
             c.Out.WriteLine($"Previous secrets file moved to: {FileBackup.Move(fileStore.SecretsFile, ctx.Time.GetUtcNow().UtcDateTime, fileStore.Owner)}");
 
-        var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob));
+        // FIDO2 plan, task 2: a FIDO2 slot is a YubiKey's too.
+        var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotKinds.IsYubiKey(s.HwBlob));
         c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
         c.Out.WriteLine("It opens with any YubiKey that has a slot there, or the recovery key. To give this machine's TPM or Secure");
         c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'sudo {ctx.Prefix} slot approve' on an enrolled");

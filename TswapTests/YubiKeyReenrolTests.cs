@@ -1419,4 +1419,20 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         _agents.Add(server);
         return server;
     }
+
+    /// <summary>FIDO2 plan, task 2 row 16: a key's OTP slots, without its FIDO2 slot (slot add --fido2 checks those itself).</summary>
+    [Fact]
+    public void OneKeySlots_IgnoreFido2()
+    {
+        var slots = new Fido2TestSlots();
+        var otp = slots.AddOtp(SimulatedYubiKeyService.WithKeys(Fido2TestSlots.Fido2Serial), Fido2TestSlots.Fido2Serial);
+        slots.AddFido2(Fido2TestSlots.Blob(Fido2TestSlots.Fido2Serial));
+        slots.AddFido2(Fido2TestSlots.Blob(44440000));
+
+        var bySerial = TswapCli.Commands.SlotCommand.OneKeySlotsBySerial(slots.Keyring);
+
+        var (key, keySlots) = Assert.Single(bySerial);
+        Assert.Equal(Fido2TestSlots.Fido2Serial, key);
+        Assert.Equal(otp.SlotId, Assert.Single(keySlots).Slot.SlotId);
+    }
 }

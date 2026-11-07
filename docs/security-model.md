@@ -153,6 +153,7 @@ means no source states it.
 |---|---|---|---|---|---|
 | YubiKey, touch required | That YubiKey, plugged in (its challenge-response slot 2) | Yes: a touch per unlock | Optional vault password, mixed into the slot key's derivation: whoever holds the key can guess it offline, one Argon2id (64 MiB, t = 3) per guess | Independent review: not documented. Touch detection: Yubico's .NET SDK 1.18.1 reports when the key waits for a touch (with this SDK, not yet checked on a real touch key) | [1] [2] [3] |
 | YubiKey, no touch | That YubiKey, plugged in | No: any process running as you can unlock while the key is plugged in | Optional vault password, as above. It stops another local user (no root) who can use the plugged-in key | As above | [1] [2] [3] |
+| YubiKey FIDO2 slot | That YubiKey (its FIDO2 credential for the relying party `tswap.crawford.dev`), plugged in, plus its FIDO2 PIN | Yes: the PIN and a touch on every unlock (user verification required), on every OS | Optional vault password, mixed into the slot key's derivation, as for an OTP slot | New in v0.3.0. Tested against a fake device; the hmac-secret path was run on real hardware in a spike only (Linux and Windows, one key). Independent review: not documented | [12] [13] |
 | Linux TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password (`--password`). If the TPM's lockout password is empty, anyone who can use the TPM can reset its failed-password counter and keep guessing; tswap warns | Verified on one physical TPM (Intel PTT), single vendor, on 2026-10-29 (#155). Still open: a full host power cycle, `tpm2_clear`, a second TPM vendor. Independent review: not documented | [3] [4] [5] |
 | Windows TPM | This machine's TPM (the machine slot); no PCR policy | No: without a vault password, any process running as you can unseal it | Optional vault password. About 4 wrong passwords for one Windows user, or 9 across all standard users, lock **everyone's** TPM use for up to 8 hours | Virtual TPM verified. A physical TPM was run during development (July 2026); its commands and results were not recorded (#156). A re-check of v0.1.0 on two physical machines is open (#156). Independent review: not documented | [3] [5] [6] |
 | Secure Enclave, `--with-touch` | This Mac's Secure Enclave; the key never leaves it and works only on this Mac | Yes: Touch ID or the login password on every unlock | Optional vault password (a password Secure Enclave slot) | **PoC-grade.** Verified for correctness (round trips, fails cleanly on denial). The wrapping is a **hand-rolled ECIES equivalent** (ephemeral ECDH + HKDF-SHA256 + AES-GCM) that **has had no independent cryptographic review** (#159). Tested on Apple Silicon only (M4 Pro, macOS 26 and 27.2); Intel T2 Macs untested | [3] [7] [8] [9] |
@@ -173,6 +174,8 @@ checked; dates of checks are in the Reviewed / verified column.
 9. [Secure Enclave: touch or no touch](#secure-enclave-touch-or-no-touch), this page (2026-10-30).
 10. [hardware-backends.md, touch or no touch](design/hardware-backends.md#touch-or-no-touch-an-explicit-choice-brief-t11) (2026-10-30).
 11. [setup.md, The recovery key](setup.md#the-recovery-key) (2026-10-30).
+12. [YubiKey FIDO2 slot: the PIN and a touch](#yubikey-fido2-slot-the-pin-and-a-touch), this page (2026-11-06).
+13. [setup.md, FIDO2 slots](setup.md#fido2-slots) (2026-11-06).
 
 A vault is only as strong as the weakest slot usable on that machine: see
 [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect).
@@ -192,6 +195,44 @@ hand-rolled ECIES equivalent. In the words of the
 cryptography expertise for subtler issues". It has not had an independent cryptographic review;
 `init --secure-enclave` says so too. Tested on Apple Silicon only. The design record lists what
 else is open before it should be trusted as a primary vault backend.
+
+### YubiKey FIDO2 slot: the PIN and a touch
+
+A FIDO2 slot ([setup.md](setup.md#fido2-slots)) is opened by the key's hmac-secret output for the
+slot's credential, which the key gives only after it has verified its FIDO2 PIN and seen a touch.
+To open the vault with it, an attacker needs **the key, its PIN and a touch**: the vault files and
+the PIN without the key are not enough, and neither is the key without the PIN. Malware running as
+you can't open a FIDO2 slot on its own while the key sits plugged in, unlike a no-touch OTP slot;
+it would need the PIN (for example from a keylogger) and someone to touch the key.
+
+- **User verification is required** on every enrolment and every unlock, on every OS. tswap refuses
+  a credential made, or an answer given, without it (`... answered without verifying the PIN (no
+  user verification); tswap doesn't use such an answer.`).
+- **PIN tries are counted by the key.** Eight wrong PINs in all block the key's FIDO2 until a FIDO2
+  reset (which deletes every credential on it); after three wrong in a row the key takes no more
+  until it is unplugged and plugged in again. tswap never retries a wrong PIN itself, shows the
+  tries left, and tries FIDO2 slots last, after every slot that needs no PIN.
+- **On Windows the dialog owns PIN entry.** Windows' security key dialog asks for the PIN, so tswap
+  can't count the tries there, and the dialog may ask again after a wrong PIN within one unlock:
+  those tries are the dialog's, not tswap's. tswap never sees the PIN on Windows.
+- **On Linux and macOS the PIN goes through tswap**, typed at the terminal (`/dev/tty`) without
+  echo, and sent to the key under CTAP2's PIN protocol; tswap doesn't store it.
+- **Relying-party id `tswap.crawford.dev`.** Every tswap credential is bound to it, so a website
+  can't ask the key for a tswap slot's output (a site can only use its own domain), and tswap's
+  credential is separate from any website login on the key. (Only pages under `tswap.crawford.dev`,
+  a domain the project owner holds for a future phone app, could ask, and still only with the PIN
+  and a touch.) Programs on the machine talk to the key directly and can name any relying party,
+  so this protects against websites, not local malware. The credential is non-discoverable:
+  nothing is stored on the key, and only someone holding the slot's credential id (in the vault's
+  keyring) can ask for it.
+- **No terminal, no FIDO2.** Without a person at a terminal, FIDO2 slots are skipped (no Windows
+  dialog pops up for a script or an agent), so a FIDO2 slot never opens a vault unattended.
+- **A vault password on a FIDO2 slot** is mixed into the slot key's derivation, as on an OTP slot:
+  the key never sees it, so whoever holds the key and its PIN needs one PIN and touch for the key's
+  answer, then can guess the password offline at one Argon2id per guess.
+- **Not reviewed.** The construction (the PRF transform of a per-slot input, HKDF-SHA256 into the
+  slot key; [hardware-backends.md](design/hardware-backends.md#yubikey-fido2-slots-v030-issue-193))
+  has had no independent review, and the real-hardware checks are still the owner's.
 
 ## Touch posture
 
