@@ -80,15 +80,23 @@ public sealed class FingerprintScanner
         _capWhitespaceFree = RoundUp(Longest(Classes.WhitespaceFree));
         _capBase64 = RoundUp(Longest(Classes.Base64));
         _capBase64Url = RoundUp(Longest(Classes.Base64Url));
-        _capFree = RoundUp(freeShapes.Select(f => f.Item1 + Math.Max(0, f.Item2)).DefaultIfEmpty(0).Max());
+        _capFree = RoundUp(freeShapes.Select(f => RawLength(f.Item1, f.Item2)).DefaultIfEmpty(0).Max());
         _maxFreeWhitespace = freeShapes.Any(f => f.Item2 < 0)
             ? int.MaxValue
             : RoundUp(freeShapes.Select(f => f.Item2).DefaultIfEmpty(0).Max());
 
+        // A whitespace-only entry (WhitespaceOnly) can be found folded, as a free entry can: up to one
+        // raw '\r' per character.
         MaxRawLength = Math.Max(
-            runLengths.Select(r => r.Item1).DefaultIfEmpty(0).Max(),
-            freeShapes.Select(f => f.Item1 + Math.Max(0, f.Item2)).DefaultIfEmpty(0).Max());
+            runLengths.Select(r => (r.Item2 & Classes.WhitespaceOnly) != 0 ? 2 * r.Item1 : r.Item1).DefaultIfEmpty(0).Max(),
+            freeShapes.Select(f => RawLength(f.Item1, f.Item2)).DefaultIfEmpty(0).Max());
     }
+
+    /// <summary>
+    /// The longest raw span of a free shape: each folded line break adds one raw <c>\r</c>, so at most
+    /// <paramref name="whitespace"/> more; for a kind this build doesn't know (-1), at most L more.
+    /// </summary>
+    private static int RawLength(int length, int whitespace) => length + (whitespace < 0 ? length : whitespace);
 
     /// <summary>
     /// The longest span <see cref="Scan"/> can report, in UTF-16 code units: the longest entry, or for a
@@ -168,6 +176,18 @@ public sealed class FingerprintScanner
         internal int[] Counts = [];
         internal List<FingerprintHit> Hits = [];
         internal int Pending = -1;
+
+        /// <summary>Forgets the last window (its text and arrays), so nothing of the output stays behind.</summary>
+        public void Clear()
+        {
+            if (Prefix.Length > 0) ArrayPool<ulong>.Shared.Return(Prefix);
+            if (Counts.Length > 0) ArrayPool<int>.Shared.Return(Counts);
+            Text = "";
+            Prefix = [];
+            Counts = [];
+            Hits = [];
+            Pending = -1;
+        }
     }
 
     /// <summary>
@@ -199,6 +219,7 @@ public sealed class FingerprintScanner
         List<FingerprintHit> found = [];
         var prefix = ArrayPool<ulong>.Shared.Rent(text.Length + 1);
         var counts = _freeShapes.Length > 0 ? ArrayPool<int>.Shared.Rent(text.Length + 1) : null;
+        var handedOver = false;
         try
         {
             if (carried > 0)
@@ -231,25 +252,25 @@ public sealed class FingerprintScanner
                 if (text.Contains("\r\n", StringComparison.Ordinal))
                     ScanFolded(text, b, found);
             }
+
+            if (state is not null)
+            {
+                state.Clear();
+                state.Text = text.ToString();
+                state.Prefix = prefix;
+                state.Counts = counts ?? [];
+                state.Hits = found;
+                handedOver = true;
+            }
         }
         finally
         {
-            if (state is null)
+            // Unless the state took them, the arrays go back (also when the scan threw).
+            if (!handedOver)
             {
                 ArrayPool<ulong>.Shared.Return(prefix);
                 if (counts is not null) ArrayPool<int>.Shared.Return(counts);
             }
-        }
-
-        if (state is not null)
-        {
-            if (state.Prefix.Length > 0) ArrayPool<ulong>.Shared.Return(state.Prefix);
-            if (state.Counts.Length > 0) ArrayPool<int>.Shared.Return(state.Counts);
-            state.Text = text.ToString();
-            state.Prefix = prefix;
-            state.Counts = counts ?? [];
-            state.Hits = found;
-            state.Pending = -1;
         }
 
         found.Sort(static (x, y) =>
@@ -335,7 +356,11 @@ public sealed class FingerprintScanner
         {
             if (IsWhitespace(text[s]))
             {
-                if (whitespaceEnd <= s) whitespaceEnd = RunEnd(text, s, IsWhitespace);
+                if (whitespaceEnd <= s)
+                {
+                    whitespaceEnd = RunEnd(text, s, IsWhitespace);
+                    TryFoldedWhitespaceRun(text, s, whitespaceEnd, b, carried, found);
+                }
                 for (var k = 0; k < _runLengths.Length && _runLengths[k].Length <= whitespaceEnd - s; k++)
                 {
                     if ((_runLengths[k].Classes & Classes.WhitespaceOnly) != 0 && s + _runLengths[k].Length > carried)
@@ -359,6 +384,43 @@ public sealed class FingerprintScanner
                     || ((classes & Classes.Base64) != 0 && length <= base64Run)
                     || ((classes & Classes.Base64Url) != 0 && length <= base64UrlRun))
                     Try(text, prefix, powers[k], s, length, s, length, found);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whitespace-only entries on a raw whitespace run printed through a PTY (each <c>\n</c> as
+    /// <c>\r\n</c>): the run is folded on its own (runs are short, so this costs next to nothing) and its
+    /// windows tried with their raw spans. Runs without a <c>\r\n</c> are covered by the raw tries.
+    /// </summary>
+    private void TryFoldedWhitespaceRun(ReadOnlySpan<char> text, int start, int end, ulong b, int carried, List<FingerprintHit> found)
+    {
+        var run = text[start..end];
+        if (!run.Contains("\r\n", StringComparison.Ordinal) || !_runLengths.Any(r => (r.Classes & Classes.WhitespaceOnly) != 0))
+            return;
+        Span<char> folded = run.Length <= 512 ? stackalloc char[run.Length] : new char[run.Length];
+        Span<int> rawStart = run.Length <= 512 ? stackalloc int[run.Length] : new int[run.Length];
+        Span<int> rawEnd = run.Length <= 512 ? stackalloc int[run.Length] : new int[run.Length];
+        var m = 0;
+        for (var i = 0; i < run.Length; i++)
+        {
+            var pair = run[i] == '\r' && i + 1 < run.Length && run[i + 1] == '\n';
+            folded[m] = pair ? '\n' : run[i];
+            rawStart[m] = start + i;
+            if (pair) i++;
+            rawEnd[m] = start + i + 1;
+            m++;
+        }
+        for (var fs = 0; fs < m; fs++)
+        {
+            foreach (var (length, classes) in _runLengths)
+            {
+                if (fs + length > m)
+                    break;
+                if ((classes & Classes.WhitespaceOnly) == 0 || rawEnd[fs + length - 1] <= carried)
+                    continue;
+                var window = folded.Slice(fs, length);
+                TryHash(window, RollingHash.Of(window, b), rawStart[fs], rawEnd[fs + length - 1] - rawStart[fs], found);
             }
         }
     }
@@ -434,10 +496,15 @@ public sealed class FingerprintScanner
         // The window's hash from prefix hashes: H[s+L] − H[s]·b^L, the same value as RollingHash.Of.
         var hash = prefix[start + length] + RollingHash.Modulus - Reduce((UInt128)prefix[start] * power);
         if (hash >= RollingHash.Modulus) hash -= RollingHash.Modulus;
+        TryHash(view.Slice(start, length), hash, hitStart, hitLength, found);
+    }
+
+    private void TryHash(ReadOnlySpan<char> window, ulong hash, int hitStart, int hitLength, List<FingerprintHit> found)
+    {
+        var length = window.Length;
         if (!FilterHas(length, hash) || !_candidates.TryGetValue((length, hash), out var candidates))
             return;
         // A window that cuts a surrogate pair is never confirmed: UTF-8 is not injective on it.
-        var window = view.Slice(start, length);
         if (FingerprintIndex.SplitsASurrogatePair(window))
             return;
 

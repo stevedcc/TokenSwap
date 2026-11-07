@@ -117,7 +117,10 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
     public void Throughput_BeforeAndAfter()
     {
         if (!Enabled)
+        {
+            output.WriteLine("Not measured: set TSWAP_PERF=1 (Release-like build) to run the throughput measurement.");
             return;
+        }
         var rng = new Random(20261107);
         using var keys = FingerprintKeys.Derive(RandomNumberGenerator.GetBytes(32));
         var plaintext = TokenForms(RandomString(rng, 32, Word));
@@ -147,7 +150,10 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
     public void Startup_LoadSecrets_Versus_Metadata()
     {
         if (!Enabled)
+        {
+            output.WriteLine("Not measured: set TSWAP_PERF=1 (Release-like build) to run the throughput measurement.");
             return;
+        }
         using var m = new FleetMachine("perf-startup", SimulatedYubiKeyService.WithKeys(SerialA));
         var key = VaultKey(m, InitRecordVault(m));
         var rng = new Random(2000);

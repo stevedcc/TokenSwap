@@ -11,7 +11,8 @@ internal static class RunCoverage
 {
     /// <summary>
     /// Writes the coverage warning when some records are not fully fingerprinted or can't be read, and
-    /// the older-variant note when some were fingerprinted by an older tswap.
+    /// the older-variant note when some were fingerprinted by an older tswap. Both are part of the one
+    /// text printed before and after the child, so the note, when there is one, comes twice too.
     /// </summary>
     public static void Warn(TextWriter error, string prefix, VaultMetadata metadata)
     {

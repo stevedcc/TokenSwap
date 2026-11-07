@@ -85,20 +85,42 @@ public class FingerprintStreamMatcherTests
         var matcher = FingerprintStreamMatcher.For(
             Vault(Record("a", RecordType.Value, Set("alpha-secret-1", keys)),
                   Record("b", RecordType.Value, Set("line one\nline two", keys))), keys);
-        var textA = string.Concat(Enumerable.Range(0, 400).Select(i => $"row {i} alpha-secret-1 end\n"));
-        var textB = string.Concat(Enumerable.Range(0, 400).Select(i => $"row {i} line one\r\nline two end\n"));
+        // Same length and chunk size, so both streams make the same number of calls.
+        var textA = string.Concat(Enumerable.Range(0, 400).Select(i => $"row {i:000} alpha-secret-1 end\n"));
+        var textB = string.Concat(Enumerable.Range(0, 400).Select(i => $"row {i:000} line one\r\nline two\n"));
+        Assert.Equal(textA.Length, textB.Length);
         var expectedA = string.Concat(Pieces(matcher, Chunk(textA, 97)));
-        var expectedB = string.Concat(Pieces(matcher, Chunk(textB, 89)));
+        var expectedB = string.Concat(Pieces(matcher, Chunk(textB, 97)));
         Assert.DoesNotContain("alpha-secret-1", expectedA);
         Assert.DoesNotContain("line one", expectedB);
 
-        // FallbackPty drains stdout and stderr on two threads with one matcher.
-        var results = Enumerable.Range(0, 8).AsParallel().WithDegreeOfParallelism(4)
-            .Select(i => i % 2 == 0 ? string.Concat(Pieces(matcher, Chunk(textA, 97))) : string.Concat(Pieces(matcher, Chunk(textB, 89))))
-            .ToList();
+        // FallbackPty drains stdout and stderr on two threads with one matcher. A barrier before every call
+        // makes the two threads enter the shared matcher together, call after call.
+        using var barrier = new Barrier(2);
+        var together = new Together(matcher, barrier);
+        string? resultA = null, resultB = null;
+        var a = new Thread(() => resultA = string.Concat(Pieces(together, Chunk(textA, 97))));
+        var b = new Thread(() => resultB = string.Concat(Pieces(together, Chunk(textB, 97))));
+        a.Start();
+        b.Start();
+        Assert.True(a.Join(TimeSpan.FromSeconds(60)) && b.Join(TimeSpan.FromSeconds(60)), "the threads did not finish");
 
-        Assert.All(results.Where((_, i) => i % 2 == 0), r => Assert.Equal(expectedA, r));
-        Assert.All(results.Where((_, i) => i % 2 == 1), r => Assert.Equal(expectedB, r));
+        Assert.Equal(expectedA, resultA);
+        Assert.Equal(expectedB, resultB);
+    }
+
+    /// <summary>Delegates to a shared matcher after a barrier, so two threads call it at the same time.</summary>
+    private sealed class Together(IStreamMatcher inner, Barrier barrier) : IStreamMatcher
+    {
+        public int MaxMatchLength => inner.MaxMatchLength;
+
+        public void FindMatches(ReadOnlySpan<char> window, ICollection<StreamMatch> matches)
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(30));
+            inner.FindMatches(window, matches);
+        }
+
+        public int PendingFrom(ReadOnlySpan<char> window) => inner.PendingFrom(window);
     }
 
     [Fact]

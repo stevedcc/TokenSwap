@@ -366,6 +366,69 @@ public class FingerprintScannerTests
     }
 
     /// <summary>
+    /// A whitespace-only value with line breaks, printed through a PTY (each <c>\n</c> as <c>\r\n</c>), is
+    /// found too: its raw run is folded locally.
+    /// </summary>
+    [Fact]
+    public void Scan_WhitespaceOnlyValue_ThroughPty_Found()
+    {
+        using var keys = NewKeys();
+        const string value = " \n\t\n ";
+        var scanner = FingerprintScanner.Build([("blank", false, Set(value, keys))], keys);
+        var printed = Onlcr(value);
+
+        Assert.Equal(new FingerprintHit("blank", false, VariantKind.Plain, 1, printed.Length), Assert.Single(Scan(scanner, "a" + printed + "b"), h => h.Kind == VariantKind.Plain));
+        Assert.True(scanner.MaxRawLength >= printed.Length);
+    }
+
+    /// <summary>
+    /// A pinned gap: a whitespace-only value split across two reads is not held back (PendingFrom can't
+    /// tell its entry from a whitespace-free one, and holding every chunk's trailing whitespace would
+    /// hold every line end), so neither window sees it whole.
+    /// </summary>
+    [Fact]
+    public void PendingFrom_WhitespaceOnlyValue_TrailingWhitespaceNotHeld()
+    {
+        using var keys = NewKeys();
+        var scanner = FingerprintScanner.Build([("blank", false, Set("   ", keys))], keys);
+
+        Assert.Equal("hello ".Length, scanner.PendingFrom("hello "));
+    }
+
+    /// <summary>An entry of a kind this build doesn't know may still be folded: its raw span gets a slack of L.</summary>
+    [Fact]
+    public void MaxRawLength_UnknownKind_AllowsFoldSlack()
+    {
+        using var keys = NewKeys();
+        var plain = Set("future-kind-value", keys).Entries[0];
+        var unknown = new FingerprintSet(SecretVariants.CurrentSetVersion, [plain with { Kind = (VariantKind)9 }]);
+
+        Assert.Equal(2 * plain.Length, FingerprintScanner.Build([("x", false, unknown)], keys).MaxRawLength);
+    }
+
+    /// <summary>
+    /// The same periodic window scanned twice with one state (the second call finds the window starting
+    /// with its own end): the hits are a fresh scan's, since a carried hit depends only on the text.
+    /// </summary>
+    [Fact]
+    public void Scan_CarriedState_SameWindowTwice_PeriodicText_SameHits()
+    {
+        using var keys = NewKeys();
+        var scanner = FingerprintScanner.Build([("p", false, Set("abab-secret", keys)), ("q", false, Set("line a\nline b", keys))], keys);
+        var window = string.Concat(Enumerable.Repeat("abab-secret line a\nline b ", 40));
+        var state = new FingerprintScanner.ScanState();
+        var expected = Scan(scanner, window);
+
+        for (var i = 0; i < 3; i++)
+        {
+            List<FingerprintHit> hits = [];
+            scanner.Scan(window, hits, state);
+            scanner.PendingFrom(window, state);
+            Assert.Equal(expected, hits);
+        }
+    }
+
+    /// <summary>
     /// Stage 2's case (a value with bytes 61 62 FF decodes to "ab\uFFFD"): UTF-8 encodes a lone high
     /// surrogate as U+FFFD's bytes, so the window "ab\uD83D" that cuts the pair of "ab😀" has the same
     /// HMAC. With the rolling-hash collision forced on top, it is still no hit

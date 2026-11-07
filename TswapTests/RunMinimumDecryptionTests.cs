@@ -38,11 +38,13 @@ public sealed class RunMinimumDecryptionTests : IDisposable
     /// <summary><c>run</c> through the fake runner, the store's value decryptions recorded from here on.</summary>
     private (int Exit, string Out, string Err) Run(params string[] args) => Run(interleaved: false, args);
 
+    private FakeConsole _console = new("");
+
     private (int Exit, string Out, string Err) Run(bool interleaved, params string[] args)
     {
         _values.Clear();
         _m.StoreOpened = store => store.ValueDecrypted = (file, version) => _values.Add((file, version));
-        var console = new FakeConsole("") { Interleaved = interleaved };
+        var console = _console = new FakeConsole("") { Interleaved = interleaved };
         string[] command = ["run", .. args];
         var env = FilledFilesEnvironment.FromSystem() with
         {
@@ -162,17 +164,20 @@ public sealed class RunMinimumDecryptionTests : IDisposable
         _m.Ok("alpha-value", "ingest", "alpha");
         _m.Ok("beta-value", "ingest", "beta");
         _m.Ok("gamma-value", "ingest", "gamma");
-        _pty.Child = _ => "child output\n";
         var warning = "Warning: 1 of the records used here are stored in the old record format 2, which tswap can only decrypt " +
                       $"whole; the value versions not used were wiped. Ask the user to run {ElevatedCommand.For("tswap", "vault reindex")} once to convert the vault.";
+
+        // The child's output goes to the fake runner, not the console: "after the child" is pinned as
+        // "not yet printed while the child runs, printed once by the time run returns".
+        var warningsWhileChildRuns = -1;
+        _pty.During = () => warningsWhileChildRuns = Count(_console.OutText, warning);
 
         var (exit, text, _) = Run(interleaved: true, "curl", "{{alpha}}", "{{alpha}}");
 
         Assert.Equal(0, exit);
+        Assert.Equal(0, warningsWhileChildRuns);
         Assert.Equal(1, Count(text, warning));
-        Assert.True(text.IndexOf("child output", StringComparison.Ordinal) < text.IndexOf(warning, StringComparison.Ordinal),
-            $"the format 2 warning comes after the child's output: {text}");
-        Assert.DoesNotContain("alpha", text.Replace("child output", ""));
+        Assert.DoesNotContain("alpha", text);
     }
 
     [Fact]

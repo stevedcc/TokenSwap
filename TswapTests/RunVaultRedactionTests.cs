@@ -100,9 +100,13 @@ public sealed class RunVaultRedactionTests : IDisposable
         var pem = "-----BEGIN KEY-----\n" + string.Join("\n", lines) + "\n-----END KEY-----";
         _m.Ok(pem, "ingest", "pem");
         var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(pem));
-        // Through ONLCR in 4096-character chunks; the padding puts the first chunk boundary inside the
-        // PEM's last 52 characters, i.e. inside the fold slack (its \r's).
-        var pad = new string('.', 4096 - (pem.Length + 52) + 20);
+        // Through ONLCR in 4096-character chunks; the padding puts the first chunk boundary right after the
+        // \r of the PEM's last line break, before its \n, so the occurrence is only complete in the next
+        // window and its raw span (3,366 characters) is longer than the value (3,313). Whether
+        // MaxMatchLength counts that slack is pinned by MaxRawLength_PemSized_IncludesFoldSlack (here the
+        // base64 variant, 4,416 characters, keeps MaxMatchLength above the span either way).
+        var lastBreak = pem.Replace("\n", "\r\n").LastIndexOf('\r');
+        var pad = new string('.', 4096 - (lastBreak + 1));
         _pty.Onlcr = true;
         _pty.Child = _ => $"{pad}{pem}\nb64: {base64}\n";
 
@@ -179,6 +183,28 @@ public sealed class RunVaultRedactionTests : IDisposable
         Assert.Equal(7, exit);
         Assert.Equal(1, warningsWhileChildRuns);
         Assert.Equal(2, Count(text, Coverage(1)));
+    }
+
+    /// <summary>
+    /// The older-variant note (unreachable at variant set 1, so built by hand): printed with the coverage
+    /// warning, and on its own when the vault is otherwise fully fingerprinted.
+    /// </summary>
+    [Fact]
+    public void RunCoverage_OlderVariantSet_Noted()
+    {
+        var note = $"Note: 2 record(s) were fingerprinted by an older tswap and are matched with the fingerprints they have; " +
+                   $"{Fix} adds the newer variants.";
+        var alone = new StringWriter();
+        RunCoverage.Warn(alone, "tswap", new VaultMetadata([], 0, 2, []));
+        Assert.Equal(note + Environment.NewLine, alone.ToString());
+
+        var both = new StringWriter();
+        RunCoverage.Warn(both, "tswap", new VaultMetadata([], 1, 2, ["f00d"]));
+        Assert.Equal(Coverage(1, 1) + Environment.NewLine + note + Environment.NewLine, both.ToString());
+
+        var neither = new StringWriter();
+        RunCoverage.Warn(neither, "tswap", new VaultMetadata([], 0, 0, []));
+        Assert.Equal("", neither.ToString());
     }
 
     // ── pinned gaps ──────────────────────────────────────────────────────────────────
@@ -261,8 +287,34 @@ public sealed class RunVaultRedactionTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// When the redaction fails (the runner rethrows after the child), the warnings that follow the child
+    /// still come, before the error: the coverage warning a second time and the format 2 line.
+    /// </summary>
     [Fact]
-    public void Run_MatcherFailure_NoOutputAfterIt_MessageClean()
+    public void Run_MatcherFailure_WarningsAfterTheChildStillPrinted()
+    {
+        _key = VaultKey(_m, InitFormatTwoVault(_m));
+        _m.Ok("old-format-value", "ingest", "old");
+        WriteMarker(_m);
+        var console = new FakeConsole("") { Interleaved = true };
+        string[] command = ["run", "curl", "{{old}}"];
+        var ctx = _m.Context(console, command) with { PtyRunner = () => new FailingPty() };
+
+        var exit = CliRunner.Run(ctx, command);
+
+        var text = console.OutText;
+        Assert.NotEqual(0, exit);
+        Assert.Equal(2, Count(text, Coverage(1)));
+        var formatTwo = $"Warning: 1 of the records used here are stored in the old record format 2, which tswap can only decrypt " +
+                        $"whole; the value versions not used were wiped. Ask the user to run {Fix} once to convert the vault.";
+        Assert.Equal(1, Count(text, formatTwo));
+        var error = text.IndexOf("Redaction failed", StringComparison.Ordinal);
+        Assert.True(error > text.LastIndexOf(Coverage(1), StringComparison.Ordinal) && error > text.IndexOf(formatTwo, StringComparison.Ordinal), text);
+    }
+
+    [Fact]
+    public void Run_MatcherFailure_ExitsNonZero_MessageClean()
     {
         RecordVault();
         _m.Ok("token-value-1", "ingest", "token");

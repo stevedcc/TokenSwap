@@ -14,16 +14,9 @@ namespace TswapCli;
 /// is used only when the next window starts with that held text (checked on the text), so the results
 /// are those of a fresh scan, and one matcher still serves both of the pipe runner's drain threads.
 /// </summary>
-internal sealed class FingerprintStreamMatcher : IStreamMatcher
+internal sealed class FingerprintStreamMatcher(FingerprintScanner scanner) : IStreamMatcher, IDisposable
 {
-    private readonly FingerprintScanner _scanner;
-    private readonly ThreadLocal<FingerprintScanner.ScanState> _state = new(() => new());
-
-    private FingerprintStreamMatcher(FingerprintScanner scanner)
-    {
-        _scanner = scanner;
-        MaxMatchLength = Math.Max(1, scanner.MaxRawLength);
-    }
+    private readonly ThreadLocal<FingerprintScanner.ScanState> _state = new(() => new(), trackAllValues: true);
 
     /// <summary>
     /// A matcher for every retained version of every record in <paramref name="metadata"/> that has a
@@ -40,17 +33,25 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher
     }
 
     /// <summary>The scanner's longest raw span (fold slack included), at least 1.</summary>
-    public int MaxMatchLength { get; }
+    public int MaxMatchLength { get; } = Math.Max(1, scanner.MaxRawLength);
 
     public void FindMatches(ReadOnlySpan<char> window, ICollection<StreamMatch> matches)
     {
         List<FingerprintHit> hits = [];
-        _scanner.Scan(window, hits, _state.Value);
+        scanner.Scan(window, hits, _state.Value);
         foreach (var hit in hits)
             matches.Add(new StreamMatch(hit.Start, hit.Length, Label(hit)));
     }
 
-    public int PendingFrom(ReadOnlySpan<char> window) => _scanner.PendingFrom(window, _state.Value);
+    public int PendingFrom(ReadOnlySpan<char> window) => scanner.PendingFrom(window, _state.Value);
+
+    /// <summary>Clears every thread's carried state (the last window's text is output) once the run is over.</summary>
+    public void Dispose()
+    {
+        foreach (var state in _state.Values)
+            state.Clear();
+        _state.Dispose();
+    }
 
     private static string Label(FingerprintHit hit) =>
         hit.IsPrevious ? $"[REDACTED: {hit.Name}:previous]" : $"[REDACTED: {hit.Name}]";
