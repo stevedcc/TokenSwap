@@ -252,7 +252,7 @@ Three assertions rest on what Apple's tools print or answer on GitHub's runner, 
 | `notarisation-control` | the same check fails on the unnotarised control | task 4 |
 | `pkg-timestamp` | `pkgutil --check-signature` prints "Signed with a trusted timestamp" | task 5 `check` |
 
-Each goes through one shell function, `runner_check <id> <passed: 0|1> <message>`, in
+Each goes through one shell function, `runner_check <id> <status> <message>` (status 0: passed, as a shell exit status), in
 `contrib/packaging/macos/runner-checks.sh`, which `sign-macos.sh`, `package.sh` and `package-pkg.sh` source. With
 `TSWAP_MACOS_GATE_RUNNER_CHECKS=1` a failed check prints `::error::<id>: <message>` and fails the script like every
 other check. Otherwise it prints `REPORT-ONLY <id>: <message>` and a `::warning::` with the same text, and the script
