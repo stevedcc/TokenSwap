@@ -323,4 +323,26 @@ public sealed class RedactWithoutDecryptingTests : IDisposable
         Assert.NotEqual(0, getExit);
         Assert.Contains(Path.GetFileName(RecordFile(_m, _key, "liar")), getErr);
     }
+
+    /// <summary>
+    /// Code review (GLM A-1): BuildIndex leaves tombstones out (RecordMetadata.RetainedVersions yields
+    /// nothing for one), so a deleted secret's value is not masked and its name never appears.
+    /// </summary>
+    [Fact]
+    public void Redact_DeletedSecret_NotMaskedAndNotNamed()
+    {
+        InitFormatThree();
+        _m.Ok("gone-value-123", "ingest", "deleted-secret");
+        _m.Ok("", "delete", "deleted-secret");
+        _m.Ok("kept-value-456", "ingest", "kept");
+        var file = Write("log.txt", "a=gone-value-123 b=kept-value-456\n");
+        ClearSeams();
+
+        var (exit, stdout, stderr) = _m.Run("", "redact", file);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("a=gone-value-123 b=[REDACTED: kept]\n", stdout);
+        Assert.DoesNotContain("deleted-secret", stdout + stderr);
+        Assert.Empty(_values);
+    }
 }

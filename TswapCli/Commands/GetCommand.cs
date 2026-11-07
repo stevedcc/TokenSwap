@@ -21,8 +21,14 @@ public sealed class GetCommand : ICliCommand
         // Brief T16-S2: only this secret's record, and only its current value section (format 2:
         // that record, decoded whole, and the format 2 warning). Errors as before.
         using var view = ctx.OpenVault(key);
-        ctx.Console.Out.WriteLine(view.ResolveToken(name));
-        FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
-        return 0;
+        try
+        {
+            ctx.Console.Out.WriteLine(view.ResolveToken(name));
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
+        }
     }
 }

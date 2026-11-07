@@ -1271,10 +1271,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 {
                     notFingerprinted++;
                     if (formatTwo == FormatTwoRecords.Decode)
-                    {
-                        formatTwoDecoded++;
                         DecodeFormatTwo(fileName, copies);
-                    }
                     continue;
                 }
 
@@ -1295,10 +1292,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 {
                     notFingerprinted++;
                     if (formatTwo == FormatTwoRecords.Decode)
-                    {
-                        formatTwoDecoded++;
                         DecodeFormatTwo(fileName, copies);
-                    }
                     continue;
                 }
 
@@ -1396,7 +1390,11 @@ public sealed class RecordVaultStore : IFileVaultStore
                 if (folded.UnreadableReason is { } reason)
                     unreadable.Add((fileName, UnreadableText(fileName, reason)));
                 else if (folded.State is { } state)
+                {
+                    // Code review (GLM B-2): counted only when it was decrypted whole, not when it failed.
+                    formatTwoDecoded++;
                     records.Add(MetadataOf(state));
+                }
             }
             finally
             {

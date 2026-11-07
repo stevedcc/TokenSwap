@@ -16,11 +16,18 @@ public sealed class ListCommand : ICliCommand
         var key = ctx.Unlock(config);
         // Brief T16-S2: metadata only (a format 2 record is decoded whole, its values wiped, and warned about).
         using var view = ctx.OpenVault(key);
-        var secrets = view.LoadAll(FormatTwoRecords.Decode).Secrets;
-        view.ThrowIfAnyUnreadable("list");
-        Write(ctx, secrets);
-        FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
-        return 0;
+        try
+        {
+            var secrets = view.LoadAll(FormatTwoRecords.Decode).Secrets;
+            view.ThrowIfAnyUnreadable("list");
+            Write(ctx, secrets);
+            return 0;
+        }
+        finally
+        {
+            // Also when it refuses: the format 2 records were decrypted all the same (owner decision 1).
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
+        }
     }
 
     private static void Write(CommandContext ctx, IReadOnlyList<SecretInfo> secrets)
