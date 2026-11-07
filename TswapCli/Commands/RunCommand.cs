@@ -73,13 +73,13 @@ public sealed class RunCommand : ICliCommand
 
         // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
         // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
-        // Fix round 1, B: a token is a name or 'name:previous' (SecretsDb.ResolveToken).
+        // A token is a name or 'name:previous' (SecretsDb.ResolveToken).
         Dictionary<string, string> secretValues = [];
         foreach (var token in tokens)
         {
             secretValues[token] = db.ResolveToken(token)
                 ?? throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
-            // Fix round 3: warn about a burned value (current or previous), as apply does.
+            // Warn about a burned value (current or previous), as apply does.
             if (db.IsBurnedToken(token))
                 ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
         }
