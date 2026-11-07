@@ -63,6 +63,27 @@ public sealed class SelectiveValueCommandTests : IDisposable
             _values.Order());
     }
 
+    /// <summary>
+    /// Code review (MiMo A I-1): a format 3 record whose conflicted copy is garbage is no format 2
+    /// record: get decrypts only its current value and prints no format 2 warning.
+    /// </summary>
+    [Fact]
+    public void Get_FormatThreeRecordWithAGarbageCopy_NoFormatTwoWarning_OneValue()
+    {
+        _m.Ok("old-value", "ingest", "s");
+        _m.Ok("new-value", "ingest", "--rotate", "s");
+        File.WriteAllBytes(RecordFile(_m, _key, "s") + " (1)", [1, 2, 3, 4, 3, 7, 7, 7, 7, 7]);
+        _values.Clear();
+
+        var (exit, stdout, stderr) = _m.Run("", "get", "s");
+
+        Assert.Equal(0, exit);
+        Assert.Equal("new-value", stdout.Trim());
+        Assert.DoesNotContain("format 2", stderr);
+        Assert.Contains("can't be used", stderr);
+        Assert.Equal([(FileName("s"), Metadata("s").Version)], _values);
+    }
+
     [Fact]
     public void Apply_UnrelatedUnreadableRecord_NotReported()
     {

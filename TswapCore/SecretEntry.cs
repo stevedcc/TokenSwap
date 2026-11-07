@@ -74,7 +74,11 @@ public sealed class SecretEntry : IDisposable
     /// <summary>The secret, or null for a tombstone.</summary>
     public SecretInfo? Info => SecretInfo.From(Metadata);
 
-    /// <summary>True when the record has a format 2 file, so it was decoded whole.</summary>
+    /// <summary>
+    /// True when the record has a format 2 file (main or conflicted copy, by its cleartext format byte),
+    /// so it was decoded whole. <see cref="RecordVaultStore.OpenSecret(string, byte[])"/> takes the
+    /// whole-record path for that reason only; an unreadable or unusable file never sends it there.
+    /// </summary>
     public bool IsFormatTwo => _decoded is not null;
 
     /// <summary>
