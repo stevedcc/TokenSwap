@@ -209,7 +209,10 @@ public sealed class MetadataCommandTests : IDisposable
 
     // ------------------------------------------------------------------ difference 9
 
-    /// <summary>Damages the last value section of <paramref name="name"/>'s record (its metadata stays sound).</summary>
+    /// <summary>
+    /// Damages the last value section of <paramref name="name"/>'s record (its metadata stays sound):
+    /// the current value's for a record without a previous value.
+    /// </summary>
     private string DamageValueSection(string name)
     {
         var path = RecordFile(_m, _key, name);
@@ -242,11 +245,11 @@ public sealed class MetadataCommandTests : IDisposable
     public void Names_DamagedValueSection_StillListed()
     {
         History();
-        var file = DamageValueSection("gamma");
+        var file = DamageValueSection("alpha"); // alpha's only section: the current value, which get reads
 
         Run("alpha  2026-01-02 03:04\nbeta   2026-01-02 03:09 [BURNED]\ngamma  2026-01-02 03:29\n", 0, "names");
 
-        AssertGetFailsNaming("gamma", file);
+        AssertGetFailsNaming("alpha", file);
     }
 
     [Fact]
