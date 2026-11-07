@@ -136,9 +136,13 @@ internal static partial class ControllingTerminal
             using var terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => Restore());
             using var quit = PosixSignalRegistration.Create(PosixSignal.SIGQUIT, _ => Restore());
             using var hangup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, _ => Restore());
+            // Fail closed after a resume too: when the echo can't be switched off again, what is typed next shows, so
+            // the read that is pending becomes a cancel (its bytes are zeroed, never returned).
+            var echoLost = 0;
             using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, context =>
             {
-                Apply(quiet, TcsaNow);
+                if (Apply(quiet, TcsaNow) != 0)
+                    Interlocked.Exchange(ref echoLost, 1);
                 context.Cancel = true;
             });
             if (Apply(quiet, TcsaFlush) != 0)
@@ -148,7 +152,12 @@ internal static partial class ControllingTerminal
             }
             try
             {
-                return ReadBytesLine();
+                var line = ReadBytesLine();
+                if (Volatile.Read(ref echoLost) == 0)
+                    return line;
+                if (line is not null)
+                    CryptographicOperations.ZeroMemory(line);
+                return null;
             }
             finally
             {

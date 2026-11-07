@@ -58,6 +58,71 @@ public class ControllingTerminalTests : IDisposable
         Assert.True(calls.Sets[1].EchoOn);  // the saved settings, put back
     }
 
+    // Follow-up review: after a resume (SIGCONT, fg) the echo-off is applied again; when that fails, what is typed
+    // next was typed with the echo on, so the pending read is a cancel. A real SIGCONT reaches a read blocked on a FIFO.
+    [Fact]
+    public void UnixTty_EchoOffFailsAfterResume_ReadIsCancelled()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Assert.Equal(0, mkfifo(_file, 0x180)); // 0600
+        var calls = new FailingAfterResume();
+        using var tty = ControllingTerminal.UnixTty.OpenPath(_file, calls);
+        Assert.NotNull(tty);
+
+        var read = Task.Run(tty.ReadSecret);
+        Assert.True(calls.EchoOffApplied.Wait(TimeSpan.FromSeconds(10)), "the read never switched the echo off");
+        Assert.Equal(0, kill(Environment.ProcessId, SigCont));
+        Assert.True(calls.ResumeRefused.Wait(TimeSpan.FromSeconds(10)), "the resume never re-applied the echo-off");
+        using (var writer = new FileStream(_file, FileMode.Open, FileAccess.Write))
+            writer.Write("123456\n"u8);
+
+        Assert.True(read.Wait(TimeSpan.FromSeconds(10)), "the read didn't end");
+        Assert.Null(read.Result);
+        Assert.True(calls.Sets[^1].EchoOn); // the saved settings, put back at the end
+    }
+
+    private static readonly int SigCont = OperatingSystem.IsMacOS() ? 19 : 18;
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int mkfifo(string path, uint mode);
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int signal);
+
+    /// <summary>The first echo-off succeeds; the next (the re-apply after a resume) fails.</summary>
+    private sealed class FailingAfterResume : ControllingTerminal.UnixTty.ITermiosCalls
+    {
+        private int _echoOffs;
+
+        public List<(int When, bool EchoOn)> Sets { get; } = [];
+        public ManualResetEventSlim EchoOffApplied { get; } = new();
+        public ManualResetEventSlim ResumeRefused { get; } = new();
+
+        public int Get(int fd, Span<byte> termios)
+        {
+            termios.Clear();
+            termios[ControllingTerminal.UnixTty.LflagOffset] = 0x8; // ECHO
+            return 0;
+        }
+
+        public int Set(int fd, int when, ReadOnlySpan<byte> termios)
+        {
+            var echoOn = (termios[ControllingTerminal.UnixTty.LflagOffset] & 0x8) != 0;
+            lock (Sets)
+                Sets.Add((when, echoOn));
+            if (echoOn)
+                return 0;
+            if (Interlocked.Increment(ref _echoOffs) == 1)
+            {
+                EchoOffApplied.Set();
+                return 0;
+            }
+            ResumeRefused.Set();
+            return -1;
+        }
+    }
+
     /// <summary>tcgetattr gives settings with ECHO on; every tcsetattr that clears ECHO fails.</summary>
     private sealed class FailingSetAttr : ControllingTerminal.UnixTty.ITermiosCalls
     {

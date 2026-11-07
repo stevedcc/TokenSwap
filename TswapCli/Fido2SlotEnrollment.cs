@@ -221,8 +221,8 @@ internal static class Fido2SlotEnrollment
         }
         catch (Fido2Exception e)
         {
-            // Only the service's mapped failures: the type and kind stay, the failure is kept inside.
-            throw new Fido2Exception(e.Kind, e.Serial, e.RetriesLeft, $"{e.Message} {RetrySafeText}", e);
+            // Only the service's mapped failures: the type, kind and exit code stay, the failure is kept inside.
+            throw new Fido2Exception(e.Kind, e.Serial, e.RetriesLeft, $"{e.Message} {RetrySafeText}", e, e.ExitCode);
         }
         try
         {

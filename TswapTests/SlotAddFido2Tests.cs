@@ -318,6 +318,39 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Equal(Fido2Texts.TimedOut($"YubiKey {SerialA}"), cause.Message);
     }
 
+    // Follow-up review: the re-wrap keeps the failure's exit code too.
+    [Fact]
+    public void Enroll_SecondOperationFails_KeepsTheExitCode()
+    {
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+        var ctx = Context(new FakeConsole(""), ["slot", "add", "--fido2"]) with
+        {
+            Fido2 = new OpenFails(new Fido2Service(_fido2), new Fido2Exception(Fido2Failure.Busy, SerialA, null, "busy.", exitCode: 7)),
+        };
+        var key = Assert.Single(ctx.Fido2!.ListYubiKeys());
+
+        var e = Assert.Throws<Fido2Exception>(() =>
+            Fido2SlotEnrollment.Enroll(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
+
+        Assert.Equal(7, e.ExitCode);
+        Assert.Equal(Fido2Failure.Busy, e.Kind);
+    }
+
+    /// <summary>The real service, except that <see cref="Open"/> throws <paramref name="failure"/>.</summary>
+    private sealed class OpenFails(IFido2Service inner, Fido2Exception failure) : IFido2Service
+    {
+        public bool CanList => inner.CanList;
+        public IReadOnlyList<Fido2KeyInfo> ListYubiKeys() => inner.ListYubiKeys();
+        public Fido2SlotBlob Enrol(Fido2KeyInfo? key, bool requiresPassword, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, Fido2Pin? pin) =>
+            inner.Enrol(key, requiresPassword, vaultFido2Slots, pin);
+        public Fido2Opened Open(IReadOnlyList<Fido2SlotBlob> blobs, Fido2KeyInfo? key, Fido2Pin? pin) => throw failure;
+        public Fido2Locate Locate(Fido2SlotBlob blob) => inner.Locate(blob);
+        public void SetPin(Fido2KeyInfo key, Fido2Pin? pin) => inner.SetPin(key, pin);
+        public string KeyName(Fido2SlotBlob blob) => inner.KeyName(blob);
+        public string KeyName(Fido2KeyInfo key) => inner.KeyName(key);
+    }
+
     [Fact]
     public void RetrySafeText_IsYubiKeysOwn() =>
         Assert.Equal("No slot was added and nothing was written. The key may keep an unused credential (a YubiKey stores " +
@@ -325,12 +358,16 @@ public class SlotAddFido2Tests : IDisposable
             Fido2SlotEnrollment.RetrySafeText);
 
     // Final review (MiMo p6a): a new PIN longer than CTAP2's 63 bytes is asked again before anything is sent.
-    [Fact]
-    public void SlotAddFido2_NewPinOver63Bytes_AskedAgain()
+    // 64 ASCII characters, and 32 two-byte characters (64 UTF-8 bytes, 32 characters): the limit is bytes.
+    [Theory]
+    [InlineData('7', 64)]
+    [InlineData('\u00e9', 32)]
+    public void SlotAddFido2_NewPinOver63Bytes_AskedAgain(char c, int count)
     {
         OtpVault();
         var key = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: null);
-        var tooLong = new string('7', 64);
+        var tooLong = new string(c, count);
+        Assert.Equal(64, System.Text.Encoding.UTF8.GetByteCount(tooLong));
         _terminal = new FakeTerminal("yes", tooLong, "4321", "4321", "4321", "4321");
 
         var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
@@ -356,6 +393,7 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Contains("No plugged-in YubiKey matches a slot of this vault", stderr);
         // Before the unlock only silent calls (the listing, and the duplicate probe when the vault has FIDO2 slots):
         // no PIN, no touch, no credential made.
+        Assert.Contains(FakeFido2Op.Find, Ops()); // the key was listed (and picked) before the unlock
         Assert.All(Ops(), op => Assert.True(op is FakeFido2Op.Find or FakeFido2Op.FindHolder, $"{op} before the unlock"));
         Assert.Empty(_fido2.DevicePinCalls);
         Assert.Empty(_terminal.Reads);
@@ -498,6 +536,7 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Empty(_otp.Challenges); // the vault was not unlocked
         Assert.Empty(_terminal.Reads); // no PIN read
         Assert.Empty(_fido2.DevicePinCalls);
+        Assert.Contains(FakeFido2Op.FindHolder, Ops()); // the silent probe ran and found it
         Assert.All(Ops(), op => Assert.True(op is FakeFido2Op.Find or FakeFido2Op.FindHolder, $"{op} before the refusal"));
         Assert.Equal(before, Snapshot());
     }

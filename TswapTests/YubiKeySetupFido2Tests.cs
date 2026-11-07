@@ -123,7 +123,7 @@ public sealed class YubiKeySetupFido2Tests : IDisposable
         Assert.Contains("vault password", stderr);
         Assert.EndsWith("Nothing was changed.", stderr.TrimEnd());
         // No PIN or touch spent without the password: only the silent probe ran.
-        Assert.All(Fido2.Calls, c => Assert.Equal(FakeFido2Op.FindHolder, c.Op));
+        Assert.Equal(FakeFido2Op.FindHolder, Assert.Single(Fido2.Calls).Op);
         Assert.DoesNotContain(_m.Terminal.Reads.Skip(readsBefore), r => r.Secret);
         Assert.DoesNotContain("Unhandled", stdout + stderr);
     }
