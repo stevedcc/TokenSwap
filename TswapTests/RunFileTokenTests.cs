@@ -854,7 +854,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    // Review minor 1: the word check also sees what {{name}} tokens expand to, so a secret whose value
+    // The word check also sees what {{name}} tokens expand to, so a secret whose value
     // is 'base64' can't stand in for the program. The refusal doesn't repeat the value.
     [Theory]
     [InlineData("{{prog}} {{@values.yaml}}")]
@@ -876,7 +876,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    // Re-review (fix round 2): a word made by two tokens together is refused too, naming both tokens.
+    // A word made by two tokens together is refused too, naming both tokens.
     [Theory]
     [InlineData("a", "ba", "b", "se64", "mytool {{a}}{{b}} {{@values.yaml}}")]
     [InlineData("w", "nice", "p", "install", "{{w}} {{p}} {{@values.yaml}} /tmp/x")]
@@ -1050,7 +1050,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(_forwarded);
     }
 
-    // Re-review minor 1: the close/logoff handler can still be running (it waits for the killed child)
+    // The close/logoff handler can still be running (it waits for the killed child)
     // when the main thread, released by that kill, has finished Dispose. The handler must not fail, and
     // tswap exits with the child's code.
     [Fact]
@@ -1089,7 +1089,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    // Review minor 4: on Windows the console's close, logoff and shutdown events end tswap once the
+    // On Windows the console's close, logoff and shutdown events end tswap once the
     // handler returns, so the handler kills the child and cleans up before it returns.
     [Fact]
     public void RunFileToken_ProcessEndingSignal_CleansUpBeforeTheHandlerReturns()
@@ -1112,7 +1112,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
-    // Review minor 10: the sweep only touches a stale folder that is the user's own 0700 one, and it
+    // The sweep only touches a stale folder that is the user's own 0700 one, and it
     // never zeroes through a hard link (it only unlinks it).
     [Fact]
     public void RunFileToken_SweepSkipsOpenFolderAndNeverZeroesThroughHardLinks()
@@ -1152,14 +1152,14 @@ public sealed class RunFileTokenTests : IDisposable
 }
 
 /// <summary>
-/// Review of task 1: the pieces of <c>run</c>'s signal path that decide whom to signal, without
+/// The pieces of <c>run</c>'s signal path that decide whom to signal, without
 /// processes (fake snapshots and process groups).
 /// </summary>
 public sealed class RunFileTokenChildSelectionTests
 {
     private static readonly DateTime TswapStart = new(2026, 11, 7, 10, 0, 0, DateTimeKind.Utc);
 
-    // Windows (review Important 2): Toolhelp's parent ids go stale when a parent exits, and pids are
+    // Windows: Toolhelp's parent ids go stale when a parent exits, and pids are
     // reused, so a candidate counts only when it was created after tswap.
     [Fact]
     public void RunFileToken_WindowsChildren_OnlyThoseCreatedAfterTswap()
@@ -1179,7 +1179,7 @@ public sealed class RunFileTokenChildSelectionTests
         Assert.Equal([100], children);
     }
 
-    // Review minor 3: a child in tswap's own process group, when that group is the terminal's
+    // A child in tswap's own process group, when that group is the terminal's
     // foreground group, already got the terminal's SIGINT (Ctrl+C): never a second one.
     [Theory]
     [InlineData(500, 300, 2, 300, 1)]     // the child leads its own group (PTY): its group, even for SIGINT

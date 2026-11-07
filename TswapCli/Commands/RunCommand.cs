@@ -116,9 +116,9 @@ public sealed class RunCommand : ICliCommand
             }
         }
 
-        // Review minor 1: the same word check on what the {{name}} tokens expand to (file tokens still as
+        // The same word check on what the {{name}} tokens expand to (file tokens still as
         // typed), before anything is written: a secret whose value is 'base64' can't be the printer. The
-        // refusal names the token (re-review minor 3), never the word, which came from its value. All tokens
+        // refusal names the token, never the word, which came from its value. All tokens
         // substituted at once decide (a word can come from two: {{a}}{{b}}, or {{w}} {{p}} as wrapper and
         // program); one token at a time only picks the one to name, else every token is named.
         if (filesEnv is not null && secretValues.Count > 0
@@ -165,7 +165,7 @@ public sealed class RunCommand : ICliCommand
                     "which came from a secret's value.\nUse 'sudo ... get <name>' to view a secret.");
             }
 
-            // Show sanitised version
+            // Show the sanitised command
             if (ctx.Verbose)
             {
                 var sanitized = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));

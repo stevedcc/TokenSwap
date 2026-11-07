@@ -207,7 +207,7 @@ internal sealed class FilledFiles : IDisposable
     {
         if (_env.SignalEndsProcess(signal))
         {
-            // Review minor 4: tswap ends when this returns, so nothing can wait for the child: kill it,
+            // tswap ends when this returns, so nothing can wait for the child: kill it,
             // give it a moment to let go of the copies, and clean up here (bounded).
             bool running;
             lock (_gate)

@@ -859,7 +859,7 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
-    // Final review of #251: a word the post-substitution check refuses came from a secret's value, so
+    // A word the post-substitution check refuses came from a secret's value, so
     // the refusal names the token, never the word.
     [Fact]
     public void Run_ProgramFromATokenAfterSubstitution_RefusalNamesTheTokenNotTheValue()

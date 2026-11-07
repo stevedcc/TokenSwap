@@ -856,7 +856,7 @@ public static class Validation
     }
 
     /// <summary>
-    /// Sanitize a command by replacing all tokens (file tokens too) with ********.
+    /// Sanitise a command by replacing all tokens (file tokens too) with ********.
     /// </summary>
     public static string SanitizeCommand(string command)
     {
