@@ -457,7 +457,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
         RunTswapWithStdin("other-vault-value-42", "ingest", "other");
         var childScript = Path.Combine(_tempDir, "print-other.sh");
@@ -484,7 +484,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         if (!OperatingSystem.IsLinux())
             return;
 
-        RunTswap("init", "--yubikey");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("token-value-7", "ingest", "token");
         RunTswapWithStdin("-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END KEY-----", "ingest", "pem");
         var prompt = Path.Combine(_tempDir, "prompt.sh");
