@@ -131,6 +131,7 @@ pwsh installTswap.ps1
 - **Privileged commands** (`add`, `get`, `list`, `delete`, `export`, `import`, and the others that
   need sudo, listed in [commands.md](commands.md#which-commands-need-sudo)) run from an **elevated
   command prompt** (right-click → "Run as administrator") instead of `sudo`.
-- **Process substitution** (`<(tswap apply values.yaml)`) is a bash feature and is not available in
-  cmd or PowerShell. Use option 2 or 3 from the
-  [Helm deployment patterns](examples.md#helm-deployment-patterns) instead.
+- **Process substitution** (`<(…)`) is a bash feature and is not available in cmd or PowerShell,
+  and `apply` needs an elevated prompt. For a file with `# tswap:` markers use
+  `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`, which works in cmd and
+  PowerShell: see the [Helm deployment patterns](examples.md#helm-deployment-patterns).

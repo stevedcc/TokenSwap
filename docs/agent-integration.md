@@ -14,7 +14,7 @@ automation. Every command's own sudo requirement is in
 
 ### Agent role (no sudo)
 
-These commands need no sudo. Except where the Risk column says otherwise (`apply`), they never show
+These commands need no sudo. They never show
 a secret value:
 
 | Command | Purpose | Risk |
@@ -22,13 +22,12 @@ a secret value:
 | `create <name> [length]` | Generate random secret; name max 64 chars, value length 1–4096, default 32 | None — value is never displayed |
 | `ingest <name>` | Import secret from stdin pipe; name max 64 chars, value up to 64 KB | None — agent constructs the pipeline but never sees the value |
 | `names` | List secret names | Reveals what secrets exist (names only) |
-| `run <cmd>` | Use secrets via `{{token}}` | Secrets passed to subprocess; exfiltration blocklist applies |
+| `run <cmd>` | Use secrets via `{{token}}`, or a file with `# tswap:` markers via `{{@file}}` | Secrets passed to subprocess; exfiltration blocklist applies, and with `{{@file}}` printers, encoders, copiers, shells and interpreters are refused too ([limits](security-model.md#files-with-secrets-run-with-file)) |
 | `burn <name> [reason]` | Mark secret as compromised | None — write-only operation |
 | `burned` | List burned secrets | Reveals names + burn metadata |
 | `check <path>` | Verify `# tswap:` markers | None — reads markers, not values |
 | `redact <file>` | View file with values masked | None — replaces values with `[REDACTED]` |
 | `tocomment <file>` | Annotate file with markers | Requires unlocked vault to match values |
-| `apply <file>` | Substitute markers with values | Output contains plaintext — send to stdout/process substitution only |
 | `rotate <name>` / `ingest --rotate <name>` of a **burned** secret | Replace a compromised value | None — the new value is never displayed; a secret that isn't burned needs sudo |
 | `slots` | List slots and what protects each | None — reads metadata only |
 | `agent status` / `agent stop` | The tswap agent's state; stop it | None — never returns a value |
@@ -69,7 +68,7 @@ sudo, tswap's own sudo check refuses the operator's commands either way.
 
 ```bash
 # Example allowlist for an AI agent wrapper
-ALLOWED_COMMANDS="create|ingest|rotate|names|slots|run|burn|burned|check|redact|tocomment|apply|prompt|prompt-hash|migrate"
+ALLOWED_COMMANDS="create|ingest|rotate|names|slots|run|burn|burned|check|redact|tocomment|prompt|prompt-hash|migrate"
 
 # Reject anything not in the allowlist
 if ! echo "$1" | grep -qE "^($ALLOWED_COMMANDS)$"; then

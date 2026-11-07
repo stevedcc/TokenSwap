@@ -111,4 +111,19 @@ public class PromptTests
         Assert.DoesNotContain("agent start", should);
         Assert.DoesNotContain("broker unlock", should);
     }
+
+    [Fact]
+    public void Prompt_NeverSuggestsApplyForAgents()
+    {
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        var should = text[text.IndexOf("Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("Commands you must NEVER use", StringComparison.Ordinal)];
+
+        Assert.Contains("sudo tswap apply <file>", never);
+        Assert.DoesNotContain("tswap apply", should);
+        Assert.Contains("tswap run helm upgrade --install app ./chart -f {{@values.yaml}}", text);
+        Assert.Contains("run … {{@file}}", text);
+        Assert.DoesNotContain("<(", text);
+        Assert.DoesNotMatch(@"<\(\s*(sudo\s+)?\S*tswap apply", text);
+    }
 }

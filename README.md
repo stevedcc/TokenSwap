@@ -32,9 +32,10 @@ tswap draws a privilege boundary with sudo:
 - Commands that **reveal** a value, remove or replace a value that is still good, or administer
   the vault need sudo: `get`, `add`, `list` (names with their dates) and `delete` among them. An
   agent without sudo can't run them.
-- `apply` needs no sudo and prints a file with the values filled in, so its output holds
-  plaintext: send it to stdout or process substitution only
-  ([agent-integration.md](docs/agent-integration.md#agent-role-no-sudo)).
+- `apply` prints a file with the values filled in, so it needs sudo too. An agent uses a file with
+  `# tswap:` markers through `run`: `tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`
+  fills a private copy, hides the values in the output and deletes the copy afterwards
+  ([examples.md](docs/examples.md#helm-deployment-patterns)).
 - `run` blocks `echo`, `printf`, pipes, redirects, and inline shell or interpreter code
   (`sh -c`, `python -c`, ...), so a command can't simply print the value it was given.
 

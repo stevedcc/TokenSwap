@@ -162,7 +162,7 @@ Replace inline secrets with # tswap: comments
 ### apply
 
 ```
-tswap apply <file>
+sudo tswap apply <file>
 ```
 
 Output file with # tswap: markers substituted
