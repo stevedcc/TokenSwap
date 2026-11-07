@@ -1,5 +1,6 @@
 using System.Text.Json;
 using TswapCli;
+using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
@@ -433,5 +434,29 @@ public class SlotCommandTests : IDisposable
         Assert.Contains("slot approve", stderr);
         Assert.Contains("requires", stderr);
         Assert.False(File.Exists(apprFile));
+    }
+
+    // --- The help and the usage (#246) ---
+
+    [Fact]
+    public void SlotHelp_AcceptNamesVaultDir()
+    {
+        Assert.Contains("slot accept <file> [--receipt <file>] [--vault-dir <shared folder>]", new SlotCommand().HelpUsage);
+    }
+
+    [Fact]
+    public void SlotUsage_IsTheHelpWithThePrefix()
+    {
+        var dir = NewTempDir();
+
+        var (exit, _, stderr) = Run(dir, _keyA, "", "slot");
+
+        Assert.NotEqual(0, exit);
+        var usageLine = stderr.Split('\n').Single(line => line.Contains("Usage: ")).TrimEnd('\r');
+        var usage = usageLine[(usageLine.IndexOf("Usage: ", StringComparison.Ordinal) + "Usage: ".Length)..];
+        var help = new SlotCommand().HelpUsage;
+        var forms = help[..help.LastIndexOf(" (approve, merge and add take", StringComparison.Ordinal)];
+        Assert.Equal("tswap " + forms.Replace(" | ", " | tswap "), usage);
+        Assert.DoesNotContain("{", usage);
     }
 }

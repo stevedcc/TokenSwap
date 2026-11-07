@@ -41,7 +41,11 @@ namespace TswapCli.Commands;
 public sealed class SlotCommand : ICliCommand
 {
     public string Name => "slot";
-    public string HelpUsage => $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)";
+    public string HelpUsage => $"{Forms} (approve, merge and add take --recovery-key-stdin)";
+
+    /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
+    private static string Forms =>
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey";
     public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
@@ -78,8 +82,7 @@ public sealed class SlotCommand : ICliCommand
         };
     }
 
-    private static string Usage(CommandContext ctx) =>
-        $"{ctx.Prefix} slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] <file> | {ctx.Prefix} slot approve <request-file> <approve-file> | {ctx.Prefix} slot accept <file> [--receipt <file>] | {ctx.Prefix} slot merge <receipt-or-config.json> [--yes] | {ctx.Prefix} slot add --fido2 [--serial <n>] | {ctx.Prefix} slot add --yubikey";
+    private static string Usage(CommandContext ctx) => $"{ctx.Prefix} " + Forms.Replace(" | ", $" | {ctx.Prefix} ");
 
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 

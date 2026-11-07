@@ -58,7 +58,7 @@ Create a record vault (one file per secret, shareable by sync tools) in \<config
 ### slot
 
 ```
-sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
+sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
 ```
 
 Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)
