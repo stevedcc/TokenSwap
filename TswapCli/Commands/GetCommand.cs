@@ -18,15 +18,17 @@ public sealed class GetCommand : ICliCommand
         ctx.RequireSudo("get");
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-
-        if (!db.Secrets.ContainsKey(name))
+        // Brief T16-S2: only this secret's record, and only its current value section (format 2:
+        // that record, decoded whole, and the format 2 warning). Errors as before.
+        using var view = ctx.OpenVault(key);
+        try
         {
-            db.ThrowIfUnreadable(name);
-            throw new TswapException($"Secret '{name}' not found");
+            ctx.Console.Out.WriteLine(view.ResolveToken(name));
+            return 0;
         }
-
-        ctx.Console.Out.WriteLine(db.Secrets[name].Value);
-        return 0;
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
+        }
     }
 }

@@ -23,9 +23,10 @@ public static class Apply
     /// Finds lines with empty values (e.g., <c>password: ""  # tswap: db-password</c>)
     /// and replaces the empty value with the actual secret value.
     /// Returns the modified content. Warnings are written to <paramref name="warnings"/>
-    /// (discarded when null — callers that surface warnings must pass a writer).
+    /// (discarded when null — callers that surface warnings must pass a writer). Brief T16-S2: a
+    /// value is resolved through <paramref name="db"/> only for a line it fills.
     /// </summary>
-    public static string ApplySecrets(string content, SecretsDb db, TextWriter? warnings = null)
+    public static string ApplySecrets(string content, ISecretLookup db, TextWriter? warnings = null)
         => ApplySecretsReporting(content, db, warnings).Content;
 
     /// <summary>True when <paramref name="content"/> has at least one <c># tswap: &lt;name&gt;</c> marker.</summary>
@@ -38,7 +39,7 @@ public static class Apply
     /// distinct string written into the file for it (the value escaped for its quotes).
     /// </summary>
     public static (string Content, IReadOnlyList<(string Name, string Raw, IReadOnlyList<string> WrittenForms)> Applied)
-        ApplySecretsReporting(string content, SecretsDb db, TextWriter? warnings)
+        ApplySecretsReporting(string content, ISecretLookup db, TextWriter? warnings)
     {
         warnings ??= TextWriter.Null;
         List<(string Name, string Raw, List<string> WrittenForms)> applied = [];
@@ -72,12 +73,17 @@ public static class Apply
             var baseName = secretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal)
                 ? secretName[..^SecretsDb.PreviousSuffix.Length]
                 : secretName;
-            if (!db.Secrets.ContainsKey(baseName))
+            if (!db.Contains(baseName))
             {
                 db.ThrowIfUnreadable(baseName);
                 throw new Exception($"Secret '{baseName}' not found (line {i + 1})");
             }
-            var value = db.ResolveToken(secretName, $" (line {i + 1})");
+            // Brief T16-S2: ':previous' without a previous value fails here, in today's order, from
+            // metadata; the value itself is decrypted only for a line that is filled in (Value()).
+            var where = $" (line {i + 1})";
+            if (secretName.Length != baseName.Length && !db.HasPreviousValue(baseName))
+                db.ResolveToken(secretName, where); // throws the "no previous value" text
+            string Value() => db.ResolveToken(secretName, where);
             var burned = db.IsBurnedToken(secretName);
 
             // Find and replace empty value patterns before the marker
@@ -101,6 +107,7 @@ public static class Apply
                 var whitespace = match.Groups[3].Value;  // optional whitespace
 
                 // Escape the secret value for the appropriate quote style
+                var value = Value();
                 var escapedValue = EscapeForQuote(value, quote);
                 if (burned)
                     warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
@@ -119,6 +126,7 @@ public static class Apply
                 {
                     var prefix = unquotedMatch.Groups[1].Value;
                     // Default to double quotes for safety
+                    var value = Value();
                     var escapedValue = EscapeForQuote(value, "\"");
                     if (burned)
                         warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");

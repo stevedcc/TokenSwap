@@ -1,4 +1,5 @@
 using TswapCore;
+using TswapCore.Fingerprints;
 
 namespace TswapCli.Commands;
 
@@ -19,11 +20,13 @@ public sealed class RedactCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-        db.ThrowIfAnyUnreadable("redact");
+        // Brief T16-S2: metadata only, no value decrypted; refuses before the file is opened.
+        using var view = ctx.OpenVault(key);
+        using var keys = FingerprintKeys.Derive(key);
+        var matcher = FingerprintRedaction.Matcher(ctx, view, keys, "redact", changesFile: false);
 
         var content = File.ReadAllText(filePath);
-        var redacted = Redact.RedactContent(content, db);
+        var redacted = Redact.RedactContent(content, matcher);
 
         ctx.Console.Out.Write(redacted);
 

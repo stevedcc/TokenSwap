@@ -309,6 +309,14 @@ public sealed record CommandContext(
     public TswapCore.SecretsDb LoadSecrets(byte[] key)
         => Storage.LoadSecrets(key, Console.Error);
 
+    /// <summary>
+    /// Brief T16-S2: the vault as a <see cref="VaultView"/> (metadata first, values only where a
+    /// command uses them), its load-time findings on stderr. Classic vaults were refused when the
+    /// store opened (<see cref="Storage"/>), so the store is always a record store here.
+    /// </summary>
+    public VaultView OpenVault(byte[] key) => new(
+        Storage as RecordVaultStore ?? throw new TswapException("This command needs a record vault."), key, Console.Error);
+
     /// <summary>Resolves a connected YubiKey serial, prompting when several are present.</summary>
     public int SelectSerial(int? requiredSerial = null)
         => Unlocker.SelectConnectedSerial(ChooseSerial, requiredSerial);

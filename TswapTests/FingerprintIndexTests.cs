@@ -117,4 +117,48 @@ public class FingerprintIndexTests
         Assert.Empty(index.Scan("abc"));
         Assert.Equal(12, index.MaxLength); // base64 of "abcdefgh"
     }
+
+    [Fact]
+    public void Scan_ForgedRollingHashCollisionAcrossASurrogatePair_NoHit()
+    {
+        // UTF-8 encodes a lone high surrogate as U+FFFD's bytes, so the HMAC of "ab\uD83D" equals
+        // the HMAC of "ab\uFFFD". Force the rolling-hash collision on top: an entry with the rolling
+        // hash of the window that cuts the pair of "ab😀" and the HMAC of "ab\uFFFD".
+        using var keys = FingerprintKeys.Derive(RandomNumberGenerator.GetBytes(32));
+        const string window = "ab\uD83D";
+        Assert.Equal(Fingerprinter.Hmac(window, keys), Fingerprinter.Hmac("ab\uFFFD", keys));
+        var forged = new FingerprintEntry(VariantKind.Plain, 3, RollingHash.Of(window, keys.RollingBase), Fingerprinter.Hmac("ab\uFFFD", keys));
+        var index = FingerprintIndex.Build([("binary-secret", false, new FingerprintSet(SecretVariants.CurrentSetVersion, [forged]))], keys);
+
+        Assert.Empty(index.Scan("ab\U0001F600"));
+        // Control: the same entry confirms the text it really describes.
+        var control = FingerprintIndex.Build(
+            [("binary-secret", false, new FingerprintSet(SecretVariants.CurrentSetVersion,
+                [forged with { RollingHash = RollingHash.Of("ab\uFFFD", keys.RollingBase) }]))], keys);
+        Assert.Equal([new FingerprintHit("binary-secret", false, VariantKind.Plain, 0, 3)], control.Scan("ab\uFFFD"));
+    }
+
+    [Fact]
+    public void Scan_ValueWithAnEmoji_StillMatched()
+    {
+        using var keys = FingerprintKeys.Derive(RandomNumberGenerator.GetBytes(32));
+        const string value = "\U0001F600pa\U0001F511ss\U0001F600";
+        var index = FingerprintIndex.Build([("emoji", false, Set(value, keys))], keys);
+
+        var hits = index.Scan("x=" + value + "\U0001F600;").Where(h => h.Kind == VariantKind.Plain).ToList();
+
+        Assert.Equal([new FingerprintHit("emoji", false, VariantKind.Plain, 2, value.Length)], hits);
+    }
+
+    [Fact]
+    public void SplitsASurrogatePair_Edges()
+    {
+        // A [Fact], not a [Theory]: xUnit's theory data serialisation turns a lone surrogate into U+FFFD.
+        Assert.True(FingerprintIndex.SplitsASurrogatePair("\uDE00ab"));      // starts on a lone low surrogate
+        Assert.True(FingerprintIndex.SplitsASurrogatePair("ab\uD83D"));      // ends on a lone high surrogate
+        Assert.False(FingerprintIndex.SplitsASurrogatePair("a\uD83D\uDE00b")); // a whole pair inside
+        Assert.False(FingerprintIndex.SplitsASurrogatePair("\uD83D\uDE00"));  // exactly a whole pair
+        Assert.False(FingerprintIndex.SplitsASurrogatePair("abc"));           // no surrogates
+        Assert.False(FingerprintIndex.SplitsASurrogatePair(""));
+    }
 }

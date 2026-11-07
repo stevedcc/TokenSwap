@@ -618,7 +618,8 @@ public static class SecretRecordCodec
     /// </summary>
     internal static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed)? DecodeMetadataAndSections(byte[] bytes, byte[] vaultKey)
     {
-        if (bytes.Length < 5)
+        // The same first check as Decode, so a damaged file gets one reason on both paths.
+        if (bytes.Length < HeaderSize)
             throw new TswapException("Malformed record: shorter than the envelope header");
         if (CheckFormat(bytes) == KeyringFormat.RecordFormatVersionV2)
             return null;
