@@ -98,6 +98,13 @@ redaction failure ends `run` with exit 1 after the command, its output cut off a
 
 ## Commands
 
+`sudo tswap add <name>` stores the value exactly as it was typed or piped. When the value ends in
+whitespace (or is only whitespace) it prints one warning line on stderr after its success line, also
+when the value was already stored: such a value is usually a paste mistake, and `run` can't always
+mask it ([what `run` masks](security-model.md#what-run-masks)). The line names the secret and the
+reason only, never the value, its length or which whitespace, and the exit code doesn't change.
+(`ingest` trims trailing whitespace, and refuses an input of whitespace only.)
+
 <!-- BEGIN GENERATED: commands (TswapTests/Docs/CommandReference.cs) -->
 
 ### init

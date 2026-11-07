@@ -194,7 +194,8 @@ Limits:
   read, also through a terminal, but not when a read boundary splits it: tswap can't tell such a
   record from a single-line one by its fingerprints, and holding back every read's trailing
   whitespace for that would hold every line end. Such a value can only be stored with
-  `sudo tswap add` (`ingest` trims trailing whitespace).
+  `sudo tswap add` (`ingest` trims trailing whitespace), which warns when a value ends in
+  whitespace or is only whitespace.
 - **A secret split between stdout and stderr** is not recognised when output is redirected
   (RedactingPty's pipe runner redacts each stream on its own).
 - **Held output at a prompt.** To catch a value split across reads, the redactor holds back the end

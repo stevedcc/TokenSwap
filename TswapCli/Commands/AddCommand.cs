@@ -36,6 +36,13 @@ public sealed class AddCommand : ICliCommand
             writer.Commit();
 
             ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");
+            // Owner decision 5: stored as typed, but trailing whitespace is usually a paste mistake, and
+            // run can't always mask such a value. The secret and the reason only: never the value or its length.
+            if (Validation.EndsInWhitespace(value))
+                ctx.Console.Error.WriteLine(
+                    $"Warning: the value of '{name}' ends in whitespace (or is only whitespace). That is usually a paste mistake, and " +
+                    $"'run' can't always mask such a value in a command's output. If it wasn't meant, run " +
+                    $"{ElevatedCommand.For(ctx.Prefix, $"add {name}")} again.");
             return 0;
         }
         finally
