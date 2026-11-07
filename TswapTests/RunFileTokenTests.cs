@@ -817,8 +817,8 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Equal(Apply.ApplySecrets(ValuesYaml, Db()), seenCopy);
     }
 
-    // Controller ruling (review of task 1, Important 1): 'install' copies files as the program, but
-    // as an argument it is Helm's headline subcommand.
+    // 'install' copies files as the program, but as an argument it is Helm's headline subcommand, so
+    // it is refused only as the program (owner decision 2026-11-07: helm install has to work).
     [Fact]
     public void RunFileToken_InstallAsArgumentAllowed()
     {
@@ -838,6 +838,10 @@ public sealed class RunFileTokenTests : IDisposable
     [InlineData("nice -n 5 install {{@f}} /tmp/x")]
     [InlineData("timeout 5 install -m 600 {{@f}} /tmp/x")]
     [InlineData("/usr/bin/install {{@f}} /tmp/x")]
+    [InlineData("find . -exec install {{@f}} /tmp/x ;")]
+    [InlineData("find . -execdir install -m 644 {{@f}} /tmp/x +")]
+    [InlineData("nice find . -ok /usr/bin/install {{@f}} /tmp/x ;")]
+    [InlineData("find . -exec nice install {{@f}} /tmp/x ;")]
     public void RunFileToken_InstallAsProgramRefused(string command)
     {
         WriteFile("f", ValuesYaml);

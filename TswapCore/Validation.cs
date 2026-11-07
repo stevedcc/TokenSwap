@@ -143,13 +143,14 @@ public static class Validation
         "certutil",
     };
 
-    // Copiers refused only as the program (argv[0], or the command a wrapper runs): as an argument the
-    // word is common and harmless ('helm install app ./chart', a controller ruling on the review).
+    // Copiers refused only as the program (argv[0], or the command a wrapper or find -exec runs): as an
+    // argument the word is common and harmless ('helm install app ./chart', owner decision 2026-11-07).
     private static readonly HashSet<string> FileProgramPrinters = new(StringComparer.OrdinalIgnoreCase) { "install" };
 
     /// <summary>
     /// Issue #251: the extra check for a command with a <c>{{@file}}</c> token. Refused: a file token as
-    /// the program; <c>install</c> as the program, also behind simple wrappers (<c>nice -n 5 install</c>);
+    /// the program; <c>install</c> as the program, also behind simple wrappers (<c>nice -n 5 install</c>)
+    /// and as the command <c>find -exec</c> runs;
     /// and any word (the basename of each argument as typed, a file token counting as its
     /// file's basename) that is a printer, encoder or copier, in the existing blocklist, or a shell or
     /// interpreter (sed included). Null when allowed.
@@ -184,8 +185,8 @@ public static class Validation
     }
 
     // argv[0] and, through simple wrappers (nice, timeout, sudo, ...: their options and leading
-    // positional skipped as CheckWrapper does), the command each runs. Tools with subcommands (docker,
-    // npm, ...) end the walk: their later words aren't a program on this machine.
+    // positional skipped as CheckWrapper does) and find's -exec family, the command each runs. Tools
+    // with subcommands (docker, npm, ...) end the walk: their later words aren't a program on this machine.
     private static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv)
     {
         var i = 0;
@@ -193,6 +194,14 @@ public static class Validation
         {
             var program = ProgramName(argv[i]);
             yield return program;
+            if (program.Equals("find", StringComparison.OrdinalIgnoreCase))
+            {
+                for (var j = i + 1; j < argv.Count; j++)
+                    if (FindExecOptions.Contains(argv[j]))
+                        foreach (var word in ProgramWords(argv.Skip(j + 1).TakeWhile(a => a is not (";" or "+")).ToList()))
+                            yield return word;
+                yield break;
+            }
             if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
                 yield break;
             WrapperValued.TryGetValue(program, out var valued);
