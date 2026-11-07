@@ -77,6 +77,21 @@ on an unreadable format 2 record that no marker names; and conflicted copies tha
 plaintext could show equal make `list` and `check` refuse that record
 ([details](security-model.md#what-each-command-decrypts)).
 
+`run` (since 0.3) decrypts only the value versions it substitutes and masks every other value in the
+vault that has fingerprints, in its stored forms (verbatim, whitespace-stripped, base64, base64url),
+also a multi-line one printed through a terminal ([what `run` masks](security-model.md#what-run-masks)).
+On a vault where some records can't be matched it keeps working and prints one line on stderr before
+the command starts and the same line after it exits (wrapped here):
+
+```
+Warning: 2 record(s) are not fully fingerprinted, 1 can't be read: 'run' masks the secrets it
+substitutes and the fingerprinted values, not these. Ask the user to run `sudo tswap vault reindex`.
+```
+
+(", … can't be read" only when a record can't be read.) A format 2 record a token or marker names is
+decrypted whole, with the warning above after the command's output. Exit codes don't change; a
+redaction failure ends `run` with exit 1 after the command, its output cut off at the failure.
+
 ## Commands
 
 <!-- BEGIN GENERATED: commands (TswapTests/Docs/CommandReference.cs) -->
