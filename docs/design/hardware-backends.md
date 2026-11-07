@@ -561,7 +561,8 @@ the vault key. Registered in `TswapCli/Program.cs` behind `OperatingSystem.IsLin
 the same public template always regenerates the same key, derived from that hierarchy's primary
 seed (TPM2 spec, Part 1, "Primary Seeds"). **Verified directly against swtpm for this codebase**
 (not assumed): two back-to-back `tpm2_createprimary -C o` calls on the same simulator produced a
-byte-identical RSA modulus. So `Config.TpmSealedKey` only stores the sealed object's public/private
+byte-identical RSA modulus, and since issue #261 repeated calls give byte-identical public areas for
+both the RSA-2048 and the ECC P-256 template on an Intel PTT and an Infineon SLB 9665 too. So `Config.TpmSealedKey` only stores the sealed object's public/private
 blobs; the primary is always regenerated fresh from the owner hierarchy, on both `Seal` and
 `Unseal`, and never written to disk. The owner hierarchy (not the null hierarchy) was chosen
 because its primary seed survives `TPM2_Startup` (a reboot) and only changes on an explicit
@@ -570,6 +571,86 @@ fine afterward, while the same blob fails to load under a primary regenerated af
 with a TPM-reported `tpm:parameter(1):integrity check failed` error. That is exactly the
 "machine-bound, invalidated on factory reset" property this backend needs, with zero extra
 bookkeeping.
+
+### Storage primary: ECC P-256 for new slots (v0.3.0, issue #261)
+
+The Linux slot persists no primary, so every unlock runs `tpm2_createprimary -C o` and loads the
+sealed object under it. Generating an RSA-2048 key in the TPM was most of an unlock, so new slots
+seal under an ECC P-256 storage primary instead. Measured with `tpm2_createprimary` alone (#155,
+#261):
+
+| Chip | `-G rsa2048` | `-G ecc256` |
+|---|---|---|
+| Intel PTT (the router) | 1.74 s | 0.26 s |
+| Infineon SLB 9665 | 8.2 s | 0.63 s |
+
+**Protection unchanged.** Both primaries are restricted decryption keys whose symmetric algorithm,
+the one that protects their children, is AES-128-CFB (`tpm2_readpublic` of each on the SLB 9665:
+`sym-alg: aes`, `sym-mode: cfb`, `sym-keybits: 128`). The sealed object is the same keyed-hash object
+with the same attributes and auth either way; only the parent's key type changes, and TCG's PC Client
+TPM profile requires both RSA-2048 and P-256.
+
+**The flag.** A new Linux TPM slot's blob always has the `TSTP` header, with flags bit 1 (`0x02`,
+`TpmSlotBlob.EccPrimary`) set: `0x02` without the vault password, `0x03` with it. A legacy package (no
+header) and `TSTP 0x01` mean RSA-2048, as before; `TpmHardwareServiceBase` passes the bit to the
+backend, and `Tpm2ToolsInterop.Unseal(package, eccPrimary, …)` rebuilds the primary it names. The
+known flags are per magic and the same on every OS: `TSTP` knows bits 0 and 1, `TSSE` only bit 0. A
+bit the magic doesn't know is "needs a newer tswap" whatever else is set (checked first, as v0.2.0
+does); else bit 0 is a password slot; else a known bit is password-free; `0x00` is corrupt. So
+`TSTP 0x02` lists as password-free on Windows and macOS too, and `TSSE 0x02` needs a newer tswap.
+`TpmSlotBlob.Wrap` refuses flags `0x00` and any bit it doesn't know, so tswap never writes a header
+it would itself refuse. Windows writes what it always has (a header-less package, or `TSTP 0x01`) and
+ignores the bit: a Windows package's key is found by its name, not by a primary. The simulated TPM
+of the test suite always writes the Linux layout. `Config.TpmSealedKey` (single-slot vaults from
+before keyrings) is written by no current code and is read as RSA, as before.
+
+**Pinned templates.** Both primaries' templates are pinned through tpm2-tools' own options, not
+left to its compiled-in defaults: the RSA one must stay what v0.2.0's `-G rsa2048` gave, or existing
+slots stop opening after a tool upgrade; the ECC one is new and pinned from the start.
+
+```
+tpm2_createprimary -C o -G rsa2048:null:aes128cfb -g sha256 -a fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt -c <primary.ctx>
+tpm2_createprimary -C o -G ecc256:null:aes128cfb  -g sha256 -a fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt -c <primary.ctx>
+```
+
+`LinuxTpmEccPrimaryTests` (`Category=Tpm`) checks each against the TPM it runs on: the public area is
+byte-identical to the one the default `-G rsa2048` / `-G ecc256` gives, and the template tpm2-tools
+sent (`--template-data`) equals TPMT_PUBLIC bytes committed in the test, so a tool upgrade that
+changed both invocations at once still fails it:
+
+| Template | TPMT_PUBLIC (tpm2-tools 5.7) |
+|---|---|
+| RSA-2048 | `0001` rsa, `000b` sha256, `00030072` attributes, `0000` no policy, `0006 0080 0043` aes 128 cfb, `0010` scheme null, `0800` 2048 bits, `00000000` exponent (65537), `0000` no unique |
+| ECC P-256 | `0023` ecc, `000b` sha256, `00030072` attributes, `0000` no policy, `0006 0080 0043` aes 128 cfb, `0010` scheme null, `0003` NIST P-256, `0010` kdf null, `0000 0000` no unique |
+
+Fields the command line doesn't name: tpm2-tools' algorithm specifier has no place for the ECC KDF
+(null) or the RSA exponent (0, meaning 65537), and tswap passes no unique data (`-u`) and no policy
+(`-L`), so both stay empty. The committed template bytes pin all four.
+
+**Downgrade by editing the blob fails closed.** The primary is the sealed object's parent: loaded
+under the other primary, `tpm2_load` fails its integrity check (`tpm:parameter(1):integrity check
+failed`), so clearing or setting bit 1 never opens a slot under the wrong key; swtpm tests force both
+directions. **Accepted limit:** removing the whole header from an ECC slot leaves a package that is
+read as RSA, so the owner gets the generic "Could not unlock with the TPM. The sealed key may have been
+created on a different machine, …" text, not the stripped-header text a password slot got before.
+It fails closed either way. Clearing only the password bit (`0x03` to `0x02`) still gets the
+stripped-header text, and so does a v0.2.0 RSA password slot with its header removed.
+
+**Older builds.** v0.2.0's header parser refuses any flag bit but bit 0 before it touches the TPM
+(`v0.2.0:TswapCore/Keyring/SlotPassword.cs`), so a v0.2.0 tswap meeting a new slot says `needs a newer
+tswap (blob version 1 or unknown flags); upgrade tswap.`, never an unseal failure. A unit test runs that
+released parser against the blobs this build writes.
+
+**Existing slots stay RSA.** Nothing converts them, and they keep opening as before. (How to move an
+existing slot to ECC is open: the plan's "`slot add` + `slot remove`" doesn't exist in this build,
+since `slot add` enrols YubiKeys only and there is no `slot remove`; to be decided by the owner.) `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
+slot whose header has bit 1, and today's `TPM, sealed to this machine's TPM, …` for every other TPM
+row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048).
+
+**On real hardware (Task 3: to be filled from real-hardware runs).** On this machine's SLB 9665 and
+the router's Intel PTT: `init --tpm` → `create` → three timed unlocks, `slots` showing the ECC slot;
+an RSA slot made by the v0.2.0 binary on the same machine opening with the new build; the v0.2.0
+binary meeting a new ECC slot printing the "needs a newer tswap" text.
 
 ### Status: verified on one physical TPM (Intel PTT), single vendor
 
