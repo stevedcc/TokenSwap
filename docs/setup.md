@@ -117,7 +117,7 @@ run `init`: creating a vault is the user's work, and `init` prints the recovery 
 ```bash
 tswap init --yubikey --recovery-key-out ~/rk.txt       # one plugged-in YubiKey
 tswap init --tpm --recovery-key-out ~/rk.txt           # this machine's TPM
-tswap init --secure-enclave --with-touch --no-recovery # or --no-touch; no recovery slot
+tswap init --secure-enclave --with-touch --no-recovery # or --no-touch; --no-recovery: no recovery slot
 ```
 
 A script's stdout isn't a terminal, so `init` won't print the recovery key there: it needs

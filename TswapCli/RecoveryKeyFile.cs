@@ -56,20 +56,11 @@ internal static class RecoveryKeyFile
         {
             Base64.EncodeToUtf8(recoveryKey, content, out _, out var written);
             content[written] = (byte)'\n';
-            var line = content.AsSpan(0, written + 1);
+            var length = written + 1;
             if (OperatingSystem.IsWindows())
-                WriteWindows(fullPath, line);
+                WriteNewFile(fullPath, content, length);
             else
-                owner.WriteNew(fullPath, line);
-        }
-        catch (IOException) when (File.Exists(fullPath))
-        {
-            // Created by someone else between the check and the write: never overwritten, never deleted.
-            throw new TswapException(AlreadyExists(fullPath));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new TswapException($"Couldn't write the recovery key to {fullPath} ({ex.Message}). No vault was created.");
+                owner.AsOwner(fullPath, () => WriteNewFile(fullPath, content, length));
         }
         finally
         {
@@ -78,18 +69,94 @@ internal static class RecoveryKeyFile
     }
 
     /// <summary>
-    /// After the vault write failed: removes the key file (the key of a vault that doesn't exist). False when that
-    /// failed too, so the caller says where it is.
+    /// Creates the file (a failed create is someone else's file or a folder we can't write: nothing of ours to remove),
+    /// then writes and flushes it; a failure after the create removes our partial file, or says it couldn't.
     /// </summary>
-    public static bool TryDelete(DirectoryOwnerMatcher owner, string fullPath)
+    private static bool WriteNewFile(string fullPath, byte[] content, int length)
+    {
+        FileStream stream;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                stream = CreateWindows(fullPath);
+            else
+                stream = CreateUnix(fullPath);
+        }
+        catch (IOException) when (File.Exists(fullPath))
+        {
+            // Created by someone else between the check and the write: never overwritten, never deleted.
+            throw new TswapException(AlreadyExists(fullPath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TswapException(CouldNotWrite(fullPath, ex.Message));
+        }
+        try
+        {
+            using (stream)
+            {
+                VerifyPrivate(fullPath, stream);
+                stream.Write(content, 0, length);
+                stream.Flush(flushToDisk: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            if (!DeleteOwnFile(fullPath))
+                throw new TswapException(
+                    $"{CouldNotWrite(fullPath, ex.Message)} The partly written file couldn't be removed either: delete {fullPath}.");
+            throw ex is TswapException ? ex : new TswapException(CouldNotWrite(fullPath, ex.Message));
+        }
+        return true;
+    }
+
+    private static string CouldNotWrite(string fullPath, string reason) =>
+        $"Couldn't write the recovery key to {fullPath} ({reason.TrimEnd('.')}). No vault was created.";
+
+    /// <summary>Unix: exclusive, mode 0600 from the start (the caller runs it as the folder's owner).</summary>
+    [UnsupportedOSPlatform("windows")]
+    private static FileStream CreateUnix(string fullPath) =>
+        new(fullPath, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        });
+
+    /// <summary>
+    /// Windows: exclusive, with its security descriptor (protected, the current user only) set at creation, never
+    /// tightened afterwards.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static FileStream CreateWindows(string fullPath)
+    {
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(CurrentUser(), FileSystemRights.FullControl, AccessControlType.Allow));
+        return new FileInfo(fullPath).Create(FileMode.CreateNew, FileSystemRights.Write | FileSystemRights.ReadPermissions,
+            FileShare.None, 4096, FileOptions.WriteThrough, security);
+    }
+
+    /// <summary>Windows: the ACL and that the file is no reparse point, checked before the key is written. Unix: nothing more.</summary>
+    private static void VerifyPrivate(string fullPath, FileStream stream)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        if (File.GetAttributes(fullPath).HasFlag(FileAttributes.ReparsePoint)
+            || !WindowsPrivateFolder.IsCurrentUserOnly(stream.GetAccessControl(), CurrentUser()))
+            throw new TswapException($"{fullPath} isn't private to you after creating it; the recovery key was not written.");
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static SecurityIdentifier CurrentUser() =>
+        WindowsIdentity.GetCurrent().User ?? throw new TswapException("Couldn't read the current user's SID.");
+
+    private static bool DeleteOwnFile(string fullPath)
     {
         try
         {
-            owner.AsOwner(fullPath, () =>
-            {
-                File.Delete(fullPath);
-                return true;
-            });
+            File.Delete(fullPath);
             return !File.Exists(fullPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -98,39 +165,29 @@ internal static class RecoveryKeyFile
         }
     }
 
+    /// <summary>
+    /// After a vault write that left the vault folder absent or empty: removes the key file (the key of a vault that
+    /// doesn't exist). False when that failed, so the caller says where it is.
+    /// </summary>
+    public static bool TryDelete(DirectoryOwnerMatcher owner, string fullPath)
+    {
+        try
+        {
+            return owner.AsOwner(fullPath, () => DeleteOwnFile(fullPath));
+        }
+        catch (TswapException)
+        {
+            return false; // the switch to the folder's owner failed: the file stays, and the caller names it
+        }
+    }
+
     public static string NotDeleted(string fullPath, string vaultError) =>
         $"The vault was not created ({vaultError.TrimEnd('.')}); delete {fullPath}, it holds the recovery key of a vault that doesn't exist.";
 
-    private static string AlreadyExists(string fullPath) => $"{fullPath} already exists; {Flag} never overwrites a file.";
+    /// <summary>Review I1: the vault folder was written before the failure, so the key may open what is there.</summary>
+    public static string KeptAfterPartialVault(string fullPath, string vaultDir, string vaultError) =>
+        $"The vault was not fully created ({vaultError.TrimEnd('.')}). Its folder {vaultDir} was partly written, and the recovery " +
+        $"key in {fullPath} was kept: it opens what was written there. Move it offline as usual, or delete it once you have removed {vaultDir}.";
 
-    /// <summary>
-    /// Created with its security descriptor (protected, the current user only), never tightened afterwards; the ACL
-    /// and that it is no reparse point are checked before the key is written. Deleted if anything after creation fails.
-    /// </summary>
-    [SupportedOSPlatform("windows")]
-    private static void WriteWindows(string fullPath, ReadOnlySpan<byte> line)
-    {
-        var user = WindowsIdentity.GetCurrent().User
-            ?? throw new TswapException("Couldn't read the current user's SID.");
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
-        var created = false;
-        try
-        {
-            using var stream = new FileInfo(fullPath).Create(FileMode.CreateNew, FileSystemRights.Write | FileSystemRights.ReadPermissions,
-                FileShare.None, 4096, FileOptions.WriteThrough, security);
-            created = true;
-            if (File.GetAttributes(fullPath).HasFlag(FileAttributes.ReparsePoint)
-                || !WindowsPrivateFolder.IsCurrentUserOnly(stream.GetAccessControl(), user))
-                throw new TswapException($"{fullPath} isn't private to you after creating it; the recovery key was not written.");
-            stream.Write(line);
-            stream.Flush(flushToDisk: true);
-        }
-        catch when (created)
-        {
-            try { File.Delete(fullPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-            throw;
-        }
-    }
+    private static string AlreadyExists(string fullPath) => $"{fullPath} already exists; {Flag} never overwrites a file.";
 }

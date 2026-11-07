@@ -214,7 +214,8 @@ internal static class GuidedInit
             }
 
             // Step 5: the recovery slot, recommended (the recovery slot never involves the password).
-            var includeRecovery = !noRecovery && AskYesNo(c, RecoveryPrompt, defaultAnswer: true);
+            // --recovery-key-out asks for one, so the question is skipped (review M7: never a silently unused flag).
+            var includeRecovery = !noRecovery && (keyFile is not null || AskYesNo(c, RecoveryPrompt, defaultAnswer: true));
 
             // Step 6: create, in memory. The chip first, then the YubiKeys' OTP slots in ListSerials order, then the
             // FIDO2 slots (PIN tries are limited, so last); the first slot built is the machine slot (the config's

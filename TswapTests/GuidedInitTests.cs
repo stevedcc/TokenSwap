@@ -557,6 +557,25 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(recoverExit == 0, recoverErr);
     }
 
+    /// <summary>Review M7: --recovery-key-out asks for a recovery slot, so guided init doesn't ask whether to add one.</summary>
+    [Fact]
+    public void Guided_RecoveryKeyOut_SkipsTheRecoveryQuestion()
+    {
+        var m = Machine(11);
+        m.Tpm = RandomNumberGenerator.GetBytes(32);
+        var folder = Folder();
+        Directory.CreateDirectory(folder);
+        var keyFile = Path.Combine(folder, "recovery-key");
+
+        // Plug-in Enter, the pick, then the other-machines question: no answer for a recovery question.
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\nn\n", "init", "--no-password", "--recovery-key-out", keyFile);
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.RecoveryPrompt, stdout);
+        Assert.Equal(32, Convert.FromBase64String(File.ReadAllText(keyFile).TrimEnd('\n')).Length);
+        Assert.Contains(SlotKind.Recovery, m.Keyring.Slots.Select(s => s.Kind));
+    }
+
     [Fact]
     public void Guided_BadPick_WithOneEntry_SaysPick1()
     {

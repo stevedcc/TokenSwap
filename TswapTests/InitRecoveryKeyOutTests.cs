@@ -268,6 +268,103 @@ public sealed class InitRecoveryKeyOutTests : IDisposable
         Assert.False(File.Exists(keyFile), stderr);
     }
 
+    /// <summary>
+    /// Review I1: the commit point is the first file in the vault folder (the keyring, which holds the recovery slot).
+    /// A failure after it (here config.json, in a config folder this process can't write) keeps the key file, since
+    /// the key opens what was written, and says where both are.
+    /// </summary>
+    [Fact]
+    public void RecoveryKeyOut_FailureAfterTheKeyringIsWritten_KeyFileKept()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // needs a folder this process can't write into: Unix mode bits, and not root (root writes anyway)
+        var m = Machine();
+        var vaultDir = Path.Combine(Outside(), "vault");
+        var keyFile = Path.Combine(Outside(), "recovery-key");
+        File.SetUnixFileMode(m.Dir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // 0500: config.json can't be written
+        try
+        {
+            var (exit, stdout, stderr) = m.RunWithStdoutRedirected("", "init", "--tpm", "--no-password",
+                "--folder", vaultDir, "--recovery-key-out", keyFile);
+
+            Assert.NotEqual(0, exit);
+            Assert.True(File.Exists(Path.Combine(vaultDir, "keyring")), stderr);
+            Assert.False(File.Exists(m.ConfigPath));
+            var key = File.ReadAllText(keyFile).TrimEnd('\n');
+            Assert.Equal(32, Convert.FromBase64String(key).Length);
+            Assert.DoesNotContain(key, stdout + stderr);
+            Assert.Contains($"the recovery key in {Path.GetFullPath(keyFile)} was kept", stderr);
+            Assert.Contains(Path.GetFullPath(vaultDir), stderr);
+        }
+        finally
+        {
+            File.SetUnixFileMode(m.Dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    /// <summary>Review I2: 'init --vault-dir' joins a shared folder and makes no recovery slot, so a script's stdout is fine.</summary>
+    [Fact]
+    public void Init_StdoutRedirected_VaultDirJoin_Works()
+    {
+        var first = Machine("rko-first");
+        var shared = Path.Combine(Outside(), "shared");
+        var keyFile = Path.Combine(Outside(), "recovery-key");
+        var (initExit, _, initErr) = first.RunWithStdoutRedirected("", "init", "--tpm", "--no-password", "--folder", shared, "--recovery-key-out", keyFile);
+        Assert.True(initExit == 0, initErr);
+        var joiner = Machine("rko-joiner");
+
+        var (exit, stdout, stderr) = joiner.RunWithStdoutRedirected("", "init", "--vault-dir", shared);
+
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain(RefusalText, stderr);
+        Assert.Contains("now uses the shared vault folder", stdout);
+        Assert.Equal(Path.GetFullPath(shared), joiner.VaultDir);
+    }
+
+    /// <summary>Review I2: a plain init with stdout redirected keeps its own refusal (it can't ask), not the key's.</summary>
+    [Fact]
+    public void Init_StdoutRedirected_Guided_KeepsItsOwnRefusal()
+    {
+        var m = Machine();
+
+        var (exit, _, stderr) = m.RunWithStdoutRedirected("", "init");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("'tswap init' without a terminal needs the slot named", stderr);
+        Assert.DoesNotContain(RefusalText, stderr);
+        AssertNothingWritten(m);
+    }
+
+    /// <summary>Review I2: on a terminal, stdin redirected or not, every slot flag still prints the key (stdout decides).</summary>
+    [Theory]
+    [MemberData(nameof(RecoverySlotPaths))]
+    public void Init_StdoutATerminal_EverySlotPath_PrintsTheKey(string[] slot)
+    {
+        var m = Machine();
+        m.Fido2Keys!.AddKey(33060005, Fido2TestSlots.Aaguid);
+        m.Terminal!.Enqueue(FakeFido2Keys.DefaultPin, FakeFido2Keys.DefaultPin);
+
+        var (exit, stdout, stderr) = m.Run("", ["init", .. slot, "--no-password"]);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Recovery Private Key (base64):", stdout);
+        Assert.Contains("the only time you will see it", stdout);
+    }
+
+    /// <summary>Review M3: with the key in a file, the block doesn't claim this is the only time the key is seen.</summary>
+    [Fact]
+    public void RecoveryKeyOut_WarningDoesNotSayOnlyTimeYouSeeIt()
+    {
+        var m = Machine();
+        var keyFile = Path.Combine(Outside(), "recovery-key");
+
+        var (exit, stdout, stderr) = m.RunWithStdoutRedirected("", "init", "--tpm", "--no-password", "--recovery-key-out", keyFile);
+
+        Assert.True(exit == 0, stderr);
+        Assert.DoesNotContain("the only time you will see it", stdout);
+        Assert.Contains("tswap never stores it anywhere", stdout.Replace("\n", " "));
+    }
+
     [Fact]
     public void RecoveryKeyOut_WindowsAclIsCurrentUserOnly()
     {

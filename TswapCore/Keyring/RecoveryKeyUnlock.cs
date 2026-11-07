@@ -22,7 +22,7 @@ public static class RecoveryKeyUnlock
 
     public static readonly string FailureMessage =
         "The recovery key did not open this vault. It is the recovery private key (base64) that 'tswap init' printed " +
-        $"for this vault; {SourceHint("tswap")} (or another command with --recovery-key-stdin). Nothing was written.";
+        $"for this vault, or wrote to its --recovery-key-out file; {SourceHint("tswap")} (or another command with --recovery-key-stdin). Nothing was written.";
 
     /// <summary>
     /// Where the recovery key comes from, for the messages that ask for it: never the vault being recovered,

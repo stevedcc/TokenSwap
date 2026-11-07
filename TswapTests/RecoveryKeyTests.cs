@@ -207,6 +207,18 @@ public class RecoveryKeyTests : IDisposable
         Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
     }
 
+    /// <summary>Review M2: the wrong-key message also fits a key that init wrote to its --recovery-key-out file.</summary>
+    [Fact]
+    public void WrongKey_MessageNamesTheKeyFile()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.Run("not-a-key\n", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("--recovery-key-out", stderr);
+    }
+
     // --- bad input ---
 
     public static TheoryData<string> Commands() =>

@@ -234,8 +234,11 @@ public sealed class InitCommand : ICliCommand
 
     /// <summary>
     /// #253: with <paramref name="keyFile"/>, the recovery key goes to that new file first, so the vault never exists
-    /// without its key on disk; if the vault write then fails, the file is deleted (or, if that fails too, named).
-    /// A kill between the two writes leaves a key file that opens nothing (accepted: the user deletes it).
+    /// without its key on disk. The commit point is the first file in the vault folder (the keyring, which holds the
+    /// recovery slot): the folder was absent or empty before (<see cref="RequireAbsentOrEmpty"/>), so a failure that
+    /// leaves it empty or absent deletes the key file (or names it, if that fails too), and a failure after anything
+    /// was written there keeps it and names both, because the key opens what was written. A kill between the key
+    /// write and the vault write leaves a key file that opens nothing (accepted: the user deletes it).
     /// </summary>
     internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir,
         VaultPasswordFile? vaultPassword, string? keyFile, byte[]? recoveryKey)
@@ -250,10 +253,26 @@ public sealed class InitCommand : ICliCommand
         {
             CreateRecordVault(ctx, fileStore, config, vaultDir, vaultPassword);
         }
-        catch (Exception vaultError) when (!RecoveryKeyFile.TryDelete(fileStore.Owner, keyFile))
+        catch (Exception vaultError) when (vaultError is TswapException or IOException or UnauthorizedAccessException)
         {
-            // The filter deleted the file when it could; only a file that is still there is named.
-            throw new TswapException(RecoveryKeyFile.NotDeleted(keyFile, vaultError.Message));
+            if (VaultFolderWritten(fileStore.Owner, vaultDir))
+                throw new TswapException(RecoveryKeyFile.KeptAfterPartialVault(keyFile, vaultDir, vaultError.Message));
+            if (!RecoveryKeyFile.TryDelete(fileStore.Owner, keyFile))
+                throw new TswapException(RecoveryKeyFile.NotDeleted(keyFile, vaultError.Message));
+            throw;
+        }
+    }
+
+    /// <summary>Whether the (absent or empty before) vault folder now holds anything; one that can't be listed counts as written.</summary>
+    private static bool VaultFolderWritten(DirectoryOwnerMatcher owner, string vaultDir)
+    {
+        try
+        {
+            return owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            return true;
         }
     }
 
@@ -514,8 +533,16 @@ public sealed class InitCommand : ICliCommand
 
         c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW\n");
         c.Out.WriteLine($"This is a break-glass credential for total hardware loss ({hardware}");
-        c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
-        c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
+        if (keyFile is null)
+        {
+            c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
+            c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
+        }
+        else
+        {
+            c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — the file below is");
+            c.Out.WriteLine("its only copy until you move it. If that copy is lost too, this recovery");
+        }
         c.Out.WriteLine("option is gone for good; your normal hardware unlock is unaffected either way.");
         c.Out.WriteLine("\nTo use it, pipe it in on stdin, never on the command line: to enroll new hardware, run");
         if (keyFile is null)
