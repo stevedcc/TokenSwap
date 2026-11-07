@@ -118,15 +118,22 @@ public sealed class RunCommand : ICliCommand
 
         // Review minor 1: the same word check on what the {{name}} tokens expand to (file tokens still as
         // typed), before anything is written: a secret whose value is 'base64' can't be the printer. The
-        // refusal names the token (re-review minor 3), never the word, which came from its value.
-        if (filesEnv is not null)
-            foreach (var (token, value) in secretValues)
-                if (Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(commandArgs,
-                        new Dictionary<string, string> { [token] = value }, new Dictionary<string, string>())) is not null)
-                    throw new TswapException(
-                        $"With a {{{{@file}}}} token, the value of {{{{{token}}}}} is a program or word that prints, " +
-                        "encodes or copies files, or a shell or interpreter, which would expose the filled copy. " +
-                        "Pass that secret another way, or run the command without the {{@file}} token.");
+        // refusal names the token (re-review minor 3), never the word, which came from its value. All tokens
+        // substituted at once decide (a word can come from two: {{a}}{{b}}, or {{w}} {{p}} as wrapper and
+        // program); one token at a time only picks the one to name, else every token is named.
+        if (filesEnv is not null && secretValues.Count > 0
+            && Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(commandArgs, secretValues, new Dictionary<string, string>())) is not null)
+        {
+            var culprit = secretValues.Keys.FirstOrDefault(token => Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(
+                commandArgs, new Dictionary<string, string> { [token] = secretValues[token] }, new Dictionary<string, string>())) is not null);
+            var named = culprit is not null
+                ? $"the value of {{{{{culprit}}}}} is"
+                : $"the values of {string.Join(", ", secretValues.Keys.Select(t => $"{{{{{t}}}}}"))} together make";
+            throw new TswapException(
+                $"With a {{{{@file}}}} token, {named} a program or word that prints, " +
+                "encodes or copies files, or a shell or interpreter, which would expose the filled copy. " +
+                "Pass that secret another way, or run the command without the {{@file}} token.");
+        }
 
         FilledFiles? files = null;
         try

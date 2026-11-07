@@ -833,6 +833,27 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
+    // Re-review (fix round 2): a word made by two tokens together is refused too, naming both tokens.
+    [Theory]
+    [InlineData("a", "ba", "b", "se64", "mytool {{a}}{{b}} {{@values.yaml}}")]
+    [InlineData("w", "nice", "p", "install", "{{w}} {{p}} {{@values.yaml}} /tmp/x")]
+    public void RunFileToken_WordFromTwoTokens_Refused(string first, string firstValue, string second, string secondValue, string command)
+    {
+        Ingest(first, firstValue);
+        Ingest(second, secondValue);
+        WriteFile("values.yaml", ValuesYaml);
+
+        var (exit, _, err) = Run(["run", .. command.Split(' ')]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{" + first + "}}", err);
+        Assert.Contains("{{" + second + "}}", err);
+        Assert.DoesNotContain(secondValue, err);
+        Assert.DoesNotContain($"'{firstValue}'", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
     [Fact]
     public void RunFileToken_UnreadableSourceRefused()
     {
