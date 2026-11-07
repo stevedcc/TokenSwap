@@ -859,6 +859,37 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
+    // Final review of #251: a word the post-substitution check refuses came from a secret's value, so
+    // the refusal names the token, never the word.
+    [Fact]
+    public void Run_ProgramFromATokenAfterSubstitution_RefusalNamesTheTokenNotTheValue()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("printenv", "ingest", "cmd");
+
+        var (exit, stdout, stderr) = RunTswap("run", "{{cmd}}", "PATH");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{cmd}}", stderr);
+        Assert.DoesNotContain("printenv", stderr);
+        Assert.DoesNotContain("printenv", stdout);
+    }
+
+    [Fact]
+    public void Run_InlineCodeFlagFromATokenAfterSubstitution_RefusalDoesNotRepeatTheFlag()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("-ec", "ingest", "opt");
+        var marker = Path.Combine(_tempDir, "ran");
+
+        var (exit, _, stderr) = RunTswap("run", "sh", "{{opt}}", $"touch {marker}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{opt}}", stderr);
+        Assert.DoesNotContain("-ec", stderr);
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
     [Fact]
     public void Run_ShellWithAScriptFile_RunsIt()
     {

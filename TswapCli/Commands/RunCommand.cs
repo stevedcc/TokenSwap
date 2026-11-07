@@ -124,11 +124,8 @@ public sealed class RunCommand : ICliCommand
         if (filesEnv is not null && secretValues.Count > 0
             && Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(commandArgs, secretValues, new Dictionary<string, string>())) is not null)
         {
-            var culprit = secretValues.Keys.FirstOrDefault(token => Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(
-                commandArgs, new Dictionary<string, string> { [token] = secretValues[token] }, new Dictionary<string, string>())) is not null);
-            var named = culprit is not null
-                ? $"the value of {{{{{culprit}}}}} is"
-                : $"the values of {string.Join(", ", secretValues.Keys.Select(t => $"{{{{{t}}}}}"))} together make";
+            var named = NameCulprit(commandArgs, secretValues, new Dictionary<string, string>(),
+                argv => Validation.GetFileTokenRefusal(argv) is not null, "is", "together make");
             throw new TswapException(
                 $"With a {{{{@file}}}} token, {named} a program or word that prints, " +
                 "encodes or copies files, or a shell or interpreter, which would expose the filled copy. " +
@@ -154,9 +151,21 @@ public sealed class RunCommand : ICliCommand
             // Re-check after substitution: a token in the program or option position (e.g.
             // `run {{cmd}} arg` where {{cmd}} expands to `echo`, or `run sh {{opt}} ...` expanding
             // to `-c`) would bypass the pre-substitution check above.
-            ThrowIfBlocked(Validation.GetBlockedInvocation(argv));
+            // The word refused here came from a secret's value, so the refusal names the token.
+            if (Validation.GetBlockedInvocation(argv) is { } blocked)
+            {
+                if (secretValues.Count == 0)
+                    ThrowIfBlocked(blocked);
+                var named = NameCulprit(commandArgs, secretValues, filePaths,
+                    a => Validation.GetBlockedInvocation(a) is not null, "makes", "together make");
+                throw new TswapException(
+                    $"After substitution, {named} this a command 'run' refuses, which could expose secret values: " +
+                    "a program that prints its arguments or environment, or a shell or interpreter given inline code " +
+                    "or code from stdin, which can print them past redaction. The refusal doesn't repeat the word, " +
+                    "which came from a secret's value.\nUse 'sudo ... get <name>' to view a secret.");
+            }
 
-            // Show sanitized version
+            // Show sanitised version
             if (ctx.Verbose)
             {
                 var sanitized = string.Join(" ", commandArgs.Select(Validation.SanitizeCommand));
@@ -202,6 +211,18 @@ public sealed class RunCommand : ICliCommand
             throw new TswapException(
                 $"'{token}' has no '# tswap:' markers, so there is nothing to fill: pass the file to the program as it is.");
         return content;
+    }
+
+    // Names the token whose value alone makes `refused` true ("the value of {{a}} <one>"), else every
+    // token: a word can come from two ({{a}}{{b}}, or {{w}} {{p}} as wrapper and program).
+    private static string NameCulprit(string[] commandArgs, Dictionary<string, string> secretValues,
+        IReadOnlyDictionary<string, string> filePaths, Func<string[], bool> refused, string one, string together)
+    {
+        var culprit = secretValues.Keys.FirstOrDefault(token => refused(Validation.SubstituteAllTokensInArgs(
+            commandArgs, new Dictionary<string, string> { [token] = secretValues[token] }, filePaths)));
+        return culprit is not null
+            ? $"the value of {{{{{culprit}}}}} {one}"
+            : $"the values of {string.Join(", ", secretValues.Keys.Select(t => $"{{{{{t}}}}}"))} {together}";
     }
 
     private static void ThrowIfBlocked(Validation.BlockedInvocation? blocked)
