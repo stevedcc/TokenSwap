@@ -154,34 +154,102 @@ public sealed class FingerprintScanner
     }
 
     /// <summary>
+    /// What one scan of a stream leaves for the next: the window, its prefix hashes and whitespace
+    /// counts, its hits, and the pending point <see cref="PendingFrom(ReadOnlySpan{char}, ScanState?)"/>
+    /// returned for it. A streaming redactor's next window usually starts with the held end of the last
+    /// one; when it does (checked on the text, character by character), the held part is neither hashed
+    /// nor scanned again. Not thread-safe: one per stream (the stream matcher keeps one per thread).
+    /// It holds the last window's text, i.e. output, until the next scan replaces it.
+    /// </summary>
+    public sealed class ScanState
+    {
+        internal string Text = "";
+        internal ulong[] Prefix = [];
+        internal int[] Counts = [];
+        internal List<FingerprintHit> Hits = [];
+        internal int Pending = -1;
+    }
+
+    /// <summary>
     /// Adds every confirmed hit in <paramref name="text"/> to <paramref name="hits"/>, in text
     /// coordinates, ordered by start, then length descending. Hits with an equal span are reported once:
     /// the first in tie order (name ordinal, current before previous, then kind).
     /// </summary>
-    public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits)
+    public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits) => Scan(text, hits, state: null);
+
+    /// <summary>
+    /// <see cref="Scan(ReadOnlySpan{char}, List{FingerprintHit})"/>, reusing what <paramref name="state"/>
+    /// carries from the previous window of the same stream when this window continues it from its pending
+    /// point; the hits are the same either way. Updates <paramref name="state"/> for the next window.
+    /// </summary>
+    public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits, ScanState? state)
     {
         ArgumentNullException.ThrowIfNull(hits);
         var b = _keys.RollingBase;
         if (text.Length == 0 || _candidates.Count == 0)
             return;
 
+        // The carried part: the previous window from its pending point, if this window starts with it.
+        var carried = 0;
+        if (state is { Pending: >= 0 } && state.Pending <= state.Text.Length
+            && state.Text.Length - state.Pending <= text.Length
+            && text[..(state.Text.Length - state.Pending)].SequenceEqual(state.Text.AsSpan(state.Pending)))
+            carried = state.Text.Length - state.Pending;
+
         List<FingerprintHit> found = [];
         var prefix = ArrayPool<ulong>.Shared.Rent(text.Length + 1);
+        var counts = _freeShapes.Length > 0 ? ArrayPool<int>.Shared.Rent(text.Length + 1) : null;
         try
         {
-            PrefixHashes(text, b, prefix);
+            if (carried > 0)
+            {
+                // Hashes and counts keep the previous window's origin: a window's hash and count are
+                // differences, so any common origin gives the same values.
+                state!.Prefix.AsSpan(state.Pending, carried + 1).CopyTo(prefix);
+                if (counts is not null)
+                    state.Counts.AsSpan(state.Pending, carried + 1).CopyTo(counts);
+                foreach (var hit in state.Hits)
+                    if (hit.Start >= state.Pending && hit.Start + hit.Length <= state.Text.Length)
+                        found.Add(hit with { Start = hit.Start - state.Pending });
+            }
+            else
+            {
+                prefix[0] = 0;
+                if (counts is not null) counts[0] = 0;
+            }
+            for (var i = carried; i < text.Length; i++)
+                prefix[i + 1] = Reduce((UInt128)prefix[i] * b + text[i]);
+            if (counts is not null)
+                for (var i = carried; i < text.Length; i++)
+                    counts[i + 1] = counts[i] + (IsWhitespace(text[i]) ? 1 : 0);
+
             if (_runLengths.Length > 0)
-                ScanRuns(text, prefix, b, found);
+                ScanRuns(text, prefix, b, carried, found);
             if (_freeShapes.Length > 0)
             {
-                ScanFree(text, prefix, b, rawStart: null, rawEnd: null, found);
+                ScanFree(text, prefix, counts!, b, carried, rawStart: null, rawEnd: null, found);
                 if (text.Contains("\r\n", StringComparison.Ordinal))
                     ScanFolded(text, b, found);
             }
         }
         finally
         {
-            ArrayPool<ulong>.Shared.Return(prefix);
+            if (state is null)
+            {
+                ArrayPool<ulong>.Shared.Return(prefix);
+                if (counts is not null) ArrayPool<int>.Shared.Return(counts);
+            }
+        }
+
+        if (state is not null)
+        {
+            if (state.Prefix.Length > 0) ArrayPool<ulong>.Shared.Return(state.Prefix);
+            if (state.Counts.Length > 0) ArrayPool<int>.Shared.Return(state.Counts);
+            state.Text = text.ToString();
+            state.Prefix = prefix;
+            state.Counts = counts ?? [];
+            state.Hits = found;
+            state.Pending = -1;
         }
 
         found.Sort(static (x, y) =>
@@ -212,7 +280,21 @@ public sealed class FingerprintScanner
     /// With free entries at least the last character is always held, so a <c>\r</c> waiting for its
     /// <c>\n</c> is never emitted early.
     /// </summary>
-    public int PendingFrom(ReadOnlySpan<char> text)
+    public int PendingFrom(ReadOnlySpan<char> text) => PendingFrom(text, state: null);
+
+    /// <summary>
+    /// <see cref="PendingFrom(ReadOnlySpan{char})"/>, remembered in <paramref name="state"/> when
+    /// <paramref name="text"/> is the window the state's last scan saw (the value does not depend on it).
+    /// </summary>
+    public int PendingFrom(ReadOnlySpan<char> text, ScanState? state)
+    {
+        var pendingFrom = PendingFromCore(text);
+        if (state is not null && text.SequenceEqual(state.Text))
+            state.Pending = pendingFrom;
+        return pendingFrom;
+    }
+
+    private int PendingFromCore(ReadOnlySpan<char> text)
     {
         var n = text.Length;
         var pending = n;
@@ -243,7 +325,7 @@ public sealed class FingerprintScanner
 
     // ── scanning ─────────────────────────────────────────────────────────────────────
 
-    private void ScanRuns(ReadOnlySpan<char> text, ulong[] prefix, ulong b, List<FingerprintHit> found)
+    private void ScanRuns(ReadOnlySpan<char> text, ulong[] prefix, ulong b, int carried, List<FingerprintHit> found)
     {
         var powers = PowersOf(b, _runLengths.Select(r => r.Length));
         var n = text.Length;
@@ -256,7 +338,7 @@ public sealed class FingerprintScanner
                 if (whitespaceEnd <= s) whitespaceEnd = RunEnd(text, s, IsWhitespace);
                 for (var k = 0; k < _runLengths.Length && _runLengths[k].Length <= whitespaceEnd - s; k++)
                 {
-                    if ((_runLengths[k].Classes & Classes.WhitespaceOnly) != 0)
+                    if ((_runLengths[k].Classes & Classes.WhitespaceOnly) != 0 && s + _runLengths[k].Length > carried)
                         Try(text, prefix, powers[k], s, _runLengths[k].Length, s, _runLengths[k].Length, found);
                 }
                 continue;
@@ -271,6 +353,8 @@ public sealed class FingerprintScanner
                 var (length, classes) = _runLengths[k];
                 if (length > whitespaceFreeRun)
                     break;
+                if (s + length <= carried)
+                    continue; // tried in the previous window; its hits are carried
                 if ((classes & Classes.WhitespaceFree) != 0
                     || ((classes & Classes.Base64) != 0 && length <= base64Run)
                     || ((classes & Classes.Base64Url) != 0 && length <= base64UrlRun))
@@ -283,35 +367,26 @@ public sealed class FingerprintScanner
     /// Free entries over one view. <paramref name="rawStart"/>/<paramref name="rawEnd"/> map a folded
     /// view's indices back to the raw text (null: the view is the raw text).
     /// </summary>
-    private void ScanFree(ReadOnlySpan<char> view, ulong[] prefix, ulong b, int[]? rawStart, int[]? rawEnd, List<FingerprintHit> found)
+    private void ScanFree(ReadOnlySpan<char> view, ulong[] prefix, int[] counts, ulong b, int carried, int[]? rawStart, int[]? rawEnd, List<FingerprintHit> found)
     {
         var powers = PowersOf(b, _freeShapes.Select(f => f.Length));
         var n = view.Length;
-        var counts = ArrayPool<int>.Shared.Rent(n + 1);
-        try
+        for (var s = 0; s < n; s++)
         {
-            counts[0] = 0;
-            for (var i = 0; i < n; i++)
-                counts[i + 1] = counts[i] + (IsWhitespace(view[i]) ? 1 : 0);
-            for (var s = 0; s < n; s++)
+            for (var k = 0; k < _freeShapes.Length; k++)
             {
-                for (var k = 0; k < _freeShapes.Length; k++)
-                {
-                    var (length, whitespace) = _freeShapes[k];
-                    if (s + length > n)
-                        break;
-                    if (whitespace >= 0 && counts[s + length] - counts[s] != whitespace)
-                        continue;
-                    if (rawStart is null)
-                        Try(view, prefix, powers[k], s, length, s, length, found);
-                    else
-                        Try(view, prefix, powers[k], s, length, rawStart[s], rawEnd![s + length - 1] - rawStart[s], found);
-                }
+                var (length, whitespace) = _freeShapes[k];
+                if (s + length > n)
+                    break;
+                if (s + length <= carried)
+                    continue; // tried in the previous window; its hits are carried
+                if (whitespace >= 0 && counts[s + length] - counts[s] != whitespace)
+                    continue;
+                if (rawStart is null)
+                    Try(view, prefix, powers[k], s, length, s, length, found);
+                else
+                    Try(view, prefix, powers[k], s, length, rawStart[s], rawEnd![s + length - 1] - rawStart[s], found);
             }
-        }
-        finally
-        {
-            ArrayPool<int>.Shared.Return(counts);
         }
     }
 
@@ -323,6 +398,7 @@ public sealed class FingerprintScanner
         var rawStart = ArrayPool<int>.Shared.Rent(n);
         var rawEnd = ArrayPool<int>.Shared.Rent(n);
         var prefix = ArrayPool<ulong>.Shared.Rent(n + 1);
+        var counts = ArrayPool<int>.Shared.Rent(n + 1);
         try
         {
             var m = 0;
@@ -338,7 +414,10 @@ public sealed class FingerprintScanner
             }
             var view = folded.AsSpan(0, m);
             PrefixHashes(view, b, prefix);
-            ScanFree(view, prefix, b, rawStart, rawEnd, found);
+            counts[0] = 0;
+            for (var i = 0; i < m; i++)
+                counts[i + 1] = counts[i] + (IsWhitespace(view[i]) ? 1 : 0);
+            ScanFree(view, prefix, counts, b, carried: 0, rawStart, rawEnd, found);
         }
         finally
         {
@@ -346,6 +425,7 @@ public sealed class FingerprintScanner
             ArrayPool<int>.Shared.Return(rawStart);
             ArrayPool<int>.Shared.Return(rawEnd);
             ArrayPool<ulong>.Shared.Return(prefix);
+            ArrayPool<int>.Shared.Return(counts);
         }
     }
 

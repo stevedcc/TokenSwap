@@ -9,11 +9,15 @@ namespace TswapCli;
 /// the vault (current and previous, burned ones included) from the keyed fingerprints alone, through a
 /// <see cref="FingerprintScanner"/>, with the label <c>run</c> gives its own tokens:
 /// <c>[REDACTED: name]</c>, or <c>[REDACTED: name:previous]</c> for a previous value, for every kind of
-/// variant. Stateless per call, so one matcher serves both of the pipe runner's drain threads.
+/// variant. Each thread carries its own <see cref="FingerprintScanner.ScanState"/> from one window to
+/// the next, so the held end of the output is not hashed and scanned again with every chunk; the state
+/// is used only when the next window starts with that held text (checked on the text), so the results
+/// are those of a fresh scan, and one matcher still serves both of the pipe runner's drain threads.
 /// </summary>
 internal sealed class FingerprintStreamMatcher : IStreamMatcher
 {
     private readonly FingerprintScanner _scanner;
+    private readonly ThreadLocal<FingerprintScanner.ScanState> _state = new(() => new());
 
     private FingerprintStreamMatcher(FingerprintScanner scanner)
     {
@@ -41,12 +45,12 @@ internal sealed class FingerprintStreamMatcher : IStreamMatcher
     public void FindMatches(ReadOnlySpan<char> window, ICollection<StreamMatch> matches)
     {
         List<FingerprintHit> hits = [];
-        _scanner.Scan(window, hits);
+        _scanner.Scan(window, hits, _state.Value);
         foreach (var hit in hits)
             matches.Add(new StreamMatch(hit.Start, hit.Length, Label(hit)));
     }
 
-    public int PendingFrom(ReadOnlySpan<char> window) => _scanner.PendingFrom(window);
+    public int PendingFrom(ReadOnlySpan<char> window) => _scanner.PendingFrom(window, _state.Value);
 
     private static string Label(FingerprintHit hit) =>
         hit.IsPrevious ? $"[REDACTED: {hit.Name}:previous]" : $"[REDACTED: {hit.Name}]";

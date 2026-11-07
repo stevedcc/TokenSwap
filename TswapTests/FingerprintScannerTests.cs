@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TswapCore;
 using TswapCore.Fingerprints;
 using Xunit;
 
@@ -384,6 +385,106 @@ public class FingerprintScannerTests
         // Control: the genuine entry confirms the text it really describes.
         Assert.Equal([new FingerprintHit("binary-secret", false, VariantKind.Plain, 0, 3)],
             Scan(FingerprintScanner.Build([("binary-secret", false, new FingerprintSet(SecretVariants.CurrentSetVersion, [value]))], keys), "ab\uFFFD"));
+    }
+
+    // ── carried state across chunks ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Property: a scan that carries its state from the previous window (as the stream matcher does)
+    /// reports exactly the hits of a fresh scan of the same window, for windows that continue the
+    /// previous one from its pending point, from another point (more or less held), or not at all.
+    /// Fails if carried state is used without checking that the new window really continues it.
+    /// </summary>
+    [Fact]
+    public void Scan_CarriedState_SameHitsAsFreshScan()
+    {
+        var rng = new Random(5150);
+        using var keys = NewKeys();
+        for (var round = 0; round < 120; round++)
+        {
+            var (sets, values) = RandomVault(rng, keys);
+            var (text, _) = PlantedText(rng, values);
+            if (rng.Next(2) == 0)
+                text = Onlcr(text);
+            var scanner = FingerprintScanner.Build(sets, keys);
+            var state = new FingerprintScanner.ScanState();
+            var window = "";
+            for (var consumed = 0; consumed < text.Length || window.Length > 0;)
+            {
+                var size = rng.Next(1, 40);
+                window += text.Substring(consumed, Math.Min(size, text.Length - consumed));
+                consumed = Math.Min(text.Length, consumed + size);
+
+                List<FingerprintHit> carried = [];
+                scanner.Scan(window, carried, state);
+                var pending = scanner.PendingFrom(window, state);
+                Assert.Equal(Scan(scanner, window), carried);
+                Assert.Equal(scanner.PendingFrom(window), pending);
+
+                // Hold from the pending point, or (sometimes) from another one, or start afresh.
+                var hold = rng.Next(5) switch
+                {
+                    0 => rng.Next(0, window.Length + 1),
+                    1 => window.Length,
+                    _ => pending,
+                };
+                window = consumed >= text.Length ? "" : window[hold..];
+                if (rng.Next(30) == 0)
+                    window = RandomString(rng, rng.Next(0, 20), Filler); // unrelated text
+            }
+        }
+    }
+
+    /// <summary>
+    /// The stream matcher (which carries state) through the real redactor gives the output a stateless
+    /// scan gives, for every chunk size 1..N, on a corpus with multi-line values through ONLCR.
+    /// </summary>
+    [Fact]
+    public void Matcher_CarriedState_SameOutputForEveryChunkSize()
+    {
+        var rng = new Random(77077);
+        using var keys = NewKeys();
+        for (var round = 0; round < 6; round++)
+        {
+            var (sets, values) = RandomVault(rng, keys);
+            var (text, _) = PlantedText(rng, values);
+            text = Onlcr(text) + text;
+            var records = sets.GroupBy(s => s.Name).Select(g => new TswapCore.Keyring.RecordMetadata(
+                RandomNumberGenerator.GetBytes(32), TswapCore.Keyring.Stamp.Zero, TswapCore.Keyring.RecordType.Value,
+                TswapCore.Keyring.Stamp.Zero, g.Key, 0, [], g.FirstOrDefault(s => !s.IsPrevious).Set,
+                g.Any(s => s.IsPrevious) ? TswapCore.Keyring.Stamp.Zero : null, g.FirstOrDefault(s => s.IsPrevious).Set, [])).ToList();
+            var carrying = TswapCli.FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys);
+            var stateless = new StatelessMatcher(FingerprintScanner.Build(
+                records.SelectMany(r => r.RetainedVersions().Where(v => v.Fingerprints is not null).Select(v => (r.Name, v.IsPrevious, v.Fingerprints!))), keys));
+
+            for (var size = 1; size <= 64; size++)
+                Assert.Equal(Redact(stateless, text, size), Redact(carrying, text, size));
+        }
+    }
+
+    private static string Redact(RedactingPty.IStreamMatcher matcher, string text, int size)
+    {
+        var redactor = new RedactingPty.StreamRedactor([], [matcher]);
+        var sb = new StringBuilder();
+        for (var i = 0; i < text.Length; i += size)
+            sb.Append(redactor.ProcessChunk(text.Substring(i, Math.Min(size, text.Length - i))));
+        return sb.Append(redactor.Flush()).ToString();
+    }
+
+    /// <summary>The matcher as it was before state was carried: a fresh scan of every window.</summary>
+    private sealed class StatelessMatcher(FingerprintScanner scanner) : RedactingPty.IStreamMatcher
+    {
+        public int MaxMatchLength { get; } = Math.Max(1, scanner.MaxRawLength);
+
+        public void FindMatches(ReadOnlySpan<char> window, ICollection<RedactingPty.StreamMatch> matches)
+        {
+            List<FingerprintHit> hits = [];
+            scanner.Scan(window, hits);
+            foreach (var h in hits)
+                matches.Add(new RedactingPty.StreamMatch(h.Start, h.Length, h.IsPrevious ? $"[REDACTED: {h.Name}:previous]" : $"[REDACTED: {h.Name}]"));
+        }
+
+        public int PendingFrom(ReadOnlySpan<char> window) => scanner.PendingFrom(window);
     }
 
     [Fact]
