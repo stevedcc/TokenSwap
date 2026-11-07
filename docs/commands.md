@@ -66,13 +66,16 @@ commands print a note naming the count and the reindex, which adds the newer var
 The other reading commands keep working on format 2 records: `names`, `list`, `burned`, and
 `check`, `get` or `apply` on a record they name, decrypt such a record whole (the only way to read
 format 2), wipe the values they don't use, and print one line on stderr after their output, with
-the number of records and the same fix. Exit codes don't change. Neither text ever names a secret,
-a file or a value.
+the number of records and the same fix (when they fail, before the error). Exit codes don't change.
+None of these texts (the refusal, the note, the warning) ever names a secret, a file or a value.
 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
-lines, and neither command matches a secret inside a label or marker it inserted itself; `get` and
-`apply` no longer report records they don't read; `check` no longer stops on an unreadable format 2
-record that no marker names.
+lines; neither command matches a secret inside or across a label or marker it inserted itself;
+`tocomment --dry-run` redacts its "before" lines in one pass, so a value spanning two changed lines is
+masked there too; `get` and `apply` no longer report records they don't read; `check` no longer stops
+on an unreadable format 2 record that no marker names; and conflicted copies that only their
+plaintext could show equal make `list` and `check` refuse that record
+([details](security-model.md#what-each-command-decrypts)).
 
 ## Commands
 
