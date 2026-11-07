@@ -69,9 +69,9 @@ namespace TswapCore.Vault.Interop;
 /// object context) are TPM-protected structures, not plaintext key material, so leaving them as
 /// transient files is fine.</para>
 ///
-/// <para><b>Status:</b> the RSA-2048 path is verified on one physical TPM, an Intel PTT (#155); the
-/// ECC P-256 path is tested against swtpm, and its real-hardware check is recorded in
-/// <c>docs/design/hardware-backends.md</c>'s Linux TPM section (#261). The trait-gated tests prove
+/// <para><b>Status:</b> both paths are verified on two physical TPMs, an Intel PTT and an Infineon
+/// SLB 9665 (RSA-2048 since #155 on the PTT, both in #261); still open are a full host power cycle and
+/// <c>tpm2_clear</c> (<c>docs/design/hardware-backends.md</c>'s Linux TPM section). The trait-gated tests prove
 /// protocol-level correctness (seal/unseal round-trip, error handling, wire format, the pinned
 /// templates) against swtpm, not that the real hardware root-of-trust property holds.</para>
 /// </summary>
@@ -249,9 +249,10 @@ internal static partial class Tpm2ToolsInterop
     private static byte[] UnsealCore(byte[] wrapped, bool eccPrimary, StretchedPassword? password)
     {
         // Ruling 3: an unsplit password blob ("TSTP" read as a length is 0x50545354) is refused before
-        // tpm2-tools is touched, with the legacy parser's text, not "corrupted".
+        // tpm2-tools is touched, with the legacy parser's text, not "corrupted" (issue #261: one without the password bit
+        // doesn't claim the password).
         if (TpmSlotBlob.HasHeader(wrapped))
-            throw new TswapException(VaultPasswordMessages.LegacyParserNeedsNewerTswap(wrapped.Length > 4 ? wrapped[4] : 0));
+            throw new TswapException(VaultPasswordMessages.UnsplitTpmHeader(wrapped));
 
         RequireAvailable();
 

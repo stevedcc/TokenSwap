@@ -164,9 +164,9 @@ internal static class PlatformCryptoProviderInterop
     private static byte[] UnwrapCore(byte[] wrapped, StretchedPassword? password)
     {
         // Ruling 3: an unsplit password blob ("TSTP" read as a length is 0x50545354) must not be parsed
-        // as a legacy package and called corrupted.
+        // as a legacy package and called corrupted (issue #261: one without the password bit doesn't claim the password).
         if (TpmSlotBlob.HasHeader(wrapped))
-            throw new TswapException(VaultPasswordMessages.LegacyParserNeedsNewerTswap(wrapped.Length > 4 ? wrapped[4] : 0));
+            throw new TswapException(VaultPasswordMessages.UnsplitTpmHeader(wrapped));
 
         RequireAvailable();
 

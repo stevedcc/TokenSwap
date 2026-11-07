@@ -296,7 +296,7 @@ public class Tpm2ArgvTests
     [Theory]
     [InlineData(1, 0x01)]
     [InlineData(2, 0x01)]
-    [InlineData(1, 0x02)]
+    [InlineData(1, 0x03)]
     public void UnsplitTstpBlob_SaysNewerTswap(byte version, byte flags)
     {
         if (!OperatingSystem.IsLinux())
@@ -310,6 +310,29 @@ public class Tpm2ArgvTests
         var ex = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(tstp, eccPrimary: false));
 
         Assert.Equal(VaultPasswordMessages.LegacyParserNeedsNewerTswap(version), ex.Message);
+        Assert.Empty(tpm.Calls); // refused before tpm2-tools is touched
+    }
+
+    /// <summary>
+    /// Issue #261: an unsplit <c>TSTP</c> blob without the password bit (an ECC slot's <c>0x02</c>) gets the plain "needs
+    /// a newer tswap" text, the one v0.2.0 says for it, and never claims the slot needs the vault password.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0x02)]
+    [InlineData(2, 0x02)]
+    public void UnsplitTstpBlob_WithoutThePasswordBit_DoesNotClaimThePassword(byte version, byte flags)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var tpm = new FakeTpm2Tools();
+        using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
+        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.EccPrimary);
+        tstp[4] = version;
+        tstp[5] = flags;
+
+        var ex = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(tstp, eccPrimary: true));
+
+        Assert.Equal(SlotPassword.NeedsNewerTswapText(version), ex.Message);
         Assert.Empty(tpm.Calls); // refused before tpm2-tools is touched
     }
 
