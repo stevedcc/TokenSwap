@@ -23,6 +23,11 @@ public `Seal`/`Unseal` contract, the simulator layout, full template pinning, mo
 real v0.2.0 binary check, doc-comment updates; the stripped-header message loss accepted and
 documented.
 
+**Plan review round 2** (GLM, MiMo: approve, minors folded in): unknown-bit precedence with
+`0x05`/`0x06` tests, the `SlotPassword` class doc, template pinning through tpm2-tools' algorithm
+spec plus committed expected template fields, the `TpmSealedKey` check and fallback, the
+simulator's password-free blob in the test inventory.
+
 **Out of scope.** Windows (its PCP key is created once at enrolment; an unlock does no key
 generation). Converting existing RSA slots (the owner adds a new slot and removes the old one).
 A flag or option to choose the algorithm (owner: ECC for new slots, no flag).
@@ -38,8 +43,8 @@ is shared by the Linux and Windows TPM backends.
   primary". The header version stays 1.
 - **Known flags are per magic, the same on every OS:** `TSTP` knows bits 0 and 1, `TSSE` only bit
   0. Classification (`SlotPassword.Describe`, so `slots` and `YubiKeyCommand`'s header check):
-  bit 0 set → Password; no bit 0 but a known bit → None; `0x00` → Corrupt; an unknown bit →
-  NeedsNewerTswap. So `TSTP 0x02` is None and `0x03` Password everywhere, including on Windows
+  an unknown bit → NeedsNewerTswap, whatever else is set (checked first, as v0.2.0 does); else
+  bit 0 set → Password; else a known bit → None; `0x00` → Corrupt. So `TSTP 0x02` is None and `0x03` Password everywhere, including on Windows
   and macOS listing a synced keyring; `TSSE 0x02` is NeedsNewerTswap.
 - **Every new Linux TPM slot has a `TSTP` header:** flags `0x02` (no password) or `0x03`
   (password). A legacy package (no magic) and `TSTP 0x01` mean RSA-2048, as now.
@@ -61,7 +66,9 @@ is shared by the Linux and Windows TPM backends.
   TPM or corrupted" message instead of today's stripped-header text for a password slot. It fails
   closed either way; documented in HARDWARE_BACKENDS.md.
 - **`Config.TpmSealedKey`** (pre-keyring single-slot vaults) is written by no current code path
-  (checked: only the model declares it); it is read as before, RSA.
+  (checked: only the model declares it; Task 1 repeats the check and names it in its commit); it is
+  read as before, RSA. If a writer turns up, it re-seals under ECC and wraps `0x02`; it never
+  wraps an RSA package.
 
 ## Code
 
@@ -69,11 +76,15 @@ is shared by the Linux and Windows TPM backends.
   returning the flags; `SlotPassword.Describe` passes each magic's known flags.
   `TpmSlotBlob`: flag constants `Password = 0x01`, `EccPrimary = 0x02`; `Wrap(package, flags)`;
   `Split` → `(bool Password, bool EccPrimary, byte[] Package)`.
-- `Tpm2ToolsInterop`: the primary template is pinned in full for each algorithm (`-G`,
-  `-g sha256`, `-a` attributes, symmetric `aes128cfb`), not only `-G`: the RSA template must stay
+- `Tpm2ToolsInterop`: the primary template is pinned for each algorithm through tpm2-tools' own
+  options: `-G rsa2048:null:aes128cfb` / `-G ecc256:null:aes128cfb` (key type, scheme, symmetric),
+  `-g sha256`, `-a` with the attributes; unique data and policy stay empty. Not only `-G`: the RSA template must stay
   what v0.2.0's tpm2-tools defaults gave, or existing slots stop opening after a tool upgrade, and
   the ECC one is new and pinned from the start. Task 2 proves each pinned template gives a
-  byte-identical public area to the default one (`tpm2_readpublic`). `Seal` always creates the ECC
+  byte-identical public area to the default one (`tpm2_readpublic`), and also compares the
+  template fields (type, nameAlg, attributes, symmetric, scheme, curve/key bits; not the unique
+  key) with expected values committed in the test, so a tool upgrade that changed both
+  invocations at once still fails it. Fields tpm2-tools can't pin are listed in HARDWARE_BACKENDS.md. `Seal` always creates the ECC
   primary; `Unseal(package, eccPrimary, password)` picks the template. Flush-before-create unchanged.
 - `LinuxTpmHardwareService`: public `Seal(key)` returns an ECC package; public `Unseal(package,
   eccPrimary)` replaces `Unseal(package)`; `Enroll` wraps with `EccPrimary` or `EccPrimary |
@@ -85,7 +96,8 @@ is shared by the Linux and Windows TPM backends.
   uses the Linux layout (`0x02`/`0x03`); the Windows layout is covered by the real Windows TPM
   tests only. Stated in its doc comment.
 - Texts and doc comments that describe the one-bit header change with it: `CorruptText` ("a
-  header with no known flag, …"), `SlotPasswordKind` docs, `TpmSlotBlob`'s and
+  header with no known flag, …"), `SlotPasswordKind` docs, the `SlotPassword` class doc's
+  classification table, `TpmSlotBlob`'s and
   `PasswordBlobHeader`'s docs, `SecureEnclaveSlotBlob`'s. The "simulator only, not verified on
   real hardware" status notes in `Tpm2ToolsInterop` and `LinuxTpmHardwareService` are updated
   from #155's results.
@@ -93,10 +105,11 @@ is shared by the Linux and Windows TPM backends.
 ## Tasks
 
 1. **Format and parsing (TDD, no TPM needed).** First, list the existing tests that pin the old
-   format (blob shapes, classification, `CorruptText`) and say in the commit message which ones
+   format (blob shapes incl. the simulator's header-less password-free TPM blob, classification,
+   `CorruptText`) and say in the commit message which ones
    change and why (rule: an assertion changes only because the format rules changed). Tests first:
    `TpmSlotBlob` round trip for `0x02`/`0x03`; legacy package and `0x01` read as RSA; `0x00`
-   Corrupt; `0x04` NeedsNewerTswap; `TSSE 0x02` NeedsNewerTswap; `Wrap` refuses `0x00` and `0x04`;
+   Corrupt; `0x04`, `0x05` and `0x06` NeedsNewerTswap (an unknown bit wins); `TSSE 0x02` NeedsNewerTswap; `Wrap` refuses `0x00` and `0x04`;
    `SlotPassword.Classify` for each; a v0.2.0-shaped parser (the released `Parse`, copied into
    the test as a fixture) gives exactly "needs a newer tswap (blob version 1 or unknown flags);
    upgrade tswap." for `0x02` and `0x03` and Password for `0x01`; a `0x02` simulated slot unlocks
