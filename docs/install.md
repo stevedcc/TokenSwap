@@ -37,7 +37,7 @@ You need the .NET 10 SDK at build time only. The compiled binary needs no .NET r
   keyboard.
 - **FIDO2 slots** reach the key through its FIDO interface instead: on Linux, through its hidraw
   device, which current distributions open to the logged-in user with systemd's own rule
-  (`60-fido-id.rules`) and Yubico's udev rule covers too; on Windows, through Windows' own WebAuthn
+  (`60-fido-id.rules`), which Yubico's udev rule covers too; on Windows, through Windows' own WebAuthn
   API (no administrator needed, version 4 or later). Not yet checked on a Linux machine without
   Yubico's rule, or on a Mac with a release build.
 

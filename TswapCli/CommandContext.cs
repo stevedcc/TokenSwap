@@ -130,7 +130,7 @@ public sealed record CommandContext(
 
     /// <summary>
     /// The FIDO2 slots' key service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS
-    /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it, and on Windows until task 5.
+    /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it.
     /// </summary>
     public IFido2Service? Fido2 { get; init; }
 

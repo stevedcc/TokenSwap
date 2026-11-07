@@ -215,12 +215,12 @@ a key keeps separate outputs with and without it) becomes the slot key:
 ```
 KEK_slot = HKDF-SHA256(ikm  = output(32),
                        salt = PRF input(32),
-                       info = "tswap/fido2-slot/v1" || slotId,      32 bytes)
+                       info = "tswap/fido2-slot/v1" || slotId,      output length 32)
 
 password slot:
 KEK_slot = HKDF-SHA256(ikm  = output(32) || stretched vault password(32),
                        salt = PRF input(32),
-                       info = "tswap/fido2-slot/v2" || slotId,      32 bytes)
+                       info = "tswap/fido2-slot/v2" || slotId,      output length 32)
 ```
 
 (`TswapCore/Keyring/Fido2SlotKek.cs`.) HKDF, not PBKDF2, as for `YubiKeySlotKek`: the output is a

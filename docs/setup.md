@@ -287,7 +287,8 @@ tswap slots                            # YubiKey 12345678, FIDO2: PIN + touch, n
   the vault on any machine that has the vault folder and the key, like an OTP slot.
 - `tswap slots` shows a FIDO2 slot by its key's serial, or by its model when the key reported no
   serial (`Security Key NFC by Yubico, FIDO2: PIN + touch, no password`). When the vault has a
-  password slot, it counts the password-free FIDO2 slots on their own line:
+  password slot, it counts the password-free FIDO2 slots apart, on a line of their own, beside (not
+  instead of) the line for the other password-free slots:
   `N FIDO2 slot(s) open without the vault password (each still needs its key's FIDO2 PIN and a
   touch).`
 

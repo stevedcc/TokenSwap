@@ -254,4 +254,53 @@ public sealed class GuidedInitFido2Tests : IDisposable
         var machine = Assert.Single(m.Keyring.Slots, s => s.Kind == SlotKind.Machine);
         Assert.IsType<YubiKeySlotKind.Otp>(YubiKeySlotKinds.Classify(machine.HwBlob));
     }
+
+    // Final review: a FIDO2 listing problem is said on its own line, without "(no YubiKey plugged in)" beside it.
+    [Fact]
+    public void GuidedInit_Fido2ListingProblem_NoNoYubiKeyLine()
+    {
+        var m = Machine(OSPlatform.Linux);
+        m.Fido2Keys!.AddKey(Serial, Fido2TestSlots.Aaguid);
+        m.Fido2Keys.FailNext(FakeFido2Op.Find, TswapCore.Vault.Fido2.Fido2Failure.Busy);
+
+        var (_, stdout, _) = m.RunOnTerminal("\n", "init", "--no-password");
+
+        Assert.Contains("  FIDO2 keys: ", stdout);
+        Assert.DoesNotContain("(no YubiKey plugged in)", stdout);
+    }
+
+    // Final review: stopping after a make-credential says the key may keep an unused credential, and that it is
+    // harmless; a stop before any credential was made doesn't.
+    [Fact]
+    public void GuidedInit_StopAfterMakeCredential_SaysAnUnusedCredentialMayStay()
+    {
+        var m = Machine(OSPlatform.Linux);
+        m.Fido2Keys!.AddKey(Serial, Fido2TestSlots.Aaguid);
+        m.Fido2Keys.FailNext(FakeFido2Op.GetHmacSecret, TswapCore.Vault.Fido2.Fido2Failure.TimedOut, afterPin: true);
+        m.Terminal!.Enqueue(Pin, Pin);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"Stopped without YubiKey {Serial}, FIDO2. No config or vault was written. {GuidedInit.UnusedCredentialNote}", stdout + stderr);
+    }
+
+    [Fact]
+    public void GuidedInit_StopBeforeMakeCredential_SaysNothingAboutCredentials()
+    {
+        var m = Machine(OSPlatform.Linux);
+        m.Fido2Keys!.AddKey(Serial, Fido2TestSlots.Aaguid);
+        m.Terminal!.Enqueue("000000"); // a wrong PIN: make-credential refused
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"Stopped without YubiKey {Serial}, FIDO2. No config or vault was written.", stdout + stderr);
+        Assert.DoesNotContain(GuidedInit.UnusedCredentialNote, stdout + stderr);
+    }
+
+    [Fact]
+    public void UnusedCredentialNote_SaysItIsHarmless() =>
+        Assert.Equal("A key used in this run may keep an unused FIDO2 credential: harmless, a YubiKey stores nothing for it.",
+            GuidedInit.UnusedCredentialNote);
 }

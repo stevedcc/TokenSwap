@@ -89,6 +89,8 @@ public class InitFido2Tests : IDisposable
         Assert.Equal([FakeFido2Op.MakeCredential, FakeFido2Op.GetHmacSecret], _fido2.Calls.Select(c => c.Op).Where(op => op != FakeFido2Op.Find));
         Assert.Contains(Fido2SlotEnrollment.ResetWarning($"YubiKey {SerialA}"), stdout);
         Assert.DoesNotContain(Fido2SlotEnrollment.MultiOsHint, stdout + stderr);
+        // The closing line says how to add a spare on every OS (final review).
+        Assert.Contains("  tswap slot add --fido2 (with sudo, or from an elevated prompt on Windows)", stdout);
     }
 
     [Fact]

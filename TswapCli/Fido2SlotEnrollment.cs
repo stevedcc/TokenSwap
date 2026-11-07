@@ -166,10 +166,11 @@ internal static class Fido2SlotEnrollment
     /// <paramref name="vaultKey"/> (K_v) for it and zeroes <c>KEK_slot</c>.
     /// </summary>
     public static (Slot Slot, Fido2SlotBlob Blob) EnrollAsSlot(
-        CommandContext ctx, Fido2KeyInfo? key, byte[] vaultKey, Keyring keyring, StretchedPassword? password)
+        CommandContext ctx, Fido2KeyInfo? key, byte[] vaultKey, Keyring keyring, StretchedPassword? password,
+        Action? credentialMade = null)
     {
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = Enroll(ctx, key, slotId, VaultFido2Slots(keyring), password);
+        var (blob, kekSlot) = Enroll(ctx, key, slotId, VaultFido2Slots(keyring), password, credentialMade);
         try
         {
             var slotKeyPair = SlotKeyPair.Generate();
@@ -187,10 +188,12 @@ internal static class Fido2SlotEnrollment
     /// <summary>
     /// The two key operations for the slot <paramref name="slotId"/>: make-credential, then one assertion of the new
     /// credential, whose output gives <c>KEK_slot</c> (zeroed here; the caller zeroes the returned KEK). A failure of
-    /// the second says <see cref="RetrySafeText"/>.
+    /// the second says <see cref="RetrySafeText"/>. <paramref name="credentialMade"/> runs once make-credential
+    /// succeeded (guided init's stop note).
     /// </summary>
     public static (Fido2SlotBlob Blob, byte[] KekSlot) Enroll(
-        CommandContext ctx, Fido2KeyInfo? key, byte[] slotId, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, StretchedPassword? password)
+        CommandContext ctx, Fido2KeyInfo? key, byte[] slotId, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, StretchedPassword? password,
+        Action? credentialMade = null)
     {
         var fido2 = ctx.Fido2 ?? throw new TswapException(Unavailable);
         var c = ctx.Console;
@@ -206,6 +209,7 @@ internal static class Fido2SlotEnrollment
         if (!fido2.CanList)
             c.Out.WriteLine(WindowsTouchLine);
         var blob = fido2.Enrol(key, password is not null, vaultFido2Slots, pin);
+        credentialMade?.Invoke();
 
         if (!fido2.CanList)
             c.Out.WriteLine(WindowsTouchLine);

@@ -56,9 +56,10 @@ where shell history keeps them; read them without echo instead (bash: `read -rs 
 - **`tswap slots`** marks each machine slot `vault password` or `no password`. It warns when slots
   without the password sit beside password slots
   (`<n> slot(s) open without the password: keep them away from shared machines.`). A password-free
-  [FIDO2 slot](setup.md#fido2-slots) still needs its key's PIN and a touch, so it is counted on a
-  line of its own (`<n> FIDO2 slot(s) open without the vault password (each still needs its key's
-  FIDO2 PIN and a touch).`).
+  [FIDO2 slot](setup.md#fido2-slots) still needs its key's PIN and a touch, so the password-free
+  FIDO2 slots are counted apart, on a line of their own (`<n> FIDO2 slot(s) open without the vault
+  password (each still needs its key's FIDO2 PIN and a touch).`); the other password-free slots
+  keep the line above, so both lines can appear.
 - **Version.** Every machine that opens a password slot, or rewrites a keyring that holds one, needs
   tswap 0.2.0 or newer. A 0.1.x build reads a password slot's blob as damage ("config is
   corrupted").

@@ -44,6 +44,10 @@ internal static class GuidedInit
         "FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to give it two slots; either " +
         "opens the vault.";
 
+    /// <summary>Final review: added to a stop once a FIDO2 credential was made in the run (nothing written uses it).</summary>
+    internal const string UnusedCredentialNote =
+        "A key used in this run may keep an unused FIDO2 credential: harmless, a YubiKey stores nothing for it.";
+
     /// <summary>FIDO2 plan, task 8: Windows' one FIDO2 entry (its dialog picks the key, so tswap can't list them).</summary>
     internal const string WindowsFido2Entry = "a YubiKey's FIDO2 slot (Windows' dialog: pick the key, PIN, touch)";
 
@@ -130,7 +134,7 @@ internal static class GuidedInit
             c.Out.WriteLine($"  {i + 1}. {devices[i].Entry}");
         if (yubiKeyProblem is not null)
             c.Out.WriteLine($"  YubiKeys: {yubiKeyProblem}");
-        else if (serials.Count == 0 && fido2Keys.Count == 0 && fido2 is not { CanList: false })
+        else if (serials.Count == 0 && fido2Keys.Count == 0 && fido2Problem is null && fido2 is not { CanList: false })
             c.Out.WriteLine("  (no YubiKey plugged in)");
         if (fido2Problem is not null)
             c.Out.WriteLine($"  FIDO2 keys: {fido2Problem}");
@@ -317,6 +321,9 @@ internal static class GuidedInit
                 YubiKeySlotEnrollment.PrintTouchPolicy(c, blob); // explained here, acknowledged below
             }
 
+            // Set once a FIDO2 credential was made in this run: a stop then says the key may keep it, unused.
+            var madeCredential = false;
+            string StopNote() => madeCredential ? " " + UnusedCredentialNote : "";
             foreach (var slot in picked.Where(p => p.Device.Kind == DeviceKind.Fido2))
             {
                 var stretched = slot.NeedsPassword ? password!.Stretched : null;
@@ -336,16 +343,17 @@ internal static class GuidedInit
                     else if (!key.PinSet)
                         key = Fido2SlotEnrollment.OfferPin(ctx, fido2!, key);
                     if (keyring is null)
-                        (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], stretched);
+                        (blob, kekSlot) = Fido2SlotEnrollment.Enroll(ctx, key, slotId, [], stretched, () => madeCredential = true);
                     else
                         (added, blob) = Fido2SlotEnrollment.EnrollAsSlot(
-                            ctx, key, vaultKey, keyring with { Slots = [.. keyring.Slots, .. addedSlots] }, stretched);
+                            ctx, key, vaultKey, keyring with { Slots = [.. keyring.Slots, .. addedSlots] }, stretched,
+                            () => madeCredential = true);
                 }
                 catch (TswapException ex)
                 {
                     c.Out.WriteLine(ex.Message);
                     if (!AskYesNo(c, $"Carry on without {slot.Device.Label}? (y/N): ", defaultAnswer: false))
-                        throw new TswapException($"Stopped without {slot.Device.Label}. No config or vault was written.");
+                        throw new TswapException($"Stopped without {slot.Device.Label}. No config or vault was written.{StopNote()}");
                     continue;
                 }
 
@@ -379,7 +387,7 @@ internal static class GuidedInit
             }
 
             if (config is null)
-                throw new TswapException("Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.");
+                throw new TswapException($"Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.{StopNote()}");
             if (addedSlots.Count > 0)
             {
                 keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));

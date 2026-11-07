@@ -317,7 +317,7 @@ Paste back: the list as printed, the `slots` output and how `names` opened, per 
 
 ## (B) Destructive checks on the spare 5C NFC only
 
-Unplug the daily key first (B6 is the one exception). Each check names what it changes on the
+Unplug the daily key first (B6 and B9 are the exceptions). Each check names what it changes on the
 spare. `ykman` is useful here
 for reading the PIN counter (`ykman --device <spare serial> fido info`) and for the reset; tswap
 itself never resets a key.
@@ -459,6 +459,38 @@ sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password   # a t
 2. Proceed: run it again and give the PIN and a touch. Expect setup to go on and program slot 2
    (touch for its check). Then `"$T" names`: the OTP slot is dead now (`slots` still lists it), so
    the unlock falls through to the FIDO2 slot and asks for the PIN.
+
+### B9. `slot add --fido2` with a fresh spare (no PIN yet), on Linux
+
+Exercises `slot add`'s set-PIN path and the re-listing after it (the key is found again by its
+listing handle once it has a PIN). Reset the spare once more (B4) so it has no FIDO2 PIN. This is
+the second exception to "unplug the daily key": plug in both, and use A1's vault, which the daily
+key opens:
+
+```bash
+export TSWAP_CONFIG_DIR="$W/linux-config"
+sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password --serial <spare>
+```
+
+Expect no PIN prompt and no touch before the vault opens with the daily key (its PIN and touch),
+then `YubiKey <spare> has no FIDO2 PIN; a FIDO2 slot needs one. Set a FIDO2 PIN on it now?
+(yes/no): `. Answer `yes`, set a PIN, and expect `✓ YubiKey <spare> has a FIDO2 PIN now.`, then the
+enrolment with two PIN prompts for the spare and `✓ YubiKey <spare> added as a FIDO2 slot`. Then
+unplug the daily key and run `"$T" names`: it opens with the spare (its new PIN and a touch).
+
+Paste back: the whole output, and whether anything asked for the spare's PIN before the vault
+opened.
+
+### B10. Windows: press Esc in the dialog
+
+With A3's joined Linux vault on Windows (`$env:TSWAP_CONFIG_DIR = "$W\join-linux-config"`), run
+`& $T -v names` and press **Esc** in Windows' security key dialog (don't touch the key). Expect
+`The key you picked: the FIDO2 PIN or touch was cancelled.` and a `Windows HRESULT` line; then run it
+again with `& $T -v slot add --fido2 --no-password` from an elevated prompt, give the first dialog
+the PIN and touch, and press Esc in the second. Expect the same cancel text, `No slot was added and
+nothing was written.`, and `tswap slots` unchanged.
+
+Paste back: both outputs, with their `Windows HRESULT` lines.
 
 ## (C) The Token2 (not a YubiKey), refused on every OS
 
