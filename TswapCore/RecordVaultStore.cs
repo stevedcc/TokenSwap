@@ -1116,63 +1116,82 @@ public sealed class RecordVaultStore : IFileVaultStore
             loaded.TryGetValue(fileName, out var current);
             if (current?.UnreadableReason is not null)
                 throw Unreadable(name, fileName);
-            var state = current?.State;
-            var value = Encoding.UTF8.GetBytes(secret.Value);
-            SecretRecord? next = null;
-            if (state is null || state.Type == RecordType.Tombstone || secret.Rotated || !state.Value.AsSpan().SequenceEqual(value))
-            {
-                // A new value version (create, add, rotate, import): it supersedes the old version,
-                // so an outstanding burn of that version becomes history.
-                var version = NextStamp();
-                var burns = (state?.Burns ?? []).ToList();
-                // Fix round 1, B: the value this version replaces is kept (one level).
-                var live = state is { Type: not RecordType.Tombstone };
-                // Brief T16-S1: the replaced value keeps its fingerprints and its sealed section
-                // (copied, never encrypted again).
-                var previous = live ? new PreviousValue(state!.Version, state.Value, state.Fingerprints) : null;
-                IReadOnlyDictionary<Stamp, byte[]>? sealedPrevious = live && state!.Sealed is { } sealedSections
-                    && sealedSections.TryGetValue(state.Version, out var previousSection)
-                        ? new Dictionary<Stamp, byte[]> { [state.Version] = previousSection }
-                        : null;
-                // restore: the previous value comes back with its burn outstanding again (it is
-                // still compromised), keeping the original burn's time and reason.
-                if (secret.Restored && live && state!.Previous is { } restoredFrom)
-                    foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
-                        burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
-                // An imported burned secret keeps its original burn time (fix round 1, C).
-                if (secret.BurnedAt is { } burnedAt)
-                    burns.Add(new BurnEntry(version, new Stamp(new Hlc(UnixMs(burnedAt), 0), origin), secret.BurnReason));
-                var createdMs = state is { Type: not RecordType.Tombstone }
-                    ? state.CreatedMs
-                    : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
-                next = new SecretRecord(
-                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
-                {
-                    Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
-                    Sealed = sealedPrevious,
-                };
-            }
-            else if (secret.BurnedAt is not null && state.OutstandingBurn is null)
-            {
-                next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, NextStamp(), secret.BurnReason)] };
-            }
+            var next = NextRecord(current?.State, FilenameHasher.ComputeRecordId(namesKey, name), name, Encoding.UTF8.GetBytes(secret.Value),
+                secret.Rotated, secret.Restored, secret.Created, secret.BurnedAt, secret.BurnReason, origin, NextStamp);
             if (next is not null)
-                writes.Add((fileName, RecordMerge.Normalize(next)));
+                writes.Add((fileName, next));
         }
 
         foreach (var current in loaded.Values)
         {
             if (current.State is not { Type: not RecordType.Tombstone } state || db.Secrets.ContainsKey(state.Name))
                 continue;
-            var tombstone = state with
-            {
-                Type = RecordType.Tombstone, Version = NextStamp(), Value = [], Previous = null, Fingerprints = null, Sealed = null,
-            };
-            writes.Add((current.FileName, RecordMerge.Normalize(tombstone)));
+            writes.Add((current.FileName, Tombstone(state, NextStamp())));
         }
 
         WriteRecords(writes, key, loaded);
     }
+
+    /// <summary>
+    /// The record one secret's save writes, or null when nothing changed: <see cref="SaveSecrets"/>'s
+    /// per-secret rules, shared with the per-record write path (brief T16-S2b). A new value version
+    /// is written when there is no live record, when <paramref name="rotated"/> (rotate, restore),
+    /// or when <paramref name="value"/> differs; otherwise a burn is added when
+    /// <paramref name="burnedAt"/> is set and the current version has none. Stamps come from
+    /// <paramref name="nextStamp"/> only when something is written; the write stamp is left zero.
+    /// </summary>
+    /// <param name="state">The merged record as loaded (null: no record).</param>
+    /// <param name="restored"><c>restore</c>: the previous value's burns become outstanding again on the new version.</param>
+    /// <param name="created">The creation time of a secret that has no live record (its record's own is kept otherwise).</param>
+    /// <param name="burnedAt">A burn to add: on the current version (burn), or on the new version with this time (import).</param>
+    internal static SecretRecord? NextRecord(SecretRecord? state, byte[] recordId, string name, byte[] value, bool rotated, bool restored,
+        DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp)
+    {
+        SecretRecord? next = null;
+        if (state is null || state.Type == RecordType.Tombstone || rotated || !state.Value.AsSpan().SequenceEqual(value))
+        {
+            // A new value version (create, add, rotate, import): it supersedes the old version,
+            // so an outstanding burn of that version becomes history.
+            var version = nextStamp();
+            var burns = (state?.Burns ?? []).ToList();
+            // Fix round 1, B: the value this version replaces is kept (one level).
+            var live = state is { Type: not RecordType.Tombstone };
+            // Brief T16-S1: the replaced value keeps its fingerprints and its sealed section
+            // (copied, never encrypted again).
+            var previous = live ? new PreviousValue(state!.Version, state.Value, state.Fingerprints) : null;
+            IReadOnlyDictionary<Stamp, byte[]>? sealedPrevious = live && state!.Sealed is { } sealedSections
+                && sealedSections.TryGetValue(state.Version, out var previousSection)
+                    ? new Dictionary<Stamp, byte[]> { [state.Version] = previousSection }
+                    : null;
+            // restore: the previous value comes back with its burn outstanding again (it is
+            // still compromised), keeping the original burn's time and reason.
+            if (restored && live && state!.Previous is { } restoredFrom)
+                foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
+                    burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
+            // An imported burned secret keeps its original burn time (fix round 1, C).
+            if (burnedAt is { } at)
+                burns.Add(new BurnEntry(version, new Stamp(new Hlc(UnixMs(at), 0), origin), burnReason));
+            var createdMs = state is { Type: not RecordType.Tombstone }
+                ? state.CreatedMs
+                : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+            next = new SecretRecord(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
+            {
+                Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
+                Sealed = sealedPrevious,
+            };
+        }
+        else if (burnedAt is not null && state.OutstandingBurn is null)
+        {
+            next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, nextStamp(), burnReason)] };
+        }
+        return next is null ? null : RecordMerge.Normalize(next);
+    }
+
+    /// <summary>The tombstone a delete writes over the live record <paramref name="state"/> (burns kept as history).</summary>
+    internal static SecretRecord Tombstone(SecretRecord state, Stamp version) => RecordMerge.Normalize(state with
+    {
+        Type = RecordType.Tombstone, Version = version, Value = [], Previous = null, Fingerprints = null, Sealed = null,
+    });
 
     /// <summary>
     /// Brief T6 decision 8: writes every secret of <paramref name="db"/> as a record into an empty
@@ -1579,7 +1598,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// sealed section keeps it (copied, never encrypted again); one without (new, or read from
     /// format 2) is sealed by the codec. Sections of versions no longer retained are dropped.
     /// </summary>
-    private static SecretRecord PrepareV3(SecretRecord record, FingerprintKeys keys, bool recomputeOlderSets)
+    internal static SecretRecord PrepareV3(SecretRecord record, FingerprintKeys keys, bool recomputeOlderSets)
     {
         if (record.Type == RecordType.Tombstone)
             return record with { Fingerprints = null, Previous = null, Sealed = null };
