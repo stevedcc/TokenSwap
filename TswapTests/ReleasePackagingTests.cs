@@ -873,8 +873,18 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain("vars.MACOS_", outside);
         Assert.DoesNotContain("environment:", outside);
         Assert.Contains("    environment: macos-signing\n", buildMacos);
-        // Secrets reach steps through env:, never through a run: line (no value in the command echo).
-        Assert.DoesNotContain(buildMacos.Split('\n'), line => line.Contains("secrets.") && !System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s+[A-Z0-9_]+: \$\{\{ secrets\.MACOS_[A-Z0-9_]+( != '')? \}\}$"));
+        // Secrets reach the repo's own scripts through a step's env:, never a run: line (the command echo) or an
+        // action's with: inputs: every secrets. line is a NAME: ${{ secrets.MACOS_… }} entry whose parent key is env:.
+        var lines = buildMacos.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].Contains("secrets."))
+                continue;
+            Assert.Matches(@"^\s+[A-Z0-9_]+: \$\{\{ secrets\.MACOS_[A-Z0-9_]+( != '')? \}\}$", lines[i]);
+            var indent = lines[i].Length - lines[i].TrimStart().Length;
+            var parent = lines[..i].Last(line => line.Trim().Length > 0 && line.Length - line.TrimStart().Length < indent);
+            Assert.True(parent.Trim() == "env:", $"{lines[i].Trim()} is under '{parent.Trim()}', not env:");
+        }
         foreach (var secret in new[] { "MACOS_SIGN_APP_P12_BASE64", "MACOS_SIGN_INSTALLER_P12_BASE64", "MACOS_SIGN_P12_PASSWORD", "MACOS_NOTARY_KEY_P8_BASE64", "MACOS_NOTARY_ISSUER_ID" })
             Assert.Contains($"secrets.{secret}", buildMacos);
         foreach (var variable in new[] { "MACOS_TEAM_ID", "MACOS_NOTARY_KEY_ID" })
@@ -892,7 +902,11 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("    timeout-minutes: 120\n", buildMacos);
         Assert.Contains("    permissions:\n      contents: read\n", buildMacos);
         Assert.Contains("      SIGNING_REQUIRED: ${{ github.repository == 'stevedcc/TokenSwap' }}\n", buildMacos);
-        Assert.DoesNotContain("osx-arm64\n            os:", Job(Workflow("release.yml"), "build"));
+        // The matrix job builds no macOS any more, in whatever shape an entry would take.
+        var build = Job(Workflow("release.yml"), "build");
+        var matrix = build[build.IndexOf("    strategy:", StringComparison.Ordinal)..build.IndexOf("    steps:", StringComparison.Ordinal)];
+        Assert.DoesNotContain("osx", matrix);
+        Assert.DoesNotContain("macos", matrix);
     }
 
     /// <summary>The signing steps in the plan's order: the shim is signed by the build, tswap after it, then checks.</summary>
@@ -924,19 +938,27 @@ public class ReleasePackagingTests : IDisposable
     }
 
     [Fact]
-    public void Workflows_ReleaseOnlyOnATagPush_AndListsThePkg()
+    public void Workflows_ReleaseOnlyOnATagPush_AndOnlyUpstreamListsThePkg()
     {
         var release = Workflow("release.yml");
         var job = Job(release, "release");
 
         Assert.Contains("    needs: [build, build-macos]\n", job);
         Assert.Contains("    if: github.event_name == 'push'\n", job);
-        Assert.Contains("artifacts/tswap-osx-arm64.pkg", job);
-        Assert.Contains("artifacts/tswap-osx-arm64.tar.gz", job);
-        Assert.Contains("fail_on_unmatched_files: true", job);
+        // The only push trigger is a version tag.
+        Assert.Contains("on:\n  push:\n    tags:\n      - 'v*.*.*'\n", release);
+        Assert.DoesNotContain("branches:", release[..release.IndexOf("jobs:", StringComparison.Ordinal)]);
         // Upstream the pkg is required; a fork's release lists no pkg (its macOS build is unsigned).
-        Assert.Contains("if: github.repository == 'stevedcc/TokenSwap'", job);
-        Assert.Contains("if: github.repository != 'stevedcc/TokenSwap'", job);
+        var steps = job.Split("      - name: ").Skip(1).ToList();
+        var upstream = Assert.Single(steps, step => step.Contains("        if: github.repository == 'stevedcc/TokenSwap'\n"));
+        var fork = Assert.Single(steps, step => step.Contains("        if: github.repository != 'stevedcc/TokenSwap'\n"));
+        foreach (var step in new[] { upstream, fork })
+        {
+            Assert.Contains("fail_on_unmatched_files: true", step);
+            Assert.Contains("artifacts/tswap-osx-arm64.tar.gz", step);
+        }
+        Assert.Contains("artifacts/tswap-osx-arm64.pkg", upstream);
+        Assert.DoesNotContain(".pkg", fork);
         Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
         Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
     }
