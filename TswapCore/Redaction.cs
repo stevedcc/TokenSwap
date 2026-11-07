@@ -10,9 +10,11 @@ public static class Redaction
 {
     /// <summary>
     /// <paramref name="writtenForm"/> itself and its base64 and base64url encodings, padded and
-    /// unpadded; for a multi-line form also its <c>\r\n</c> form (a PTY turns <c>\n</c> into
-    /// <c>\r\n</c> on output) and that form's base64 and base64url, padded and unpadded. Distinct, in
-    /// that order; an empty form has none (it would match everywhere).
+    /// unpadded; for a multi-line form also its <c>\r\n</c> form and its <c>\n</c> form (a tool that
+    /// normalises line endings), the form as a PTY prints it (ONLCR turns each <c>\n</c> into
+    /// <c>\r\n</c> and leaves a <c>\r</c> alone, so a value with <c>\r\n</c> shows <c>\r\r\n</c>), and
+    /// the base64 and base64url of each, padded and unpadded. Distinct, in that order; an empty form
+    /// has none (it would match everywhere).
     /// </summary>
     public static IReadOnlyList<string> Variants(string writtenForm)
     {
@@ -20,7 +22,10 @@ public static class Redaction
             return [];
         List<string> forms = [writtenForm];
         if (writtenForm.Contains('\n'))
-            forms.Add(writtenForm.Replace("\r\n", "\n").Replace("\n", "\r\n"));
+        {
+            var lf = writtenForm.Replace("\r\n", "\n");
+            forms.AddRange([lf.Replace("\n", "\r\n"), lf, writtenForm.Replace("\n", "\r\n")]);
+        }
 
         List<string> variants = [];
         foreach (var form in forms)

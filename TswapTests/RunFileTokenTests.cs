@@ -98,7 +98,9 @@ public sealed class RunFileTokenTests : IDisposable
     /// A stand-in for RedactingPty's runners: records argv, runs <see cref="During"/> while "the child
     /// runs", and streams the child's output (<see cref="Child"/>) through <see cref="StreamRedactor"/>
     /// in chunks of <see cref="ChunkSize"/> characters, with <c>\n</c> turned into <c>\r\n</c> first
-    /// when <see cref="CrLf"/> is set (a PTY's output translation).
+    /// when <see cref="CrLf"/> is set (a PTY's output translation), or with every <c>\n</c> turned into
+    /// <c>\r\n</c> and any <c>\r</c> left alone when <see cref="Onlcr"/> is set (what a real PTY's ONLCR
+    /// does to a value that already holds <c>\r\n</c>: <c>\r\r\n</c>).
     /// </summary>
     private sealed class FakePty : IPtyRunner
     {
@@ -107,6 +109,7 @@ public sealed class RunFileTokenTests : IDisposable
         public int ExitCode { get; set; }
         public int ChunkSize { get; set; } = 4096;
         public bool CrLf { get; set; }
+        public bool Onlcr { get; set; }
         public string[]? Argv { get; private set; }
         public int Starts { get; private set; }
         public StringBuilder Output { get; } = new();
@@ -119,6 +122,8 @@ public sealed class RunFileTokenTests : IDisposable
             var raw = Child(argv);
             if (CrLf)
                 raw = raw.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            if (Onlcr)
+                raw = raw.Replace("\n", "\r\n");
             var redactor = new StreamRedactor(replacements);
             for (var i = 0; i < raw.Length; i += ChunkSize)
                 Output.Append(redactor.ProcessChunk(raw.Substring(i, Math.Min(ChunkSize, raw.Length - i))));
@@ -327,6 +332,40 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Contains("key: \"[REDACTED: pem]\"", output);
         Assert.Contains("b64: [REDACTED: pem]", output);
         Assert.Contains("raw: [REDACTED: pem]", output);
+    }
+
+    // A value with Windows line endings (a PEM pasted from Windows): the PTY turns its \n into \r\n and
+    // leaves its \r, so a tool printing it verbatim shows \r\r\n line breaks.
+    [Fact]
+    public void RunFileToken_CrLfValueRedacted_AfterPtyTranslation()
+    {
+        const string value = "-----BEGIN PRIVATE KEY-----\r\nMIIBVwIBADANBgkqhkiG9w0BAQEFAASCAUEw\r\n-----END PRIVATE KEY-----";
+        Ingest("pem", value);
+        WriteFile("values.yaml", "key: \"\"  # tswap: pem\n");
+        _pty.Onlcr = true;
+        _pty.Child = _ => "raw: " + value + "\n";
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(exit == 0, err);
+        var output = _pty.Output.ToString();
+        Assert.DoesNotContain("MIIBVwIBADANBgkqhkiG9w0BAQEFAASCAUEw", output);
+        Assert.Equal("raw: [REDACTED: pem]\r\n", output);
+    }
+
+    // The same value printed by a tool that normalises line endings to \n (no PTY translation here).
+    [Fact]
+    public void RunFileToken_CrLfValueRedacted_InItsLfForm()
+    {
+        const string value = "-----BEGIN PRIVATE KEY-----\r\nMIIBVwIBADANBgkqhkiG9w0BAQEFAASCAUEw\r\n-----END PRIVATE KEY-----";
+        Ingest("pem", value);
+        WriteFile("values.yaml", "key: \"\"  # tswap: pem\n");
+        _pty.Child = _ => "raw: " + value.Replace("\r\n", "\n") + "\nb64: " + Base64(value.Replace("\r\n", "\n")) + "\n";
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal("raw: [REDACTED: pem]\nb64: [REDACTED: pem]\n", _pty.Output.ToString());
     }
 
     [Fact]
