@@ -202,8 +202,9 @@ builder pins today's behaviour with tests first, see Stage 2).
 > **Owner amendment, 2026-11-07** (brief T16-S2, plan amendment 2): the overlap order is today's,
 > which Stage 2 pins: matched length descending, then the matched text ordinally, then live before
 > burned, then name, then match type (`SecretProcessor`'s sort); each entry's occurrences left to
-> right. "Longest first, then leftmost" was a simplification that would have changed which name
-> wins an equal-length tie.
+> right. A `name:previous` entry always counts as live there, even when that version was burned
+> (today's sort looks the burn up by the token, which no secret is called). "Longest first, then
+> leftmost" was a simplification that would have changed which name wins an equal-length tie.
 
 ### Reindex, sudo only **(owner: refuse and reindex; sudo: owner accepted the recommendation)**
 

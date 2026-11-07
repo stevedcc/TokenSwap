@@ -84,7 +84,7 @@ deployment.
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
-| A command decrypting values it doesn't use | Since 0.3 each command decrypts only the value versions it prints or substitutes: `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output ([what each command decrypts](#what-each-command-decrypts)) |
+| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands decrypt only the value versions they print or substitute: `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands still decrypt every record until a later 0.3 change ([what each command decrypts](#what-each-command-decrypts)) |
 
 ### What tswap does not protect against
 
@@ -100,13 +100,16 @@ deployment.
 
 ### What each command decrypts
 
-Since 0.3 a command decrypts only the values it uses (owner: "unlocking all secrets is bad
-practice"). A format 3 record keeps its value versions in separate encrypted sections, so a
-command can read a record's name, burns and fingerprints without opening a value. A **format 2**
-record (written by tswap 0.1, and kept until `sudo tswap vault reindex` rewrites it) holds name and
-both value versions in one encrypted block: a command that must read it decrypts it whole, wipes
-the values it doesn't use at once, and prints a warning with the number of such records and the
-reindex command.
+Since 0.3 the commands that only read (`redact`, `tocomment`, `check`, `names`, `list`, `burned`,
+`get`, `apply`) decrypt only the values they use (owner: "unlocking all secrets is bad practice");
+the write commands don't yet (the table). A format 3 record keeps its value versions in separate
+encrypted sections, so a command can read a record's name, burns and fingerprints without opening
+a value. A **format 2** record (written by tswap 0.1, and kept until `sudo tswap vault reindex`
+rewrites it) holds name and both value versions in one encrypted block: a command that must read
+it decrypts it whole, wipes the values it doesn't use at once, and prints a warning with the number
+of such records and the reindex command. A record counts as format 2 when its main file or any of
+its sync-conflict copies is; a copy that is damaged or of another format is skipped with a warning
+and doesn't make the record format 2.
 
 | Command | Format 3 record | Format 2 record |
 |---|---|---|
@@ -127,11 +130,16 @@ Limits of reading metadata only:
 
 - `redact` and `tocomment` find what the fingerprints describe. A record whose fingerprints don't
   describe its stored value (only a write bug, or someone holding the vault key, can make one) has
-  its stored value printed unmasked by `redact`. Detecting that needs the value, which these
+  its stored value printed unmasked by `redact` and left in place, unmarked, by `tocomment`. Detecting that needs the value, which these
   commands must not decrypt; `get` and `apply` still check it and refuse that record.
 - `check`, `names`, `list` and `burned` don't open value sections, so they don't notice a damaged
   value section: they list the record as sound. The command that uses the value fails closed,
   naming the file.
+- Merging a record's sync-conflict copies without the plaintext: two copies of one version with
+  different ciphertexts can only be shown equal by their fingerprints. Where a copy has none, the
+  record can't be read on this path: `list` and `check` refuse it, naming the file, and `names` and
+  `burned` warn and leave it out, where the full load would have merged them. A write of that record
+  (or `vault merge`, `vault reindex`) converges the copies.
 - Strings are not zeroed: a value `get` or `apply` prints lives in memory as a string until the
   process exits, as before (there are just fewer of them).
 
