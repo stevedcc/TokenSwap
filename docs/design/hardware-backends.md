@@ -647,10 +647,20 @@ since `slot add` enrols YubiKeys only and there is no `slot remove`; to be decid
 slot whose header has bit 1, and today's `TPM, sealed to this machine's TPM, …` for every other TPM
 row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048).
 
-**On real hardware (Task 3: to be filled from real-hardware runs).** On this machine's SLB 9665 and
-the router's Intel PTT: `init --tpm` → `create` → three timed unlocks, `slots` showing the ECC slot;
-an RSA slot made by the v0.2.0 binary on the same machine opening with the new build; the v0.2.0
-binary meeting a new ECC slot printing the "needs a newer tswap" text.
+**On real hardware (2026-11-07, #261).** tswap built from this branch and the released v0.2.0
+binary, each machine with a throwaway vault (`--no-password --no-recovery`):
+
+| | Infineon SLB 9665 (discrete, owner's workstation) | Intel PTT (router, as a `tss` member) |
+|---|---|---|
+| New ECC slot: `init --tpm` / `create` | 1.46 s / 2.49 s | 0.65 s / 1.04 s |
+| New ECC slot: unlock (`run true {{x}}`, three runs) | 2.43–2.50 s | 1.04–1.08 s |
+| v0.2.0 RSA slot: unlock with the new build | 9.97 s | 2.53 s (v0.2.0 itself: 2.53 s) |
+| `slots` | `TPM (ECC P-256), …` for the new slot, `TPM, …` for the v0.2.0 one | the same |
+| v0.2.0 binary on the new ECC slot | refused before touching the TPM: "Slot …: needs a newer tswap (blob version 1 or unknown flags); upgrade tswap." | the same |
+
+The rest of an unlock (loading and unsealing the sealed object, the flushes) is about 1.8 s on the
+SLB 9665 and 0.8 s on the PTT, so an ECC unlock is about 4× faster on the SLB 9665 and 2.4× on the
+PTT.
 
 ### Status: verified on one physical TPM (Intel PTT), single vendor
 
