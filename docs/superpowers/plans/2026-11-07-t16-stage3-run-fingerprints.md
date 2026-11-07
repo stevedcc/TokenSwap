@@ -1,0 +1,427 @@
+# T16 Stage 3: `run` decrypts only what it substitutes and masks every vault secret (issues #220, #106)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans, task by task, TDD per task (superpowers:test-driven-development).
+
+**Goal.** `tswap run` decrypts only the value sections it substitutes (`{{name}}`, `{{name:previous}}`,
+and the markers of its `{{@file}}` files), and its streaming redaction masks every other value version
+in the vault by keyed fingerprint. Target: **v0.3.0**.
+
+**Why.** Owner, 2026-11-07 (binding): "unlocking all secrets is bad practice". Today `run` calls
+`ctx.LoadSecrets(key)` (`TswapCli/Commands/RunCommand.cs:72`), which decrypts every value and previous
+value of the vault into strings that live for the whole child run, and it masks only its own tokens'
+forms (`RunCommand.cs:87-96`, `:180-186`). Spec Goal 2 and Stage 3
+(`docs/superpowers/specs/2026-11-01-import-story-design.md:51-54`, `:240-262`); it also closes #106
+(`run` misses encoded forms of secrets it didn't substitute).
+
+**Repos and bases.**
+- RedactingPty: `/home/stevecrawford/RiderProjects/redactingpty-wt`, a new worktree from `main`
+  b4fda29 (R1 merged, untagged: `git describe` = `v1.0.2-14-gb4fda29`). `brief/r2` (3 commits, .NET 11
+  SDK, test targets `net10.0;net11.0`, CI) is unmerged and waits for .NET 11 GA; it changes no library
+  code, so 1.1 does not wait for it. Whichever merges second merges `main` in (conflicts at most in
+  `README.md` and the workflows).
+- tswap: `origin/main` once #251 (`feat/apply-sudo-run-file`, contained in this branch's ddd4ca3) has
+  merged, plus Stage 2's store contract (its tasks 1-3, "Shared with Stage 2" below).
+
+## Facts checked against the code
+
+| Fact | Where |
+|---|---|
+| `run` decrypts the whole vault, then resolves tokens and fills files from that `SecretsDb` | `RunCommand.cs:72`, `:78-85`, `:110` |
+| `run`'s own forms: raw, escaped (files), base64/base64url padded and unpadded, `\r\n`, `\n` and ONLCR (`\r\r\n`) forms of multi-line values, and their encodings | `TswapCore/Redaction.cs:19-40`, `Apply.cs:40-138` |
+| Stored fingerprint variants: plain, whitespace-stripped (CR, LF, space, tab removed), base64 **padded only**, base64url **unpadded only** | `TswapCore/Fingerprints/SecretVariants.cs:40-59` |
+| `FingerprintIndex.Scan` slides one rolling hash per distinct stored length over the whole text, then confirms on the HMAC | `FingerprintIndex.cs:67-97` |
+| `LoadMetadata` reads metadata sections only; `VaultMetadata.IsFullyFingerprinted` = no un-fingerprinted and no unreadable record | `RecordVaultStore.cs:1148`, `VaultMetadata.cs:32` |
+| `ReadSecretValue(name, key, previous)` decrypts one record: on format 3 only its metadata and the one value section; on format 2 the whole record (current and previous) | `RecordVaultStore.cs:531`, `:574`, `:601` |
+| Test seams: `RecordDecrypted` (metadata/payload), `ValueDecrypted` (record, version stamp) | `RecordVaultStore.cs:132`, `:138` |
+| `apply`'s fill looks up only the **first** marker per line, checks existence via `db.Secrets.ContainsKey` | `Apply.cs:59`, `:69`, `:75`, `:80-81` |
+| Burn state of current and previous version | `RecordVaultStore.cs:673-692` (`ToSecret`), `Models.cs:254`, `:267`, `:302` |
+| `run` on an unreadable record must name the hashed file | `TswapTests/RecordConflictTests.cs:241` |
+| RedactingPty: one public runner method; redactor overlap = longest Find − 1; replacements applied by successive `string.Replace` | `IPtyRunner.cs:16`; `StreamRedactor.cs:37-40`, `:47-90`, `:102-110` |
+| The redactor is built before the fork in `UnixPty.Run` (parent code), per call in `WindowsPty` and per stream in `FallbackPty` (stdout and stderr drained **on two threads**) | `UnixPty.cs:148`; `WindowsPty.cs:284`; `FallbackPty.cs:60-61`, `:82` |
+| Frozen fork-child spans include `UnixPty.Run`'s attribute and **signature** (lines 100-104 at 5d9a8fa) and 150-180 | `docs/briefs/r1-dotnet10-idioms.md:45-58` |
+| Package validation baseline 1.0.0; a `v*` tag publishes to nuget.org (OIDC) | `RedactingPty.csproj:36`; `.github/workflows/publish.yml:8-10` |
+| tswap consumes RedactingPty 1.0.2; the only test fake runner is `FakePty` | `TswapCli/TswapCli.csproj:21`; `TswapTests/RunFileTokenTests.cs:105-131` |
+| Plaintext redactor throughput (i7-6700K, 4 KB chunks): 854 / 475 / 140 / 28.6 Mchars/s at 1 / 10 / 50 / 200 replacements | `redactingpty-wt/r1-report.md:311-339` |
+
+**Pre-plan probe (scratch, Release, this machine, not committed).** `FingerprintIndex.Scan` over
+4096-char windows plus overlap, log-like text, no hits: 200 secrets of 16-64 chars (66 distinct
+lengths) **1.35 Mchars/s**; 200 × 32 chars (3 lengths) 31.7; 2,000 × 16-128 (146 lengths) **0.61**;
+200 × 16-5,000 (502 lengths, longest variant 6,576) **0.09**. A prototype with prefix hashes, the
+character-class pruning of Task T1 and a bitset prefilter: 24 / 7.1 / 12.7 Mchars/s on log text, and
+**1.3** Mchars/s on base64-heavy text (200 secrets). Stage 1's scanner is unusable in a stream; T1
+builds the fast one.
+
+## Out of scope
+
+- Any variant-set change (hex, URL-encoding, JSON escapes, unpadded base64, wrapped base64,
+  re-indented multi-line values): a format change, a later variant-set version (spec `:252-254`).
+- Stage 2's commands (`redact`, `tocomment`, `apply`, `check`, `get`) and `FingerprintIndex.cs`.
+- The broker's own redactor (`TswapCore/Broker/BrokerRedactor.cs`).
+- Prefix fingerprints for smarter hold-back: **rejected**, they would let a `run` child learn a
+  secret's first characters one at a time by watching what is held back.
+- Zeroing the vault key inside `run`, ConPTY's re-rendering of long lines (pre-existing), classic
+  vaults (already refused: `ICliCommand.WorksOnClassicVault`).
+
+## Owner decisions needed
+
+- **D1, partly fingerprinted vault.** The spec says `run` then "redacts only its own tokens, as
+  today, and warns" (`:247-251`). **Recommend:** also mask every record that *has* fingerprints, and
+  warn as the spec says (twice, keep working). Throwing away 199 records' coverage because one was
+  replayed has no upside. The warning wording is the same either way.
+- **D2, hold-back (the spec doesn't cover it).** To catch a match split across reads, the redactor
+  holds back the end of the output until more arrives or the child exits. Today that is the longest
+  substituted form − 1 (about 43 chars for a 32-char secret; enough to hide a short `Password:`
+  prompt). With `MaxMatchLength` taken from the whole vault it becomes the longest vault variant
+  (about 4.4 K chars for a base64'd PEM). The 1.1 API adds `PendingFrom` (below), and tswap's matcher
+  uses character classes, so for single-line secrets only the trailing word (a run of non-whitespace
+  or base64 characters) is held, which is **less than today**. A vault holding a **multi-line**
+  secret (PEM, kubeconfig) is different: its verbatim form may contain any text, so the matcher must
+  hold up to that value's raw length on every pause, and interactive prompts can stay hidden. Options:
+  **(a)** accept and document (full coverage); **(b)** match multi-line values' verbatim form
+  vault-wide only when stdout is not a terminal (agents; humans in an interactive session keep the
+  stripped and base64 forms); **(c)** never match multi-line verbatim forms vault-wide; **(d)** flush
+  the held text after an idle time (leaks part of a value whose printing stalls). **Recommend (a)**,
+  with the owner's interactive check in Task T6; (b) if that check is unacceptable. Substituted
+  multi-line values stay fully masked by their plaintext forms in every option.
+- **D3, throughput targets.** Proposed (my call, Task T5): realistic vault on log text ≥ 20 Mchars/s,
+  2,000 secrets ≥ 5, base64-heavy output ≥ 1. A miss is reported, never loosened by the builder.
+- **D4, RedactingPty release order.** `main` holds R1's P/Invoke refactor, not yet released.
+  **Recommend** tagging `v1.0.3` from b4fda29 first, then `v1.1.0`, so a regression bisects to one of
+  them. Alternative: 1.1.0 ships both.
+
+## Outward gates (owner)
+
+- **G1** Merge the RedactingPty PR (CI: 9 legs green).
+- **G2** Tags `v1.0.3` (per D4) and `v1.1.0`: each publishes to nuget.org. tswap's PR CI can't pass
+  until 1.1.0 is there.
+- **G3** Merge the tswap PR (`Closes #106`, `Refs #220`).
+- **G4** v0.3.0 tag, with the rest of v0.3.0.
+
+External reviews as for every brief: plan review, then code review (GLM + MiMo) per repo.
+
+## Shared with Stage 2
+
+Stage 2's plan (`docs/superpowers/plans/2026-11-07-t16-stage2-redact-without-decrypting.md`, "The
+store API", read while finishing this plan) defines a lazy API that fits `run`: `ctx.OpenVault(key)`
+→ `VaultView : ISecretLookup` (`Contains`, `HasPreviousValue`, `IsBurnedToken`, `ResolveToken`
+decrypting one version once, `ThrowIfUnreadable`), `LoadAll(FormatTwoRecords.Skip)` → `VaultMetadata`,
+`Apply.ApplySecretsReporting(content, ISecretLookup, warnings)`, all over `OpenSecret` /
+`SecretEntry.DecryptValue(previous)`. **Stage 3 uses exactly that and proposes no other API.** It is
+lazy, so `run`'s error order stays as today with no change to the order of calls. What `run` relies
+on, to be checked in Stage 2's review (the API above meets each one as written):
+
+- **S1** `name` decrypts only the current value section, `name:previous` only the previous one;
+  format 2 decrypts that one record whole.
+- **S2** Messages identical to `SecretsDb.ResolveToken` / `ThrowIfUnreadable` (unreadable names the
+  hashed file, `RecordConflictTests.cs:241`).
+- **S3** Burn state from metadata equals `ToSecret`'s (`SecretInfo.From`).
+- **S4** `Contains`, `IsBurnedToken`, `ThrowIfUnreadable` and `LoadAll(Skip)` decrypt no value.
+- **S5** Conflicted copies folded as `ReadSecretValue` folds them.
+- **S6** Value bytes zeroed after conversion; `VaultView.Dispose` zeroes what it holds.
+
+`run` builds its own `FingerprintScanner` from `LoadAll(Skip).Records` (every retained version's
+`FingerprintSet`); it doesn't need `VaultView.BuildIndex`. Stage 2's task 1 (no hit on a window that
+splits a surrogate pair, `FingerprintIndex.Confirm`) applies to the new scanner too (Task T1).
+
+**File ownership** (agrees with Stage 2's table).
+- Stage 2: `RecordVaultStore.cs`, `VaultMetadata.cs`, `SecretEntry.cs`, `SecretInfo.cs`,
+  `ISecretLookup.cs`, `VaultView.cs`, `Models.cs`, `Apply.cs`, `Check.cs`, `CommandContext.cs`,
+  `FingerprintIndex.cs`, `FleetMachine.cs`, its commands and docs sections.
+- Stage 3: `TswapCli/Commands/RunCommand.cs`, `TswapCli/FingerprintStreamMatcher.cs` (new),
+  `TswapCli/RunCoverage.cs` (new), `TswapCli/TswapCli.csproj` (RedactingPty version),
+  `TswapCore/Fingerprints/FingerprintScanner.cs` (new), `FakePty` in `TswapTests/RunFileTokenTests.cs`,
+  its new test files; docs: the `run` row and limits in `docs/security-model.md`, `run` in
+  `docs/commands.md`, its section of `docs/release-notes/v0.3.0.md`. `Redaction.cs` and
+  `FilledFiles*.cs` are Stage 3's but stay unchanged.
+
+**Order.** RedactingPty R1-R3 and tswap T1-T2 start at once, in parallel with Stage 2 (T1 picks up
+Stage 2's surrogate rule from its plan, not its code). T3 onwards start when Stage 2's tasks 1-3 (the
+contract) are pushed; Stage 3 merges them in, never edits their files.
+
+## RedactingPty 1.1
+
+### API (new public types; nothing existing changes)
+
+```csharp
+namespace RedactingPty;
+
+/// Finds matches in the redactor's window. Called with the held tail + the new chunk, and on Flush
+/// with the tail; must be stateless per call and thread-safe (FallbackPty drains stdout and stderr
+/// on two threads with one matcher).
+public interface IStreamMatcher
+{
+    /// Longest match FindMatches can report, in UTF-16 code units; read once; >= 1.
+    int MaxMatchLength { get; }
+
+    /// Adds every match lying entirely inside window.
+    void FindMatches(ReadOnlySpan<char> window, ICollection<StreamMatch> matches);
+
+    /// Smallest index from which a match could still start and end past the window; the redactor
+    /// may emit everything before it. window.Length when none can.
+    int PendingFrom(ReadOnlySpan<char> window) => Math.Max(0, window.Length - (MaxMatchLength - 1));
+}
+
+public readonly record struct StreamMatch(int Start, int Length, string Replacement);
+
+public sealed class StreamRedactor
+{
+    public StreamRedactor(IReadOnlyList<StreamReplacement> replacements);             // unchanged
+    public StreamRedactor(IReadOnlyList<StreamReplacement> replacements,
+                          IReadOnlyList<IStreamMatcher> matchers);                    // new
+}
+
+public interface IPtyRunner
+{
+    int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements);            // unchanged
+    int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements,
+            IReadOnlyList<IStreamMatcher> matchers)                                   // new, default:
+        => matchers.Count == 0 ? Run(argv, replacements)
+         : throw new NotSupportedException("This IPtyRunner does not support stream matchers.");
+}
+```
+
+`ICollection<StreamMatch>` rather than a return value (my call): spans can't be captured by an
+iterator, and matches are rare, so the interface call costs nothing. The default overload throws
+rather than drops matchers: a third-party runner must not silently redact less.
+
+### Semantics
+
+- **No matchers** (`[]`, or the 1.0 constructor): today's algorithm, unchanged code path. The existing
+  `StreamRedactorTests` stay untouched.
+- **With matchers**, per `ProcessChunk`: window = tail + chunk; collect spans once: every occurrence
+  of every `Find` (overlapping ones included) and every matcher's matches (validated: inside the
+  window, `1 <= Length <= MaxMatchLength`, else `InvalidOperationException`: fail closed). Hold point =
+  the minimum of each matcher's `PendingFrom` and the plaintext pending point (the smallest `i` whose
+  `window[i..]` is a proper prefix of some `Find`, exact). Then today's straddler pull-back over all
+  spans, until stable, and the surrogate guard. In the emitted part, spans are chosen **longest first,
+  then leftmost, then plaintext before matcher, then list order**, never overlapping, and replaced in
+  one pass, so replacement text is never matched again. `Flush` resolves the tail the same way.
+  Overlap = max(longest `Find`, every `MaxMatchLength`) − 1.
+- Truncation after the 30 s drain timeout still discards the tail (unchanged).
+
+### Runners, without touching the frozen spans
+
+`UnixPty.Run(argv, replacements)` keeps its frozen signature. The new overload wraps both lists in an
+internal `MatcherCarrier : IReadOnlyList<StreamReplacement>` (it enumerates the replacements) and calls
+the frozen `Run`; the one parent-code line `UnixPty.cs:148` becomes `StreamRedactor.ForRunner(replacements)`
+(internal: unwraps a carrier, else the 1.0 constructor). Same in `WindowsPty.cs:284` and
+`FallbackPty.Drain` (`:82`). (My call: no instance state, so concurrent `Run` calls stay safe, and the
+frozen-span diff stays empty.)
+
+### Release
+
+Version 1.1.0; `PackageValidationBaselineVersion` 1.0.2 (my call: proves nothing changed since the
+latest release); README gets "Custom matchers" (contract, thread safety, hold-back); "Fork safety"
+unchanged. If package validation flags the default interface member (expected not to: it has a
+body), fall back to a public `IMatchingPtyRunner : IPtyRunner` implemented by the built-in runners,
+and report it.
+
+## tswap changes per file
+
+- `TswapCore/Fingerprints/FingerprintScanner.cs` (new): the stream scanner (Task T1).
+- `TswapCli/FingerprintStreamMatcher.cs` (new): `IStreamMatcher` over the scanner; replacement
+  `[REDACTED: name]`, or `[REDACTED: name:previous]` for a previous value; one label for every kind,
+  as `run` labels its own forms today (my call; `redact`'s `(base64)` suffixes are a file concern).
+- `TswapCli/RunCoverage.cs` (new): the warning text from a `VaultMetadata`.
+- `TswapCli/Commands/RunCommand.cs`: `ctx.OpenVault(key)` replaces `LoadSecrets` (`:72`); tokens (`:78-85`)
+  and files (`:110`) resolve through it; `LoadAll(Skip)` → scanner → matcher; warnings before and after
+  the child; `runner.Run(argv, replacements, [matcher])` (`:186`), always with the matcher (empty index:
+  `MaxMatchLength` 1, no matches), so `run` uses one resolution path. The plaintext list (`:87-96`) is
+  unchanged. `FingerprintKeys` are disposed after the child exits.
+- `TswapCli/TswapCli.csproj`: RedactingPty 1.1.0. Before G2, develop against
+  `1.1.0-local.N` from a local pack (`-p:RestoreAdditionalProjectSources=<dir>`), never a local
+  `1.1.0` (it would shadow the real one in the NuGet cache); the last task sets 1.1.0.
+- `TswapTests/RunFileTokenTests.cs`: `FakePty` also implements the three-argument `Run`
+  (`new StreamRedactor(replacements, matchers)`); no assertion changes.
+- Docs (Task T6).
+
+## What `run` masks, before and after
+
+| Output contains | Today | After |
+|---|---|---|
+| A substituted value's forms (raw, escaped, base64/base64url ±padding, `\r\n`/`\n`/ONLCR and their encodings) | yes | yes, unchanged (plaintext) |
+| Another vault value (current or previous, burned included): verbatim, single line | no | yes |
+| … whitespace-stripped, base64 padded, base64url unpadded | no | yes |
+| … base64url padded | no | the unpadded core; the `=` stay visible |
+| … base64 with its `=` padding removed | no | **no** (not a stored variant) |
+| … multi-line, stored line endings kept (pipes, `FallbackPty`) | no | yes |
+| … multi-line through a PTY (`\n` → `\r\n`; `\r\n` → `\r\r\n`) | no | yes, by folding `\r\n` to `\n` before matching (my call, no format change) |
+| … `\r\n` value printed with `\n` only; wrapped base64; re-indented PEM (YAML block); JSON/URL/hex encodings; inside a larger base64 blob | no | **no** (later variant set) |
+| Records without fingerprints (format 2, replayed) or unreadable | no | no; warned twice (D1) |
+| Secrets added while the child runs | no | no (index built at start) |
+| Values in memory during the child run | every value of the vault | substituted values + fingerprints + `K_fp` |
+
+A `run` child can now test guesses against any vault secret by printing them; `redact` (no sudo)
+already offers that oracle (spec "Guessing oracle (not new)"), so the agent gains nothing. Hit labels
+show secret names, which `names` already lists.
+
+## Tasks
+
+Every task: failing test first, watch it fail for the stated reason, then the code. Each test below
+says what production change makes it fail.
+
+### RedactingPty (brief R3; one commit per task)
+
+**R1. Matcher API and the redactor's matcher path.** Files: `RedactingPty/IStreamMatcher.cs`,
+`StreamMatch.cs` (new), `StreamRedactor.cs`; test `RedactingPty.Tests/StreamRedactorMatcherTests.cs`.
+- `Matcher_SplitAtEveryPosition_Masked` (40-char match, every split): fails if the overlap ignores
+  `MaxMatchLength`.
+- `Matcher_PemSized5000Chars_AcrossChunks_Masked` (4096-char chunks): fails with any cap below 5000.
+- `Matcher_OverlapsPlaintext_LongestWins`, `Matcher_EqualLength_PlaintextWins`,
+  `Matcher_Nested_LongerWins`, `Matcher_Disjoint_AllMasked`: fail if spans are applied in source
+  order or by successive `Replace`.
+- `Matcher_ReplacementTextNotRescanned`: fails if `string.Replace` runs after the span pass.
+- `Matcher_Straddler_NeverEmittedInPart` (asserts every emitted piece): fails if the pull-back ignores
+  matcher spans.
+- `Matcher_PendingFromWindowLength_EmitsAtOnce` and `Plaintext_NewPath_HoldsOnlyARealPrefix`: fail if
+  the hold point stays `window.Length − overlap`.
+- `Matcher_InvalidMatch_Throws` (theory: negative start, past the window, empty, longer than
+  `MaxMatchLength`), `Matcher_MaxMatchLengthBelowOne_Throws`, `Matcher_PendingFromOutOfRange_Throws`:
+  fail if bad spans are clamped.
+- `Matcher_Flush_Masks`, `Matcher_SurrogatePairNotSplit`.
+- `NoMatchers_SameAsOneDotZero` (random finds, texts, chunkings: every emitted piece identical to the
+  1.0 constructor's): fails if `[]` takes the new path.
+
+**R2. Runners.** Files: `IPtyRunner.cs`, `UnixPty.cs` (new overload + line 148 only), `WindowsPty.cs`,
+`FallbackPty.cs`, `MatcherCarrier.cs` (new, internal), `RedactingPty.TestHost/Program.cs` (a test
+matcher mode); tests in `PtyRunnerTests.cs`, `FallbackPtyTests.cs`.
+- `Run_WithMatcher_MasksChildOutput` (each real runner through the test host, and `FallbackPty`):
+  fails if an overload calls `Run(argv, replacements)` without the carrier.
+- `Fallback_OneMatcher_StdoutAndStderr_BothMasked`: fails if only one stream gets the matcher.
+- `CustomRunner_DefaultOverload_EmptyDelegates` / `_WithMatchersThrows`: fail if the default ignores
+  matchers.
+- Report: R1's frozen-span diff against 5d9a8fa, empty (`docs/briefs/r1-dotnet10-idioms.md:45-65`).
+
+**R3. Package.** Baseline 1.0.2, `dotnet pack` output (validation passes), NativeAOT publish of the
+test host with 0 warnings, README section, CI's nine legs green. Then G1, G2.
+
+### tswap (one commit per task)
+
+**T1. `FingerprintScanner`.** File `TswapCore/Fingerprints/FingerprintScanner.cs`; test
+`TswapTests/FingerprintScannerTests.cs`.
+
+```csharp
+public sealed class FingerprintScanner
+{
+    public static FingerprintScanner Build(IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys);
+    public int MaxRawLength { get; }                             // see below
+    public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits);   // text coordinates, deduped
+    public int PendingFrom(ReadOnlySpan<char> text);
+}
+```
+
+Design: prefix hashes over the text (window hash `H[i+L] − H[i]·b^L`, the same value as
+`RollingHash.Of`), a per-length bitset prefilter, HMAC confirmation exactly as `FingerprintIndex`,
+including Stage 2 task 1's rule (no window starting on a low surrogate or ending on a high one).
+Each entry gets a class from data already stored: *no-whitespace* (whitespace-stripped entries, and
+plain entries of a set without one), *base64 alphabet*, *base64url alphabet*, *free* (a plain entry of
+a set that has a whitespace-stripped one: it may hold line breaks; its whitespace count is exactly
+`W = L − S`). A start is tried for a length only while the class allows (a run of allowed characters
+at least that long; for free entries, exactly `W` of CR, LF, space, tab in the window of the view
+being scanned). Free entries
+are also tried on a view with each `\r\n` folded to `\n`, hits mapped back to raw spans that include
+the folded `\r`s. `MaxRawLength` = max over entries of `L`, or `L + W` for free entries (each folded
+break adds at most one raw character). `PendingFrom`: the earliest start whose visible part fits some
+class (no-whitespace and base64 classes: inside the trailing run; free: at most `W_max` of space, tab,
+LF), and no earlier than `text.Length − (MaxRawLength − 1)`.
+- `Scan_RawHits_EqualFingerprintIndexScan` (property: random vaults with multi-line, burned and
+  previous values, texts with every variant planted; hit sets equal, folded hits excluded): fails on
+  any unsound pruning (e.g. `=` missing from the base64 class, a whitespace plain entry classed
+  no-whitespace).
+- `Scan_MultiLine_Onlcr_Found`, `Scan_CrLfValue_OnlcrOutput_Found`, `Scan_CrLfValue_PipeOutput_Found`
+  (spans cover the raw text): fail without the folded view or with wrong mapping.
+- `Scan_CrLfValue_LfOutput_NotFound`: pins a documented gap.
+- `MaxRawLength_PemSized_IncludesFoldSlack` (3,300-char value, 51 line breaks): fails if it uses
+  `FingerprintIndex.MaxLength`.
+- `PendingFrom_IsSound` (property: for every planted occurrence and every cut inside it,
+  `PendingFrom(text[..cut]) <= start`): fails if pruning is too eager.
+- `PendingFrom_SingleLineVault_TrailingSpace_HoldsNothing`: fails if it returns the length bound.
+- `Scan_RollingHashCollision_NoHitWithoutHmac`, `Scan_WindowSplittingASurrogatePair_NoHit` (Stage 2's
+  case, value bytes `61 62 FF` against `ab😀`).
+
+**T2. `FingerprintStreamMatcher` and the package.** Files `TswapCli/FingerprintStreamMatcher.cs`,
+`TswapCli/TswapCli.csproj` (`1.1.0-local.N` until G2); test `TswapTests/FingerprintStreamMatcherTests.cs`
+(through the real `StreamRedactor`).
+- `Matcher_OtherSecret_AcrossChunks_Masked`, `Matcher_PreviousValue_LabelledPrevious`,
+  `Matcher_BurnedValue_StillMasked`: fail if labels or sets are built wrong.
+- `Matcher_TwoThreads_SameResults`: fails with shared mutable buffers.
+- `Matcher_EmptyIndex_MaxMatchLengthOne`.
+
+**T3. `run` decrypts only what it substitutes** (needs Stage 2 tasks 1-3). File `RunCommand.cs`; test
+`TswapTests/RunMinimumDecryptionTests.cs` (the store's `ValueDecrypted` seam).
+- `Run_DecryptsOnlyItsTokens` (six secrets, format 3; `{{a}} {{b:previous}}` → exactly (a, current)
+  and (b, previous), and nothing from building the index): fails if `ctx.LoadSecrets` comes back.
+- `Run_FileMarkers_DecryptOnlyMarkedVersions` (markers `c`, `d:previous`): fails if files are filled
+  from a full load.
+- `Run_TokenTwice_DecryptedOnce`.
+- `Run_MissingToken_MessageUnchanged_NothingElseDecrypted`, `Run_NoPreviousValue_MessageUnchanged`.
+- `Run_Format2Record_OnlyThatRecordDecrypted` (before a reindex).
+- Unchanged and passing: `RecordConflictTests`, `PreviousValueTests`, `PreviousValueWarningTests`,
+  `RunFileTokenTests`.
+
+**T4. `run` masks the vault; the coverage warning.** Files `RunCommand.cs`, `TswapCli/RunCoverage.cs`,
+`RunFileTokenTests.cs` (`FakePty` only); test `TswapTests/RunVaultRedactionTests.cs`.
+Warning (stderr, identical before the child starts and after it exits, my call: one text to grep):
+`Warning: <n> record(s) have no fingerprints[, <m> can't be read]: 'run' masks the secrets it
+substitutes and the fingerprinted ones, not these. Ask the user to run 'sudo <prefix> vault reindex'.`
+Plus one line when `OlderVariantSet > 0` (unreachable at variant set 1; tested on `RunCoverage` with a
+built `VaultMetadata`). If the process ends through the signal path, the second line may be missing
+(my call: the signal path exits at once).
+- `Run_OtherVaultSecret_Masked` (the fake child prints a secret nobody substituted): fails if the
+  matcher isn't passed.
+- `Run_OtherSecret_Base64AndStripped_Masked`, `Run_OtherSecretsPreviousValue_Masked`.
+- `Run_PemSizedOtherSecret_OnlcrAndBase64_Masked` (`FakePty.Onlcr`, 4096-char chunks, the split
+  inside the fold slack): fails if `MaxMatchLength` ignores the slack or folding is missing.
+- `Run_PartlyFingerprinted_WarnsTwice_RunsAndMasksFingerprinted` (per D1; exit code passed through):
+  fails if the warning appears once, if `run` refuses, or (D1) if the fingerprinted secret is shown.
+- `Run_UnreadableRecord_InWarning`, `Run_FullyFingerprinted_NoWarning`,
+  `Run_ChildFails_WarningStillAfterOutput`.
+- `EndToEnd_Run_OtherSecretMasked_RealPty` in `EndToEndTests` (the outer-PTY harness at
+  `EndToEndTests.cs:341`, built NativeAOT binary): fails if trimming or default-interface dispatch
+  breaks the matcher under AOT.
+
+**T5. Performance (numbers recorded in the PR and the release notes).** Test
+`TswapTests/RunRedactionThroughputTests.cs`, `[Trait("Category", "Perf")]`, returns early with a
+message unless `TSWAP_PERF=1`; Release; `StreamRedactor` directly in 4096-char chunks; prints:
+
+| Case | Vault | Output |
+|---|---|---|
+| before | 1.0 redactor, a substituted token's forms (#251 list) | 100 MB log-like; 100 MB base64-heavy |
+| after A | same plaintext + matcher, 200 secrets × 4 variants (16-64 chars, 10 multi-line 1.7-3.3 K) | same two |
+| after B | 2,000 secrets (16-128, 1 % multi-line) | same two |
+
+Also: Mchars/s; `MaxMatchLength`; mean characters held on log text; startup (unlock excluded) of
+`LoadSecrets` vs `LoadMetadata` + `FingerprintKeys` + `Build` for B. Targets per D3; a miss is
+reported to the owner with the profile, not tuned away silently.
+
+**T6. Docs, version, owner check.** `docs/security-model.md` (`:79` row and the `run` limits, the
+table above in short), `docs/commands.md` (`run`), `docs/release-notes/v0.3.0.md` (run section:
+minimum decryption, vault-wide masking, the warning, the gaps, D2's hold-back); `TswapCli.csproj` to
+1.1.0 after G2 (clear the local feed from the restore). Prompt text unchanged (`prompt-hash` stable).
+Owner check (D2): `tswap run ssh <host>` with a PEM in the vault, prompt visible or not.
+
+## Review focus
+
+1. Nothing decrypted beyond the substituted versions, file markers and `:previous` included
+   (`RunMinimumDecryptionTests`); format 2 exception documented.
+2. RedactingPty: frozen spans byte-identical; `UnixPty` changed only at line 148 plus the overload;
+   the 1.0 path untouched (`NoMatchers_SameAsOneDotZero`); package validation output.
+3. Soundness: no partial value ever emitted (`PendingFrom_IsSound`, the straddler test, the
+   PEM-sized tests); `MaxMatchLength` honest for folded hits.
+4. Overlap resolution: longest, leftmost, plaintext first; replacement text never rescanned.
+5. Thread safety under `FallbackPty`; `FingerprintKeys` disposed after the child.
+6. Coverage claims in the docs match the table and the tests (including the pinned gaps).
+7. Warning text, twice, `run` keeps working (D1).
+8. `writing-dotnet10-code` defaults in new code.
+
+## Risks
+
+- **Throughput on base64-heavy output** (probe: about 1 Mchar/s): a 100 MB dump takes minutes;
+  backpressure slows the child, nothing is lost. D3.
+- **Hold-back with multi-line vault secrets** (D2): interactive prompts can stay hidden.
+- **Release coupling:** tswap's PR waits for G2; local packs must never use the release version.
+- **Two scanners** (`FingerprintIndex` for Stage 2, `FingerprintScanner` here): the equality
+  property test keeps them aligned; Stage 2 may adopt the scanner later.
+- **Stage 2's API differs from the proposal:** S1-S6 are the contract; the eager fallback is above.
+- **Default interface member and package validation** (fallback above).
