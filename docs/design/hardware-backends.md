@@ -279,8 +279,8 @@ and the service refuses before any key call.
 
 **Unlock: pass 4.** `VaultUnlocker.Unlock` tries FIDO2 slots last, after pass 1 (password-free
 slots), pass 2 (the agent) and pass 3 (the vault-password prompt for other password slots). A vault
-whose only usable ways in here are FIDO2 slots skips passes 2 and 3 but still asks a running agent
-first when it has a password slot, so the agent saves the PIN and touch it can. On
+that can only be opened here through FIDO2 slots skips the vault-password prompt; when the vault has
+a password slot, a running agent is asked first, so its answer saves the PIN and touch. On
 Linux and macOS it locates each slot's key silently, asks for the PIN only for a key that holds
 the credential, and opens one slot per run; on Windows it runs one ceremony over the remaining
 slots. A FIDO2 password slot reuses the password typed in this run, or asks for it before the PIN;

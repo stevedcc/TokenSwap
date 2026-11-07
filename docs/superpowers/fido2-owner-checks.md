@@ -472,8 +472,8 @@ export TSWAP_CONFIG_DIR="$W/linux-config"
 sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password --serial <spare>
 ```
 
-Expect no PIN prompt and no touch before the vault opens with the daily key (its PIN and touch),
-then `YubiKey <spare> has no FIDO2 PIN; a FIDO2 slot needs one. Set a FIDO2 PIN on it now?
+Expect no PIN prompt or touch for the spare before the vault opens with the daily key (the daily
+key's PIN and touch), then `YubiKey <spare> has no FIDO2 PIN; a FIDO2 slot needs one. Set a FIDO2 PIN on it now?
 (yes/no): `. Answer `yes`, set a PIN, and expect `✓ YubiKey <spare> has a FIDO2 PIN now.`, then the
 enrolment with two PIN prompts for the spare and `✓ YubiKey <spare> added as a FIDO2 slot`. Then
 unplug the daily key and run `"$T" names`: it opens with the spare (its new PIN and a touch).
