@@ -506,4 +506,80 @@ public sealed class WriteCommandDecryptionTests : IDisposable
         Assert.Null(burned.Previous);
         Assert.Equal(section, Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")))));
     }
+
+    // ------------------------------------------------------------------ task 7: restore
+
+    [Fact]
+    public void Restore_DecryptsOnlyThePreviousValue()
+    {
+        var previous = ReadRecord(_m, _key, "b").Previous!.Version;
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok("", "restore", "b");
+
+        Assert.Equal([(FileOf("b"), previous)], _values);
+        Assert.Equal([FileOf("b")], _records);
+        AssertOthersUnchanged(before, "b");
+        Assert.Equal("b-value", _m.Get("b"));
+        Assert.Equal("b-value-2", Db().Secrets["b"].PreviousValue);
+    }
+
+    [Fact]
+    public void Restore_UnreadableTarget_NamesTheFile_WritesNothing()
+    {
+        var path = RecordFile(_m, _key, "b");
+        File.WriteAllBytes(path, File.ReadAllBytes(path)[..150]);
+        var before = Snapshot();
+        Watch();
+
+        var (exit, stdout, err) = _m.Run("", "restore", "b");
+
+        Assert.Equal(1, exit);
+        Assert.Equal("", stdout);
+        Assert.Equal($"\n❌ Error: {SecretsDb.UnreadableRecordText("b", FileOf("b"))}" + Environment.NewLine, err);
+        Assert.Equal(before, Snapshot());
+        Assert.Empty(_values);
+    }
+
+    /// <summary>
+    /// Copies only plaintext can merge (one of them without fingerprint sets, re-encrypted): the
+    /// write decodes that record whole, so restore decrypts its two versions (in both files of that
+    /// record) and nothing of any other record.
+    /// </summary>
+    [Fact]
+    public void Restore_CopiesOnlyPlaintextCanMerge_DecryptsThatRecordsTwoVersions()
+    {
+        var path = RecordFile(_m, _key, "b");
+        var state = SecretRecordCodec.Decode(File.ReadAllBytes(path), _key);
+        var later = new Stamp(new Hlc(state.Write.Hlc.PhysicalMs + 1000, 0), state.Write.Origin);
+        File.WriteAllBytes(path + " (1)", SecretRecordCodec.Encode(
+            state with { Write = later, Fingerprints = null, Previous = state.Previous! with { Fingerprints = null }, Sealed = null }, _key, 3));
+        Watch();
+
+        _m.Ok("", "restore", "b");
+
+        Assert.Equal([state.Previous!.Version, state.Version], _values.Select(v => v.Version).Distinct().Order());
+        Assert.All(_values, v => Assert.StartsWith(FileOf("b"), v.File, StringComparison.Ordinal));
+        Assert.False(File.Exists(path + " (1)"));
+        Assert.Equal("b-value", _m.Get("b"));
+    }
+
+    [Fact]
+    public void Restore_BurnLine_FromTheWrittenState()
+    {
+        Watch();
+        var unburned = _m.Ok("", "restore", "b");
+        _m.Ok("", "burn", "a", "leaked");
+        _m.Ok("a-2", "ingest", "--rotate", "a");
+        var burned = _m.Ok("", "restore", "a");
+
+        const string Restored = "\n✓ Secret '{0}' restored to its previous value (a new version; the value it replaced is now the previous one).\n";
+        const string Remember = "  Remember to update the external system that uses it.\n";
+        Assert.Equal((string.Format(Restored, "b") + Remember).ReplaceLineEndings(), unburned);
+        Assert.Equal((string.Format(Restored, "a") +
+            "  ⚠ That value was burned (leaked); the burn is outstanding again. Rotate it once the service uses it.\n" + Remember).ReplaceLineEndings(),
+            burned);
+        Assert.Equal("leaked", Db().Secrets["a"].BurnReason);
+    }
 }
