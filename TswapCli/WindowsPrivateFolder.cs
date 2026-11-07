@@ -40,6 +40,11 @@ internal static partial class WindowsPrivateFolder
         return true;
     }
 
+    /// <summary>True when <paramref name="path"/>'s ACL grants only the current user (the sweep's check).</summary>
+    [SupportedOSPlatform("windows")]
+    public static bool IsPrivate(string path) =>
+        WindowsIdentity.GetCurrent().User is { } user && IsCurrentUserOnly(new DirectoryInfo(path).GetAccessControl(), user);
+
     [SupportedOSPlatform("windows")]
     private static bool IsCurrentUserOnly(DirectorySecurity security, SecurityIdentifier user)
     {

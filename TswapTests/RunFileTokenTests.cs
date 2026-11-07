@@ -454,7 +454,7 @@ public sealed class RunFileTokenTests : IDisposable
         var fresh = Path.Combine(_tmpRoot, "tswap-run-fedcba9876543210");
         foreach (var dir in new[] { old, fresh })
         {
-            Directory.CreateDirectory(Path.Combine(dir, "1"));
+            MakeRunFolder(dir);
             File.WriteAllText(Path.Combine(dir, "1", "values.yaml"), "left over");
         }
         Directory.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddHours(-2));
@@ -482,7 +482,7 @@ public sealed class RunFileTokenTests : IDisposable
                 foreach (var name in new[] { "tswap-run-1111111111111111", "tswap-run-2222222222222222" })
                 {
                     var dir = Path.Combine(root, name);
-                    Directory.CreateDirectory(Path.Combine(dir, "1"));
+                    MakeRunFolder(dir);
                     File.WriteAllText(Path.Combine(dir, "1", "values.yaml"), "left over");
                     File.WriteAllText(Path.Combine(dir, ".lock"), "");
                 }
@@ -506,6 +506,19 @@ public sealed class RunFileTokenTests : IDisposable
             foreach (var l in locks)
                 l.Dispose();
         }
+    }
+
+    // A run folder as tswap makes it (mode 0700 on Unix: the sweep touches no other), with subfolder 1.
+    private static void MakeRunFolder(string dir)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "1"));
+            return;
+        }
+        const UnixFileMode rwx = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(dir, rwx);
+        Directory.CreateDirectory(Path.Combine(dir, "1"), rwx);
     }
 
     private static IDisposable HoldLock(string path)
@@ -681,7 +694,7 @@ public sealed class RunFileTokenTests : IDisposable
     public static TheoryData<string> PrinterWords => new()
     {
         "cat", "echo", "printf", "tee", "base64", "base32", "basenc", "xxd", "od", "hexdump", "hd", "strings",
-        "uuencode", "iconv", "cp", "mv", "dd", "install", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz",
+        "uuencode", "iconv", "cp", "mv", "dd", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz",
         "zstd", "openssl", "gpg", "less", "more", "head", "tail", "nl", "sort", "uniq", "rev", "tac", "split", "ln",
         "certutil",
     };
@@ -755,11 +768,94 @@ public sealed class RunFileTokenTests : IDisposable
     public void RunFileToken_WrappersLookedThrough_HelmAllowed(string command)
     {
         WriteFile("f", ValuesYaml);
+        string? seenCopy = null;
+        _pty.During = argv => seenCopy = File.ReadAllText(CopyPath(argv));
 
         var (exit, _, err) = Run(["run", .. command.Split(' ')]);
 
         Assert.True(exit == 0, err);
         Assert.Equal(1, _pty.Starts);
+        Assert.Equal(Apply.ApplySecrets(ValuesYaml, Db()), seenCopy);
+    }
+
+    // Controller ruling (review of task 1, Important 1): 'install' copies files as the program, but
+    // as an argument it is Helm's headline subcommand.
+    [Fact]
+    public void RunFileToken_InstallAsArgumentAllowed()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        string? copy = null;
+        _pty.During = argv => copy = File.ReadAllText(CopyPath(argv));
+
+        var (exit, _, err) = Run("run", "helm", "install", "app", "./chart", "-f", "{{@values.yaml}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal(["helm", "install", "app", "./chart", "-f"], _pty.Argv![..5]);
+        Assert.Equal(Apply.ApplySecrets(ValuesYaml, Db()), copy);
+    }
+
+    [Theory]
+    [InlineData("install {{@f}} /tmp/x")]
+    [InlineData("nice -n 5 install {{@f}} /tmp/x")]
+    [InlineData("timeout 5 install -m 600 {{@f}} /tmp/x")]
+    [InlineData("/usr/bin/install {{@f}} /tmp/x")]
+    public void RunFileToken_InstallAsProgramRefused(string command)
+    {
+        WriteFile("f", ValuesYaml);
+
+        var (exit, _, err) = Run(["run", .. command.Split(' ')]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'install'", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
+    // Review minor 1: the word check also sees what {{name}} tokens expand to, so a secret whose value
+    // is 'base64' can't stand in for the program. The refusal doesn't repeat the value.
+    [Theory]
+    [InlineData("{{prog}} {{@values.yaml}}")]
+    [InlineData("mytool {{prog}} {{@values.yaml}}")]
+    public void RunFileToken_SubstitutedValueIsAPrinter_Refused(string command)
+    {
+        Ingest("prog", "base64");
+        WriteFile("values.yaml", ValuesYaml);
+
+        var (exit, _, err) = Run(["run", .. command.Split(' ')]);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("value of a {{name}} token", err);
+        Assert.DoesNotContain("base64", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
+    [Fact]
+    public void RunFileToken_UnreadableSourceRefused()
+    {
+        if (OperatingSystem.IsWindows() || new UnixOwnership().EffectiveUid == 0)
+        {
+            _output.WriteLine("SKIPPED: needs Unix permissions that bind (not root).");
+            return;
+        }
+        var path = WriteFile("values.yaml", ValuesYaml);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Can't read 'values.yaml'", err);
+        Assert.DoesNotContain("Unhandled", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
+    }
+
+    [Fact]
+    public void SubstituteAllTokensInArgs_NulValueIsATswapRefusal()
+    {
+        var ex = Assert.Throws<TswapException>(() => Validation.SubstituteAllTokensInArgs(
+            ["cmd", "{{tok}}"], new Dictionary<string, string> { ["tok"] = "va\0lue" }, new Dictionary<string, string>()));
+        Assert.Contains("'tok'", ex.Message);
     }
 
     [Theory]
@@ -826,11 +922,11 @@ public sealed class RunFileTokenTests : IDisposable
             Assert.True(_forwardedEvent.Wait(TimeSpan.FromSeconds(10)), "the signal reaches the child's process group");
             copyStillThereAfterForwarding = File.Exists(CopyPath(argv));
         };
-        _pty.ExitCode = 130; // the child died of SIGINT
+        _pty.ExitCode = 1; // the child handled SIGINT and exited 1: its own code, not 128 + 2, is tswap's
 
         var (exit, _, _) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
 
-        Assert.Equal(130, exit);
+        Assert.Equal(1, exit);
         lock (_forwarded)
             Assert.Equal([2], _forwarded);
         Assert.True(copyStillThereAfterForwarding, "cleanup waits for the child to exit");
@@ -870,6 +966,111 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Equal(0, _pty.Starts);
         Assert.Empty(RunFolders());
         Assert.Empty(_forwarded);
+    }
+
+    // Review minor 4: on Windows the console's close, logoff and shutdown events end tswap once the
+    // handler returns, so the handler kills the child and cleans up before it returns.
+    [Fact]
+    public void RunFileToken_ProcessEndingSignal_CleansUpBeforeTheHandlerReturns()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        _env = _env with { SignalEndsProcess = signal => signal == 1, ChildGrace = TimeSpan.FromMilliseconds(100) };
+        bool? copyGoneWhenHandlerReturned = null;
+        _pty.During = argv =>
+        {
+            var copy = CopyPath(argv);
+            _signalHandler!(1);
+            copyGoneWhenHandlerReturned = !File.Exists(copy);
+        };
+
+        Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(copyGoneWhenHandlerReturned, "the copy is removed inside the handler");
+        lock (_forwarded)
+            Assert.Contains(9, _forwarded);
+        Assert.Empty(RunFolders());
+    }
+
+    // Review minor 10: the sweep only touches a stale folder that is the user's own 0700 one, and it
+    // never zeroes through a hard link (it only unlinks it).
+    [Fact]
+    public void RunFileToken_SweepSkipsOpenFolderAndNeverZeroesThroughHardLinks()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            _output.WriteLine("SKIPPED: Unix modes and hard links.");
+            return;
+        }
+        var open = Path.Combine(_tmpRoot, "tswap-run-3333333333333333");
+        var linked = Path.Combine(_tmpRoot, "tswap-run-4444444444444444");
+        foreach (var dir in new[] { open, linked })
+            Directory.CreateDirectory(Path.Combine(dir, "1"));
+        File.WriteAllText(Path.Combine(open, "1", "values.yaml"), "left over");
+        var victim = Path.Combine(_tempDir, "victim.txt");
+        File.WriteAllText(victim, "precious");
+        using (var ln = Process.Start("ln", [victim, Path.Combine(linked, "1", "values.yaml")]))
+            ln.WaitForExit();
+        File.SetUnixFileMode(open, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                                   | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        File.SetUnixFileMode(linked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        foreach (var dir in new[] { open, linked })
+            Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow.AddHours(-2));
+        WriteFile("values.yaml", ValuesYaml);
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(exit == 0, err);
+        Assert.Equal("left over", File.ReadAllText(Path.Combine(open, "1", "values.yaml")));
+        Assert.False(Directory.Exists(linked), "a stale private folder is still removed");
+        Assert.Equal("precious", File.ReadAllText(victim));
+    }
+}
+
+/// <summary>
+/// Review of task 1: the pieces of <c>run</c>'s signal path that decide whom to signal, without
+/// processes (fake snapshots and process groups).
+/// </summary>
+public sealed class RunFileTokenChildSelectionTests
+{
+    private static readonly DateTime TswapStart = new(2026, 11, 7, 10, 0, 0, DateTimeKind.Utc);
+
+    // Windows (review Important 2): Toolhelp's parent ids go stale when a parent exits, and pids are
+    // reused, so a candidate counts only when it was created after tswap.
+    [Fact]
+    public void RunFileToken_WindowsChildren_OnlyThoseCreatedAfterTswap()
+    {
+        (int Pid, int ParentPid)[] snapshot = [(100, 42), (101, 42), (102, 42), (103, 7), (104, 42)];
+        Dictionary<int, DateTime?> starts = new()
+        {
+            [100] = TswapStart.AddSeconds(2),  // tswap's real child
+            [101] = TswapStart.AddHours(-3),   // its parent was an earlier process that had pid 42 (pid reuse)
+            [102] = null,                      // its start can't be read: not verifiable
+            [103] = TswapStart.AddSeconds(5),  // someone else's child
+            [104] = TswapStart,                // not later than tswap
+        };
+
+        var children = ChildProcesses.SelectWindowsChildren(snapshot, parent: 42, TswapStart, pid => starts[pid]);
+
+        Assert.Equal([100], children);
+    }
+
+    // Review minor 3: a child in tswap's own process group, when that group is the terminal's
+    // foreground group, already got the terminal's SIGINT (Ctrl+C): never a second one.
+    [Theory]
+    [InlineData(500, 300, 2, 300, 1)]     // the child leads its own group (PTY): its group, even for SIGINT
+    [InlineData(700, 300, 2, 300, -1)]    // in some other group it doesn't lead: the child alone
+    [InlineData(300, 300, 2, null, -1)]   // shares tswap's group, no terminal: the child alone
+    [InlineData(300, 300, 2, 999, -1)]    // shares tswap's group, which isn't in the foreground: the child alone
+    [InlineData(300, 300, 2, 300, 0)]     // shares tswap's foreground group, SIGINT: already delivered
+    [InlineData(300, 300, 3, 300, 0)]     // ... SIGQUIT (Ctrl+\) likewise
+    [InlineData(300, 300, 15, 300, -1)]   // ... SIGTERM never comes from the terminal: the child alone
+    public void RunFileToken_SignalTarget(int childPgid, int ownPgid, int signal, int? foreground, int expected)
+    {
+        // expected: 1 the child's group, -1 the child alone, 0 none ("already delivered").
+        var target = ChildProcesses.Target(pid: 500, childPgid, ownPgid, signal, foreground);
+
+        int? want = expected switch { 0 => null, -1 => 500, _ => -500 };
+        Assert.Equal(want, target);
     }
 }
 

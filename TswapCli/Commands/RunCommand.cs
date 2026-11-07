@@ -116,6 +116,16 @@ public sealed class RunCommand : ICliCommand
             }
         }
 
+        // Review minor 1: the same word check on what the {{name}} tokens expand to (file tokens still as
+        // typed), before anything is written: a secret whose value is 'base64' can't be the printer. The
+        // refusal doesn't repeat the word, which came from a secret value.
+        if (filesEnv is not null
+            && Validation.GetFileTokenRefusal(Validation.SubstituteAllTokensInArgs(commandArgs, secretValues, new Dictionary<string, string>())) is not null)
+            throw new TswapException(
+                "With a {{@file}} token, the value of a {{name}} token in this command is a program or word that prints, " +
+                "encodes or copies files, or a shell or interpreter, which would expose the filled copy. " +
+                "Pass the secret another way, or run the command without the {{@file}} token.");
+
         FilledFiles? files = null;
         try
         {

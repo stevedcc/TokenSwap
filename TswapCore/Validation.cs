@@ -138,14 +138,19 @@ public static class Validation
     private static readonly HashSet<string> FilePrinters = new(StringComparer.OrdinalIgnoreCase)
     {
         "cat", "echo", "printf", "tee", "base64", "base32", "basenc", "xxd", "od", "hexdump", "hd", "strings",
-        "uuencode", "iconv", "cp", "mv", "dd", "install", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz",
+        "uuencode", "iconv", "cp", "mv", "dd", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz",
         "zstd", "openssl", "gpg", "less", "more", "head", "tail", "nl", "sort", "uniq", "rev", "tac", "split", "ln",
         "certutil",
     };
 
+    // Copiers refused only as the program (argv[0], or the command a wrapper runs): as an argument the
+    // word is common and harmless ('helm install app ./chart', a controller ruling on the review).
+    private static readonly HashSet<string> FileProgramPrinters = new(StringComparer.OrdinalIgnoreCase) { "install" };
+
     /// <summary>
     /// Issue #251: the extra check for a command with a <c>{{@file}}</c> token. Refused: a file token as
-    /// the program; and any word (the basename of each argument as typed, a file token counting as its
+    /// the program; <c>install</c> as the program, also behind simple wrappers (<c>nice -n 5 install</c>);
+    /// and any word (the basename of each argument as typed, a file token counting as its
     /// file's basename) that is a printer, encoder or copier, in the existing blocklist, or a shell or
     /// interpreter (sed included). Null when allowed.
     /// </summary>
@@ -155,6 +160,10 @@ public static class Validation
             return null;
         if (FileTokenRegex.IsMatch(argv[0]))
             return new(argv[0], "A {{@file}} token can't be the program: the file is data for a tool, never a program to run.");
+        foreach (var program in ProgramWords(argv))
+            if (FileProgramPrinters.Contains(program))
+                return new(program, $"'{program}' copies files, which would expose the filled copy of a {{{{@file}}}} token. " +
+                    "The file is data for a tool, never something to copy.");
         foreach (var arg in argv)
         {
             var files = FileTokenRegex.Matches(arg).Select(m => ProgramName(m.Groups[1].Value));
@@ -174,6 +183,47 @@ public static class Validation
         return null;
     }
 
+    // argv[0] and, through simple wrappers (nice, timeout, sudo, ...: their options and leading
+    // positional skipped as CheckWrapper does), the command each runs. Tools with subcommands (docker,
+    // npm, ...) end the walk: their later words aren't a program on this machine.
+    private static IEnumerable<string> ProgramWords(IReadOnlyList<string> argv)
+    {
+        var i = 0;
+        while (i < argv.Count)
+        {
+            var program = ProgramName(argv[i]);
+            yield return program;
+            if (!Wrappers.Contains(program) || SubcommandTools.Contains(program))
+                yield break;
+            WrapperValued.TryGetValue(program, out var valued);
+            var skipLeading = WrapperLeadingPositional.Contains(program);
+            var next = -1;
+            for (var j = i + 1; j < argv.Count && next < 0; j++)
+            {
+                var arg = argv[j];
+                if (arg == "--")
+                    continue;
+                if (arg.StartsWith('-'))
+                {
+                    if (valued is not null && valued.Contains(arg, StringComparer.Ordinal))
+                        j++;
+                    continue;
+                }
+                if (arg.Contains('=') && !arg.StartsWith('/') && program.Equals("sudo", StringComparison.OrdinalIgnoreCase))
+                    continue; // sudo VAR=value
+                if (skipLeading)
+                {
+                    skipLeading = false;
+                    continue;
+                }
+                next = j;
+            }
+            if (next < 0)
+                yield break;
+            i = next;
+        }
+    }
+
     private static string FileTokenWayOut(string word) =>
         $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +
         "or pass the secret with a plain {{name}} token instead.";
@@ -182,15 +232,16 @@ public static class Validation
     /// Substitutes both token kinds in one pass over each argument as typed (issue #251): a
     /// <c>{{name}}</c> gets its raw value from <paramref name="secretValues"/>, a <c>{{@path}}</c> the
     /// filled copy's path from <paramref name="filePaths"/>. Substituted text is never scanned again (a
-    /// value containing <c>{{@…}}</c> stays plain text). Values are not shell-quoted (see
-    /// <see cref="SubstituteTokensInArgs"/>); null and NUL-containing values are refused.
+    /// value containing <c>{{@…}}</c> stays plain text). Values are not shell-quoted: the program is
+    /// executed directly, never through a shell. Null and NUL-containing values are refused
+    /// (<see cref="TswapException"/>): native APIs would silently truncate them.
     /// </summary>
     public static string[] SubstituteAllTokensInArgs(string[] args, IReadOnlyDictionary<string, string> secretValues,
         IReadOnlyDictionary<string, string> filePaths)
     {
         foreach (var (token, value) in secretValues)
             if (value is null || value.Contains('\0'))
-                throw new Exception(
+                throw new TswapException(
                     $"Secret '{token}' has a null or NUL-containing value, which cannot be " +
                     "passed as a process argument. Re-ingest the secret with a valid value.");
 
@@ -791,15 +842,8 @@ public static class Validation
                     $"Secret '{token}' has a null or NUL-containing value, which cannot be " +
                     "passed as a process argument. Re-ingest the secret with a valid value.");
 
-        var result = new string[args.Length];
-        for (int i = 0; i < args.Length; i++)
-        {
-            var a = args[i];
-            foreach (var (token, value) in secretValues)
-                a = a.Replace($"{{{{{token}}}}}", value);
-            result[i] = a;
-        }
-        return result;
+        // The one substitution pass run uses (name tokens only here).
+        return SubstituteAllTokensInArgs(args, secretValues, new Dictionary<string, string>());
     }
 
     /// <summary>

@@ -64,6 +64,13 @@ internal sealed record FilledFilesEnvironment
     /// </summary>
     public Func<int, int> SignalChildren { get; init; } = ChildProcesses.Signal;
 
+    /// <summary>
+    /// Whether tswap ends as soon as the handler for this signal returns, whatever it does: on Windows
+    /// the console's close, logoff and shutdown events (SIGHUP, SIGTERM), which can't be cancelled.
+    /// The handler then kills the child and cleans up before it returns.
+    /// </summary>
+    public Func<int, bool> SignalEndsProcess { get; init; } = signal => OperatingSystem.IsWindows() && signal is 1 or 15;
+
     /// <summary>How long an interrupted child gets to exit before it is killed.</summary>
     public TimeSpan ChildGrace { get; init; } = TimeSpan.FromSeconds(10);
 
@@ -109,6 +116,9 @@ internal sealed class FilledFiles : IDisposable
     private bool _childRunning;
     private bool _forwarding;
     private bool _disposed;
+    private Task? _forwardTask;
+    private readonly Lock _cleanupGate = new();
+    private bool _cleanedUp;
 
     /// <summary>The same source file, as resolved paths compare on this OS.</summary>
     public static StringComparer SourcePathComparer =>
@@ -126,6 +136,18 @@ internal sealed class FilledFiles : IDisposable
     /// are made on the first call.
     /// </summary>
     public string Add(string sourcePath, string content)
+    {
+        // Under the cleanup lock: a process-ending signal's cleanup never runs halfway through a copy,
+        // and no copy is made after it.
+        lock (_cleanupGate)
+        {
+            if (_cleanedUp)
+                throw new TswapException("Interrupted: the filled copies were removed.");
+            return AddLocked(sourcePath, content);
+        }
+    }
+
+    private string AddLocked(string sourcePath, string content)
     {
         if (_copies.TryGetValue(sourcePath, out var existing))
             return existing;
@@ -177,8 +199,31 @@ internal sealed class FilledFiles : IDisposable
         }
     }
 
+    // How long a process-ending signal's handler waits for the killed child before cleaning up: Windows
+    // allows a close event's handler about 5 seconds in all.
+    private static readonly TimeSpan EndingWait = TimeSpan.FromSeconds(2);
+
     private void OnSignal(int signal)
     {
+        if (_env.SignalEndsProcess(signal))
+        {
+            // Review minor 4: tswap ends when this returns, so nothing can wait for the child: kill it,
+            // give it a moment to let go of the copies, and clean up here (bounded).
+            bool running;
+            lock (_gate)
+            {
+                _signal ??= signal;
+                running = _childRunning;
+            }
+            if (running)
+            {
+                _env.SignalChildren(KillSignal);
+                _childExited.Wait(EndingWait < _env.ChildGrace ? EndingWait : _env.ChildGrace);
+            }
+            CleanUp();
+            return;
+        }
+
         bool startForwarding, forwardAgain;
         lock (_gate)
         {
@@ -188,7 +233,7 @@ internal sealed class FilledFiles : IDisposable
             _forwarding |= startForwarding;
         }
         if (startForwarding)
-            _ = Task.Run(() => Forward(signal));
+            _forwardTask = Task.Run(() => Forward(signal));
         else if (forwardAgain)
             _env.SignalChildren(signal);
         // No child running: RunChild never starts it (or it has exited), and Dispose cleans up.
@@ -318,12 +363,13 @@ internal sealed class FilledFiles : IDisposable
     {
         if (OperatingSystem.IsWindows())
         {
-            if (File.GetAttributes(folder).HasFlag(FileAttributes.ReparsePoint))
+            if (File.GetAttributes(folder).HasFlag(FileAttributes.ReparsePoint) || !WindowsPrivateFolder.IsPrivate(folder))
                 return;
         }
-        else if (_env.Stat(folder) is not { Type: BrokerNative.EntryType.Directory } s || s.Uid != _env.EffectiveUid())
+        else if (_env.Stat(folder) is not { Type: BrokerNative.EntryType.Directory } s || s.Uid != _env.EffectiveUid()
+                 || (s.Mode & (UnixFileMode)0x1FF) != PrivateFolder)
         {
-            return;
+            return; // not a folder tswap made: another user's, a link, or one others can write into
         }
         if (Directory.GetLastWriteTimeUtc(folder) >= cutoff)
             return;
@@ -351,7 +397,9 @@ internal sealed class FilledFiles : IDisposable
             };
             foreach (var file in Directory.EnumerateFiles(folder, "*", options).ToList())
                 if (!string.Equals(file, lockPath, StringComparison.Ordinal))
-                    ZeroAndDelete(file, record: false);
+                    // A hard link is only unlinked: zeroing it would zero the file it shares (Windows:
+                    // the folder's ACL already keeps others from planting one).
+                    ZeroAndDelete(file, record: false, zero: OperatingSystem.IsWindows() || FilledFilesNative.LinkCount(file) == 1);
             if (OperatingSystem.IsWindows())
             {
                 // Windows can't delete a folder holding an open file.
@@ -374,6 +422,25 @@ internal sealed class FilledFiles : IDisposable
         _disposed = true;
         try
         {
+            CleanUp();
+            // The forwarding task ends once the child has exited (RunChild has set the event).
+            _forwardTask?.Wait(_env.ChildGrace);
+            _childExited.Dispose();
+        }
+        finally
+        {
+            _signals.Dispose();
+        }
+    }
+
+    // Once, from Dispose or from a process-ending signal's handler, whichever comes first.
+    private void CleanUp()
+    {
+        lock (_cleanupGate)
+        {
+            if (_cleanedUp)
+                return;
+            _cleanedUp = true;
             foreach (var file in _files)
                 ZeroAndDelete(file, record: true);
             if (_folder is not null)
@@ -393,10 +460,6 @@ internal sealed class FilledFiles : IDisposable
             }
             ReleaseLock();
         }
-        finally
-        {
-            _signals.Dispose();
-        }
     }
 
     private void ReleaseLock()
@@ -406,20 +469,21 @@ internal sealed class FilledFiles : IDisposable
     }
 
     // Best effort: tmpfs and SSDs may keep copies of the old blocks.
-    private void ZeroAndDelete(string file, bool record)
+    private void ZeroAndDelete(string file, bool record, bool zero = true)
     {
         try
         {
-            long length;
-            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Write, FileShare.None))
+            long length = 0;
+            if (zero)
             {
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Write, FileShare.None);
                 length = stream.Length;
                 var zeros = new byte[(int)Math.Min(length, 64 * 1024)];
                 for (var left = length; left > 0; left -= zeros.Length)
                     stream.Write(zeros, 0, (int)Math.Min(zeros.Length, left));
                 stream.Flush(flushToDisk: true);
             }
-            if (record)
+            if (record && zero)
                 _env.Recorder?.Invoke(new CleanupStep(CleanupKind.Zeroed, file, length));
             File.Delete(file);
             if (record)
