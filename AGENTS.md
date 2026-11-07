@@ -84,8 +84,8 @@ sudo" precedent, the `slot` command as a whole is bucketed under `[sudo]` on the
 screen and in this list; the runtime `RequireSudo` check itself only actually fires inside
 `slot approve`, `slot add --yubikey` (which unlocks this machine's vault and adds a plugged-in
 YubiKey to its keyring as a new slot, a new way to decrypt it) and `slot merge` (which unlocks
-this machine's vault and adds the slots of a receipt or of another copy's `config.json`, each a
-new way to decrypt it). `recover` (its own command, `RequiresSudo`) opens the vault with the
+this machine's vault and adds the slots of a slot receipt, each a new way to decrypt it; another
+copy of a record vault is folded in with `vault merge <its vault folder>` instead, #247). `recover` (its own command, `RequiresSudo`) opens the vault with the
 recovery private key, read from stdin only, and enrolls this machine's hardware as a new slot.
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
