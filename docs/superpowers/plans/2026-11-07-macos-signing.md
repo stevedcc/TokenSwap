@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Plan review round 3 (2026-11-07; GLM approved round 2, MiMo approve with three Minors;
+> `tswap-wt/tools/sign-plan-r3-mimo.md`).** Folded in at implementation time:
+> N6: "report-only" now has one named mechanism, the `runner_check` function and the variable
+> `TSWAP_MACOS_GATE_RUNNER_CHECKS` (section "Report-only checks" below), used the same way in tasks 3, 4, 5 and 10;
+> Task 4's notarisation check and its unnotarised control are report-only under it until task 10's follow-up commit,
+> and the section says how the control is caught meanwhile.
+> N7: the spelling test is in Task 4's test list, as `MacOsSmoke_NotarisationCheck_ExactArgumentSpelling`.
+> N8: the two summary lines ("My calls", file map) say `<arch>-apple-macos$(SecureEnclaveShimMinOS)`, arch per build host.
+
 > **Plan review round 2 (2026-11-07; MiMo request changes, no Blocking; `tswap-wt/tools/sign-plan-r2-mimo.md`).**
 > N1: MiMo corrected its own round-1 advice: codesign's short options take everything after the letter, so
 > `-R='=notarized'` passed `==notarized` (exit 2 even on a good binary). Every notarisation check now uses the
@@ -90,7 +99,8 @@ My calls within those decisions, with reasons:
   files can be compared in tests.
 - **Pkg identifier `dev.crawford.tswap.pkg`** (the receipt name for `pkgutil --pkg-info` / `--forget`), next to D4's
   code identifiers.
-- **Shim deployment target `arm64-apple-macos12.0`**, the same as `tswap`'s own minimum (.NET 10 NativeAOT, read from
+- **Shim deployment target `<arch>-apple-macos$(SecureEnclaveShimMinOS)`, minos 12.0, arch per build host** (arm64
+  in the release), the same as `tswap`'s own minimum (.NET 10 NativeAOT, read from
   v0.2.0's `LC_BUILD_VERSION`: minos 12.0). Every CryptoKit and Security call the shim makes exists since macOS 10.15,
   and Apple silicon Macs start at macOS 11, so 12.0 loses no one tswap itself could serve; `swiftc` refuses to compile
   any call newer than the target, which checks the claim. The pkg's distribution carries the same minimum
@@ -231,6 +241,31 @@ the owner's name.
 
 The smoke asserts `codesign -d --entitlements - tswap` prints no entitlements.
 
+## Report-only checks (`runner_check`, `TSWAP_MACOS_GATE_RUNNER_CHECKS`)
+
+Three assertions rest on what Apple's tools print or answer on GitHub's runner, which nobody has seen yet:
+
+| Id | Check | Where |
+|---|---|---|
+| `dylib-runtime` | `codesign -dvvv` names `runtime` in the **dylib's** `flags=` line (on `tswap` it gates from the start) | task 3 `verify` |
+| `notarisation` | `codesign -vvvv --test-requirement='=notarized' --check-notarization` passes on each notarised file | task 4 |
+| `notarisation-control` | the same check fails on the unnotarised control | task 4 |
+| `pkg-timestamp` | `pkgutil --check-signature` prints "Signed with a trusted timestamp" | task 5 `check` |
+
+Each goes through one shell function, `runner_check <id> <passed: 0|1> <message>`, in
+`contrib/packaging/macos/runner-checks.sh`, which `sign-macos.sh`, `package.sh` and `package-pkg.sh` source. With
+`TSWAP_MACOS_GATE_RUNNER_CHECKS=1` a failed check prints `::error::<id>: <message>` and fails the script like every
+other check. Otherwise it prints `REPORT-ONLY <id>: <message>` and a `::warning::` with the same text, and the script
+goes on; a passed check prints `<id>: ok` in both modes. `release.yml` does not set the variable until task 10's
+follow-up commit, which adds `TSWAP_MACOS_GATE_RUNNER_CHECKS: '1'` to `build-macos`'s `env:` and copies the dry run's
+strings into the checks and their fakes (or drops a check, with the output as evidence). Tests run each check in both
+modes.
+
+The control cannot fail the dry run while it is report-only, so it is caught by the record step instead: a control
+that passes prints `REPORT-ONLY notarisation-control: the check passed an unnotarised binary: it proves nothing`, and
+task 10 lists that line among what must be absent before the follow-up commit; from that commit on it fails the job.
+The control runs whenever the signing checks run (the dry run and every tag run): it costs one call with retries = 1.
+
 ## The pkg
 
 - **Payload root** (staged in `$RUNNER_TEMP/pkgroot`, copied with `ditto` from the signed, notarised publish files):
@@ -252,8 +287,9 @@ The smoke asserts `codesign -d --entitlements - tswap` prints no entitlements.
 - **Notarise and staple:** `notarytool submit tswap-osx-arm64.pkg --wait …`, `xcrun stapler staple
   tswap-osx-arm64.pkg`, `xcrun stapler validate tswap-osx-arm64.pkg`.
 - **Checks:** `pkgutil --check-signature` (first certificate "Developer ID Installer: … (<TEAMID>)", and a trusted
-  timestamp: the exact wording, "Signed with a trusted timestamp" on current macOS, is **report-only** (printed, never failing) until
-  task 10's follow-up commit copies the dry run's wording into the check and its fake); `spctl -a -t install -vv` ("accepted", "source=Notarized Developer ID"); `pkgutil
+  timestamp: the exact wording, "Signed with a trusted timestamp" on current macOS, is the report-only check
+  `pkg-timestamp` (section "Report-only checks") until task 10's follow-up commit copies the dry run's wording into the
+  check and its fake); `spctl -a -t install -vv` ("accepted", "source=Notarized Developer ID"); `pkgutil
   --payload-files` lists exactly the two files (plus the directories); `pkgutil --expand-full` into a temp folder: the
   payload's SHA-256s equal the tarball's files, `lsbom` of the component's Bom shows `0755` and `0/0` for both, and both
   pass the same `verify` and minos checks.
@@ -412,12 +448,14 @@ pushed with the default `GITHUB_TOKEN` starts no workflow, so such a bot needs a
 
 ## File map
 
-- `TswapCore/TswapCore.csproj` — `BuildSecureEnclaveShim`: `-target arm64-apple-macos12.0` (#265), and signing when
+- `TswapCore/TswapCore.csproj` — `BuildSecureEnclaveShim`: `-target <arch>-apple-macos$(SecureEnclaveShimMinOS)`
+  (minos 12.0, arch per build host; #265), and signing when
   `TswapMacSignIdentity` is set.
 - `contrib/packaging/sign-macos.sh` (new) — `keychain-setup`, `sign`, `verify`, `notarise`, `keychain-cleanup`.
 - `contrib/packaging/package-pkg.sh` (new) — stage, `pkgbuild`, `productbuild`, `productsign`, `notarise` + staple,
   checks, `--install-test`.
 - `contrib/packaging/macos/distribution.xml`, `contrib/packaging/macos/resources/conclusion.html` (new).
+- `contrib/packaging/macos/runner-checks.sh` (new) — `runner_check`, the report-only mechanism (sourced by the three scripts).
 - `contrib/packaging/package.sh` — macOS smoke: embedded-dylib and minos checks always; signature, notarisation and
   quarantine checks when `TSWAP_EXPECT_TEAM_ID` is set.
 - `TswapCore/InstallScript.cs`, `TswapCli/Commands/InstallScriptCommand.cs` — per-user-only script when run from the
@@ -503,7 +541,8 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   Application:`, `Identifier=` as D4; `codesign -d --entitlements -` prints none for `tswap`; **minos** (`vtool
   -show-build`) is the same for both files (#265). Each failure names the file and the field. A missing runtime flag
   fails CI: that is the regression guard for the `--sign`/`--options` order. Whether `codesign` records `runtime` on
-  the **dylib** is **report-only** (printed, never failing) until task 10's follow-up commit makes it gating (it gates on
+  the **dylib** is the report-only check `dylib-runtime` (section "Report-only checks") until task 10's follow-up
+  commit makes it gating (it gates on
   `tswap` from the start, which notarisation requires); if the dry run shows it doesn't, the dylib's runtime assertion is dropped with that
   output as the evidence, and the plan says so.
 - [ ] `notarise <file>` (a zip or a pkg): requires `MACOS_NOTARY_KEY_P8_BASE64`, `MACOS_NOTARY_KEY_ID`,
@@ -528,7 +567,8 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   `KeychainSetup_ImportFails_RemovesTheP12sAndTheKeychain`, `KeychainCleanup_RemovesKeychainAndFiles`,
   `KeychainCleanup_NothingToClean_Succeeds`, `Sign_PutsSignBeforeOptions` (the fake codesign's logged argument order: `--keychain` before `--sign` before
   `--options runtime`),
-  `Scripts_HaveNoSetX`.
+  `Verify_DylibWithoutRuntime_ReportOnly_PrintsAndPasses`, `Verify_DylibWithoutRuntime_Gated_Fails`,
+  `RunnerCheck_ReportOnly_WarnsAndContinues`, `RunnerCheck_Gated_Fails`, `Scripts_HaveNoSetX`.
   Break-it-once: drop the team check from `verify`, see `Verify_WrongTeam_Fails` fail, revert.
 
 ### Task 4: the tarball's smoke checks the signed bytes
@@ -545,11 +585,13 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   `TeamIdentifier`, runtime flag; then `codesign -vvvv --test-requirement='=notarized' --check-notarization` per file. Exit 0 passes; exit 3
   (the requirement is not met: the ticket isn't visible yet) is retried every 20 s for at most 10 minutes (waiting on
   the check's own answer, not a blind sleep; interval and count are variables the tests shorten); exit 1 (a bad
-  signature) or any other code fails at once. The last answer is printed on failure. In the dry run the same check
-  also runs on an **unnotarised control** (a copy of `tswap` re-signed ad hoc in `$RUNNER_TEMP`) **with retries = 1**
-  (no 10-minute wait) and must fail there; its exit code (3 expected, 1 if the ad-hoc signature trips `--verify` first)
-  is printed and recorded, so a check that passes everything is caught. Spelling: the long option with a leading `=`
-  (requirement text, not a file path), never `-R`; a test, `Smoke_NotarisationCheck_ExactArgumentSpelling`, pins the
+  signature) or any other code ends the check at once. The last answer is printed on failure. The same check also
+  runs on an **unnotarised control** (a copy of `tswap` re-signed ad hoc in `$RUNNER_TEMP`) **with retries = 1** (no
+  10-minute wait) and must fail there; its exit code (3 expected, 1 if the ad-hoc signature trips `--verify` first)
+  is printed and recorded. Both go through `runner_check` (section "Report-only checks"): `notarisation` for the
+  notarised files and `notarisation-control` for the control, report-only until task 10's follow-up commit; until
+  then a control that passes is caught by task 10's record step, as that section says. Spelling: the long option with
+  a leading `=` (requirement text, not a file path), never `-R`; a test, `MacOsSmoke_NotarisationCheck_ExactArgumentSpelling`, pins the
   exact arguments the fake `codesign` receives (`-vvvv`, `--test-requirement==notarized`, `--check-notarization`) and that
   no `-R` appears.
 - [ ] **Simulated browser download** (same condition): copy the archive, set `com.apple.quarantine` (`0083;<hex
@@ -559,8 +601,10 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
 - [ ] The existing Secure Enclave run stays and now runs the signed, hardened binary.
 - [ ] Tests with fakes: `MacOsSmoke_EmbeddedDylibDiffers_Fails`, `MacOsSmoke_EmbeddedDylibMatches_Passes`,
   `MacOsSmoke_DifferentMinOs_Fails`, `MacOsSmoke_ExpectTeam_ChecksEachFile`,
-  `MacOsSmoke_NotarisationNeverVisible_FailsAfterRetries`, `MacOsSmoke_GatekeeperDisabled_SaysSkip`,
-  `MacOsSmoke_WithoutExpectTeam_RunsNoSigningChecks`. `MacOsSmoke_MakesAndUnlocksASecureEnclaveVaultInAThrowawayConfig`
+  `MacOsSmoke_NotarisationNeverVisible_FailsAfterRetries` (gated), `MacOsSmoke_NotarisationNeverVisible_ReportOnly_Passes`,
+  `MacOsSmoke_NotarisationCheck_ExactArgumentSpelling`, `MacOsSmoke_ControlPasses_Gated_Fails`,
+  `MacOsSmoke_ControlPasses_ReportOnly_SaysItProvesNothing`, `MacOsSmoke_ReadsShimMinOsFromTheCsproj`,
+  `MacOsSmoke_GatekeeperDisabled_SaysSkip`, `MacOsSmoke_WithoutExpectTeam_RunsNoSigningChecks`. `MacOsSmoke_MakesAndUnlocksASecureEnclaveVaultInAThrowawayConfig`
   gains the new `installscript` run in its expected list: a new run this plan adds, not a changed outcome; say so in
   the commit. Break-it-once: fake installscript emitting different bytes → the first test fails; revert.
 
@@ -585,6 +629,7 @@ Inputs come from the environment, never from arguments (nothing in `ps` or the l
   `Build_MissingDylib_FailsWithoutAPkg`, `Distribution_MinOsEqualsTheShimTarget` (reads `distribution.xml` and the
   csproj property), `Distribution_LocalSystemOnly_NoCustomise`, `Notarise_StaplesAndValidates`,
   `Check_PayloadDiffersFromTarball_Fails`, `Check_ExtraPayloadFile_Fails`, `Check_NotNotarisedSource_Fails`,
+  `Check_OtherTimestampWording_ReportOnly_Passes`, `Check_OtherTimestampWording_Gated_Fails`,
   `InstallTest_RefusesOutsideGitHubRunner`, `InstallTest_ExistingTswap_Refuses`,
   `InstallTest_RunsTheDocumentedUninstall` (the `rm` and `pkgutil --forget` lines it runs are read from
   `docs/install.md`'s uninstall block, so docs and test can't drift), `Conclusion_NamesInstallscript`.
@@ -711,10 +756,12 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
   modes, receipt, SE smoke from `/usr/local/bin`, per-user-only installscript, uninstall).
 - [ ] Also record, before the related checks may gate: `codesign -vvvv --test-requirement='=notarized'
   --check-notarization` passing on the notarised `tswap` and failing on the unnotarised control (with its exit code); whether `codesign -dvvv` shows `runtime` in the dylib's `flags=` line;
-  `pkgutil --check-signature`'s exact timestamp line. Until then these three assertions are report-only in
-  tasks 3–5 (they print what they see and never fail the job), so a first dry run doesn't go red one string at a time;
-  the follow-up commit copies the strings into the fakes and checks and makes them gating, or drops a check with the
-  output as evidence.
+  `pkgutil --check-signature`'s exact timestamp line. Until then these are the report-only checks of section
+  "Report-only checks" (`dylib-runtime`, `notarisation`, `notarisation-control`, `pkg-timestamp`: `runner_check`
+  prints `REPORT-ONLY <id>: …` and never fails the job), so a first dry run doesn't go red one string at a time. The
+  log must show no `REPORT-ONLY notarisation-control` line (a control that passed: the check proves nothing). The
+  follow-up commit copies the strings into the fakes and checks and sets `TSWAP_MACOS_GATE_RUNNER_CHECKS: '1'` in
+  `build-macos`'s `env:`, or drops a check with the output as evidence.
 - [ ] Anything red: fix on a branch, repeat. No tag until a dry run is green.
 
 ### Task 11: the owner's checks on the work Mac (runbook `docs/superpowers/macos-signing-owner-checks.md`)
