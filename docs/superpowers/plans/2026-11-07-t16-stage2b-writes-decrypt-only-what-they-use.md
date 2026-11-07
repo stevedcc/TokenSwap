@@ -4,6 +4,25 @@
 > superpowers:executing-plans). Every task is TDD: the named tests first, watched failing for the
 > stated reason, then the production change.
 
+**Plan review round 2** (DeepSeek: approve; MiMo: request changes). Every finding is fixed in place,
+none declined:
+- *MiMo I-1:* the plan now says what happens when the one value an exception must decrypt is itself
+  damaged. `add`'s comparison fails closed, naming the file, and writes nothing; owner decision 8, accepted
+  (it narrows decision 1 for `add`). A retained version without a set that can't be
+  decrypted is carried forward without a set, with a warning (owner decision 9, accepted within decision 1). Both are
+  pinned.
+- *MiMo I-2:* the stale `RunCommand.cs` sentence is removed from the merge order.
+- *DeepSeek N-1:* checked. `LoadRecordStates` is a real public method (`RecordVaultStore.cs:1434`,
+  `vault merge`'s), and `LoadRecords` is private (`:753`), so a command can't call it. The scan now
+  forbids every public whole-vault entry point, and review focus 1 keeps `LoadRecords` inside the
+  store.
+- *DeepSeek N-2:* "unreadable" is defined.
+- *DeepSeek N-3:* the cached states are named "entry (live or tombstone)", "no file" and
+  "unreadable".
+- *MiMo minors:* M-1 adds extensions to the golden; M-2 rewords the warning to "read here"; M-3
+  removes the stale sentence; M-4 splits warnings from the refusal; M-5 moves the `add` test to
+  task 5.
+
 **Plan review round 1** (MiMo, DeepSeek: request changes, no Blocking). Every finding is fixed in
 place, none declined:
 - *MiMo I-1 / DeepSeek I1:* the zero-decryption claim is qualified in the Goal, the decryption
@@ -110,10 +129,22 @@ stamp, `:889`), and the codec copies a held section byte for byte (`EncodeV3`, `
   variant's 128-bit HMAC decides. A set of another variant-set version (older: written by an older
   build in a mixed fleet, which Stage 2's `OlderVariantSet` note exists for; or newer: a later build),
   or none: that one current value section is decrypted and compared (1 value, only that record). A
-  reindex removes the older case. Owner decision 6: accepted.
+  reindex removes the older case. Owner decision 6: accepted. **If that section can't be opened** (it
+  fails authentication, or its value doesn't match a set it can be checked against), the comparison
+  can't be made: `add` refuses with `SecretsDb.UnreadableRecordText` naming the file, writes nothing,
+  and the record is left as it was. Writing a new version anyway is the option decision 6 rejected
+  (a same value would push the real previous out). `rotate`, `ingest --rotate` (which need no
+  comparison) and `delete` still work on it. Owner decision 8: accepted.
 - **A copied version without a fingerprint set** (only planted records; v0.2+ always writes one):
   that section is decrypted to compute the set, as today's `PrepareV3` does from the full load
-  (`:1586-1589`). Same behaviour, one value of the written record.
+  (`:1586-1589`). Same behaviour, one value of the written record. **If that section can't be
+  opened** (it fails authentication), the version is carried forward byte for byte **without** a set
+  (owner decision 9, MiMo r2 I-1). This is decision 1's rule, carry the damage forward, and it adds nothing a
+  reader can be misled by: the record stays "not fingerprinted", so `redact`/`tocomment` keep
+  refusing and `run` keeps warning, exactly as for that record before the write. Its users still
+  fail closed. The command prints one line on stderr: `Warning: record {file} holds a value version
+  that can't be decrypted, so it was kept as it is without fingerprints; restore the file from a
+  backup or another copy.` It names only the hashed file, as the unreadable-record warnings do.
 - **`create` and `ingest` on an existing name** decrypt nothing: existence comes from metadata.
 - **Copies that only plaintext can merge** (`MergeAllMetadata` refuses, `RecordMerge.cs:246-248`,
   where `MergeAll` merges): the write falls back to decoding **that record** whole, as today, and so
@@ -156,8 +187,17 @@ public VaultWriter OpenVaultForWrite(byte[] key); // new VaultWriter((RecordVaul
 ```
 
 **Unreadable targets: one rule (DeepSeek I2, MiMo M-6).** `OpenForWrite` is called once per name and
-its result cached: an entry, "no file", or "unreadable" with the hashed file name. For an unreadable
-name:
+its result cached as one of three states:
+- an **entry**, live or tombstone (a tombstone is an entry, so `create` and `import` over a deleted
+  name keep its burns, as today);
+- **no file**;
+- **unreadable**, with the hashed file name.
+**Unreadable** means the main file can't be read, or its header or metadata section can't be
+authenticated or parsed, or its copies can't be merged even on the whole-record path (exactly the
+cases `OpenSecret` throws for, `:598-602`, `:664-667`, `:639-645`). A format 3 record whose
+**value** section is damaged, or whose fingerprints don't match its value, is an **entry** with
+opaque sections, not unreadable (difference 2); only a decryption of that section can fail on it.
+`Find` returns null for no file, a tombstone and unreadable. For an unreadable name:
 - `Find` returns null, as `SecretsDb` does (`LoadSecrets` leaves unreadable records out,
   `RecordVaultStore.cs:494-496`), and `ThrowIfUnreadable` throws `SecretsDb.UnreadableRecordText`
   naming the file.
@@ -255,15 +295,16 @@ target is format 3, so the target is absent or format 2 and its plaintext is in 
 | `burn` | full load; already-burned check (`BurnCommand.cs:23-34`) | `Find`; null → `ThrowIfUnreadable` → "not found" (as today) → already burned? → `Burn`. 0 values |
 | `delete` | full load; tombstone pass over every record | `Find` → `ThrowIfUnreadable` → `Delete`. 0 values; one tombstone by construction |
 | `restore` | full load, `ResolveToken(name:previous)`, save, **second full load** for the burn line | `Restore` (same errors) → `Commit`; the burn line from the written state. 1 value (2 under the copy-conflict fallback) |
-| `add` | full load; save writes only if the value changed; an unreadable target refused at the save with the file named (`:1117-1118`) | `SetValue` (fingerprint comparison) → `Commit` (an unreadable target refused there, same text). 0 values; 1 (that current value) when the stored set is of another variant-set version or missing (owner decision 6) |
+| `add` | full load; save writes only if the value changed; an unreadable target refused at the save with the file named (`:1117-1118`) | `SetValue` (fingerprint comparison) → `Commit` (an unreadable target refused there, same text). 0 values; 1 (that current value) when the stored set is of another variant-set version or missing (owner decision 6); that value damaged: refuses naming the file (decision 8) |
 | `import` | full load; skip existing live names; save | per name in today's order: `Find` (skip as today when non-null) → `SetValue(importedBurnAt…)` (stages nothing for an unreadable name) → one `Commit` (throws the first unreadable name). 0 vault values (the export file's values are read, by nature) |
 
-The other rows (`rotate`, `delete`) decrypt nothing beyond the record-level exceptions in the Goal,
-which apply to every row. Every one prints `FingerprintTexts.WarnFormatTwo(…, writer.FormatTwoDecoded, FormatTwoUse.Write)` in a
+Every row's counts are subject to the record-level exceptions in the Goal. Every one prints `FingerprintTexts.WarnFormatTwo(…, writer.FormatTwoDecoded, FormatTwoUse.Write)` in a
 `finally` after its output, as `get` does (`GetCommand.cs:29-32`). New text (my call, count and fix
-only, Stage 2's discipline): `Warning: {n} of the records written here were stored in the old record
+only, Stage 2's discipline): `Warning: {n} of the records read here were stored in the old record
 format 2, which tswap can only decrypt whole; the value versions not needed were wiped. Ask the user
-to run {fix} once to convert the vault.` The agent prompt needs no change: rule 11 already covers any
+to run {fix} once to convert the vault.` ("read here", MiMo r2 M-2: it also prints when a command decoded a format 2 record and then wrote
+nothing, such as `create` refusing an existing name or `add` of the same value.) The agent prompt
+needs no change: rule 11 already covers any
 command that "prints a warning about the old record format 2" (`TswapCore/Prompt.cs:86-87`).
 
 ## Format 2 records and mixed fleets
@@ -358,11 +399,13 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `RecordVaultStore.cs` refactor only).
    - **First, before any production edit (MiMo M-4):** `SaveSecrets_MatchesItsGolden`, committed
      green on today's code. A scripted history (fixed clock and origin; create, add of a same and of
-     a new value, burn, rotate, restore of a burned previous, delete, re-create, import with a burn)
+     a new value, burn, rotate, restore of a burned previous, delete, re-create, import with a burn,
+     and a record planted with an unknown extension, as `RecordStoreV3Tests.NewerExtension_SurvivesBurnAndMerge`
+     does, then burned and rotated)
      driven through `LoadSecrets` + `SaveSecrets`. Every record's decoded state, minus the
      random-nonce section bytes, is compared with a checked-in golden file
      (a new `TswapTests/Fixtures/save-secrets-golden.json`, copied to the output as the signing branch does with its fixtures: stamps, types, burns, created, names, values,
-     previous, fingerprints). The extraction must keep it byte-equal, so the oracle's reference
+     previous, fingerprints, extensions). The extraction must keep it byte-equal, so the oracle's reference
      can't move with the production code.
    - New `RecordWritesTests`: new version over a live record
    (previous section and set kept, older previous dropped, outstanding burn becomes history), over a
@@ -415,6 +458,9 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `Add_SetOfAnotherVariantVersion_DecryptsOnlyThatCurrentValue`;
    `Restore_DecryptsOnlyThePreviousSection` (exactly `(file, previousVersion)`);
    `CopiedVersionWithoutASet_IsFingerprintedFromItsSection` (planted; one decrypt, set present after);
+   `CopiedVersionWithoutASet_Damaged_CarriedForwardWithoutASet_Warns` (MiMo r2 I-1, my call: a burn
+   succeeds, the section is byte-identical, the version still has no set, `LoadMetadata` still counts
+   the record as not fingerprinted, and stderr is exactly the warning, naming only the hashed file);
    `Import_StampsInOrdinalOrder_SkippedLinesInCultureOrder` (names `B-x` and `a-x`);
    `FormatTwoWriteWarning_CountOnly` (a format 2 record and tombstone with distinctive names and values:
    the line equals the text with `n`, carries no name, value or hashed file name). Break: `SetValue`
@@ -426,12 +472,20 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    the value through `get`, `Modified` through `names`, and for `add` the old value now under
    `name:previous`. Further tests:
    - `Add_UnreadableTarget_RefusesNamingTheFile_WritesNothing`.
-   - `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting` (difference 2).
+   - `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting` and
+     `Add_DamagedValueSection_NewVersion_KeepsItAsPrevious` (difference 2; the current set is
+     current, so the fingerprints decide and nothing is decrypted).
+   - `Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing` (decision 8: the
+     comparison's one decrypt fails, so `add` exits 1 with `UnreadableRecordText` naming the file,
+     every record file and `config.json` stay byte-identical, and `rotate` of the same record then
+     succeeds).
    - `Write_UntouchedRecordsWarnings_NotReported` (difference 1, MiMo M-2): an unrelated unreadable
      record, an unrelated conflicted copy (note), an unusable copy and a year-ahead record. Exit 0,
      and stderr carries none of their file names.
-   - `Write_TargetsOwnWarnings_SameTexts`: the same four situations on the written record give the
-     full load's exact texts. `RecordConflictTests.AnUndecryptableConflictCopy_IsWarnedAbout_AndKept_EvenAfterAWrite`
+   - `Write_TargetsOwnWarnings_SameTexts`: on the written record, a conflicted copy (copy note), an
+     unusable copy and a year-ahead stamp give the full load's exact **warning** texts, and the write
+     succeeds. The fourth situation, an unreadable target, is a **refusal**, not a warning: its text is
+     pinned by `Add_UnreadableTarget_…` here and by `Burn_UnreadableTarget_NamesTheFile` (task 6). `RecordConflictTests.AnUndecryptableConflictCopy_IsWarnedAbout_AndKept_EvenAfterAWrite`
      also stays green.
    - `Write_UnrelatedNonUtf8Record_NotRewritten` and `Burn_NonUtf8Record_WritesABurn_NotANewVersion`
      (difference 5, both halves, planted with `SecretRecordCodec.Encode`). `RotateTests.CreateAndIngest_OnAnExistingName_RefuseAndPointToRotate`,
@@ -444,7 +498,7 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `name:previous`); `Burn_UnreadableTarget_NamesTheFile` (command-level text); difference 2:
    `Burn_DamagedValueSection_Succeeds_GetStillFailsNamingTheFile`,
    `Rotate_FingerprintMismatch_KeepsItAsPrevious_RestoreFailsClosed`,
-   `Delete_DamagedValueSection_WritesATombstone`, `Add_DamagedValueSection_NewVersion_KeepsItAsPrevious`. Existing `RotateTests` (sudo unless burned, nothing
+   `Delete_DamagedValueSection_WritesATombstone`. Existing `RotateTests` (sudo unless burned, nothing
    written on refusal, `LastHlc` unchanged), `EmptySaveGuardTests.Deleting*`, `RecordConflictTests`,
    `RecordStoreV3Tests.Burn_CopiesValueSectionsByteForByte` green. Measure `burn` on a 1,000-record
    vault before/after and record both times in the commit (no test). Break: `burn` opens its record
@@ -473,7 +527,11 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
 10. **Guard and docs.** `WriteCommands_DontUseTheWholeVaultApi` (my call; DeepSeek I3). A source
     scan of exactly the write commands' own files (`Create`, `Ingest`, `Burn`, `Rotate`, `Restore`,
     `Add`, `Delete`, `Import` in `TswapCli/Commands/`, plus `TswapCli/SecretRotation.cs`). None of
-    them may contain `LoadSecrets(`, `SaveSecrets(`, `LoadRecordStates(` or `MergeRecords(`. The
+    them may contain any of the store's public whole-vault entry points: `LoadSecrets(`, `SaveSecrets(`,
+    `LoadRecordStates(` (`:1434`), `MergeRecords(` (`:1461`), `WriteSnapshot(` (`:1183`) or `Reindex(`
+    (`:1027`). `LoadRecords` (`:753`) and `WriteRecords` (`:1526`) are private to the store, so a
+    command can't call them; inside the store, review focus 1 and task 3's decryption tests keep the
+    write session off `LoadRecords`. The
     Scope table's whole-vault callers are out of the scan on purpose: `ExportCommand.cs:43`,
     `VaultCommand.cs:118` (`vault merge`, #271), `RecordMigration.cs:125,398` (outside `Commands/`)
     and `RunCommand.cs:72` (Stage 3). The behavioural counters are the proof; this keeps a later edit
@@ -527,8 +585,7 @@ Order: Stage 2 (#268) merges first; 2b branches from it (this worktree, `design/
 4b492e2) and merges `origin/main` (`git merge --no-edit`, never rebase) before its PR. Stage 3,
 polish and signing are independent of 2b's code and may merge in any order before or after it;
 whichever merges second resolves the docs conflicts (security-model table: keep both the `run` row
-and the new write row; release notes: one section per brief). Task 10's source scan names
-`RunCommand.cs` only while it still calls `LoadSecrets`; if Stage 3 is on main first, drop it there.
+and the new write row; release notes: one section per brief).
 
 ## Review focus
 
@@ -584,6 +641,16 @@ and the new write row; release notes: one section per brief). Task 10's source s
    fleets for no gain. Pinned by task 4's `Add_SetOfAnotherVariantVersion_DecryptsOnlyThatCurrentValue`.
 7. **Decisions 1 and 3 re-confirmed as revised:** difference 2 includes `add` and the
    `create`/`ingest` refusal reason, and the AGENTS.md sentence in decision 3 is approved verbatim.
+8. **`add` when the one value its comparison needs is damaged: refuse (option a).** If the stored
+   current set is of another variant-set version or missing, and that current value section can't be
+   decrypted or doesn't match its set, `add` refuses with `SecretsDb.UnreadableRecordText` naming the
+   file and writes nothing. This narrows decision 1 for `add` in that one state. `rotate`,
+   `ingest --rotate` and `delete` + `add` still work on the record. Pinned by
+   `Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing`.
+9. **A retained version without a set whose section can't be decrypted** (the implementer's
+   recommendation, accepted within decision 1): it is carried forward byte for byte, still without
+   a set, with one warning naming only the hashed file. Pinned by
+   `CopiedVersionWithoutASet_Damaged_CarriedForwardWithoutASet_Warns`.
 
 No owner decision is open.
 
