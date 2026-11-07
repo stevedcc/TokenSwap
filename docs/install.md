@@ -60,6 +60,21 @@ support).
 - A symlink to `tswap` (say from `~/bin`) works, since the folder is the real file's.
 - tswap runs code from that folder, so keep it writable only by you.
 
+### macOS installer package
+
+From v0.3.0 each release also has `tswap-osx-arm64.pkg`, a signed, notarised and stapled installer. It
+installs `tswap` and `libtswapse.dylib` into `/usr/local/bin` for every user of the Mac (owned by root,
+mode 0755) and runs no scripts. It works offline: the notarisation ticket is stapled to it.
+
+#### Uninstall
+
+```bash
+sudo rm /usr/local/bin/tswap /usr/local/bin/libtswapse.dylib
+sudo pkgutil --forget dev.crawford.tswap.pkg
+```
+
+Neither installing nor uninstalling touches your vault.
+
 ### Unsigned binaries
 
 The binaries are not signed. macOS refuses a browser download ("Apple cannot verify…"). Clear the
