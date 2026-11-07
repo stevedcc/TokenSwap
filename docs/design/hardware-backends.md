@@ -551,8 +551,10 @@ afterwards would leave the embedded copy unsigned, and the hardened runtime's li
 would refuse it. `package.sh --smoke` checks on every macOS build that the dylib `installscript`
 writes is byte-for-byte the archive's. Both Mach-Os are signed with the Developer ID Application
 identity, hardened runtime, secure timestamp, no entitlements, and notarised; library validation then
-loads only a `libtswapse.dylib` of the same team, so a planted or mismatched one is refused (with a
-message saying the two files must come from one release). Local builds stay ad hoc, as before.
+loads only a `libtswapse.dylib` signed with the same Team ID (or by Apple), so a planted, unsigned,
+ad-hoc or older (v0.2) one is refused, with a message saying the two files must come from one release.
+It checks the signer, not the release: a dylib from another signed v0.3+ release loads (one too old for
+this `tswap` then fails on a missing entry point, since new shim functions get new names). Local builds stay ad hoc, as before.
 
 The installer package (`tswap-osx-arm64.pkg`, signed with Developer ID Installer, notarised and
 stapled) is a second channel to the same place `installscript` uses, `/usr/local/bin`; run from that

@@ -57,7 +57,7 @@ From v0.3.0 the macOS release is signed and notarised, and there is also an inst
 it is (keep `tswap` and `libtswapse.dylib` together, from the same release). Releases up to v0.2.x are not
 signed: on macOS a browser download is refused until you clear its quarantine mark, which you can do as
 yourself (no admin needed), see [install.md](install.md#unsigned-binaries). The Windows binaries are not
-signed; notes are in [install.md](install.md#windows-notes).
+signed. Other Windows notes are in [install.md](install.md#windows-notes).
 
 ## YubiKeys
 

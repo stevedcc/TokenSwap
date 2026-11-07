@@ -69,8 +69,9 @@ are in [Installing tswap](docs/install.md).
   **from Terminal**: a double-click in Finder on a downloaded command-line tool is refused however it is signed. The
   first run of a browser download needs a network connection (Gatekeeper fetches the notarisation ticket).
 
-Both files must come from the same release: from v0.3.0 tswap refuses a `libtswapse.dylib` from another build. To
-check a download: `codesign -dv --verbose=2 tswap` shows `Authority=Developer ID Application: …` and the
+Keep both files from one release. From v0.3.0 tswap loads only a `libtswapse.dylib` signed with the same Team ID
+(library validation): a v0.2.x, self-built or foreign copy is refused, with a message saying so. Two signed releases
+are not told apart, so a dylib from another v0.3+ release loads. To check a download: `codesign -dv --verbose=2 tswap` shows `Authority=Developer ID Application: …` and the
 `TeamIdentifier`; `pkgutil --check-signature tswap-osx-arm64.pkg` shows the Developer ID Installer certificate.
 
 **v0.2.x and earlier** are not signed, so macOS refuses a browser download ("Apple cannot verify…"). Clear the

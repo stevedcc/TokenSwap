@@ -247,7 +247,7 @@ The smoke asserts `codesign -d --entitlements - tswap` prints no entitlements.
 
 ## Report-only checks (`runner_check`, `TSWAP_MACOS_GATE_RUNNER_CHECKS`)
 
-Three assertions rest on what Apple's tools print or answer on GitHub's runner, which nobody has seen yet:
+Four checks rest on what Apple's tools print or answer on GitHub's runner, which nobody has seen yet:
 
 | Id | Check | Where |
 |---|---|---|
@@ -728,7 +728,8 @@ copy) makes `NativeLibrary.Load` throw `DllNotFoundException` with dyld's text (
   the first run of a browser download needs a network connection. For v0.2.x and earlier keep the `xattr -dr
   com.apple.quarantine <folder>` line, labelled as such (D6). How to check: `codesign -dv --verbose=2 tswap`
   (`Authority=Developer ID Application: …`, `TeamIdentifier=<TEAMID>`), `pkgutil --check-signature` for the pkg.
-  Both files must come from the same release (from v0.3.0 a mismatched dylib is refused).
+  Keep both files from one release (from v0.3.0 a dylib not signed with the same Team ID is refused; two signed
+  releases are not told apart: code review C I1).
 - [ ] `docs/install.md`: a "macOS installer package" section (what it installs, ownership and mode, the `installscript`
   follow-up, upgrading — stop `tswap agent` / a broker first until M8 says otherwise —, and **Uninstall**:
   ```bash
@@ -838,8 +839,9 @@ from the Mac.
   or M1–M3), **stop**: no entitlements to make it pass; report with the evidence for an owner decision. If only M5 fails,
   D7 decides.
 - **Library validation and the dylib's load path.** Found at `AppContext.BaseDirectory/libtswapse.dylib`, an absolute
-  path, so no `@rpath`/`DYLD_*` lookup. A dylib that isn't ours is refused (a planted dylib no longer loads), and so is
-  any mismatched copy: task 1 stops the build from embedding an unsigned one, task 4 checks it, task 7 explains the
+  path, so no `@rpath`/`DYLD_*` lookup. A dylib not signed with our Team ID is refused (a planted, unsigned or v0.2
+  dylib no longer loads); a dylib of another signed release is not (library validation checks the signer, not the
+  release; code review C I1): task 1 stops the build from embedding an unsigned one, task 4 checks it, task 7 explains the
   rest. Self-built binaries stay ad hoc without the hardened runtime, as today.
 - **Two install routes to the same place.** The pkg and `installscript` both write `/usr/local/bin`; the pkg's receipt
   then lists files `installscript` may later replace. Harmless (same paths, same kind of file); `pkgutil --forget` in

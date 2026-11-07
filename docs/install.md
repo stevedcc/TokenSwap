@@ -78,11 +78,12 @@ bash installTswap.sh
 ```
 
 Run from the installed copy, `installscript` writes only those per-user steps: no binary step and no
-`sudo`. If `/usr/local/bin/libtswapse.dylib` is missing or isn't the one that copy was built with, it
-says so on stderr: install the package again.
+`sudo`. If `/usr/local/bin/libtswapse.dylib` is missing, unreadable or isn't the one that copy was built
+with, it says so on stderr: install the package again, or run `installscript` from the unpacked release
+folder instead.
 
-**Upgrading:** stop a running `tswap agent` (`tswap agent stop`) and broker first, then open the new
-package. Whether Installer replaces a running tswap safely is not yet checked; until it is, stop them.
+**Upgrading:** stop a running `tswap agent` (`tswap agent stop`) and a broker (however you started it,
+see [BROKER.md](BROKER.md)) first, then open the new package. Whether Installer replaces a running tswap safely is not yet checked; until it is, stop them.
 
 #### Uninstall
 
@@ -103,9 +104,12 @@ double-click in Finder on a downloaded command-line tool is refused however it i
 of a browser download needs a network connection, since Gatekeeper fetches the notarisation ticket
 (the package has it stapled and works offline).
 
-`tswap` and `libtswapse.dylib` must come from the same release: with the hardened runtime, tswap
-refuses a library from another build (an older release, a build of your own) and says so. A build of your
-own (`dotnet publish`) stays ad-hoc signed, without the hardened runtime, as before.
+Keep `tswap` and `libtswapse.dylib` from the same release. With the hardened runtime, library
+validation lets tswap load only a library signed with the same Team ID (or Apple's own): a v0.2.x copy, a
+build of your own or anyone else's dylib is refused, and tswap says so. It checks the signer, not the
+release: a `libtswapse.dylib` from another signed v0.3+ release still loads, so keep both files from one
+archive. A build of your own (`dotnet publish`) stays ad-hoc signed, without the hardened runtime and so
+without library validation, as before.
 
 <a id="unsigned-binaries"></a>
 
@@ -118,8 +122,7 @@ the quarantine mark on the unpacked folder, as yourself (no admin needed):
 xattr -dr com.apple.quarantine <folder>
 ```
 
-`curl -LO <archive URL>` downloads carry no quarantine mark. Windows binaries are not signed: see
-[Windows notes](#windows-notes).
+`curl -LO <archive URL>` downloads carry no quarantine mark. The Windows binaries are not signed either.
 
 ## Building from source
 
