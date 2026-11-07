@@ -20,6 +20,15 @@ owner for confirmation on its corrected rationale. Nothing was declined. Also co
 numbers cited into `SecretProcessor.cs`, `ToCommentProcessor.cs`, `Apply.cs` and `FingerprintIndex.cs`
 (round 0 read them through one concatenated `cat -n`, so they were offset; re-checked with `grep -n`).
 
+**Review round 2** (GLM, MiMo: approve). Folded in: `VaultMetadata.Secrets` is "non-tombstone
+records, burned included" (GLM N1; also task 9's wording); task 3's unreadable test renamed
+`OpenSecret_Unreadable_CarriesTheFileName` with its assertion target stated (GLM N2); the refusal's
+stray punctuation and "distinct records" (GLM N3); `redact`'s labels behind one internal
+`RedactProcessor.Label` helper Stage 3 could call (MiMo 1). Taken in part: MiMo 1 asked that Stage 3
+get the labels from Stage 2; Stage 3's plan chose one label for every kind in `run` on purpose, so
+the helper is offered, not imposed (see "Stage 3 uses"). Owner decisions of 2026-11-07 recorded
+(task 1 stays as hardening; difference 12 accepted). Test note on `init` and #253 added.
+
 **Goal.** No command decrypts a secret value it doesn't use (owner, 2026-11-07, binding: "unlocking
 all secrets is bad practice"). `redact` and `tocomment` decrypt **no** value: they read metadata
 sections only and recognise secrets by their keyed fingerprints (spec Stage 2). `check`, `names`,
@@ -119,7 +128,7 @@ public enum FormatTwoRecords { Skip, Decode }
 `:1172`, `:1201`). `Decode` (for `names`, `list`, `burned`; owner decision 1) decodes exactly the
 records that have a format 2 file, through the existing `ReadRecord` + `FoldConflictCopies` path,
 converts each to `RecordMetadata` (fingerprints null, so it still counts as not fingerprinted) and
-zeroes its values at once. `VaultMetadata` gains `IReadOnlyList<SecretInfo> Secrets` (live records,
+zeroes its values at once. `VaultMetadata` gains `IReadOnlyList<SecretInfo> Secrets` (non-tombstone records, burned included,
 by name) and `int FormatTwoDecoded`.
 
 **The format 2 warning (owner decision 1: "keep working with warning").** Whenever a command decoded
@@ -139,7 +148,7 @@ form:
   {fix} once to convert the vault.`
 
 What it may contain (thought through): only the count `n` and the fix. `n` counts **records**
-(distinct record file names), not files: a record whose main file or any conflicted copy has format
+(distinct records), not files: a record whose main file or any conflicted copy has format
 byte 2. That byte is cleartext (`SecretRecordCodec.FormatVersionOf`, `SecretRecordCodec.cs:232`)
 and the copies' names are tied to their record by the folder listing
 (`RecordDirectoryScanner`), so anyone who can list the vault folder can count them without the key:
@@ -216,7 +225,11 @@ read for this round): `ctx.OpenVault(key)`, `ResolveToken`/`IsBurnedToken` for `
 with its `FingerprintSet`) gives it every version, and it takes the longest stored variant
 (RedactingPty's `MaxMatchLength`) from the sets' `FingerprintEntry.Length` itself; it doesn't use
 `BuildIndex`. It applies task 1's rule by calling `FingerprintIndex.SplitsASurrogatePair` (same
-assembly), never by editing `FingerprintIndex.cs`. Its requirements S1-S6 are met: S1 by
+assembly), never by editing `FingerprintIndex.cs`. `redact`'s labels come from one internal helper,
+`RedactProcessor.Label(string token, VariantKind kind)` (task 6), callable the same way; Stage 3's
+plan deliberately uses one label for every kind in `run` ("tswap changes per file": `redact`'s
+`(base64)` suffixes are "a file concern"), so the helper is offered, not required, and the two label
+sets differ by design, not by drift. Its requirements S1-S6 are met: S1 by
 `DecryptValue` (format 2 whole, warned), S2 by the `UnreadableRecordException` conversion and
 `Lookup_MatchesSecretsDb`, S3 by `SecretInfo.From` and the property test, S4 by
 `OpenSecret_FormatThree_DecryptsNoValue` and the zero-decryption tests, S5 by
@@ -254,8 +267,8 @@ either brief starts.
 
 **Stage 2's refusal (owner), text (my call, in `FingerprintTexts`):** `'{command}' recognises
 secrets by their fingerprints, and {n} record(s) in this vault have none yet (written by an older
-tswap, or the vault was never reindexed). Ask the user to run {fix}. The file was not read`
-(`tocomment`: `not read or changed`)`.` `{fix}` as in the format 2 warning (`ElevatedCommand`). On
+tswap, or the vault was never reindexed). Ask the user to run {fix}. The file was not read.`
+(`tocomment`: `… The file was not read or changed.`) `{fix}` as in the format 2 warning (`ElevatedCommand`). On
 stderr, exit 1, stdout empty; the vault's metadata was read, the input file not opened.
 `OlderVariantSet > 0` gives one note and matching goes on (spec): `Note: {n} record(s) were
 fingerprinted by an older tswap and are matched with the fingerprints they have; {fix} adds the
@@ -268,7 +281,8 @@ metadata, not value-derived material).
   its current version as `name` and its previous version as `name:previous`, each with every
   stored variant. Variant kind → label as
   today: `Plain`/`WhitespaceStripped` → `[REDACTED: name]`, `Base64` → `(base64)`, `Base64Url` →
-  `(base64url)` (`RedactProcessor.cs`, `SecretProcessor.cs:43-48`).
+  `(base64url)` (`RedactProcessor.cs`, `SecretProcessor.cs:43-48`), computed by one internal static
+  `RedactProcessor.Label(token, kind)`.
 - **Priority, exactly today's sort** (`SecretProcessor.cs:56-70`): matched length descending, then
   the matched text ordinally, then live before burned, then name, then match type. The matched text
   is the window of the input (no plaintext from the vault needed), so this is reproducible. Today's
@@ -337,7 +351,14 @@ metadata, not value-derived material).
 ## Tasks
 
 Tests named per task; "Break:" is the production change that must make the task's key test fail
-(done once, reverted, reported in the commit message).
+(done once, reverted, reported in the commit message). **`init` in tests:** the polish brief (#253,
+planned in another worktree) makes `init` refuse to print the recovery key to a non-terminal
+stdout. Any new test here that spawns the binary's `tswap init` passes `--no-recovery`, or
+`--recovery-key-out <file>` when it needs the key. The in-process fixtures
+(`InitRecordVault`/`InitFormatTwoVault`) read the printed key (`RecoveryKeyFrom`,
+`RecordVaultTestSupport.cs:47`) to derive the vault key: if #253's refusal also applies to the
+in-process console, whichever brief merges second switches that one helper to
+`--recovery-key-out` (one place, no test assertion changes).
 
 1. **Fingerprint confirmation made injective** (`FingerprintIndex.cs`; owner-approved). What is true,
    checked on 2026-11-07 against this worktree's `TswapCore` (a scratch console project, not
@@ -389,7 +410,8 @@ Tests named per task; "Break:" is the production change that must make the task'
    `OpenSecret_FormatThree_DecryptsNoValue` (`ValueDecrypted` empty, metadata right);
    `DecryptValue_DecryptsOnlyThatVersion` (current: exactly `(file, current)`; previous: exactly
    `(file, previous)`); `OpenSecret_FormatTwo_DecodesOnlyThatRecord` (only its file reported);
-   `OpenSecret_Unreadable_NamesTheFile`; `OpenSecret_FoldsConflictCopiesLikeReadSecretValue`;
+   `OpenSecret_Unreadable_CarriesTheFileName` (the `UnreadableRecordException`'s `FileName` is the
+   hashed file and its `Message` equals today's `ReadSecretValue` text exactly); `OpenSecret_FoldsConflictCopiesLikeReadSecretValue`;
    `LoadMetadata_Decode_ListsFormatTwoRecords_DecodingOnlyThem` (`FormatTwoDecoded` counts a format 2
    tombstone too); `LoadMetadata_WarnsLikeTheFullLoad` (same folder, `LoadSecrets` vs
    `LoadMetadata(Decode)`: equal warning lines for an unreadable main file, a newer and an
@@ -444,6 +466,8 @@ Tests named per task; "Break:" is the production change that must make the task'
    `ToComment_AdjacentSecrets_UseOriginalNeighbours` fails when the context regex runs on the
    modified line; `Redact_MultiLineValue_MaskedAcrossLines` fails when `redact` scans per line; the
    selection rewrite itself: dropping the text-ordinal tie-break fails the `xab`/`abz` pin.
+   `Label_MatchesTodaysLabels` (each kind, for `name` and `name:previous`) pins the label helper;
+   Break: change the base64url suffix.
 7. **`redact`, `tocomment` read metadata only** (`RedactCommand.cs`, `ToCommentCommand.cs`). New
    `RedactWithoutDecryptingTests` (format 3 vault through `StoreOpened`):
    `Redact_DecryptsNoValue` and `ToComment_DecryptsNoValue` (also `--dry-run`: `ValueDecrypted`
@@ -488,7 +512,7 @@ Tests named per task; "Break:" is the production change that must make the task'
    `Get_DecryptsOnlyItsCurrentValue` (exactly one `(file, current)`); `Apply_DecryptsOnlyItsMarkers`
    (two markers, one filled line, one unrelated secret: exactly the two values, each once);
    `Apply_UnrelatedUnreadableRecord_NotReported` (difference 6). New `FormatTwoVaultCommandTests`
-   (`InitFormatTwoVault`): `names`, `list`, `burned` list every live secret as today, print the
+   (`InitFormatTwoVault`): `names`, `list`, `burned` list every non-tombstone secret as today, print the
    format 2 warning with the right count once, and report `ValueDecrypted` only for format 2 files;
    `check` with a marker on a format 2 record resolves it and warns with `n = 1`, and
    `Check_UnnamedUnreadableFormatTwoRecord_NoLongerStops` (difference 8); `get` and `apply` on a
@@ -543,18 +567,15 @@ Each task: one commit with explicit paths; full suite once at the end through
 2. **Write commands:** a separate brief, Stage 2b, in v0.3.0, after Stage 2 (section below).
 3. **`redact` masks multi-line values across lines:** approved ("redact behaviour is great").
 4. **Spec amendments:** approved as listed below; task 10 writes them into the spec.
-
-## Owner decisions needed
-
-1. **Confirm task 1 on its corrected rationale.** It was approved on my first, overstated
-   description (a reachable false match). Measured: the HMAC step alone isn't injective across a
-   split surrogate pair, but a false hit also needs a collision of the keyed 61-bit rolling hash,
-   so it isn't reachable in practice. Task 1 is now hardening (a few lines; it makes "never a false
-   match" unconditional and gives Stage 3's scanner the same rule). Keep it, or drop it (then
-   amendment 3 is dropped too and Stage 3 needs no `SplitsASurrogatePair`).
-2. **Confirm difference 12** (my call): on a record whose fingerprints don't describe its value,
+5. **Task 1 stays, as hardening, on its corrected rationale** (the HMAC step alone isn't injective
+   across a split surrogate pair, but a false hit also needs a keyed 61-bit rolling-hash
+   collision, so it isn't reachable in practice; the rule makes "never a false match"
+   unconditional and gives Stage 3's scanner the same rule).
+6. **Difference 12 accepted:** on a record whose fingerprints don't describe its value,
    `redact`/`tocomment` mask by the fingerprints and let the stored value through, where today they
-   refuse. The alternative needs the value decrypted, which the binding goal rules out.
+   refuse; the alternative needs the value decrypted, which the binding goal rules out.
+
+No owner decision is open.
 
 ## Spec amendments (owner-approved 2026-11-07; task 10 edits the spec)
 
