@@ -18,7 +18,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
-    <PackageReference Include="RedactingPty" Version="1.0.2" />
+    <!-- 1.1.0-local.N: a local pack of RedactingPty 1.1 until v1.1.0 is on nuget.org (restore with
+         -p:RestoreAdditionalProjectSources=<the local feed folder>). -->
+    <PackageReference Include="RedactingPty" Version="1.1.0-local.1" />
   </ItemGroup>
 
   <ItemGroup>
