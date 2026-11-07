@@ -50,12 +50,14 @@ needs access to the TPM: the broker guide gives a user that access with group `t
 (`sudo usermod -aG tss <user>`, see [BROKER.md](BROKER.md#1-the-vault-user)). Both steps use an
 administrator's commands. Without access, tswap says "no TPM found or no access to it".
 
-### Unsigned binaries
+### Signed and unsigned binaries
 
-The release binaries are not signed. On macOS a browser download is refused until you clear its
-quarantine mark, which you can do as yourself (no admin needed): see
-[install.md](install.md#unsigned-binaries). Windows notes are in
-[install.md](install.md#windows-notes).
+From v0.3.0 the macOS release is signed and notarised, and there is also an installer package (see
+[install.md](install.md#macos-installer-package)); a portable copy from the archive runs from Terminal as
+it is (keep `tswap` and `libtswapse.dylib` together, from the same release). Releases up to v0.2.x are not
+signed: on macOS a browser download is refused until you clear its quarantine mark, which you can do as
+yourself (no admin needed), see [install.md](install.md#unsigned-binaries). The Windows binaries are not
+signed; notes are in [install.md](install.md#windows-notes).
 
 ## YubiKeys
 

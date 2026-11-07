@@ -49,17 +49,32 @@ determined local actor. What it protects against, and what it doesn't:
 
 Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive per platform:
 `tswap-linux-x64.tar.gz`, `tswap-linux-arm64.tar.gz`, `tswap-osx-arm64.tar.gz` and
-`tswap-win-x64.zip`. Unpack it into a folder of your own, and keep that folder writable only by you (tswap runs code
-from it). Run `tswap` from there, or install it with `installscript` (below).
+`tswap-win-x64.zip`, and from v0.3.0 a macOS installer, `tswap-osx-arm64.pkg`. Unpack an archive into a folder of your
+own, and keep that folder writable only by you (tswap runs code from it). Run `tswap` from there, or install it with
+`installscript` (below).
 
 You need one hardware backend: a YubiKey (tswap prepares it with `tswap yubikey setup`; on Linux
 it needs Yubico's udev rule), a TPM 2.0 (Windows, or Linux with `tpm2-tools`), or a Mac's Secure
 Enclave. Prerequisites, building from source and notes for Windows
 are in [Installing tswap](docs/install.md).
 
-**macOS.** The archive holds `tswap` and `libtswapse.dylib` (the Secure Enclave support): keep them
-in the same folder. The binaries are not signed, so macOS refuses a browser download ("Apple cannot
-verify…"). Clear the quarantine mark on the unpacked folder, as yourself (no admin needed):
+**macOS (from v0.3.0): two downloads, signed and notarised, from the same bytes.** macOS 12 or later, Apple silicon.
+
+- **The installer package, `tswap-osx-arm64.pkg`** (recommended). Double-click it: it installs `tswap` and
+  `libtswapse.dylib` (the Secure Enclave support) into `/usr/local/bin` and works offline. Then, for the agent skill
+  and shell completions of your user, run `tswap installscript > installTswap.sh`, review it, and run
+  `bash installTswap.sh` (from the installed copy it does only those per-user steps). Uninstall:
+  [docs/install.md](docs/install.md#uninstall).
+- **The archive, `tswap-osx-arm64.tar.gz`**: `tswap` and `libtswapse.dylib`, keep them in the same folder. Run `tswap`
+  **from Terminal**: a double-click in Finder on a downloaded command-line tool is refused however it is signed. The
+  first run of a browser download needs a network connection (Gatekeeper fetches the notarisation ticket).
+
+Both files must come from the same release: from v0.3.0 tswap refuses a `libtswapse.dylib` from another build. To
+check a download: `codesign -dv --verbose=2 tswap` shows `Authority=Developer ID Application: …` and the
+`TeamIdentifier`; `pkgutil --check-signature tswap-osx-arm64.pkg` shows the Developer ID Installer certificate.
+
+**v0.2.x and earlier** are not signed, so macOS refuses a browser download ("Apple cannot verify…"). Clear the
+quarantine mark on the unpacked folder, as yourself (no admin needed):
 
 ```bash
 xattr -dr com.apple.quarantine <folder>
