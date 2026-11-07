@@ -4,10 +4,45 @@
 > superpowers:executing-plans). Every task is TDD: the named tests first, watched failing for the
 > stated reason, then the production change.
 
+**Plan review round 1** (MiMo, DeepSeek: request changes, no Blocking). Every finding is fixed in
+place, none declined:
+- *MiMo I-1 / DeepSeek I1:* the zero-decryption claim is qualified in the Goal, the decryption
+  section, the per-command table and the AGENTS.md sentence (revised; owner re-confirmed,
+  decision 7). Three exceptions, each confined to the written record:
+  - `add`'s comparison fallback, which is real in mixed fleets: the "unreachable" claim is dropped;
+  - a copied version without a fingerprint set;
+  - copies that only plaintext can merge, which makes `restore` 2 values there, not 1.
+  `add` joins difference 2, as does the `create`/`ingest` refusal reason on a damaged record. The
+  `add` fallback was put to the owner and accepted (decision 6).
+- *DeepSeek I2 / MiMo M-6:* one stated rule for unreadable targets (`Find`, the staging methods,
+  `Commit`), with command-level tests for `burn` and `add`.
+- *DeepSeek I3:* task 10's scan now covers only the write commands' own files. Checked: `VaultCommand.cs:118`
+  does call `LoadSecrets`, so the old allow-list would have failed on correct code.
+- *MiMo M-1:* task 2's property test also runs on random raw copy sets: the metadata merge equals
+  `MergeAll` or refuses, which takes the fallback.
+- *MiMo M-2:* difference 1's other warnings and the target's own warnings, and difference 5's `burn`
+  half, now have named tests.
+- *MiMo M-3:* every command-level decryption test also reads the write back.
+- *MiMo M-4:* task 2 starts with a golden test of today's `SaveSecrets`, recorded before the
+  extraction.
+- *MiMo M-5 / DeepSeek M2:* task 10 has a Break.
+- *DeepSeek M1:* `FormatTwoDecoded` counts format 2 records only.
+- *DeepSeek M3:* the probe's no-value claim is backed by code evidence and a test.
+- *MiMo checklist 1 and 2:* file ownership and modes are named; "all-or-nothing" is scoped to
+  refusals.
+- *MiMo nit:* signing is named by its issue, #240, throughout.
+
 **Goal.** No write command decrypts a value it doesn't use (owner, 2026-11-07, binding: "unlocking
 all secrets is bad practice"). On format 3 records `create`, `ingest`, `ingest --rotate`, `rotate`,
 `burn`, `delete`, `add` and `import` decrypt **no** vault value, and `restore` decrypts exactly one
-(the previous value it puts back). Each reads only the record(s) it writes (metadata sections; a
+(the previous value it puts back), except where the written record itself can only be decided or
+merged by its value. Those exceptions decrypt that one record's values only:
+- `add` over a secret whose stored fingerprint set is of another variant-set version, or missing,
+  compares that current value (1);
+- a retained version without a fingerprint set is fingerprinted from its own section (1);
+- a record whose conflicted copies only plaintext can merge is decoded whole (its versions; for
+  `restore` that is 2, not 1).
+Each command reads only the record(s) it writes (metadata sections; a
 folder probe of one metadata section on a vault without the format marker). A format 2 record is
 decoded whole, only when it is the one being written, with Stage 2's warning discipline. Merge
 semantics, the stale-write guard, the HLC rules and the on-disk formats are unchanged. Target
@@ -72,18 +107,21 @@ stamp, `:889`), and the codec copies a held section byte for byte (`EncodeV3`, `
   is of `SecretVariants.CurrentSetVersion` and equals `Fingerprinter.Compute(newValue)`. Sound because
   every stored value is the UTF-8 encoding of a .NET string (`:1120`, `:1204`), on which UTF-8
   decoding (what `Fingerprinter.Compute` hashes, `Fingerprinter.cs:19`) is injective, and the plain
-  variant's 128-bit HMAC decides. A set of another variant-set version, or none: that one current
-  value section is decrypted and compared (1 value, only that record; unreachable for records written
-  by v0.2+, which always fingerprint, `PrepareV3`, `:1582-1605`).
+  variant's 128-bit HMAC decides. A set of another variant-set version (older: written by an older
+  build in a mixed fleet, which Stage 2's `OlderVariantSet` note exists for; or newer: a later build),
+  or none: that one current value section is decrypted and compared (1 value, only that record). A
+  reindex removes the older case. Owner decision 6: accepted.
 - **A copied version without a fingerprint set** (only planted records; v0.2+ always writes one):
   that section is decrypted to compute the set, as today's `PrepareV3` does from the full load
   (`:1586-1589`). Same behaviour, one value of the written record.
+- **`create` and `ingest` on an existing name** decrypt nothing: existence comes from metadata.
 - **Copies that only plaintext can merge** (`MergeAllMetadata` refuses, `RecordMerge.cs:246-248`,
   where `MergeAll` merges): the write falls back to decoding **that record** whole, as today, and so
   still converges the copies, as `LoadMetadata`'s own warning promises ("a full load (any command
   that writes this record) may still be able to merge them", `RecordVaultStore.cs:1349`) and
   `docs/security-model.md` says ("A write of that record … converges the copies"). Both its versions
-  are reported to `ValueDecrypted`; no other record's.
+  are reported to `ValueDecrypted`; no other record's. For `restore` the previous value then comes
+  from that decode, so the count is 2, not 1. No format 2 warning: the record is format 3.
 
 "Decrypts" is a call of the `ValueDecrypted` seam (`RecordVaultStore.cs:138`), which fires at the
 store's two value-decryption sites only: `OpenValueSection` (`:700`) and `DecodeFull` (`:937-943`).
@@ -99,7 +137,7 @@ otherwise the implementer's.
 // TswapCore/VaultWriter.cs (new): what the write commands use
 public sealed class VaultWriter : IDisposable
 {
-    public SecretInfo? Find(string name);         // that record's metadata; null: none, tombstone, or unreadable
+    public SecretInfo? Find(string name);         // that record's metadata; null: none, tombstone, or unreadable (rule below)
     public void ThrowIfUnreadable(string name);   // SecretsDb.UnreadableRecordText(name, file) (Models.cs, Stage 2)
     public void SetValue(string name, string value, DateTime created, bool always = false,
                          DateTime? importedBurnAt = null, string? importedBurnReason = null);
@@ -109,21 +147,37 @@ public sealed class VaultWriter : IDisposable
     public void Delete(string name);               // the tombstone (:1167-1171)
     public void Restore(string name);              // ResolveToken(name:previous)'s errors, then one decrypt
     public IReadOnlyDictionary<string, SecretInfo?> Commit(); // guard every staged record, then write; the written states
-    public int FormatTwoDecoded { get; }           // records decoded whole (the warning's n)
+    public int FormatTwoDecoded { get; }           // records with a format 2 file decoded whole (the warning's n);
+                                                   // the copy-conflict fallback on format 3 records is not counted
     public void Dispose();                         // zeroes held sections, decoded format 2 values, plaintexts
 }
 // CommandContext.cs
 public VaultWriter OpenVaultForWrite(byte[] key); // new VaultWriter((RecordVaultStore)Storage, key, Console.Error)
 ```
 
+**Unreadable targets: one rule (DeepSeek I2, MiMo M-6).** `OpenForWrite` is called once per name and
+its result cached: an entry, "no file", or "unreadable" with the hashed file name. For an unreadable
+name:
+- `Find` returns null, as `SecretsDb` does (`LoadSecrets` leaves unreadable records out,
+  `RecordVaultStore.cs:494-496`), and `ThrowIfUnreadable` throws `SecretsDb.UnreadableRecordText`
+  naming the file.
+- `SetValue`, `Burn`, `Delete` and `Restore` stage **nothing** for that name and record the error.
+- `Commit` throws the first recorded error in ordinal name order **before** any guard check or write,
+  exactly as `SaveSecrets` throws `Unreadable` while building its writes (`:1117-1118`).
+So an unreadable record is never skipped as absent and never overwritten. Commands keep today's
+calls: `create`, `ingest`, `delete`, `burn` and `rotate` call `ThrowIfUnreadable` where they do
+today, so they name the file before "not found" or "already exists"; `add` and `import`, which
+today learn it only at the save, learn it at `Commit`.
+
 **Staging, then one commit (my call).** Operations stage; `Commit` assigns stamps and writes. This
-keeps today's guarantees exactly: (a) `import`'s all-or-nothing guard: every staged record is
+keeps today's guarantees exactly: (a) `import`'s all-or-nothing **refusal** (a crash in the middle of
+`Commit` leaves the records written so far, exactly as today's `WriteRecords` loop does): every staged record is
 re-read and compared before the first write (`WriteRecords` → `CheckUnchanged`, `:1534`, `:1647`), so a
 changed record refuses the whole import with nothing written, as today; (b) stamp order: version and
 burn stamps are issued per record in **ordinal** name order, then the write stamps in the same order,
 exactly as `SaveSecrets` (`:1113`, then `WriteRecords`, `:1541-1545`), even though `import` iterates
 in culture order (`ImportCommand.cs:66`, `OrderBy(kv => kv.Key)`); (c) an unreadable target is
-recorded when opened and thrown at `Commit` (the first in ordinal order), so `import` prints its
+recorded when opened and thrown at `Commit` (the rule above), so `import` prints its
 "Skipped" lines in today's order before failing, as `SaveSecrets` throws only after the loop
 (`:1117-1118`).
 
@@ -182,8 +236,12 @@ the folder selects format 3 (`RecordStoreV3Tests.AnyV3RecordRead_WritesV3EvenWit
 Per record, that is decided as (my call): the marker; else the target's own authenticated format 3
 file; else, at `Commit`, a **probe**: the scan's files whose cleartext format byte is 3
 (`SecretRecordCodec.FormatVersionOf`, `:232`), main files then copies in ordinal order, each until one
-metadata section authenticates (`DecodeMetadataAndSections`, `:619`; no value section is opened; each
-attempt reported to `RecordDecrypted`). A file that fails authentication selects nothing
+metadata section authenticates (`SecretRecordCodec.DecodeMetadataAndSections`, `:619`; each attempt
+reported to `RecordDecrypted`). No value section is opened. In the code, `DecodeMetadataAndSections`
+→ `ReadV3Metadata` (`:737-764`) decrypts only the metadata section. `FrameV3` (`:677-711`) slices the
+value sections and returns them still encrypted. The store's `ValueDecrypted` seam is not reached on
+this path. The implementer confirms this with `Unmarked_AuthenticatedFormatThreeRecord_SelectsFormatThree_DecryptingNoValue`
+(task 3: `ValueDecrypted` empty, `RecordDecrypted` only the probed file). A file that fails authentication selects nothing
 (`ADamagedFormat3File_DoesNotSelectFormat3`, `:111`) and is not warned about (it is not this
 command's record). Invariant this relies on: when the folder writes format 2, no readable file of the
 target is format 3, so the target is absent or format 2 and its plaintext is in hand.
@@ -192,15 +250,16 @@ target is format 3, so the target is absent or format 2 and its plaintext is in 
 
 | Command | Today | After (format 3) |
 |---|---|---|
-| `create`, `ingest` | full load; `ThrowIfUnreadable`, exists? (`CreateCommand.cs:52-55`, `IngestCommand.cs:41-44`) | `OpenVaultForWrite` → `ThrowIfUnreadable` → `Find` → `SetValue` → `Commit`. 0 values; existence from metadata (format 2: that record whole, warned) |
+| `create`, `ingest` | full load; `ThrowIfUnreadable`, exists? (`CreateCommand.cs:52-55`, `IngestCommand.cs:41-44`) | `OpenVaultForWrite` → `ThrowIfUnreadable` → `Find` → `SetValue` → `Commit`. 0 values; existence from metadata (format 2: that record whole, warned). An existing name with a damaged value section now refuses as "already exists" (difference 2) |
 | `ingest --rotate`, `rotate` | full load; `SecretRotation.Check` on `SecretsDb` (`SecretRotation.cs:20-40`) | `Check` on the writer's `Find`/`ThrowIfUnreadable` (same texts and order: not found, classic branch, sudo unless burned) → `SetValue(always: true)`. 0 values |
-| `burn` | full load; already-burned check (`BurnCommand.cs:23-34`) | `Find` → same checks → `Burn`. 0 values |
+| `burn` | full load; already-burned check (`BurnCommand.cs:23-34`) | `Find`; null → `ThrowIfUnreadable` → "not found" (as today) → already burned? → `Burn`. 0 values |
 | `delete` | full load; tombstone pass over every record | `Find` → `ThrowIfUnreadable` → `Delete`. 0 values; one tombstone by construction |
-| `restore` | full load, `ResolveToken(name:previous)`, save, **second full load** for the burn line | `Restore` (same errors) → `Commit`; the burn line from the written state. 1 value |
-| `add` | full load; save writes only if the value changed | `SetValue` (fingerprint comparison). 0 values |
-| `import` | full load; skip existing live names; save | per name in today's order: `Find` (skip as today) → `SetValue(importedBurnAt…)` → one `Commit`. 0 vault values (the export file's values are read, by nature) |
+| `restore` | full load, `ResolveToken(name:previous)`, save, **second full load** for the burn line | `Restore` (same errors) → `Commit`; the burn line from the written state. 1 value (2 under the copy-conflict fallback) |
+| `add` | full load; save writes only if the value changed; an unreadable target refused at the save with the file named (`:1117-1118`) | `SetValue` (fingerprint comparison) → `Commit` (an unreadable target refused there, same text). 0 values; 1 (that current value) when the stored set is of another variant-set version or missing (owner decision 6) |
+| `import` | full load; skip existing live names; save | per name in today's order: `Find` (skip as today when non-null) → `SetValue(importedBurnAt…)` (stages nothing for an unreadable name) → one `Commit` (throws the first unreadable name). 0 vault values (the export file's values are read, by nature) |
 
-Every one prints `FingerprintTexts.WarnFormatTwo(…, writer.FormatTwoDecoded, FormatTwoUse.Write)` in a
+The other rows (`rotate`, `delete`) decrypt nothing beyond the record-level exceptions in the Goal,
+which apply to every row. Every one prints `FingerprintTexts.WarnFormatTwo(…, writer.FormatTwoDecoded, FormatTwoUse.Write)` in a
 `finally` after its output, as `get` does (`GetCommand.cs:29-32`). New text (my call, count and fix
 only, Stage 2's discipline): `Warning: {n} of the records written here were stored in the old record
 format 2, which tswap can only decrypt whole; the value versions not needed were wiped. Ask the user
@@ -238,6 +297,7 @@ command that "prints a warning about the old record format 2" (`TswapCore/Prompt
 | HLC per record, machine clock monotonic | `Hlc.Next(_highestSeen, now)` (`:1108`, `:1543`), `LastHlc` saved (`:1570`), `SaveConfig` keeps the max on disk (`:193-196`) | `_highestSeen` = `LastHlc` max the written record's authenticated stamps; same `Next`, same save. No rule compares stamps across records: `MergeAll` and `MergeAllMetadata` take one record's copies only (`RecordMerge.cs:100-102`, `:193-195`), and burns compare within one version |
 | At most one delete per command | the empty-save guard (`:1096-1100`) | `Delete` stages one tombstone for one name; nothing else tombstones |
 | Extensions survive | `Extensions = state?.Extensions` (`:1151`) | carried in `RecordMetadata.Extensions` |
+| File ownership and modes under sudo | `TightenModes` before the first write (`:1613`), every file through `DirectoryOwnerMatcher` (`_owner.WriteDurable`, `:1562`; `WriteMachineConfig`, `:230-240`) | the same `CommitWrites` code; no new file or temp path. `RecordStoreFileLayerTests` (`UnderSudo_EveryRecordKeyringBackupAndTempFolderWrite_IsDoneAsTheFoldersOwner`, `NewFoldersAre0700_AndFiles0600_UnderUmask0`, `AVaultWithWiderModes_IsTightenedOnTheNextWrite_…`) stay green; task 6 adds `burn` and `delete` to the first one's commands if it doesn't run them |
 
 ## Behaviour differences from today
 
@@ -246,12 +306,15 @@ command that "prints a warning about the old record format 2" (`TswapCore/Prompt
    written record are, with the same texts. Marker warnings and the permissions notice unchanged.
    (Stage 2 difference 6, for writes.)
 2. **A format 3 record with a damaged value section or fingerprints that don't match its value**:
-   `burn`, `rotate`, `ingest --rotate` and `delete` now succeed on it (sections and sets copied forward
-   byte for byte; a delete drops them); today the full load marks it unreadable
-   (`RecordMerge.ValidateFingerprints`, `:880-881`; a failed section, `DecodeV3`) and they refuse.
+   `burn`, `rotate`, `ingest --rotate`, `add` (a changed value, or a same value its fingerprints
+   confirm) and `delete` now succeed on it (sections and sets copied forward byte for byte; a delete
+   drops them). Today the full load marks it unreadable (`RecordMerge.ValidateFingerprints`,
+   `:880-881`; a failed section, `DecodeV3`) and they refuse. `create` and `ingest` on its name now
+   refuse with "already exists" instead of the unreadable-record text.
    Whoever uses that value still fails closed, naming the file (`get`, `apply`, `run`, `restore` of
    that version, through `OpenValueSection`'s authentication and fingerprint check). Detecting it
-   needs the value, which these commands must not decrypt. (Owner decision 1: accepted.)
+   needs the value, which these commands must not decrypt. (Owner decision 1: accepted; `add` and the
+   `create`/`ingest` refusal reason, added after review round 1, re-confirmed in decision 7.)
 3. **HLC reach.** A write's stamps exceed `LastHlc` and the written record's stamps, no longer every
    stamp in the folder. A machine whose clock lags another's now stamps its writes with its own time
    (shown as `Modified`/burn time) unless the record itself carries a later stamp, and `LastHlc` no
@@ -292,16 +355,32 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    them). Every existing `SecretRecordCodecV3Tests`/`SecretRecordCodecTests` test unchanged and green.
    Break: the overload seals a fresh section instead of copying (the byte-identical test fails).
 2. **Rules on metadata, and `SaveSecrets`' body extracted** (`RecordMerge.cs`, new `RecordWrites.cs`,
-   `RecordVaultStore.cs` refactor only). New `RecordWritesTests`: new version over a live record
+   `RecordVaultStore.cs` refactor only).
+   - **First, before any production edit (MiMo M-4):** `SaveSecrets_MatchesItsGolden`, committed
+     green on today's code. A scripted history (fixed clock and origin; create, add of a same and of
+     a new value, burn, rotate, restore of a burned previous, delete, re-create, import with a burn)
+     driven through `LoadSecrets` + `SaveSecrets`. Every record's decoded state, minus the
+     random-nonce section bytes, is compared with a checked-in golden file
+     (a new `TswapTests/Fixtures/save-secrets-golden.json`, copied to the output as the signing branch does with its fixtures: stamps, types, burns, created, names, values,
+     previous, fingerprints). The extraction must keep it byte-equal, so the oracle's reference
+     can't move with the production code.
+   - New `RecordWritesTests`: new version over a live record
    (previous section and set kept, older previous dropped, outstanding burn becomes history), over a
    tombstone (created time from the input, burns kept, no previous), burn (a burn of the current
    version, sections untouched), tombstone (no sections or sets, burns as history), restore (the
    restored version's burns re-issued on the new version with their original stamp and reason,
    `:1139-1141`; `FixRoundShouldFixTests`' equal-stamp case), imported burn (`:1143-1144`), extensions
    kept; `RecordWrites_MatchNextRecord_OnRandomStates` (seeded: for random merged states and operations,
-   the metadata result equals `NextRecord`'s, converted with fingerprints). `StaleWriteGuardTests`,
+   the metadata result equals `NextRecord`'s, converted with fingerprints);
+   `MergeAllMetadata_MatchesMergeAll_OrRefuses_OnRandomCopySets` (MiMo M-1). Seeded: random raw
+   copy sets of one record (diverging versions, burns, previous values, re-encrypted sections, with
+   and without fingerprint sets). Either `MergeAllMetadata` equals `MergeAll`'s result converted to
+   metadata (winner, burns, write stamp, extensions, chosen sections), or it throws
+   `RecordConflictException`, which is exactly the case that takes the whole-record fallback; it
+   never gives a different winner. `StaleWriteGuardTests`,
    `EmptySaveGuardTests`, `RotateTests`, `PreviousValueTests` unchanged and green (the refactor).
-   Break: drop the restore burn re-issue in `RecordWrites`.
+   Breaks: drop the restore burn re-issue in `RecordWrites`; change `NextRecord`'s created-time rule
+   over a tombstone (the golden fails).
 3. **Store write session** (`RecordVaultStore.cs`, `SecretEntry.cs`). New `RecordStorePerRecordWriteTests`:
    `Burn_FormatThree_ReadsOnlyItsRecord_DecryptsNoValue` (`ValueDecrypted` empty, `RecordDecrypted` is
    exactly the target file, every other file byte-identical, the target's sections byte-identical);
@@ -310,8 +389,10 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    `Guard_RecordCreatedElsewhereSinceOpen_IsNotOverwritten`; `Guard_Batch_OneChanged_NoneWritten`;
    `Copies_FoldedAndRemoved_OnlyForTheWrittenRecord`;
    `CopiesOnlyPlaintextCanMerge_FallBackToThatRecord_AndConverge` (Stage 2's difference 10 setup: the
-   write succeeds, the copies are gone, `ValueDecrypted` names only that record's file);
-   `UnreadableTarget_Throws_NamingTheFile`; `Hlc_ObservesTheTargetsAuthenticatedStampsOnly` (a valid copy
+   write succeeds, the copies are gone, `ValueDecrypted` names only that record's file, and
+   `FormatTwoDecoded` stays 0);
+   `UnreadableTarget_StagesNothing_CommitThrowsFirstInOrdinalOrder_BeforeAnyWrite` (two unreadable names
+   and one writable one in one session: nothing written, the error names the ordinally first file); `Hlc_ObservesTheTargetsAuthenticatedStampsOnly` (a valid copy
    from a clock three days ahead: the new stamps order after it; a junk copy with a future header: no
    effect); `Hlc_UnrelatedFutureRecord_DoesNotRaiseTheStamp` (difference 3);
    `Unmarked_AuthenticatedFormatThreeRecord_SelectsFormatThree_DecryptingNoValue`,
@@ -340,30 +421,44 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    compares through `DecryptValue` (the first `Add_` test fails).
 5. **`create`, `ingest`, `add`** (their commands). New `WriteCommandDecryptionTests` (format 3,
    `StoreOpened`): `Create_DecryptsNoValue`, `Ingest_DecryptsNoValue`, `Add_NewName_DecryptsNoValue`,
-   `Add_ChangedValue_DecryptsNoValue` (each: `ValueDecrypted` empty, `RecordDecrypted` only the
-   target, every other record file byte-identical); `Create_UnrelatedUnreadableRecord_NotReported`
-   (difference 1: exit 0, stderr without the other file); `Write_UnrelatedNonUtf8Record_NotRewritten`
-   (difference 5, planted with `SecretRecordCodec.Encode`). `RotateTests.CreateAndIngest_OnAnExistingName_RefuseAndPointToRotate`,
+   `Add_ChangedValue_DecryptsNoValue`. Each asserts `ValueDecrypted` empty, `RecordDecrypted` only
+   the target and every other record file byte-identical, **and reads the write back** (MiMo M-3):
+   the value through `get`, `Modified` through `names`, and for `add` the old value now under
+   `name:previous`. Further tests:
+   - `Add_UnreadableTarget_RefusesNamingTheFile_WritesNothing`.
+   - `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting` (difference 2).
+   - `Write_UntouchedRecordsWarnings_NotReported` (difference 1, MiMo M-2): an unrelated unreadable
+     record, an unrelated conflicted copy (note), an unusable copy and a year-ahead record. Exit 0,
+     and stderr carries none of their file names.
+   - `Write_TargetsOwnWarnings_SameTexts`: the same four situations on the written record give the
+     full load's exact texts. `RecordConflictTests.AnUndecryptableConflictCopy_IsWarnedAbout_AndKept_EvenAfterAWrite`
+     also stays green.
+   - `Write_UnrelatedNonUtf8Record_NotRewritten` and `Burn_NonUtf8Record_WritesABurn_NotANewVersion`
+     (difference 5, both halves, planted with `SecretRecordCodec.Encode`). `RotateTests.CreateAndIngest_OnAnExistingName_RefuseAndPointToRotate`,
    `RecordConflictTests.ATruncatedMainRecord_FailsClosed`, `RecordStoreTests`, `TimeProviderTests`,
    `RecordStoreV3Tests` marker tests unchanged. Break: `create` calls `ctx.LoadSecrets`.
 6. **`burn`, `delete`, `rotate`, `ingest --rotate`** (`BurnCommand.cs`, `DeleteCommand.cs`,
    `RotateCommand.cs`, `IngestCommand.cs`, `SecretRotation.cs`). Tests: `Burn_DecryptsNoValue`,
-   `Delete_DecryptsNoValue`, `Rotate_DecryptsNoValue`, `IngestRotate_DecryptsNoValue`; difference 2:
+   `Delete_DecryptsNoValue`, `Rotate_DecryptsNoValue`, `IngestRotate_DecryptsNoValue`, each with a
+   read-back (the burn in `burned --json`, the tombstone's record type, the previous value under
+   `name:previous`); `Burn_UnreadableTarget_NamesTheFile` (command-level text); difference 2:
    `Burn_DamagedValueSection_Succeeds_GetStillFailsNamingTheFile`,
    `Rotate_FingerprintMismatch_KeepsItAsPrevious_RestoreFailsClosed`,
-   `Delete_DamagedValueSection_WritesATombstone`. Existing `RotateTests` (sudo unless burned, nothing
+   `Delete_DamagedValueSection_WritesATombstone`, `Add_DamagedValueSection_NewVersion_KeepsItAsPrevious`. Existing `RotateTests` (sudo unless burned, nothing
    written on refusal, `LastHlc` unchanged), `EmptySaveGuardTests.Deleting*`, `RecordConflictTests`,
    `RecordStoreV3Tests.Burn_CopiesValueSectionsByteForByte` green. Measure `burn` on a 1,000-record
    vault before/after and record both times in the commit (no test). Break: `burn` opens its record
    through `OpenFull`.
 7. **`restore`** (`RestoreCommand.cs`). `Restore_DecryptsOnlyThePreviousValue` (one `ValueDecrypted`,
-   `RecordDecrypted` only the target); `Restore_BurnLine_FromTheWrittenState` (output equal to today's
+   `RecordDecrypted` only the target, `get` returns the restored value);
+   `Restore_CopiesOnlyPlaintextCanMerge_DecryptsThatRecordsTwoVersions` (exactly two, both of that file); `Restore_BurnLine_FromTheWrittenState` (output equal to today's
    for a burned and an unburned previous). `PreviousValueTests`, `RecordStoreV3Tests.Restore_KeepsTheRestoredSectionBytes`,
    `TimeProviderTests.Restore_WritesTheNewVersionsTime_FromTheTimeProvider` green. Break: the burn line
    from `ctx.LoadSecrets` again (the first test fails).
 8. **`import`** (`ImportCommand.cs`). `Import_DecryptsNoVaultValue` (export of three, vault holding one
    of them live, one deleted, one absent: `ValueDecrypted` empty, `RecordDecrypted` only those three
-   files); `Import_UnreadableTarget_RefusesWritingNothing` (today's text, file named, every record and
+   files; the absent and the deleted names read back with `get`, the live one unchanged);
+   `Import_UnreadableTarget_RefusesWritingNothing` (today's text, file named, every record and
    `config.json` byte-identical, the earlier "Skipped" lines printed). `RecordStoreExportImportTests`,
    `FixRoundShouldFixTests` (import with `--include-burned` keeps the burn time) green. Break: import
    writes each record as it goes (the refusal test finds a written record).
@@ -375,14 +470,19 @@ once, reverted, reported in the commit message). Fixtures: `InitRecordVault` (fo
    byte-identical. `RecordStoreV3Tests.NoMarker_WritesV2`, `V2CopyAgainstV3Main_MergesAndNextWriteIsV3`,
    `MarkerEmptyGarbageOrBelow3_WarnsAndCountsAsAbsent`, `MarkerConflictCopy_IsIgnored` green. Break: the
    warning printed with the record's name (`FormatTwoWriteWarning_CountOnly` and this class fail).
-10. **Guard and docs.** `WriteCommands_DontUseTheWholeVaultApi` (my call: a source scan of
-    `TswapCli/Commands/*.cs` and `SecretRotation.cs`: `LoadSecrets(`/`SaveSecrets(` only in
-    `ExportCommand.cs` and, until Stage 3 merges, `RunCommand.cs`; the behavioural counters are the
-    proof, this keeps a later edit honest). Docs: `docs/security-model.md` (the write-commands row of
+10. **Guard and docs.** `WriteCommands_DontUseTheWholeVaultApi` (my call; DeepSeek I3). A source
+    scan of exactly the write commands' own files (`Create`, `Ingest`, `Burn`, `Rotate`, `Restore`,
+    `Add`, `Delete`, `Import` in `TswapCli/Commands/`, plus `TswapCli/SecretRotation.cs`). None of
+    them may contain `LoadSecrets(`, `SaveSecrets(`, `LoadRecordStates(` or `MergeRecords(`. The
+    Scope table's whole-vault callers are out of the scan on purpose: `ExportCommand.cs:43`,
+    `VaultCommand.cs:118` (`vault merge`, #271), `RecordMigration.cs:125,398` (outside `Commands/`)
+    and `RunCommand.cs:72` (Stage 3). The behavioural counters are the proof; this keeps a later edit
+    honest. Break: add `ctx.LoadSecrets(key);` to `AddCommand.Execute` (the scan fails). Docs: `docs/security-model.md` (the write-commands row of
     "What each command decrypts", `:121`, and the threat row's last sentence, `:87`), `docs/commands.md`
     (format 2 section, `:46-77`: writes too), `docs/release-notes/v0.3.0.md` (replace `:56-57` with a
-    2b section listing the differences), the spec's Delivery section (an "Owner amendment, 2026-11-07
-    (brief T16-S2b)" stating the write commands' minimum decryption and restore's one value), AGENTS.md
+    2b section listing the differences and the record-level exceptions), the spec's Delivery section
+    (an "Owner amendment, 2026-11-07 (brief T16-S2b)" stating the write commands' minimum decryption,
+    its exceptions and restore's one value), AGENTS.md
     `:203-207` (owner decision 3: the sentence given there). `TswapTests/Docs` green. No `Prompt.cs`
     change (rule 11 covers the warning).
 
@@ -420,7 +520,7 @@ Each task: one commit with explicit paths; full suite once at the end through
 | `TswapCore/RecordVaultStore.cs`, `SecretEntry.cs`, `Keyring/SecretRecordCodec.cs`, `Keyring/RecordMerge.cs`, new `Keyring/RecordWrites.cs`, new `VaultWriter.cs` | Stage 2's files (merged first); no other open brief |
 | `TswapCli/CommandContext.cs`, `FingerprintTexts.cs`, `SecretRotation.cs`, `TswapCore/Validation.cs` (`EndsInWhitespace`), Commands `Create`, `Ingest`, `Burn`, `Rotate`, `Restore`, `Add`, `Delete`, `Import` | `ImportCommand.cs` with polish (PR #269 adds three lines at `:42`; 2b edits `:61-93`: separate hunks) |
 | New test files above; no edit to `FleetMachine.cs` | polish adds a helper to `FleetMachine.cs`; Stage 3 edits `RunFileTokenTests.cs`, not 2b's |
-| `docs/security-model.md`, `docs/commands.md`, `docs/release-notes/v0.3.0.md`, the spec's Delivery section, AGENTS.md (approved) | Stage 3 edits the same table and threat row (adds a `run` row, rewrites `:87`), polish and signing (#240) add release-notes sections: text conflicts only |
+| `docs/security-model.md`, `docs/commands.md`, `docs/release-notes/v0.3.0.md`, the spec's Delivery section, AGENTS.md (approved) | Stage 3 edits the same table and threat row (adds a `run` row, rewrites `:87`), polish and signing (issue #240) add release-notes sections: text conflicts only |
 | Not touched: `RunCommand.cs`, `Redaction.cs`, `FingerprintScanner.cs` (Stage 3); `InitCommand.cs`, `RecoverCommand.cs`, `SlotCommand.cs`, `Prompt.cs` (polish); `release.yml`, `contrib/packaging/*`, `InstallScript.cs` (signing) | |
 
 Order: Stage 2 (#268) merges first; 2b branches from it (this worktree, `design/t16-stage2b` at
@@ -446,20 +546,28 @@ and the new write row; release notes: one section per brief). Task 10's source s
 
 ## Owner decisions (2026-11-07, all recommendations taken)
 
-1. **Damaged value section or mismatched fingerprints:** `burn`, `rotate`, `ingest --rotate` and
-   `delete` on such a record **succeed** and carry the damage forward byte for byte; no value is
-   decrypted to check it. Later users of that value (`get`, `apply`, `run`, `restore`) still fail
-   closed, naming the file. Difference 2, pinned by task 6's three tests.
+1. **Damaged value section or mismatched fingerprints:** `burn`, `rotate`, `ingest --rotate`, `add`
+   and `delete` on such a record **succeed** and carry the damage forward byte for byte; no value is
+   decrypted to check it; `create`/`ingest` on its name refuse as "already exists". Later users of
+   that value (`get`, `apply`, `run`, `restore`) still fail closed, naming the file. Difference 2,
+   pinned by task 6's four tests and task 5's `Create_ExistingNameWithDamagedValueSection_RefusesAsExisting`.
 2. **`vault merge` and `vault reindex` are out of 2b:** follow-up issue #271 (metadata-only merge of
    format 3 folders; reindex without decoding records already current).
 3. **AGENTS.md `:203-207`** is updated in task 10. The last sentence ("`LoadSecrets`, which decrypts
    every record, is left only to the write commands until Stage 2b; new code never calls it to read.")
-   becomes exactly:
-   > Write commands decrypt only what they use too (T16 Stage 2b): `create`, `ingest`, `rotate`,
-   > `burn`, `delete`, `add` and `import` decrypt no value of a format 3 record and `restore` only the
-   > previous value it puts back (`VaultWriter`, `RecordVaultStore.OpenForWrite`). Only `export` and
-   > `migrate` (by their nature) and `vault merge` and `vault reindex` (follow-up #271) read every
-   > value; new code never calls `LoadSecrets` or `SaveSecrets` to read or write anything else.
+   is replaced, exactly, by the text below (revised after review round 1, because the first approved
+   text claimed no exceptions, which the plan's own tests contradict; owner re-confirmed verbatim,
+   decision 7):
+   > Write commands decrypt only what they use too (T16 Stage 2b): on format 3 records `create`,
+   > `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value and `restore` only the
+   > previous value it puts back (`VaultWriter`, `RecordVaultStore.OpenForWrite`), except where the
+   > written record itself can only be decided or merged by its value: `add` compares that record's
+   > current value when its stored fingerprints are of another variant-set version or missing, a
+   > retained version without fingerprints is fingerprinted from its own value, and a record whose
+   > conflicted copies only plaintext can merge, like a format 2 record, is decrypted whole. Only
+   > `export` and `migrate` (by their nature) and `vault merge` and `vault reindex` (follow-up #271)
+   > read every value; new code never calls `LoadSecrets` or `SaveSecrets` to read or write anything
+   > else.
 4. **HLC reach accepted:** a write's stamps beat only the written record's and `LastHlc`; a slow
    machine's stamps no longer jump past unrelated records. Difference 3, pinned by task 3's
    `Hlc_UnrelatedFutureRecord_DoesNotRaiseTheStamp`.
@@ -468,6 +576,14 @@ and the new write row; release notes: one section per brief). Task 10's source s
    as a limit), and trailing whitespace is usually a paste mistake. The warning names the secret and
    the reason, never the value or its length, and doesn't refuse (owner prefers warnings). Task 11;
    difference 8.
+6. **`add`'s comparison fallback accepted (option a):** when the stored current fingerprint set is
+   of another variant-set version, or missing, `add` decrypts that one record's current value to tell
+   "same value" from a new one. It is one value of the record being written, by a sudo user typing a
+   value, and a reindex removes the case. Rejected: always writing a new version, which would push the
+   real previous value out of the one-level history, and refusing, which would block `add` in mixed
+   fleets for no gain. Pinned by task 4's `Add_SetOfAnotherVariantVersion_DecryptsOnlyThatCurrentValue`.
+7. **Decisions 1 and 3 re-confirmed as revised:** difference 2 includes `add` and the
+   `create`/`ingest` refusal reason, and the AGENTS.md sentence in decision 3 is approved verbatim.
 
 No owner decision is open.
 
