@@ -401,7 +401,7 @@ internal sealed class FilledFiles : IDisposable
                 if (!string.Equals(file, lockPath, StringComparison.Ordinal))
                     // A hard link is only unlinked: zeroing it would zero the file it shares (Windows:
                     // the folder's ACL already keeps others from planting one).
-                    ZeroAndDelete(file, record: false, zero: OperatingSystem.IsWindows() || FilledFilesNative.LinkCount(file) == 1);
+                    ZeroAndDelete(file, record: true, zero: OperatingSystem.IsWindows() || FilledFilesNative.LinkCount(file) == 1);
             if (OperatingSystem.IsWindows())
             {
                 // Windows can't delete a folder holding an open file.

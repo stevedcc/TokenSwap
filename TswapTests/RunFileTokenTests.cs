@@ -329,6 +329,8 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.DoesNotContain(body1, output);
         Assert.DoesNotContain(body2, output);
         Assert.DoesNotContain(Base64(crlfValue)[..40], output);
+        Assert.DoesNotContain(Base64(crlfValue)[^40..], output);
+        Assert.DoesNotContain("-----END PRIVATE KEY-----", output);
         Assert.Contains("key: \"[REDACTED: pem]\"", output);
         Assert.Contains("b64: [REDACTED: pem]", output);
         Assert.Contains("raw: [REDACTED: pem]", output);
@@ -506,6 +508,9 @@ public sealed class RunFileTokenTests : IDisposable
 
         Assert.True(exit == 0, err);
         Assert.True(oldGoneAtChildStart, "the stale folder is swept when run starts");
+        var staleCopy = Path.Combine(old, "1", "values.yaml");
+        Assert.Contains(_cleanup, step => step.Kind == CleanupKind.Zeroed && step.Path == staleCopy);
+        Assert.All(_onDiskAtZeroing[staleCopy], b => Assert.Equal(0, b));
         Assert.True(Directory.Exists(fresh), "a folder younger than an hour is kept");
         Assert.Equal("left over", File.ReadAllText(Path.Combine(fresh, "1", "values.yaml")));
     }
@@ -566,11 +571,12 @@ public sealed class RunFileTokenTests : IDisposable
             return new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         var stream = UnixLockFile.TryTake(path, out var held);
         Assert.False(held);
-        return stream!;
+        Assert.NotNull(stream);
+        return stream;
     }
 
     [Fact]
-    public void RunFileToken_PrecreatedFolderOrSymlinkRefused()
+    public void RunFileToken_PrecreatedFolderOrSymlinkNeverWrittenThrough()
     {
         WriteFile("values.yaml", ValuesYaml);
         var taken = Path.Combine(_xdg, "tswap-run-aaaaaaaaaaaaaaaa");
@@ -932,6 +938,19 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.Empty(RunFolders());
     }
 
+    // A one- or two-character value has no base64 form of its own in SecretVariants: the value is
+    // still redacted, and nothing throws.
+    [Theory]
+    [InlineData("a")]
+    [InlineData("ab")]
+    public void Redaction_ShortValue_HasItsPlainForm(string value)
+    {
+        var variants = Redaction.Variants(value);
+
+        Assert.Equal(value, variants[0]);
+        Assert.DoesNotContain("", variants);
+    }
+
     [Fact]
     public void SubstituteAllTokensInArgs_NulValueIsATswapRefusal()
     {
@@ -944,6 +963,24 @@ public sealed class RunFileTokenTests : IDisposable
     [InlineData("python3 x.py {{@f}}", "'python3'")]
     [InlineData("awk {print} {{@f}}", "'awk'")]
     [InlineData("sed y/a/A/ {{@f}}", "'sed'")]
+    [InlineData("sh x.sh {{@f}}", "'sh'")]
+    [InlineData("zsh x.sh {{@f}}", "'zsh'")]
+    [InlineData("fish x.fish {{@f}}", "'fish'")]
+    [InlineData("dash x.sh {{@f}}", "'dash'")]
+    [InlineData("ksh x.sh {{@f}}", "'ksh'")]
+    [InlineData("python x.py {{@f}}", "'python'")]
+    [InlineData("python3.12 x.py {{@f}}", "'python3.12'")]
+    [InlineData("perl x.pl {{@f}}", "'perl'")]
+    [InlineData("ruby x.rb {{@f}}", "'ruby'")]
+    [InlineData("node x.js {{@f}}", "'node'")]
+    [InlineData("php x.php {{@f}}", "'php'")]
+    [InlineData("pwsh x.ps1 {{@f}}", "'pwsh'")]
+    [InlineData("powershell x.ps1 {{@f}}", "'powershell'")]
+    [InlineData("cmd x.bat {{@f}}", "'cmd'")]
+    [InlineData("lua x.lua {{@f}}", "'lua'")]
+    [InlineData("gawk -f x.awk {{@f}}", "'gawk'")]
+    [InlineData("mawk -f x.awk {{@f}}", "'mawk'")]
+    [InlineData("helm template -f {{@f}} --post-renderer bash", "'bash'")]
     public void RunFileToken_InterpreterAnywhereRefused(string command, string named)
     {
         WriteFile("f", ValuesYaml);
@@ -989,6 +1026,7 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.DoesNotContain("No {{tokens}}", err);
         Assert.DoesNotContain("not found", err);
         Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
     }
 
     // ------------------------------------------------------------------ signals
@@ -1014,6 +1052,113 @@ public sealed class RunFileTokenTests : IDisposable
         Assert.True(copyStillThereAfterForwarding, "cleanup waits for the child to exit");
         Assert.Empty(RunFolders());
         Assert.Contains(_cleanup, s => s.Kind == CleanupKind.Zeroed);
+    }
+
+    // A child that ignores the forwarded SIGINT is killed once the grace period is over; the copy is
+    // removed after it exits.
+    [Fact]
+    public void RunFileToken_ChildIgnoringSigint_KilledAfterGrace()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        _env = _env with { ChildGrace = TimeSpan.FromMilliseconds(100) };
+        bool? killed = null;
+        _pty.During = _ =>
+        {
+            _signalHandler!(2);
+            killed = SpinWait.SpinUntil(() => { lock (_forwarded) return _forwarded.Contains(9); }, TimeSpan.FromSeconds(10));
+        };
+
+        Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(killed, "the child is killed after the grace period");
+        lock (_forwarded)
+            Assert.Equal([2, 9], _forwarded);
+        Assert.Empty(RunFolders());
+        Assert.Contains(_cleanup, s => s.Kind == CleanupKind.Zeroed);
+    }
+
+    // An exception while the child runs (a failing PTY, say) still zeroes and removes the copy.
+    [Fact]
+    public void RunFileToken_ThrowMidRun_FolderRemoved()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        string? copy = null;
+        _pty.During = argv =>
+        {
+            copy = CopyPath(argv);
+            throw new IOException("the PTY went away");
+        };
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("the PTY went away", err);
+        Assert.NotNull(copy);
+        Assert.False(File.Exists(copy));
+        Assert.Empty(RunFolders());
+        Assert.All(_onDiskAtZeroing[copy], b => Assert.Equal(0, b));
+    }
+
+    // The folder's .lock is held while the child runs, so a concurrent sweep never touches it.
+    [Fact]
+    public void RunFileToken_LockHeldWhileChildRuns()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        bool? lockFree = null;
+        _pty.During = argv =>
+        {
+            var lockPath = Path.Combine(RunFolderOf(CopyPath(argv)), ".lock");
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    using var _ = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                    lockFree = true;
+                }
+                catch (IOException)
+                {
+                    lockFree = false;
+                }
+                return;
+            }
+            using var stream = UnixLockFile.TryTake(lockPath, out var held);
+            lockFree = stream is not null && !held;
+        };
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}");
+
+        Assert.True(exit == 0, err);
+        Assert.False(lockFree, "the lock is taken by the running tswap");
+    }
+
+    // The same file spelt in another case is one copy where the file system ignores case (macOS,
+    // Windows) and two files, two copies, on Linux.
+    [Fact]
+    public void RunFileToken_CaseOfPathFollowsThePlatform()
+    {
+        WriteFile("values.yaml", ValuesYaml);
+        var caseSensitive = OperatingSystem.IsLinux();
+        if (caseSensitive)
+            WriteFile("VALUES.YAML", ValuesYaml);
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@values.yaml}}", "-f", "{{@VALUES.YAML}}");
+
+        Assert.True(exit == 0, err);
+        var copies = new[] { _pty.Argv![3], _pty.Argv[5] };
+        Assert.Equal(caseSensitive ? 2 : 1, copies.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void RunFileToken_RedirectWithAFileTokenRefused()
+    {
+        WriteFile("f", ValuesYaml);
+
+        var (exit, _, err) = Run("run", "helm", "template", "-f", "{{@f}}", ">", "out.yaml");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Pipes and output redirection are not allowed", err);
+        Assert.Equal(0, _pty.Starts);
+        Assert.Empty(RunFolders());
     }
 
     [Fact]
@@ -1115,7 +1260,7 @@ public sealed class RunFileTokenTests : IDisposable
     // The sweep only touches a stale folder that is the user's own 0700 one, and it
     // never zeroes through a hard link (it only unlinks it).
     [Fact]
-    public void RunFileToken_SweepSkipsOpenFolderAndNeverZeroesThroughHardLinks()
+    public void RunFileToken_SweepSkipsFolderOthersCanReadAndNeverZeroesThroughHardLinks()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -1242,10 +1387,11 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary, ITestOu
         using var p = Process.Start(psi)!;
         p.StandardInput.Write(stdin);
         p.StandardInput.Close();
-        var err = p.StandardError.ReadToEnd();
-        p.StandardOutput.ReadToEnd();
+        var err = p.StandardError.ReadToEndAsync();
+        var stdout = p.StandardOutput.ReadToEndAsync();
         p.WaitForExit();
-        Assert.True(p.ExitCode == 0, err);
+        Task.WaitAll(err, stdout);
+        Assert.True(p.ExitCode == 0, err.Result);
     }
 
     // A child of pid named name (pgrep: Linux and macOS).

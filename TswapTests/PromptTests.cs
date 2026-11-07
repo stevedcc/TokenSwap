@@ -125,5 +125,7 @@ public class PromptTests
         Assert.Contains("run … {{@file}}", text);
         Assert.DoesNotContain("<(", text);
         Assert.DoesNotMatch(@"<\(\s*(sudo\s+)?\S*tswap apply", text);
+        foreach (var line in text.Split('\n').Where(l => l.Contains("tswap apply")))
+            Assert.True(line.Contains("sudo tswap apply"), $"apply without sudo: {line}");
     }
 }
