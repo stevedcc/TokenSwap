@@ -42,7 +42,8 @@ automated/silent unlocking by malicious processes.
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
-## Commands you must NEVER use (require sudo, expose values):
+## Commands you must NEVER use (human use only; most require sudo and expose values):
+- `%CMD% init` — Creates a vault and prints its recovery key once (no sudo, but the user's job; never run it, not even with flags)
 - `sudo %CMD% add <name>` — Only for human interactive use
 - `sudo %CMD% get <name>` — Exposes plaintext value
 - `sudo %CMD% list` — Lists secrets with metadata

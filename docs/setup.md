@@ -115,11 +115,13 @@ run `init`: creating a vault is the user's work, and `init` prints the recovery 
 [agent-integration.md](agent-integration.md#agent-role-no-sudo).)
 
 ```bash
-tswap init --yubikey                                   # one plugged-in YubiKey
-tswap init --tpm                                       # this machine's TPM
-tswap init --secure-enclave --with-touch               # or --no-touch
+tswap init --yubikey --recovery-key-out ~/rk.txt       # one plugged-in YubiKey
+tswap init --tpm --recovery-key-out ~/rk.txt           # this machine's TPM
+tswap init --secure-enclave --with-touch --no-recovery # or --no-touch; no recovery slot
 ```
 
+A script's stdout isn't a terminal, so `init` won't print the recovery key there: it needs
+`--recovery-key-out <file>` (or `--no-recovery`), see [The recovery key](#the-recovery-key).
 A plain `tswap init` without a terminal is refused and names these flags. `tswap init --fido2`
 skips the questions too, but it still needs a person at a terminal to type the key's PIN, so a
 script without one is refused ([FIDO2 slots](#fido2-slots)).
@@ -426,8 +428,29 @@ Another machine joins the vault with four `slot` commands and files you carry yo
 
 ## The recovery key
 
-The guided `init`, `init --yubikey`, `--tpm` and `--secure-enclave` print a **recovery private
-key** once. It opens the vault without any enrolled hardware.
+The guided `init`, `init --yubikey`, `--fido2`, `--tpm` and `--secure-enclave` print a **recovery
+private key** once. It opens the vault without any enrolled hardware.
+
+When stdout isn't a terminal (a script, `tswap init … | tee log`, an AI agent's tool), `init` refuses
+to print it, before it touches any hardware, and asks for `--recovery-key-out <file>` (or
+`--no-recovery`). With `--recovery-key-out`, the key goes into that new file and nowhere else:
+
+- the file must not exist (it is never overwritten), its folder must, and it may not be inside the
+  vault folder or the config folder (they may be synced or backed up);
+- it is readable by you only (mode `0600`; on Windows an ACL for your user alone), and under sudo
+  it belongs to the folder's owner, not root;
+- it holds the base64 key and a newline, exactly what `recover` reads on stdin;
+- it is written before the vault, and deleted again if the vault can't be written.
+
+Move it offline (a password manager, a printed copy) and delete it. To use it later:
+
+```bash
+sudo tswap recover --yubikey < ~/rk.txt                # Linux and macOS (or --tpm / --secure-enclave)
+```
+
+```powershell
+Get-Content -Raw ~\rk.txt | tswap recover --yubikey   # Windows, a PowerShell elevated as the same user
+```
 
 tswap reads it **only from stdin**: never from an argument, the environment or a file path. Pipe it
 from wherever you keep it. Stdin must be the base64 key alone; surrounding whitespace is fine.

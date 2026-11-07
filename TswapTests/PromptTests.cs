@@ -87,6 +87,19 @@ public class PromptTests
         Assert.Contains("- `sudo tswap vault merge <folder>`", never);
     }
 
+    /// <summary>#253: creating a vault is the user's job, and init prints the recovery key.</summary>
+    [Fact]
+    public void Prompt_ListsInitUnderNever()
+    {
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        var should = text[text.IndexOf("## Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)];
+
+        var initLine = Assert.Single(never.Split('\n'), line => line.StartsWith("- `tswap init`", StringComparison.Ordinal));
+        Assert.Contains("recovery key", initLine);
+        Assert.DoesNotContain("tswap init", should);
+    }
+
     [Fact]
     public void Template_ExplainsPreviousAndRestore()
     {

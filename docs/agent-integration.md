@@ -36,7 +36,9 @@ a secret value:
 
 `init` needs no sudo either, but AI agents shouldn't run it: creating a vault is the user's work
 (even with `--no-recovery`), and `init` prints the recovery private key once
-([setup.md](setup.md#the-recovery-key)).
+([setup.md](setup.md#the-recovery-key)). The skill (`tswap prompt`) lists `init` among the
+commands an agent must never use, and an `init` whose stdout isn't a terminal (an agent's tool)
+refuses unless it is given `--recovery-key-out <file>` or `--no-recovery`.
 
 `agent start` and `broker unlock` need no sudo either, but they read the **vault password** at a
 terminal: they are for the human. An AI agent whose command fails with "needs the vault password"

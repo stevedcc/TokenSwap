@@ -114,6 +114,10 @@ public sealed class FleetMachine : IDisposable
         return (exit, text);
     }
 
+    /// <summary>#253: runs with stdout redirected (a pipe, a log, an agent's tool), stdin redirected too.</summary>
+    public (int Exit, string Out, string Err) RunWithStdoutRedirected(string stdin, params string[] args) =>
+        Run(new FakeConsole(stdin) { IsOutputRedirected = true }, args);
+
     /// <summary>Runs with stdin as an interactive terminal (not redirected).</summary>
     public (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
