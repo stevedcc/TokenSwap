@@ -74,6 +74,16 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         Assert.Contains(paths = fake.Switches.Select(s => s.Path).ToList(), p => p.StartsWith(Full(_m.RecordsDir) + "/") && p.Length > _m.RecordsDir.Length + 60);
         Assert.Contains(Full(_m.ConfigPath), paths); // LastHlc
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
+
+        // Brief T16-S2b: the per-record writes of burn and delete go through the same file layer.
+        foreach (var command in new[] { new[] { "burn", "t" }, ["delete", "t"] })
+        {
+            fake.Switches.Clear();
+            _m.Ok("", command);
+            Assert.Contains(paths = fake.Switches.Select(s => s.Path).ToList(), p => p.StartsWith(Full(_m.RecordsDir) + "/") && p.Length > _m.RecordsDir.Length + 60);
+            Assert.Contains(Full(_m.ConfigPath), paths);
+            Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
+        }
     }
 
     [Fact]

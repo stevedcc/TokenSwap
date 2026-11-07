@@ -19,18 +19,25 @@ public sealed class DeleteCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-
-        if (!db.Secrets.ContainsKey(name))
+        // Brief T16-S2b: only this record is read; one tombstone for one name, no value decrypted.
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
         {
-            db.ThrowIfUnreadable(name);
-            throw new TswapException($"Secret '{name}' not found");
+            if (writer.Find(name) is null)
+            {
+                writer.ThrowIfUnreadable(name);
+                throw new TswapException($"Secret '{name}' not found");
+            }
+
+            writer.Delete(name);
+            writer.Commit();
+
+            ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' deleted");
+            return 0;
         }
-
-        db.Secrets.Remove(name);
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' deleted");
-        return 0;
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 }

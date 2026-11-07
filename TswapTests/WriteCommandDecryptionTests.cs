@@ -315,4 +315,195 @@ public sealed class WriteCommandDecryptionTests : IDisposable
 
         Assert.Equal(planted, File.ReadAllBytes(RecordFile(_m, _key, "a")));
     }
+
+    // ------------------------------------------------------------------ task 6: burn, delete, rotate, ingest --rotate
+
+    [Fact]
+    public void Burn_DecryptsNoValue()
+    {
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok("", "burn", "b", "seen");
+
+        Assert.Empty(_values);
+        Assert.Equal([FileOf("b")], _records);
+        AssertOthersUnchanged(before, "b");
+        StopWatching();
+        var burned = System.Text.Json.JsonDocument.Parse(_m.Ok("", "burned", "--json")).RootElement;
+        var entry = Assert.Single(burned.EnumerateArray(), e => e.GetProperty("status").GetString() == "outstanding");
+        Assert.Equal("b", entry.GetProperty("name").GetString());
+        Assert.Equal("seen", entry.GetProperty("reason").GetString());
+        Assert.Equal(_now.UtcDateTime, entry.GetProperty("burnedAt").GetDateTime().ToUniversalTime());
+        Assert.Equal("b-value-2", _m.Get("b"));
+    }
+
+    [Fact]
+    public void Delete_DecryptsNoValue()
+    {
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok("", "delete", "b");
+
+        Assert.Empty(_values);
+        Assert.Equal([FileOf("b")], _records);
+        AssertOthersUnchanged(before, "b");
+        var record = ReadRecord(_m, _key, "b");
+        Assert.Equal(RecordType.Tombstone, record.Type);
+        Assert.Empty(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "b"))));
+        Assert.False(Db().Secrets.ContainsKey("b"));
+    }
+
+    [Fact]
+    public void Rotate_DecryptsNoValue()
+    {
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok("", "rotate", "a", "20");
+
+        Assert.Empty(_values);
+        Assert.Equal([FileOf("a")], _records);
+        AssertOthersUnchanged(before, "a");
+        Assert.Equal(20, _m.Get("a").Length);
+        Assert.Equal("a-value", Db().Secrets["a"].PreviousValue);
+        AssertModified("a");
+    }
+
+    [Fact]
+    public void IngestRotate_DecryptsNoValue()
+    {
+        var before = Snapshot();
+        Watch();
+
+        _m.Ok("a-new", "ingest", "--rotate", "a");
+
+        Assert.Empty(_values);
+        Assert.Equal([FileOf("a")], _records);
+        AssertOthersUnchanged(before, "a");
+        Assert.Equal("a-new", _m.Get("a"));
+        Assert.Equal("a-value", Db().Secrets["a"].PreviousValue);
+    }
+
+    [Fact]
+    public void Burn_UnreadableTarget_NamesTheFile()
+    {
+        var path = RecordFile(_m, _key, "a");
+        File.WriteAllBytes(path, File.ReadAllBytes(path)[..150]);
+        var before = Snapshot();
+        Watch();
+
+        var (exit, _, err) = _m.Run("", "burn", "a");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SecretsDb.UnreadableRecordText("a", FileOf("a")), err);
+        Assert.Equal(before, Snapshot());
+        Assert.Empty(_values);
+    }
+
+    /// <summary>Difference 2: a burn copies a damaged section forward; whoever uses the value still fails closed, naming the file.</summary>
+    [Fact]
+    public void Burn_DamagedValueSection_Succeeds_GetStillFailsNamingTheFile()
+    {
+        DamageLastValueSection("a");
+        var damaged = Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a"))));
+        Watch();
+
+        _m.Ok("", "burn", "a", "seen");
+
+        Assert.Empty(_values);
+        Assert.Equal(damaged, Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")))));
+        Assert.Equal(RecordType.Burned, SecretRecordCodec.DecodeMetadata(File.ReadAllBytes(RecordFile(_m, _key, "a")), _key)!.Type);
+        StopWatching();
+        var (exit, _, err) = _m.Run("", "get", "a");
+        Assert.Equal(1, exit);
+        Assert.Contains(SecretsDb.UnreadableRecordText("a", FileOf("a")), err);
+    }
+
+    /// <summary>Difference 2: fingerprints that don't match the value are carried forward with it; a restore of it fails closed.</summary>
+    [Fact]
+    public void Rotate_FingerprintMismatch_KeepsItAsPrevious_RestoreFailsClosed()
+    {
+        Plant("a", s => s with { Fingerprints = Fingerprints(_key, "something-else"u8.ToArray()) });
+        var mismatched = File.ReadAllBytes(RecordFile(_m, _key, "a"));
+        Watch();
+
+        _m.Ok("a-new", "ingest", "--rotate", "a");
+
+        Assert.Empty(_values);
+        var sections = ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")));
+        Assert.Equal(Assert.Single(ValueSections(mismatched)), sections[1]);
+        Assert.Equal("a-new", _m.Get("a"));
+        var before = Snapshot();
+        var (exit, _, err) = _m.Run("", "restore", "a");
+        Assert.Equal(1, exit);
+        Assert.Contains(SecretsDb.UnreadableRecordText("a", FileOf("a")), err);
+        Assert.Equal(before, Snapshot());
+    }
+
+    [Fact]
+    public void Delete_DamagedValueSection_WritesATombstone()
+    {
+        DamageLastValueSection("a");
+        Watch();
+
+        _m.Ok("", "delete", "a");
+
+        Assert.Empty(_values);
+        Assert.Equal(RecordType.Tombstone, ReadRecord(_m, _key, "a").Type);
+        Assert.Empty(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a"))));
+    }
+
+    [Fact]
+    public void IngestRotate_DamagedValueSection_Succeeds()
+    {
+        DamageLastValueSection("a");
+        var damaged = Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a"))));
+        Watch();
+
+        _m.Ok("a-new", "ingest", "--rotate", "a");
+
+        Assert.Empty(_values);
+        Assert.Equal(damaged, ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")))[1]);
+        Assert.Equal("a-new", _m.Get("a"));
+    }
+
+    /// <summary>Owner decision 8: the one value the comparison needs can't be decrypted, so <c>add</c> refuses; <c>rotate</c> still works.</summary>
+    [Fact]
+    public void Add_OtherVariantSet_DamagedCurrent_RefusesNamingTheFile_WritesNothing()
+    {
+        Plant("a", s => s with { Fingerprints = s.Fingerprints! with { VariantSetVersion = TswapCore.Fingerprints.SecretVariants.CurrentSetVersion + 1 } });
+        DamageLastValueSection("a");
+        var before = Snapshot();
+        Watch();
+
+        var (exit, _, err) = _m.Run("a-new\na-new\n", "add", "a");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SecretsDb.UnreadableRecordText("a", FileOf("a")), err);
+        Assert.Equal(before, Snapshot());
+        Assert.Equal([FileOf("a")], _values.Select(v => v.File));
+        _m.Ok("", "rotate", "a");
+        Assert.NotEqual(before[FileOf("a")], Snapshot()[FileOf("a")]);
+    }
+
+    /// <summary>Difference 5: a burn of a record whose bytes aren't UTF-8 writes a burn, not a new version with mangled bytes.</summary>
+    [Fact]
+    public void Burn_NonUtf8Record_WritesABurn_NotANewVersion()
+    {
+        Plant("a", s => s with { Value = [0xFF, 0xFE, 0x41], Fingerprints = Fingerprints(_key, [0xFF, 0xFE, 0x41]), Sealed = null });
+        var planted = ReadRecord(_m, _key, "a");
+        var section = Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a"))));
+        Watch();
+
+        _m.Ok("", "burn", "a");
+
+        var burned = ReadRecord(_m, _key, "a");
+        Assert.Equal(RecordType.Burned, burned.Type);
+        Assert.Equal(planted.Version, burned.Version);
+        Assert.Equal(new byte[] { 0xFF, 0xFE, 0x41 }, burned.Value);
+        Assert.Null(burned.Previous);
+        Assert.Equal(section, Assert.Single(ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")))));
+    }
 }
