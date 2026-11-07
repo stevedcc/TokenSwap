@@ -33,6 +33,20 @@ public class RedactEngineTests
         Assert.Equal("x [REDACTED: s1] [REDACTED: s2]", Redact.RedactContent("x abcdefgh RED", db));
     }
 
+    /// <summary>
+    /// Code review (MiMo A M-1), difference 2 "inside or across": a value that exists only across the
+    /// edge of an inserted label (its "]" plus the original "x") was masked by the plaintext engine and
+    /// is not now. The output holds nothing from the vault: every character comes from the input or
+    /// from the label, so nothing is revealed that the reader can't build from them.
+    /// </summary>
+    [Fact]
+    public void Redact_SecretAcrossAnInsertedLabel_NotReplaced()
+    {
+        var db = Db(("a", S("hello")), ("b", S("]x")));
+        Assert.Equal("[REDACTED: a[REDACTED: b]", PlaintextRedactOracle.RedactContent("hellox", db)); // today
+        Assert.Equal("[REDACTED: a]x", Redact.RedactContent("hellox", db));
+    }
+
     [Fact]
     public void ToComment_SecretInsideAnInsertedMarker_NotReplaced()
     {

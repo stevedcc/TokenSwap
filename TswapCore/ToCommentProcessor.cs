@@ -8,7 +8,7 @@ namespace TswapCore;
 /// that <c>tswap check</c> and <c>tswap run</c> understand; the matching is
 /// <see cref="SecretMatcher.ToComment"/>'s, with the context rules below.
 /// </summary>
-public sealed class ToCommentProcessor : SecretProcessor
+public static class ToCommentProcessor
 {
     // Optionally consume an existing tswap marker immediately following the value. This prevents
     // duplication when processing `tswap apply` output, which emits lines like:
@@ -40,8 +40,6 @@ public sealed class ToCommentProcessor : SecretProcessor
 
     /// <summary>What a match of <paramref name="token"/> becomes.</summary>
     internal static string Replacement(string token) => $"\"\"  # tswap: {token}";
-
-    protected override string GetReplacement(string secretName, MatchType matchType) => Replacement(secretName);
 
     /// <summary>
     /// The continuation lines of line <paramref name="index"/> (whose text before the replacement was
