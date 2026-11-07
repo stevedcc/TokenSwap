@@ -1303,6 +1303,41 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("argon2id", written);
     }
 
+    // #259: an empty passphrase is refused with a tswap message, not Argon2's exception.
+
+    [Fact]
+    public void Export_EmptyPassphrase_RefusedBeforeUnlock()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "empty.enc");
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n\n", "export", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("An empty passphrase can't protect an export. Run 'sudo tswap export' again.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.False(File.Exists(exportPath));
+    }
+
+    [Fact]
+    public void Import_EmptyPassphrase_Refused()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+        FreshVault();
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n", "import", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("No import passphrase was entered.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.DoesNotContain("my-secret", namesOut);
+    }
+
     [Fact]
     public void Export_Import_RoundTrip()
     {
@@ -1550,6 +1585,47 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("Imported 1 secret(s)", stdout);
         var (_, namesOut, _) = RunTswap("names");
         Assert.Contains("legacy-secret", namesOut);
+    }
+
+    /// <summary>Review M5: the empty-passphrase refusal is for Argon2id files; a v1 file made with "" still imports.</summary>
+    [Fact]
+    public void Import_V1ExportFileWithEmptyPassphrase_StillImports()
+    {
+        RunTswap("init", "--yubikey");
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var exportKey = Crypto.DeriveKeyFromPassphrase("", salt);
+        var dbJson = JsonSerializer.Serialize(
+            new SecretsDb(new Dictionary<string, Secret> { ["empty-pass-secret"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }),
+            TswapJsonContext.Default.SecretsDb);
+        var exportFile = new ExportFile(ExportFile.V1, DateTime.UtcNow, Convert.ToBase64String(salt),
+            Convert.ToBase64String(Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey)));
+        var exportPath = Path.Combine(_tempDir, "empty-v1.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, stderr) = RunTswapWithStdin("\n", "import", exportPath);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        Assert.Contains("empty-pass-secret", RunTswap("names").stdout);
+    }
+
+    /// <summary>Review M5: the empty export passphrase is refused before the vault is unlocked (no YubiKey challenge).</summary>
+    [Fact]
+    public void Export_EmptyPassphrase_NoYubiKeyChallenge()
+    {
+        using var m = new FleetMachine("export-empty", SimulatedYubiKeyService.WithKeys(11111111));
+        m.Keys.PluggedIn = [11111111];
+        m.Ok("", "init", "--yubikey", "--no-password");
+        m.Ok("v\nv\n", "add", "db");
+        m.Keys.Challenges.Clear();
+        var exportPath = m.PathOf("empty.enc");
+
+        var (exit, _, stderr) = m.Run("\n\n", "export", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("An empty passphrase can't protect an export.", stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.False(File.Exists(exportPath));
     }
 
     [Fact]

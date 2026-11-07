@@ -39,7 +39,7 @@ public sealed class RecoverCommand : ICliCommand
     public int Execute(CommandContext ctx, string[] args)
     {
         var usage = $"{ctx.Prefix} recover --yubikey|--tpm|{SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} [{SlotCommand.RecoveryKeyFlag}] " +
-                    $"(the recovery key is read from stdin only, e.g. sudo {ctx.Prefix} get recovery-key | sudo {ctx.Prefix} recover --yubikey; " +
+                    $"(the recovery key is read from stdin only: {RecoveryKeyUnlock.SourceHint(ctx.Prefix)}; " +
                     "with --password the key is stdin's first line and the vault password follows on the next)";
         // Brief T11: the touch choice first (--secure-enclave needs exactly one), then exactly one device.
         var (rest, _) = SlotCommand.SplitRecoveryKeyFlag(args);
@@ -159,8 +159,11 @@ public sealed class RecoverCommand : ICliCommand
             c.Out.WriteLine("The new slot needs the vault password (or a running 'tswap agent') for every unlock.");
         SlotCommand.PrintFingerprint(c, "New slot", newSlot.PublicKey);
         c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
-        c.Out.WriteLine("Other copies of the vault don't have the new slot yet: on each, run");
-        c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <this machine's config.json> --yes");
+        // A record vault keeps its keyring in the vault folder: sharers read it there, own copies take it by 'vault merge'.
+        var folder = (ctx.Storage as RecordVaultStore)?.VaultDir ?? "this vault's folder";
+        c.Out.WriteLine("Machines that share this vault folder get the new slot with it.");
+        c.Out.WriteLine($"A machine with its own copy of the vault gets it once you copy {folder} there and run, on that machine:");
+        c.Out.WriteLine($"  sudo {ctx.Prefix} vault merge <the copied folder>   (it asks you to confirm the new slot, or pass --yes)");
         return 0;
     }
 }
