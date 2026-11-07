@@ -112,7 +112,10 @@ public sealed class RecordStoreV3Tests : IDisposable
     {
         _m.Ok("a-value", "ingest", "a");
         var damaged = SecretRecordCodec.Encode(Read("a") with { Name = "b", RecordId = FilenameHasher.ComputeRecordId(RecordKeyDerivation.DeriveNamesKey(_key), "b") }, _key, 3);
-        damaged[^1] ^= 0xFF; // fails authentication
+        // Brief T16-S2b (difference 4): the metadata section's tag, so it fails authentication; a damaged
+        // value section with an intact metadata section selects format 3 now
+        // (RecordStorePerRecordWriteTests.Unmarked_FormatThreeWithDamagedValueSection_SelectsFormatThree).
+        damaged[SecretRecordCodec.V3HeaderSize + 4 + 20] ^= 0xFF;
         System.IO.File.WriteAllBytes(File("b"), damaged);
 
         _m.Ok("c-value", "ingest", "c");

@@ -27,12 +27,20 @@ public sealed class AddCommand : ICliCommand
             throw new TswapException("Values don't match");
 
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
+        // Brief T16-S2b: only this name's record is read; whether the value changed is decided from
+        // its stored fingerprints (one value is decrypted only when they can't tell).
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
+        {
+            writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime);
+            writer.Commit();
 
-        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");
-        return 0;
+            ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' added successfully");
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 }
