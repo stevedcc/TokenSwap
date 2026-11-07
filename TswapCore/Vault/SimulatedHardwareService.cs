@@ -39,6 +39,12 @@ namespace TswapCore.Vault;
 /// text, as <c>TPM_RC_AUTH_FAIL</c> does. A simulated Secure Enclave mirrors the shim instead (brief T17 task 13):
 /// a wrong password gives the <c>-7</c> text, and a stripped header today's generic unwrap text, as the old
 /// <c>tswap_se_unwrap</c> it then goes through says.</para>
+///
+/// <para>Issue #261: it has no Linux or Windows notion, so a simulated TPM slot always has the Linux layout, a
+/// <c>TSTP</c> header with the ECC-primary bit (<c>0x02</c> password-free, <c>0x03</c> with the password). There is
+/// no primary to choose, so <see cref="Unlock"/> reads the bit and ignores it; it still opens a header-less
+/// password-free blob. The Windows layout (a header-less package, <c>0x01</c>) is covered by the real Windows TPM
+/// tests only.</para>
 /// </summary>
 public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
 {
@@ -118,14 +124,15 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         if (password is null)
         {
             blob[^1] = _requirePresence ? PresenceFlag : (byte)0; // the test seam (brief T11 decision 5)
-            return new HardwareEnrollment(kekSlot, blob);
+            return new HardwareEnrollment(kekSlot,
+                Backend == HardwareBackend.Tpm ? TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary) : blob);
         }
 
         blob[^2] = _requirePresence ? PresenceFlag : (byte)0;
         blob[^1] = NeedsPasswordMarker;
         return new HardwareEnrollment(kekSlot, Backend switch
         {
-            HardwareBackend.Tpm => TpmSlotBlob.Wrap(blob),
+            HardwareBackend.Tpm => TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary | TpmSlotBlob.Password),
             HardwareBackend.SecureEnclave => SecureEnclaveSlotBlob.Wrap(blob),
             _ => throw new InvalidOperationException($"The simulated '{Backend.DisplayName}' backend has no password slot blob"),
         });
@@ -160,9 +167,12 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         var hwBlob = HardwareBlobLocator.Read(config, Backend);
 
         // Brief T17: split off the password header, as the real backends do.
-        var (needsPassword, blob) = Backend == HardwareBackend.SecureEnclave
-            ? SecureEnclaveSlotBlob.Split(hwBlob)
-            : TpmSlotBlob.Split(hwBlob);
+        bool needsPassword;
+        byte[] blob;
+        if (Backend == HardwareBackend.SecureEnclave)
+            (needsPassword, blob) = SecureEnclaveSlotBlob.Split(hwBlob);
+        else
+            (needsPassword, _, blob) = TpmSlotBlob.Split(hwBlob);
 
         // The old length (no flag byte, read as presence), the new one with a flag of 0 or 1, or (brief
         // T17) a password object: the flag, then the 'P' marker.

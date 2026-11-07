@@ -631,12 +631,14 @@ password slots get new blob bytes, so a vault without a password stays byte-iden
 | Slot | Password blob | Key |
 |---|---|---|
 | YubiKey | `YubiKeySlotBlob` version 2 = version 1 plus a `flags` byte (bit 0 = password), 75 bytes | `KEK_slot = HKDF-SHA256(ikm = response(20) ‖ stretched(32), salt = blob.Salt, info = "tswap/yubikey-slot/v2" ‖ slotId, 32)` |
-| TPM (Linux, Windows) | `"TSTP" \| version 1 \| flags 1` followed by today's package (read as a 4-byte length, `TSTP` is 0x50545354, larger than any blob) | the TPM object's auth value / PCP usage auth = the stretched password |
+| TPM (Linux, Windows) | `"TSTP" \| version 1 \| flags 1` followed by today's package (read as a 4-byte length, `TSTP` is 0x50545354, larger than any blob). Since v0.3.0 bit 1 of the flags marks a Linux package sealed under an ECC P-256 primary, and every new Linux TPM slot has the header (`0x02`, or `0x03` with the password) ([hardware-backends.md](hardware-backends.md#storage-primary-ecc-p-256-for-new-slots-v030-issue-261)) | the TPM object's auth value / PCP usage auth = the stretched password |
 | Secure Enclave | `"TSSE" \| version 1 \| flags 1` followed by today's package, whose key was made with `.applicationPassword` | the Enclave's application password = the stretched password |
 
-- **Classification** (`SlotPassword.Classify`, which never throws): flags exactly `0x01` is a password
-  slot; any other bit set, or a higher blob version, is "needs a newer tswap"; `0x00`, or a known
-  magic with truncated or trailing bytes, is corrupt. Such slots are set aside before an unlock and
+- **Classification** (`SlotPassword.Classify`, which never throws), with the flag bits each magic
+  knows, the same on every OS (YubiKey v2 and `TSSE`: bit 0; `TSTP`: bits 0 and 1 since v0.3.0): a bit
+  the magic doesn't know, or a higher blob version, is "needs a newer tswap", whatever else is set;
+  else bit 0 is a password slot; else a known bit is a password-free slot (`TSTP 0x02`); `0x00`, or a
+  known magic with truncated or trailing bytes, is corrupt. Such slots are set aside before an unlock and
   only named in its error; the other slots still unlock (T4's rule). `tswap slots` shows them as
   `needs a newer tswap` / `corrupt (restore config.json from backup)`.
 - **Flipping a flag never weakens a slot.** Stripping a TPM or Secure Enclave header, or rewriting a

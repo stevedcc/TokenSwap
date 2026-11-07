@@ -36,7 +36,7 @@ public class LinuxTpmHardwareServiceTests
         var key = RandomNumberGenerator.GetBytes(32);
 
         var sealedKey = svc.Seal(key);
-        var recovered = svc.Unseal(sealedKey);
+        var recovered = svc.Unseal(sealedKey, eccPrimary: true);
 
         Assert.Equal(key, recovered);
         Assert.NotEqual(key, sealedKey);
@@ -81,7 +81,8 @@ public class LinuxTpmHardwareServiceTests
     {
         var svc = new LinuxTpmHardwareService();
         var vaultKey = RandomNumberGenerator.GetBytes(32);
-        var sealedKey = svc.Seal(vaultKey);
+        // Issue #261: the public Seal seals under the ECC primary, so the blob carries the TSTP ECC bit.
+        var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(vaultKey), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
 
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.Tpm,
@@ -121,7 +122,8 @@ public class LinuxTpmHardwareServiceTests
         // SealUnseal_RoundTripsKey), so a 16-byte payload round-trips fine at that layer.
         // Unlock specifically promises a 32-byte vault key, so it must reject this.
         var svc = new LinuxTpmHardwareService();
-        var sealedKey = svc.Seal(RandomNumberGenerator.GetBytes(16));
+        // Issue #261: an ECC package, so the blob carries the TSTP ECC bit.
+        var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(RandomNumberGenerator.GetBytes(16)), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(sealedKey));
@@ -135,7 +137,7 @@ public class LinuxTpmHardwareServiceTests
     {
         var svc = new LinuxTpmHardwareService();
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(new byte[3]));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(new byte[3], eccPrimary: true));
         Assert.Contains("too short", ex.Message);
     }
 
@@ -150,7 +152,7 @@ public class LinuxTpmHardwareServiceTests
         var corrupted = new byte[8];
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(corrupted, int.MaxValue - 1);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted, eccPrimary: true));
         Assert.Contains("length prefix", ex.Message);
     }
 
@@ -170,7 +172,7 @@ public class LinuxTpmHardwareServiceTests
         for (var i = 4 + pubLen; i < corrupted.Length; i++)
             corrupted[i] ^= 0xFF;
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted, eccPrimary: true));
         Assert.Contains("Could not unlock", ex.Message);
     }
 }

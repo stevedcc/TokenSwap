@@ -20,7 +20,7 @@ public class PasswordSlotBlobTests
     private const int Serial = 11111111;
     private const string NewerText = "needs a newer tswap (blob version {0} or unknown flags); upgrade tswap.";
     private const string CorruptText =
-        "a password header without the password flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.";
+        "a header with no known flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.";
 
     private static readonly byte[] Challenge = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
     private static readonly byte[] Salt = Enumerable.Range(100, 32).Select(i => (byte)i).ToArray();
@@ -175,8 +175,9 @@ public class PasswordSlotBlobTests
     [Fact]
     public void TpmSplit_LegacyBlob_IsNoPassword_PackageUnchanged()
     {
-        var (password, package) = TpmSlotBlob.Split(LegacyTpm);
+        var (password, eccPrimary, package) = TpmSlotBlob.Split(LegacyTpm);
         Assert.False(password);
+        Assert.False(eccPrimary);
         Assert.Equal(LegacyTpm, package);
         Assert.False(TpmSlotBlob.HasHeader(LegacyTpm));
     }
@@ -184,18 +185,19 @@ public class PasswordSlotBlobTests
     [Fact]
     public void TpmWrap_ThenSplit_RoundTrips()
     {
-        var wrapped = TpmSlotBlob.Wrap(LegacyTpm);
+        var wrapped = TpmSlotBlob.Wrap(LegacyTpm, TpmSlotBlob.Password);
 
         Assert.Equal("TSTP"u8.ToArray(), wrapped[..4]);
         Assert.Equal(1, wrapped[4]);
         Assert.Equal(0x01, wrapped[5]);
         Assert.Equal(LegacyTpm, wrapped[6..]);
         Assert.True(TpmSlotBlob.HasHeader(wrapped));
-        var (password, package) = TpmSlotBlob.Split(wrapped);
+        var (password, eccPrimary, package) = TpmSlotBlob.Split(wrapped);
         Assert.True(password);
+        Assert.False(eccPrimary);
         Assert.Equal(LegacyTpm, package);
 
-        AssertHeaderRefusals(wrapped, TpmSlotBlob.Split);
+        AssertHeaderRefusals(wrapped, b => TpmSlotBlob.Split(b).Package, unknownFlags: [0x04, 0x05]);
     }
 
     [Fact]
@@ -215,21 +217,21 @@ public class PasswordSlotBlobTests
         Assert.False(legacyPassword);
         Assert.Equal(LegacySe, legacyPackage);
 
-        AssertHeaderRefusals(wrapped, SecureEnclaveSlotBlob.Split);
+        AssertHeaderRefusals(wrapped, b => SecureEnclaveSlotBlob.Split(b).Package, unknownFlags: [0x02, 0x03]);
     }
 
     /// <summary>
-    /// The refusals ruling 3 pins for a <c>TSTP</c> / <c>TSSE</c> header: version 2 and flags
-    /// <c>0x02</c> / <c>0x03</c> need a newer tswap, flags <c>0x00</c> is corrupt, and a header cut
-    /// short keeps a "Malformed … Restore config.json from backup." text.
+    /// The refusals ruling 3 pins for a <c>TSTP</c> / <c>TSSE</c> header: version 2 and flags with a bit
+    /// the magic doesn't know (<paramref name="unknownFlags"/>; issue #261 made <c>TSTP</c>'s bit 1 known) need a newer
+    /// tswap, flags <c>0x00</c> is corrupt, and a header cut short keeps a "Malformed … Restore config.json from backup." text.
     /// </summary>
-    private static void AssertHeaderRefusals(byte[] wrapped, Func<byte[], (bool, byte[])> split)
+    private static void AssertHeaderRefusals(byte[] wrapped, Func<byte[], byte[]> split, byte[] unknownFlags)
     {
         var version2 = (byte[])wrapped.Clone();
         version2[4] = 2;
         Assert.Equal(string.Format(NewerText, 2), Assert.Throws<TswapException>(() => split(version2)).Message);
 
-        foreach (var flags in new byte[] { 0x02, 0x03 })
+        foreach (var flags in unknownFlags)
         {
             var unknown = (byte[])wrapped.Clone();
             unknown[5] = flags;
@@ -254,10 +256,11 @@ public class PasswordSlotBlobTests
         // The helpers' short text for an unknown header version or an unknown flag bit: "needs a
         // newer tswap", never the legacy parsers' "corrupted" (which reading the magic as a length
         // prefix would give).
-        foreach (var (wrap, split) in new (Func<byte[], byte[]>, Func<byte[], (bool, byte[])>)[]
+        // Issue #261: TSTP knows bit 1, so its first unknown bit is 0x04; TSSE's is still 0x02.
+        foreach (var (wrap, split, unknownFlag) in new (Func<byte[], byte[]>, Func<byte[], byte[]>, byte)[]
                  {
-                     (TpmSlotBlob.Wrap, TpmSlotBlob.Split),
-                     (SecureEnclaveSlotBlob.Wrap, SecureEnclaveSlotBlob.Split),
+                     (p => TpmSlotBlob.Wrap(p, TpmSlotBlob.Password), b => TpmSlotBlob.Split(b).Package, 0x04),
+                     (SecureEnclaveSlotBlob.Wrap, b => SecureEnclaveSlotBlob.Split(b).Package, 0x02),
                  })
         {
             var version2 = wrap(LegacyTpm);
@@ -267,7 +270,7 @@ public class PasswordSlotBlobTests
             Assert.DoesNotContain("corrupt", ex.Message);
 
             var flag2 = wrap(LegacyTpm);
-            flag2[5] = 0x02;
+            flag2[5] = unknownFlag;
             ex = Assert.Throws<TswapException>(() => split(flag2));
             Assert.Equal("needs a newer tswap (blob version 1 or unknown flags); upgrade tswap.", ex.Message);
         }
@@ -315,11 +318,13 @@ public class PasswordSlotBlobTests
             { "legacy Secure Enclave", LegacySe, SlotPasswordKind.None },
             { "no blob (legacy pair slot)", null, SlotPasswordKind.None },
         };
-        foreach (var magic in new[] { "TSTP", "TSSE" })
+        // Issue #261: TSTP knows bit 1 (sealed under an ECC primary), TSSE doesn't.
+        foreach (var (magic, bit1Known) in new[] { ("TSTP", true), ("TSSE", false) })
         {
             rows.Add($"{magic} v1 0x01", Header(magic, 1, 0x01), SlotPasswordKind.Password);
-            rows.Add($"{magic} v1 0x02", Header(magic, 1, 0x02), SlotPasswordKind.NeedsNewerTswap);
-            rows.Add($"{magic} v1 0x03", Header(magic, 1, 0x03), SlotPasswordKind.NeedsNewerTswap);
+            rows.Add($"{magic} v1 0x02", Header(magic, 1, 0x02), bit1Known ? SlotPasswordKind.None : SlotPasswordKind.NeedsNewerTswap);
+            rows.Add($"{magic} v1 0x03", Header(magic, 1, 0x03), bit1Known ? SlotPasswordKind.Password : SlotPasswordKind.NeedsNewerTswap);
+            rows.Add($"{magic} v1 0x04", Header(magic, 1, 0x04), SlotPasswordKind.NeedsNewerTswap);
             rows.Add($"{magic} v1 0x00", Header(magic, 1, 0x00), SlotPasswordKind.Corrupt);
             rows.Add($"{magic} v2", Header(magic, 2, 0x01), SlotPasswordKind.NeedsNewerTswap);
         }
