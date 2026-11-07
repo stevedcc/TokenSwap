@@ -261,7 +261,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
     {
         var random = new Random(6_12);
         var config = _m.Config;
-        var counts = new Dictionary<string, int> { ["v2"] = 0, ["conflict"] = 0, ["merged"] = 0, ["multi"] = 0 };
+        var counts = new Dictionary<string, int> { ["v2"] = 0, ["conflict"] = 0, ["merged"] = 0, ["multi"] = 0, ["info"] = 0 };
         Stamp[] versions = [S(1000), S(2000), S(2000, OriginB), S(3000)];
         string ValueOf(Stamp v) => $"value-{v.Hlc.PhysicalMs}-{v.Origin[0]}";
 
@@ -346,6 +346,25 @@ public sealed class RecordStoreMetadataTests : IDisposable
                 Assert.Equal(full.Previous?.Version, meta.PreviousVersion);
                 Assert.Equal(full.Previous?.Fingerprints, meta.PreviousFingerprints);
                 Assert.Equal(full.Write, meta.Write);
+                // Brief T16-S2: what the reading commands show comes from the metadata alone and
+                // agrees with what the full load gives them.
+                var info = SecretInfo.From(meta);
+                if (full.Type == RecordType.Tombstone)
+                {
+                    Assert.Null(info);
+                    continue;
+                }
+                var secret = RecordVaultStore.ToSecret(full);
+                Assert.NotNull(info);
+                Assert.Equal(full.Name, info.Name);
+                Assert.Equal(secret.Created, info.Created);
+                Assert.Equal(secret.Modified, info.Modified);
+                Assert.Equal(secret.BurnedAt, info.BurnedAt);
+                Assert.Equal(secret.BurnReason, info.BurnReason);
+                Assert.Equal(secret.History ?? [], info.History);
+                Assert.Equal(secret.PreviousValue is not null, info.HasPrevious);
+                Assert.Equal(secret.PreviousBurned, info.PreviousBurned);
+                counts["info"]++;
             }
         }
 
@@ -353,6 +372,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
         Assert.True(counts["conflict"] > 3, $"generator: {counts["conflict"]} conflicts");
         Assert.True(counts["merged"] > 20, $"generator: {counts["merged"]} merged records");
         Assert.True(counts["multi"] > 20, $"generator: {counts["multi"]} records with copies");
+        Assert.True(counts["info"] > 20, $"generator: {counts["info"]} secrets compared");
     }
 
     private static IEnumerable<T[]> Permutations<T>(IReadOnlyList<T> items)
