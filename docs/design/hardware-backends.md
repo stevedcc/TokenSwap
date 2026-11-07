@@ -641,9 +641,12 @@ stripped-header text, and so does a v0.2.0 RSA password slot with its header rem
 tswap (blob version 1 or unknown flags); upgrade tswap.`, never an unseal failure. A unit test runs that
 released parser against the blobs this build writes.
 
-**Existing slots stay RSA.** Nothing converts them, and they keep opening as before. (How to move an
-existing slot to ECC is open: the plan's "`slot add` + `slot remove`" doesn't exist in this build,
-since `slot add` enrols YubiKeys only and there is no `slot remove`; to be decided by the owner.) `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
+**Existing slots stay RSA.** Nothing converts them, and they keep opening as before. On Linux,
+`tswap slots` ends with a note when this machine's own TPM slot (the one the unlock reads: the TPM
+vault's machine slot named by `KeyringSlotId`) is a header-less package or `TSTP 0x01`: it uses
+RSA-2048, a slot made by v0.3.0 or later unlocks several times faster, and re-enrolling a slot in
+place isn't supported yet ([#264](https://github.com/stevedcc/TokenSwap/issues/264)). Other machines'
+slots, ECC slots and Windows (no primary to choose) get no note. `tswap slots` shows `TPM (ECC P-256), sealed to this machine's TPM, …` for a
 slot whose header has bit 1, and today's `TPM, sealed to this machine's TPM, …` for every other TPM
 row (a header-less package can't be told apart from a Windows one, so no row claims RSA-2048).
 

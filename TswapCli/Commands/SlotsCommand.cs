@@ -57,7 +57,7 @@ public sealed class SlotsCommand : ICliCommand
                 : "Acknowledged the touch setting of: " + string.Join("; ", postures.Select(p => $"{p.Label} ({p.Posture})")));
             return 0;
         }
-        ctx.Console.Out.WriteLine(Format(config, ctx.RememberedSlots));
+        ctx.Console.Out.WriteLine(Format(config, ctx.RememberedSlots, ctx.Os));
         return 0;
     }
 
@@ -73,7 +73,8 @@ public sealed class SlotsCommand : ICliCommand
     /// "insecure" for a no-touch machine slot — see this class's doc comment.
     /// </summary>
     /// <param name="remembered">Task 4b: this machine's remembered slots (null: nothing is marked).</param>
-    internal static string Format(Config config, TswapCore.Vault.RememberedYubiKeySlots? remembered = null)
+    internal static string Format(Config config, TswapCore.Vault.RememberedYubiKeySlots? remembered = null,
+        System.Runtime.InteropServices.OSPlatform? os = null)
     {
         if (config.Keyring is null)
         {
@@ -155,7 +156,48 @@ public sealed class SlotsCommand : ICliCommand
                 "actual hardware unlock, which this listing deliberately doesn't attempt.");
         }
 
+        if (os == System.Runtime.InteropServices.OSPlatform.Linux && OwnRsaTpmSlot(config, keyring) is { } rsaSlot)
+            sb.Append("\n\n" + RsaPrimaryNote(AbbreviateSlotId(rsaSlot.SlotId)));
+
         return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>
+    /// Issue #261: the note for this machine's Linux TPM slot sealed under the RSA-2048 primary. Its only variable part
+    /// is the slot's short id.
+    /// </summary>
+    internal static string RsaPrimaryNote(string id8) =>
+        $"Note: this machine's TPM slot ({id8}) was made before tswap 0.3.0 and uses an RSA-2048 key, so each unlock " +
+        "takes seconds longer than it needs to. A TPM slot made by tswap 0.3.0 or later uses ECC P-256 and unlocks " +
+        "several times faster; re-enrolling a slot in place isn't supported yet (issue #264).";
+
+    /// <summary>
+    /// This machine's own TPM slot when it is a usable one sealed under the RSA-2048 primary (a header-less package or
+    /// a <c>TSTP</c> header without the ECC bit); otherwise null. Found as the unlock finds it
+    /// (<c>HardwareBlobLocator</c>): a TPM vault's machine slot named by <see cref="Config.KeyringSlotId"/>, or its
+    /// only machine slot when that is unset. A corrupt slot or one from a newer tswap gets no note: it is already marked.
+    /// </summary>
+    private static Slot? OwnRsaTpmSlot(Config config, Keyring keyring)
+    {
+        if (config.Backend != HardwareBackend.Tpm)
+            return null;
+        byte[]? ownId;
+        try
+        {
+            ownId = config.KeyringSlotId is null ? null : Convert.FromBase64String(config.KeyringSlotId);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        var own = ownId is null
+            ? keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
+            : keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownId));
+        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob))
+            return null;
+        if (SlotPassword.Classify(own) is not (SlotPasswordKind.None or SlotPasswordKind.Password))
+            return null;
+        return TpmSlotBlob.SealedUnderEccPrimary(hwBlob) ? null : own;
     }
 
     /// <summary>Brief T7 item 5: a classic YubiKey vault's touch posture (both keys share it).</summary>
