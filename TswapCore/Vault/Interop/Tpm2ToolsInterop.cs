@@ -20,15 +20,24 @@ namespace TswapCore.Vault.Interop;
 /// <para><b>Primitive: seal/unseal against a primary key that is never persisted.</b> A TPM 2.0
 /// primary key is deterministic: the same hierarchy plus the same public template always yields
 /// the same key, derived from that hierarchy's primary seed (TPM2 spec, Part 1, "Primary Seeds")
-/// — <b>verified directly against swtpm for this codebase</b>, not assumed: two back-to-back
-/// <c>tpm2_createprimary -C o</c> calls on the same simulator produced a byte-identical RSA
-/// modulus. So <see cref="Seal"/> only needs to persist the sealed object's public/private blobs
-/// (<c>tpm2_create -u/-r</c> output); <see cref="Unseal"/> regenerates the same primary from
-/// scratch under the owner hierarchy (<c>-C o</c>) and loads the sealed object under it — no
-/// primary context is ever written to <see cref="Config.TpmSealedKey"/>. The template is pinned
-/// explicitly (<c>-G rsa2048</c>, verified to match what this backend was developed against)
-/// rather than relying on tpm2-tools' compiled-in default, so a future tool/distro upgrade
-/// changing that default can't silently break the determinism guarantee this relies on.</para>
+/// — <b>verified directly, not assumed</b>: back-to-back <c>tpm2_createprimary -C o</c> calls give
+/// byte-identical public areas for both templates below, on swtpm, an Intel PTT and an Infineon
+/// SLB 9665 (#155, #261). So <see cref="Seal"/> only needs to persist the sealed object's
+/// public/private blobs (<c>tpm2_create -u/-r</c> output); <see cref="Unseal"/> regenerates the same
+/// primary from scratch under the owner hierarchy (<c>-C o</c>) and loads the sealed object under it —
+/// no primary context is ever written to <see cref="Config.TpmSealedKey"/>.</para>
+///
+/// <para><b>Two storage primaries (issue #261).</b> <see cref="Seal"/> always uses an ECC P-256 primary:
+/// generating the RSA-2048 one took most of an unlock on real chips (1.74 s against 0.26 s on an Intel
+/// PTT, 8.2 s against 0.63 s on an SLB 9665). Packages sealed before that are under the RSA-2048
+/// primary, and the caller's <c>eccPrimary</c> flag (the <c>TSTP</c> header's bit 1) picks the one to
+/// rebuild; under the wrong one <c>tpm2_load</c> fails its integrity check. Both templates are pinned
+/// through tpm2-tools' options (<c>-G rsa2048:null:aes128cfb</c> / <c>-G ecc256:null:aes128cfb</c>,
+/// <c>-g sha256</c>, <c>-a</c> with the attributes; unique data and policy empty) rather than relying on
+/// its compiled-in defaults, so a tool/distro upgrade changing those can't silently break the
+/// determinism guarantee: the RSA one must stay what v0.2.0's <c>-G rsa2048</c> gave, or existing slots
+/// stop opening. Both protect their children with AES-128-CFB, so the sealed object's protection is the
+/// same either way.</para>
 ///
 /// <para>The owner hierarchy (not the null hierarchy) is used deliberately: its primary seed is
 /// preserved across <c>TPM2_Startup</c> (a reboot-equivalent) and only changes on an explicit
@@ -60,18 +69,36 @@ namespace TswapCore.Vault.Interop;
 /// object context) are TPM-protected structures, not plaintext key material, so leaving them as
 /// transient files is fine.</para>
 ///
-/// <para><b>Status: developed and tested only against a software TPM simulator (swtpm), not yet
-/// verified against real Linux TPM hardware.</b> See <c>docs/design/hardware-backends.md</c>'s Linux TPM
-/// section — this proves protocol-level correctness (seal/unseal round-trip, error handling,
-/// wire format) against swtpm, not that the real hardware root-of-trust property holds.</para>
+/// <para><b>Status:</b> both paths are verified on two physical TPMs, an Intel PTT and an Infineon
+/// SLB 9665 (RSA-2048 since #155 on the PTT, both in #261); still open are a full host power cycle and
+/// <c>tpm2_clear</c> (<c>docs/design/hardware-backends.md</c>'s Linux TPM section). The trait-gated tests prove
+/// protocol-level correctness (seal/unseal round-trip, error handling, wire format, the pinned
+/// templates) against swtpm, not that the real hardware root-of-trust property holds.</para>
 /// </summary>
 [SupportedOSPlatform("linux")]
 internal static partial class Tpm2ToolsInterop
 {
-    // tpm2-tools' current default template already produces this (verified against swtpm), but
-    // pinning it explicitly means a future tpm2-tools/tpm2-tss default change can't silently
-    // change what "the same hierarchy + template" derives — see the class doc comment.
-    private const string PrimaryAlgorithm = "rsa2048";
+    // Issue #261: both storage primary templates are pinned through tpm2-tools' own options (key type, scheme and
+    // symmetric in -G, the name algorithm, the attributes), so a tpm2-tools/tpm2-tss default change can't silently
+    // change what "the same hierarchy + template" derives — see the class doc comment. The RSA one is what v0.2.0's
+    // "-G rsa2048" gave (existing slots must keep opening); the ECC one is new. Unique data and policy stay empty.
+    // LinuxTpmEccPrimaryTests checks both against tpm2-tools' defaults and against committed template bytes.
+    private const string PrimaryAttributes = "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt";
+
+    private static readonly string[] RsaPrimaryTemplate = ["-G", "rsa2048:null:aes128cfb", "-g", "sha256", "-a", PrimaryAttributes];
+
+    private static readonly string[] EccPrimaryTemplate = ["-G", "ecc256:null:aes128cfb", "-g", "sha256", "-a", PrimaryAttributes];
+
+    /// <summary>
+    /// Rebuilds the owner hierarchy's storage primary into <paramref name="primaryPath"/>: ECC P-256 when
+    /// <paramref name="eccPrimary"/>, else RSA-2048. Flushes transient objects first.
+    /// </summary>
+    private static void CreatePrimary(string primaryPath, bool eccPrimary)
+    {
+        FlushTransient();
+        RunOrThrow("tpm2_createprimary", "creating the TPM primary key",
+            ["-C", "o", .. eccPrimary ? EccPrimaryTemplate : RsaPrimaryTemplate, "-c", primaryPath]);
+    }
 
     /// <summary>Cheap, side-effect-free presence check — reads fixed TPM properties, touches no transient objects.</summary>
     public static bool IsAvailable()
@@ -121,7 +148,7 @@ internal static partial class Tpm2ToolsInterop
                 $"simulator in dev/test — see docs/portable.md#linux-tpm). tpm2_getcap failed: {stderr.Trim()}");
     }
 
-    /// <summary>Enrollment: seals <paramref name="plaintextKey"/> to a freshly (re)created TPM-bound primary key.</summary>
+    /// <summary>Enrollment: seals <paramref name="plaintextKey"/> under a freshly (re)created ECC P-256 storage primary.</summary>
     public static byte[] Seal(byte[] plaintextKey) => SealCore(plaintextKey, null);
 
     /// <summary>
@@ -145,9 +172,9 @@ internal static partial class Tpm2ToolsInterop
             var pubPath = Path.Combine(tmp.FullName, "seal.pub");
             var privPath = Path.Combine(tmp.FullName, "seal.priv");
 
-            FlushTransient();
-            RunOrThrow("tpm2_createprimary", "creating the TPM primary key",
-                "-C", "o", "-G", PrimaryAlgorithm, "-c", primaryPath);
+            // Issue #261: every new package is sealed under the ECC P-256 primary (an RSA-2048 key generation took
+            // most of an unlock on real chips); the caller marks it with the TSTP ECC bit.
+            CreatePrimary(primaryPath, eccPrimary: true);
 
             FlushTransient();
             // "-i -": pipe the plaintext vault key over stdin rather than writing it to a temp
@@ -205,22 +232,27 @@ internal static partial class Tpm2ToolsInterop
         }
     }
 
-    /// <summary>Unlock: reconstitutes the TPM-bound primary and unseals a payload produced by <see cref="Seal(byte[])"/>.</summary>
-    public static byte[] Unseal(byte[] wrapped) => UnsealCore(wrapped, null);
+    /// <summary>
+    /// Unlock: reconstitutes the storage primary (ECC P-256 when <paramref name="eccPrimary"/>, what
+    /// <see cref="Seal(byte[])"/> uses; else the RSA-2048 one of slots sealed before issue #261) and unseals the package.
+    /// </summary>
+    public static byte[] Unseal(byte[] wrapped, bool eccPrimary) => UnsealCore(wrapped, eccPrimary, null);
 
     /// <summary>
     /// Brief T17 task 8: unseals a password slot's package (its <c>TSTP</c> header removed) with the stretched
     /// vault password as the object's auth: <c>tpm2_unseal -p file:-</c> with <c>hex:&lt;64 hex&gt;</c> on stdin.
-    /// One prompt means one TPM attempt: a refused auth is never retried.
+    /// One prompt means one TPM attempt: a refused auth is never retried. <paramref name="eccPrimary"/> picks the
+    /// primary, as for the password-free overload.
     /// </summary>
-    public static byte[] Unseal(byte[] wrapped, StretchedPassword password) => UnsealCore(wrapped, password);
+    public static byte[] Unseal(byte[] wrapped, bool eccPrimary, StretchedPassword password) => UnsealCore(wrapped, eccPrimary, password);
 
-    private static byte[] UnsealCore(byte[] wrapped, StretchedPassword? password)
+    private static byte[] UnsealCore(byte[] wrapped, bool eccPrimary, StretchedPassword? password)
     {
         // Ruling 3: an unsplit password blob ("TSTP" read as a length is 0x50545354) is refused before
-        // tpm2-tools is touched, with the legacy parser's text, not "corrupted".
+        // tpm2-tools is touched, with the legacy parser's text, not "corrupted" (issue #261: one without the password bit
+        // doesn't claim the password).
         if (TpmSlotBlob.HasHeader(wrapped))
-            throw new TswapException(VaultPasswordMessages.LegacyParserNeedsNewerTswap(wrapped.Length > 4 ? wrapped[4] : 0));
+            throw new TswapException(VaultPasswordMessages.UnsplitTpmHeader(wrapped));
 
         RequireAvailable();
 
@@ -246,9 +278,8 @@ internal static partial class Tpm2ToolsInterop
             File.WriteAllBytes(pubPath, wrapped.AsSpan(4, pubLen).ToArray());
             File.WriteAllBytes(privPath, wrapped.AsSpan(4 + pubLen).ToArray());
 
-            FlushTransient();
-            RunOrThrow("tpm2_createprimary", "creating the TPM primary key",
-                "-C", "o", "-G", PrimaryAlgorithm, "-c", primaryPath);
+            // The flag picks the parent: a package loaded under the other primary fails tpm2_load's integrity check.
+            CreatePrimary(primaryPath, eccPrimary);
 
             FlushTransient();
             // tpm2_load takes no auth: the parent (the owner hierarchy's primary) has none.

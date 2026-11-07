@@ -161,7 +161,7 @@ public class BrokerLockedTests : IAsyncLifetime
         Assert.Equal("The broker is already unlocked.", BrokerPasswordState.AlreadyUnlockedText);
         Assert.Equal("The broker was locked while unlocking; run 'tswap broker unlock' again.", BrokerPasswordState.LockedWhileUnlockingText);
         Assert.Equal("This broker's slot has no vault password; it is never locked.", BrokerCommand.NeverLockedText);
-        Assert.Equal("a password header without the password flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.",
+        Assert.Equal("a header with no known flag, or a truncated blob or trailing bytes (corrupt); restore config.json from backup.",
             SlotPassword.CorruptText);
     }
 
@@ -1337,7 +1337,7 @@ public class BrokerLockedTests : IAsyncLifetime
 
     [Fact]
     public void BrokerUnlock_OwnSlotNeedsNewerTswap_RefusedBeforeConnect() =>
-        BrokerUnlock_OwnSlotNeedsNewerTswapOrCorrupt_RefusedBeforeConnect(0x02, "needs a newer tswap (blob version 1 or unknown flags); upgrade tswap.");
+        BrokerUnlock_OwnSlotNeedsNewerTswapOrCorrupt_RefusedBeforeConnect(0x04, "needs a newer tswap (blob version 1 or unknown flags); upgrade tswap.");
 
     [Fact]
     public void BrokerUnlock_OwnSlotCorrupt_RefusedBeforeConnect() =>
@@ -1364,7 +1364,7 @@ public class BrokerLockedTests : IAsyncLifetime
 
     [Fact]
     public void Serve_OwnSlotNeedsNewerTswap_Refuses() =>
-        Serve_OwnSlotCorruptOrNeedsNewerTswap_Refuses(0x02, "needs a newer tswap (blob version 1 or unknown flags); upgrade tswap.");
+        Serve_OwnSlotCorruptOrNeedsNewerTswap_Refuses(0x04, "needs a newer tswap (blob version 1 or unknown flags); upgrade tswap.");
 
     /// <summary>Rewrites the flags byte of <paramref name="m"/>'s own TSTP slot header; returns the slot's id8.</summary>
     private static string SetOwnSlotFlags(FleetMachine m, byte flags)

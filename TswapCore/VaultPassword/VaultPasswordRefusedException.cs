@@ -92,4 +92,17 @@ public static class VaultPasswordMessages
     /// </summary>
     public static string LegacyParserNeedsNewerTswap(int version) =>
         $"This slot needs the vault password and a newer tswap (blob version {version} or unknown flags); upgrade tswap.";
+
+    /// <summary>
+    /// What the TPM legacy parsers say for an unsplit <c>TSTP</c> blob: <see cref="LegacyParserNeedsNewerTswap"/> when its
+    /// flags have the password bit (or the blob is too short to show them), else the plain
+    /// <see cref="Keyring.SlotPassword.NeedsNewerTswapText"/> (issue #261: an ECC slot's <c>0x02</c> needs no password).
+    /// </summary>
+    public static string UnsplitTpmHeader(byte[] wrapped)
+    {
+        var version = wrapped.Length > 4 ? wrapped[4] : 0;
+        return wrapped.Length > 5 && (wrapped[5] & Keyring.SlotPassword.PasswordFlag) == 0
+            ? Keyring.SlotPassword.NeedsNewerTswapText(version)
+            : LegacyParserNeedsNewerTswap(version);
+    }
 }
