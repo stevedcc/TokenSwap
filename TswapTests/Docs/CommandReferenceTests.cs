@@ -20,6 +20,27 @@ public class CommandReferenceTests
 
     private static string Page() => MarkdownLinks.ReadText(PagePath);
 
+    // ------------------------------------------------------------------ the quoted refusal (code review, MiMo C-M3)
+
+    /// <summary>
+    /// The refusal quoted in "Fingerprints, format 2 records and vault reindex" is the text redact
+    /// prints (Linux/macOS form), whitespace aside: the block is wrapped for reading.
+    /// </summary>
+    [Fact]
+    public void QuotedRedactRefusal_IsTheCommandsText()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the page quotes the sudo form; Windows prints the elevated-prompt form
+        var page = Page().Replace("\r\n", "\n");
+        var start = page.IndexOf("The message (one line on stderr", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the quoted refusal is gone from docs/commands.md");
+        var open = page.IndexOf("```\n", start, StringComparison.Ordinal) + 4;
+        var close = page.IndexOf("\n```", open, StringComparison.Ordinal);
+        var quoted = Regex.Replace(page[open..close], @"\s+", " ");
+
+        Assert.Equal(FingerprintTexts.Refusal("tswap", "redact", 2, changesFile: false), quoted);
+    }
+
     // ------------------------------------------------------------------ the generated block
 
     [Fact]

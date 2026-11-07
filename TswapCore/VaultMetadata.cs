@@ -41,7 +41,7 @@ public sealed record VaultMetadata(
     /// <summary>
     /// Brief T16-S2: records with a format 2 main file or conflicted copy that
     /// <see cref="RecordVaultStore.LoadMetadata"/> decoded whole (<see cref="FormatTwoRecords.Decode"/>),
-    /// tombstones included; 0 with <see cref="FormatTwoRecords.Skip"/>.
+    /// tombstones included, one that failed to decrypt not; 0 with <see cref="FormatTwoRecords.Skip"/>.
     /// </summary>
     public int FormatTwoDecoded { get; init; }
 }

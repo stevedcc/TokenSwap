@@ -50,6 +50,7 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
         var metadata = store.LoadMetadata(vaultKey, warnings, formatTwo);
         _metadata = metadata;
         _loadedWith = formatTwo;
+        // Names are unique: every format binds a record's name to its record id, and the id to its file.
         _byName = metadata.Records.ToDictionary(r => r.Name, StringComparer.Ordinal);
         _unreadable = metadata.Unreadable.ToHashSet(StringComparer.Ordinal);
         return metadata;

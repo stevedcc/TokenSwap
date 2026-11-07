@@ -277,4 +277,116 @@ public sealed class RecordStoreSelectiveReadTests : IDisposable
         var full = Assert.ThrowsAny<TswapException>(() => SecretRecordCodec.Decode(bytes, _key)).Message;
         Assert.Equal(full, Assert.ThrowsAny<TswapException>(() => SecretRecordCodec.DecodeMetadata(bytes, _key)).Message);
     }
+
+    // ------------------------------------------------------------------ code review: mixed record sets
+
+    /// <summary>
+    /// Code review (MiMo A I-1): a format 3 record with a conflicted copy that isn't a record at all
+    /// (garbage, or a file that can't be read) is not format 2: it is read on the metadata path, the
+    /// copy warned about and skipped, and only the version asked for is decrypted.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OpenSecret_FormatThreeWithAnUnusableCopy_IsNotFormatTwo(bool unreadableCopy)
+    {
+        if (unreadableCopy && (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess))
+            return; // mode 000 can't stop an administrator from reading the copy
+        _m.Ok("old-value", "ingest", "a");
+        _m.Ok("new-value", "ingest", "--rotate", "a");
+        var copy = RecordFile(_m, _key, "a") + " (1)";
+        File.WriteAllBytes(copy, [1, 2, 3, 4, 3, 7, 7, 7, 7, 7]);
+        if (unreadableCopy)
+            File.SetUnixFileMode(copy, UnixFileMode.None);
+        try
+        {
+            var warnings = new StringWriter();
+            var store = new RecordVaultStore(_m.Dir, warnings: warnings);
+            List<(string File, Stamp Version)> values = [];
+            store.ValueDecrypted = (file, version) => values.Add((file, version));
+
+            using var entry = store.OpenSecret("a", _key)!;
+
+            Assert.False(entry.IsFormatTwo);
+            Assert.Empty(values);
+            Assert.Equal("new-value", Encoding.UTF8.GetString(entry.DecryptValue(previous: false)!));
+            Assert.Equal([(FileName("a"), entry.Metadata.Version)], values);
+            Assert.Contains($"{Path.GetFileName(copy)} (Dropbox / Google Drive conflicted copy of record {FileName("a")}) can't be used", warnings.ToString());
+        }
+        finally
+        {
+            if (unreadableCopy)
+                File.SetUnixFileMode(copy, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    /// <summary>
+    /// Code review (GLM B-1, MiMo B-M2): a record with a format 2 file anywhere in its set (here a
+    /// format 2 conflicted copy beside a format 3 main file, and the reverse) is decoded whole, both
+    /// versions reported, counted as one format 2 record, and agrees with ReadSecretValue.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OpenSecret_MixedFormatRecordSet_IsDecodedWholeAsOneFormatTwoRecord(bool formatTwoMain)
+    {
+        _m.Ok("old-value", "ingest", "a");
+        _m.Ok("main-value", "ingest", "--rotate", "a");
+        var path = RecordFile(_m, _key, "a");
+        var state = ReadRecord(_m, _key, "a");
+        var newer = new Stamp(new Hlc(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000, 0), OriginA);
+        var copyState = state with { Write = newer };
+        if (formatTwoMain)
+        {
+            File.WriteAllBytes(path, SecretRecordCodec.Encode(state, _key, KeyringFormat.RecordFormatVersionV2));
+            File.WriteAllBytes(path + " (1)", SecretRecordCodec.Encode(copyState, _key, KeyringFormat.RecordFormatVersion));
+        }
+        else
+            File.WriteAllBytes(path + " (1)", SecretRecordCodec.Encode(copyState, _key, KeyringFormat.RecordFormatVersionV2));
+        var (store, values) = Watched();
+
+        byte[]? opened;
+        using (var entry = store.OpenSecret("a", _key)!)
+        {
+            Assert.True(entry.IsFormatTwo);
+            Assert.Equal(4, values.Count); // two files, both versions of each, decoded whole
+            Assert.All(values, v => Assert.StartsWith(FileName("a"), v.File)); // the main file or its copy
+            opened = entry.DecryptValue(previous: false);
+        }
+
+        Assert.Equal("main-value", Encoding.UTF8.GetString(opened!));
+        Assert.Equal(opened, Store(_m).ReadSecretValue("a", _key));
+        var metadata = Store(_m).LoadMetadata(_key, TextWriter.Null, FormatTwoRecords.Decode);
+        Assert.Equal(1, metadata.FormatTwoDecoded);
+        Assert.Equal(1, metadata.NotFingerprinted);
+        using var view = new VaultView(Store(_m), _key, TextWriter.Null);
+        Assert.Equal("main-value", view.ResolveToken("a"));
+        Assert.Equal(1, view.FormatTwoDecoded);
+    }
+
+    /// <summary>
+    /// Code review (GLM B-4): the lifecycle the wiping rests on: a disposed entry (format 3 and format 2)
+    /// and a disposed view refuse to decrypt, so nothing reads values after they were wiped.
+    /// </summary>
+    [Fact]
+    public void DisposedEntriesAndViews_RefuseToDecrypt()
+    {
+        _m.Ok("a-value", "ingest", "a");
+        var entry = Store(_m).OpenSecret("a", _key)!;
+        entry.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => entry.DecryptValue(previous: false));
+
+        using var m2 = new FleetMachine("selective-dispose", SimulatedYubiKeyService.WithKeys(SerialA));
+        var key2 = VaultKey(m2, InitFormatTwoVault(m2));
+        m2.Ok("b-value", "ingest", "b");
+        var formatTwo = Store(m2).OpenSecret("b", key2)!;
+        Assert.True(formatTwo.IsFormatTwo);
+        formatTwo.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => formatTwo.DecryptValue(previous: false));
+
+        var view = new VaultView(Store(_m), _key, TextWriter.Null);
+        Assert.Equal("a-value", view.ResolveToken("a"));
+        view.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => view.ResolveToken("a"));
+    }
 }

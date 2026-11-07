@@ -585,23 +585,40 @@ public sealed class RecordVaultStore : IFileVaultStore
         if (!mainExists && copies.Count == 0)
             return null;
 
-        List<(string File, byte[] Bytes, bool IsMain)> files = [];
-        var allV3 = true;
-        try
+        // Code review (MiMo A I-1): only a format 2 file (its cleartext format byte) sends the record
+        // down the whole-record path. A file that can't be read, or isn't a record of a format this
+        // build reads, is no reason to decrypt both versions: an unreadable main file is an
+        // unreadable record (as the full load says), an unusable copy is warned about and skipped.
+        List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files = [];
+        if (mainExists)
         {
-            if (mainExists)
-                files.Add((fileName, _owner.ReadAllBytes(mainPath), true));
-            foreach (var copy in copies)
-                files.Add((copy.ConflictingFilename, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename)), false));
-            allV3 = files.All(f => SecretRecordCodec.FormatVersionOf(f.Bytes) == KeyringFormat.RecordFormatVersion);
+            try
+            {
+                files.Add((fileName, null, _owner.ReadAllBytes(mainPath)));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                throw new UnreadableRecordException(name, fileName, ex.Message);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        List<string> unreadableCopies = [];
+        foreach (var copy in copies)
         {
-            allV3 = false; // the full path reports what can't be read, as it always has
+            try
+            {
+                files.Add((copy.ConflictingFilename, copy.Tool, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename))));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                unreadableCopies.Add(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, ex.Message));
+            }
         }
-        return allV3
-            ? OpenFromMetadata(name, fileName, files, vaultKey)
-            : OpenFull(name, fileName, copies, mainExists, vaultKey);
+        // The whole-record path reads the copies itself and reports the ones it can't read.
+        if (files.Any(f => SecretRecordCodec.FormatVersionOf(f.Bytes) == KeyringFormat.RecordFormatVersionV2))
+            return OpenFull(name, fileName, copies, mainExists, vaultKey);
+        foreach (var warning in unreadableCopies)
+            _warnings?.WriteLine(warning);
+        return OpenFromMetadata(name, fileName, files, vaultKey);
     }
 
     /// <summary>The records folder's scan, or null when the folder doesn't exist.</summary>
@@ -629,11 +646,12 @@ public sealed class RecordVaultStore : IFileVaultStore
         return new SecretEntry(this, name, fileName, vaultKey, state, inputs);
     }
 
-    private SecretEntry OpenFromMetadata(string name, string fileName, List<(string File, byte[] Bytes, bool IsMain)> files, byte[] vaultKey)
+    private SecretEntry OpenFromMetadata(string name, string fileName, List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files, byte[] vaultKey)
     {
         List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
-        foreach (var (file, bytes, isMain) in files)
+        foreach (var (file, tool, bytes) in files)
         {
+            var isMain = tool is null;
             try
             {
                 RecordDecrypted?.Invoke(file);
@@ -645,12 +663,11 @@ public sealed class RecordVaultStore : IFileVaultStore
             }
             catch (Exception ex) when (ex is TswapException or CryptographicException)
             {
-                var reason = ex is CryptographicException ? "it fails authentication" : ex.Message;
                 if (isMain)
-                    throw new UnreadableRecordException(name, fileName, reason);
-                _warnings?.WriteLine(
-                    $"Warning: {file} (conflicted copy of record {fileName}) can't be used ({reason}). " +
-                    "It is kept as it is and never chosen; remove it once you no longer need it.");
+                    throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "it fails authentication" : ex.Message);
+                // The full load's text, sync tool included.
+                _warnings?.WriteLine(UnusableCopyText(file, tool!.Value, fileName,
+                    ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message));
             }
         }
         if (inputs.Count == 0)
@@ -1254,10 +1271,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 {
                     notFingerprinted++;
                     if (formatTwo == FormatTwoRecords.Decode)
-                    {
-                        formatTwoDecoded++;
                         DecodeFormatTwo(fileName, copies);
-                    }
                     continue;
                 }
 
@@ -1278,10 +1292,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 {
                     notFingerprinted++;
                     if (formatTwo == FormatTwoRecords.Decode)
-                    {
-                        formatTwoDecoded++;
                         DecodeFormatTwo(fileName, copies);
-                    }
                     continue;
                 }
 
@@ -1379,7 +1390,11 @@ public sealed class RecordVaultStore : IFileVaultStore
                 if (folded.UnreadableReason is { } reason)
                     unreadable.Add((fileName, UnreadableText(fileName, reason)));
                 else if (folded.State is { } state)
+                {
+                    // Code review (GLM B-2): counted only when it was decrypted whole, not when it failed.
+                    formatTwoDecoded++;
                     records.Add(MetadataOf(state));
+                }
             }
             finally
             {

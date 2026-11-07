@@ -63,6 +63,46 @@ public sealed class SelectiveValueCommandTests : IDisposable
             _values.Order());
     }
 
+    /// <summary>
+    /// Code review (MiMo A I-1): a format 3 record whose conflicted copy is garbage is no format 2
+    /// record: get decrypts only its current value and prints no format 2 warning.
+    /// </summary>
+    [Fact]
+    public void Get_FormatThreeRecordWithAGarbageCopy_NoFormatTwoWarning_OneValue()
+    {
+        _m.Ok("old-value", "ingest", "s");
+        _m.Ok("new-value", "ingest", "--rotate", "s");
+        File.WriteAllBytes(RecordFile(_m, _key, "s") + " (1)", [1, 2, 3, 4, 3, 7, 7, 7, 7, 7]);
+        _values.Clear();
+
+        var (exit, stdout, stderr) = _m.Run("", "get", "s");
+
+        Assert.Equal(0, exit);
+        Assert.Equal("new-value", stdout.Trim());
+        Assert.DoesNotContain("format 2", stderr);
+        Assert.Contains("can't be used", stderr);
+        Assert.Equal([(FileName("s"), Metadata("s").Version)], _values);
+    }
+
+    /// <summary>
+    /// Code review (GLM A-2): get still takes a name only. "x:previous" is refused by the name check
+    /// before the vault is opened, as before, so get never prints a previous value.
+    /// </summary>
+    [Fact]
+    public void Get_PreviousToken_RefusedAsAnInvalidName()
+    {
+        _m.Ok("old-value", "ingest", "s");
+        _m.Ok("new-value", "ingest", "--rotate", "s");
+        _values.Clear();
+
+        var (exit, stdout, stderr) = _m.Run("", "get", "s:previous");
+
+        Assert.NotEqual(0, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains("Invalid secret name", stderr);
+        Assert.Empty(_values);
+    }
+
     [Fact]
     public void Apply_UnrelatedUnreadableRecord_NotReported()
     {
@@ -223,6 +263,10 @@ public sealed class FormatTwoVaultCommandTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Equal("a: \"alpha-value\"  # tswap: alpha\nd: \"delta-value\"  # tswap: delta\n", stdout);
         Assert.Equal([UseWarning(1)], Lines(stderr));
+        // Code review (GLM B-3, MiMo B-M1): exactly its two markers' records: alpha decoded whole (one
+        // version), delta's current section; nothing of beta or gamma.
+        Assert.Equal(new[] { FileName("alpha"), FileName("delta") }.Order(StringComparer.Ordinal),
+            _values.Select(v => v.File).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -255,6 +299,9 @@ public sealed class FormatTwoVaultCommandTests : IDisposable
         Assert.Contains("delta", stdout);
         Assert.Contains(Path.GetFileName(damaged), stderr);
         Assert.Contains("1 unreadable record", stderr);
+        // Code review (GLM B-2): the warning counts the records actually decrypted whole (beta and
+        // gamma's tombstone), not the one that failed to decrypt.
+        Assert.Contains(ReadWarning(2), Lines(stderr));
     }
 
     /// <summary>The format 2 counterpart of <c>RecordConflictTests.ATruncatedMainRecord_FailsClosed</c>.</summary>
@@ -276,4 +323,69 @@ public sealed class FormatTwoVaultCommandTests : IDisposable
         Assert.NotEqual(0, applyExit);
         Assert.Contains(fileName, applyErr);
     }
+
+    // ------------------------------------------------------------------ code review
+
+    /// <summary>
+    /// Code review (MiMo A M-3): a command that decoded format 2 records and then fails still says so
+    /// (owner decision 1), before its error.
+    /// </summary>
+    [Fact]
+    public void List_RefusingAfterDecodingFormatTwoRecords_StillWarns()
+    {
+        Vault();
+        var damaged = RecordFile(_m, _key, "delta"); // the format 3 one
+        File.WriteAllBytes(damaged, File.ReadAllBytes(damaged)[..150]);
+
+        var (exit, _, stderr) = _m.Run("", "list");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'list' covers every secret", stderr);
+        Assert.Contains(ReadWarning(3), Lines(stderr));
+    }
+
+    [Fact]
+    public void Apply_FailingAfterUsingAFormatTwoRecord_StillWarns()
+    {
+        Vault();
+        var file = _m.PathOf("t.yaml");
+        File.WriteAllText(file, "a: \"\"  # tswap: alpha\nm: \"\"  # tswap: missing\n");
+
+        var (exit, stdout, stderr) = _m.Run("", "apply", file);
+
+        Assert.NotEqual(0, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains("not found", stderr);
+        Assert.Contains(UseWarning(1), Lines(stderr));
+    }
+
+    /// <summary>
+    /// Code review (GLM A-4, MiMo A M-2), the reason two records can never claim one name: the codec
+    /// binds a record's name to its record id in format 2 as in format 3, and the store binds the id
+    /// to the file. A planted format 2 record whose name belongs to another record is unreadable on the
+    /// metadata path exactly as in the full load: names warns and lists the name once, list refuses.
+    /// </summary>
+    [Fact]
+    public void AFormatTwoRecordClaimingAnotherName_IsUnreadable_NeverADuplicate()
+    {
+        Vault();
+        var alpha = ReadRecordFormatTwo("alpha");
+        var impostor = RecordFile(_m, _key, "impostor");
+        var otherId = FilenameHasher.ComputeRecordId(RecordKeyDerivation.DeriveNamesKey(_key), "impostor");
+        File.WriteAllBytes(impostor, SecretRecordCodec.Encode(alpha with { RecordId = otherId }, _key, KeyringFormat.RecordFormatVersionV2));
+        var full = Store(_m).LoadSecrets(_key, TextWriter.Null);
+        Assert.Contains(Path.GetFileName(impostor), full.UnreadableFiles!);
+
+        var (exit, stdout, stderr) = _m.Run("", "names");
+        var list = _m.Run("", "list");
+
+        Assert.Equal(0, exit);
+        Assert.Single(Lines(stdout), l => l.StartsWith("alpha ", StringComparison.Ordinal));
+        Assert.Contains("its record id does not belong to the name inside it", stderr);
+        Assert.NotEqual(0, list.Exit);
+        Assert.Contains(Path.GetFileName(impostor), list.Err);
+    }
+
+    private SecretRecord ReadRecordFormatTwo(string name) =>
+        SecretRecordCodec.Decode(File.ReadAllBytes(RecordFile(_m, _key, name)), _key);
 }

@@ -35,13 +35,17 @@ public sealed class CheckCommand : ICliCommand
         var key = ctx.Unlock(config, warnIfNoTouch: false);
         // Brief T16-S2: metadata only; a marker naming a record left out (format 2) reads that one record.
         using var view = ctx.OpenVault(key);
-        view.LoadAll(FormatTwoRecords.Skip);
-        view.ThrowIfAnyUnreadable("check");
-
-        var results = Check.CheckMarkers(markers, view);
-        var exit = json ? WriteJson(ctx, results) : WriteText(ctx, results);
-        FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
-        return exit;
+        try
+        {
+            view.LoadAll(FormatTwoRecords.Skip);
+            view.ThrowIfAnyUnreadable("check");
+            var results = Check.CheckMarkers(markers, view);
+            return json ? WriteJson(ctx, results) : WriteText(ctx, results);
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
+        }
     }
 
     private static int WriteText(CommandContext ctx, List<Check.CheckResult> results)

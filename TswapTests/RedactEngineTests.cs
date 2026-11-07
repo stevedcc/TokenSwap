@@ -13,7 +13,7 @@ namespace TswapTests;
 /// inserted (difference 2), tocomment's context from the original neighbours (3), and redact masks
 /// multi-line values across lines (4).
 /// </summary>
-public class RedactEngineTests
+public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private static Secret S(string value, bool burned = false, string? previous = null, bool previousBurned = false) =>
         new(value, DateTime.UtcNow, DateTime.UtcNow, burned ? DateTime.UtcNow : null, burned ? "test" : null)
@@ -33,11 +33,26 @@ public class RedactEngineTests
         Assert.Equal("x [REDACTED: s1] [REDACTED: s2]", Redact.RedactContent("x abcdefgh RED", db));
     }
 
+    /// <summary>
+    /// Code review (MiMo A M-1), difference 2 "inside or across": a value that exists only across the
+    /// edge of an inserted label (its "]" plus the original "x") was masked by the plaintext engine and
+    /// is not now. The output holds nothing from the vault: every character comes from the input or
+    /// from the label, so nothing is revealed that the reader can't build from them.
+    /// </summary>
+    [Fact]
+    public void Redact_SecretAcrossAnInsertedLabel_NotReplaced()
+    {
+        var db = Db(("a", S("hello")), ("b", S("]x")));
+        Assert.Equal("[REDACTED: a[REDACTED: b]", PlaintextRedactOracle.RedactContent("hellox", db)); // today
+        Assert.Equal("[REDACTED: a]x", Redact.RedactContent("hellox", db));
+    }
+
     [Fact]
     public void ToComment_SecretInsideAnInsertedMarker_NotReplaced()
     {
         var db = Db(("s1", S("abcdefgh")), ("s2", S("tswap")));
-        Assert.NotEqual("k: \"\"  # tswap: s1", PlaintextRedactOracle.ToComment("k: abcdefgh", db).Content); // today: the marker is rewritten
+        // Today: "tswap" was then matched inside the inserted marker and the marker rewritten.
+        Assert.Equal("k: \"\"  # \"\"  # tswap: s2: s1", PlaintextRedactOracle.ToComment("k: abcdefgh", db).Content);
         Assert.Equal("k: \"\"  # tswap: s1", Redact.ToComment("k: abcdefgh", db).Content);
     }
 
@@ -94,7 +109,12 @@ public class RedactEngineTests
         string[] separators = [" ", ", ", "\n", "\r\n", "; ", "😀", " 🔑 ", "\t"];
         string[] quotes = ["", "", "\"", "'"];
         string[] filler = ["key: ", "x=", "# note ", "zz", "\n", "\r\n", "   ", "😀", "k: \"\"  # tswap: mm\n", "--", "yy-", "{\"v\": "];
-        var counts = new Dictionary<string, int> { ["redact-hits"] = 0, ["tocomment-hits"] = 0, ["previous"] = 0, ["burned"] = 0, ["astral"] = 0 };
+        // Code review (GLM B-6, MiMo B-M5): each counter proves the case it names happened in an output.
+        var counts = new Dictionary<string, int>
+        {
+            ["redact-hits"] = 0, ["tocomment-hits"] = 0, ["previous-masked"] = 0, ["burned-masked"] = 0,
+            ["burned-vs-live-tie"] = 0, ["astral-value-masked"] = 0, ["astral-next-to-a-masked-value"] = 0,
+        };
 
         for (var round = 0; round < 250; round++)
         {
@@ -120,15 +140,19 @@ public class RedactEngineTests
             var forms = values.SelectMany(v => SecretVariants.For(v).Select(x => x.Text)).ToList();
 
             var text = new StringBuilder();
+            List<string> nextToEmoji = []; // forms placed with an emoji directly before or after them
             for (var part = random.Next(3, 14); part > 0; part--)
             {
                 text.Append(filler[random.Next(filler.Length)]);
                 if (random.Next(3) > 0)
                 {
                     var quote = quotes[random.Next(quotes.Length)];
-                    text.Append(separators[random.Next(separators.Length)])
-                        .Append(quote).Append(forms[random.Next(forms.Count)]).Append(quote)
-                        .Append(separators[random.Next(separators.Length)]);
+                    var before = separators[random.Next(separators.Length)];
+                    var form = forms[random.Next(forms.Count)];
+                    var after = separators[random.Next(separators.Length)];
+                    text.Append(before).Append(quote).Append(form).Append(quote).Append(after);
+                    if (quote == "" && (char.IsLowSurrogate(before[^1]) || char.IsHighSurrogate(after[0])))
+                        nextToEmoji.Add(form);
                 }
             }
             var content = text.ToString();
@@ -140,13 +164,25 @@ public class RedactEngineTests
             Assert.True(oracleContent == engineContent, $"round {round}, tocomment:\n{content}");
             Assert.Equal(oracleChanges, engineChanges);
 
+            bool Masked(string form) => content.Contains(form) && !expected.Contains(form);
+            bool Labelled(string token) => expected.Contains($"[REDACTED: {token}]") || expected.Contains($"[REDACTED: {token} (");
             if (expected != content.Replace("\r\n", "\n")) counts["redact-hits"]++;
             if (oracleChanges.Count > 0) counts["tocomment-hits"]++;
-            if (secrets.Any(s => s.Secret.PreviousValue is not null) && expected.Contains(":previous")) counts["previous"]++;
-            if (secrets.Any(s => s.Secret.BurnedAt is not null)) counts["burned"]++;
-            if (values.Any(v => v.Any(char.IsSurrogate)) && expected != content.Replace("\r\n", "\n")) counts["astral"]++;
+            if (secrets.Any(s => s.Secret.PreviousValue is not null && Labelled(s.Name + ":previous"))) counts["previous-masked"]++;
+            if (secrets.Any(s => s.Secret.BurnedAt is not null && Labelled(s.Name))) counts["burned-masked"]++;
+            // A form held by a burned secret's current value and by a live token, present in the text:
+            // the burn state decided the label.
+            var burnedForms = secrets.Where(s => s.Secret.BurnedAt is not null)
+                .SelectMany(s => SecretVariants.For(s.Secret.Value).Select(v => v.Text)).ToHashSet();
+            var liveForms = secrets.Where(s => s.Secret.BurnedAt is null).SelectMany(s => SecretVariants.For(s.Secret.Value))
+                .Concat(secrets.Where(s => s.Secret.PreviousValue is not null).SelectMany(s => SecretVariants.For(s.Secret.PreviousValue!)))
+                .Select(v => v.Text).ToHashSet();
+            if (burnedForms.Any(f => liveForms.Contains(f) && Masked(f))) counts["burned-vs-live-tie"]++;
+            if (values.Any(v => v.Any(char.IsSurrogate) && Masked(v))) counts["astral-value-masked"]++;
+            if (nextToEmoji.Any(Masked)) counts["astral-next-to-a-masked-value"]++;
         }
 
+        output.WriteLine(string.Join(", ", counts.Select(c => $"{c.Key} = {c.Value}")));
         Assert.All(counts, c => Assert.True(c.Value > 20, $"generator: {c.Key} = {c.Value}"));
     }
 }

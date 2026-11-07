@@ -18,10 +18,15 @@ public sealed class NamesCommand : ICliCommand
         var key = ctx.Unlock(config, warnIfNoTouch: false);
         // Brief T16-S2: metadata only (a format 2 record is decoded whole, its values wiped, and warned about).
         using var view = ctx.OpenVault(key);
-        var secrets = view.LoadAll(FormatTwoRecords.Decode).Secrets;
-        Write(ctx, secrets, json);
-        FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
-        return 0;
+        try
+        {
+            Write(ctx, view.LoadAll(FormatTwoRecords.Decode).Secrets, json);
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Read);
+        }
     }
 
     private static void Write(CommandContext ctx, IReadOnlyList<SecretInfo> secrets, bool json)

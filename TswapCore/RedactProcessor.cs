@@ -7,7 +7,7 @@ namespace TswapCore;
 /// Used by <c>tswap redact</c> to produce agent-safe file output on stdout; the matching is
 /// <see cref="SecretMatcher.Redact"/>'s.
 /// </summary>
-public sealed class RedactProcessor : SecretProcessor
+public static class RedactProcessor
 {
     /// <summary>
     /// The label of a match of <paramref name="token"/> (<c>name</c> or <c>name:previous</c>) in the
@@ -18,12 +18,5 @@ public sealed class RedactProcessor : SecretProcessor
         VariantKind.Base64 => $"[REDACTED: {token} (base64)]",
         VariantKind.Base64Url => $"[REDACTED: {token} (base64url)]",
         _ => $"[REDACTED: {token}]",
-    };
-
-    protected override string GetReplacement(string secretName, MatchType matchType) => matchType switch
-    {
-        MatchType.Base64 => Label(secretName, VariantKind.Base64),
-        MatchType.Base64Url => Label(secretName, VariantKind.Base64Url),
-        _ => Label(secretName, VariantKind.Plain),
     };
 }

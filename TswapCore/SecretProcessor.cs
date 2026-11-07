@@ -7,11 +7,12 @@ public enum MatchType { Plaintext, Base64, Base64Url }
 public record LineDiff(int LineNumber, string Before, string After);
 
 /// <summary>
-/// Base of <see cref="RedactProcessor"/> and <see cref="ToCommentProcessor"/>: what each match
-/// becomes (<see cref="GetReplacement"/>) and the plaintext match list. Brief T16-S2: matching
-/// itself is <see cref="SecretMatcher"/>'s, from fingerprints; <see cref="BuildMatchList"/> stays as
-/// the definition of the search texts and their order that the fingerprint engine reproduces (its
-/// variants are pinned against <see cref="SecretVariants"/> by the tests).
+/// The plaintext match list. Brief T16-S2: matching itself is <see cref="SecretMatcher"/>'s, from
+/// fingerprints, with the labels of <see cref="RedactProcessor"/> and the replacement of
+/// <see cref="ToCommentProcessor"/>; <see cref="BuildMatchList"/> stays as the definition of the
+/// search texts and their order that the fingerprint engine reproduces (SecretVariantsTests pins its
+/// variants against <see cref="SecretVariants"/> through a subclass, which is why this class and
+/// <see cref="GetReplacement"/> remain).
 /// </summary>
 public abstract class SecretProcessor
 {

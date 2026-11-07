@@ -137,11 +137,14 @@ public class PromptTests
     [Fact]
     public void GetText_SendsTheAgentToTheUserForTheReindex()
     {
-        var text = Prompt.GetText("tswap");
+        // Code review (MiMo B-M3): whitespace-insensitive, and every clause of the rule: both triggers,
+        // the request to the user, never running it, never working around the refusal.
+        var text = System.Text.RegularExpressions.Regex.Replace(Prompt.GetText("tswap"), @"\s+", " ");
 
-        Assert.Contains("If `tswap redact` or `tswap tocomment` refuses", text);
-        Assert.Contains("old record format 2", text);
-        Assert.Contains("ask the user to run `sudo tswap vault reindex`", text);
+        Assert.Contains("If `tswap redact` or `tswap tocomment` refuses because records have no fingerprints yet", text);
+        Assert.Contains("or a command prints a warning about the old record format 2", text);
+        Assert.Contains("stop and ask the user to run `sudo tswap vault reindex` once in their own terminal", text);
+        Assert.Contains("You never run it yourself (it needs sudo)", text);
         Assert.Contains("never work around the refusal", text);
     }
 }

@@ -49,9 +49,9 @@ public static class Redact
             List<(string, bool, FingerprintSet)> sets = [];
             foreach (var (name, secret) in db.Secrets)
             {
-                sets.Add((name, false, Fingerprinter.Compute(Encoding.UTF8.GetBytes(secret.Value), keys)));
+                sets.Add((name, false, Fingerprint(secret.Value, keys)));
                 if (secret.PreviousValue is { } previous)
-                    sets.Add((name, true, Fingerprinter.Compute(Encoding.UTF8.GetBytes(previous), keys)));
+                    sets.Add((name, true, Fingerprint(previous, keys)));
             }
             var burned = db.Secrets.Where(kv => kv.Value.BurnedAt.HasValue).Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
             return use(new SecretMatcher(FingerprintIndex.Build(sets, keys), burned));
@@ -59,6 +59,19 @@ public static class Redact
         finally
         {
             CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
+    private static FingerprintSet Fingerprint(string value, FingerprintKeys keys)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        try
+        {
+            return Fingerprinter.Compute(bytes, keys);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
         }
     }
 
