@@ -127,6 +127,15 @@ public sealed record CommandContext(
     /// </summary>
     public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
 
+    /// <summary>
+    /// How <c>run</c> starts its child: RedactingPty's runner for this console (tests substitute a fake
+    /// that streams its output through the same redactor).
+    /// </summary>
+    public Func<RedactingPty.IPtyRunner> PtyRunner { get; init; } = RedactingPty.PtyRunnerFactory.Create;
+
+    /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
+    internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

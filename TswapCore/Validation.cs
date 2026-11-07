@@ -94,6 +94,112 @@ public static class Validation
             .ToList();
     }
 
+    // Issue #251: '{{@path}}' hands the child a filled copy of the file. '@' can't start a secret
+    // name, so the two token kinds never collide.
+    public static readonly Regex FileTokenRegex = new(@"\{\{@([^{}]+)\}\}");
+
+    // Both token kinds, for the one substitution pass over the command as typed.
+    private static readonly Regex AnyTokenRegex = new(@"\{\{(?:@([^{}]+)|([a-zA-Z0-9_-]+(?::previous)?))\}\}");
+
+    /// <summary>The distinct paths of the <c>{{@path}}</c> tokens in <paramref name="command"/>, in order.</summary>
+    public static IReadOnlyList<string> ExtractFileTokens(string command) =>
+        FileTokenRegex.Matches(command).Select(m => m.Groups[1].Value).Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// Scans every <c>{{@</c> in <paramref name="command"/> (<see cref="FileTokenRegex"/> can't see a
+    /// malformed one) and throws, naming the token, for an empty <c>{{@}}</c>, one with nested or
+    /// unbalanced braces, or one that is never closed.
+    /// </summary>
+    public static void ValidateFileTokens(string command)
+    {
+        for (var start = command.IndexOf("{{@", StringComparison.Ordinal); start >= 0;
+             start = command.IndexOf("{{@", start + 3, StringComparison.Ordinal))
+        {
+            var close = command.IndexOf("}}", start + 3, StringComparison.Ordinal);
+            if (close < 0)
+                throw MalformedFileToken(command[start..], "it is never closed with '}}'");
+            var token = command[start..(close + 2)];
+            var path = command[(start + 3)..close];
+            if (path.Length == 0)
+                throw MalformedFileToken(token, "it names no file");
+            if (path.IndexOfAny(['{', '}']) >= 0)
+                throw MalformedFileToken(token, "it has nested or unbalanced braces");
+            if (close + 2 < command.Length && command[close + 2] == '}')
+                throw MalformedFileToken(token + "}", "it has unbalanced braces");
+        }
+    }
+
+    private static TswapException MalformedFileToken(string token, string reason) =>
+        new($"Malformed file token '{token}': {reason}. A file token is {{{{@path}}}}, the path without braces.");
+
+    // Issue #251: with a {{@file}} token, any word of the command that prints, encodes or copies a
+    // file refuses (the filled copy is data for a tool, never something to show). A shallow guard
+    // (docs/security-model.md): it refuses the obvious one-step printers, nothing more.
+    private static readonly HashSet<string> FilePrinters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cat", "echo", "printf", "tee", "base64", "base32", "basenc", "xxd", "od", "hexdump", "hd", "strings",
+        "uuencode", "iconv", "cp", "mv", "dd", "install", "rsync", "scp", "tar", "zip", "gzip", "bzip2", "xz",
+        "zstd", "openssl", "gpg", "less", "more", "head", "tail", "nl", "sort", "uniq", "rev", "tac", "split", "ln",
+        "certutil",
+    };
+
+    /// <summary>
+    /// Issue #251: the extra check for a command with a <c>{{@file}}</c> token. Refused: a file token as
+    /// the program; and any word (the basename of each argument as typed, a file token counting as its
+    /// file's basename) that is a printer, encoder or copier, in the existing blocklist, or a shell or
+    /// interpreter (sed included). Null when allowed.
+    /// </summary>
+    public static BlockedInvocation? GetFileTokenRefusal(IReadOnlyList<string> argv)
+    {
+        if (argv.Count == 0)
+            return null;
+        if (FileTokenRegex.IsMatch(argv[0]))
+            return new(argv[0], "A {{@file}} token can't be the program: the file is data for a tool, never a program to run.");
+        foreach (var arg in argv)
+        {
+            var files = FileTokenRegex.Matches(arg).Select(m => ProgramName(m.Groups[1].Value));
+            var words = FileTokenRegex.Match(arg) is { Success: true } whole && whole.Length == arg.Length
+                ? files
+                : files.Prepend(ProgramName(arg));
+            foreach (var word in words)
+            {
+                if (FilePrinters.Contains(word) || BlockedCommands.Contains(word))
+                    return new(word, $"'{word}' prints, encodes or copies files, which would expose the filled copy of a {{{{@file}}}} token. " +
+                        FileTokenWayOut(word));
+                if (IsInterpreter(word) || word.Equals("sed", StringComparison.OrdinalIgnoreCase))
+                    return new(word, $"'{word}' is a shell or interpreter, which can print the filled copy of a {{{{@file}}}} token past redaction. " +
+                        FileTokenWayOut(word));
+            }
+        }
+        return null;
+    }
+
+    private static string FileTokenWayOut(string word) =>
+        $"With a {{{{@file}}}} token no word of the command may be '{word}': rename the file if that is its name, " +
+        "or pass the secret with a plain {{name}} token instead.";
+
+    /// <summary>
+    /// Substitutes both token kinds in one pass over each argument as typed (issue #251): a
+    /// <c>{{name}}</c> gets its raw value from <paramref name="secretValues"/>, a <c>{{@path}}</c> the
+    /// filled copy's path from <paramref name="filePaths"/>. Substituted text is never scanned again (a
+    /// value containing <c>{{@…}}</c> stays plain text). Values are not shell-quoted (see
+    /// <see cref="SubstituteTokensInArgs"/>); null and NUL-containing values are refused.
+    /// </summary>
+    public static string[] SubstituteAllTokensInArgs(string[] args, IReadOnlyDictionary<string, string> secretValues,
+        IReadOnlyDictionary<string, string> filePaths)
+    {
+        foreach (var (token, value) in secretValues)
+            if (value is null || value.Contains('\0'))
+                throw new Exception(
+                    $"Secret '{token}' has a null or NUL-containing value, which cannot be " +
+                    "passed as a process argument. Re-ingest the secret with a valid value.");
+
+        return args.Select(arg => AnyTokenRegex.Replace(arg, m =>
+            m.Groups[1].Success
+                ? filePaths.TryGetValue(m.Groups[1].Value, out var path) ? path : m.Value
+                : secretValues.TryGetValue(m.Groups[2].Value, out var value) ? value : m.Value)).ToArray();
+    }
+
     /// <summary>
     /// Check if a base command is blocked for exfiltration prevention.
     /// Returns the blocked command name or null if allowed. Compared by basename, so
@@ -697,10 +803,10 @@ public static class Validation
     }
 
     /// <summary>
-    /// Sanitize a command by replacing all tokens with ********.
+    /// Sanitize a command by replacing all tokens (file tokens too) with ********.
     /// </summary>
     public static string SanitizeCommand(string command)
     {
-        return TokenRegex.Replace(command, "********");
+        return FileTokenRegex.Replace(TokenRegex.Replace(command, "********"), "********");
     }
 }
