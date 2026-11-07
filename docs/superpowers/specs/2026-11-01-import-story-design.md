@@ -288,6 +288,48 @@ builder pins today's behaviour with tests first, see Stage 2).
   and with a large one (thousands of secrets, 100 MB of output) before and after; RedactingPty's own redactor measured 140 Mchars/s at 50 plaintext
   replacements, so the fingerprint scan must stay well above interactive output rates.
 
+  > **Owner amendment, 2026-11-07, D1** (brief T16-S3; overrules "redacts only its own tokens"
+  > above): on a vault not fully fingerprinted, `run` masks its own tokens **and every record that
+  > has fingerprints**, prints the same warning before and after the child (the count of records not
+  > fully fingerprinted and of unreadable ones, and the reindex command), and keeps working.
+
+  > **Owner amendment, 2026-11-07, D2** (brief T16-S3): the redactor holds back the end of the output
+  > to catch a secret split across reads; with a multi-line vault secret that can be its whole
+  > length, which would hide a prompt. Held output is released only when the child waits for
+  > terminal input, never by time alone: on Linux when no thread of the PTY's foreground process
+  > group runs and one is blocked in `read` on the terminal (the slave, or `/dev/tty` with the slave
+  > as controlling terminal); on macOS when ECHO is off and ICANON on (owner-confirmed); on Windows
+  > and with redirected output never. Released text is masked like a flush. **Residual limit:** only
+  > complete occurrences are recognised (prefix recognition would be a prefix oracle), so a secret
+  > printed only in part (cut short, split by an input wait, completed by another thread or a
+  > background job, or split between stdout and stderr under the pipe runner) shows that part, at
+  > the latest at exit. The hold-back is a timing channel: what is held depends only on the text and
+  > on per-class maxima rounded up to 256 characters.
+
+  > **Owner amendment, 2026-11-07, D3** (brief T16-S3): throughput targets, 4096-character chunks:
+  > a realistic vault on log text at least 20 Mchars/s, 2,000 secrets at least 5, base64-heavy
+  > output at least 1. A miss is reported to the owner, never loosened by the builder.
+
+  > **Owner amendment, 2026-11-07, D4** (brief T16-S3): RedactingPty `v1.0.3` is tagged first (the
+  > .NET 10 refactor alone, the package-validation baseline), then `v1.1.0`; both are owner gates.
+
+  > **API shape (brief T16-S3):** RedactingPty 1.1 adds `IStreamMatcher` (`MaxMatchLength`,
+  > `FindMatches(window, matches)`, `PendingFrom(window)` with a default), `StreamMatch`, a
+  > `StreamRedactor(replacements, matchers)` constructor with `HasHeld` and `Release()`, and
+  > `IPtyRunner.Run(argv, replacements, RedactionOptions)` (`Matchers`, `ReleaseWhenAwaitingInput`)
+  > whose default delegates when the options ask for nothing and throws otherwise. Overlapping
+  > occurrences merge into one run with one label (longest, leftmost, plaintext before matcher, list
+  > order). A redaction failure fails closed (output discarded, a marker, the exception after the
+  > child).
+
+  > **Coverage (brief T16-S3), in short:** masked: a substituted value's forms; every other value
+  > version verbatim, whitespace-stripped, base64 padded, base64url unpadded, multi-line through a
+  > pipe or a PTY (`\r\n` folded to `\n`). Not masked: padded base64url's `=`, unpadded base64, a
+  > `\r\n` value printed with `\n`, wrapped or re-indented values, JSON/URL/hex encodings, records not
+  > fully fingerprinted or unreadable (warned twice), secrets added during the run, a value of
+  > whitespace only split across reads
+  > ([security-model.md](../../security-model.md#what-run-masks)).
+
 ## Stage 4: `extract`, the import
 
 ### Two passes, agent-driven **(owner proposed the two-pass flow)**
