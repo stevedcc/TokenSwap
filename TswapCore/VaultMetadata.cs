@@ -30,4 +30,31 @@ public sealed record VaultMetadata(
     /// from its fingerprints, and no record is unreadable.
     /// </summary>
     public bool IsFullyFingerprinted => NotFingerprinted == 0 && Unreadable.Count == 0;
+
+    /// <summary>
+    /// Brief T16-S2: the secrets of <see cref="Records"/> (every non-tombstone record, burned
+    /// included), by name (ordinal).
+    /// </summary>
+    public IReadOnlyList<SecretInfo> Secrets =>
+        field ??= [.. Records.Select(SecretInfo.From).OfType<SecretInfo>().OrderBy(s => s.Name, StringComparer.Ordinal)];
+
+    /// <summary>
+    /// Brief T16-S2: records with a format 2 main file or conflicted copy that
+    /// <see cref="RecordVaultStore.LoadMetadata"/> decoded whole (<see cref="FormatTwoRecords.Decode"/>),
+    /// tombstones included; 0 with <see cref="FormatTwoRecords.Skip"/>.
+    /// </summary>
+    public int FormatTwoDecoded { get; init; }
+}
+
+/// <summary>
+/// Brief T16-S2: what <see cref="RecordVaultStore.LoadMetadata"/> does with a record that has a format 2
+/// file, which keeps name and value in one encrypted block.
+/// </summary>
+public enum FormatTwoRecords
+{
+    /// <summary>Not decrypted and not listed; only counted in <see cref="VaultMetadata.NotFingerprinted"/>.</summary>
+    Skip,
+
+    /// <summary>Decoded whole, listed without fingerprints, its values zeroed at once (owner decision 1).</summary>
+    Decode,
 }

@@ -37,8 +37,8 @@ automated/silent unlocking by malicious processes.
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
 - `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned
-- `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
-- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
+- `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels (it recognises them by fingerprints and decrypts no value)
+- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers (fingerprints too)
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
@@ -83,6 +83,10 @@ automated/silent unlocking by malicious processes.
    ask the user to run `%CMD% agent start` in their own terminal (or `%CMD% broker unlock` for a locked
    broker), then retry. You never ask for, type or pass the vault password, and you never run those two
    commands yourself
+11. If `%CMD% redact` or `%CMD% tocomment` refuses because records have no fingerprints yet, or a command
+   prints a warning about the old record format 2, stop and ask the user to run `sudo %CMD% vault reindex`
+   once in their own terminal, then retry. You never run it yourself (it needs sudo), and you
+   never work around the refusal (by reading or printing the file another way)
 
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty

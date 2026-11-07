@@ -24,7 +24,7 @@ public sealed class VaultReindexTests : IDisposable
 
     public VaultReindexTests()
     {
-        _key = VaultKey(_m, InitRecordVault(_m));
+        _key = VaultKey(_m, InitFormatTwoVault(_m));
     }
 
     public void Dispose()

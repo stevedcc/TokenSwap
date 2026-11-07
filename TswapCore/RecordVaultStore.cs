@@ -517,19 +517,52 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// the merge rules; no other record is read. Returns null when the secret doesn't exist (no
     /// record, or a tombstone), or <paramref name="previous"/> is asked and there is no previous
     /// value. A record that can't be read or authenticated, or whose copies can't be merged, is a
-    /// <see cref="TswapException"/> (fail closed). Keys are zeroed before returning, and every value
-    /// byte array except the copy returned (the caller zeroes that).
+    /// <see cref="TswapException"/> (fail closed) with the text of the
+    /// <see cref="UnreadableRecordException"/> <see cref="OpenSecret"/> throws. Keys are zeroed before
+    /// returning, and every value byte array except the copy returned (the caller zeroes that).
     /// <para>
     /// Brief T16-S1: when every file of the record is format 3, only the metadata sections and the
     /// one value section asked for are decrypted (the current value, or with
     /// <paramref name="previous"/> the value a rotation replaced, for a <c>name:previous</c> token),
     /// and the copies are folded on the metadata path (<see cref="RecordMerge.MergeAllMetadata"/>).
     /// A format 2 file has no separate sections, so such a record is decoded whole and merged by
-    /// <see cref="RecordMerge.MergeAll"/>, as before.
+    /// <see cref="RecordMerge.MergeAll"/>, as before. Brief T16-S2: <see cref="OpenSecret"/> plus
+    /// <see cref="SecretEntry.DecryptValue"/>.
     /// </para>
     /// </summary>
     public byte[]? ReadSecretValue(string name, byte[] vaultKey, bool previous = false)
     {
+        try
+        {
+            using var entry = OpenSecret(name, vaultKey);
+            return entry?.DecryptValue(previous);
+        }
+        catch (UnreadableRecordException ex)
+        {
+            // This read's contract is a plain TswapException with exactly this text (the broker shows it).
+            throw new TswapException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Brief T16-S2: ONE secret's record (its main file and its conflicted copies), nothing else
+    /// read, or null when there is no file. When every file is format 3, the metadata sections are
+    /// decrypted and folded (<see cref="RecordMerge.MergeAllMetadata"/>) and <b>no value</b> is
+    /// decrypted; <see cref="SecretEntry.DecryptValue"/> opens one version later. A record with any
+    /// format 2 file is decoded whole (the only way to read format 2: both its versions are reported
+    /// to <see cref="ValueDecrypted"/>) and held until the entry is disposed. A record that can't be
+    /// read, or whose copies can't be merged, throws <see cref="UnreadableRecordException"/>.
+    /// </summary>
+    public SecretEntry? OpenSecret(string name, byte[] vaultKey) => OpenSecret(name, vaultKey, ScanRecords());
+
+    /// <summary>
+    /// <see cref="OpenSecret(string, byte[])"/> with a scan of the records folder made earlier
+    /// (<see cref="ScanRecords"/>; null: the folder doesn't exist), so a caller opening many secrets
+    /// lists the folder once.
+    /// </summary>
+    internal SecretEntry? OpenSecret(string name, byte[] vaultKey, DirectoryScanResult? scan)
+    {
+        ArgumentNullException.ThrowIfNull(vaultKey);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(vaultKey);
         string fileName;
         try
@@ -540,11 +573,11 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             CryptographicOperations.ZeroMemory(namesKey);
         }
-        var recordsDir = RecordsDir;
-        if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
+        if (scan is null)
             return null;
+        var recordsDir = RecordsDir;
         var mainPath = Path.Combine(recordsDir, fileName);
-        var copies = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir)).Conflicts
+        var copies = scan.Conflicts
             .Where(c => c.RecordFilename == fileName)
             .OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal)
             .ToList();
@@ -567,38 +600,36 @@ public sealed class RecordVaultStore : IFileVaultStore
             allV3 = false; // the full path reports what can't be read, as it always has
         }
         return allV3
-            ? ReadValueFromMetadata(name, fileName, files, vaultKey, previous)
-            : ReadValueFull(name, fileName, copies, mainExists, vaultKey, previous);
+            ? OpenFromMetadata(name, fileName, files, vaultKey)
+            : OpenFull(name, fileName, copies, mainExists, vaultKey);
     }
 
-    private byte[]? ReadValueFull(string name, string fileName, List<ConflictWarning> copies, bool mainExists, byte[] vaultKey, bool previous)
+    /// <summary>The records folder's scan, or null when the folder doesn't exist.</summary>
+    internal DirectoryScanResult? ScanRecords()
+    {
+        var recordsDir = RecordsDir;
+        return _owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir))
+            ? _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir))
+            : null;
+    }
+
+    private SecretEntry OpenFull(string name, string fileName, List<ConflictWarning> copies, bool mainExists, byte[] vaultKey)
     {
         LoadedRecord? main = mainExists ? ReadRecord(fileName, vaultKey) : null;
         using (var fingerprintKeys = FingerprintKeys.Derive(vaultKey))
             main = FoldConflictCopies(fileName, copies, main, vaultKey, fingerprintKeys, _warnings);
+        var inputs = main.Inputs ?? [];
         if (main.UnreadableReason is { } reason)
-            throw new TswapException($"The record of '{name}' can't be read ({reason}).");
+        {
+            ZeroValues(inputs);
+            throw new UnreadableRecordException(name, fileName, reason);
+        }
         if (main.State is not { } state)
-            throw new TswapException($"The record of '{name}' can't be read (no readable copy).");
-        try
-        {
-            if (state.Type == RecordType.Tombstone)
-                return null;
-            var value = previous ? state.Previous?.Value : state.Value;
-            return value is null ? null : (byte[])value.Clone();
-        }
-        finally
-        {
-            foreach (var record in (main.Inputs ?? []).Append(state))
-            {
-                CryptographicOperations.ZeroMemory(record.Value);
-                if (record.Previous is { } p)
-                    CryptographicOperations.ZeroMemory(p.Value);
-            }
-        }
+            throw new UnreadableRecordException(name, fileName, "no readable copy");
+        return new SecretEntry(this, name, fileName, vaultKey, state, inputs);
     }
 
-    private byte[]? ReadValueFromMetadata(string name, string fileName, List<(string File, byte[] Bytes, bool IsMain)> files, byte[] vaultKey, bool previous)
+    private SecretEntry OpenFromMetadata(string name, string fileName, List<(string File, byte[] Bytes, bool IsMain)> files, byte[] vaultKey)
     {
         List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
         foreach (var (file, bytes, isMain) in files)
@@ -616,35 +647,39 @@ public sealed class RecordVaultStore : IFileVaultStore
             {
                 var reason = ex is CryptographicException ? "it fails authentication" : ex.Message;
                 if (isMain)
-                    throw new TswapException($"The record of '{name}' can't be read ({reason}).");
+                    throw new UnreadableRecordException(name, fileName, reason);
                 _warnings?.WriteLine(
                     $"Warning: {file} (conflicted copy of record {fileName}) can't be used ({reason}). " +
                     "It is kept as it is and never chosen; remove it once you no longer need it.");
             }
         }
         if (inputs.Count == 0)
-            throw new TswapException($"The record of '{name}' can't be read (no readable copy).");
+            throw new UnreadableRecordException(name, fileName, "no readable copy");
 
-        RecordMetadata metadata;
-        IReadOnlyDictionary<Stamp, byte[]> sections;
         try
         {
-            (metadata, sections) = RecordMerge.MergeAllMetadata(inputs);
+            var (metadata, sections) = RecordMerge.MergeAllMetadata(inputs);
+            return new SecretEntry(this, name, fileName, vaultKey, metadata, sections);
         }
         catch (RecordConflictException ex)
         {
-            throw new TswapException(
-                $"The record of '{name}' can't be read: its copies can't be merged ({ex.Message}). Remove the damaged conflicted copy.");
+            var reason = $"its copies can't be merged ({ex.Message})";
+            throw new UnreadableRecordException(name, fileName, reason,
+                $"The record of '{name}' can't be read: {reason}. Remove the damaged conflicted copy.");
         }
-        if (metadata.Type == RecordType.Tombstone)
-            return null;
-        var version = previous ? metadata.PreviousVersion : metadata.Version;
-        if (version is null)
-            return null;
-        var fingerprints = previous ? metadata.PreviousFingerprints : metadata.Fingerprints;
+    }
 
+    /// <summary>
+    /// Brief T16-S2, for <see cref="SecretEntry.DecryptValue"/>: decrypts the value section of
+    /// <paramref name="version"/> (one of the store's two value-decryption sites, so it reports to
+    /// <see cref="ValueDecrypted"/>) and checks the plaintext against its stored fingerprints, as a
+    /// full load checks every copy (ruling 11, validation per input).
+    /// </summary>
+    internal byte[] OpenValueSection(string name, string fileName, RecordMetadata metadata, Stamp version,
+        FingerprintSet? fingerprints, IReadOnlyDictionary<Stamp, byte[]> sections, byte[] vaultKey)
+    {
         if (!sections.TryGetValue(version, out var section))
-            throw new TswapException($"The record of '{name}' can't be read (a version is listed without its value section).");
+            throw new UnreadableRecordException(name, fileName, "a version is listed without its value section");
         ValueDecrypted?.Invoke(fileName, version);
         byte[] value;
         try
@@ -653,41 +688,48 @@ public sealed class RecordVaultStore : IFileVaultStore
         }
         catch (Exception ex) when (ex is TswapException or CryptographicException)
         {
-            throw new TswapException(
-                $"The record of '{name}' can't be read ({(ex is CryptographicException ? "a value section fails authentication" : ex.Message)}).");
+            throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "a value section fails authentication" : ex.Message);
         }
-        // The one plaintext at hand is checked against its stored fingerprints, as a full load checks
-        // every copy (ruling 11, validation per input).
         if (fingerprints is { } stored && stored.VariantSetVersion == SecretVariants.CurrentSetVersion)
         {
             using var fingerprintKeys = FingerprintKeys.Derive(vaultKey);
             if (!Fingerprinter.Compute(value, fingerprintKeys).Equals(stored))
             {
                 CryptographicOperations.ZeroMemory(value);
-                throw new TswapException($"The record of '{name}' can't be read (its fingerprints don't match its value).");
+                throw new UnreadableRecordException(name, fileName, "its fingerprints don't match its value");
             }
         }
         return value;
     }
 
-    private static Secret ToSecret(SecretRecord state)
+    private static void ZeroValues(IEnumerable<SecretRecord> records)
     {
-        var outstanding = state.OutstandingBurn;
-        var history = state.Burns
-            .Where(b => !ReferenceEquals(b, outstanding))
-            .OrderBy(b => b.Burn)
-            .Select(b => new PastBurn(Hlc.ToDisplayDate(b.Burn.Hlc.PhysicalMs), b.Reason))
-            .ToList();
-        return new Secret(
-            Encoding.UTF8.GetString(state.Value),
-            Hlc.ToDisplayDate(state.CreatedMs),
-            Hlc.ToDisplayDate(state.Version.Hlc.PhysicalMs),
-            outstanding is null ? null : Hlc.ToDisplayDate(outstanding.Burn.Hlc.PhysicalMs),
-            outstanding?.Reason)
+        foreach (var record in records)
         {
-            History = history.Count == 0 ? null : history,
+            CryptographicOperations.ZeroMemory(record.Value);
+            if (record.Previous is { } p)
+                CryptographicOperations.ZeroMemory(p.Value);
+        }
+    }
+
+    /// <summary>
+    /// Brief T16-S2: the metadata of a record decoded whole (format 2), carrying no fingerprints, so
+    /// such a record still counts as not fingerprinted wherever it is listed.
+    /// </summary>
+    internal static RecordMetadata MetadataOf(SecretRecord state) =>
+        new(state.RecordId, state.Write, state.Type, state.Version, state.Name, state.CreatedMs, state.Burns,
+            Fingerprints: null, state.Previous?.Version, PreviousFingerprints: null, state.Extensions);
+
+    /// <summary>A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>.</summary>
+    internal static Secret ToSecret(SecretRecord state)
+    {
+        var info = SecretInfo.From(MetadataOf(state))
+            ?? throw new InvalidOperationException("A tombstone is no secret.");
+        return new Secret(Encoding.UTF8.GetString(state.Value), info.Created, info.Modified, info.BurnedAt, info.BurnReason)
+        {
+            History = info.History.Count == 0 ? null : info.History,
             PreviousValue = state.Previous is null ? null : Encoding.UTF8.GetString(state.Previous.Value),
-            PreviousBurned = state.Previous is not null && state.Burns.Any(b => b.Version.Equals(state.Previous.Version)),
+            PreviousBurned = info.PreviousBurned,
         };
     }
 
@@ -720,22 +762,15 @@ public sealed class RecordVaultStore : IFileVaultStore
         }
 
         foreach (var record in loaded.Values.Where(r => r.UnreadableReason is not null))
-            warnings?.WriteLine(
-                $"Warning: record {record.FileName} can't be read ({record.UnreadableReason}). Its secret is kept as " +
-                "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
-                "from a backup or another copy, or wait for the sync to finish.");
+            warnings?.WriteLine(UnreadableText(record.FileName, record.UnreadableReason!));
         var unreadableCount = loaded.Values.Count(r => r.UnreadableReason is not null);
         if (unreadableCount > 0)
             warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
 
         // Decision 3, absurd stamps: accepted (merge needs a total order) but reported.
-        var nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
-        const long year = 365L * 24 * 60 * 60 * 1000;
-        var yearAhead = nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
+        var yearAhead = YearAhead();
         foreach (var record in loaded.Values.Where(r => r.State is not null && MaxPhysical(r.State) > yearAhead))
-            warnings?.WriteLine(
-                $"Warning: record {record.FileName} carries a time stamp more than a year ahead of this machine's clock " +
-                "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.");
+            warnings?.WriteLine(YearAheadText(record.FileName));
 
         _loaded = loaded;
         return loaded;
@@ -743,6 +778,36 @@ public sealed class RecordVaultStore : IFileVaultStore
 
     private static long MaxPhysical(SecretRecord state) =>
         state.Burns.Select(b => b.Burn.Hlc.PhysicalMs).Append(state.Write.Hlc.PhysicalMs).Append(state.Version.Hlc.PhysicalMs).Max();
+
+    private static long MaxPhysical(RecordMetadata metadata) =>
+        metadata.Burns.Select(b => b.Burn.Hlc.PhysicalMs).Append(metadata.Write.Hlc.PhysicalMs).Append(metadata.Version.Hlc.PhysicalMs).Max();
+
+    private long YearAhead()
+    {
+        var nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
+        const long year = 365L * 24 * 60 * 60 * 1000;
+        return nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
+    }
+
+    // The load-time diagnostics, one text each for the full load and the metadata path (brief T16-S2).
+
+    private static string UnreadableText(string fileName, string reason) =>
+        $"Warning: record {fileName} can't be read ({reason}). Its secret is kept as " +
+        "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
+        "from a backup or another copy, or wait for the sync to finish.";
+
+    private static string YearAheadText(string fileName) =>
+        $"Warning: record {fileName} carries a time stamp more than a year ahead of this machine's clock " +
+        "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.";
+
+    private static string UnusableCopyText(string copyName, SyncConflictTool tool, string fileName, string reason) =>
+        $"Warning: {copyName} ({ToolName(tool)} conflicted copy of record {fileName}) can't be used ({reason}). " +
+        "It is kept as it is and never chosen; remove it once you no longer need it.";
+
+    private static string CopyNote(string fileName, SyncConflictTool tool, string copyName, Stamp copyVersion, Stamp? mainVersion) =>
+        $"Note: record {fileName} has a {ToolName(tool)} conflicted copy ({copyName}): version {copyVersion} " +
+        $"vs {(mainVersion is null ? "no main file" : $"version {mainVersion}")}. Combined by the merge rules; the copy is " +
+        "removed the next time this record is written.";
 
     /// <summary>
     /// Decision 4: folds a record's sync-conflict copies into its main file by the merge rules. A
@@ -767,7 +832,6 @@ public sealed class RecordVaultStore : IFileVaultStore
         foreach (var copy in copies)
         {
             var path = Path.Combine(RecordsDir, copy.ConflictingFilename);
-            var tool = ToolName(copy.Tool);
             byte[] bytes;
             SecretRecord copyState;
             try
@@ -780,18 +844,13 @@ public sealed class RecordVaultStore : IFileVaultStore
             catch (Exception ex) when (ex is TswapException or CryptographicException or IOException or UnauthorizedAccessException)
             {
                 var reason = ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message;
-                warnings?.WriteLine(
-                    $"Warning: {copy.ConflictingFilename} ({tool} conflicted copy of record {fileName}) can't be used ({reason}). " +
-                    "It is kept as it is and never chosen; remove it once you no longer need it.");
+                warnings?.WriteLine(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, reason));
                 continue;
             }
             ObserveAll(copyState);
             if (main.UnreadableReason is not null)
                 continue;
-            warnings?.WriteLine(
-                $"Note: record {fileName} has a {tool} conflicted copy ({copy.ConflictingFilename}): version {copyState.Version} " +
-                $"vs {(main.State is null ? "no main file" : $"version {main.State.Version}")}. Combined by the merge rules; the copy is " +
-                "removed the next time this record is written.");
+            warnings?.WriteLine(CopyNote(fileName, copy.Tool, copy.ConflictingFilename, copyState.Version, main.State?.Version));
             inputs.Add(copyState);
             folded.Add((path, bytes));
         }
@@ -1140,147 +1199,210 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// (<see cref="SecretRecordCodec.DecodeMetadata"/>). Conflicted copies fold in all at once by
     /// <see cref="RecordMerge.MergeAllMetadata"/> (the value sections are read from the framing,
     /// still encrypted, and compared by bytes and fingerprints). A record whose main file or any
-    /// conflicted copy is format 2 counts as not fingerprinted without that file being decrypted
-    /// (ruling 12: its version stamp is inside its payload, so this path can't tell whether it is the
-    /// newer version). A record that can't be read, or whose copies can't be merged here, is listed
-    /// in <see cref="VaultMetadata.Unreadable"/> and warned about. Reads only.
+    /// conflicted copy is format 2 counts as not fingerprinted; with <see cref="FormatTwoRecords.Skip"/>
+    /// that file is not decrypted (ruling 12: its version stamp is inside its payload, so this path
+    /// can't tell whether it is the newer version) and the record isn't listed. A record that can't
+    /// be read, or whose copies can't be merged here, is listed in <see cref="VaultMetadata.Unreadable"/>
+    /// and warned about. Reads only.
+    /// <para>
+    /// Brief T16-S2: with <see cref="FormatTwoRecords.Decode"/> (owner decision 1, for <c>names</c>,
+    /// <c>list</c> and <c>burned</c>) exactly the records with a format 2 file are decoded whole, as the
+    /// full load does (<see cref="ReadRecord"/>, <see cref="FoldConflictCopies"/>), listed without
+    /// fingerprints and counted in <see cref="VaultMetadata.FormatTwoDecoded"/>; their values are
+    /// zeroed at once. The warnings are the full load's texts (unreadable records, conflicted copies
+    /// with the sync tool's name, stamps more than a year ahead), in its order.
+    /// </para>
     /// </summary>
-    public VaultMetadata LoadMetadata(byte[] vaultKey, TextWriter? warnings = null)
+    public VaultMetadata LoadMetadata(byte[] vaultKey, TextWriter? warnings = null, FormatTwoRecords formatTwo = FormatTwoRecords.Skip)
     {
         warnings ??= _warnings;
         List<RecordMetadata> records = [];
-        List<string> unreadable = [];
+        List<(string FileName, string Text)> unreadable = [];
         Dictionary<string, IReadOnlyDictionary<Stamp, byte[]>> chosenSections = new(StringComparer.Ordinal);
-        int notFingerprinted = 0, olderVariantSet = 0;
+        int notFingerprinted = 0, olderVariantSet = 0, formatTwoDecoded = 0;
         var recordsDir = RecordsDir;
         if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
         {
             MetadataSections = chosenSections;
-            return new VaultMetadata(records, 0, 0, unreadable);
+            return new VaultMetadata(records, 0, 0, []);
         }
 
         var scan = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir));
         var mains = scan.ValidRecordFilenames.ToHashSet(StringComparer.Ordinal);
         var copiesByRecord = scan.Conflicts.GroupBy(c => c.RecordFilename, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
-        foreach (var fileName in mains.Concat(copiesByRecord.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        FingerprintKeys? fingerprintKeys = null;
+        try
         {
-            List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
-            if (mains.Contains(fileName))
+            foreach (var fileName in mains.Concat(copiesByRecord.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
             {
-                var problem = ReadMainMetadata(fileName, vaultKey, inputs, out var isV2);
-                if (isV2)
+                var copies = copiesByRecord.GetValueOrDefault(fileName) ?? [];
+                byte[]? mainBytes = null;
+                string? mainProblem = null;
+                if (mains.Contains(fileName))
+                {
+                    try
+                    {
+                        mainBytes = _owner.ReadAllBytes(Path.Combine(recordsDir, fileName));
+                    }
+                    catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+                    {
+                        mainProblem = ex.Message;
+                    }
+                }
+                if (mainBytes is not null && SecretRecordCodec.FormatVersionOf(mainBytes) == KeyringFormat.RecordFormatVersionV2)
                 {
                     notFingerprinted++;
+                    if (formatTwo == FormatTwoRecords.Decode)
+                    {
+                        formatTwoDecoded++;
+                        DecodeFormatTwo(fileName, copies);
+                    }
                     continue;
                 }
-                if (problem is not null)
+
+                List<(string Name, SyncConflictTool Tool, byte[] Bytes)> copyBytes = [];
+                foreach (var copy in copies)
                 {
-                    unreadable.Add(fileName);
-                    warnings?.WriteLine(
-                        $"Warning: record {fileName} can't be read ({problem}). Its secret is kept as present but unknown: " +
-                        "restore the file from a backup or another copy, or wait for the sync to finish.");
+                    try
+                    {
+                        copyBytes.Add((copy.ConflictingFilename, copy.Tool, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename))));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+                    {
+                        WarnUnusableCopy(copy.ConflictingFilename, copy.Tool, fileName, ex.Message);
+                    }
+                }
+                // Ruling 12: a format 2 copy is never decrypted with Skip; the record is not fingerprinted.
+                if (copyBytes.Any(c => SecretRecordCodec.FormatVersionOf(c.Bytes) == KeyringFormat.RecordFormatVersionV2))
+                {
+                    notFingerprinted++;
+                    if (formatTwo == FormatTwoRecords.Decode)
+                    {
+                        formatTwoDecoded++;
+                        DecodeFormatTwo(fileName, copies);
+                    }
                     continue;
                 }
-            }
 
-            var copies = copiesByRecord.GetValueOrDefault(fileName) ?? [];
-            List<(string Name, byte[] Bytes)> copyBytes = [];
-            foreach (var copy in copies)
-            {
+                List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
+                RecordMetadata? main = null;
+                if (mainBytes is not null)
+                {
+                    mainProblem = ReadMainMetadata(fileName, mainBytes, vaultKey, out var decoded);
+                    if (decoded is { } d)
+                    {
+                        inputs.Add(d);
+                        main = d.Metadata;
+                    }
+                }
+                foreach (var (copyName, tool, bytes) in copyBytes)
+                {
+                    RecordMetadata copyMetadata;
+                    try
+                    {
+                        RecordDecrypted?.Invoke(copyName);
+                        var decoded = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
+                            ?? throw new TswapException("it is not a format 3 record");
+                        if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
+                            throw new TswapException("its record id belongs to another record");
+                        copyMetadata = decoded.Metadata;
+                        if (mainProblem is null)
+                            inputs.Add(decoded);
+                    }
+                    catch (Exception ex) when (ex is TswapException or CryptographicException)
+                    {
+                        WarnUnusableCopy(copyName, tool, fileName, ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message);
+                        continue;
+                    }
+                    if (mainProblem is null)
+                        warnings?.WriteLine(CopyNote(fileName, tool, copyName, copyMetadata.Version, main?.Version));
+                }
+                if (mainProblem is not null)
+                {
+                    unreadable.Add((fileName, UnreadableText(fileName, mainProblem)));
+                    continue;
+                }
+                if (inputs.Count == 0)
+                    continue;
+
+                (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) merged;
                 try
                 {
-                    copyBytes.Add((copy.ConflictingFilename, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename))));
+                    merged = RecordMerge.MergeAllMetadata(inputs);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+                catch (RecordConflictException ex)
                 {
-                    warnings?.WriteLine($"Warning: {copy.ConflictingFilename} (conflicted copy of record {fileName}) can't be read ({ex.Message}); it is not used.");
+                    unreadable.Add((fileName,
+                        $"Warning: record {fileName} can't be read: its copies can't be merged ({ex.Message}). Remove the damaged " +
+                        "conflicted copy; a full load (any command that writes this record) may still be able to merge them."));
+                    continue;
                 }
+                records.Add(merged.Metadata);
+                chosenSections[fileName] = merged.Sealed;
+                var retained = merged.Metadata.RetainedVersions().ToList();
+                if (retained.Any(v => v.Fingerprints is null))
+                    notFingerprinted++;
+                if (retained.Any(v => v.Fingerprints is { } set && set.VariantSetVersion < SecretVariants.CurrentSetVersion))
+                    olderVariantSet++;
             }
-            // Ruling 12: a format 2 copy is never decrypted here; the record is not fingerprinted.
-            if (copyBytes.Any(c => SecretRecordCodec.FormatVersionOf(c.Bytes) == KeyringFormat.RecordFormatVersionV2))
-            {
-                notFingerprinted++;
-                continue;
-            }
-            foreach (var (copyName, bytes) in copyBytes)
-            {
-                try
-                {
-                    RecordDecrypted?.Invoke(copyName);
-                    var decoded = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
-                        ?? throw new TswapException("it is not a format 3 record");
-                    if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
-                        throw new TswapException("its record id belongs to another record");
-                    inputs.Add(decoded);
-                }
-                catch (Exception ex) when (ex is TswapException or CryptographicException)
-                {
-                    var reason = ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message;
-                    warnings?.WriteLine(
-                        $"Warning: {copyName} (conflicted copy of record {fileName}) can't be used ({reason}). " +
-                        "It is kept as it is and never chosen; remove it once you no longer need it.");
-                }
-            }
-            if (inputs.Count == 0)
-                continue;
-
-            (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) merged;
-            try
-            {
-                merged = RecordMerge.MergeAllMetadata(inputs);
-            }
-            catch (RecordConflictException ex)
-            {
-                unreadable.Add(fileName);
-                warnings?.WriteLine(
-                    $"Warning: record {fileName} can't be read: its copies can't be merged ({ex.Message}). Remove the damaged " +
-                    "conflicted copy; a full load (any command that writes this record) may still be able to merge them.");
-                continue;
-            }
-            records.Add(merged.Metadata);
-            chosenSections[fileName] = merged.Sealed;
-            var retained = merged.Metadata.RetainedVersions().ToList();
-            if (retained.Any(v => v.Fingerprints is null))
-                notFingerprinted++;
-            if (retained.Any(v => v.Fingerprints is { } set && set.VariantSetVersion < SecretVariants.CurrentSetVersion))
-                olderVariantSet++;
         }
+        finally
+        {
+            fingerprintKeys?.Dispose();
+        }
+
+        foreach (var (_, text) in unreadable)
+            warnings?.WriteLine(text);
         if (unreadable.Count > 0)
             warnings?.WriteLine($"Warning: {unreadable.Count} unreadable record(s) in {recordsDir}.");
+        var yearAhead = YearAhead();
+        foreach (var record in records.Where(r => MaxPhysical(r) > yearAhead))
+            warnings?.WriteLine(YearAheadText(FilenameHasher.ToFilename(record.RecordId)));
         MetadataSections = chosenSections;
-        return new VaultMetadata(records, notFingerprinted, olderVariantSet, unreadable.Order(StringComparer.Ordinal).ToList());
+        return new VaultMetadata(records, notFingerprinted, olderVariantSet, [.. unreadable.Select(u => u.FileName).Order(StringComparer.Ordinal)])
+        {
+            FormatTwoDecoded = formatTwoDecoded,
+        };
+
+        void WarnUnusableCopy(string copyName, SyncConflictTool tool, string fileName, string reason) =>
+            warnings?.WriteLine(UnusableCopyText(copyName, tool, fileName, reason));
+
+        // A record with a format 2 file, decoded whole as the full load does; its values zeroed at once.
+        void DecodeFormatTwo(string fileName, List<ConflictWarning> copies)
+        {
+            fingerprintKeys ??= FingerprintKeys.Derive(vaultKey);
+            var main = mains.Contains(fileName) ? ReadRecord(fileName, vaultKey) : null;
+            var folded = FoldConflictCopies(fileName, copies, main, vaultKey, fingerprintKeys, warnings);
+            try
+            {
+                if (folded.UnreadableReason is { } reason)
+                    unreadable.Add((fileName, UnreadableText(fileName, reason)));
+                else if (folded.State is { } state)
+                    records.Add(MetadataOf(state));
+            }
+            finally
+            {
+                ZeroValues((folded.Inputs ?? []).Concat(folded.State is null ? [] : [folded.State]));
+            }
+        }
     }
 
     /// <summary>
-    /// <see cref="LoadMetadata"/>'s main file: adds its metadata to <paramref name="inputs"/>, or
-    /// returns why it can't be read. A format 2 main file sets <paramref name="isV2"/> and is not decrypted.
+    /// <see cref="LoadMetadata"/>'s format 3 main file: its metadata and sections, or why it can't be read.
     /// </summary>
-    private string? ReadMainMetadata(string fileName, byte[] vaultKey, List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs, out bool isV2)
+    private string? ReadMainMetadata(string fileName, byte[] bytes, byte[] vaultKey,
+        out (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed)? decoded)
     {
-        isV2 = false;
-        byte[] bytes;
-        try
-        {
-            bytes = _owner.ReadAllBytes(Path.Combine(RecordsDir, fileName));
-        }
-        catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
-        {
-            return ex.Message;
-        }
-        if (SecretRecordCodec.FormatVersionOf(bytes) == KeyringFormat.RecordFormatVersionV2)
-        {
-            isV2 = true;
-            return null;
-        }
+        decoded = null;
         try
         {
             RecordDecrypted?.Invoke(fileName);
-            var decoded = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
+            var read = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
                 ?? throw new TswapException("it is not a format 3 record");
-            if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
+            if (FilenameHasher.ToFilename(read.Metadata.RecordId) != fileName)
                 return "its record id does not match its file name";
-            inputs.Add(decoded);
+            decoded = read;
             return null;
         }
         catch (Exception ex) when (ex is TswapException or CryptographicException)

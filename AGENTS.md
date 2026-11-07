@@ -200,6 +200,11 @@ or burned; HLC write stamp + origin id authenticated in the header; padded to 25
 `SaveSecrets` writes only changed records, re-reading each first (stale-write guard). Merge rules
 live in `RecordMerge`. `migrate --to-records` converts a classic vault; `vault merge` folds in
 another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
+Read commands decrypt only what they use (T16 Stage 2, #220): `redact`, `tocomment`, `check`, `names`,
+`list` and `burned` read metadata only (`LoadMetadata`; `redact` and `tocomment` match by fingerprint
+through `SecretMatcher`), and `get` and `apply` decrypt only the records they name (`VaultView`,
+`RecordVaultStore.OpenSecret`). `LoadSecrets`, which decrypts every record, is left only to the write
+commands until Stage 2b; new code never calls it to read.
 
 ### Code Organization (TswapCli)
 

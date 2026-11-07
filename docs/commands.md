@@ -43,6 +43,37 @@ Three commands marked without `sudo` have one case that needs it, as their descr
 
 On Windows there is no sudo: run a command that needs it from an elevated command prompt.
 
+## Fingerprints, format 2 records and `vault reindex`
+
+`redact` and `tocomment` recognise secrets by the keyed fingerprints in each record's encrypted
+metadata and decrypt no value (since 0.3; what every command decrypts:
+[security-model.md](security-model.md#what-each-command-decrypts)). A record without fingerprints
+can't be recognised, so on a vault holding one they refuse, exit 1, print nothing on stdout and
+don't open the file. The message (one line on stderr, after `❌ Error:`, wrapped here):
+
+```
+'redact' recognises secrets by their fingerprints, and 2 record(s) in this vault have none yet
+(written by an older tswap, or the vault was never reindexed). Ask the user to run
+`sudo tswap vault reindex`. The file was not read.
+```
+
+(`tocomment` adds "or changed".) Such records are format 2 ones (from tswap 0.1, or written since
+by a 0.1 machine on a shared folder) and format 3 ones written without fingerprints. Run
+`sudo tswap vault reindex` once ([what it does](multi-machine.md#record-format-3-and-vault-reindex)).
+Records fingerprinted by an older tswap are still matched with the fingerprints they have; the
+commands print a note naming the count and the reindex, which adds the newer variants.
+
+The other reading commands keep working on format 2 records: `names`, `list`, `burned`, and
+`check`, `get` or `apply` on a record they name, decrypt such a record whole (the only way to read
+format 2), wipe the values they don't use, and print one line on stderr after their output, with
+the number of records and the same fix. Exit codes don't change. Neither text ever names a secret,
+a file or a value.
+
+Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
+lines, and neither command matches a secret inside a label or marker it inserted itself; `get` and
+`apply` no longer report records they don't read; `check` no longer stops on an unreadable format 2
+record that no marker names.
+
 ## Commands
 
 <!-- BEGIN GENERATED: commands (TswapTests/Docs/CommandReference.cs) -->

@@ -27,20 +27,27 @@ internal static class RecordVaultTestSupport
 
     /// <summary>
     /// <c>init</c> on <paramref name="machine"/> (one YubiKey slot + recovery), a record-store vault
-    /// in <paramref name="vaultDir"/> (default <c>&lt;dir&gt;/vault</c>). Returns the recovery key
-    /// (base64).
+    /// in <paramref name="vaultDir"/> (default <c>&lt;dir&gt;/vault</c>), marked <c>record-format 3</c>
+    /// as <c>init</c> makes it. Returns the recovery key (base64).
     /// <para>
-    /// Brief T16-S1: <c>init</c> now makes the record vault itself (before, this helper converted an
-    /// <c>init --keyring</c> vault by hand) and marks it <c>record-format 3</c>. The marker is removed
-    /// here, so the folder is what tswap 0.1 made (records written in format 2) and the store's tests
-    /// keep exercising that path; tests of format 3 write the marker themselves (<see cref="WriteMarker"/>).
+    /// Brief T16-S2: the fixtures follow what <c>init</c> makes (format 3), because a format 2 vault
+    /// makes <c>redact</c>/<c>tocomment</c> refuse and the reading commands warn. Tests of format 2
+    /// use <see cref="InitFormatTwoVault"/>.
     /// </para>
     /// </summary>
-    public static string InitRecordVault(FleetMachine machine, string? vaultDir = null)
+    public static string InitRecordVault(FleetMachine machine, string? vaultDir = null) =>
+        RecoveryKeyFrom(vaultDir is null ? machine.Ok("", "init", "--yubikey") : machine.Ok("", "init", "--yubikey", "--folder", vaultDir));
+
+    /// <summary>
+    /// <see cref="InitRecordVault"/> with the <c>record-format</c> marker removed, so the folder is
+    /// what tswap 0.1 made (records written in format 2); tests of format 3 on such a folder write
+    /// the marker themselves (<see cref="WriteMarker"/>).
+    /// </summary>
+    public static string InitFormatTwoVault(FleetMachine machine, string? vaultDir = null)
     {
-        var output = vaultDir is null ? machine.Ok("", "init", "--yubikey") : machine.Ok("", "init", "--yubikey", "--folder", vaultDir);
+        var recoveryKey = InitRecordVault(machine, vaultDir);
         File.Delete(Path.Combine(machine.VaultDir!, RecordVaultStore.RecordFormatMarkerFileName));
-        return RecoveryKeyFrom(output);
+        return recoveryKey;
     }
 
     /// <summary>The recovery key line printed by init.</summary>
