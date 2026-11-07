@@ -455,6 +455,25 @@ public class SlotMergeTests : IDisposable
         Assert.Contains("is neither a slot receipt", stderr);
     }
 
+    /// <summary>#247: a record vault's config.json holds no slots; the refusal names its vault folder and 'vault merge'.</summary>
+    [Fact]
+    public void Merge_RecordVaultConfigJson_RefusedNamingVaultMerge()
+    {
+        RouterVault();
+        var copy = Another("copy", RandomNumberGenerator.GetBytes(32));
+        copy.Ok("", "init", "--tpm");
+        var before = _router.ConfigText;
+
+        var (exit, _, stderr) = _router.Run("", "slot", "merge", copy.ConfigPath, "--yes");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("holds no slots", stderr);
+        Assert.Contains(copy.VaultDir!, stderr);
+        Assert.Contains("vault merge", stderr);
+        Assert.Equal(before, _router.ConfigText);
+        Assert.Empty(_router.Backups);
+    }
+
     /// <summary>FIDO2 plan, task 2 row 1: a config whose keyring has a FIDO2 slot merges it; the listing names it.</summary>
     [Fact]
     public void Merge_KeyringWithFido2Slot_Accepted()

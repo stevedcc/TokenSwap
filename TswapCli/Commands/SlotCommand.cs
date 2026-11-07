@@ -45,7 +45,7 @@ public sealed class SlotCommand : ICliCommand
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey";
     public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
@@ -1288,7 +1288,7 @@ public sealed class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteMerge(CommandContext ctx, string[] args)
     {
-        var usage = $"{ctx.Prefix} slot merge <receipt-or-config.json> [--yes] [{RecoveryKeyFlag}]";
+        var usage = $"{ctx.Prefix} slot merge <receipt> [--yes] [{RecoveryKeyFlag}]";
         var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(args);
         var yes = rest.Contains("--yes");
         var positional = rest.Where(a => a != "--yes").ToArray();
@@ -1308,7 +1308,7 @@ public sealed class SlotCommand : ICliCommand
 
         ctx.RequireSudo("slot merge");
 
-        var (incoming, source) = ReadMergeFile(path);
+        var (incoming, source) = ReadMergeFile(path, ctx.Prefix);
         if (incoming.FormatVersion != keyring.FormatVersion)
             throw new TswapException(
                 $"The {source} is for a keyring format version {incoming.FormatVersion}; this vault's is version " +
@@ -1419,7 +1419,7 @@ public sealed class SlotCommand : ICliCommand
     /// <c>Keyring</c>). Returns the incoming keyring (a receipt becomes a one-slot keyring) and a
     /// name for messages.
     /// </summary>
-    private static (TswapCore.Keyring.Keyring Keyring, string Source) ReadMergeFile(string path)
+    private static (TswapCore.Keyring.Keyring Keyring, string Source) ReadMergeFile(string path, string prefix)
     {
         if (!File.Exists(path))
             throw new TswapException($"File not found: {path}");
@@ -1459,8 +1459,34 @@ public sealed class SlotCommand : ICliCommand
             return (DecodeKeyringOrCorrupt(other, "the other copy's config.json"), "other copy's config.json");
         }
 
+        if (root is not null && RecordVaultConfig(json) is { } record)
+        {
+            var folder = record.VaultDir is null ? "" : $" ({record.VaultDir})";
+            throw new TswapException(
+                $"{path} is a record vault's config.json, which holds no slots: they are in its vault folder{folder}. " +
+                $"Copy that folder here and run 'sudo {prefix} vault merge <the copied folder>'.");
+        }
+
         throw new TswapException(
             $"{path} is neither a slot receipt (from 'slot accept') nor a keyring vault's config.json.");
+    }
+
+    /// <summary>
+    /// A record vault's machine config (<c>Store</c> "records" or a <c>VaultDir</c>), or null. A pending
+    /// 'slot request' config has neither, so it keeps the generic refusal.
+    /// </summary>
+    private static Config? RecordVaultConfig(string json)
+    {
+        Config? config;
+        try
+        {
+            config = System.Text.Json.JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+        return config is { Store: RecordVaultStore.StoreName } or { VaultDir: not null } ? config : null;
     }
 
     internal static TswapCore.Keyring.Keyring DecodeKeyringOrCorrupt(Config config, string what = "config.json")

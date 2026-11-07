@@ -284,8 +284,7 @@ Finish and check one key before you start the next. A vault whose keys still sha
   of the vault at once, but the new slot goes only into the keyring of the vault you enrol it in.
   Machines that share that vault folder get it with the folder. A machine with its own copy
   doesn't, and there the key no longer opens the vault until the slot is brought in, with
-  `sudo tswap vault merge <a copy of this vault folder>` on that machine (or `slot merge`, for a
-  vault that keeps its keyring in `config.json`). That merge unlocks the copy first, so the machine
+  `sudo tswap vault merge <a copy of this vault folder>` on that machine. That merge unlocks the copy first, so the machine
   needs another way in that it can use. How:
   [Copying the folder](multi-machine.md#copying-the-folder-scp-rsync-or-a-usb-stick) and
   [What `slot merge` adds](multi-machine.md#what-slot-merge-adds).

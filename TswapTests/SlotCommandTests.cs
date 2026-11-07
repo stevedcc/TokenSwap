@@ -459,4 +459,18 @@ public class SlotCommandTests : IDisposable
         Assert.Equal("tswap " + forms.Replace(" | ", " | tswap "), usage);
         Assert.DoesNotContain("{", usage);
     }
+
+    [Fact]
+    public void SlotHelp_MergeTakesAReceipt()
+    {
+        var dir = NewTempDir();
+        var help = new SlotCommand().HelpUsage;
+
+        var (_, _, mergeUsage) = Run(dir, _keyA, "", "slot", "merge");
+
+        Assert.Contains("slot merge <receipt> [--yes]", help);
+        Assert.DoesNotContain("receipt-or-config.json", help);
+        Assert.Contains("Usage: tswap slot merge <receipt> [--yes]", mergeUsage);
+        Assert.DoesNotContain("receipt-or-config.json", mergeUsage);
+    }
 }

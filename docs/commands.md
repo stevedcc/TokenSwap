@@ -22,7 +22,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `slot request` | no | Runs on the new machine, which has no usable vault yet; it touches no existing vault's secrets |
 | `slot approve` | sudo | Unlocks this vault and writes a file that lets whoever holds the request's private key open it: the same risk as `export` |
 | `slot accept` | no | Finishes enrolment on the new machine. On a record-store vault, or with `--vault-dir`, it also writes the new slot into the vault folder's keyring; the human check for that slot was the earlier `sudo tswap slot approve` |
-| `slot merge` | sudo | Adds the slots of a receipt or of another copy's `config.json`: each one is a new way to open the vault |
+| `slot merge` | sudo | Adds the slots of a receipt: each one is a new way to open the vault |
 | `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) as a new slot: a new way to open the vault |
 | `broker serve` | no | Runs as the vault's own user; it refuses root |
 | `broker unlock` | no | Runs as the vault user; it refuses sudo |
@@ -58,7 +58,7 @@ Create a record vault (one file per secret, shareable by sync tools) in \<config
 ### slot
 
 ```
-sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt-or-config.json> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
+sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
 ```
 
 Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)

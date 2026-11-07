@@ -121,6 +121,23 @@ public class RecoveryKeyTests : IDisposable
         Assert.DoesNotContain(_recoveryKey, stdout);
     }
 
+    /// <summary>#247: a record vault keeps its slots in the vault folder, so the next step is 'vault merge' of that folder.</summary>
+    [Fact]
+    public void Recover_NextStep_NamesVaultMergeOfThisFolder()
+    {
+        RouterVault();
+        _router.Tpm = RandomNumberGenerator.GetBytes(32);
+
+        var stdout = _router.Ok(Stdin, "recover", "--tpm");
+
+        var nextStep = stdout[stdout.IndexOf("Slots in this machine's keyring", StringComparison.Ordinal)..];
+        Assert.Contains("sudo tswap vault merge", nextStep);
+        Assert.Contains(Path.GetFullPath(_router.VaultDir!), nextStep);
+        Assert.Contains("--yes", nextStep);
+        Assert.DoesNotContain("config.json", nextStep);
+        Assert.DoesNotContain("slot merge", nextStep);
+    }
+
     [Fact]
     public void RecoverTpm_AfterTheTpmWasCleared_TheNewTpmOpensTheVault()
     {
