@@ -66,21 +66,23 @@ public sealed class RunCommand : ICliCommand
                 ctx.Console.Out.WriteLine($"Found files: {string.Join(", ", fileTokens)}");
         }
 
-        // Unlock and get secrets
+        // Unlock. Brief T16-S3: only the value versions run substitutes are decrypted (its tokens and
+        // the markers of its files, each once); every record's metadata is read without decrypting a
+        // value, which also warns, naming the file, about a record nobody named that can't be read.
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
+        using var view = ctx.OpenVault(key);
+        view.LoadAll(FormatTwoRecords.Skip);
 
-        // Verify all tokens exist and have non-null values. Null can appear if the secrets DB
-        // was tampered/corrupted (System.Text.Json can produce null for non-nullable properties).
-        // A token is a name or 'name:previous' (SecretsDb.ResolveToken).
+        // Resolve every token first: a missing secret, a missing previous value or an unreadable record
+        // (named by its hashed file) refuses before anything is written or started.
+        // A token is a name or 'name:previous'.
         Dictionary<string, string> secretValues = [];
         foreach (var token in tokens)
         {
-            secretValues[token] = db.ResolveToken(token)
-                ?? throw new TswapException($"Secret '{token}' has a null value in the database — data may be corrupted.");
+            secretValues[token] = view.ResolveToken(token);
             // Warn about a burned value (current or previous), as apply does.
-            if (db.IsBurnedToken(token))
+            if (view.IsBurnedToken(token))
                 ctx.Console.Error.WriteLine($"Warning: '{token}' is a burned value — using it anyway; rotate it after use.");
         }
 
@@ -107,7 +109,7 @@ public sealed class RunCommand : ICliCommand
                 var source = FullSourcePath(token, filesEnv.CurrentDirectory);
                 if (!bySource.TryGetValue(source, out var content))
                 {
-                    var (text, applied) = Apply.ApplySecretsReporting(ReadSource(token, source), db, ctx.Console.Error);
+                    var (text, applied) = Apply.ApplySecretsReporting(ReadSource(token, source), view, ctx.Console.Error);
                     foreach (var (name, raw, written) in applied)
                         Redact(name, raw, written);
                     bySource[source] = content = text;
@@ -183,7 +185,11 @@ public sealed class RunCommand : ICliCommand
                 .ToList();
 
             var runner = ctx.PtyRunner();
-            return files is null ? runner.Run(argv, replacements) : files.RunChild(() => runner.Run(argv, replacements));
+            var exitCode = files is null ? runner.Run(argv, replacements) : files.RunChild(() => runner.Run(argv, replacements));
+
+            // After the child's output: the records run named that are still in format 2 (decrypted whole).
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
+            return exitCode;
         }
         finally
         {
