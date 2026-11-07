@@ -3,6 +3,18 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans, task by task, TDD per task (superpowers:test-driven-development).
 
+**Plan review round 2** (GLM approve; MiMo: one Important, five Minors). P1: masking is now the
+union of all complete-occurrence intervals, merged into maximal runs, one label per run (transitive
+by construction), with chain and random-overlap tests. m1 D2's wording gives the quantised bound;
+m2 the signal path keeps today's `Flush`, declared below with the reason; m3 and GLM N3 `v1.0.3` is
+tagged from `main` before R3 (gate G0); m4 and GLM N1 T1's surrogate call and test land after the
+merge of Stage 2's task 1, with no stand-in anywhere; m5 `FingerprintTexts.cs` is listed as Stage 2's,
+read-only here; GLM N2 T2 starts after R1 is packed; GLM N4 accepted as is (the zeroing is Stage
+2's S6, reviewed there). Not taken: GLM N5. The test host *is* the process that builds the runner
+(`RedactingPty.TestHost` constructs a real runner and runs the child under it; the test assembly
+starts the test host), and it is the assembly with `InternalsVisibleTo`, so the wording stands.
+macOS ICANON stays **pending owner confirmation**.
+
 **Plan review round 1** (GLM, MiMo: request changes). All findings addressed in place:
 contract gate and fingerprint-set source aligned with Stage 2's approved plan (3457dbc: tasks 1-4,
 S7, `SplitsASurrogatePair`, `UnreadableRecordException`); the Linux probe accepts a read on
@@ -86,7 +98,8 @@ builds the fast one.
   "only its own tokens", `:247-251`, is overruled.)
 - **D2, hold-back: interactive prompts are detected (owner design).** To catch a match split across
   reads, the redactor holds back the end of the output. With `PendingFrom` and tswap's character
-  classes, single-line secrets hold only the trailing word (less than today's longest form − 1). A
+  classes, single-line secrets hold only the trailing word, at most the per-class cap − 1, the cap
+  rounded up to a multiple of 256 characters ("Hold-back as a timing channel"). A
   **multi-line** vault secret (PEM, kubeconfig) may contain any text, so up to its raw length is held
   on every pause, which would hide prompts. Therefore:
   - When the redactor holds a non-empty tail and the output has been quiet for ~50 ms, the relay
@@ -117,9 +130,11 @@ builds the fast one.
 
 ## Outward gates (owner)
 
+- **G0** Tag `v1.0.3` from `main` b4fda29 (D4; it needs nothing from the 1.1 PR) **before R3**, so
+  R3's package validation can restore its 1.0.3 baseline. Publishes to nuget.org.
 - **G1** Merge the RedactingPty PR (CI: 9 legs green).
-- **G2** Tags `v1.0.3`, then `v1.1.0` (D4): each publishes to nuget.org. tswap's PR CI can't pass
-  until 1.1.0 is there.
+- **G2** Tag `v1.1.0` (D4), after G1: publishes to nuget.org. tswap's PR CI can't pass until 1.1.0 is
+  there.
 - **G3** Merge the tswap PR (`Closes #106`, `Refs #220`).
 - **G4** v0.3.0 tag, with the rest of v0.3.0.
 
@@ -172,10 +187,15 @@ in the coverage warning's `<m>`; `run` goes on. No test input changes.
   its new test files; docs: the `run` row and limits in `docs/security-model.md`, `run` in
   `docs/commands.md`, its section of `docs/release-notes/v0.3.0.md`. `Redaction.cs` and
   `FilledFiles*.cs` are Stage 3's but stay unchanged.
+- Stage 2's, read-only for Stage 3: `TswapCli/FingerprintTexts.cs` (the format 2 text `RunCoverage`
+  prints; Stage 3's own texts live in `RunCoverage.cs`). Stage 2's table should list it the same way
+  (for the coordinator; Stage 3 doesn't edit Stage 2's plan).
 
-**Order.** RedactingPty R1-R3 and tswap T1-T2 start at once, in parallel with Stage 2; T1's
-surrogate check calls `FingerprintIndex.SplitsASurrogatePair` once Stage 2's task 1 is merged in
-(before that, T1 is written against the predicate's documented contract and its test). **T3 onwards
+**Order.** RedactingPty R1-R3 and tswap T1 start at once, in parallel with Stage 2. T1's surrogate
+call to `FingerprintIndex.SplitsASurrogatePair` and its test `Scan_WindowSplittingASurrogatePair_NoHit`
+are committed only after Stage 2's task 1 is merged in (a follow-up commit within T1 if the rest is
+ready first); no stand-in predicate is written anywhere, and `FingerprintIndex.cs` is never touched.
+T2 starts once R1 is packed as `1.1.0-local.N` (it tests through the real `StreamRedactor`). **T3 onwards
 start when Stage 2's tasks 1-4 (the contract; task 4 adds `ctx.OpenVault`) are pushed**; Stage 3
 merges them in (`git merge --no-edit`), never edits their files.
 
@@ -250,21 +270,32 @@ rather than drops matchers: a third-party runner must not silently redact less.
   indices, lengths and the matcher's type only, never window or match text). Hold point =
   the minimum of each matcher's `PendingFrom` and the plaintext pending point (the smallest `i` whose
   `window[i..]` is a proper prefix of some `Find`, exact). Then today's straddler pull-back over all
-  spans, until stable, and the surrogate guard. In the emitted part, spans are chosen **longest first,
-  then leftmost, then plaintext before matcher, then list order**, never overlapping, and replaced in
-  one pass, so replacement text is never matched again. Occurrences that overlap a chosen one (not
-  nested in it) are merged into its mask (my call, after MiMo M7: no character of any complete
-  occurrence is emitted; the 1.0 path's successive `Replace` shows the non-overlapping tail of the
-  second). Equal spans: one mask, the first by the tie order (for tswap's matcher: name ordinal,
-  current before previous, then kind). `Flush` resolves the tail the same way.
+  spans, until stable (each pull-back re-checks every span, so a chain of overlapping occurrences
+  across the boundary moves as one), and the surrogate guard.
+  **Masking, invariant by construction: no character of any complete occurrence is emitted** (my
+  call, after MiMo M7 and P1). In the emitted part, take the union of all complete-occurrence
+  intervals (plaintext and matcher alike) and merge intervals that share at least one character into
+  maximal runs; adjacent but disjoint occurrences stay separate runs, so two secrets side by side keep
+  two labels. Each run is replaced once, in one pass (replacement text is never matched again), by
+  the label of its **longest occurrence, then leftmost, then plaintext before matcher, then list
+  order** (for tswap's matcher, list order is the tie order: name ordinal, current before previous,
+  then kind). A run of one occurrence is that occurrence's label; a nested value takes the outer
+  value's label. `Flush` and `Release` resolve the tail the same way. The 1.0 path keeps today's
+  successive `Replace` (declared: backward compatibility; with no matcher nothing changes).
   Overlap = max(longest `Find`, every `MaxMatchLength`) − 1.
 - Truncation after the 30 s drain timeout still discards the tail (unchanged).
 - **Failure is closed** (MiMo I1). If a matcher or the redactor throws in the relay, the runner
   discards the held tail and everything of that chunk, writes `[output truncated: redaction failed]`,
   keeps draining the master and discarding its bytes (so the child never blocks on a full PTY), and
   after the child exits rethrows the exception (text as above). Nothing after the failure point is
-  ever written. tswap prints that message, which contains no output text. Normal exit and tswap's
-  signal path end at EOF and `Flush` as today (complete occurrences masked).
+  ever written. tswap prints that message, which contains no output text. An exception thrown by
+  `Flush` or `Release` takes the same path (discard, marker).
+- **Signal path: today's `Flush` kept (MiMo round 1 I1's "discard on the signal path" not taken as
+  written; m2).** When tswap forwards SIGINT/SIGTERM/SIGHUP and the child exits, the relay ends at
+  EOF and flushes as on a normal exit: complete occurrences are masked, and what can escape is a
+  partial occurrence, which the residual limit already covers "at exit". Discarding would also drop
+  the child's legitimate last output after a Ctrl-C (an error message, a summary) for no masking
+  gain.
 - `Release()` masks complete matches in the tail and emits the rest, including a partial match
   (D2's residual limit); the next chunk starts with an empty tail; on an empty tail it returns `""`.
 
@@ -432,6 +463,14 @@ says what production change makes it fail.
   `Matcher_PendingFromOutOfRange_Throws`: fail if bad spans are clamped or the window is quoted.
 - `Matcher_OverlappingOccurrences_UnionMasked` (`abcd` and `cdef` in `abcdef`): fails with plain
   non-overlapping selection; `Matcher_EqualSpans_OneMaskByTieOrder`.
+- `Matcher_ChainedOverlaps_UnionMasked` (theory: `abcd`/`defg`/`ghij` equal lengths; unequal lengths;
+  plaintext and matcher mixed, including an equal-length tie that plaintext labels): one run, one
+  label by the stated rule; fails with a one-round merge (MiMo P1's case leaks `hij`).
+- `Matcher_AdjacentOccurrences_TwoLabels`.
+- `Matcher_RandomOverlaps_NoOccurrenceCharacterSurvives` (property: random plaintext finds and
+  scripted matcher spans over random positions and chunkings; occurrence characters from an alphabet
+  used nowhere else, labels and filler from others; asserts the output holds no character of that
+  alphabet and every run carries the rule's label): fails on any non-transitive merge.
 - `Matcher_Flush_Masks`, `Matcher_SurrogatePairNotSplit`.
 - `Release_MasksCompleteMatchesInTail` (fails if `Release` skips resolution),
   `Release_PartialPrefixReleasedUnmasked` (pins the residual limit), `Release_ThenNextChunk_Continues`,
@@ -484,8 +523,9 @@ fork only), `LinuxPty.cs`/`MacOSPty.cs` untouched; TestHost child modes (`prompt
 - Report: the frozen-span diff, empty; which of `bash`, `python3 input()`, `getpass`, `ssh`, `sudo`,
   `gpg` prompts are detected on Linux and macOS (and so whether ICANON is right for them).
 
-**R3. Package.** Baseline 1.0.3 (after G2's first tag), `dotnet pack` output (validation passes), NativeAOT publish of the
-test host with 0 warnings, README section, CI's nine legs green. Then G1, G2.
+**R3. Package.** Needs G0 (`v1.0.3` on nuget.org). Baseline 1.0.3, `dotnet pack` output (validation
+passes), NativeAOT publish of the test host with 0 warnings, README section, CI's nine legs green.
+Then G1, G2.
 
 ### tswap (one commit per task)
 
@@ -545,7 +585,7 @@ Equal-span hits are reported once, in tie order: name ordinal, current before pr
 
 **T2. `FingerprintStreamMatcher` and the package.** Files `TswapCli/FingerprintStreamMatcher.cs`,
 `TswapCli/TswapCli.csproj` (`1.1.0-local.N` until G2); test `TswapTests/FingerprintStreamMatcherTests.cs`
-(through the real `StreamRedactor`).
+(through the real `StreamRedactor`). Starts once R1 is packed locally.
 - `Matcher_OtherSecret_AcrossChunks_Masked`, `Matcher_PreviousValue_LabelledPrevious`,
   `Matcher_BurnedValue_StillMasked`: fail if labels or sets are built wrong.
 - `Matcher_TwoThreads_SameResults`: fails with shared mutable buffers.
@@ -593,7 +633,8 @@ built `VaultMetadata`). If the process ends through the signal path, the second 
 - Pinned gaps: `Run_OtherSecretBase64UrlPadded_CoreMasked_PaddingShown`,
   `Run_SecretAddedDuringChild_NotMasked`.
 - `Run_NestedAndOverlappingTokenValues_FullyMasked` (`{{a}}` inside `{{b}}`, and two overlapping
-  values): every character of each masked.
+  values): every character of each masked; `Run_ChainedOverlappingSecrets_FullyMasked` (three vault
+  secrets overlapping in a chain, one substituted, two by fingerprint).
 - `Run_MatcherFailure_NoOutputAfterIt_MessageClean` (a `FakePty` path whose matcher throws): `run`
   exits non-zero, its stderr message contains no child output.
 - The existing `RunFileTokenTests`, now on the with-matcher path through `FakePty`, are the pin that
@@ -643,7 +684,8 @@ blocks for D1 (overrules `:247-251`), D2 (prompt release, residual limit), D3, D
    the 1.0 path untouched (`NoMatchers_SameAsOneDotZero`); package validation output.
 3. Soundness: no partial value ever emitted (`PendingFrom_IsSound`, the straddler test, the
    PEM-sized tests); `MaxMatchLength` honest for folded hits.
-4. Overlap resolution: longest, leftmost, plaintext first; replacement text never rescanned.
+4. Masking: the union of complete occurrences in maximal runs, one label per run (longest, leftmost,
+   plaintext first); replacement text never rescanned; the random-overlap property test.
 5. Thread safety under `FallbackPty`; `FingerprintKeys` disposed after the child.
 6. Coverage claims in the docs match the table and the tests (including the pinned gaps).
 7. Warning text, twice, `run` keeps working (D1); `run`'s stderr order; the unreadable-record rule;
