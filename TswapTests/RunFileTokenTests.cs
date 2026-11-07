@@ -1174,6 +1174,8 @@ public sealed class RunFileTokenChildSelectionTests
     [InlineData(300, 300, 2, 300, 0)]     // shares tswap's foreground group, SIGINT: already delivered
     [InlineData(300, 300, 3, 300, -1)]    // ... SIGQUIT is registered only on Windows (Ctrl+Break), where this rule isn't used: forwarded
     [InlineData(300, 300, 15, 300, -1)]   // ... SIGTERM never comes from the terminal: the child alone
+    [InlineData(500, 500, 15, null, -1)]  // the child's pid is tswap's own (reused) group id: never -ownPgid, the child alone
+    [InlineData(500, 500, 2, 500, 0)]     // ... and a SIGINT on that foreground group was already delivered
     public void RunFileToken_SignalTarget(int childPgid, int ownPgid, int signal, int? foreground, int expected)
     {
         // expected: 1 the child's group, -1 the child alone, 0 none ("already delivered").

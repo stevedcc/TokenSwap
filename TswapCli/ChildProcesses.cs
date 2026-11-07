@@ -48,7 +48,7 @@ internal static class ChildProcesses
     /// </summary>
     internal static int? Target(int pid, int childPgid, int ownPgid, int signal, int? foregroundPgid)
     {
-        if (childPgid == pid)
+        if (childPgid == pid && pid != ownPgid) // a reused pid equal to tswap's own group id is not the child's group
             return -pid;
         if (childPgid == ownPgid && signal == 2 && foregroundPgid == ownPgid)
             return null;
@@ -56,7 +56,7 @@ internal static class ChildProcesses
     }
 
     /// <summary>
-    /// Windows (review of task 1, Important 2): the children of <paramref name="parent"/> in a Toolhelp
+    /// Windows: the children of <paramref name="parent"/> in a Toolhelp
     /// snapshot. Toolhelp's parent id goes stale when the parent exits and pids are reused, so an entry
     /// counts only when its creation time, read by <paramref name="startOf"/>, is later than the
     /// parent's: unreadable or earlier ones are never signalled or killed.
