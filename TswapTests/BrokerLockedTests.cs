@@ -252,6 +252,23 @@ public class BrokerLockedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task EmptyPassword_AtBrokerUnlock_Cancels()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        using var m = new FleetMachine("bk-empty") { Tpm = RandomNumberGenerator.GetBytes(32) };
+        var fleet = await RealVaultBrokerAsync(m);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n", "broker", "unlock");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("No vault password was entered, so nothing was unlocked.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.DoesNotContain("unlocked.", stdout);
+        Assert.True(fleet.State.IsLocked);
+    }
+
+    [Fact]
     public async Task Unlock_WrongPassword_StaysLocked_SaysWrongPassword()
     {
         if (OperatingSystem.IsWindows())

@@ -124,7 +124,9 @@ A command that opens a vault whose slot on this machine has the password tries, 
 1. every slot that has **no** password (a plugged-in YubiKey slot without the password opens the
    vault silently, without asking anyone);
 2. a running **tswap agent**;
-3. a prompt on the terminal (`Vault password: `, once per command).
+3. a prompt on the terminal (`Vault password: `, once per command). Pressing Enter without typing a
+   password cancels the command ("No vault password was entered, so nothing was unlocked."); no other
+   slot is tried after it. `agent start` and `broker unlock` cancel the same way.
 
 With no agent and no terminal (scripts, AI agents) it fails at once:
 

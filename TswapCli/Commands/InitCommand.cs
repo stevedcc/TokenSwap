@@ -29,8 +29,8 @@ public sealed class InitCommand : ICliCommand
     internal const string Fido2TouchFlagRefusal =
         "--with-touch and --no-touch are for --secure-enclave: a FIDO2 slot always asks for the key's PIN and a touch.";
 
-    public string HelpUsage => $"init [--yubikey|--fido2 [--serial <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
-    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
+    public string HelpUsage => $"init [--yubikey|--fido2 [--serial <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery|--recovery-key-out <file>] [--folder <dir>] | init --vault-dir <shared folder>";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery; its key is printed once, and when stdout is not a terminal init refuses unless --recovery-key-out <file> names a new file for it (readable by you only; never overwritten). --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
     /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
@@ -48,6 +48,11 @@ public sealed class InitCommand : ICliCommand
 
     internal const string KeyringRefusal =
         "--keyring is gone: run plain 'tswap init' for the guided setup, or name the slot with --yubikey, --tpm or --secure-enclave.";
+
+    /// <summary>#253: stdout is not a terminal, a recovery slot is wanted, and no file was named for its key.</summary>
+    internal const string RecoveryKeyNeedsTerminal =
+        "'tswap init' prints the recovery key, and stdout is not a terminal here (it could end up in a log or an agent's context). " +
+        "Write it to a new file with --recovery-key-out <file>, or use --no-recovery.";
 
     internal const string NoTerminalRefusal =
         "'tswap init' without a terminal needs the slot named: --yubikey, --tpm, or --secure-enclave with --with-touch or --no-touch.";
@@ -73,12 +78,13 @@ public sealed class InitCommand : ICliCommand
         // before anything else (the reinitialise prompt, any hardware), so a typo such as
         // 'init --tmp' never falls through to a YubiKey initialisation. Brief T11: --secure-enclave
         // needs --with-touch or --no-touch, taken out (and checked) first.
-        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|{Fido2Flag} [{Fido2SlotEnrollment.SerialFlag} <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [{FolderFlag} <dir>] " +
-                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {Fido2SlotEnrollment.SerialFlag} <n>, {SecureEnclaveTouchChoice.WithTouch}, " +
+        var usage = $"{ctx.Prefix} init [{YubiKeyFlag}|{Fido2Flag} [{Fido2SlotEnrollment.SerialFlag} <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery|{RecoveryKeyFile.Flag} <file>] [{FolderFlag} <dir>] " +
+                    $"(valid flags: {string.Join(", ", KnownFlags)}, {FolderFlag} <dir>, {RecoveryKeyFile.Flag} <file>, {Fido2SlotEnrollment.SerialFlag} <n>, {SecureEnclaveTouchChoice.WithTouch}, " +
                     $"{SecureEnclaveTouchChoice.NoTouch}, {VaultPasswordChoice.PasswordFlag}, {VaultPasswordChoice.NoPasswordFlag}; " +
                     $"{YubiKeyFlag}, {Fido2Flag}, --tpm and --secure-enclave are mutually exclusive, and so are --password and --no-password; " +
-                    $"{Fido2SlotEnrollment.SerialFlag} only with {Fido2Flag})";
-        (args, var newFolder) = SplitFolder(args, usage);
+                    $"{Fido2SlotEnrollment.SerialFlag} only with {Fido2Flag}, {RecoveryKeyFile.Flag} not with --no-recovery)";
+        (args, var newFolder) = SplitValue(args, FolderFlag, usage);
+        (args, var recoveryKeyOut) = SplitValue(args, RecoveryKeyFile.Flag, usage);
         (args, var serial) = Fido2SlotEnrollment.SplitSerial(args, usage);
         if (args.Contains(Fido2Flag) && args.Any(a => a is SecureEnclaveTouchChoice.WithTouch or SecureEnclaveTouchChoice.NoTouch))
             throw new UsageException($"{usage}\n{Fido2TouchFlagRefusal}");
@@ -95,7 +101,8 @@ public sealed class InitCommand : ICliCommand
         var noRecovery = args.Contains("--no-recovery");
 
         // Several methods at once is the guided flow's job.
-        if (new[] { yubiKey, fido2, tpm, secureEnclave }.Count(f => f) > 1 || (serial is not null && !fido2))
+        if (new[] { yubiKey, fido2, tpm, secureEnclave }.Count(f => f) > 1 || (serial is not null && !fido2)
+            || (recoveryKeyOut is not null && noRecovery))
             throw new UsageException(usage);
 
         // Brief T11 decision 7: as soon as the flags are valid, before any prompt or write.
@@ -108,11 +115,17 @@ public sealed class InitCommand : ICliCommand
         if (guided && (c.IsInputRedirected || c.IsOutputRedirected))
             throw new TswapException(NoTerminalRefusal);
 
+        // #253: the recovery key goes to stdout only when that is a terminal; anywhere else it could end up in a log
+        // or an agent's context. Refused before any prompt, hardware or write.
+        if (c.IsOutputRedirected && !noRecovery && recoveryKeyOut is null)
+            throw new TswapException(RecoveryKeyNeedsTerminal);
+
         var fileStore = ctx.Storage as IFileVaultStore
             ?? throw new TswapException("'init' needs a file-based config.");
 
         // Checked before anything is printed or any hardware is touched, so a refusal enrolls nothing.
         var vaultDir = Path.GetFullPath(newFolder ?? Path.Combine(fileStore.ConfigDir, "vault"));
+        var keyFile = recoveryKeyOut is null ? null : RecoveryKeyFile.Check(recoveryKeyOut, vaultDir, fileStore.ConfigDir);
         RefuseExistingVault(ctx, fileStore, vaultDir);
 
         // FIDO2 plan, task 6: no terminal (the PIN is typed there), or --serial on Windows: refused before any prompt
@@ -133,18 +146,18 @@ public sealed class InitCommand : ICliCommand
         // Brief T2 decision 2: --tpm and --secure-enclave make a keyring vault (machine slot +
         // recovery slot unless --no-recovery), as --yubikey does with one YubiKey.
         if (secureEnclave)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, passwordFlag, requirePresence: requirePresence!.Value);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.SecureEnclave, includeRecovery: !noRecovery, passwordFlag, keyFile, requirePresence: requirePresence!.Value);
 
         if (tpm)
-            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery, passwordFlag);
+            return ExecuteHardwareKeyring(ctx, fileStore, vaultDir, HardwareBackend.Tpm, includeRecovery: !noRecovery, passwordFlag, keyFile);
 
         if (yubiKey)
-            return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag);
+            return ExecuteKeyring(ctx, fileStore, vaultDir, includeRecovery: !noRecovery, passwordFlag, keyFile);
 
         if (fido2)
-            return ExecuteFido2Keyring(ctx, fileStore, vaultDir, serial, includeRecovery: !noRecovery, passwordFlag);
+            return ExecuteFido2Keyring(ctx, fileStore, vaultDir, serial, includeRecovery: !noRecovery, passwordFlag, keyFile);
 
-        return GuidedInit.Execute(ctx, fileStore, vaultDir, newFolder, noRecovery, passwordFlag);
+        return GuidedInit.Execute(ctx, fileStore, vaultDir, newFolder, noRecovery, passwordFlag, keyFile);
     }
 
     /// <summary>
@@ -193,13 +206,13 @@ public sealed class InitCommand : ICliCommand
         }
     }
 
-    /// <summary>Takes <c>--folder &lt;dir&gt;</c> out of <paramref name="args"/> (at most once, with a value).</summary>
-    private static (string[] Remaining, string? Folder) SplitFolder(string[] args, string usage)
+    /// <summary>Takes <paramref name="flag"/> and its value (<c>--folder &lt;dir&gt;</c>, <c>--recovery-key-out &lt;file&gt;</c>) out of <paramref name="args"/> (at most once, with a value).</summary>
+    private static (string[] Remaining, string? Value) SplitValue(string[] args, string flag, string usage)
     {
-        var index = Array.IndexOf(args, FolderFlag);
+        var index = Array.IndexOf(args, flag);
         if (index < 0)
             return (args, null);
-        if (index + 1 >= args.Length || args[index + 1].StartsWith("--") || args.Count(a => a == FolderFlag) > 1)
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--") || args.Count(a => a == flag) > 1)
             throw new UsageException(usage);
         return ([.. args[..index], .. args[(index + 2)..]], args[index + 1]);
     }
@@ -217,6 +230,50 @@ public sealed class InitCommand : ICliCommand
             throw new TswapException(
                 $"The vault folder {vaultDir} is not empty. A new vault is created in an absent or empty folder only; to use a " +
                 $"folder another machine already shares, run '{ctx.Prefix} init --vault-dir {vaultDir}'.");
+    }
+
+    /// <summary>
+    /// #253: with <paramref name="keyFile"/>, the recovery key goes to that new file first, so the vault never exists
+    /// without its key on disk. The commit point is the first file in the vault folder (the keyring, which holds the
+    /// recovery slot): the folder was absent or empty before (<see cref="RequireAbsentOrEmpty"/>), so a failure that
+    /// leaves it empty or absent deletes the key file (or names it, if that fails too), and a failure after anything
+    /// was written there keeps it and names both, because the key opens what was written. A kill between the key
+    /// write and the vault write leaves a key file that opens nothing (accepted: the user deletes it).
+    /// </summary>
+    internal static void CreateRecordVault(CommandContext ctx, IFileVaultStore fileStore, Config config, string vaultDir,
+        VaultPasswordFile? vaultPassword, string? keyFile, byte[]? recoveryKey)
+    {
+        if (keyFile is null || recoveryKey is null)
+        {
+            CreateRecordVault(ctx, fileStore, config, vaultDir, vaultPassword);
+            return;
+        }
+        RecoveryKeyFile.Write(fileStore.Owner, keyFile, recoveryKey);
+        try
+        {
+            CreateRecordVault(ctx, fileStore, config, vaultDir, vaultPassword);
+        }
+        catch (Exception vaultError) when (vaultError is TswapException or IOException or UnauthorizedAccessException)
+        {
+            if (VaultFolderWritten(fileStore.Owner, vaultDir))
+                throw new TswapException(RecoveryKeyFile.KeptAfterPartialVault(keyFile, vaultDir, vaultError.Message));
+            if (!RecoveryKeyFile.TryDelete(fileStore.Owner, keyFile))
+                throw new TswapException(RecoveryKeyFile.NotDeleted(keyFile, vaultError.Message));
+            throw;
+        }
+    }
+
+    /// <summary>Whether the (absent or empty before) vault folder now holds anything; one that can't be listed counts as written.</summary>
+    private static bool VaultFolderWritten(DirectoryOwnerMatcher owner, string vaultDir)
+    {
+        try
+        {
+            return owner.AsOwner(vaultDir, () => Directory.Exists(vaultDir) && Directory.EnumerateFileSystemEntries(vaultDir).Any());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            return true;
+        }
     }
 
     /// <summary>
@@ -262,7 +319,7 @@ public sealed class InitCommand : ICliCommand
     /// <para>No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the
     /// challenge, and unlock challenges it again the same way.</para>
     /// </summary>
-    private static int ExecuteKeyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, bool includeRecovery, bool? passwordFlag)
+    private static int ExecuteKeyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, bool includeRecovery, bool? passwordFlag, string? keyFile)
     {
         var c = ctx.Console;
 
@@ -270,7 +327,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("║  tswap - Keyring Initialization        ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's slot");
-        c.Out.WriteLine("(k = 1) — see MULTI_MACHINE_KEYING.md. Add more keys later, each as its own");
+        c.Out.WriteLine("(k = 1) — see docs/multi-machine.md. Add more keys later, each as its own");
         c.Out.WriteLine($"slot that opens the vault alone: sudo {ctx.Prefix} slot add --yubikey\n");
 
         // Test mode (TSWAP_TEST_KEY, Debug builds only) asks nothing, as its init always did: there is
@@ -306,7 +363,7 @@ public sealed class InitCommand : ICliCommand
             config = SecurityWarnings.Acknowledge(config); // brief T7 item 5: explained below
             try
             {
-                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
+                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File, keyFile, recoveryPrivateKey);
             }
             finally
             {
@@ -325,7 +382,7 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine($"Entropy mode:    {(rngMode == RngMode.YubiKey ? "YubiKey hardware (two touches per create)" : "System RNG (one touch per create)")}");
             c.Out.WriteLine("\nThis key alone opens the vault. To enroll a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  sudo {ctx.Prefix} slot add --yubikey");
-            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later");
+            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"YubiKey {blob.Serial} and every key added later", keyFile);
             PrintVaultFolder(c, fileStore, vaultDir);
             return 0;
         }
@@ -344,7 +401,7 @@ public sealed class InitCommand : ICliCommand
     /// key operations succeeded.
     /// </summary>
     private static int ExecuteFido2Keyring(CommandContext ctx, IFileVaultStore fileStore, string vaultDir, int? serial,
-        bool includeRecovery, bool? passwordFlag)
+        bool includeRecovery, bool? passwordFlag, string? keyFile)
     {
         var c = ctx.Console;
         var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
@@ -373,7 +430,7 @@ public sealed class InitCommand : ICliCommand
                 kekSlot, backendConfig, includeRecovery, blob.Encode(), slotId, password?.VaultKey, password?.VaultId);
             try
             {
-                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
+                CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File, keyFile, recoveryPrivateKey);
             }
             finally
             {
@@ -392,7 +449,7 @@ public sealed class InitCommand : ICliCommand
             Fido2SlotEnrollment.PrintResetWarning(c, name);
             c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
             c.Out.WriteLine($"  {ctx.Prefix} slot add --fido2 (with sudo, or from an elevated prompt on Windows)");
-            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"{name} and every key added later");
+            PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"{name} and every key added later", keyFile);
             PrintVaultFolder(c, fileStore, vaultDir);
             return 0;
         }
@@ -463,7 +520,9 @@ public sealed class InitCommand : ICliCommand
     /// <c>--no-recovery</c> was passed, in which case this prints a short "no recovery slot"
     /// notice instead so the absence of a break-glass option isn't a silent surprise later.
     /// </summary>
-    internal static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey")
+    /// <param name="keyFile">#253: the file <c>--recovery-key-out</c> wrote the key to; the key itself is then not printed.</param>
+    internal static void PrintRecoveryKeyBackupWarning(IConsole c, string prefix, byte[]? recoveryPrivateKey, string hardware = "every enrolled YubiKey",
+        string? keyFile = null)
     {
         if (recoveryPrivateKey is null)
         {
@@ -474,14 +533,33 @@ public sealed class InitCommand : ICliCommand
 
         c.Out.WriteLine("\n⚠️  CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW\n");
         c.Out.WriteLine($"This is a break-glass credential for total hardware loss ({hardware}");
-        c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
-        c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
+        if (keyFile is null)
+        {
+            c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — display here is");
+            c.Out.WriteLine("the only time you will see it. If this backup is lost too, this recovery");
+        }
+        else
+        {
+            c.Out.WriteLine("lost or destroyed). tswap never stores it anywhere — the file below is");
+            c.Out.WriteLine("its only copy until you move it. If that copy is lost too, this recovery");
+        }
         c.Out.WriteLine("option is gone for good; your normal hardware unlock is unaffected either way.");
         c.Out.WriteLine("\nTo use it, pipe it in on stdin, never on the command line: to enroll new hardware, run");
-        c.Out.WriteLine($"  <command printing the key> | sudo {prefix} recover --yubikey   (or --tpm / --secure-enclave)");
+        if (keyFile is null)
+            c.Out.WriteLine($"  <command printing the key> | sudo {prefix} recover --yubikey   (or --tpm / --secure-enclave)");
+        else if (OperatingSystem.IsWindows())
+            c.Out.WriteLine($"  Get-Content -Raw {keyFile} | {prefix} recover --yubikey   (or --tpm; from a PowerShell elevated as the same user)");
+        else
+            c.Out.WriteLine($"  sudo {prefix} recover --yubikey < {keyFile}   (or --tpm / --secure-enclave)");
         c.Out.WriteLine("or give it to 'slot add --yubikey', 'slot approve' or 'slot merge' with --recovery-key-stdin.");
-        c.Out.WriteLine("\nRecovery Private Key (base64):");
-        c.Out.WriteLine(Convert.ToBase64String(recoveryPrivateKey));
+        if (keyFile is null)
+        {
+            c.Out.WriteLine("\nRecovery Private Key (base64):");
+            c.Out.WriteLine(Convert.ToBase64String(recoveryPrivateKey));
+        }
+        else
+            c.Out.WriteLine($"\nRecovery private key written to {keyFile} (readable by you only). Move it offline now " +
+                            "(a password manager, a printed copy) and delete it here: tswap keeps no copy.");
         c.Out.WriteLine("\nBackup locations required:");
         c.Out.WriteLine("  [ ] Password manager (Bitwarden/1Password)");
         c.Out.WriteLine("  [ ] Printed copy (home safe)");
@@ -628,7 +706,8 @@ public sealed class InitCommand : ICliCommand
     /// (Windows) and an Intel PTT (#155); see <c>docs/design/hardware-backends.md</c>.</para>
     /// </summary>
     private static int ExecuteHardwareKeyring(
-        CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool? passwordFlag, bool requirePresence = true)
+        CommandContext ctx, IFileVaultStore fileStore, string vaultDir, HardwareBackend backend, bool includeRecovery, bool? passwordFlag,
+        string? keyFile, bool requirePresence = true)
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
@@ -671,7 +750,7 @@ public sealed class InitCommand : ICliCommand
 
         try
         {
-            CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File);
+            CreateRecordVault(ctx, fileStore, config, vaultDir, password?.File, keyFile, recoveryPrivateKey);
         }
         finally
         {
@@ -695,9 +774,9 @@ public sealed class InitCommand : ICliCommand
             // Brief T7 item 8 (#159): said where the user sees it, in proportion (docs/design/hardware-backends.md).
             c.Out.WriteLine("\nNote: the Secure Enclave slot's wrapping (ephemeral ECDH + HKDF-SHA256 + AES-GCM, a hand-rolled");
             c.Out.WriteLine("ECIES equivalent) has been verified for correctness (round-trips, fails cleanly on denial) but");
-            c.Out.WriteLine("has not had an independent cryptographic review. See HARDWARE_BACKENDS.md.");
+            c.Out.WriteLine("has not had an independent cryptographic review. See docs/security-model.md#the-secure-enclaves-wrapping-has-not-been-reviewed.");
         }
-        PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}");
+        PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, $"this machine's {hardware}", keyFile);
         return 0;
     }
 

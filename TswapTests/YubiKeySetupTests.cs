@@ -720,6 +720,22 @@ public sealed partial class YubiKeySetupTests : IDisposable
             Assert.True(bytes.AsSpan().SequenceEqual(after[path]), $"{path} changed");
     }
 
+    /// <summary>#259: Enter at the vault password prompt cancels the check; it is not a key that didn't answer.</summary>
+    [Fact]
+    public void Setup_Replace_EmptyPassword_Cancels()
+    {
+        var m = VaultOnAAndB("correct horse battery staple");
+
+        var r = Setup(m.Keys, ["--touch", "--replace", "--serial", $"{SerialA}"], m.Dir, $"{SerialA}\n\n", terminal: true);
+
+        Assert.NotEqual(0, r.Exit);
+        Assert.Contains("No vault password was entered, so nothing was unlocked.", r.Err);
+        Assert.DoesNotContain("didn't answer", r.Err);
+        Assert.DoesNotContain("Argon2", r.Err);
+        Assert.Equal(1, r.Err.Split("Vault password:").Length - 1);
+        Assert.Empty(m.Keys.Programmed);
+    }
+
     [Fact]
     public void Setup_Replace_PasswordSlotWrongPassword_SaysSo()
     {

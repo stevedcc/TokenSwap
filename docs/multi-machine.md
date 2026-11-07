@@ -55,8 +55,9 @@ that already opens the vault.
   `--yes`.
 - To bring in the slots of another copy of a record vault, use `vault merge <its vault folder>`
   ([below](#copying-the-folder-scp-rsync-or-a-usb-stick)): a record vault keeps its keyring in the
-  vault folder, and `slot merge` refuses its `config.json` ("neither a slot receipt ... nor a
-  keyring vault's config.json").
+  vault folder, and `slot merge` refuses its `config.json` ("... is a record vault's config.json,
+  which holds no slots: they are in its vault folder (...). Copy that folder here and run
+  'sudo tswap vault merge <the copied folder>'.").
 - It never removes or replaces a slot, and it refuses another vault's files.
 - It backs up `config.json` first. Merging the same file twice changes nothing.
 

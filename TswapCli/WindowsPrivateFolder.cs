@@ -46,7 +46,7 @@ internal static partial class WindowsPrivateFolder
         WindowsIdentity.GetCurrent().User is { } user && IsCurrentUserOnly(new DirectoryInfo(path).GetAccessControl(), user);
 
     [SupportedOSPlatform("windows")]
-    private static bool IsCurrentUserOnly(DirectorySecurity security, SecurityIdentifier user)
+    internal static bool IsCurrentUserOnly(FileSystemSecurity security, SecurityIdentifier user)
     {
         if (!security.AreAccessRulesProtected)
             return false;

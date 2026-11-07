@@ -507,6 +507,47 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Empty(_children.Started);
     }
 
+    private const string NoPasswordEnteredText = "No vault password was entered, so nothing was unlocked.";
+
+    [Fact]
+    public void AgentStart_EmptyPassword_Cancels_NoChild()
+    {
+        var (m, _) = TpmPasswordVault("empty");
+
+        var (exit, _, stderr) = Start(m, password: "");
+
+        Assert.Equal(1, exit);
+        Assert.Contains(NoPasswordEnteredText, stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.Empty(_children.Started);
+    }
+
+    /// <summary>Through <see cref="AgentCommand.Serve"/> with a host that only records, so the test process isn't hardened.</summary>
+    [Fact]
+    public void AgentServeForeground_EmptyPassword_Cancels()
+    {
+        var (m, _) = TpmPasswordVault("fg-empty");
+        var console = new FakeConsole("\n") { IsInputRedirected = false };
+        var ctx = m.Context(console, ["agent", "serve", "--foreground"]);
+        var listening = false;
+        var host = new AgentServeHost(Stream.Null, TextWriter.Null, Detach: () => { }, Harden: _ => { },
+            HandleSignals: _ => { listening = true; return new EmptyDisposable(); });
+
+        var ex = Assert.ThrowsAny<TswapException>(() => AgentCommand.Serve(ctx, ["--foreground"], host));
+
+        Assert.Equal(NoPasswordEnteredText, ex.Message);
+        Assert.Equal(1, console.Reads);
+        Assert.False(listening);
+        var (statusExit, _, statusErr) = m.Run("", "agent", "status");
+        Assert.Equal(1, statusExit);
+        Assert.Contains("No tswap agent is running for this vault", statusErr);
+    }
+
+    private sealed class EmptyDisposable : IDisposable
+    {
+        public void Dispose() { }
+    }
+
     // ------------------------------------------------------------------ agent serve, stop, status
 
     [Fact]

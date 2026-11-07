@@ -454,7 +454,7 @@ public sealed class YubiKeyCommand : ICliCommand
                     return needs;
                 throw new TswapException($"Refusing: {needs} Nothing was changed.");
             }
-            catch (TswapException e)
+            catch (TswapException e) when (e is not TswapCore.VaultPassword.VaultPasswordCancelledException) // #259: Enter cancels
             {
                 // By the failure's kind: busy keeps the device's text (Task 2's wording); an empty slot 2 was
                 // reprogrammed or cleared, so its slot didn't open; anything else (a touch that timed out, the key
