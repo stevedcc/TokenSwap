@@ -27,9 +27,11 @@ namespace TswapCore.Vault;
 /// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
 /// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
 ///
-/// <para><b>Status: developed and tested only against a software TPM simulator (swtpm), not
-/// yet verified against real Linux TPM hardware</b> — see <c>docs/design/hardware-backends.md</c>'s Linux
-/// TPM section before trusting this as a primary vault backend.</para>
+/// <para><b>Status:</b> verified on two physical TPMs (an Intel PTT, #155, and an Infineon SLB 9665,
+/// #261), with RSA-2048 slots made by v0.2.0 and with new slots, which seal under an ECC P-256 primary
+/// (issue #261). See
+/// <c>docs/design/hardware-backends.md</c>'s Linux TPM section for what is verified on real hardware
+/// and what is still open.</para>
 ///
 /// <para>Registered at the composition root only on Linux — see <c>TswapCli/Program.cs</c>. On
 /// other builds <see cref="VaultUnlocker"/> returns a clear "backend not supported" error for a
@@ -46,25 +48,31 @@ public sealed class LinuxTpmHardwareService : TpmHardwareServiceBase, IHardwareE
 
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and seals it to this
-    /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine.
+    /// machine's TPM via <see cref="Seal"/>. The returned blob is useless off this machine. Issue #261: the package is
+    /// sealed under the ECC P-256 primary, so the blob always has the <c>TSTP</c> header with
+    /// <see cref="TpmSlotBlob.EccPrimary"/> (and <see cref="TpmSlotBlob.Password"/> for a password slot).
     /// </summary>
     public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         return password is null
-            ? new HardwareEnrollment(kekSlot, Seal(kekSlot))
-            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password)));
+            ? new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(Seal(kekSlot), TpmSlotBlob.EccPrimary))
+            : new HardwareEnrollment(kekSlot,
+                TpmSlotBlob.Wrap(Tpm2ToolsInterop.Seal(kekSlot, password), TpmSlotBlob.EccPrimary | TpmSlotBlob.Password));
     }
 
     /// <summary>
-    /// Enrollment side: seals <paramref name="plaintextKey"/> (the vault key) to a fresh
-    /// TPM-bound primary key. The returned blob is useless off this machine.
+    /// Enrollment side: seals <paramref name="plaintextKey"/> (the vault key) under a fresh ECC P-256 storage
+    /// primary. Returns the bare package (no <c>TSTP</c> header); the blob is useless off this machine.
     /// </summary>
     public byte[] Seal(byte[] plaintextKey) => Tpm2ToolsInterop.Seal(plaintextKey);
 
-    /// <summary>Unlock side: unseals a payload produced by <see cref="Seal"/> using this TPM's regenerated primary key.</summary>
-    public byte[] Unseal(byte[] wrapped) => Tpm2ToolsInterop.Unseal(wrapped);
+    /// <summary>
+    /// Unlock side: unseals a bare package under this TPM's regenerated primary, ECC P-256 when
+    /// <paramref name="eccPrimary"/> (a <see cref="Seal"/> package) and RSA-2048 otherwise (a slot sealed before issue #261).
+    /// </summary>
+    public byte[] Unseal(byte[] wrapped, bool eccPrimary) => Tpm2ToolsInterop.Unseal(wrapped, eccPrimary);
 
-    protected override byte[] RecoverKey(byte[] wrapped, StretchedPassword? password) =>
-        password is null ? Unseal(wrapped) : Tpm2ToolsInterop.Unseal(wrapped, password);
+    protected override byte[] RecoverKey(byte[] wrapped, bool eccPrimary, StretchedPassword? password) =>
+        password is null ? Unseal(wrapped, eccPrimary) : Tpm2ToolsInterop.Unseal(wrapped, eccPrimary, password);
 }

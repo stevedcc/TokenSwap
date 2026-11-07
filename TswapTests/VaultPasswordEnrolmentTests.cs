@@ -107,7 +107,8 @@ public class VaultPasswordEnrolmentTests : IDisposable
     public void Init_NoPasswordFlag_KeyringBytesAsBefore()
     {
         // Goal 4 pin: --no-password and an unattended init with neither flag make the same password-free
-        // vault: no vault-password file, a legacy TPM blob (no TSTP header) of the same size, and a v1
+        // vault: no vault-password file, a password-free TPM blob of the same size (issue #261: the simulated TPM
+        // writes the Linux layout, a TSTP header with only the ECC-primary bit), and a v1
         // YubiKey blob of 74 bytes. (The keyrings' bytes differ only by their random keys and ids.)
         var flagged = Machine("no-pw");
         var plain = Machine("plain");
@@ -118,7 +119,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         {
             Assert.False(File.Exists(VaultPasswordPath(m)));
             Assert.Equal(SlotPasswordKind.None, SlotPassword.Classify(OwnSlot(m)));
-            Assert.False(TpmSlotBlob.HasHeader(OwnSlot(m).HwBlob));
+            Assert.Equal([.. "TSTP"u8, 1, TpmSlotBlob.EccPrimary], OwnSlot(m).HwBlob![..6]);
         }
         Assert.Equal(OwnSlot(plain).HwBlob!.Length, OwnSlot(flagged).HwBlob!.Length);
         Assert.Equal(plain.Keyring.Slots.Select(s => (s.Kind, s.Wrapped.Length)), flagged.Keyring.Slots.Select(s => (s.Kind, s.Wrapped.Length)));
@@ -414,7 +415,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         var stdout = m.Ok("", "slots");
 
         var lines = stdout.ReplaceLineEndings("\n").Split('\n');
-        Assert.Contains(lines, l => l.StartsWith(tpmId) && l.EndsWith("TPM, sealed to this machine's TPM, vault password"));
+        Assert.Contains(lines, l => l.StartsWith(tpmId) && l.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, vault password"));
         Assert.Contains(lines, l => l.Contains($"YubiKey {SerialA}, ") && l.EndsWith(", no password"));
         Assert.Contains("1 slot(s) open without the password: keep them away from shared machines.", lines);
     }
@@ -427,7 +428,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
 
         var stdout = m.Ok("", "slots");
 
-        Assert.Contains("TPM, sealed to this machine's TPM, no password", stdout);
+        Assert.Contains("TPM (ECC P-256), sealed to this machine's TPM, no password", stdout);
         Assert.DoesNotContain("open without the password", stdout);
     }
 
@@ -456,7 +457,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
     [Fact]
     public void Slots_ShowsNeedsNewerTswap()
     {
-        var config = ConfigWithMachineBlobs(TstpBlob(2, 0x01), TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40)));
+        var config = ConfigWithMachineBlobs(TstpBlob(2, 0x01), TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40), TpmSlotBlob.Password));
 
         var text = SlotsCommand.Format(config);
 
@@ -469,7 +470,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
     [Fact]
     public void Slots_ShowsCorrupt_ListsTheRest()
     {
-        var config = ConfigWithMachineBlobs(TstpBlob(1, 0x00), RandomNumberGenerator.GetBytes(60), TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40)));
+        var config = ConfigWithMachineBlobs(TstpBlob(1, 0x00), RandomNumberGenerator.GetBytes(60), TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40), TpmSlotBlob.Password));
 
         var text = SlotsCommand.Format(config);
 
@@ -479,6 +480,25 @@ public class VaultPasswordEnrolmentTests : IDisposable
         Assert.EndsWith("TPM, sealed to this machine's TPM, no password", rows[1]);
         Assert.EndsWith("TPM, sealed to this machine's TPM, vault password", rows[2]);
         Assert.Contains("1 slot(s) open without the password: keep them away from shared machines.", text);
+    }
+
+    [Fact]
+    public void Slots_NamesTheEccPrimary_OnlyForAnEccSlot()
+    {
+        var config = ConfigWithMachineBlobs(
+            TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40), TpmSlotBlob.EccPrimary),
+            TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40), TpmSlotBlob.EccPrimary | TpmSlotBlob.Password),
+            [40, 0, 0, 0, .. RandomNumberGenerator.GetBytes(60)],
+            TpmSlotBlob.Wrap(RandomNumberGenerator.GetBytes(40), TpmSlotBlob.Password));
+
+        var text = SlotsCommand.Format(config);
+
+        var rows = text.ReplaceLineEndings("\n").Split('\n').Where(IsMachineRow).ToList();
+        Assert.Equal(4, rows.Count);
+        Assert.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, no password", rows[0]);
+        Assert.EndsWith("TPM (ECC P-256), sealed to this machine's TPM, vault password", rows[1]);
+        Assert.EndsWith("TPM, sealed to this machine's TPM, no password", rows[2]);
+        Assert.EndsWith("TPM, sealed to this machine's TPM, vault password", rows[3]);
     }
 
     // ------------------------------------------------------------------ classic vaults, Windows

@@ -62,7 +62,7 @@ public class WindowsTpmPasswordTests
         IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
         using var password = Password(0x33);
         var (_, hwBlob) = enrollment.Enroll(password);
-        var (_, package) = TpmSlotBlob.Split(hwBlob);
+        var (_, _, package) = TpmSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() =>
             new WindowsTpmHardwareService().Unlock(ConfigWith(package), _ => 0, password: null));

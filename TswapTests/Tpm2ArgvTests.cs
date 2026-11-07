@@ -49,7 +49,7 @@ public class Tpm2ArgvTests
         var key = RandomNumberGenerator.GetBytes(32);
 
         var package = Tpm2ToolsInterop.Seal(key, password);
-        var recovered = Tpm2ToolsInterop.Unseal(package, password);
+        var recovered = Tpm2ToolsInterop.Unseal(package, eccPrimary: true, password);
 
         Assert.Equal(key, recovered);
         var secret = Bytes(password);
@@ -84,7 +84,7 @@ public class Tpm2ArgvTests
         using var password = Password();
 
         var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), password);
-        Tpm2ToolsInterop.Unseal(package, password);
+        Tpm2ToolsInterop.Unseal(package, eccPrimary: true, password);
 
         var expected = ExpectedAuthText(password);
         Assert.Matches("^hex:[0-9a-f]{64}$", expected);
@@ -149,15 +149,23 @@ public class Tpm2ArgvTests
         using var password = Password();
         var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), password);
 
-        Tpm2ToolsInterop.Unseal(package, password);
+        Tpm2ToolsInterop.Unseal(package, eccPrimary: true, password);
 
         var stdin = tpm.StdinBuffers.Single(b => b.Command == "tpm2_unseal").Buffer; // the interop's own array
         Assert.Equal(68, stdin.Length);
         Assert.All(stdin, b => Assert.Equal(0, b));
     }
 
+    /// <summary>Issue #261: the pinned ECC P-256 storage primary template, as tpm2-tools' options.</summary>
+    private const string EccPrimary =
+        "tpm2_createprimary -C o -G ecc256:null:aes128cfb -g sha256 -a fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt -c <tmp>/primary.ctx";
+
+    /// <summary>Issue #261: the pinned RSA-2048 template, what v0.2.0's <c>-G rsa2048</c> gave (checked on swtpm by <see cref="LinuxTpmEccPrimaryTests"/>).</summary>
+    private const string RsaPrimary =
+        "tpm2_createprimary -C o -G rsa2048:null:aes128cfb -g sha256 -a fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt -c <tmp>/primary.ctx";
+
     [Fact]
-    public void LegacySlot_ArgvUnchanged()
+    public void PasswordFreeSlot_Argv_EccPrimary_FlushBeforeEachStep()
     {
         if (!OperatingSystem.IsLinux())
             return;
@@ -166,19 +174,19 @@ public class Tpm2ArgvTests
         var key = RandomNumberGenerator.GetBytes(32);
 
         var package = Tpm2ToolsInterop.Seal(key);
-        var recovered = Tpm2ToolsInterop.Unseal(package);
+        var recovered = Tpm2ToolsInterop.Unseal(package, eccPrimary: true);
 
         Assert.Equal(key, recovered);
         Assert.Equal(
         [
             "tpm2_getcap properties-fixed",
             "tpm2_flushcontext -t",
-            "tpm2_createprimary -C o -G rsa2048 -c <tmp>/primary.ctx",
+            EccPrimary,
             "tpm2_flushcontext -t",
             "tpm2_create -C <tmp>/primary.ctx -u <tmp>/seal.pub -r <tmp>/seal.priv -i -",
             "tpm2_getcap properties-fixed",
             "tpm2_flushcontext -t",
-            "tpm2_createprimary -C o -G rsa2048 -c <tmp>/primary.ctx",
+            EccPrimary,
             "tpm2_flushcontext -t",
             "tpm2_load -C <tmp>/primary.ctx -u <tmp>/seal.pub -r <tmp>/seal.priv -c <tmp>/loaded.ctx",
             "tpm2_flushcontext -t",
@@ -186,6 +194,50 @@ public class Tpm2ArgvTests
         ], tpm.Calls.Select(c => c.Normalised).ToList());
         Assert.Equal(key, tpm.Calls.Single(c => c.Command == "tpm2_create").Stdin);
         Assert.Null(tpm.Calls.Single(c => c.Command == "tpm2_unseal").Stdin);
+    }
+
+    [Fact]
+    public void RsaUnseal_Argv_PinnedRsaTemplate_FlushBeforeEachStep()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var tpm = new FakeTpm2Tools();
+        using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
+        var key = RandomNumberGenerator.GetBytes(32);
+        var package = Tpm2ToolsInterop.Seal(key);
+        tpm.Calls.Clear();
+
+        var recovered = Tpm2ToolsInterop.Unseal(package, eccPrimary: false);
+
+        Assert.Equal(key, recovered); // the fake has no primaries: only the argv is under test here
+        Assert.Equal(
+        [
+            "tpm2_getcap properties-fixed",
+            "tpm2_flushcontext -t",
+            RsaPrimary,
+            "tpm2_flushcontext -t",
+            "tpm2_load -C <tmp>/primary.ctx -u <tmp>/seal.pub -r <tmp>/seal.priv -c <tmp>/loaded.ctx",
+            "tpm2_flushcontext -t",
+            "tpm2_unseal -c <tmp>/loaded.ctx",
+        ], tpm.Calls.Select(c => c.Normalised).ToList());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PasswordSlot_Argv_SealsUnderEcc_UnsealsUnderTheFlaggedPrimary(bool eccPrimary)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var tpm = new FakeTpm2Tools();
+        using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
+        using var password = Password();
+        var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), password);
+
+        Tpm2ToolsInterop.Unseal(package, eccPrimary, password);
+
+        var primaries = tpm.Calls.Where(c => c.Command == "tpm2_createprimary").Select(c => c.Normalised).ToList();
+        Assert.Equal([EccPrimary, eccPrimary ? EccPrimary : RsaPrimary], primaries);
     }
 
     [Fact]
@@ -199,7 +251,7 @@ public class Tpm2ArgvTests
         using var wrong = Password(0x01);
         var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), right);
 
-        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, wrong));
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, eccPrimary: true, wrong));
 
         Assert.Equal(VaultPasswordMessages.WrongPasswordTpm, ex.Message);
         Assert.Equal(VaultPasswordRefusal.WrongPassword, ex.Reason);
@@ -217,7 +269,7 @@ public class Tpm2ArgvTests
         var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), password);
         tpm.InLockout = true;
 
-        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, password));
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, eccPrimary: true, password));
 
         Assert.Equal(VaultPasswordMessages.TpmLockoutLinux, ex.Message);
         Assert.Equal(VaultPasswordRefusal.Lockout, ex.Reason);
@@ -235,7 +287,7 @@ public class Tpm2ArgvTests
         using var password = Password();
         var package = Tpm2ToolsInterop.Seal(RandomNumberGenerator.GetBytes(32), password);
 
-        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package));
+        var ex = Assert.Throws<VaultPasswordRefusedException>(() => Tpm2ToolsInterop.Unseal(package, eccPrimary: true));
 
         Assert.Equal(VaultPasswordMessages.StrippedHeader, ex.Message);
         Assert.Equal(VaultPasswordRefusal.StrippedHeader, ex.Reason);
@@ -244,20 +296,43 @@ public class Tpm2ArgvTests
     [Theory]
     [InlineData(1, 0x01)]
     [InlineData(2, 0x01)]
-    [InlineData(1, 0x02)]
+    [InlineData(1, 0x03)]
     public void UnsplitTstpBlob_SaysNewerTswap(byte version, byte flags)
     {
         if (!OperatingSystem.IsLinux())
             return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
-        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6]);
+        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.Password);
         tstp[4] = version;
         tstp[5] = flags;
 
-        var ex = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(tstp));
+        var ex = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(tstp, eccPrimary: false));
 
         Assert.Equal(VaultPasswordMessages.LegacyParserNeedsNewerTswap(version), ex.Message);
+        Assert.Empty(tpm.Calls); // refused before tpm2-tools is touched
+    }
+
+    /// <summary>
+    /// Issue #261: an unsplit <c>TSTP</c> blob without the password bit (an ECC slot's <c>0x02</c>) gets the plain "needs
+    /// a newer tswap" text, the one v0.2.0 says for it, and never claims the slot needs the vault password.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0x02)]
+    [InlineData(2, 0x02)]
+    public void UnsplitTstpBlob_WithoutThePasswordBit_DoesNotClaimThePassword(byte version, byte flags)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        var tpm = new FakeTpm2Tools();
+        using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
+        var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.EccPrimary);
+        tstp[4] = version;
+        tstp[5] = flags;
+
+        var ex = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(tstp, eccPrimary: true));
+
+        Assert.Equal(SlotPassword.NeedsNewerTswapText(version), ex.Message);
         Assert.Empty(tpm.Calls); // refused before tpm2-tools is touched
     }
 
