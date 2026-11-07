@@ -16,16 +16,22 @@ internal sealed class MacFakeTools : IDisposable
     public const string AppHash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     public const string InstallerHash = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
-    public string Dir { get; } = Directory.CreateTempSubdirectory("tswap-macfake-").FullName;
-    public string Tools => Path.Combine(Dir, "tools");
+    public string Dir { get; }
+    public string Tools => Path.Combine(Dir, "mac-tools");
     public string RunnerTemp => Path.Combine(Dir, "runner-temp");
     public string GitHubOutput => Path.Combine(Dir, "github-output");
 
     /// <summary>The environment every run gets on top of the process's own (PATH: the fakes first).</summary>
     public Dictionary<string, string?> Environment { get; } = [];
 
-    public MacFakeTools()
+    private readonly bool _ownsDir;
+
+    /// <param name="dir">A folder another harness already uses as <c>$FAKE_DIR</c> (it stays that harness's to
+    /// delete), or null for a new temporary one.</param>
+    public MacFakeTools(string? dir = null)
     {
+        _ownsDir = dir is null;
+        Dir = dir ?? Directory.CreateTempSubdirectory("tswap-macfake-").FullName;
         Directory.CreateDirectory(Tools);
         Directory.CreateDirectory(RunnerTemp);
         File.WriteAllText(GitHubOutput, "");
@@ -41,7 +47,11 @@ internal sealed class MacFakeTools : IDisposable
         WriteFakes();
     }
 
-    public void Dispose() => Directory.Delete(Dir, recursive: true);
+    public void Dispose()
+    {
+        if (_ownsDir)
+            Directory.Delete(Dir, recursive: true);
+    }
 
     public void Write(string name, string content) => File.WriteAllText(Path.Combine(Dir, name), content);
 
@@ -226,6 +236,30 @@ internal sealed class MacFakeTools : IDisposable
             esac
             echo "fake xcrun: unexpected $tool $*" >&2
             exit 64
+
+            """);
+        // xattr: -w records the mark; -p answers whether it reached a file (quarantine.propagates: every file has it).
+        WriteTool("xattr", """
+            echo "$*" >> "$FAKE_DIR/xattr.log"
+            case "$1" in
+              -w) exit 0 ;;
+              -p) [ -f "$FAKE_DIR/quarantine.propagates" ] && { echo '0083;6740a1b2;Safari;'; exit 0; }; echo "xattr: ${@: -1}: No such xattr: $2" >&2; exit 1 ;;
+            esac
+            exit 0
+
+            """);
+        // spctl: --status from spctl-status (default enabled); -a -t install from spctl-install.out.
+        WriteTool("spctl", """
+            echo "$*" >> "$FAKE_DIR/spctl.log"
+            case "$1" in
+              --status) if [ -f "$FAKE_DIR/spctl-status" ]; then cat "$FAKE_DIR/spctl-status"; else echo 'assessments enabled'; fi ;;
+              -a)
+                if [ -f "$FAKE_DIR/spctl-install.out" ]; then cat "$FAKE_DIR/spctl-install.out" >&2
+                else printf '%s: accepted\nsource=Notarized Developer ID\norigin=Developer ID Installer: Test Person (TEAMID1234)\n' "${@: -1}" >&2; fi
+                [ -f "$FAKE_DIR/spctl-install.exit" ] && exit "$(cat "$FAKE_DIR/spctl-install.exit")"
+                ;;
+            esac
+            exit 0
 
             """);
         // ditto: -c -k <dir> <zip> writes the folder's listing (the fake zip); ditto <src> <dest> copies.

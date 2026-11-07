@@ -41,10 +41,24 @@ public class ReleasePackagingTests : IDisposable
     private bool BwrapFails { get; set; }
     private string BwrapLog => Path.Combine(_dir, "bwrap.log");
 
+    /// <summary>
+    /// Issue #240: the macOS smoke's Apple tools (<c>codesign</c>, <c>vtool</c>, <c>xattr</c>, <c>spctl</c>), faked in
+    /// the same <c>$FAKE_DIR</c>; their defaults are a correctly signed and notarised build of
+    /// <see cref="MacFakeTools.Team"/>. <see cref="Env"/> adds variables to the script's environment (null removes one).
+    /// </summary>
+    private readonly MacFakeTools _mac;
+    private Dictionary<string, string?> Env { get; } = new()
+    {
+        ["TSWAP_EXPECT_TEAM_ID"] = null,
+        ["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = null,
+        ["TSWAP_NOTARY_CHECK_INTERVAL"] = "0",
+    };
+
     public ReleasePackagingTests()
     {
         _tools = Path.Combine(_dir, "tools");
         Directory.CreateDirectory(_tools);
+        _mac = new MacFakeTools(_dir);
         WriteTool("readelf", "#!/bin/sh\ncat \"$FAKE_DIR/readelf.out\"\n");
         WriteTool("ldconfig", "#!/bin/sh\ncat \"$FAKE_DIR/ldconfig.out\"\n");
         WriteTool("bwrap",
@@ -60,7 +74,11 @@ public class ReleasePackagingTests : IDisposable
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
-    public void Dispose() => Directory.Delete(_dir, recursive: true);
+    public void Dispose()
+    {
+        _mac.Dispose();
+        Directory.Delete(_dir, recursive: true);
+    }
 
     private static string RepoFile(params string[] parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
@@ -92,7 +110,15 @@ public class ReleasePackagingTests : IDisposable
         if (StrategyOutput is not null)
             File.WriteAllText(Path.Combine(_dir, "strategy.out"), StrategyOutput);
         psi.Environment["FAKE_DIR"] = _dir;
-        psi.Environment["PATH"] = _tools + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+        psi.Environment["PATH"] = _tools + Path.PathSeparator + _mac.Tools + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+        psi.Environment["RUNNER_TEMP"] = _mac.RunnerTemp;
+        foreach (var (name, value) in Env)
+        {
+            if (value is null)
+                psi.Environment.Remove(name);
+            else
+                psi.Environment[name] = value;
+        }
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
@@ -117,7 +143,17 @@ public class ReleasePackagingTests : IDisposable
         File.WriteAllText(Path.Combine(publish, "tswap"), $$"""
             #!/bin/sh
             echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})"
+            echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})" >> "$FAKE_DIR/runs.log"
             case " $* " in
+              *" installscript "*)
+                # The macOS script's dylib step: the embedded bytes (embedded.dylib overrides the archive's own).
+                dylib="$(dirname "$0")/libtswapse.dylib"
+                [ -f "$FAKE_DIR/embedded.dylib" ] && dylib="$FAKE_DIR/embedded.dylib"
+                echo '#!/usr/bin/env bash'
+                echo 'echo "==> Installing Secure Enclave support library..."'
+                echo "echo \"$(base64 < "$dylib" | tr -d '\n')\" | base64 -D > \"\$DYLIB_TMP\""
+                exit 0
+                ;;
               *" yubikey setup "*)
                 if [ "$1" = -v ]; then
                   if [ -n "$FAKE_IN_SANDBOX" ] || ! grep -q 'libpcsclite.so.1 (' "$FAKE_DIR/ldconfig.out"; then
@@ -242,6 +278,8 @@ public class ReleasePackagingTests : IDisposable
         Assert.Equal($"ran from {folder} with: {YubiKeySmokeArgs} (config: unset)", runs[1]);
         Assert.Equal($"ran from {folder} with: init --secure-enclave --no-touch --no-password --no-recovery (config: {folder}/config)", runs[2]);
         Assert.Equal($"ran from {folder} with: names (config: {folder}/config)", runs[3]);
+        // Issue #240: installscript runs too (its output is read, not printed), before the Secure Enclave vault.
+        Assert.Equal([runs[0], runs[1], $"ran from {folder} with: installscript (config: unset)", runs[2], runs[3]], LoggedRuns());
     }
 
     /// <summary>A binary that fails its smoke run fails the packaging.</summary>
@@ -464,5 +502,326 @@ public class ReleasePackagingTests : IDisposable
         }
         foreach (var workflow in new[] { "ci.yml", "release.yml" })
             Assert.Contains(YubiKeySmokeArgs, File.ReadAllText(RepoFile(".github", "workflows", workflow)));
+    }
+
+    // ---- Issue #240 / #265: the macOS smoke checks the shipped bytes (signed in the release, unsigned in CI). ----
+
+    /// <summary>Every run of the fake tswap, in order, including those whose output the script captures.</summary>
+    private List<string> LoggedRuns()
+    {
+        var log = Path.Combine(_dir, "runs.log");
+        return File.Exists(log) ? [.. File.ReadAllLines(log)] : [];
+    }
+
+    private (int ExitCode, string Output) MacOsSmoke() =>
+        Package("osx-arm64", PublishFakeBinary(exitCode: 0, "libtswapse.dylib"), "--smoke");
+
+    private void ExpectTeam(bool gated = true)
+    {
+        Env["TSWAP_EXPECT_TEAM_ID"] = MacFakeTools.Team;
+        Env["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = gated ? "1" : null;
+    }
+
+    private List<string> NotarisationChecks(string fileName) =>
+        [.. _mac.Log("codesign").Where(line => line.Contains("--check-notarization") && line.EndsWith("/" + fileName, StringComparison.Ordinal))];
+
+    [Fact]
+    public void MacOsSmoke_EmbeddedDylibMatches_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("the dylib installscript writes is the archive's", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_EmbeddedDylibDiffers_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _mac.Write("embedded.dylib", "an unsigned build of the dylib");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("the dylib installscript writes is not the archive's (was the shim signed after it was embedded?)", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_DifferentMinOs_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _mac.Write("minos-libtswapse.dylib", "26.0");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("minos: tswap 12.0, libtswapse.dylib 26.0, SecureEnclaveShimMinOS 12.0: they must be equal (#265)", output);
+    }
+
+    /// <summary>Both files agree with each other but not with the csproj's property: still a failure.</summary>
+    [Fact]
+    public void MacOsSmoke_MinOsOtherThanTheCsproj_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _mac.Write("minos-libtswapse.dylib", "11.0");
+        _mac.Write("minos-tswap", "11.0");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"SecureEnclaveShimMinOS {MacPkgScriptTests.ShimMinOs()}: they must be equal", output);
+    }
+
+    /// <summary>package.sh reads the minimum from TswapCore.csproj itself (one source), and a missing property fails.</summary>
+    [Fact]
+    public void MacOsSmoke_ReadsShimMinOsFromTheCsproj()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        // A copy of the packaging scripts in a tree whose csproj lacks the property.
+        var repo = Path.Combine(_dir, "repo");
+        var packaging = Path.Combine(repo, "contrib", "packaging");
+        Directory.CreateDirectory(Path.Combine(packaging, "macos"));
+        foreach (var script in Directory.GetFiles(RepoFile("contrib", "packaging"), "*.sh", SearchOption.AllDirectories))
+            File.Copy(script, Path.Combine(packaging, Path.GetRelativePath(RepoFile("contrib", "packaging"), script)));
+        Directory.CreateDirectory(Path.Combine(repo, "TswapCore"));
+        File.WriteAllText(Path.Combine(repo, "TswapCore", "TswapCore.csproj"), "<Project><PropertyGroup /></Project>\n");
+
+        var (exitCode, output) = Run("bash", Path.Combine(packaging, "package.sh"), "osx-arm64",
+            PublishFakeBinary(exitCode: 0, "libtswapse.dylib"), Path.Combine(_dir, "dist"), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"no <SecureEnclaveShimMinOS> in {Path.Combine(repo, "TswapCore", "TswapCore.csproj")}", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_WithoutExpectTeam_RunsNoSigningChecks()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Empty(_mac.Log("codesign"));
+        Assert.Empty(_mac.Log("xattr"));
+        Assert.Empty(_mac.Log("spctl"));
+    }
+
+    [Fact]
+    public void MacOsSmoke_ExpectTeam_ChecksEachFile()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        var codesign = _mac.Log("codesign");
+        foreach (var file in new[] { "tswap", "libtswapse.dylib" })
+        {
+            Assert.Single(codesign, line => line.StartsWith("--verify --strict --verbose=2 ", StringComparison.Ordinal) && line.EndsWith("/" + file, StringComparison.Ordinal));
+            Assert.Single(codesign, line => line.StartsWith("-dvvv ", StringComparison.Ordinal) && line.EndsWith("/" + file, StringComparison.Ordinal));
+            Assert.Single(NotarisationChecks(file));
+        }
+        Assert.Contains("notarisation: ok", output);
+        Assert.Contains("notarisation-control: ok", output);
+        Assert.Contains("the unnotarised control: exit 3", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ExpectTeam_DylibOfAnotherTeam_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("details-libtswapse.dylib", MacFakeTools.Details("dev.crawford.tswap.libtswapse", team: "OTHERTEAM1"));
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("libtswapse.dylib: TeamIdentifier is OTHERTEAM1, expected TEAMID1234", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ExpectTeam_NoRuntimeOnTswap_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam(gated: false);
+        _mac.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", flags: "0x0(none)"));
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("tswap: flags= does not name runtime", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_NotarisationCheck_ExactArgumentSpelling()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        var checks = _mac.Log("codesign").Where(line => line.Contains("notarized")).ToList();
+        Assert.Equal(3, checks.Count); // tswap, the dylib, the control
+        Assert.All(checks, line => Assert.StartsWith("-vvvv --test-requirement==notarized --check-notarization /", line));
+        Assert.DoesNotContain(_mac.Log("codesign"), line => line.Split(' ').Contains("-R") || line.Contains("-R="));
+    }
+
+    [Fact]
+    public void MacOsSmoke_NotarisationVisibleAfterRetries_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("notarization-tswap", "3\n3\n0\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Equal(3, NotarisationChecks("tswap").Count);
+        Assert.Contains("isn't visible yet", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_NotarisationNeverVisible_FailsAfterRetries()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
+        _mac.Write("notarization-tswap", "3\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Equal(4, NotarisationChecks("tswap").Count);
+        Assert.Contains("::error::notarisation: tswap: codesign --check-notarization exit 3 after 4 attempts", output);
+        Assert.Contains("code failed to satisfy specified code requirement(s)", output); // the last answer
+    }
+
+    [Fact]
+    public void MacOsSmoke_NotarisationNeverVisible_ReportOnly_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam(gated: false);
+        Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
+        _mac.Write("notarization-tswap", "3\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Equal(4, NotarisationChecks("tswap").Count);
+        Assert.Contains("REPORT-ONLY notarisation: tswap: codesign --check-notarization exit 3 after 4 attempts", output);
+    }
+
+    /// <summary>Exit 1 is a bad signature, not a ticket still on its way: no retries.</summary>
+    [Fact]
+    public void MacOsSmoke_NotarisationBadSignature_FailsAtOnce()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("notarization-libtswapse.dylib", "1\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Single(NotarisationChecks("libtswapse.dylib"));
+        Assert.Contains("libtswapse.dylib: codesign --check-notarization exit 1 after 1 attempts", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ControlPasses_Gated_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("notarization-control", "0\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("::error::notarisation-control: the check passed an unnotarised binary: it proves nothing", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ControlPasses_ReportOnly_SaysItProvesNothing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam(gated: false);
+        _mac.Write("notarization-control", "0\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("REPORT-ONLY notarisation-control: the check passed an unnotarised binary: it proves nothing", output);
+        // The control is an ad-hoc re-signed copy, checked once (no 10-minute wait).
+        var control = Assert.Single(_mac.Log("codesign"), line => line.Contains("--check-notarization") && line.Contains("control"));
+        Assert.Contains(_mac.Log("codesign"), line => line.StartsWith("--force --sign - ", StringComparison.Ordinal) && line.EndsWith(control.Split(' ')[^1], StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MacOsSmoke_QuarantineNotPropagated_SaysSkip()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("SKIP: quarantine did not propagate", output);
+        Assert.Single(_mac.Log("xattr"), line => line.StartsWith("-w com.apple.quarantine 0083;", StringComparison.Ordinal) && line.Contains(";Safari; "));
+    }
+
+    [Fact]
+    public void MacOsSmoke_GatekeeperDisabled_SaysSkip()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("quarantine.propagates", "");
+        _mac.Write("spctl-status", "assessments disabled\n");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.Contains("spctl --status: assessments disabled", output);
+        Assert.Contains("SKIP: Gatekeeper assessments are disabled on this runner", output);
+        Assert.DoesNotContain(LoggedRuns(), run => run.Contains("/quarantined "));
+    }
+
+    [Fact]
+    public void MacOsSmoke_GatekeeperEnabled_RunsTheQuarantinedCopy()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        ExpectTeam();
+        _mac.Write("quarantine.propagates", "");
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        var quarantined = LoggedRuns().Where(run => run.Contains("/quarantined with: ")).Select(run => run[run.IndexOf(" with: ", StringComparison.Ordinal)..]).ToList();
+        Assert.Equal(3, quarantined.Count);
+        Assert.Equal(" with: prompt-hash (config: unset)", quarantined[0]);
+        Assert.StartsWith(" with: init --secure-enclave --no-touch --no-password --no-recovery (config: ", quarantined[1]);
+        Assert.StartsWith(" with: names (config: ", quarantined[2]);
+        Assert.Contains("the quarantined copy ran", output);
     }
 }
