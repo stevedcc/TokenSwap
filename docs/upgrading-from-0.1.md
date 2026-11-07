@@ -20,11 +20,17 @@ tswap 0.2 is a breaking release.
    A two-YubiKey XOR vault and converting straight into a synced folder: see
    [What the conversion does](#what-the-conversion-does).
 
-2. **A record vault made by 0.1:** once every machine sharing it runs 0.2, reindex it once:
+2. **A record vault made by 0.1:** once every machine sharing it runs 0.2 or later, reindex it once:
 
    ```bash
    sudo tswap vault reindex
    ```
+
+   From 0.3 this step is required: until a vault holds no format 2 records, `redact` and
+   `tocomment` refuse (they recognise secrets by fingerprints, which format 2 records don't have),
+   and `names`, `list`, `burned`, `check`, `get` and `apply` warn each time they read one
+   ([commands.md](commands.md#fingerprints-format-2-records-and-vault-reindex)). A machine still on
+   0.1 writes new records in format 2 again, so upgrade every machine on a shared folder first.
 
    A vault converted in step 1 needs no reindex: like every new vault, it starts in format 3.
 

@@ -13,7 +13,9 @@ public sealed record FingerprintHit(string Name, bool IsPrevious, VariantKind Ki
 /// any plaintext. For each distinct stored length it slides a window over the text, keeps the
 /// window's rolling hash in O(1) per character, and looks up (length, hash); a candidate becomes a
 /// hit only when the window's HMAC equals a stored HMAC (fixed-time). A rolling-hash match alone is
-/// never a hit, so the 64-bit prefilter can collide without ever producing a false match.
+/// never a hit, so the 64-bit prefilter can collide without ever producing a false match; and a
+/// window that cuts a surrogate pair is never confirmed (<see cref="SplitsASurrogatePair"/>), because
+/// the HMAC's UTF-8 encoding is not injective on such windows.
 /// <para>
 /// The index holds a reference to the <see cref="FingerprintKeys"/> it was built with (no copy of
 /// the key): it works only while the caller keeps them undisposed.
@@ -96,10 +98,22 @@ public sealed class FingerprintIndex
         return hits;
     }
 
+    /// <summary>
+    /// True when <paramref name="window"/> starts on a low surrogate or ends on a high one, i.e. it
+    /// cuts a surrogate pair of the text it was taken from. Such a window is never confirmed: the
+    /// HMAC is taken over UTF-8, which encodes a lone surrogate as U+FFFD's bytes, so without this
+    /// rule a window ending on the high half of an emoji would confirm against a value holding
+    /// U+FFFD there (given a rolling-hash collision as well). A value's own variants never start or
+    /// end inside a pair, so no real match is lost. Stage 3's scanner applies the same rule.
+    /// </summary>
+    internal static bool SplitsASurrogatePair(ReadOnlySpan<char> window) =>
+        window.Length > 0 && (char.IsLowSurrogate(window[0]) || char.IsHighSurrogate(window[^1]));
+
     private void Confirm(
         ReadOnlySpan<char> window, int start,
         List<(string Name, bool IsPrevious, VariantKind Kind, byte[] Hmac)> candidates, List<FingerprintHit> hits)
     {
+        if (SplitsASurrogatePair(window)) return;
         var mac = Fingerprinter.Hmac(window, _keys);
         try
         {

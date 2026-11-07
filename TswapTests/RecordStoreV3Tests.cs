@@ -22,7 +22,7 @@ public sealed class RecordStoreV3Tests : IDisposable
 
     public RecordStoreV3Tests()
     {
-        _key = VaultKey(_m, InitRecordVault(_m));
+        _key = VaultKey(_m, InitFormatTwoVault(_m));
     }
 
     public void Dispose()

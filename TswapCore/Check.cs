@@ -83,22 +83,23 @@ public static class Check
     public record CheckResult(MarkerRef Marker, SecretStatus Status);
 
     /// <summary>
-    /// Check each marker reference against the loaded secrets database.
+    /// Check each marker reference against the vault (a loaded <see cref="SecretsDb"/>, or a
+    /// <see cref="VaultView"/> that decrypts no value for it).
     /// </summary>
-    public static List<CheckResult> CheckMarkers(List<MarkerRef> markers, SecretsDb db)
+    public static List<CheckResult> CheckMarkers(List<MarkerRef> markers, ISecretLookup db)
     {
         return markers.Select(marker =>
         {
             var previous = marker.SecretName.EndsWith(SecretsDb.PreviousSuffix, StringComparison.Ordinal);
             var name = previous ? marker.SecretName[..^SecretsDb.PreviousSuffix.Length] : marker.SecretName;
-            if (!db.Secrets.TryGetValue(name, out var secret))
+            if (!db.Contains(name))
             {
                 db.ThrowIfUnreadable(name);
                 return new CheckResult(marker, SecretStatus.Missing);
             }
             if (previous)
-                return new CheckResult(marker, secret.PreviousValue is null ? SecretStatus.Missing : SecretStatus.Ok);
-            return new CheckResult(marker, secret.BurnedAt.HasValue ? SecretStatus.Burned : SecretStatus.Ok);
+                return new CheckResult(marker, db.HasPreviousValue(name) ? SecretStatus.Ok : SecretStatus.Missing);
+            return new CheckResult(marker, db.IsBurnedToken(name) ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }
 }

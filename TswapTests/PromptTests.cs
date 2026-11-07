@@ -128,4 +128,23 @@ public class PromptTests
         foreach (var line in text.Split('\n').Where(l => l.Contains("tswap apply")))
             Assert.True(line.Contains("sudo tswap apply"), $"apply without sudo: {line}");
     }
+
+    /// <summary>
+    /// Brief T16-S2: redact and tocomment refuse on a vault with records lacking fingerprints, and the
+    /// reading commands warn about format 2 records; the prompt sends the agent to the user for the
+    /// reindex and forbids a workaround.
+    /// </summary>
+    [Fact]
+    public void GetText_SendsTheAgentToTheUserForTheReindex()
+    {
+        // Code review (MiMo B-M3): whitespace-insensitive, and every clause of the rule: both triggers,
+        // the request to the user, never running it, never working around the refusal.
+        var text = System.Text.RegularExpressions.Regex.Replace(Prompt.GetText("tswap"), @"\s+", " ");
+
+        Assert.Contains("If `tswap redact` or `tswap tocomment` refuses because records have no fingerprints yet", text);
+        Assert.Contains("or a command prints a warning about the old record format 2", text);
+        Assert.Contains("stop and ask the user to run `sudo tswap vault reindex` once in their own terminal", text);
+        Assert.Contains("You never run it yourself (it needs sudo)", text);
+        Assert.Contains("never work around the refusal", text);
+    }
 }

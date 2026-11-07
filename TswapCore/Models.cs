@@ -223,7 +223,7 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
 /// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>
 public sealed record PastBurn(DateTime BurnedAt, string? Reason);
 
-public record SecretsDb(Dictionary<string, Secret> Secrets)
+public record SecretsDb(Dictionary<string, Secret> Secrets) : ISecretLookup
 {
     /// <summary>
     /// Brief T6 decision 4 (record store only): for a name whose record file can't be read
@@ -246,6 +246,12 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
 
     /// <summary>The suffix of a token or marker that names a secret's previous value.</summary>
     public const string PreviousSuffix = ":previous";
+
+    /// <inheritdoc/>
+    public bool Contains(string name) => Secrets.ContainsKey(name);
+
+    /// <inheritdoc/>
+    public bool HasPreviousValue(string name) => Secrets.TryGetValue(name, out var secret) && secret.PreviousValue is not null;
 
     /// <summary>
     /// Fix round 3: true when <paramref name="token"/> (a name or <c>name:previous</c>) refers to a
@@ -290,10 +296,13 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public void ThrowIfAnyUnreadable(string command)
     {
         if (UnreadableFiles is { Count: > 0 } files)
-            throw new TswapException(
-                $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
-                "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.");
+            throw new TswapException(AnyUnreadableText(command, files));
     }
+
+    /// <summary>Brief T16-S2: <see cref="ThrowIfAnyUnreadable"/>'s text, shared with <see cref="VaultView"/>.</summary>
+    public static string AnyUnreadableText(string command, IReadOnlyList<string> files) =>
+        $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
+        "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.";
 
     /// <summary>
     /// Throws when <paramref name="name"/> is in a record that can't be read, naming the file (fail
@@ -302,10 +311,16 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public void ThrowIfUnreadable(string name)
     {
         if (UnreadableRecord?.Invoke(name) is { } file)
-            throw new TswapException(
-                $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
-                "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
+            throw new TswapException(UnreadableRecordText(name, file));
     }
+
+    /// <summary>
+    /// Brief T16-S2: <see cref="ThrowIfUnreadable"/>'s text for the record <paramref name="file"/>
+    /// (hashed name), shared with <see cref="VaultView"/>, so every command names the file alike.
+    /// </summary>
+    public static string UnreadableRecordText(string name, string file) =>
+        $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
+        "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.";
 }
 
 /// <summary>
