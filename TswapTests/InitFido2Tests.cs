@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using TswapCli;
+using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Keyring;
 using TswapCore.Vault;
@@ -209,6 +210,27 @@ public class InitFido2Tests : IDisposable
         Assert.Contains("fido2-check", namesOut);
         Assert.All(_terminal.Reads, r => Assert.True(r.Secret, r.Prompt));
         Assert.DoesNotContain(pin, namesOut + namesErr + _terminal.Text);
+        // The unlock's touch line goes to the command's own stderr.
+        Assert.Contains(Fido2Texts.TouchLine, namesErr);
+        Assert.DoesNotContain(Fido2Texts.TouchLine, namesOut);
+    }
+
+    // Final review (MiMo p6a): the touch flags are the Secure Enclave's; a FIDO2 slot always needs its PIN and a touch.
+    [Theory]
+    [InlineData("--no-touch")]
+    [InlineData("--with-touch")]
+    public void InitFido2_TouchFlag_Refused(string flag)
+    {
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, stdout, stderr) = Run(Dir(), "", "init", "--fido2", flag);
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(InitCommand.Fido2TouchFlagRefusal, stderr);
+        Assert.DoesNotContain("Secure Enclave key", stdout + stderr); // not the --no-touch warning
+        Assert.Empty(_fido2.Calls);
+        Assert.False(File.Exists(Path.Combine(Dir(), "config.json")));
     }
 
     [Fact]

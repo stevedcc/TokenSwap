@@ -37,7 +37,8 @@ public enum Fido2Failure
 /// A FIDO2 operation failed, with a text for the person (<see cref="Fido2Texts"/>, composed by
 /// <see cref="Fido2Service"/>) and the kind beside it, so callers react to <see cref="Kind"/>, never the wording.
 /// </summary>
-public sealed class Fido2Exception(Fido2Failure kind, int? serial, int? retriesLeft, string message) : TswapException(message)
+public sealed class Fido2Exception(Fido2Failure kind, int? serial, int? retriesLeft, string message, Exception? inner = null)
+    : TswapException(message, inner: inner)
 {
     public Fido2Failure Kind { get; } = kind;
 

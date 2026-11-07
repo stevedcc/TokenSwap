@@ -36,7 +36,7 @@ internal static class Fido2SlotEnrollment
     /// <summary>Said when the second key operation fails: the first made a credential, but nothing was written.</summary>
     public const string RetrySafeText =
         "No slot was added and nothing was written. The key may keep an unused credential (a YubiKey stores nothing for " +
-        "it: its id is the wrapped key; other brands may differ), so running this again is safe.";
+        "it: its ID is the wrapped key), so running this again is safe.";
 
     /// <summary>The closing line of every OTP enrolment, on every OS (<see cref="YubiKeySlotEnrollment.PrintTouchPolicy"/>).</summary>
     public const string MultiOsHint =
@@ -200,27 +200,29 @@ internal static class Fido2SlotEnrollment
         var pin = Fido2PinPrompt.For(ctx);
         // Linux and macOS: the touch line once each PIN is typed (task 8), as the key then waits for the touch.
         // Windows: its dialog line before each operation (the dialog asks for the PIN).
+        // Both are notices: stderr (task 7 ruling), as at unlock.
         if (fido2.CanList && pin is not null)
-            pin = VaultUnlocker.TouchLineAfterPin(pin, c.Out.WriteLine);
+            pin = VaultUnlocker.TouchLineAfterPin(pin, c.Error.WriteLine);
 
         c.Out.WriteLine(key is null
             ? "\nEnrolling a FIDO2 credential on the key you pick in Windows' dialog..."
             : $"\nEnrolling a FIDO2 credential on {fido2.KeyName(key)} (its PIN and a touch, twice)...");
         if (!fido2.CanList)
-            c.Out.WriteLine(WindowsTouchLine);
+            c.Error.WriteLine(WindowsTouchLine);
         var blob = fido2.Enrol(key, password is not null, vaultFido2Slots, pin);
         credentialMade?.Invoke();
 
         if (!fido2.CanList)
-            c.Out.WriteLine(WindowsTouchLine);
+            c.Error.WriteLine(WindowsTouchLine);
         Fido2Opened opened;
         try
         {
             opened = fido2.Open([blob], key, pin);
         }
-        catch (TswapException e)
+        catch (Fido2Exception e)
         {
-            throw new TswapException($"{e.Message} {RetrySafeText}", e.ExitCode);
+            // Only the service's mapped failures: the type and kind stay, the failure is kept inside.
+            throw new Fido2Exception(e.Kind, e.Serial, e.RetriesLeft, $"{e.Message} {RetrySafeText}", e);
         }
         try
         {

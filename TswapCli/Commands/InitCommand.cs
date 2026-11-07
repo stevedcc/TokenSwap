@@ -25,6 +25,10 @@ namespace TswapCli.Commands;
 public sealed class InitCommand : ICliCommand
 {
     public string Name => "init";
+    /// <summary>Final review: <c>init --fido2</c> with a touch flag, refused as <c>slot add</c> refuses one.</summary>
+    internal const string Fido2TouchFlagRefusal =
+        "--with-touch and --no-touch are for --secure-enclave: a FIDO2 slot always asks for the key's PIN and a touch.";
+
     public string HelpUsage => $"init [--yubikey|--fido2 [--serial <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery] [--folder <dir>] | init --vault-dir <shared folder>";
     public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery. --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
@@ -76,6 +80,8 @@ public sealed class InitCommand : ICliCommand
                     $"{Fido2SlotEnrollment.SerialFlag} only with {Fido2Flag})";
         (args, var newFolder) = SplitFolder(args, usage);
         (args, var serial) = Fido2SlotEnrollment.SplitSerial(args, usage);
+        if (args.Contains(Fido2Flag) && args.Any(a => a is SecureEnclaveTouchChoice.WithTouch or SecureEnclaveTouchChoice.NoTouch))
+            throw new UsageException($"{usage}\n{Fido2TouchFlagRefusal}");
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
         (args, var passwordFlag) = VaultPasswordChoice.Split(args, usage);

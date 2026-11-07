@@ -8,7 +8,7 @@ namespace TswapCli;
 /// there is no terminal (<see cref="CommandContext.Terminal"/> gives none), which <see cref="IFido2Service"/> refuses
 /// before any key call. Each request opens the terminal, asks there (no echo on Linux and macOS, read from
 /// <c>/dev/tty</c>, so stdin may carry something else) and closes it again. A new PIN is asked twice and asked again
-/// while the two differ or it is too short; an empty answer or the end of input returns no bytes (a cancellation).
+/// while the two differ, it is too short or longer than 63 bytes; an empty answer or the end of input returns no bytes (a cancellation).
 /// Windows' dialog asks for the PIN itself, so there the delegate exists but is not called.
 /// </summary>
 internal static class Fido2PinPrompt
@@ -25,6 +25,11 @@ internal static class Fido2PinPrompt
     public const string MismatchText = "The two PINs differ; type the new PIN again.";
 
     public const string TooShortText = "A FIDO2 PIN has at least 4 characters; type a longer one.";
+
+    /// <summary>CTAP2: a PIN is at most 63 bytes of UTF-8.</summary>
+    public const int MaximumPinBytes = 63;
+
+    public const string TooLongText = "A FIDO2 PIN has at most 63 bytes (UTF-8); type a shorter one.";
 
     /// <summary>Whether a person can answer at a terminal here.</summary>
     public static bool HasTerminal(CommandContext ctx)
@@ -65,6 +70,13 @@ internal static class Fido2PinPrompt
             {
                 CryptographicOperations.ZeroMemory(first);
                 prompt = TooShortText + "\n" + NewPinPrompt(keyName);
+                continue;
+            }
+            if (first.Length > MaximumPinBytes)
+            {
+                // Asked again before anything is sent: the key would refuse it.
+                CryptographicOperations.ZeroMemory(first);
+                prompt = TooLongText + "\n" + NewPinPrompt(keyName);
                 continue;
             }
             var second = Ask(terminal, RepeatPrompt);

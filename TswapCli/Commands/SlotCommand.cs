@@ -953,8 +953,9 @@ public sealed class SlotCommand : ICliCommand
     private static int ExecuteAddFido2(CommandContext ctx, int? serial, bool? passwordFlag, bool withRecoveryKey)
     {
         var c = ctx.Console;
-        var (config, keyring) = LoadKeyringForAdd(ctx);
+        // The refusals that need no vault (no terminal, --serial on Windows) come before the sudo check, as in init.
         var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+        var (config, keyring) = LoadKeyringForAdd(ctx);
         Fido2KeyInfo? key = null;
         if (fido2.CanList)
         {
