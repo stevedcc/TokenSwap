@@ -1,5 +1,6 @@
 using RedactingPty;
 using TswapCore;
+using TswapCore.Fingerprints;
 
 namespace TswapCli.Commands;
 
@@ -72,7 +73,10 @@ public sealed class RunCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
         using var view = ctx.OpenVault(key);
-        view.LoadAll(FormatTwoRecords.Skip);
+        var metadata = view.LoadAll(FormatTwoRecords.Skip);
+        // Every other fingerprinted value version of the vault is masked too (the matcher), and what
+        // can't be is said before the child starts and again after it exits.
+        RunCoverage.Warn(ctx.Console.Error, ctx.Prefix, metadata);
 
         // Resolve every token first: a missing secret, a missing previous value or an unreadable record
         // (named by its hashed file) refuses before anything is written or started.
@@ -135,6 +139,7 @@ public sealed class RunCommand : ICliCommand
         }
 
         FilledFiles? files = null;
+        FingerprintKeys? fingerprintKeys = null;
         try
         {
             Dictionary<string, string> filePaths = new(StringComparer.Ordinal);
@@ -184,16 +189,30 @@ public sealed class RunCommand : ICliCommand
                 .Select(kv => new StreamReplacement(kv.Key, kv.Value))
                 .ToList();
 
+            // Always with the matcher (an empty index holds nothing and matches nothing), so run has one
+            // resolution path; output held back for a possible multi-line secret is released when the
+            // child waits for terminal input.
+            fingerprintKeys = FingerprintKeys.Derive(key);
+            var options = new RedactionOptions
+            {
+                Matchers = [FingerprintStreamMatcher.For(metadata, fingerprintKeys)],
+                ReleaseWhenAwaitingInput = true,
+            };
             var runner = ctx.PtyRunner();
-            var exitCode = files is null ? runner.Run(argv, replacements) : files.RunChild(() => runner.Run(argv, replacements));
+            var exitCode = files is null
+                ? runner.Run(argv, replacements, options)
+                : files.RunChild(() => runner.Run(argv, replacements, options));
 
-            // After the child's output: the records run named that are still in format 2 (decrypted whole).
+            // After the child's output: the coverage warning again, then the records run named that are
+            // still in format 2 (decrypted whole).
+            RunCoverage.Warn(ctx.Console.Error, ctx.Prefix, metadata);
             FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded, FormatTwoUse.Substitute);
             return exitCode;
         }
         finally
         {
             files?.Dispose();
+            fingerprintKeys?.Dispose();
         }
     }
 

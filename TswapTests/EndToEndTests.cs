@@ -340,9 +340,10 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// Runs the tswap binary with <paramref name="tswapArgs"/> (a bash-quoted argument string) under
     /// an outer PTY, so isatty(0/1/2) is true and <c>PtyRunnerFactory.Create()</c> picks
     /// LinuxPty/MacOSPty. Returns tswap's exit code and everything it wrote to the terminal, or null
-    /// where openpty isn't available.
+    /// where openpty isn't available. With <paramref name="reply"/>, its text is typed into the terminal
+    /// once (and only once) the output contains <c>WhenSeen</c>: input is sent only after a prompt shows.
     /// </summary>
-    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs)
+    private (int ExitCode, string Output)? RunTswapUnderOuterPty(string tswapArgs, (string WhenSeen, string Type)? reply = null)
     {
         // Open an outer PTY pair. tswap will inherit the slave as its fds so
         // isatty(0/1/2) returns true and PtyRunnerFactory.Create() picks LinuxPty/MacOSPty.
@@ -415,7 +416,17 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
                     break; // poll error
                 }
                 int n = (int)PtyRead(masterFd, buf, (nint)buf.Length);
-                if (n > 0) { sb.Append(Encoding.UTF8.GetString(buf, 0, n)); continue; }
+                if (n > 0)
+                {
+                    sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+                    if (reply is var (whenSeen, type) && sb.ToString().Contains(whenSeen))
+                    {
+                        var typed = Encoding.UTF8.GetBytes(type);
+                        PtyWrite(masterFd, typed, typed.Length);
+                        reply = null;
+                    }
+                    continue;
+                }
                 if (n == 0) break; // EOF
                 var readErrno = Marshal.GetLastPInvokeError();
                 if (readErrno == EINTR || readErrno == eagain) continue; // interrupted or O_NONBLOCK: retry
@@ -433,6 +444,56 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             process.WaitForExit();
         }
         return (process.ExitCode, sb.ToString());
+    }
+
+    /// <summary>
+    /// Brief T16-S3: through a real PTY and the published binary (NativeAOT in CI, so trimming and the
+    /// default-interface dispatch of RedactingPty's options overload are exercised), a vault secret the
+    /// command never named is masked by its fingerprints.
+    /// </summary>
+    [Fact]
+    public void EndToEnd_Run_OtherSecretMasked_RealPty()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
+        RunTswapWithStdin("other-vault-value-42", "ingest", "other");
+        var childScript = Path.Combine(_tempDir, "print-other.sh");
+        File.WriteAllText(childScript, "echo \"got $1\"\necho \"log other-vault-value-42 end\"\n");
+
+        if (RunTswapUnderOuterPty($"run sh \"{childScript}\" {{{{my-secret}}}}") is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("other-vault-value-42", output);
+        Assert.DoesNotContain("s3cr3t", output);
+        Assert.Contains("log [REDACTED: other] end", output);
+        Assert.Contains("got [REDACTED: my-secret]", output);
+    }
+
+    /// <summary>
+    /// Brief T16-S3 (owner decision D2), Linux: with a multi-line secret in the vault the redactor holds
+    /// back the end of the output, so a prompt would hide behind it; run releases it when the child waits
+    /// for terminal input. The answer is typed only after the prompt has shown; without the release the
+    /// child waits forever and the harness's deadline ends the test without the answer.
+    /// </summary>
+    [Fact]
+    public void EndToEnd_Run_PromptVisible_WithPemInVault()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("token-value-7", "ingest", "token");
+        RunTswapWithStdin("-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END KEY-----", "ingest", "pem");
+        var prompt = Path.Combine(_tempDir, "prompt.sh");
+        File.WriteAllText(prompt, "printf 'Continue? [y/N] '\nread x\necho \"answer-$x\"\n");
+
+        if (RunTswapUnderOuterPty($"run sh \"{prompt}\" {{{{token}}}}", ("Continue? [y/N] ", "y\n")) is not var (exitCode, output))
+            return; // openpty not available on this platform; skip test
+        Assert.Contains("answer-y", output);
+        Assert.Equal(0, exitCode);
     }
 
     /// <summary>

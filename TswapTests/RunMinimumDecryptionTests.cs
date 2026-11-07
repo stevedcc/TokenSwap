@@ -1,5 +1,3 @@
-using System.Text;
-using RedactingPty;
 using TswapCli;
 using TswapCore;
 using TswapCore.Keyring;
@@ -24,30 +22,6 @@ public sealed class RunMinimumDecryptionTests : IDisposable
     {
         _m.Dispose();
         Directory.Delete(_temp, recursive: true);
-    }
-
-    /// <summary>A stand-in runner: records the start and argv, prints <see cref="Child"/>'s output through the redactor.</summary>
-    internal sealed class RecordingPty : IPtyRunner
-    {
-        public Func<string[], string> Child { get; set; } = _ => "";
-        public Action? During { get; set; }
-        public int Starts { get; private set; }
-        public string[]? Argv { get; private set; }
-        public StringBuilder Output { get; } = new();
-
-        public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements) =>
-            Run(argv, replacements, new RedactionOptions());
-
-        public int Run(string[] argv, IReadOnlyList<StreamReplacement> replacements, RedactionOptions options)
-        {
-            Starts++;
-            Argv = argv;
-            During?.Invoke();
-            var redactor = new StreamRedactor(replacements, options.Matchers);
-            Output.Append(redactor.ProcessChunk(Child(argv)));
-            Output.Append(redactor.Flush());
-            return 0;
-        }
     }
 
     private readonly RecordingPty _pty = new();
