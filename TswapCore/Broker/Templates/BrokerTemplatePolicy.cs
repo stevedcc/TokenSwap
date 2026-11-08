@@ -315,7 +315,7 @@ public static class BrokerTemplateValidator
             args[argName] = new BrokerTemplateArg(argName, CompileArgPattern(name, argName, arg.Pattern!), maxLength, arg.AllowLeadingDash ?? false);
         }
         HashSet<string> used = [with(StringComparer.Ordinal)];
-        var parts = new List<IReadOnlyList<(string Text, bool IsArg)>> { new[] { (program, false) } };
+        List<IReadOnlyList<(string Text, bool IsArg)>> parts = [new[] { (program, false) }];
         for (var i = 1; i < t.Argv.Count; i++)
         {
             var entry = t.Argv[i];
