@@ -31,7 +31,9 @@ public sealed class SaveSecretsGoldenTests
         };
         var text = actual.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
 
-        var expected = File.Exists(GoldenPath()) ? File.ReadAllText(GoldenPath()) : null;
+        // Line endings normalised on read: .gitattributes pins eol=lf for every text file, but a copy of
+        // the fixture that didn't come through git (an archive, an editor) may carry CRLF.
+        var expected = File.Exists(GoldenPath()) ? File.ReadAllText(GoldenPath()).ReplaceLineEndings("\n") : null;
         if (expected != text)
         {
             var written = Path.Combine(AppContext.BaseDirectory, "save-secrets-golden.actual.json");

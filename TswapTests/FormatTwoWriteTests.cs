@@ -80,6 +80,7 @@ public sealed class FormatTwoWriteTests : IDisposable
 
         var (err, others) = RunWatched(stdin, args);
 
+        Assert.NotEmpty(_values);
         Assert.All(_values, v => Assert.Equal(FileOf("target"), v.File));
         Assert.Equal(KeyringFormat.RecordFormatVersion, FormatOf("target"));
         Assert.Contains(Warning(1), err);

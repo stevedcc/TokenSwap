@@ -106,7 +106,8 @@ public sealed class AddWhitespaceWarningTests : IDisposable
     [InlineData(" a", false)]
     [InlineData("a ", true)]
     [InlineData("a\t", true)]
-    [InlineData("a ", true)]
+    [InlineData("a\u00A0", true)] // a no-break space, escaped so it stays visible and can't be normalised away
     [InlineData(" ", true)]
+    [InlineData("\u00A0", true)]
     public void EndsInWhitespace(string value, bool expected) => Assert.Equal(expected, Validation.EndsInWhitespace(value));
 }

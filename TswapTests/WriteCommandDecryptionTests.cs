@@ -21,6 +21,7 @@ public sealed class WriteCommandDecryptionTests : IDisposable
     private readonly byte[] _key;
     private readonly List<string> _records = [];
     private readonly List<(string File, Stamp Version)> _values = [];
+    private int _watchedStores;
 
     public WriteCommandDecryptionTests()
     {
@@ -42,12 +43,25 @@ public sealed class WriteCommandDecryptionTests : IDisposable
         _now += TimeSpan.FromSeconds(10);
         _m.StoreOpened = store =>
         {
+            _watchedStores++;
             store.RecordDecrypted = file => _records.Add(file);
             store.ValueDecrypted = (file, version) => _values.Add((file, version));
         };
     }
 
     private void StopWatching() => _m.StoreOpened = null;
+
+    /// <summary>
+    /// Code review (MiMo B1): a write of a new name has no record to read, so its proof that nothing was
+    /// read or decrypted needs the watch to have been on the store that command used: exactly one store,
+    /// watched, and nothing reported by either seam.
+    /// </summary>
+    private void AssertWatchedAndNothingRead()
+    {
+        Assert.Equal(1, _watchedStores);
+        Assert.Empty(_records);
+        Assert.Empty(_values);
+    }
 
     /// <summary>Every file of the records folder and config.json, as bytes.</summary>
     private Dictionary<string, string> Snapshot()
@@ -105,8 +119,7 @@ public sealed class WriteCommandDecryptionTests : IDisposable
 
         _m.Ok("", "create", "c");
 
-        Assert.Empty(_values);
-        Assert.All(_records, r => Assert.Equal(FileOf("c"), r));
+        AssertWatchedAndNothingRead();
         AssertOthersUnchanged(before, "c");
         Assert.Equal(32, _m.Get("c").Length);
         AssertModified("c");
@@ -120,8 +133,7 @@ public sealed class WriteCommandDecryptionTests : IDisposable
 
         _m.Ok("c-value", "ingest", "c");
 
-        Assert.Empty(_values);
-        Assert.All(_records, r => Assert.Equal(FileOf("c"), r));
+        AssertWatchedAndNothingRead();
         AssertOthersUnchanged(before, "c");
         Assert.Equal("c-value", _m.Get("c"));
         AssertModified("c");
@@ -135,8 +147,7 @@ public sealed class WriteCommandDecryptionTests : IDisposable
 
         _m.Ok("c-value\nc-value\n", "add", "c");
 
-        Assert.Empty(_values);
-        Assert.All(_records, r => Assert.Equal(FileOf("c"), r));
+        AssertWatchedAndNothingRead();
         AssertOthersUnchanged(before, "c");
         Assert.Equal("c-value", _m.Get("c"));
         AssertModified("c");
