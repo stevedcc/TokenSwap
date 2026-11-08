@@ -476,7 +476,7 @@ public sealed class BrokerCommand : ICliCommand
     {
         string? socket = null;
         string? template = null;
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, string> values = [with(StringComparer.Ordinal)];
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--socket" && i + 1 < args.Length && socket is null)
@@ -839,7 +839,7 @@ public sealed class BrokerCommand : ICliCommand
     private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known, string[]? flags = null)
     {
         List<string> positional = [];
-        var options = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, string> options = [with(StringComparer.Ordinal)];
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];

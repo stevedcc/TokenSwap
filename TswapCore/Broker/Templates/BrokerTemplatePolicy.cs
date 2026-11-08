@@ -650,8 +650,7 @@ public static class BrokerTemplateValidator
         // Protected paths by st_dev:st_ino: the bind may not be one, contain one (be an ancestor of
         // it) or be inside one (have it as an ancestor).
         static bool Same(BrokerNative.FileIdentity a, BrokerNative.FileIdentity b) => a.Dev == b.Dev && a.Ino == b.Ino;
-        var full = new List<string>(host.Protected);
-        full.AddRange(BrokerHostContext.SudoPaths);
+        List<string> full = [.. host.Protected, .. BrokerHostContext.SudoPaths];
         if (!string.IsNullOrEmpty(socketDir))
             full.Add(socketDir);
         foreach (var protectedPath in full)

@@ -243,6 +243,26 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.NotEmpty(err2);
     }
 
+    /// <summary>
+    /// Row 1b's pin for <c>broker call</c>'s own argument parsing: names are ordinal, so "who" and "Who" are two
+    /// arguments (the broker refuses the undeclared one), while the same name twice is refused locally.
+    /// </summary>
+    [Fact]
+    public void TheCallCommand_TakesArgumentNamesDifferingOnlyInCase_AsTwoArguments()
+    {
+        using var m = new FleetMachine("tplcase");
+        var missing = Path.Combine(m.Dir, "missing.sock");
+
+        var (twice, _, twiceErr) = m.Run("", "broker", "call", "t", "who=a", "who=b", "--socket", missing);
+        Assert.Equal(125, twice);
+        Assert.Contains("is not name=value (or is given twice)", twiceErr);
+
+        var (caseVariants, _, caseErr) = m.Run("", "broker", "call", "t", "who=a", "Who=b", "--socket", missing);
+        Assert.Equal(125, caseVariants);
+        Assert.DoesNotContain("given twice", caseErr);
+        Assert.NotEmpty(caseErr);
+    }
+
     [Fact]
     public async Task ATimeout_Reports124()
     {
