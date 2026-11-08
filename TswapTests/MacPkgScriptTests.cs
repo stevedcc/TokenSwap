@@ -166,9 +166,9 @@ public sealed partial class MacPkgScriptTests : IDisposable
         // The payload: exactly the two files, at /usr/local/bin, mode 0755.
         Assert.Equal(["./usr/local/bin/libtswapse.dylib", "./usr/local/bin/tswap"],
             Directory.GetFiles(Payload, "*", SearchOption.AllDirectories).Select(f => "./" + Path.GetRelativePath(Payload, f)).Order());
-        Assert.All(Directory.GetFiles(Payload, "*", SearchOption.AllDirectories), f =>
+        foreach (var f in Directory.GetFiles(Payload, "*", SearchOption.AllDirectories))
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead |
-                         UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute, File.GetUnixFileMode(f)));
+                         UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute, File.GetUnixFileMode(f));
         Assert.Contains("version=\"0.3.0\"", File.ReadAllText(Path.Combine(_fake.Dir, "distribution.used")));
         Assert.True(File.Exists(Pkg), output);
         Assert.False(File.Exists(Pkg + ".partial"));
@@ -434,6 +434,7 @@ public sealed partial class MacPkgScriptTests : IDisposable
     }
 
     /// <summary>A pkg whose payload tswap is a fake that answers like the installed binary.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     private void FakeInstalledBinary(string installscript)
     {
         PkgAndTarball();
