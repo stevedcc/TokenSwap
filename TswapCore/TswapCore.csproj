@@ -79,9 +79,10 @@
       The shim's minimum macOS (#265). It must equal tswap's own minimum (NativeAOT's LC_BUILD_VERSION minos), which
       contrib/packaging/package.sh and the pkg's distribution.xml are checked against; without an explicit target
       swiftc took the SDK's version (26.0), so the dylib refused to load on any older macOS. Every CryptoKit and
-      Security call the shim makes exists since 10.15, and swiftc refuses a newer call than the target.
+      Security call the shim makes exists since 10.15, and swiftc refuses a newer call than the target. 14.0 since
+      .NET 11, whose NativeAOT build defaults AppleMinOSVersion to 14.0 (12.0 on .NET 10); owner decision 2026-11-08.
     -->
-    <SecureEnclaveShimMinOS>12.0</SecureEnclaveShimMinOS>
+    <SecureEnclaveShimMinOS>14.0</SecureEnclaveShimMinOS>
     <!-- The build host's architecture, as swiftc's own default was: an Intel Mac's developer build stays loadable. -->
     <SecureEnclaveShimArch Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">arm64</SecureEnclaveShimArch>
     <SecureEnclaveShimArch Condition="'$(SecureEnclaveShimArch)' == ''">x86_64</SecureEnclaveShimArch>

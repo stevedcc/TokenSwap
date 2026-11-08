@@ -60,7 +60,8 @@ Unpack it into a folder of your own and run `tswap` from there, or install it wi
 [`installscript`](#installing-with-installscript).
 
 **macOS: two files.** The macOS archive holds `tswap` and `libtswapse.dylib` (the Secure Enclave
-support). Both need macOS 12 or later (#265: before v0.3.0 the library said macOS 26).
+support). Both need macOS 14 (Sonoma) or later: from the .NET 11 build on, tswap itself targets macOS 14
+(before it, macOS 12; #265: before v0.3.0 the library said macOS 26).
 
 - Keep them in the same folder: tswap loads the library from next to itself.
 - A symlink to `tswap` (say from `~/bin`) works, since the folder is the real file's.

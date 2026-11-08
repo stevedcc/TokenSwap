@@ -585,7 +585,7 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = MacOsSmoke();
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("minos: tswap 12.0, libtswapse.dylib 26.0, SecureEnclaveShimMinOS 12.0: they must be equal (#265)", output);
+        Assert.Contains("minos: tswap 14.0, libtswapse.dylib 26.0, SecureEnclaveShimMinOS 14.0: they must be equal (#265)", output);
     }
 
     /// <summary>Both files agree with each other but not with the csproj's property: still a failure.</summary>

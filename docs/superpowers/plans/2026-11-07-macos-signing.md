@@ -1,5 +1,9 @@
 # Signed and notarised macOS release (v0.3.0, issues #240 and #265) — Implementation Plan
 
+> **Update (2026-11-08, brief T15):** the minimum macOS this plan names as 12.0 is **14.0** from the .NET 11 build
+> on: .NET 11's NativeAOT targets macOS 14 (`AppleMinOSVersion`), and the owner raised `SecureEnclaveShimMinOS`, the
+> pkg's `<os-version min>` and the checks with it. The 12.0 lines below record the plan as it was carried out.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Code review (2026-11-07; MiMo and DeepSeek, `tswap-wt/tools/sign-code-p{A,B,C}-{mimo,deepseek}.md`).** The old-macOS

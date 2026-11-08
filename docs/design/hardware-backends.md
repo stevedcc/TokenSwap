@@ -559,7 +559,7 @@ this `tswap` then fails on a missing entry point, since new shim functions get n
 The installer package (`tswap-osx-arm64.pkg`, signed with Developer ID Installer, notarised and
 stapled) is a second channel to the same place `installscript` uses, `/usr/local/bin`; run from that
 installed copy, `installscript` writes only the per-user steps. The shim is built with an explicit
-deployment target, `SecureEnclaveShimMinOS` (12.0, tswap's own minimum; issue #265: without it the
+deployment target, `SecureEnclaveShimMinOS` (14.0, tswap's own minimum since .NET 11, whose NativeAOT targets macOS 14; issue #265: without it the
 dylib said macOS 26.0), and the release checks that both Mach-Os and the package's distribution say
 the same minimum. Signing does not change how this backend functions locally: an unsigned build
 works as before.
