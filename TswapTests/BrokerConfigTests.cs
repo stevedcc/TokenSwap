@@ -415,4 +415,28 @@ public class BrokerConfigTests : IDisposable
 
         Assert.NotNull(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir, new PathOwnership(dirUid: 1000, fileUid: 1000)));
     }
+
+    // ---- The comparers of the policy's sets that an input can observe: route methods are ordinal (case-sensitive),
+    // Connection tokens are case-insensitive. Pinned before the sets moved to collection expressions with with(comparer)
+    // (idiomatic .NET 11 plan, row 1a). The name allow-lists (routes, templates, ssh keys, template args) are ordinal
+    // too, but no input can tell: names are validated to [a-z0-9-] and every lookup goes through an ordinal dictionary
+    // first. ----
+
+    [Fact]
+    public void RouteMethods_AreCaseSensitive()
+    {
+        var route = BrokerPolicy.Parse(WithRoute(Route(extra: """, "methods": ["GET"]"""))).Routes["r"];
+
+        Assert.True(route.Methods.Contains("GET"));
+        Assert.False(route.Methods.Contains("get"));
+    }
+
+    [Fact]
+    public void ConnectionTokens_AreCaseInsensitive()
+    {
+        var tokens = BrokerHeaderSniffer.ParseConnectionTokens("GET / HTTP/1.1\r\nConnection: X-Secret-Header\r\n\r\n"u8.ToArray());
+
+        Assert.True(tokens.Contains("x-secret-header"));
+        Assert.True(tokens.Contains("X-SECRET-HEADER"));
+    }
 }

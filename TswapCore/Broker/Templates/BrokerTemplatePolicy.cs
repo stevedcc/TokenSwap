@@ -314,7 +314,7 @@ public static class BrokerTemplateValidator
                 throw Ex($"argument '{argName}': max_length must be 1 to {MaxArgMaxLength}.");
             args[argName] = new BrokerTemplateArg(argName, CompileArgPattern(name, argName, arg.Pattern!), maxLength, arg.AllowLeadingDash ?? false);
         }
-        var used = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> used = [with(StringComparer.Ordinal)];
         var parts = new List<IReadOnlyList<(string Text, bool IsArg)>> { new[] { (program, false) } };
         for (var i = 1; i < t.Argv.Count; i++)
         {

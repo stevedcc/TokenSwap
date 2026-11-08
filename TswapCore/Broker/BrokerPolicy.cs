@@ -294,7 +294,7 @@ public sealed class BrokerPolicy
         }
 
         // Methods.
-        var methods = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> methods = [with(StringComparer.Ordinal)];
         foreach (var method in route.Methods ?? [.. DefaultMethods])
         {
             if (method is null || !AllowedMethods.Contains(method))
@@ -419,7 +419,7 @@ public sealed class BrokerPolicy
         List<(uint From, uint To)> ranges = [];
         foreach (var entry in socket.Uids)
             ranges.Add(ParseUidRange(name, entry));
-        var allowed = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowed = [with(StringComparer.Ordinal)];
         foreach (var route in socket.Routes ?? throw new BrokerConfigException($"Socket '{name}' has no 'routes' list."))
         {
             if (route is null || !routes.ContainsKey(route))
@@ -427,14 +427,14 @@ public sealed class BrokerPolicy
             allowed.Add(route);
         }
         // Allow-lists deny by default (brief T9 decision 4): no list, no templates or keys.
-        var allowedTemplates = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowedTemplates = [with(StringComparer.Ordinal)];
         foreach (var template in socket.Templates ?? [])
         {
             if (template is null || !templates.ContainsKey(template))
                 throw new BrokerConfigException($"Socket '{name}' allows template '{Printable(template ?? "")}', which is not defined.");
             allowedTemplates.Add(template);
         }
-        var allowedKeys = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowedKeys = [with(StringComparer.Ordinal)];
         foreach (var key in socket.SshKeys ?? [])
         {
             if (key is null || !sshKeys.ContainsKey(key))
