@@ -392,77 +392,126 @@ public static class SecretRecordCodec
     /// <summary>One retained value version as format 3 lists it.</summary>
     private readonly record struct VersionEntry(Stamp Version, byte Role, FingerprintSet? Fingerprints);
 
+    /// <summary>
+    /// Format 3 from a record with plaintext: the versions that carry no section yet (new, or read
+    /// from format 2) are sealed here with a fresh nonce, the others keep theirs (ruling 1), and the
+    /// file is written by <see cref="EncodeV3(RecordMetadata, IReadOnlyDictionary{Stamp, byte[]}, byte[])"/>,
+    /// so there is one metadata encoder.
+    /// </summary>
     private static byte[] EncodeV3(SecretRecord record, byte[] vaultKey)
     {
         if (record.RecordId.Length != KeyringFormat.RecordIdSize)
             throw new ArgumentException($"RecordId must be {KeyringFormat.RecordIdSize} bytes", nameof(record));
-        if (record.Burns.Count > RecordMerge.MaxBurns)
-            throw new ArgumentException($"A record holds at most {RecordMerge.MaxBurns} burns", nameof(record));
         var isTombstone = record.Type == RecordType.Tombstone;
         if (isTombstone && record.Previous is not null)
             throw new ArgumentException("A tombstone carries no previous value", nameof(record));
         if (isTombstone && record.Fingerprints is not null)
             throw new ArgumentException("A tombstone carries no fingerprints", nameof(record));
+        if (record.Previous is { } p && p.Version.Equals(record.Version))
+            throw new ArgumentException("The previous value's version stamp equals the current one", nameof(record));
 
-        List<(VersionEntry Entry, byte[] Value)> versions = [];
-        if (!isTombstone)
+        List<(Stamp Version, byte[] Value)> versions = isTombstone ? [] : [(record.Version, record.Value)];
+        if (!isTombstone && record.Previous is { } previous)
+            versions.Add((previous.Version, previous.Value));
+        foreach (var (stamp, section) in record.Sealed ?? new Dictionary<Stamp, byte[]>())
         {
-            versions.Add((new VersionEntry(record.Version, CurrentRole, record.Fingerprints), record.Value));
-            if (record.Previous is { } previous)
-            {
-                if (previous.Version.Equals(record.Version))
-                    throw new ArgumentException("The previous value's version stamp equals the current one", nameof(record));
-                versions.Add((new VersionEntry(previous.Version, PreviousRole, previous.Fingerprints), previous.Value));
-            }
+            if (!versions.Any(v => v.Version.Equals(stamp)))
+                throw new ArgumentException($"Sealed holds a value section for {stamp}, which is not a retained version", nameof(record));
+            if (section.Length < SectionOverhead)
+                throw new ArgumentException("A sealed value section is shorter than its nonce and tag", nameof(record));
         }
-        if (record.Sealed is { } sealedSections)
+
+        var metadata = new RecordMetadata(record.RecordId, record.Write, record.Type, record.Version, record.Name, record.CreatedMs,
+            record.Burns, isTombstone ? null : record.Fingerprints, isTombstone ? null : record.Previous?.Version,
+            isTombstone ? null : record.Previous?.Fingerprints, record.Extensions);
+        // Ruling 1: a retained version's section is copied when this record already carries it;
+        // only a version without one (new, or converted from format 2) is encrypted here.
+        Dictionary<Stamp, byte[]> sections = [];
+        foreach (var (stamp, value) in versions)
+            sections[stamp] = record.Sealed is not null && record.Sealed.TryGetValue(stamp, out var copied)
+                ? copied
+                : SealValue(record.RecordId, stamp, value, vaultKey);
+        return EncodeV3(metadata, sections, vaultKey);
+    }
+
+    /// <summary>
+    /// Brief T16-S2b: a format 3 file from <paramref name="metadata"/> and one held section per
+    /// retained version, each copied byte for byte. There is no plaintext parameter: this encoder
+    /// can't decrypt, re-encrypt or check a section, so a write that holds only metadata and sealed
+    /// sections (a burn, a rotation's previous version) decrypts no value. New values are sealed
+    /// by the caller first (<see cref="SealValue"/>).
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// A retained version has no section, a section belongs to no retained version or is shorter
+    /// than its nonce and tag, or the metadata is otherwise not encodable.
+    /// </exception>
+    internal static byte[] EncodeV3(RecordMetadata metadata, IReadOnlyDictionary<Stamp, byte[]> sections, byte[] vaultKey)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        ArgumentNullException.ThrowIfNull(sections);
+        if (metadata.RecordId.Length != KeyringFormat.RecordIdSize)
+            throw new ArgumentException($"RecordId must be {KeyringFormat.RecordIdSize} bytes", nameof(metadata));
+        if (metadata.Burns.Count > RecordMerge.MaxBurns)
+            throw new ArgumentException($"A record holds at most {RecordMerge.MaxBurns} burns", nameof(metadata));
+        var isTombstone = metadata.Type == RecordType.Tombstone;
+        if (isTombstone && (metadata.PreviousVersion is not null || metadata.PreviousFingerprints is not null))
+            throw new ArgumentException("A tombstone carries no previous value", nameof(metadata));
+        if (isTombstone && metadata.Fingerprints is not null)
+            throw new ArgumentException("A tombstone carries no fingerprints", nameof(metadata));
+        if (metadata.PreviousVersion is { } previousVersion && previousVersion.Equals(metadata.Version))
+            throw new ArgumentException("The previous value's version stamp equals the current one", nameof(metadata));
+
+        List<VersionEntry> versions = [.. metadata.RetainedVersions()
+            .Select(v => new VersionEntry(v.Version, v.IsPrevious ? PreviousRole : CurrentRole, v.Fingerprints))];
+        foreach (var stamp in sections.Keys)
         {
-            foreach (var (stamp, section) in sealedSections)
-            {
-                if (!versions.Any(v => v.Entry.Version.Equals(stamp)))
-                    throw new ArgumentException($"Sealed holds a value section for {stamp}, which is not a retained version", nameof(record));
-                if (section.Length < SectionOverhead)
-                    throw new ArgumentException("A sealed value section is shorter than its nonce and tag", nameof(record));
-            }
+            if (!versions.Any(v => v.Version.Equals(stamp)))
+                throw new ArgumentException($"A value section is given for {stamp}, which is not a retained version", nameof(sections));
         }
-        foreach (var (entry, _) in versions)
+        List<byte[]> ordered = [];
+        foreach (var entry in versions)
         {
+            if (!sections.TryGetValue(entry.Version, out var section))
+                throw new ArgumentException($"The retained version {entry.Version} has no value section", nameof(sections));
+            if (section.Length < SectionOverhead)
+                throw new ArgumentException("A value section is shorter than its nonce and tag", nameof(sections));
+            ordered.Add(section);
             if (entry.Fingerprints is { Entries.Count: > byte.MaxValue })
-                throw new ArgumentException($"A fingerprint set holds at most {byte.MaxValue} entries", nameof(record));
+                throw new ArgumentException($"A fingerprint set holds at most {byte.MaxValue} entries", nameof(metadata));
             if (entry.Fingerprints?.Entries.Any(e => e.Hmac.Length != FingerprintEntry.HmacLength || e.Length < 0) == true)
-                throw new ArgumentException("A fingerprint entry is malformed", nameof(record));
+                throw new ArgumentException("A fingerprint entry is malformed", nameof(metadata));
         }
-        if (record.Extensions.Count > ushort.MaxValue)
-            throw new ArgumentException($"A record holds at most {ushort.MaxValue} extensions", nameof(record));
+        if (metadata.Extensions.Count > ushort.MaxValue)
+            throw new ArgumentException($"A record holds at most {ushort.MaxValue} extensions", nameof(metadata));
 
-        var name = Encoding.UTF8.GetBytes(record.Name);
+        var name = Encoding.UTF8.GetBytes(metadata.Name);
         if (name.Length > ushort.MaxValue)
-            throw new ArgumentException("Name too long for a record", nameof(record));
-        var reasons = record.Burns.Select(b => b.Reason is null ? null : Encoding.UTF8.GetBytes(b.Reason)).ToList();
+            throw new ArgumentException("Name too long for a record", nameof(metadata));
+        var reasons = metadata.Burns.Select(b => b.Reason is null ? null : Encoding.UTF8.GetBytes(b.Reason)).ToList();
         if (reasons.Any(r => r is not null && r.Length >= NoReason))
             throw new TswapException("A burn reason is too long to store (64 KiB at most).");
 
         long raw = MetadataFixedSize + name.Length + 1;
-        foreach (var (entry, _) in versions)
+        foreach (var entry in versions)
             raw += StampSize + 1 + 1 + (entry.Fingerprints is null ? 0 : 2 + entry.Fingerprints.Entries.Count * FingerprintEntrySize);
-        raw += 1 + record.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
-        raw += 2 + record.Extensions.Sum(e => 2L + 4 + e.Data.Length);
+        raw += 1 + metadata.Burns.Count * (2 * StampSize + 2) + reasons.Sum(r => r?.Length ?? 0);
+        raw += 2 + metadata.Extensions.Sum(e => 2L + 4 + e.Data.Length);
         if (raw > int.MaxValue / 2)
-            throw new ArgumentException("Record metadata too large", nameof(record));
+            throw new ArgumentException("Record metadata too large", nameof(metadata));
 
-        var metadata = new byte[BucketSize((int)raw)]; // zero-initialized: the padding tail is all zero bytes
-        var span = metadata.AsSpan();
+        var plain = new byte[BucketSize((int)raw)]; // zero-initialized: the padding tail is all zero bytes
+        var span = plain.AsSpan();
         var offset = 0;
-        span[offset++] = (byte)record.Type;
-        offset = WriteStamp(span, offset, record.Version);
-        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(offset, 8), record.CreatedMs);
+        span[offset++] = (byte)metadata.Type;
+        offset = WriteStamp(span, offset, metadata.Version);
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(offset, 8), metadata.CreatedMs);
         offset += 8;
         BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), (ushort)name.Length);
         offset += 2;
         name.CopyTo(span.Slice(offset));
         offset += name.Length;
         span[offset++] = (byte)versions.Count;
-        foreach (var (entry, _) in versions)
+        foreach (var entry in versions)
         {
             offset = WriteStamp(span, offset, entry.Version);
             span[offset++] = entry.Role;
@@ -485,10 +534,10 @@ public static class SecretRecordCodec
                 offset += FingerprintEntry.HmacLength;
             }
         }
-        offset = WriteBurns(span, offset, record.Burns, reasons);
-        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), (ushort)record.Extensions.Count);
+        offset = WriteBurns(span, offset, metadata.Burns, reasons);
+        BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), (ushort)metadata.Extensions.Count);
         offset += 2;
-        foreach (var extension in record.Extensions)
+        foreach (var extension in metadata.Extensions)
         {
             BinaryPrimitives.WriteUInt16LittleEndian(span.Slice(offset, 2), extension.Type);
             offset += 2;
@@ -502,31 +551,23 @@ public static class SecretRecordCodec
         var header = new byte[V3HeaderSize];
         KeyringFormat.RecordMagic.CopyTo(header, 0);
         header[4] = KeyringFormat.RecordFormatVersion;
-        record.RecordId.CopyTo(header, 5);
-        WriteStamp(header, 5 + KeyringFormat.RecordIdSize, record.Write);
+        metadata.RecordId.CopyTo(header, 5);
+        WriteStamp(header, 5 + KeyringFormat.RecordIdSize, metadata.Write);
         header[V3HeaderSize - 1] = count;
 
         byte[] metadataSection;
-        var metadataKey = RecordKeyDerivation.DeriveMetadataKey(vaultKey, record.RecordId, record.Write);
+        var metadataKey = RecordKeyDerivation.DeriveMetadataKey(vaultKey, metadata.RecordId, metadata.Write);
         try
         {
-            metadataSection = Crypto.Encrypt(metadata, metadataKey, MetadataAad(record.RecordId, record.Write, count));
+            metadataSection = Crypto.Encrypt(plain, metadataKey, MetadataAad(metadata.RecordId, metadata.Write, count));
         }
         finally
         {
             CryptographicOperations.ZeroMemory(metadataKey);
-            CryptographicOperations.ZeroMemory(metadata);
+            CryptographicOperations.ZeroMemory(plain);
         }
 
-        // Ruling 1: a retained version's section is copied when this record already carries it;
-        // only a version without one (new, or converted from format 2) is encrypted here.
-        var sections = versions
-            .Select(v => record.Sealed is not null && record.Sealed.TryGetValue(v.Entry.Version, out var copied)
-                ? copied
-                : SealValue(record.RecordId, v.Entry.Version, v.Value, vaultKey))
-            .ToList();
-
-        var total = V3HeaderSize + 4 + metadataSection.Length + sections.Sum(x => 4 + x.Length);
+        var total = V3HeaderSize + 4 + metadataSection.Length + ordered.Sum(x => 4 + x.Length);
         var bytes = new byte[total];
         header.CopyTo(bytes, 0);
         var at = V3HeaderSize;
@@ -534,7 +575,7 @@ public static class SecretRecordCodec
         at += 4;
         metadataSection.CopyTo(bytes, at);
         at += metadataSection.Length;
-        foreach (var section in sections)
+        foreach (var section in ordered)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at, 4), (uint)section.Length);
             at += 4;

@@ -16,12 +16,15 @@ namespace TswapCli;
 /// </summary>
 internal static class SecretRotation
 {
-    /// <summary>Checks that <paramref name="name"/> may be rotated here; returns its current secret.</summary>
-    public static Secret Check(CommandContext ctx, SecretsDb db, string name, string command)
+    /// <summary>
+    /// Checks that <paramref name="name"/> may be rotated here; returns its current secret, from its
+    /// record's metadata (brief T16-S2b: no value is decrypted for the check).
+    /// </summary>
+    public static SecretInfo Check(CommandContext ctx, VaultWriter writer, string name, string command)
     {
-        if (!db.Secrets.TryGetValue(name, out var existing))
+        if (writer.Find(name) is not { } existing)
         {
-            db.ThrowIfUnreadable(name);
+            writer.ThrowIfUnreadable(name);
             throw new TswapException(
                 $"Secret '{name}' not found. 'rotate' replaces an existing secret; for a new one use '{ctx.Prefix} create {name}' " +
                 $"or '<source> | {ctx.Prefix} ingest {name}'.");
@@ -39,15 +42,18 @@ internal static class SecretRotation
         return existing;
     }
 
-    /// <summary>Writes <paramref name="value"/> as the new version of <paramref name="name"/>.</summary>
-    public static void Write(CommandContext ctx, SecretsDb db, byte[] key, string name, Secret existing, string value)
+    /// <summary>
+    /// Writes <paramref name="value"/> as the new version of <paramref name="name"/> (always a new
+    /// version, even for an equal value); the replaced value's section is copied, not decrypted.
+    /// </summary>
+    public static void Write(CommandContext ctx, VaultWriter writer, string name, string value)
     {
-        db.Secrets[name] = existing with { Value = value, Modified = ctx.Time.GetUtcNow().UtcDateTime, BurnedAt = null, BurnReason = null, Rotated = true };
-        ctx.Storage.SaveSecrets(db, key);
+        writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime, always: true);
+        writer.Commit();
     }
 
     /// <summary>The lines printed after a rotation (the value itself is never shown).</summary>
-    public static void Report(CommandContext ctx, string name, Secret existing, string detail)
+    public static void Report(CommandContext ctx, string name, SecretInfo existing, string detail)
     {
         ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' rotated ({detail})");
         ctx.Console.Out.WriteLine(existing.BurnedAt is not null

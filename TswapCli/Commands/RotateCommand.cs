@@ -29,12 +29,20 @@ public sealed class RotateCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-        var existing = SecretRotation.Check(ctx, db, name, "rotate");
+        // Brief T16-S2b: only this record is read, and no stored value is decrypted.
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
+        {
+            var existing = SecretRotation.Check(ctx, writer, name, "rotate");
 
-        var value = CreateCommand.GenerateValue(ctx, config, length);
-        SecretRotation.Write(ctx, db, key, name, existing, value);
-        SecretRotation.Report(ctx, name, existing, $"new {length}-char random value");
-        return 0;
+            var value = CreateCommand.GenerateValue(ctx, config, length);
+            SecretRotation.Write(ctx, writer, name, value);
+            SecretRotation.Report(ctx, name, existing, $"new {length}-char random value");
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 }

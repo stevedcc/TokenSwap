@@ -67,7 +67,14 @@ The other reading commands keep working on format 2 records: `names`, `list`, `b
 `check`, `get` or `apply` on a record they name, decrypt such a record whole (the only way to read
 format 2), wipe the values they don't use, and print one line on stderr after their output, with
 the number of records and the same fix (when they fail, before the error). Exit codes don't change.
+The write commands (`create`, `ingest`, `rotate`, `burn`, `restore`, `add`, `delete`, `import`; since
+0.3 each reads only the records of the names it is given, `import` every exported name so it can skip
+the ones the vault holds) do the same for a format 2 record they read: they decrypt it whole, wipe the
+value versions they don't need, and print the warning after their output (when they fail, before the
+error), also when they then write nothing (`create` of an existing name, `add` of the same value,
+`import` skipping a name).
 None of these texts (the refusal, the note, the warning) ever names a secret, a file or a value.
+(The errors about one unreadable record name its hashed file, so it can be restored.)
 
 Other changes in 0.3, from reading metadata only: `redact` masks a multi-line value (a PEM key) across
 lines; neither command matches a secret inside or across a label or marker it inserted itself;
@@ -93,6 +100,13 @@ decrypted whole, with the warning above after the command's output. Exit codes d
 redaction failure ends `run` with exit 1 after the command, its output cut off at the failure.
 
 ## Commands
+
+`sudo tswap add <name>` stores the value exactly as it was typed or piped. When the value ends in
+whitespace (or is only whitespace) it prints one warning line on stderr after its success line, also
+when the value was already stored: such a value is usually a paste mistake, and `run` can't always
+mask it ([what `run` masks](security-model.md#what-run-masks)). The line names the secret and the
+reason only, never the value, its length or which whitespace, and the exit code doesn't change.
+(`ingest` trims trailing whitespace, and refuses an input of whitespace only.)
 
 <!-- BEGIN GENERATED: commands (TswapTests/Docs/CommandReference.cs) -->
 

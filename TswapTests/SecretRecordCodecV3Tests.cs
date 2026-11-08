@@ -725,4 +725,89 @@ public class SecretRecordCodecV3Tests
         Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.Decode(encoded, new byte[32]));
         Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.DecodeMetadata(encoded, new byte[32]));
     }
+
+    // ------------------------------------------------------------------ brief T16-S2b: from metadata and held sections
+
+    /// <summary>A record with everything format 3 holds: previous value, burns, fingerprints and an extension.</summary>
+    private static SecretRecord FullRecord() =>
+        BurnedRecord(withPrevious: true) with { Extensions = [new RecordExtension(0x7777, RandomNumberGenerator.GetBytes(40))] };
+
+    [Fact]
+    public void EncodeFromMetadata_DecodesToTheSameState()
+    {
+        foreach (var record in new[] { FullRecord(), ValueRecord(), TombstoneRecord() })
+        {
+            var viaRecord = Encode(record);
+            var (metadata, sections) = SecretRecordCodec.DecodeMetadataAndSections(viaRecord, VaultKey)!.Value;
+
+            var viaMetadata = SecretRecordCodec.EncodeV3(metadata, sections, VaultKey);
+
+            var expected = SecretRecordCodec.Decode(viaRecord, VaultKey);
+            var actual = SecretRecordCodec.Decode(viaMetadata, VaultKey);
+            Assert.True(actual.SameState(expected), $"{record.Type}: the state changed");
+            Assert.Equal(expected.Write, actual.Write);
+            Assert.Equal(Sections(viaRecord).Count, Sections(viaMetadata).Count);
+            for (var i = 1; i < Sections(viaRecord).Count; i++)
+                Assert.Equal(SectionBytes(viaRecord, i), SectionBytes(viaMetadata, i));
+        }
+    }
+
+    [Fact]
+    public void EncodeFromMetadata_CopiesSectionsByteForByte()
+    {
+        var viaRecord = Encode(FullRecord());
+        var (metadata, sections) = SecretRecordCodec.DecodeMetadataAndSections(viaRecord, VaultKey)!.Value;
+        var newWrite = new Stamp(new Hlc(1_800_000_000_000, 0), OriginB);
+
+        var rewritten = SecretRecordCodec.EncodeV3(metadata with { Write = newWrite }, sections, VaultKey);
+
+        Assert.Equal(sections[Version], SectionBytes(rewritten, 1));
+        Assert.Equal(sections[PreviousStamp], SectionBytes(rewritten, 2));
+        var decoded = SecretRecordCodec.Decode(rewritten, VaultKey);
+        Assert.Equal(newWrite, decoded.Write);
+        Assert.Equal("hello"u8.ToArray(), decoded.Value);
+        Assert.Equal("old-pw"u8.ToArray(), decoded.Previous!.Value);
+    }
+
+    [Fact]
+    public void EncodeFromMetadata_MissingOrUnlistedSection_Throws()
+    {
+        var (metadata, sections) = SecretRecordCodec.DecodeMetadataAndSections(Encode(FullRecord()), VaultKey)!.Value;
+        var withoutPrevious = sections.Where(kv => !kv.Key.Equals(PreviousStamp)).ToDictionary();
+        var withUnlisted = sections.ToDictionary();
+        withUnlisted[new Stamp(new Hlc(1, 0), OriginB)] = sections[Version];
+        var tombstone = metadata with { Type = RecordType.Tombstone, PreviousVersion = null, PreviousFingerprints = null, Fingerprints = null };
+
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.EncodeV3(metadata, withoutPrevious, VaultKey));
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.EncodeV3(metadata, withUnlisted, VaultKey));
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.EncodeV3(tombstone, sections, VaultKey));
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.EncodeV3(metadata, new Dictionary<Stamp, byte[]>
+        {
+            [Version] = new byte[27], [PreviousStamp] = sections[PreviousStamp],
+        }, VaultKey));
+    }
+
+    /// <summary>
+    /// The encoder never opens a section: sections of random bytes encode, the metadata reads back,
+    /// and only opening a value fails. A sealing or re-encrypting encoder could not get past them.
+    /// </summary>
+    [Fact]
+    public void EncodeFromMetadata_OpaqueSections_NeverOpened()
+    {
+        var (metadata, _) = SecretRecordCodec.DecodeMetadataAndSections(Encode(FullRecord()), VaultKey)!.Value;
+        var opaque = new Dictionary<Stamp, byte[]>
+        {
+            [Version] = RandomNumberGenerator.GetBytes(12 + 16 + 256),
+            [PreviousStamp] = RandomNumberGenerator.GetBytes(12 + 16 + 256),
+        };
+
+        var encoded = SecretRecordCodec.EncodeV3(metadata, opaque, VaultKey);
+
+        var read = SecretRecordCodec.DecodeMetadata(encoded, VaultKey)!;
+        Assert.Equal(metadata.Name, read.Name);
+        Assert.Equal(metadata.Fingerprints, read.Fingerprints);
+        Assert.Equal(opaque[Version], SectionBytes(encoded, 1));
+        Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.OpenValue(encoded, VaultKey, Version));
+        Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.OpenValue(encoded, VaultKey, PreviousStamp));
+    }
 }

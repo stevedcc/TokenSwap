@@ -14,12 +14,13 @@ namespace TswapCore;
 /// (the <see cref="KeyringCodec"/> bytes) and <c>records/&lt;HMAC(K_names, name) hex&gt;</c>, one
 /// file per secret (<see cref="SecretRecordCodec"/>).
 /// <para>
-/// Commands keep using <see cref="IVaultStore"/>'s whole-database calls: <see cref="LoadConfig"/>
-/// composes <see cref="Config.Keyring"/> from the vault folder, <see cref="LoadSecrets"/> reads and
-/// merges every record, and <see cref="SaveSecrets"/> writes only the records whose secret changed
-/// (a value write, a tombstone for a removed name, or a burn), each with a fresh
-/// <see cref="Hlc"/> stamp. Before each write it re-reads the file and refuses when it changed
-/// since this command loaded it (decision 6).
+/// <see cref="LoadConfig"/> composes <see cref="Config.Keyring"/> from the vault folder,
+/// <see cref="LoadSecrets"/> reads and merges every record, and <see cref="SaveSecrets"/> writes
+/// only the records whose secret changed (a value write, a tombstone for a removed name, or a
+/// burn), each with a fresh <see cref="Hlc"/> stamp. Before each write it re-reads the file and
+/// refuses when it changed since this command loaded it (decision 6). Brief T16-S2b: the write
+/// commands no longer use those two; they open one record at a time (<see cref="OpenForWrite"/>)
+/// and write through <see cref="CommitWrites"/>, under the same guard and rules.
 /// </para>
 /// <para>Every file goes through <see cref="DirectoryOwnerMatcher"/> (decision 10).</para>
 /// <para>
@@ -560,7 +561,16 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// (<see cref="ScanRecords"/>; null: the folder doesn't exist), so a caller opening many secrets
     /// lists the folder once.
     /// </summary>
-    internal SecretEntry? OpenSecret(string name, byte[] vaultKey, DirectoryScanResult? scan)
+    internal SecretEntry? OpenSecret(string name, byte[] vaultKey, DirectoryScanResult? scan) => OpenSecret(name, vaultKey, scan, forWrite: false);
+
+    /// <param name="forWrite">
+    /// Brief T16-S2b (<see cref="OpenForWrite"/>): also observe every authenticated stamp of the
+    /// record, note a format 3 record for <see cref="WritesV3"/>, keep the main file's bytes and the
+    /// folded copies for the guard and the copy removal, print the full load's notes about this
+    /// record (copy notes, a stamp a year ahead), and decode the record whole when only plaintext
+    /// can merge its copies.
+    /// </param>
+    private SecretEntry? OpenSecret(string name, byte[] vaultKey, DirectoryScanResult? scan, bool forWrite)
     {
         ArgumentNullException.ThrowIfNull(vaultKey);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(vaultKey);
@@ -601,7 +611,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                 throw new UnreadableRecordException(name, fileName, ex.Message);
             }
         }
-        List<string> unreadableCopies = [];
+        List<string> notes = [];
         foreach (var copy in copies)
         {
             try
@@ -610,16 +620,62 @@ public sealed class RecordVaultStore : IFileVaultStore
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
             {
-                unreadableCopies.Add(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, ex.Message));
+                notes.Add(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, ex.Message));
             }
         }
         // The whole-record path reads the copies itself and reports the ones it can't read.
         if (files.Any(f => SecretRecordCodec.FormatVersionOf(f.Bytes) == KeyringFormat.RecordFormatVersionV2))
-            return OpenFull(name, fileName, copies, mainExists, vaultKey);
-        foreach (var warning in unreadableCopies)
-            _warnings?.WriteLine(warning);
-        return OpenFromMetadata(name, fileName, files, vaultKey);
+            return OpenFull(name, fileName, copies, mainExists, vaultKey, forWrite, formatTwo: true);
+        if (!forWrite)
+        {
+            foreach (var note in notes)
+                _warnings?.WriteLine(note);
+            notes.Clear();
+        }
+        var entry = OpenFromMetadata(name, fileName, files, vaultKey, forWrite, notes);
+        if (entry is null) // writes only: the copies need their plaintext to merge
+            return OpenFull(name, fileName, copies, mainExists, vaultKey, forWrite, formatTwo: false);
+        foreach (var note in notes)
+            _warnings?.WriteLine(note);
+        return entry;
     }
+
+    /// <summary>
+    /// Brief T16-S2b: the write session of one command: the marker read once (its warnings as
+    /// today), this machine's clock started from <c>LastHlc</c>, and one scan of the records
+    /// folder. The records are opened one at a time (<see cref="OpenForWrite"/>) and written
+    /// together (<see cref="CommitWrites"/>); nothing else in the folder is read, except the probe
+    /// of ruling 3 on a folder without the marker.
+    /// </summary>
+    internal sealed class WriteSession(byte[] vaultKey, DirectoryScanResult? scan)
+    {
+        internal byte[] VaultKey { get; } = vaultKey;
+
+        internal DirectoryScanResult? Scan { get; } = scan;
+    }
+
+    /// <summary>Brief T16-S2b: starts a write session (see <see cref="WriteSession"/>).</summary>
+    /// <param name="warnings">Where this command's findings go (stderr in the CLI); null: the store's.</param>
+    internal WriteSession BeginWrite(byte[] vaultKey, TextWriter? warnings = null)
+    {
+        ArgumentNullException.ThrowIfNull(vaultKey);
+        warnings ??= _warnings;
+        _warnings = warnings;
+        _highestSeen = Hlc.TryParse(MachineConfig.LastHlc) ?? Hlc.Zero;
+        _sawV3 = false;
+        ReadMarker(warnings);
+        return new WriteSession(vaultKey, ScanRecords());
+    }
+
+    /// <summary>
+    /// Brief T16-S2b: ONE secret's record for a write, nothing else read: <see cref="OpenSecret(string, byte[])"/>
+    /// (no value of a format 3 record decrypted; a format 2 record decoded whole), plus what the
+    /// write needs: the record's authenticated stamps move this machine's clock, an authenticated
+    /// format 3 file selects format 3, the main file's bytes and the folded copies are kept, and
+    /// copies that only plaintext can merge are merged by decoding this record whole, as the full
+    /// load did. Null: no file. A record that can't be read throws <see cref="UnreadableRecordException"/>.
+    /// </summary>
+    internal SecretEntry? OpenForWrite(WriteSession session, string name) => OpenSecret(name, session.VaultKey, session.Scan, forWrite: true);
 
     /// <summary>The records folder's scan, or null when the folder doesn't exist.</summary>
     internal DirectoryScanResult? ScanRecords()
@@ -630,7 +686,8 @@ public sealed class RecordVaultStore : IFileVaultStore
             : null;
     }
 
-    private SecretEntry OpenFull(string name, string fileName, List<ConflictWarning> copies, bool mainExists, byte[] vaultKey)
+    private SecretEntry OpenFull(string name, string fileName, List<ConflictWarning> copies, bool mainExists, byte[] vaultKey,
+        bool forWrite = false, bool formatTwo = true)
     {
         LoadedRecord? main = mainExists ? ReadRecord(fileName, vaultKey) : null;
         using (var fingerprintKeys = FingerprintKeys.Derive(vaultKey))
@@ -643,15 +700,34 @@ public sealed class RecordVaultStore : IFileVaultStore
         }
         if (main.State is not { } state)
             throw new UnreadableRecordException(name, fileName, "no readable copy");
-        return new SecretEntry(this, name, fileName, vaultKey, state, inputs);
+        if (forWrite && MaxPhysical(state) > YearAhead())
+            _warnings?.WriteLine(YearAheadText(fileName));
+        return new SecretEntry(this, name, fileName, vaultKey, state, inputs, formatTwo)
+        {
+            MainBytes = main.MainBytes,
+            FoldedCopies = main.FoldedCopies ?? [],
+        };
     }
 
-    private SecretEntry OpenFromMetadata(string name, string fileName, List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files, byte[] vaultKey)
+    /// <summary>
+    /// The metadata path. For a write (<paramref name="forWrite"/>) it returns null instead of
+    /// refusing when only plaintext can merge the copies (the caller decodes the record whole), and
+    /// queues its notes on <paramref name="notes"/>, which the caller prints only when this path
+    /// is the one taken (the whole-record path prints its own).
+    /// </summary>
+    private SecretEntry? OpenFromMetadata(string name, string fileName, List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files,
+        byte[] vaultKey, bool forWrite, List<string> notes)
     {
         List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
+        List<(string Path, byte[] Bytes)> folded = [];
+        byte[]? mainBytes = null;
+        RecordMetadata? mainMetadata = null;
+        List<(string File, SyncConflictTool Tool, Stamp Version)> copyVersions = [];
         foreach (var (file, tool, bytes) in files)
         {
             var isMain = tool is null;
+            if (isMain)
+                mainBytes = bytes;
             try
             {
                 RecordDecrypted?.Invoke(file);
@@ -660,29 +736,283 @@ public sealed class RecordVaultStore : IFileVaultStore
                 if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
                     throw new TswapException(isMain ? "its record id does not match its file name" : "its record id belongs to another record");
                 inputs.Add(decoded);
+                if (forWrite)
+                {
+                    // Ruling 3 and the HLC rules, on authenticated metadata only (fix round 1, A1).
+                    _sawV3 = true;
+                    Observe(decoded.Metadata.Write.Hlc);
+                    Observe(decoded.Metadata.Version.Hlc);
+                    foreach (var burn in decoded.Metadata.Burns)
+                        Observe(burn.Burn.Hlc);
+                }
+                if (isMain)
+                    mainMetadata = decoded.Metadata;
+                else
+                {
+                    folded.Add((Path.Combine(RecordsDir, file), bytes));
+                    copyVersions.Add((file, tool!.Value, decoded.Metadata.Version));
+                }
             }
             catch (Exception ex) when (ex is TswapException or CryptographicException)
             {
                 if (isMain)
                     throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "it fails authentication" : ex.Message);
-                // The full load's text, sync tool included.
-                _warnings?.WriteLine(UnusableCopyText(file, tool!.Value, fileName,
-                    ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message));
+                // The full load's text, sync tool included; a read prints it at once, as before.
+                var text = UnusableCopyText(file, tool!.Value, fileName,
+                    ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message);
+                if (forWrite)
+                    notes.Add(text);
+                else
+                    _warnings?.WriteLine(text);
             }
         }
         if (inputs.Count == 0)
             throw new UnreadableRecordException(name, fileName, "no readable copy");
 
+        (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) merged;
         try
         {
-            var (metadata, sections) = RecordMerge.MergeAllMetadata(inputs);
-            return new SecretEntry(this, name, fileName, vaultKey, metadata, sections);
+            merged = RecordMerge.MergeAllMetadata(inputs);
         }
         catch (RecordConflictException ex)
         {
+            if (forWrite)
+                return null;
             var reason = $"its copies can't be merged ({ex.Message})";
             throw new UnreadableRecordException(name, fileName, reason,
                 $"The record of '{name}' can't be read: {reason}. Remove the damaged conflicted copy.");
+        }
+        if (forWrite)
+        {
+            // The full load's notes about this record, in its order (copies, then the stamp check).
+            notes.AddRange(copyVersions.Select(c => CopyNote(fileName, c.Tool, c.File, c.Version, mainMetadata?.Version)));
+            if (MaxPhysical(merged.Metadata) > YearAhead())
+                notes.Add(YearAheadText(fileName));
+        }
+        return new SecretEntry(this, name, fileName, vaultKey, merged.Metadata, merged.Sealed)
+        {
+            MainBytes = mainBytes,
+            FoldedCopies = folded,
+        };
+    }
+
+    /// <summary>
+    /// Brief T16-S2b: writes <paramref name="writes"/> (each on the entry <see cref="OpenForWrite"/>
+    /// gave), applying <see cref="SaveSecrets"/>' rules record by record: on a format 3 entry's
+    /// metadata and held sections (<see cref="RecordWrites"/>; a new value is sealed here, retained
+    /// sections are copied, nothing else is decrypted), on the plaintext of an entry decoded whole
+    /// (<see cref="NextRecord"/>), and on nothing for a name without a record. Version and burn
+    /// stamps are issued in ordinal name order, then the write stamps in that order, as
+    /// <see cref="SaveSecrets"/> does. Every record is checked against its bytes as opened before
+    /// the first write (a change refuses the whole commit, nothing written); a newer marker refuses
+    /// too. On a folder without the marker whose target is not format 3, the folder is probed
+    /// (<see cref="ProbeFormatThree"/>). Returns the metadata of what was written (empty: nothing).
+    /// </summary>
+    /// <exception cref="TswapException">
+    /// A guard or marker refusal; or <c>add</c>'s comparison needs a current value that can't be
+    /// decrypted (owner decision 8: <see cref="SecretsDb.UnreadableRecordText"/>, nothing written).
+    /// </exception>
+    internal IReadOnlyList<RecordMetadata> CommitWrites(WriteSession session, IReadOnlyList<PendingWrite> writes)
+    {
+        var key = session.VaultKey;
+        var origin = OriginId();
+        var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
+        List<RecordWrite> records = [];
+        FingerprintKeys? fingerprintKeys = null;
+
+        Stamp NextStamp()
+        {
+            var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
+            _highestSeen = hlc;
+            return new Stamp(hlc, origin);
+        }
+
+        try
+        {
+            foreach (var write in writes.OrderBy(w => w.Name, StringComparer.Ordinal))
+            {
+                var entry = write.Entry;
+                var fileName = entry?.FileName ?? FilenameHasher.ComputeFilename(namesKey, write.Name);
+                var recordId = FilenameHasher.ComputeRecordId(namesKey, write.Name);
+                if (entry?.Sections is not { } held)
+                {
+                    // No record, or a record decoded whole: SaveSecrets' own rules on its plaintext.
+                    var state = entry?.Decoded;
+                    var next = write switch
+                    {
+                        ValueWrite v => NextRecord(state, recordId, write.Name, v.Value, v.Always, v.Restored, v.Created, v.ImportedBurnAt,
+                            v.ImportedBurnReason, origin, NextStamp),
+                        BurnWrite b when state is { Type: not RecordType.Tombstone } =>
+                            NextRecord(state, recordId, write.Name, state.Value, rotated: false, restored: false, default, DateTime.UnixEpoch,
+                                b.Reason, origin, NextStamp),
+                        DeleteWrite when state is { Type: not RecordType.Tombstone } live => Tombstone(live, NextStamp()),
+                        _ => null,
+                    };
+                    if (next is not null)
+                        records.Add(new RecordWrite(fileName, next, MainBytes: entry?.MainBytes, Copies: entry?.FoldedCopies));
+                    continue;
+                }
+
+                var current = entry.Metadata;
+                var isLive = current.Type != RecordType.Tombstone;
+                RecordMetadata? metadata = null;
+                IReadOnlyDictionary<Stamp, byte[]> sections = held;
+                switch (write)
+                {
+                    case ValueWrite v:
+                        var keys = fingerprintKeys ??= FingerprintKeys.Derive(key);
+                        if (RecordWrites.Next(current, held, recordId, write.Name, () => SameValue(write.Name, entry, v.Value, keys), v.Always,
+                                v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin, NextStamp,
+                                version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)))
+                            is { } next)
+                            (metadata, sections) = next;
+                        break;
+                    case BurnWrite b when isLive && current.Burns.All(burn => !burn.Version.Equals(current.Version)):
+                        metadata = RecordWrites.Burn(current, NextStamp(), b.Reason);
+                        break;
+                    case DeleteWrite when isLive:
+                        metadata = RecordWrites.Tombstone(current, NextStamp());
+                        sections = new Dictionary<Stamp, byte[]>();
+                        break;
+                }
+                if (metadata is null)
+                    continue;
+                fingerprintKeys ??= FingerprintKeys.Derive(key);
+                metadata = WithMissingSets(write.Name, fileName, metadata, sections, key, fingerprintKeys);
+                records.Add(new RecordWrite(fileName, null, metadata, sections, entry.MainBytes, entry.FoldedCopies));
+            }
+        }
+        finally
+        {
+            fingerprintKeys?.Dispose();
+            CryptographicOperations.ZeroMemory(namesKey);
+        }
+
+        if (records.Count == 0)
+            return [];
+        if (!WritesV3)
+            ProbeFormatThree(session);
+        return WriteAll(records, key, reindex: false, written: null);
+    }
+
+    /// <summary>
+    /// <c>add</c>'s question, without the stored value where possible: the value is the same when the
+    /// current version's set is of this build's variant-set version and equals the new value's
+    /// (sound for a record whose set describes its value: UTF-8 decoding of a .NET string's bytes is
+    /// injective, and the plain variant's 128-bit HMAC decides). A set of another variant-set version,
+    /// or none, can't answer it: that one current value is decrypted and compared (owner decision 6);
+    /// when it can't be decrypted, the comparison can't be made and the write refuses (decision 8).
+    /// </summary>
+    private static bool SameValue(string name, SecretEntry entry, byte[] value, FingerprintKeys keys)
+    {
+        if (entry.Metadata.Fingerprints is { } stored && stored.VariantSetVersion == SecretVariants.CurrentSetVersion)
+            return Fingerprinter.Compute(value, keys).Equals(stored);
+        byte[]? current;
+        try
+        {
+            current = entry.DecryptValue(previous: false);
+        }
+        catch (UnreadableRecordException ex)
+        {
+            throw new TswapException(SecretsDb.UnreadableRecordText(name, ex.FileName));
+        }
+        try
+        {
+            return current is not null && current.AsSpan().SequenceEqual(value);
+        }
+        finally
+        {
+            if (current is not null)
+                CryptographicOperations.ZeroMemory(current);
+        }
+    }
+
+    /// <summary>
+    /// A retained version written without a fingerprint set (only planted records lack one; v0.2+
+    /// always writes one) is fingerprinted from its own section, as <see cref="PrepareV3"/> does from
+    /// the full load. A section that can't be opened is carried forward without a set (owner
+    /// decision 9), with one warning naming only the hashed file: the record stays "not
+    /// fingerprinted", so its users keep failing closed as before.
+    /// </summary>
+    private RecordMetadata WithMissingSets(string name, string fileName, RecordMetadata metadata, IReadOnlyDictionary<Stamp, byte[]> sections,
+        byte[] key, FingerprintKeys keys)
+    {
+        var warned = false;
+        FingerprintSet? Fill(Stamp version, FingerprintSet? set)
+        {
+            if (set is not null)
+                return set;
+            byte[] value;
+            try
+            {
+                value = OpenValueSection(name, fileName, metadata, version, null, sections, key);
+            }
+            catch (UnreadableRecordException)
+            {
+                if (!warned)
+                    _warnings?.WriteLine(
+                        $"Warning: record {fileName} holds a value version that can't be decrypted, so it was kept as it is without " +
+                        "fingerprints; restore the file from a backup or another copy.");
+                warned = true;
+                return null;
+            }
+            try
+            {
+                return Fingerprinter.Compute(value, keys);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(value);
+            }
+        }
+        if (metadata.Type == RecordType.Tombstone)
+            return metadata;
+        return metadata with
+        {
+            Fingerprints = Fill(metadata.Version, metadata.Fingerprints),
+            PreviousFingerprints = metadata.PreviousVersion is { } previous ? Fill(previous, metadata.PreviousFingerprints) : null,
+        };
+    }
+
+    /// <summary>
+    /// Ruling 3 on a folder without the marker, when this write read no format 3 record of its own:
+    /// the scan's files whose cleartext format byte is 3 (main files, then conflicted copies, each in
+    /// ordinal order) until one metadata section authenticates, which selects format 3. Only metadata
+    /// sections are decrypted (each attempt reported to <see cref="RecordDecrypted"/>); a file that
+    /// fails selects nothing and is not warned about (it is not this command's record).
+    /// </summary>
+    private void ProbeFormatThree(WriteSession session)
+    {
+        if (session.Scan is not { } scan)
+            return;
+        var candidates = scan.ValidRecordFilenames.Order(StringComparer.Ordinal)
+            .Concat(scan.Conflicts.Select(c => c.ConflictingFilename).Order(StringComparer.Ordinal));
+        foreach (var file in candidates)
+        {
+            byte[] bytes;
+            try
+            {
+                bytes = _owner.ReadAllBytes(Path.Combine(RecordsDir, file));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                continue;
+            }
+            if (SecretRecordCodec.FormatVersionOf(bytes) != KeyringFormat.RecordFormatVersion)
+                continue;
+            try
+            {
+                RecordDecrypted?.Invoke(file);
+                if (SecretRecordCodec.DecodeMetadataAndSections(bytes, session.VaultKey) is not null)
+                {
+                    _sawV3 = true;
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is TswapException or CryptographicException)
+            {
+                // Not authenticated: it selects nothing.
+            }
         }
     }
 
@@ -1116,63 +1446,82 @@ public sealed class RecordVaultStore : IFileVaultStore
             loaded.TryGetValue(fileName, out var current);
             if (current?.UnreadableReason is not null)
                 throw Unreadable(name, fileName);
-            var state = current?.State;
-            var value = Encoding.UTF8.GetBytes(secret.Value);
-            SecretRecord? next = null;
-            if (state is null || state.Type == RecordType.Tombstone || secret.Rotated || !state.Value.AsSpan().SequenceEqual(value))
-            {
-                // A new value version (create, add, rotate, import): it supersedes the old version,
-                // so an outstanding burn of that version becomes history.
-                var version = NextStamp();
-                var burns = (state?.Burns ?? []).ToList();
-                // Fix round 1, B: the value this version replaces is kept (one level).
-                var live = state is { Type: not RecordType.Tombstone };
-                // Brief T16-S1: the replaced value keeps its fingerprints and its sealed section
-                // (copied, never encrypted again).
-                var previous = live ? new PreviousValue(state!.Version, state.Value, state.Fingerprints) : null;
-                IReadOnlyDictionary<Stamp, byte[]>? sealedPrevious = live && state!.Sealed is { } sealedSections
-                    && sealedSections.TryGetValue(state.Version, out var previousSection)
-                        ? new Dictionary<Stamp, byte[]> { [state.Version] = previousSection }
-                        : null;
-                // restore: the previous value comes back with its burn outstanding again (it is
-                // still compromised), keeping the original burn's time and reason.
-                if (secret.Restored && live && state!.Previous is { } restoredFrom)
-                    foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
-                        burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
-                // An imported burned secret keeps its original burn time (fix round 1, C).
-                if (secret.BurnedAt is { } burnedAt)
-                    burns.Add(new BurnEntry(version, new Stamp(new Hlc(UnixMs(burnedAt), 0), origin), secret.BurnReason));
-                var createdMs = state is { Type: not RecordType.Tombstone }
-                    ? state.CreatedMs
-                    : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
-                next = new SecretRecord(
-                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
-                {
-                    Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
-                    Sealed = sealedPrevious,
-                };
-            }
-            else if (secret.BurnedAt is not null && state.OutstandingBurn is null)
-            {
-                next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, NextStamp(), secret.BurnReason)] };
-            }
+            var next = NextRecord(current?.State, FilenameHasher.ComputeRecordId(namesKey, name), name, Encoding.UTF8.GetBytes(secret.Value),
+                secret.Rotated, secret.Restored, secret.Created, secret.BurnedAt, secret.BurnReason, origin, NextStamp);
             if (next is not null)
-                writes.Add((fileName, RecordMerge.Normalize(next)));
+                writes.Add((fileName, next));
         }
 
         foreach (var current in loaded.Values)
         {
             if (current.State is not { Type: not RecordType.Tombstone } state || db.Secrets.ContainsKey(state.Name))
                 continue;
-            var tombstone = state with
-            {
-                Type = RecordType.Tombstone, Version = NextStamp(), Value = [], Previous = null, Fingerprints = null, Sealed = null,
-            };
-            writes.Add((current.FileName, RecordMerge.Normalize(tombstone)));
+            writes.Add((current.FileName, Tombstone(state, NextStamp())));
         }
 
         WriteRecords(writes, key, loaded);
     }
+
+    /// <summary>
+    /// The record one secret's save writes, or null when nothing changed: <see cref="SaveSecrets"/>'s
+    /// per-secret rules, shared with the per-record write path (brief T16-S2b). A new value version
+    /// is written when there is no live record, when <paramref name="rotated"/> (rotate, restore),
+    /// or when <paramref name="value"/> differs; otherwise a burn is added when
+    /// <paramref name="burnedAt"/> is set and the current version has none. Stamps come from
+    /// <paramref name="nextStamp"/> only when something is written; the write stamp is left zero.
+    /// </summary>
+    /// <param name="state">The merged record as loaded (null: no record).</param>
+    /// <param name="restored"><c>restore</c>: the previous value's burns become outstanding again on the new version.</param>
+    /// <param name="created">The creation time of a secret that has no live record (its record's own is kept otherwise).</param>
+    /// <param name="burnedAt">A burn to add: on the current version (burn), or on the new version with this time (import).</param>
+    internal static SecretRecord? NextRecord(SecretRecord? state, byte[] recordId, string name, byte[] value, bool rotated, bool restored,
+        DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp)
+    {
+        SecretRecord? next = null;
+        if (state is null || state.Type == RecordType.Tombstone || rotated || !state.Value.AsSpan().SequenceEqual(value))
+        {
+            // A new value version (create, add, rotate, import): it supersedes the old version,
+            // so an outstanding burn of that version becomes history.
+            var version = nextStamp();
+            var burns = (state?.Burns ?? []).ToList();
+            // Fix round 1, B: the value this version replaces is kept (one level).
+            var live = state is { Type: not RecordType.Tombstone };
+            // Brief T16-S1: the replaced value keeps its fingerprints and its sealed section
+            // (copied, never encrypted again).
+            var previous = live ? new PreviousValue(state!.Version, state.Value, state.Fingerprints) : null;
+            IReadOnlyDictionary<Stamp, byte[]>? sealedPrevious = live && state!.Sealed is { } sealedSections
+                && sealedSections.TryGetValue(state.Version, out var previousSection)
+                    ? new Dictionary<Stamp, byte[]> { [state.Version] = previousSection }
+                    : null;
+            // restore: the previous value comes back with its burn outstanding again (it is
+            // still compromised), keeping the original burn's time and reason.
+            if (restored && live && state!.Previous is { } restoredFrom)
+                foreach (var burn in state.Burns.Where(b => b.Version.Equals(restoredFrom.Version)).ToList())
+                    burns.Add(new BurnEntry(version, burn.Burn, burn.Reason));
+            // An imported burned secret keeps its original burn time (fix round 1, C).
+            if (burnedAt is { } at)
+                burns.Add(new BurnEntry(version, new Stamp(new Hlc(UnixMs(at), 0), origin), burnReason));
+            var createdMs = state is { Type: not RecordType.Tombstone }
+                ? state.CreatedMs
+                : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+            next = new SecretRecord(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
+            {
+                Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
+                Sealed = sealedPrevious,
+            };
+        }
+        else if (burnedAt is not null && state.OutstandingBurn is null)
+        {
+            next = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, nextStamp(), burnReason)] };
+        }
+        return next is null ? null : RecordMerge.Normalize(next);
+    }
+
+    /// <summary>The tombstone a delete writes over the live record <paramref name="state"/> (burns kept as history).</summary>
+    internal static SecretRecord Tombstone(SecretRecord state, Stamp version) => RecordMerge.Normalize(state with
+    {
+        Type = RecordType.Tombstone, Version = version, Value = [], Previous = null, Fingerprints = null, Sealed = null,
+    });
 
     /// <summary>
     /// Brief T6 decision 8: writes every secret of <paramref name="db"/> as a record into an empty
@@ -1523,53 +1872,92 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <c>vault reindex</c>: format 3 regardless of the marker, and fingerprint sets of an older
     /// variant-set version are recomputed.
     /// </param>
-    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded, bool reindex = false)
+    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded, bool reindex = false) =>
+        WriteAll(
+            [.. writes.Select(w => new RecordWrite(w.FileName, w.State, MainBytes: loaded.GetValueOrDefault(w.FileName)?.MainBytes,
+                Copies: loaded.GetValueOrDefault(w.FileName)?.FoldedCopies))],
+            key, reindex,
+            (fileName, bytes, written) => loaded[fileName] = new LoadedRecord(fileName, bytes, written, null, MainState: written, Inputs: [written]));
+
+    /// <summary>
+    /// One record a write writes: a merged state with plaintext (<paramref name="State"/>), or
+    /// (brief T16-S2b) format 3 metadata with one held section per retained version; the main file's
+    /// bytes it was read as (the guard's reference) and the conflicted copies folded into it.
+    /// </summary>
+    private sealed record RecordWrite(string FileName, SecretRecord? State, RecordMetadata? Metadata = null,
+        IReadOnlyDictionary<Stamp, byte[]>? Sections = null, byte[]? MainBytes = null, IReadOnlyList<(string Path, byte[] Bytes)>? Copies = null);
+
+    /// <summary>
+    /// <see cref="WriteRecords"/>' body for either form of record, shared by every write: the newer-marker
+    /// refusal, the guard over every record before the first write, the modes, one write stamp each,
+    /// the copy removal, <c>LastHlc</c> saved after the writes. Returns what was written, as metadata.
+    /// </summary>
+    private List<RecordMetadata> WriteAll(IReadOnlyList<RecordWrite> writes, byte[] key, bool reindex, Action<string, byte[], SecretRecord>? written)
     {
         if (writes.Count == 0)
-            return;
+            return [];
         // Ruling 3: a vault folder marked by a newer tswap is never written by this one.
         if (_markerFormat > KeyringFormat.RecordFormatVersion)
             throw NewerFormatMarker();
         var recordsDir = RecordsDir;
-        CheckUnchanged(writes, loaded);
+        CheckUnchanged(writes.Select(w => (w.FileName, w.MainBytes)));
 
         TightenModes();
         _owner.CreateDirectory(VaultDir);
         _owner.CreateDirectory(recordsDir);
         var origin = OriginId();
+        List<RecordMetadata> result = [];
         using var fingerprintKeys = WritesV3 || reindex ? FingerprintKeys.Derive(key) : null;
-        foreach (var (fileName, state) in writes)
+        foreach (var write in writes)
         {
             var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
             _highestSeen = hlc;
-            var written = state with { Write = new Stamp(hlc, origin) };
+            var stamp = new Stamp(hlc, origin);
             byte[] bytes;
-            if (fingerprintKeys is not null)
+            SecretRecord? next = null;
+            if (write.Metadata is { } metadata)
             {
-                written = PrepareV3(written, fingerprintKeys, recomputeOlderSets: reindex);
-                bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersion);
-                written = written with { Sealed = written.Type == RecordType.Tombstone ? null : SecretRecordCodec.SectionsOf(bytes, written) };
+                // Held only for a format 3 target, which selected format 3 when it was opened.
+                if (!WritesV3)
+                    throw new InvalidOperationException("A format 3 record's metadata can only be written in format 3.");
+                var stamped = metadata with { Write = stamp };
+                bytes = SecretRecordCodec.EncodeV3(stamped, write.Sections!, key);
+                result.Add(stamped);
             }
             else
             {
-                bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersionV2);
-                // What format 2 holds: no fingerprints, extensions or sections.
-                written = written with
+                next = write.State! with { Write = stamp };
+                if (fingerprintKeys is not null)
                 {
-                    Fingerprints = null, Previous = written.Previous is { } p ? p with { Fingerprints = null } : null, Extensions = [], Sealed = null,
-                };
+                    next = PrepareV3(next, fingerprintKeys, recomputeOlderSets: reindex);
+                    bytes = SecretRecordCodec.Encode(next, key, KeyringFormat.RecordFormatVersion);
+                    next = next with { Sealed = next.Type == RecordType.Tombstone ? null : SecretRecordCodec.SectionsOf(bytes, next) };
+                }
+                else
+                {
+                    bytes = SecretRecordCodec.Encode(next, key, KeyringFormat.RecordFormatVersionV2);
+                    // What format 2 holds: no fingerprints, extensions or sections.
+                    next = next with
+                    {
+                        Fingerprints = null, Previous = next.Previous is { } p ? p with { Fingerprints = null } : null, Extensions = [], Sealed = null,
+                    };
+                }
+                result.Add(new RecordMetadata(next.RecordId, next.Write, next.Type, next.Version, next.Name, next.CreatedMs, next.Burns,
+                    next.Fingerprints, next.Previous?.Version, next.Previous?.Fingerprints, next.Extensions));
             }
-            _owner.WriteDurable(Path.Combine(recordsDir, fileName), bytes);
+            _owner.WriteDurable(Path.Combine(recordsDir, write.FileName), bytes);
             // Decision 4: the copies merged into what was just written are redundant now.
-            if (loaded.TryGetValue(fileName, out var before) && before.FoldedCopies is { Count: > 0 } copies)
+            if (write.Copies is { Count: > 0 } copies)
                 RemoveRedundantCopies(copies);
-            loaded[fileName] = new LoadedRecord(fileName, bytes, written, null, MainState: written, Inputs: [written]);
+            if (next is not null)
+                written?.Invoke(write.FileName, bytes, next);
             AfterRecordWritten?.Invoke();
         }
 
         var machine = MachineConfig with { LastHlc = _highestSeen.ToString() };
         _machineConfig = machine;
         WriteMachineConfig(machine);
+        return result;
     }
 
     /// <summary>
@@ -1579,7 +1967,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// sealed section keeps it (copied, never encrypted again); one without (new, or read from
     /// format 2) is sealed by the codec. Sections of versions no longer retained are dropped.
     /// </summary>
-    private static SecretRecord PrepareV3(SecretRecord record, FingerprintKeys keys, bool recomputeOlderSets)
+    internal static SecretRecord PrepareV3(SecretRecord record, FingerprintKeys keys, bool recomputeOlderSets)
     {
         if (record.Type == RecordType.Tombstone)
             return record with { Fingerprints = null, Previous = null, Sealed = null };
@@ -1644,14 +2032,16 @@ public sealed class RecordVaultStore : IFileVaultStore
     }
 
     /// <summary>Decision 6: every record about to be written is unchanged since this command loaded it.</summary>
-    private void CheckUnchanged(List<(string FileName, SecretRecord State)> writes, Dictionary<string, LoadedRecord> loaded)
+    private void CheckUnchanged(List<(string FileName, SecretRecord State)> writes, Dictionary<string, LoadedRecord> loaded) =>
+        CheckUnchanged(writes.Select(w => (w.FileName, loaded.GetValueOrDefault(w.FileName)?.MainBytes)));
+
+    private void CheckUnchanged(IEnumerable<(string FileName, byte[]? MainBytes)> records)
     {
-        foreach (var (fileName, _) in writes)
+        foreach (var (fileName, mainBytes) in records)
         {
             var path = Path.Combine(RecordsDir, fileName);
             var onDisk = _owner.FileExists(path) ? TryRead(path) : null;
-            loaded.TryGetValue(fileName, out var current);
-            GenerationGuard.CheckUnchanged(fileName, current?.MainBytes, onDisk);
+            GenerationGuard.CheckUnchanged(fileName, mainBytes, onDisk);
         }
     }
 

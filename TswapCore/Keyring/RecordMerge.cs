@@ -63,6 +63,17 @@ public static class RecordMerge
         return record with { Burns = burns, Type = TypeOf(isTombstone, record.Version, burns) };
     }
 
+    /// <summary>
+    /// Brief T16-S2b: <see cref="Normalize(SecretRecord)"/> for a record held as metadata (the
+    /// per-record write path, which has no plaintext): canonical burns and the type they give.
+    /// </summary>
+    public static RecordMetadata Normalize(RecordMetadata metadata)
+    {
+        var isTombstone = metadata.Type == RecordType.Tombstone;
+        var burns = CanonicalBurns(metadata.Burns, metadata.Version, isTombstone);
+        return metadata with { Burns = burns, Type = TypeOf(isTombstone, metadata.Version, burns) };
+    }
+
     /// <summary>Merges two versions of one secret: <c>MergeAll([a, b])</c>.</summary>
     public static SecretRecord Merge(SecretRecord a, SecretRecord b) => MergeAll([a, b]);
 
