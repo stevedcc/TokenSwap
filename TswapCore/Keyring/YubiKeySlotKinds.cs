@@ -5,7 +5,7 @@ namespace TswapCore.Keyring;
 /// challenge-response slot (<c>TSYK</c> version 1 or 2), a FIDO2 hmac-secret slot (<c>TSYK</c> version 3), a
 /// <c>TSYK</c> blob this build can't use or can't read, or not a YubiKey blob at all.
 /// </summary>
-public abstract record YubiKeySlotKind
+public closed record YubiKeySlotKind
 {
     private YubiKeySlotKind()
     {

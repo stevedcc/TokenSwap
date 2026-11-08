@@ -8,7 +8,7 @@ using TswapCore.Broker;
 namespace TswapCore.Agent;
 
 /// <summary>What the agent answered, or why there was no usable answer (brief T17 ruling 8).</summary>
-public abstract record AgentAnswer
+public closed record AgentAnswer
 {
     private AgentAnswer()
     {
