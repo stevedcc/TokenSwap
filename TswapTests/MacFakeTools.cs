@@ -59,8 +59,9 @@ internal sealed class MacFakeTools : IDisposable
     public void Identities(string policy, params string[] subjects)
     {
         var applications = 0;
-        var lines = subjects.Select((subject, i) =>
+        var lines = subjects.Index().Select(entry =>
         {
+            var (i, subject) = entry;
             var hash = subject.StartsWith("Developer ID Installer", StringComparison.Ordinal) ? InstallerHash
                 : subject.StartsWith("Developer ID Application", StringComparison.Ordinal) && applications++ == 0 ? AppHash
                 : new string('D', 40);

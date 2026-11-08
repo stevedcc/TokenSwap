@@ -51,7 +51,7 @@ public class NoYkmanTests
             .SelectMany(d => Directory.EnumerateFiles(Path.Combine(root, d), "*.cs", SearchOption.AllDirectories))
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
-            .SelectMany(f => File.ReadLines(f).Select((line, i) => (File: f, Line: i + 1, Text: line)))
+            .SelectMany(f => File.ReadLines(f).Index().Select(p => (File: f, Line: p.Index + 1, Text: p.Item)))
             .Where(l => l.Text.Contains("ykman", StringComparison.OrdinalIgnoreCase))
             .Where(l => !(Path.GetFileName(l.File) == "MigrateCommand.cs"
                           && l.Text.Contains("ykman is no longer needed", StringComparison.Ordinal)))

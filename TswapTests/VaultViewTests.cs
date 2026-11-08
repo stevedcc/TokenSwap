@@ -208,7 +208,7 @@ public sealed class VaultViewTests : IDisposable
         _m.Ok("v", "ingest", "damaged");
         var damaged = RecordFile(_m, _key, "damaged");
         string[] tokens = ["ok", "burned", "rotated", "rotated:previous", "ok:previous", "deleted", "missing", "burned:previous"];
-        List<Check.MarkerRef> markers = [.. tokens.Select((t, i) => new Check.MarkerRef("f.yaml", i + 1, t))];
+        List<Check.MarkerRef> markers = [.. tokens.Index().Select(p => new Check.MarkerRef("f.yaml", p.Index + 1, p.Item))];
 
         var (view, values) = Watched();
         using (view)

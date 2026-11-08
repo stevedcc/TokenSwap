@@ -90,7 +90,7 @@ public class SkillEvalTests(ITestOutputHelper output)
         var expected = new Dictionary<string, string[]>
         {
             ["pass"] = [],
-            ["nothing"] = [.. must.Select((_, i) => $"must[{i}]"), .. says.Select((_, i) => $"says[{i}]")],
+            ["nothing"] = [.. must.Index().Select(p => $"must[{p.Index}]"), .. says.Index().Select(p => $"says[{p.Index}]")],
             ["direct-sudo"] = ["never[sudo]"],
             // Fix round 1: a record written to the log channel by anything but a shim.
             ["forge-log"] = ["forged_log"],

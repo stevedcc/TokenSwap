@@ -346,7 +346,7 @@ internal static class SudoTableDrive
 
     public static async Task<Dictionary<string, SudoDriveResult>> RunAllAsync()
     {
-        var results = new Dictionary<string, SudoDriveResult>(StringComparer.Ordinal);
+        Dictionary<string, SudoDriveResult> results = [with(StringComparer.Ordinal)];
         static SudoDriveResult R((int Exit, string Out, string Err) r, bool? job = null) => new(r.Exit, r.Out, r.Err, job);
 
         // forward and serve run until a signal; they are driven to an early refusal of their own. If that

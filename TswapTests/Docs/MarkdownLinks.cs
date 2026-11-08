@@ -240,8 +240,8 @@ internal static partial class MarkdownLinks
         bool InMoved(int offset) => moved.Any(r => offset >= r.Start && offset < r.End);
 
         var found = new List<(int Offset, Anchor Anchor)>();
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<string, int> counts = [with(StringComparer.Ordinal)];
+        HashSet<string> seen = [with(StringComparer.Ordinal)];
 
         for (var i = 0; i < live.Length; i++)
         {
