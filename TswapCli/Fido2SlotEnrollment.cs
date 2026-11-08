@@ -134,7 +134,7 @@ internal static class Fido2SlotEnrollment
     private static Fido2KeyInfo AskWhich(CommandContext ctx, IFido2Service fido2, IReadOnlyList<Fido2KeyInfo> keys)
     {
         using var terminal = ctx.Terminal?.Invoke() ?? throw new Fido2Exception(Fido2Failure.NoTerminal, null, null, Fido2Texts.NoTerminal);
-        var list = string.Concat(keys.Select((k, i) => $"  {i + 1}. {fido2.KeyName(k)}\n"));
+        var list = string.Concat(keys.Index().Select(k => $"  {k.Index + 1}. {fido2.KeyName(k.Item)}\n"));
         terminal.Write($"\nSeveral YubiKeys are plugged in:\n{list}Select YubiKey (1-{keys.Count}): ");
         var input = terminal.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))

@@ -106,6 +106,22 @@ public class InitFido2Tests : IDisposable
         Assert.Equal([SlotKind.Machine], DecodeKeyring(LoadConfig(Dir())).Slots.Select(s => s.Kind));
     }
 
+    /// <summary>The numbered list of plugged-in keys, exactly (idiomatic .NET 11 plan, row 15a: it is built with Index()).</summary>
+    [Fact]
+    public void InitFido2_SeveralKeys_ListsThemNumberedFromOne()
+    {
+        _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid);
+        _fido2.AddKey(SerialB, Fido2TestSlots.Aaguid);
+        _terminal = new FakeTerminal("2", Pin, Pin);
+
+        var (exit, _, stderr) = Run(Dir(), "", "init", "--fido2");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains($"\nSeveral YubiKeys are plugged in:\n  1. YubiKey {SerialA}\n  2. YubiKey {SerialB}\nSelect YubiKey (1-2): ",
+            _terminal.Reads[0].Prompt);
+        Assert.Equal(SerialB, Fido2Blob(DecodeKeyring(LoadConfig(Dir())).Slots[0]).Serial);
+    }
+
     [Fact]
     public void InitFido2_SeveralKeys_AsksOrUsesSerial()
     {
