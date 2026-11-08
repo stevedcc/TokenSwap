@@ -622,6 +622,8 @@ public sealed class AgentCommandTests : IDisposable
         var (m, _) = TpmPasswordVault("harden");
 
         Assert.Equal(0, Start(m).Exit);
+        // The parent returns on the ready line; the child detaches after writing it.
+        Assert.True(_children.WaitForEvent("detach"), "the child never detached");
 
         Assert.Equal(["harden", "read", "ready", "detach"], _children.Events);
     }
@@ -1012,7 +1014,49 @@ public sealed class AgentCommandTests : IDisposable
         }
 
         private readonly List<StringBuilder> _recordings = [];
-        public List<string> Events { get; } = [];
+        /// <summary>
+        /// The child's steps in order (harden, read, ready, detach), as a snapshot. The child records them on its own
+        /// task, and the parent returns as soon as it has read the ready line (<c>ReadReply</c> doesn't wait for end of
+        /// file), so a step after "ready" ("detach") may still be on its way: wait for it with <see cref="WaitForEvent"/>.
+        /// </summary>
+        public List<string> Events
+        {
+            get
+            {
+                lock (_events)
+                    return [.. _events];
+            }
+        }
+
+        private readonly List<string> _events = [];
+
+        /// <summary>Records <paramref name="name"/>; with <paramref name="once"/>, not again straight after itself.</summary>
+        private void AddEvent(string name, bool once = false)
+        {
+            lock (_events)
+            {
+                if (!once || _events.LastOrDefault() != name)
+                    _events.Add(name);
+                Monitor.PulseAll(_events);
+            }
+        }
+
+        /// <summary>Whether <paramref name="name"/> was recorded within 30 s.</summary>
+        public bool WaitForEvent(string name)
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            lock (_events)
+            {
+                while (!_events.Contains(name))
+                {
+                    var left = deadline - DateTime.UtcNow;
+                    if (left <= TimeSpan.Zero)
+                        return false;
+                    Monitor.Wait(_events, left);
+                }
+                return true;
+            }
+        }
         private readonly List<(FleetMachine Machine, CommandContext Context)> _agents = [];
 
 
@@ -1050,7 +1094,7 @@ public sealed class AgentCommandTests : IDisposable
                 var tee = new TeeWriter(readyOut, recorded, text =>
                 {
                     if (text.StartsWith("ready", StringComparison.Ordinal))
-                        Events.Add("ready");
+                        AddEvent("ready");
                 });
                 try
                 {
@@ -1074,10 +1118,10 @@ public sealed class AgentCommandTests : IDisposable
                         tee,
                         Detach: () =>
                         {
-                            Events.Add("detach");
+                            AddEvent("detach");
                             readyOut.Dispose(); // the parent sees end of file, as after the real child's reopen
                         },
-                        Harden: _ => Events.Add("harden"),
+                        Harden: _ => AddEvent("harden"),
                         HandleSignals: _ => new NoSignals());
                     return AgentCommand.Serve(ctx, args[2..], host);
                 }
@@ -1127,10 +1171,9 @@ public sealed class AgentCommandTests : IDisposable
             public override int Read(byte[] buffer, int offset, int count)
             {
                 var n = inner.Read(buffer, offset, count);
+                owner.AddEvent("read", once: true);
                 lock (owner.ChildInputs)
                 {
-                    if (owner.Events.LastOrDefault() != "read")
-                        owner.Events.Add("read");
                     if (owner.ChildInputs.Count == 0)
                         owner.ChildInputs.Add([]);
                     owner.ChildInputs[^1] = [.. owner.ChildInputs[^1], .. buffer.AsSpan(offset, n).ToArray()];
