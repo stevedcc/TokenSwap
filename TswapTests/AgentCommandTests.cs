@@ -92,7 +92,7 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     /// <summary><c>agent start</c> on a terminal with <paramref name="password"/> typed.</summary>
-    private static (int Exit, string Out, string Err) Start(FleetMachine m, string password = Password, params string[] extra) =>
+    private static (int Exit, string Out, string Err) Start(FleetMachine m, string password = Password, params ReadOnlySpan<string> extra) =>
         m.RunOnTerminal(password + "\n", ["agent", "start", .. extra]);
 
     /// <summary>
@@ -138,7 +138,7 @@ public sealed class AgentCommandTests : IDisposable
         return connects;
     }
 
-    private static void AssertHoldsNoSecret(string text, params byte[][] secrets)
+    private static void AssertHoldsNoSecret(string text, params ReadOnlySpan<byte[]> secrets)
     {
         foreach (var secret in secrets)
         {

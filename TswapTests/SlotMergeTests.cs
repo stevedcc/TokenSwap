@@ -67,7 +67,7 @@ public class SlotMergeTests : IDisposable
     }
 
     /// <summary>Reads 'router' on <paramref name="machine"/> with only these keys plugged in.</summary>
-    private string GetWith(FleetMachine machine, params int[] pluggedIn)
+    private string GetWith(FleetMachine machine, params ReadOnlySpan<int> pluggedIn)
     {
         _keys.PluggedIn = [.. pluggedIn];
         try

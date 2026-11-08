@@ -49,7 +49,7 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
             Directory.Delete(_root, true);
     }
 
-    private ProcessStartInfo Psi(params string[] args)
+    private ProcessStartInfo Psi(params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo(_binary)
         {

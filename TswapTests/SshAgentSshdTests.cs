@@ -282,7 +282,7 @@ public class SshAgentSshdTests(ITestOutputHelper output) : IAsyncLifetime
         return port;
     }
 
-    private (Process Process, Channel<string> Lines) Start(string file, params string[] args)
+    private (Process Process, Channel<string> Lines) Start(string file, params ReadOnlySpan<string> args)
     {
         var lines = Channel.CreateUnbounded<string>();
         var psi = new ProcessStartInfo(file) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };

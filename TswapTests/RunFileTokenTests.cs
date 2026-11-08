@@ -1372,7 +1372,7 @@ public sealed class RunFileTokenEndToEndTests(TswapBinaryFixture binary, ITestOu
             Directory.Delete(_tempDir, true);
     }
 
-    private ProcessStartInfo Psi(string config, string xdg, params string[] args)
+    private ProcessStartInfo Psi(string config, string xdg, params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo
         {

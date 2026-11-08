@@ -37,7 +37,7 @@ internal sealed class FakeTerminal(params string[] lines) : ITerminal
     /// <summary>Runs at each read, before it is answered (e.g. to see what the command had printed by then).</summary>
     public Action? OnRead { get; set; }
 
-    public void Enqueue(params string[] more)
+    public void Enqueue(params ReadOnlySpan<string> more)
     {
         foreach (var line in more)
             _lines.Enqueue(line);

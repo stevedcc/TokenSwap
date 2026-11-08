@@ -22,7 +22,7 @@ public sealed class PreviousValueTests : IDisposable
     public void Dispose() => _m.Dispose();
 
     /// <summary>Runs a script through 'run' that writes its arguments to a file; returns the file.</summary>
-    private string RunAndCapture(params string[] tokens)
+    private string RunAndCapture(params ReadOnlySpan<string> tokens)
     {
         var script = _m.PathOf("capture.sh");
         var output = _m.PathOf("captured.txt");

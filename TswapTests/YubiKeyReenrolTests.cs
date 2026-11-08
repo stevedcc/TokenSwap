@@ -90,7 +90,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
     private static string KeyringPath(FleetMachine m) => Path.Combine(m.VaultDir!, RecordVaultStore.KeyringFileName);
 
-    private static (int Exit, string Out, string Err) SlotAdd(FleetMachine m, params string[] extra) =>
+    private static (int Exit, string Out, string Err) SlotAdd(FleetMachine m, params ReadOnlySpan<string> extra) =>
         m.Run("", ["slot", "add", "--yubikey", .. extra]);
 
     private static string ReenrolledLine(int serial) => $"YubiKey {serial} re-enrolled as a new slot (fingerprint ";
@@ -1308,7 +1308,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>The legacy pair-keyring fixture (classic, single-file) on a fleet machine, its keys needing no touch.</summary>
-    private FleetMachine LegacyPairVault(params int[] extraSerials)
+    private FleetMachine LegacyPairVault(params ReadOnlySpan<int> extraSerials)
     {
         var m = Machine([PairA, PairB, .. extraSerials]);
         File.WriteAllText(m.ConfigPath, JsonSerializer.Serialize(

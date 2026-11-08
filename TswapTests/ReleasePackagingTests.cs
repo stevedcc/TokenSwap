@@ -83,7 +83,7 @@ public class ReleasePackagingTests : IDisposable
     private static string RepoFile(params string[] parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
-    private string Publish(params string[] files)
+    private string Publish(params ReadOnlySpan<string> files)
     {
         var publish = Path.Combine(_dir, "publish");
         Directory.CreateDirectory(publish);
@@ -130,14 +130,14 @@ public class ReleasePackagingTests : IDisposable
         return (process.ExitCode, stdout.Result + stderr.Result);
     }
 
-    private (int ExitCode, string Output) Package(string rid, string publish, params string[] extra) =>
+    private (int ExitCode, string Output) Package(string rid, string publish, params ReadOnlySpan<string> extra) =>
         Run("bash", [RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"), .. extra]);
 
     /// <summary>
     /// A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with
     /// <paramref name="exitCode"/>; <c>yubikey setup</c> answers like the real binary instead (see <see cref="YubiKeyOutput"/>).
     /// </summary>
-    private string PublishFakeBinary(int exitCode, params string[] extraFiles)
+    private string PublishFakeBinary(int exitCode, params ReadOnlySpan<string> extraFiles)
     {
         var publish = Publish(["tswap", .. extraFiles]);
         File.WriteAllText(Path.Combine(publish, "tswap"), $$"""

@@ -24,7 +24,7 @@ public sealed class SshTestKeys : IDisposable
         new[] { "/usr/bin", "/bin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin" }
             .Select(d => Path.Combine(d, tool)).FirstOrDefault(File.Exists);
 
-    public static (int Exit, string Out, string Err) Run(string tool, params string[] args)
+    public static (int Exit, string Out, string Err) Run(string tool, params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo(Which(tool) ?? tool)
         {

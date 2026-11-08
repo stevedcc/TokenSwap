@@ -12,7 +12,7 @@ namespace TswapTests;
 /// </summary>
 public class BrokerContribTests(ITestOutputHelper output)
 {
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     /// <summary>A minimal CIL reader: S-expressions, ';' comments, "strings".</summary>

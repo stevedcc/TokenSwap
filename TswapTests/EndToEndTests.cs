@@ -59,7 +59,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         return psi;
     }
 
-    private (int exitCode, string stdout, string stderr) RunTswap(params string[] args)
+    private (int exitCode, string stdout, string stderr) RunTswap(params ReadOnlySpan<string> args)
     {
         var psi = MakePsi();
         foreach (var arg in args)
@@ -73,7 +73,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         return (process.ExitCode, stdout, stderr);
     }
 
-    private (int exitCode, string stdout, string stderr) RunTswapWithStdin(string stdin, params string[] args)
+    private (int exitCode, string stdout, string stderr) RunTswapWithStdin(string stdin, params ReadOnlySpan<string> args)
     {
         var psi = MakePsi(redirectStdin: true);
         foreach (var arg in args)
@@ -112,7 +112,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         foreach (var d in new[] { home, initFolder, otherFolder })
             Directory.CreateDirectory(d);
 
-        (int exit, string stdout, string stderr) RunIn(string folder, params string[] args)
+        (int exit, string stdout, string stderr) RunIn(string folder, params ReadOnlySpan<string> args)
         {
             var psi = MakePsi();
             psi.Environment.Remove("TSWAP_CONFIG_DIR");
@@ -719,7 +719,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // output arrives, resetting the quiescent timer for another attempt.
     // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
     // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
-    private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
+    private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params IEnumerable<string> args)
     {
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;

@@ -115,7 +115,7 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
     private static readonly string[] AddRoute =
         ["broker", "route", "add", "github", "--upstream", "https://github.com/stevedcc", "--auth", "bearer", "--secret", "gh", "--path", ""];
 
-    private void AddSocket(string name = "lane1", params string[] binding) =>
+    private void AddSocket(string name = "lane1", params ReadOnlySpan<string> binding) =>
         _m.Ok("", ["broker", "socket", "add", name, "--uids", "100999", "--routes", "github", "--socket-dir", "/run/tswap-broker", .. binding]);
 
     /// <summary>A v0.1 broker.json: sockets with neither "container" nor "uid_only".</summary>

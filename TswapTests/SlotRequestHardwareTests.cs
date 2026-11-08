@@ -45,7 +45,7 @@ public class SlotRequestHardwareTests : IDisposable
     }
 
     /// <summary>request (joiner, with <paramref name="flags"/>) → approve (router) → accept (joiner) → merge (router).</summary>
-    private void Join(FleetMachine joiner, params string[] flags)
+    private void Join(FleetMachine joiner, params ReadOnlySpan<string> flags)
     {
         var request = joiner.PathOf("request.json");
         var approve = joiner.PathOf("approve.json");

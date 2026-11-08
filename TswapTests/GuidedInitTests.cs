@@ -78,7 +78,7 @@ public sealed class GuidedInitTests : IDisposable
     private static string ThisOsChip => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
 
     /// <summary>Runs <c>names</c> with only <paramref name="serials"/> plugged in (and the chip as set), unattended.</summary>
-    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params int[] serials)
+    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params ReadOnlySpan<int> serials)
     {
         var plugged = m.Keys.PluggedIn;
         m.Keys.PluggedIn = [.. serials];

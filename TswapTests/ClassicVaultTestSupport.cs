@@ -76,7 +76,7 @@ internal static class ClassicVaultTestSupport
     /// layout: the keyring moves into config.json and the vault folder goes. Returns <c>K_v</c> and
     /// init's output.
     /// </summary>
-    public static (byte[] VaultKey, string InitOutput) CreateKeyringVault(FleetMachine machine, params string[] initFlags)
+    public static (byte[] VaultKey, string InitOutput) CreateKeyringVault(FleetMachine machine, params ReadOnlySpan<string> initFlags)
     {
         var output = machine.Ok("", ["init", .. initFlags]);
         return (FoldIntoClassicKeyringVault(machine.Dir, output), output);

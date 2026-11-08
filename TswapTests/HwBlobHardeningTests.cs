@@ -21,7 +21,7 @@ public class HwBlobHardeningTests
         kind,
         hwBlob is null ? null : Convert.ToBase64String(hwBlob));
 
-    private static string ApproveJson(byte keyringVersion, params SlotDto[] slots) =>
+    private static string ApproveJson(byte keyringVersion, params ReadOnlySpan<SlotDto> slots) =>
         SlotEnrollmentFileCodec.SerializeApprove(new SlotApproveFile(
             SlotApproveFile.CurrentFormatVersion,
             keyringVersion,

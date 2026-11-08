@@ -432,7 +432,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         Assert.DoesNotContain("open without the password", stdout);
     }
 
-    private static Config ConfigWithMachineBlobs(params byte[][] hwBlobs)
+    private static Config ConfigWithMachineBlobs(params ReadOnlySpan<byte[]> hwBlobs)
     {
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
