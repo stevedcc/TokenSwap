@@ -157,6 +157,51 @@ public class RecoverySlotWrapTests
         Assert.Contains("recovery public key", ex.Message);
     }
 
+    // X25519 keys are 32 bytes. A wrong-length key (e.g. a mistyped or truncated recovery key, or a damaged slot) must
+    // fail as the TswapException these methods promise, never as a raw exception from the platform provider
+    // (code review of #216, F1).
+    public static TheoryData<int> WrongKeyLengths => [0, 31, 33, 64];
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Unwrap_WrongLengthRecoveryPrivateKey_FailsLikeAnyOtherWrongKey(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, ephemeralPublicKey, RandomNumberGenerator.GetBytes(length), FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Unwrap_WrongLengthEphemeralPublicKey_FailsLikeAnyOtherTampering(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        var (_, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, RandomNumberGenerator.GetBytes(length), recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Wrap_WrongLengthRecoveryPublicKey_FailsWithTswapException(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Wrap(
+            vaultKey, RandomNumberGenerator.GetBytes(length), FormatVersion, VaultId, K, SlotId));
+
+        Assert.Contains("Invalid recovery public key", ex.Message);
+    }
+
     [Fact]
     public void Wrap_WrongVaultKeyLength_ThrowsArgumentException()
     {

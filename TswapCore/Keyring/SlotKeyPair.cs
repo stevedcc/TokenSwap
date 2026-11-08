@@ -69,9 +69,13 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
     /// (one that gives an all-zero shared secret), so a tampered public key fails instead of
     /// deriving a KEK from a known input. OpenSSL and CNG already refuse to derive one; the
     /// all-zero check below makes that tswap's own guarantee rather than provider behaviour.
+    /// A key that isn't <see cref="KeySize"/> bytes throws <see cref="CryptographicException"/> too (the providers
+    /// throw <see cref="ArgumentException"/> for it), so callers map one exception type.
     /// </summary>
     public static byte[] ComputeSharedSecret(byte[] privateKey, byte[] peerPublicKey)
     {
+        if (privateKey.Length != KeySize || peerPublicKey.Length != KeySize)
+            throw new CryptographicException($"X25519 keys are {KeySize} bytes");
         using var key = X25519DiffieHellman.ImportPrivateKey(privateKey);
         using var peer = X25519DiffieHellman.ImportPublicKey(peerPublicKey);
         var secret = key.DeriveRawSecretAgreement(peer);

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using TswapCore.Keyring;
 using Xunit;
 
@@ -128,6 +129,27 @@ public class SlotKeyPairTests
 
         Assert.Equal(RebexPublicHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, PublicBasePoint())));
         Assert.Equal(RebexSharedSecretHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, Convert.FromHexString(RebexPeerPublicHex))));
+    }
+
+    // Wrong-length keys fail as CryptographicException, the one exception type this primitive throws and its
+    // callers map to TswapException (the BCL itself throws ArgumentException for them; code review of #216, F1).
+    [Theory]
+    [InlineData(0, 32)]
+    [InlineData(31, 32)]
+    [InlineData(33, 32)]
+    [InlineData(32, 0)]
+    [InlineData(32, 31)]
+    [InlineData(32, 33)]
+    public void ComputeSharedSecret_WrongLengthKey_ThrowsCryptographicException(int privateLength, int publicLength)
+    {
+        var privateKey = SlotKeyPair.Generate().PrivateKey.AsSpan(0, Math.Min(privateLength, 32)).ToArray();
+        if (privateLength > 32)
+            privateKey = [.. privateKey, 0];
+        var publicKey = SlotKeyPair.Generate().PublicKey.AsSpan(0, Math.Min(publicLength, 32)).ToArray();
+        if (publicLength > 32)
+            publicKey = [.. publicKey, 0];
+
+        Assert.Throws<CryptographicException>(() => SlotKeyPair.ComputeSharedSecret(privateKey, publicKey));
     }
 
     // Low-order peer keys: X25519 with any of them yields an all-zero shared secret whatever the
