@@ -93,7 +93,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
         _m.Ok("", "delete", "b"); // a tombstone is never "missing fingerprints"
         _m.Ok("d-value", "ingest", "d");
         var store = Store(_m);
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
 
         var metadata = store.LoadMetadata(_key, TextWriter.Null);
@@ -129,7 +129,7 @@ public sealed class RecordStoreMetadataTests : IDisposable
         var copy = FileOf("s") + " (1)";
         System.IO.File.WriteAllBytes(copy, SecretRecordCodec.Encode(ReadRecord(_m, _key, "s"), _key, KeyringFormat.RecordFormatVersionV2));
         var store = Store(_m);
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
 
         var metadata = store.LoadMetadata(_key, TextWriter.Null);

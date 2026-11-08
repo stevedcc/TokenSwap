@@ -104,7 +104,7 @@ public class VaultUnlockerPasswordTests
     {
         var vault = new VaultBuilder();
         var own = vault.AddTpmSlot(MachineKey, password: true);
-        var calls = new List<string>();
+        List<string> calls = [];
 
         var key = Unlock(Unlocker(SimulatedYubiKeyService.WithKeys()), vault.Config(HardwareBackend.Tpm, own),
             new UnlockSources(() => { calls.Add("agent"); return null; }, Prompt(Password, calls)));
@@ -226,7 +226,7 @@ public class VaultUnlockerPasswordTests
         var (_, hwBlob) = service.Enroll(right);
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
-        var given = new List<StretchedPassword>();
+        List<StretchedPassword> given = [];
         var frees = 0;
         StretchedPassword.BeforeFreeObserver = _ => Interlocked.Increment(ref frees);
         try
@@ -319,7 +319,7 @@ public class VaultUnlockerPasswordTests
         var own = vault.AddTpmSlot(MachineKey, password: true);
         vault.AddYubiKeySlot(keys, SerialA, password: false);
         keys.Challenges.Clear();
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
 
         byte[] key;
         using (SimulatedHardwareService.ObserveCalls((backend, call) => hardwareCalls.Add($"{backend.DisplayName} {call}")))
@@ -338,7 +338,7 @@ public class VaultUnlockerPasswordTests
         var own = vault.AddTpmSlot(MachineKey, password: true);
         vault.AddYubiKeySlot(keys, SerialA, password: false);
         keys.PluggedIn = [];
-        var calls = new List<string>();
+        List<string> calls = [];
 
         var key = Unlock(Unlocker(keys), vault.Config(HardwareBackend.Tpm, own),
             new UnlockSources(() => { calls.Add("agent"); return null; }, Prompt(Password, calls)));
@@ -359,7 +359,7 @@ public class VaultUnlockerPasswordTests
         var own = vault.AddTpmSlot(MachineKey, password: true);
         vault.AddYubiKeySlot(keys, SerialA, password: false);
         keys.Challenges.Clear();
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
         using var stretched = StretchedPassword.FromBytes(Password);
 
         byte[] key;
@@ -421,7 +421,7 @@ public class VaultUnlockerPasswordTests
         var own = vault.AddTpmSlot(MachineKey, password: false);
         vault.AddYubiKeySlot(keys, SerialA, password: true);
         keys.Challenges.Clear();
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
         using var stretched = StretchedPassword.FromBytes(Password);
 
         byte[] key;
@@ -446,7 +446,7 @@ public class VaultUnlockerPasswordTests
         var own = vault.AddTpmSlot(MachineKey, password: false);
         vault.AddYubiKeySlot(keys, SerialA, password: false);
         keys.Challenges.Clear();
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
         using var stretched = StretchedPassword.FromBytes(Password);
 
         TswapException ex;
@@ -464,7 +464,7 @@ public class VaultUnlockerPasswordTests
     {
         var vault = new VaultBuilder();
         var own = vault.AddTpmSlot(MachineKey, password: true);
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
 
         byte[] key;
         using (SimulatedHardwareService.ObserveCalls((_, call) => hardwareCalls.Add(call)))
@@ -644,7 +644,7 @@ public class VaultUnlockerPasswordTests
         var blob = (byte[])vault.Slots[0].HwBlob!.Clone();
         blob[4] = 2;
         vault.ReplaceBlob(own, blob);
-        var hardwareCalls = new List<string>();
+        List<string> hardwareCalls = [];
 
         TswapException ex;
         using (SimulatedHardwareService.ObserveCalls((_, call) => hardwareCalls.Add(call)))

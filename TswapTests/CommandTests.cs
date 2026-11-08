@@ -966,10 +966,10 @@ public class CommandTests : IDisposable
         File.WriteAllText(file, "grep-pattern-value\n");
         string[] command = ["run", "grep", "-v", "-x", "-e", "{{grep-pat}}", file];
 
-        var (exit, stdout, stderr) = RunTswap(globalFlag == null ? command : [globalFlag, .. command]);
+        var (exit, stdout, stderr) = RunTswap(globalFlag is null ? command : [globalFlag, .. command]);
 
         Assert.True(exit == 1, $"grep must get its -v (exit 1: no non-matching line); exit {exit}: {stdout}{stderr}");
-        if (globalFlag != null)
+        if (globalFlag is not null)
             Assert.Contains("Found tokens: grep-pat", stdout); // tswap's own -v still makes it verbose
         else
             Assert.DoesNotContain("Found tokens", stdout);

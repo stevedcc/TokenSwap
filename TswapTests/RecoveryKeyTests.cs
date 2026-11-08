@@ -268,7 +268,7 @@ public class RecoveryKeyTests : IDisposable
             "not base64 at all!\n",                                    // malformed
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)), // too long
         ];
-        var errors = new List<string>();
+        List<string> errors = [];
         foreach (var input in inputs)
         {
             var (exit, stdout, stderr) = _router.Run(input, Args(command, joiner));

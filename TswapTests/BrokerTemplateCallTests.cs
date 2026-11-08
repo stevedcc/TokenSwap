@@ -426,7 +426,7 @@ public class BrokerTemplateVaultReadTests : IDisposable
         for (var i = 0; i < 50; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
         var unlocks = 0;
         var hardware = new CountingHardware(new SimulatedHardwareService(HardwareBackend.Tpm, _m.Tpm!), () => unlocks++);

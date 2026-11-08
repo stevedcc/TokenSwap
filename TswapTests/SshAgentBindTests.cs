@@ -70,7 +70,7 @@ public static class SshBindMessages
     {
         var w = new SshWriter().String(sessionId).Byte(messageType).String(user).String(service).String(method)
             .Byte(hasSignature).String(algorithm).String(keyBlob);
-        if (hostKey != null)
+        if (hostKey is not null)
             w.String(hostKey);
         return w.ToArray();
     }

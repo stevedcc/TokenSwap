@@ -762,7 +762,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         {
             if (DateTime.UtcNow - lastCtrlCAt < TimeSpan.FromMilliseconds(1000)) return;
             // Retry on EINTR/EAGAIN so Ctrl+C is always delivered.
-            var ctrlC = new byte[] { 0x03 };
+            byte[] ctrlC = [0x03];
             nint written;
             do { written = PtyWrite(masterFd, ctrlC, 1); }
             while (written < 0 && Marshal.GetLastPInvokeError() is int e && (e == EINTR || e == eagain));

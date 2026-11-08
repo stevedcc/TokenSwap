@@ -55,7 +55,7 @@ public sealed class BrokerVaultConflictTests : IDisposable
     private (string? Value, List<string> Decrypted) Read(string name)
     {
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
         var value = store.ReadSecretValue(name, _vaultKey);
         return (value is null ? null : Encoding.UTF8.GetString(value), decrypted);

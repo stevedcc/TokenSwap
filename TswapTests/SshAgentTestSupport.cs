@@ -69,7 +69,7 @@ public sealed class SshAgentHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (Server != null)
+        if (Server is not null)
             await Server.DisposeAsync();
         await Broker.DisposeAsync();
     }

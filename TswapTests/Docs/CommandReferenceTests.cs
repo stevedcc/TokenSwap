@@ -68,7 +68,7 @@ public class CommandReferenceTests
         Assert.True(begin > 0 && end > begin, "docs/commands.md has no generated block");
         var anchors = MarkdownLinks.AnchorsDetailed(text);
 
-        var problems = new List<string>();
+        List<string> problems = [];
         foreach (var command in CommandRegistry.All)
         {
             var slug = MarkdownLinks.BaseSlug(command.Name);
@@ -182,7 +182,7 @@ public class CommandReferenceTests
         Assert.True(subcommands["slot"].Count >= 5 && subcommands["broker"].Count >= 9, "extracted from HelpUsage: " + extracted);
 
         var rows = SudoTable(Page());
-        var problems = new List<string>();
+        List<string> problems = [];
         foreach (var (row, sudo) in rows)
         {
             var words = row.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -222,7 +222,7 @@ public class CommandReferenceTests
         var results = await SudoTableDrive.RunAllAsync();
 
         var rows = SudoTable(Page());
-        var problems = new List<string>();
+        List<string> problems = [];
         foreach (var (row, sudo) in rows)
         {
             if (!results.TryGetValue(row, out var r))

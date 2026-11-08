@@ -47,7 +47,7 @@ public class SshAgentPkcs8EdgeTests
                 oid.WriteObjectIdentifier(innerCurveOid ?? curveOid);
                 ec.WriteOctetString(oid.Encode()[2..], Ctx0Primitive); // the OID's content bytes under a primitive [0]
             }
-            if (innerPublic != null)
+            if (innerPublic is not null)
             {
                 using (ec.PushSequence(Ctx1Constructed))
                     ec.WriteBitString(innerPublic);
@@ -63,7 +63,7 @@ public class SshAgentPkcs8EdgeTests
                 w.WriteObjectIdentifier(curveOid);
             }
             w.WriteOctetString(ec.Encode());
-            if (outerPublic != null)
+            if (outerPublic is not null)
             {
                 if (outerPublicConstructed)
                 {

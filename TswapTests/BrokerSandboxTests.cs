@@ -118,7 +118,7 @@ public class BrokerSandboxTests(ITestOutputHelper output) : IDisposable
         BrokerSandbox? sandbox = null, Action<BrokerSandboxStarted>? started = null, CancellationToken cancellationToken = default)
     {
         sandbox ??= new BrokerSandbox(SandboxBed.BwrapPath);
-        if (started != null)
+        if (started is not null)
             sandbox.Started += started;
         var stdout = new MemoryStream();
         var stderr = new MemoryStream();
@@ -156,7 +156,7 @@ public class BrokerSandboxTests(ITestOutputHelper output) : IDisposable
     /// <summary>Host pids whose command line contains <paramref name="marker"/>.</summary>
     internal static List<int> HostPidsWith(string marker)
     {
-        var found = new List<int>();
+        List<int> found = [];
         foreach (var dir in Directory.EnumerateDirectories("/proc"))
         {
             if (!int.TryParse(Path.GetFileName(dir), out var pid))

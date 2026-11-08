@@ -345,7 +345,7 @@ public class Tpm2ArgvTests
     {
         if (!OperatingSystem.IsLinux())
             return;
-        var calls = new List<string>();
+        List<string> calls = [];
         using var _ = Tpm2ToolsInterop.UseRunner((command, args, stdin, started) =>
         {
             calls.Add($"{command} {string.Join(' ', args)}");

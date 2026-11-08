@@ -19,7 +19,7 @@ public class HwBlobHardeningTests
         Convert.ToBase64String(SlotKeyPair.Generate().PublicKey),
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(48)),
         kind,
-        hwBlob == null ? null : Convert.ToBase64String(hwBlob));
+        hwBlob is null ? null : Convert.ToBase64String(hwBlob));
 
     private static string ApproveJson(byte keyringVersion, params SlotDto[] slots) =>
         SlotEnrollmentFileCodec.SerializeApprove(new SlotApproveFile(

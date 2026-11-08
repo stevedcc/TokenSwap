@@ -125,7 +125,7 @@ public class T4ReviewFollowUpTests : IDisposable
         var keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB);
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
-        var slots = new List<Slot>();
+        List<Slot> slots = [];
         foreach (var serial in new[] { SerialB, SerialA }) // B's slot first, so it is met first
         {
             var blob = YubiKeySlotBlob.Create(serial, requiresTouch: true);

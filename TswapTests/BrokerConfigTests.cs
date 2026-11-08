@@ -338,7 +338,7 @@ public class BrokerConfigTests : IDisposable
         BrokerConfigFile.Save(DirectoryOwnerMatcher.Default, _dir, BrokerPolicy.Deserialize(ValidJson));
         var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir));
         var original = holder.Current;
-        var log = new List<string>();
+        List<string> log = [];
         BrokerPolicy Load() => BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir);
 
         File.WriteAllText(path, ValidJson.Replace("\"version\": 1", "\"version\": 1, \"bogus\": 1"));

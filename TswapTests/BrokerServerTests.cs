@@ -250,7 +250,7 @@ public class BrokerServerTests : IAsyncLifetime
 
         var clock = new BrokerManualClock();
         var limiter = new BrokerLimiter(limits, clock);
-        var held = new List<IDisposable>();
+        List<IDisposable> held = [];
         for (var i = 0; i < 4; i++)
             held.Add((await limiter.TryAcquireAsync("a", default))!);
 
@@ -453,7 +453,7 @@ public class BrokerServerTests : IAsyncLifetime
 
     private async Task<List<Socket>> OpenIdleAsync(string socket, int count)
     {
-        var sockets = new List<Socket>();
+        List<Socket> sockets = [];
         for (var i = 0; i < count; i++)
         {
             var c = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);

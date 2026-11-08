@@ -105,7 +105,7 @@ public class ReleaseBuildGateTests
         protected override Assembly? Load(AssemblyName assemblyName)
         {
             var path = _resolver.ResolveAssemblyToPath(assemblyName);
-            return path != null ? LoadFromAssemblyPath(path) : null;
+            return path is not null ? LoadFromAssemblyPath(path) : null;
         }
     }
 }

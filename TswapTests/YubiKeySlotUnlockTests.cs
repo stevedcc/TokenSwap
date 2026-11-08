@@ -58,7 +58,7 @@ public class YubiKeySlotUnlockTests
         public Config Config(HardwareBackend? backend = null, byte[]? ownSlotId = null) => new(
             [], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, Slots))),
-            KeyringSlotId: ownSlotId == null ? null : Convert.ToBase64String(ownSlotId));
+            KeyringSlotId: ownSlotId is null ? null : Convert.ToBase64String(ownSlotId));
     }
 
     private static (SimulatedYubiKeyService Keys, KeyringBuilder Vault, Config Config) TwoKeyVault()
