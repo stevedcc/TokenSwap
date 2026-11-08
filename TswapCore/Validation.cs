@@ -48,10 +48,6 @@ public static class Validation
     }
 
     /// <summary>
-    /// Validate a requested secret length: must be between 1 and 4096.
-    /// Throws a user-friendly exception on failure.
-    /// </summary>
-    /// <summary>
     /// Brief T16-S2b (owner decision 5): true when <paramref name="value"/>'s last character is
     /// whitespace (<see cref="char.IsWhiteSpace(char)"/>), so also for a value of whitespace only;
     /// false for an empty value. <c>add</c> warns about such a value (usually a paste mistake).
@@ -62,6 +58,10 @@ public static class Validation
         return value.Length > 0 && char.IsWhiteSpace(value[^1]);
     }
 
+    /// <summary>
+    /// Validate a requested secret length: must be between 1 and 4096.
+    /// Throws a user-friendly exception on failure.
+    /// </summary>
     public static void ValidateLength(int length)
     {
         if (length < 1)

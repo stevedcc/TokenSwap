@@ -15,6 +15,33 @@ namespace TswapCore.Keyring;
 internal static class RecordWrites
 {
     /// <summary>
+    /// <see cref="RecordVaultStore.NextRecord"/>'s dispatch for a record held as metadata: a new
+    /// version (<see cref="NewVersion"/>, sealed by <paramref name="seal"/>) when there is no live
+    /// record, when <paramref name="rotated"/>, or when <paramref name="sameValue"/> says the value
+    /// differs; otherwise, with <paramref name="burnedAt"/> set, a burn of the current version
+    /// (<see cref="Burn"/>, stamped by <paramref name="nextStamp"/>, not at <paramref name="burnedAt"/>);
+    /// otherwise null (nothing to write). Stamps are taken only for what is written.
+    /// </summary>
+    public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections)? Next(
+        RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Func<bool> sameValue,
+        bool rotated, bool restored, DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
+        Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal)
+    {
+        // NextRecord's order: a new version when there is no live record, when rotated, or when the
+        // value differs (asked last, so add's comparison runs only when it decides something).
+        if (state is not { Type: not RecordType.Tombstone } live || rotated || !sameValue())
+        {
+            var version = nextStamp();
+            var (section, fingerprints) = seal(version);
+            return NewVersion(state, heldSections, recordId, name, version, section, fingerprints, restored, created, burnedAt, burnReason, origin);
+        }
+        // The same value with a burn: a burn of the current version, stamped now, when it has none.
+        if (burnedAt is not null && live.Burns.All(b => !b.Version.Equals(live.Version)))
+            return (Burn(live, nextStamp(), burnReason)!, heldSections);
+        return null;
+    }
+
+    /// <summary>
     /// A new value version <paramref name="version"/> (create, add, rotate, import, restore) over
     /// <paramref name="state"/> (null: no record). The replaced current version becomes the previous
     /// one with its section and set; an older previous is dropped with its section; an outstanding

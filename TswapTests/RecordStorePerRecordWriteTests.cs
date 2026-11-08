@@ -255,6 +255,31 @@ public sealed class RecordStorePerRecordWriteTests : IDisposable
         Assert.DoesNotContain(FileOf("far"), _records);
     }
 
+    /// <summary>
+    /// Code review (MiMo A-2): a value equal to the stored one with an imported burn is SaveSecrets'
+    /// burn rule (a burn of the current version, stamped now), on the metadata path as on the
+    /// whole-record path. No shipped command stages it (import skips live names); the rule sets
+    /// must not drift anyway.
+    /// </summary>
+    [Fact]
+    public void ValueWrite_SameValueWithAnImportedBurn_WritesABurn_AsNextRecordDoes()
+    {
+        _m.Ok("a-value", "ingest", "a");
+        var sections = ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a")));
+        _now += TimeSpan.FromSeconds(5);
+
+        var written = Assert.Single(WriteOne("a", entry => new ValueWrite("a", entry, "a-value"u8.ToArray(), Always: false, Restored: false,
+            _now.UtcDateTime, ImportedBurnAt: new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), ImportedBurnReason: "imported")));
+
+        Assert.Equal(RecordType.Burned, written.Type);
+        var burn = Assert.Single(written.Burns);
+        Assert.Equal(written.Version, burn.Version);
+        Assert.Equal(_now.ToUnixTimeMilliseconds(), burn.Burn.Hlc.PhysicalMs);
+        Assert.Equal("imported", burn.Reason);
+        Assert.Equal(sections, ValueSections(File.ReadAllBytes(RecordFile(_m, _key, "a"))));
+        Assert.Empty(_values);
+    }
+
     [Fact]
     public void NewerMarker_RefusesBeforeWriting()
     {

@@ -250,7 +250,7 @@ public sealed class RecordWritesTests
     {
         var random = new Random(2_016);
         using var keys = FingerprintKeys.Derive(Key);
-        int compared = 0, burns = 0, restores = 0, tombstones = 0, imports = 0;
+        int compared = 0, burns = 0, restores = 0, tombstones = 0, imports = 0, sameValueBurns = 0, unchanged = 0;
         for (var round = 0; round < 600; round++)
         {
             var name = $"s{round % 7}";
@@ -269,18 +269,35 @@ public sealed class RecordWritesTests
 
             switch (live ? random.Next(4) : 0)
             {
-                case 0: // a new version: create, add, rotate, import (with or without a burn), restore
+                case 0: // a value: create, add (same or new value), rotate, import (with or without a burn), restore
                 {
                     var restored = live && state!.Previous is not null && random.Next(3) == 0;
-                    var value = restored ? state!.Previous!.Value : Encoding.UTF8.GetBytes(RandomValue(random));
-                    DateTime? importedAt = random.Next(4) == 0 ? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(round) : null;
-                    var expected = RecordVaultStore.NextRecord(state, IdOf(name), name, value, rotated: true, restored, Created, importedAt, "imp",
-                        OriginA, () => stamp)!;
-                    var section = Section();
-                    var (actual, sections) = RecordWrites.NewVersion(meta, held, IdOf(name), name, stamp, section, Fp(value), restored, Created,
-                        importedAt, "imp", OriginA);
-                    plaintexts[stamp] = value;
-                    Compare(expected, actual, sections, state, section);
+                    // Code review (MiMo A-2): add's "same value" and import's burn over a live record of the
+                    // same value go through the same dispatch as everything else (CommitWrites calls Next).
+                    var sameValue = live && !restored && random.Next(2) == 0;
+                    var rotated = restored || random.Next(sameValue ? 6 : 2) == 0;
+                    var value = restored ? state!.Previous!.Value : sameValue ? state!.Value : Encoding.UTF8.GetBytes(RandomValue(random));
+                    DateTime? importedAt = random.Next(sameValue ? 2 : 3) == 0 ? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(round) : null;
+                    var expected = RecordVaultStore.NextRecord(state, IdOf(name), name, value, rotated, restored, Created, importedAt, "imp",
+                        OriginA, () => stamp);
+                    byte[]? section = null;
+                    var actual = RecordWrites.Next(meta, held, IdOf(name), name, () => value.AsSpan().SequenceEqual(state!.Value), rotated, restored,
+                        Created, importedAt, "imp", OriginA, () => stamp, version =>
+                        {
+                            section = Section();
+                            return (section, Fp(value));
+                        });
+                    Assert.Equal(expected is null, actual is null);
+                    if (expected is not null)
+                    {
+                        if (section is not null)
+                            plaintexts[stamp] = value;
+                        Compare(expected, actual!.Value.Metadata, actual.Value.Sections, state, section);
+                    }
+                    if (expected is not null && section is null)
+                        sameValueBurns++;
+                    if (expected is null)
+                        unchanged++;
                     restores += restored ? 1 : 0;
                     imports += importedAt is null ? 0 : 1;
                     break;
@@ -328,8 +345,9 @@ public sealed class RecordWritesTests
                 }
             }
         }
-        Assert.True(compared == 600 && burns > 50 && restores > 10 && tombstones > 50 && imports > 20,
-            $"compared {compared}, burns {burns}, restores {restores}, tombstones {tombstones}, imports {imports}");
+        Assert.True(compared == 600 && burns > 50 && restores > 10 && tombstones > 50 && imports > 20 && sameValueBurns > 10 && unchanged > 10,
+            $"compared {compared}, burns {burns}, restores {restores}, tombstones {tombstones}, imports {imports}, " +
+            $"same-value burns {sameValueBurns}, unchanged {unchanged}");
     }
 
     /// <summary>

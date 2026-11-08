@@ -860,13 +860,12 @@ public sealed class RecordVaultStore : IFileVaultStore
                 switch (write)
                 {
                     case ValueWrite v:
-                        fingerprintKeys ??= FingerprintKeys.Derive(key);
-                        if (!v.Always && isLive && SameValue(write.Name, entry, v.Value, fingerprintKeys))
-                            break;
-                        var version = NextStamp();
-                        (metadata, sections) = RecordWrites.NewVersion(current, held, recordId, write.Name, version,
-                            SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, fingerprintKeys),
-                            v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin);
+                        var keys = fingerprintKeys ??= FingerprintKeys.Derive(key);
+                        if (RecordWrites.Next(current, held, recordId, write.Name, () => SameValue(write.Name, entry, v.Value, keys), v.Always,
+                                v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin, NextStamp,
+                                version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)))
+                            is { } next)
+                            (metadata, sections) = next;
                         break;
                     case BurnWrite b when isLive && current.Burns.All(burn => !burn.Version.Equals(current.Version)):
                         metadata = RecordWrites.Burn(current, NextStamp(), b.Reason);
