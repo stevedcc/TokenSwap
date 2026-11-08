@@ -6,7 +6,7 @@ Project instructions for AI agents working in this repository.
 
 TokenSwap (tswap) is a hardware-backed secret manager that solves two problems:
 1. **AI Agent Safety**: AI agents can use passwords via `{{token}}` substitution without seeing plaintext values
-2. **YubiKey Redundancy**: Two YubiKeys enrolled once; either key unlocks the vault via XOR key reconstruction
+2. **Hardware-backed vault key**: one slot per device (YubiKey, TPM, Secure Enclave) plus an offline recovery slot; any one opens the vault (the older two-YubiKey XOR vault is migration-only since v0.2)
 
 C# application with a single entry point:
 - **`TswapCli/Program.cs`** — NativeAOT compiled binary (`dotnet publish TswapCli/TswapCli.csproj -c Release`). ~4MB, ~20ms startup, no runtime dependencies.
@@ -17,7 +17,8 @@ C# application with a single entry point:
 # Build
 dotnet publish TswapCli/TswapCli.csproj -c Release
 # Linux:   cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/tswap /usr/local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
+#          (the Secure Enclave library stays next to the binary; the release archive packs both, contrib/packaging/package.sh)
 # Windows: copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
@@ -56,13 +57,22 @@ point it at real secrets: every value in it is an inert marker.
 
 ### Privilege Boundary (sudo separation)
 
-Commands are split by whether they require sudo:
+Commands are split by whether they require sudo (the user-facing table, subcommand by subcommand, is
+[docs/commands.md](docs/commands.md#which-commands-need-sudo)):
 
-- **No sudo**: `init`, `create <name>`, `ingest <name>`, `names`, `slots`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `apply <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `installscript`, `migrate` — safe for AI agents
+- **No sudo**: `init` (needs a terminal for the guided setup; scripts name the slot: `init --yubikey`, `--fido2` (still needs a terminal for the key's PIN), `--tpm`, or `--secure-enclave --with-touch|--no-touch`; AI agents shouldn't run it: creating a vault is the user's work, and it prints the recovery key, #253; with stdout not a terminal it writes the key only to --recovery-key-out <file>), `agent start|serve|stop|status`, `create <name>`, `ingest <name>`, `names`, `slots`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `installscript`, `migrate` — AI agents may use these, except `init` (above) and `agent start|serve` (the user's: they read the vault password at a terminal)
 - **No sudo for a burned secret, sudo otherwise**: `rotate <name> [len]`, `ingest --rotate <name>` — replacing a burned (already compromised) secret is the agent's job; replacing one still in use could break the services using it, so that needs sudo. Listed with the no-sudo commands on the help screen.
 - **No sudo, joining a shared vault folder**: `init --vault-dir <folder>` writes this machine's own config only. `slot accept <file>` on a record-store machine, and `slot accept <file> --vault-dir <folder>`, also write the new slot into the **shared keyring** (a union with the file) without sudo: the human gate for that slot is the earlier `sudo tswap slot approve` on an enrolled machine, which produced the approve file.
-- **No sudo, the broker** ([docs/BROKER.md](docs/BROKER.md)): `broker serve` runs as the vault's own user (it refuses root), and `broker forward` runs inside a container (it needs no vault). `broker route|socket add|remove` requires sudo. On the help screen `broker` is listed without `[sudo]` because its main subcommands never need it.
-- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `restore <name>` — exposes secret values or changes what the vault holds
+- **No sudo, the broker** ([docs/BROKER.md](docs/BROKER.md)): `broker serve` runs as the vault's own user (it refuses root), and `broker forward` and `broker call` run inside a container (they need no vault). `broker unlock|lock|status` (brief T17: a broker whose slot has the vault password starts locked) run as the vault user and refuse sudo. `broker route add|remove`, `broker socket add|bind|remove` and `broker template add|remove` require sudo. On the help screen `broker` is listed without `[sudo]` because its main subcommands never need it.
+- **No sudo, the vault-password agent** (brief T17): `agent start [--timeout <d>]`, `agent serve [--foreground]`, `agent stop`, `agent status`. `agent start|serve` refuse root; `agent stop|status` work under sudo too (they report `(as root, for <name>'s agent)`). The agent holds the stretched vault password and returns the vault key over a socket to the vault user's own commands (and root); no command prints a secret value from it. `TSWAP_AGENT_SOCK` overrides the socket path (Unix only), for clients and for `agent start|serve`; sudo drops it, and root's client then finds the owner's agent through the vault folder's owner. `agent start` and `broker unlock` read the password at a terminal: an AI agent asks the user to run them.
+- **Requires sudo**: `add <name>`, `get <name>`, `list`, `delete <name>`, `export <path>`, `import <path>`, `slot approve <request-file> <approve-file>`, `slot add --yubikey|--fido2`, `slot merge <file>`, `recover --yubikey|--tpm|--secure-enclave`, `migrate --to-records [--vault-dir <dir>]`, `vault merge <other-vault-dir>`, `vault reindex`, `restore <name>`, `apply <file>` — exposes secret values or changes what the vault holds
+
+**Classic vaults are migration-only (v0.2, brief T16-S1):** on a classic single-file vault every
+command that opens the store refuses (`ICliCommand.WorksOnClassicVault`, checked once when
+`CommandContext.Storage` opens), except `init` (which refuses with its own message), `migrate` and
+`export`. `init` makes a record vault (`<config dir>/vault` or `--folder <dir>`) with the
+`record-format` marker; `vault reindex` rewrites every record in record format 3 (keyed
+fingerprints in an encrypted metadata section, value sections encrypted once and copied).
 
 `slot approve` specifically: it unlocks an *existing* vault and writes out an artifact that
 decrypts that vault's master key for whoever holds the matching private key — the same
@@ -74,8 +84,8 @@ sudo" precedent, the `slot` command as a whole is bucketed under `[sudo]` on the
 screen and in this list; the runtime `RequireSudo` check itself only actually fires inside
 `slot approve`, `slot add --yubikey` (which unlocks this machine's vault and adds a plugged-in
 YubiKey to its keyring as a new slot, a new way to decrypt it) and `slot merge` (which unlocks
-this machine's vault and adds the slots of a receipt or of another copy's `config.json`, each a
-new way to decrypt it). `recover` (its own command, `RequiresSudo`) opens the vault with the
+this machine's vault and adds the slots of a slot receipt, each a new way to decrypt it; another
+copy of a record vault is folded in with `vault merge <its vault folder>` instead, #247). `recover` (its own command, `RequiresSudo`) opens the vault with the
 recovery private key, read from stdin only, and enrolls this machine's hardware as a new slot.
 
 This enforces that AI agents can use secrets (`run`) but cannot read or enumerate values.
@@ -122,18 +132,20 @@ to enroll. Tests: `TwoYubiKeysTests` (FleetMachine `RunOnTerminal` plays a termi
 **The touch posture** is explained once where it is chosen (enrolment, `migrate`) on stderr and
 acknowledged in `config.json` (`AcknowledgedTouch`); everyday commands print one line only for a
 posture that changed since (`SecurityWarnings.NoticeIfChanged`); `tswap slots --ack` acknowledges.
-It is detected from whether `ykman otp calculate` asked for a touch
-(`IYubiKeyService.ChallengeReportingTouch`). Every notice goes to stderr.
+It is detected from whether the key asked for a touch while it answered the challenge, which Yubico's
+.NET SDK reports through its touch notifier (`YubicoOtpKeys.Calculate`, `UseTouchNotifier`;
+`IYubiKeyService.ChallengeReportingTouch`). A configured slot's touch setting can't be read from the key
+(`SdkYubiKeyService.DetectTouchRequirement` returns null). Every notice goes to stderr.
 
-### YubiKey XOR Redundancy
+### YubiKey XOR Redundancy (classic vaults, migration only)
 
-On `init`, two YubiKeys produce HMAC-SHA1 responses (K1, K2). An XOR share (K1 XOR K2) is stored in config. At unlock time, either key can derive the other key via the XOR share, then both are combined with PBKDF2 to produce the master key. The master key is never persisted.
+Classic vaults made by `init` before v0.2 work like this (v0.2 only migrates or exports them): two YubiKeys produce HMAC-SHA1 responses (K1, K2). An XOR share (K1 XOR K2) is stored in config. At unlock time, either key can derive the other key via the XOR share, then both are combined with PBKDF2 to produce the master key. The master key is never persisted.
 
 ### Cryptography
 
 - **Encryption**: AES-256-GCM (random nonce per operation)
 - **Key derivation**: PBKDF2-SHA256, 100k iterations
-- **YubiKey challenge-response**: HMAC-SHA1 via `ykman` CLI (`ykman list --serials` for enumeration, `ykman --device <serial> otp calculate 2` for challenge-response)
+- **YubiKey challenge-response**: HMAC-SHA1 on slot 2 through Yubico's .NET SDK (`Yubico.YubiKey` 1.18.1, `TswapCore.csproj`), over the key's OTP (keyboard HID) interface; the challenge string is UTF-8, zero-padded or truncated to a 64-byte frame (`SdkYubiKeyService.ChallengeReportingTouch`). Slot 2 is programmed by `tswap yubikey setup` (`YubicoOtpKeys.ProgramSlot2`: HMAC-SHA1, HMAC_LT64, touch per flag, a host-RNG secret, verified by one challenge).
 
 ### Stdin Ingestion (`ingest` command)
 
@@ -156,17 +168,24 @@ The install path varies by agent — Claude Code uses `.claude/skills/`, other t
 
 ### Token Substitution (`run` command)
 
-Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators.
+Pattern `{{secret-name}}` in commands is replaced with actual values only in the subprocess. Exfiltration prevention blocks commands like `echo`, `cat`, `env` and pipe/redirect operators. With a `{{@file}}` token (below) it also refuses any word of the command that is a printer, encoder, copier, shell or interpreter (`cp`, `base64`, `sh`, `python`, `sed`, …; `install` only as the program, behind a wrapper such as `nice`, or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`, so `helm install` works).
 
-### File Marker Substitution (`apply` command)
+### Files with secrets: `run` with `{{@file}}`
 
-Reads files with `# tswap: <secret-name>` markers and substitutes empty values with actual secrets, outputting to stdout. Supports Helm process substitution pattern: `helm upgrade -f <(tswap apply values.yaml)`. This avoids writing secrets to temporary files on disk.
+`tswap run helm upgrade --install app ./chart -f {{@values.yaml}}`: the token `{{@path}}` (a path, resolved against the current directory) names a file with `# tswap: <secret-name>` markers. `run` fills it in memory (`Apply.ApplySecrets` semantics), writes the copy into a private `0700` folder (`FilledFiles`: `$XDG_RUNTIME_DIR` when it is the user's own, else the temp folder; Windows: a current-user-only ACL), replaces the token with the copy's path, redacts every written form (plain, quoted, base64, base64url, and a multi-line value's `\r\n`, `\n` and PTY-printed forms), and zeroes and deletes the copy when the child exits (also on SIGINT/SIGTERM/SIGHUP; a sweep at the next file-token `run` removes folders a SIGKILL left). Before writing anything, it refuses a command in which any word is a printer, encoder, copier, shell or interpreter (the check also runs on what `{{name}}` tokens expand to, and that refusal names the token). It also refuses to run as root. `sudo tswap apply <file>` is the human-only form that prints the filled file to stdout; agents never use it, and nothing suggests `<(tswap apply …)`. Limits: docs/security-model.md ("Files with secrets").
 
 ### Storage
 
 Config directory: `~/.config/tswap/`
 - `config.json` — YubiKey serials + XOR share (plaintext, not secret)
 - `secrets.json.enc` — AES-256-GCM encrypted secrets database
+
+A record vault's folder may also hold `vault-password` (brief T17, `VaultPasswordFile`, 130 bytes):
+the vault password's Argon2id salt and parameters, a verifier and a key check, all useless without
+the vault key. Whether a slot needs the password is in that slot's own hardware blob (YubiKey slot
+blob v2, `TSTP` / `TSSE` headers; `SlotPassword.Classify`); the keyring format is unchanged. The
+agent's socket is `agent-<16 hex of the vault id>.sock` in the vault user's run folder
+(`AgentSocketPath`). See docs/vault-password-and-agent.md and docs/design/multi-machine-keying.md.
 
 Load/save of both files sits behind `TswapCore.IVaultStore`; `Storage` is the default
 single-file implementation. Commands depend on the interface, so an alternative backend
@@ -181,6 +200,11 @@ or burned; HLC write stamp + origin id authenticated in the header; padded to 25
 `SaveSecrets` writes only changed records, re-reading each first (stale-write guard). Merge rules
 live in `RecordMerge`. `migrate --to-records` converts a classic vault; `vault merge` folds in
 another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
+Read commands decrypt only what they use (T16 Stage 2, #220): `redact`, `tocomment`, `check`, `names`,
+`list` and `burned` read metadata only (`LoadMetadata`; `redact` and `tocomment` match by fingerprint
+through `SecretMatcher`), and `get` and `apply` decrypt only the records they name (`VaultView`,
+`RecordVaultStore.OpenSecret`). `LoadSecrets`, which decrypts every record, is left only to the write
+commands until Stage 2b; new code never calls it to read.
 
 ### Code Organization (TswapCli)
 
@@ -188,13 +212,35 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 1. **`Program.cs`** / **`CliHost`** — `Program.cs` hands the real console and process environment to `CliHost.Run`, the composition root: resolves the environment, wires real or test services, dispatches, and maps exceptions to exit codes (tests call `CliHost.Run` with a scripted environment)
 2. **`CliEnvironment`** — config-dir resolution, lazy (TSWAP_CONFIG_DIR override, SUDO_USER mapping via passwd, XDG, legacy dir migration), invocation prefix, leading global flags, `TSWAP_YUBIKEY_SERIAL`
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
-4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, vault unlocker, sudo enforcement)
+4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, FIDO2 service (`Fido2`), the controlling terminal (`Terminal`), vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, installscript, completion)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion, slots, yubikey)
 
-YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`YkmanYubiKeyService` shells out to ykman; `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see `HARDWARE_BACKENDS.md` §YubiKey keyring slots). This is the seam for adding TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends; see `HARDWARE_BACKENDS.md`.
+YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`SdkYubiKeyService` implements it over `IOtpKeys`: `YubicoOtpKeys` makes the SDK calls, and `YubicoSdk.EnsureInitialized` sets the SDK's crypto creators, the Linux `libudev.so.1` resolver and silent logging; on Linux the SDK's PC/SC calls go through tswap's own loader, `TswapCli/Native/pcsc-loader.c`, which forwards to `libpcsclite.so.1` when it is present and otherwise uses a stand-in that answers `SCARD_E_NO_SERVICE` (`PcscStrategy.Describe()`); `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
+
+**FIDO2 slots (v0.3.0, issue #193):** a YubiKey's FIDO2 hmac-secret credential as a keyring slot (`Fido2SlotBlob`, the
+`TSYK` blob's version 3; `Fido2SlotKek`; `YubiKeySlotKinds.Classify` routes every YubiKey blob). Commands and the
+unlocker use `TswapCore.Vault.Fido2.IFido2Service` (`Fido2Service`), which works over the device seam `IFido2Keys`:
+`SdkFido2Keys` (Linux and macOS, Yubico's SDK, raw CTAP2 commands under a PIN token), `WebAuthnFido2Keys` (Windows,
+`webauthn.dll`; its dialog asks for the PIN) and `FakeFido2Keys` (tests). Every FIDO2 message lives in `Fido2Texts`;
+device implementations throw only `Fido2DeviceException` and carry no user text. `CliHost` builds one service (none in
+test mode) for the unlocker and `CommandContext.Fido2`; the PIN comes from `Fido2PinPrompt` over
+`CommandContext.Terminal` (`/dev/tty` on Linux and macOS, never stdin; no terminal: no FIDO2, on every OS). No
+automated test may create a credential or ask for a PIN on a real key; the owner's checks are in
+[docs/superpowers/fido2-owner-checks.md](docs/superpowers/fido2-owner-checks.md).
 
 `TswapCore/` holds shared library types: `Config`, `Secret`, `SecretsDb` records, `Crypto`, `Storage`, `Prompt`, `InstallScript`, and the `JsonSerializerContext` (source-generated, required for NativeAOT).
+
+**The vault password (brief T17, v0.2.0):** `TswapCore/VaultPassword/` (stretching with Argon2id, the
+locked-memory `StretchedPassword`, the `vault-password` codec, the refusal texts) and `TswapCore/Agent/`
+(the agent's wire protocol, server, client, socket paths, peer checks). `VaultUnlocker.Unlock` runs
+four passes: every password-free slot, then the agent (`UnlockSources.AskAgent`), then one terminal
+prompt (`UnlockSources.Prompt`), then (pass 4) the FIDO2 slots, last because PIN tries are limited
+(`UnlockSources.Fido2Pin`, null without a terminal); a vault without password slots never contacts an agent, and
+one without password or FIDO2 slots never prompts.
+`VaultUnlocker.UnlockWithPasswordSlots` is the proof of `agent start` and `broker unlock`: only this
+machine's password slots, with a given stretched password. `agent serve` and `broker serve` never ask
+an agent (they pass `AskAgent: null`).
 
 Secret redaction of subprocess output (used by `run`) comes from the [`RedactingPty`](https://github.com/stevedcc/RedactingPty) NuGet package — runs a child process in a PTY while streaming its output through find/replace filters. It was originally an in-repo library (`ConsoleIntercept/`) and was extracted to its own repository once it proved dependency-free and independently useful.
 
@@ -204,15 +250,19 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 
 1. **Install the skill** (one-time, per project): `mkdir -p .claude/skills/tswap && tswap prompt > .claude/skills/tswap/SKILL.md`. After installation the SKILL.md is loaded automatically by your agent when relevant — no need to run `tswap prompt` at session start.
 2. **Keep it current**: Re-run the install command whenever `tswap prompt-hash` changes so your skill file stays up to date.
-3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `apply`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only, plus `rotate` / `ingest --rotate` to replace a **burned** secret (rotating one that isn't burned needs sudo: ask the user).
+3. **Never use sudo commands** — they expose secret values. Use `create`, `ingest`, `names`, `run`, `burn`, `burned`, `check`, `redact`, `tocomment`, `prompt`, `prompt-hash`, and `migrate` only, plus `rotate` / `ingest --rotate` to replace a **burned** secret (rotating one that isn't burned needs sudo: ask the user). If a command says the vault needs the vault password, ask the user to run `tswap agent start` in their terminal; never handle the vault password yourself.
 4. **Use `{{token}}` substitution** via `run` to pass secrets to commands without seeing them.
 5. **Burn immediately** if you accidentally see a plaintext secret: `tswap burn <name> "<reason>"`.
 
 ### Prerequisites
 
-- `ykman` CLI (YubiKey Manager)
-- 2 YubiKeys with slot 2 configured:
-  - **Recommended**: `ykman otp chalresp --generate --touch 2` (requires button press)
-  - **Less secure**: `ykman otp chalresp --generate 2` (no button press, for CI/automation only)
+- YubiKey access, per OS (no ykman and no `libpcsclite` needed anywhere; details in
+  [docs/install.md](docs/install.md)):
+  - Linux: Yubico's udev rule (access to the key's hidraw device)
+  - macOS: Input Monitoring for the app that runs tswap (System Settings → Privacy & Security → Input Monitoring), for
+    the OTP slot only; a FIDO2 slot needs none
+- YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
+  [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
+  setting; a key without touch (less secure: no button press) is for CI/automation only.
 - The .NET SDK that `global.json` names (.NET 11; build time only)
 - For sudo commands: copy the compiled binary to `/usr/local/bin`

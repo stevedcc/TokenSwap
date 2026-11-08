@@ -86,7 +86,7 @@ public class CliEnvironmentTests
     }
 
     // Fix round 2 (MiMo F3), a documented limit: sudo can't know the invoking user's XDG_CONFIG_HOME,
-    // so with a custom one the two differ (README: set TSWAP_CONFIG_DIR for both).
+    // so with a custom one the two differ (docs/security-model.md, "Which vault a command under sudo uses": set TSWAP_CONFIG_DIR for both).
     [Fact]
     public void Linux_ACustomXdgConfigHome_IsNotSeenUnderSudo()
     {

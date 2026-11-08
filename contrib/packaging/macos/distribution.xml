@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The tswap installer's distribution (issue #240), built by contrib/packaging/package-pkg.sh with productbuild;
+  @VERSION@ is replaced there. It installs tswap and libtswapse.dylib into /usr/local/bin for every user (no choice of
+  disk, no per-user install, nothing to customise) and runs no scripts. The minimum macOS must equal the Mach-Os'
+  (TswapCore.csproj's SecureEnclaveShimMinOS, #265); MacPkgScriptTests and package-pkg.sh's check keep them equal.
+-->
+<installer-gui-script minSpecVersion="2">
+    <title>tswap</title>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="12.0"/>
+        </allowed-os-versions>
+    </volume-check>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <choices-outline>
+        <line choice="dev.crawford.tswap.pkg"/>
+    </choices-outline>
+    <choice id="dev.crawford.tswap.pkg" visible="false" title="tswap">
+        <pkg-ref id="dev.crawford.tswap.pkg"/>
+    </choice>
+    <pkg-ref id="dev.crawford.tswap.pkg" version="@VERSION@" onConclusion="none">#component.pkg</pkg-ref>
+</installer-gui-script>

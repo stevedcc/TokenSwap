@@ -14,7 +14,7 @@ namespace TswapCli.Commands;
 ///
 /// <para><b>The core requirement this issue calls out by name:</b> a no-touch YubiKey machine
 /// slot must never be reported as a bare "unprotected"/"insecure" — see
-/// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet), which documents custody (physically
+/// <c>docs/design/multi-machine-keying.md</c> §Why not k &gt;= 2 (yet), which documents custody (physically
 /// controlling who has the key at all) as a real, if unusual, control distinct from no
 /// protection whatsoever. See <see cref="DescribeMachineProtection"/> and
 /// <see cref="DescribeRecoveryProtection"/> for how each slot kind's actual guarantee is
@@ -57,21 +57,29 @@ public sealed class SlotsCommand : ICliCommand
                 : "Acknowledged the touch setting of: " + string.Join("; ", postures.Select(p => $"{p.Label} ({p.Posture})")));
             return 0;
         }
-        ctx.Console.Out.WriteLine(Format(config));
+        ctx.Console.Out.WriteLine(Format(config, ctx.RememberedSlots, ctx.Os));
         return 0;
     }
+
+    /// <summary>
+    /// Task 4b: the mark of a key's slot that isn't the one this machine remembers it last opened the vault with. Not
+    /// "dead" or "older": that can't be known without a challenge, and a merge can bring in newer slots.
+    /// </summary>
+    internal const string OtherSlotOfKeyMark = "another slot of this key (not the one it last opened with)";
 
     /// <summary>
     /// Pure formatting, factored out from <see cref="Execute"/> so it's unit-testable without
     /// spinning up a full <see cref="CommandContext"/>. Never returns a bare "unprotected" or
     /// "insecure" for a no-touch machine slot — see this class's doc comment.
     /// </summary>
-    internal static string Format(Config config)
+    /// <param name="remembered">Task 4b: this machine's remembered slots (null: nothing is marked).</param>
+    internal static string Format(Config config, TswapCore.Vault.RememberedYubiKeySlots? remembered = null,
+        System.Runtime.InteropServices.OSPlatform? os = null)
     {
         if (config.Keyring is null)
         {
             return "This vault has no keyring — it's a single derived-key or hardware-wrapped\n" +
-                   "vault with no multi-slot concept (see 'tswap init --keyring' to create a\n" +
+                   "vault with no multi-slot concept (see 'tswap init' to create a\n" +
                    "keyring vault instead)." + DescribeClassicPosture(config);
         }
 
@@ -90,7 +98,7 @@ public sealed class SlotsCommand : ICliCommand
 
         if (keyring.Slots.Count == 0)
             return "This vault has a keyring but no enrolled slots — it is not usable as-is; " +
-                   "restore config.json from backup or re-run 'tswap init --keyring'.";
+                   "restore config.json from backup or re-run 'tswap init'.";
 
         var machineSlotCount = keyring.Slots.Count(s => s.Kind == SlotKind.Machine);
 
@@ -102,6 +110,8 @@ public sealed class SlotsCommand : ICliCommand
         sb.Append($"{"SLOT".PadRight(slotColumnWidth)}  {"KIND".PadRight(kindColumnWidth)}  PROTECTION\n");
         sb.Append(new string('-', slotColumnWidth + 2 + kindColumnWidth + 2 + 40) + "\n");
 
+        // Task 4b: only one-key slots are remembered; nothing marks a legacy pair slot, or a key nothing is remembered for.
+        var lastOpened = remembered?.ForVault(keyring.VaultId) ?? new Dictionary<int, byte[]>();
         foreach (var slot in keyring.Slots)
         {
             var shortId = AbbreviateSlotId(slot.SlotId);
@@ -109,7 +119,28 @@ public sealed class SlotsCommand : ICliCommand
             var protection = slot.Kind == SlotKind.Machine
                 ? DescribeMachineProtection(config, slot)
                 : DescribeRecoveryProtection();
+            // Only OTP slots are remembered (FIDO2 plan, task 2: a FIDO2 slot is never marked).
+            if (slot.Kind == SlotKind.Machine && YubiKeySlotKinds.Classify(slot.HwBlob) is YubiKeySlotKind.Otp(var blob)
+                && lastOpened.TryGetValue(blob.Serial, out var last) && !last.AsSpan().SequenceEqual(slot.SlotId))
+                protection += $" — {OtherSlotOfKeyMark}";
             sb.Append($"{shortId.PadRight(slotColumnWidth)}  {kindLabel.PadRight(kindColumnWidth)}  {protection}\n");
+        }
+
+        // Brief T17 ruling 3 / task 6: with at least one password slot, say how many open without it. FIDO2 plan,
+        // task 8: a password-free FIDO2 slot still needs its key's PIN and a touch, so it is counted apart.
+        var kinds = keyring.Slots.Where(s => s.Kind == SlotKind.Machine)
+            .Select(s => (Password: SlotPassword.Classify(s), Fido2: YubiKeySlotKinds.Classify(s.HwBlob) is YubiKeySlotKind.Fido2))
+            .ToList();
+        if (kinds.Any(k => k.Password == SlotPasswordKind.Password))
+        {
+            var withoutPassword = kinds.Count(k => k is { Password: SlotPasswordKind.None, Fido2: false });
+            var fido2WithoutPassword = kinds.Count(k => k is { Password: SlotPasswordKind.None, Fido2: true });
+            if (withoutPassword > 0 || fido2WithoutPassword > 0)
+                sb.Append('\n');
+            if (withoutPassword > 0)
+                sb.Append($"{withoutPassword} slot(s) open without the password: keep them away from shared machines.\n");
+            if (fido2WithoutPassword > 0)
+                sb.Append(Fido2WithoutPasswordLine(fido2WithoutPassword) + "\n");
         }
 
         var changed = SecurityWarnings.Changed(config);
@@ -125,7 +156,51 @@ public sealed class SlotsCommand : ICliCommand
                 "actual hardware unlock, which this listing deliberately doesn't attempt.");
         }
 
+        if (os == System.Runtime.InteropServices.OSPlatform.Linux && OwnRsaTpmSlot(config, keyring) is { } rsaSlot)
+            sb.Append("\n\n" + RsaPrimaryNote(AbbreviateSlotId(rsaSlot.SlotId)));
+
         return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>
+    /// Issue #261: the note for this machine's Linux TPM slot sealed under the RSA-2048 primary. Its only variable part
+    /// is the slot's short id.
+    /// </summary>
+    internal static string RsaPrimaryNote(string id8) =>
+        $"Note: this machine's TPM slot ({id8}) was made before tswap 0.3.0 and uses an RSA-2048 key, so every unlock " +
+        "is slower than it needs to be. A TPM slot made by tswap 0.3.0 or later uses ECC P-256 and unlocks two to four " +
+        "times faster (measured on two TPMs); re-enrolling a slot in place isn't supported yet (issue #264).";
+
+    /// <summary>
+    /// This machine's own TPM slot when it is a usable one sealed under the RSA-2048 primary (a header-less package or
+    /// a <c>TSTP</c> header without the ECC bit); otherwise null. Found as the unlock finds it
+    /// (<c>HardwareBlobLocator</c>): a TPM vault's machine slot named by <see cref="Config.KeyringSlotId"/>, or its
+    /// first machine slot when that is unset. A corrupt slot or one from a newer tswap gets no note: it is already
+    /// marked. YubiKey and Secure Enclave blobs are told apart by their magic; a header-less or <c>TSTP 0x01</c> package
+    /// a Windows machine wrote can't be told from a Linux RSA one, an accepted ambiguity: this machine's own slot in a
+    /// TPM vault on Linux is a Linux one unless the config was copied from Windows, and then the unlock fails anyway.
+    /// </summary>
+    private static Slot? OwnRsaTpmSlot(Config config, Keyring keyring)
+    {
+        if (config.Backend != HardwareBackend.Tpm)
+            return null;
+        byte[]? ownId;
+        try
+        {
+            ownId = config.KeyringSlotId is null ? null : Convert.FromBase64String(config.KeyringSlotId);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        var own = ownId is null
+            ? keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine)
+            : keyring.Slots.FirstOrDefault(s => s.Kind == SlotKind.Machine && s.SlotId.AsSpan().SequenceEqual(ownId));
+        if (own?.HwBlob is not { Length: > 0 } hwBlob || YubiKeySlotKinds.IsYubiKey(hwBlob) || SecureEnclaveSlotBlob.HasHeader(hwBlob))
+            return null;
+        if (SlotPassword.Classify(own) is not (SlotPasswordKind.None or SlotPasswordKind.Password))
+            return null;
+        return TpmSlotBlob.SealedUnderEccPrimary(hwBlob) ? null : own;
     }
 
     /// <summary>Brief T7 item 5: a classic YubiKey vault's touch posture (both keys share it).</summary>
@@ -158,14 +233,42 @@ public sealed class SlotsCommand : ICliCommand
     /// issue calls out: <c>false</c> (or <c>null</c>, unknown) must never collapse to a bare
     /// "unprotected"/"insecure" — a no-touch YubiKey is still only usable by whoever has
     /// physical custody of it, which is a real, if unusual, control (see
-    /// <c>MULTI_MACHINE_KEYING.md</c> §Why not k &gt;= 2 (yet)).
+    /// <c>docs/design/multi-machine-keying.md</c> §Why not k &gt;= 2 (yet)).
     /// </summary>
-    private static string DescribeMachineProtection(Config config, Slot slot) =>
+    private static string DescribeMachineProtection(Config config, Slot slot) => SlotPassword.Classify(slot) switch
+    {
+        // Brief T17 ruling 3: a slot this build can't use is named, never described as if it worked.
+        SlotPasswordKind.NeedsNewerTswap => NeedsNewerTswapMark,
+        SlotPasswordKind.Corrupt => CorruptMark,
+        var kind => DescribeHardware(config, slot) + (kind == SlotPasswordKind.Password ? ", vault password" : ", no password"),
+    };
+
+    /// <summary>FIDO2 plan, task 8: what protects a FIDO2 slot, after its key's name.</summary>
+    internal const string Fido2Protection = "FIDO2: PIN + touch";
+
+    /// <summary>FIDO2 plan, task 8: the password-free FIDO2 slots of a vault that has a password slot.</summary>
+    internal static string Fido2WithoutPasswordLine(int count) =>
+        $"{count} FIDO2 slot(s) open without the vault password (each still needs its key's FIDO2 PIN and a touch).";
+
+    /// <summary>Brief T17: the PROTECTION of a slot whose blob needs a newer tswap.</summary>
+    internal const string NeedsNewerTswapMark = "needs a newer tswap";
+
+    /// <summary>Brief T17: the PROTECTION of a slot whose blob is corrupt.</summary>
+    internal const string CorruptMark = "corrupt (restore config.json from backup)";
+
+    private static string DescribeHardware(Config config, Slot slot) => YubiKeySlotKinds.Classify(slot.HwBlob) switch
+    {
         // Brief T4: a one-key YubiKey slot names its own key and touch policy, whatever the
         // vault's backend (a TPM vault on the router may hold the owner's YubiKeys as slots).
-        YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob)
-            ? DescribeYubiKeySlot(YubiKeySlotBlob.Decode(slot.HwBlob!))
-            : DescribeMachineProtection(config);
+        YubiKeySlotKind.Otp(var blob) => DescribeYubiKeySlot(blob),
+        // FIDO2 plan, task 8: the key (its model from the AAGUID when the serial is unknown); always PIN and touch.
+        YubiKeySlotKind.Fido2(var blob) => $"{Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid)}, {Fido2Protection}",
+        // Not reached for a TSYK blob this build can't read: DescribeMachineProtection names it first.
+        // Issue #261: only a TSTP header with the ECC-primary bit says which primary; a legacy package can't be told
+        // apart from a Windows one, so no other row names an algorithm.
+        _ when TpmSlotBlob.SealedUnderEccPrimary(slot.HwBlob) => "TPM (ECC P-256), sealed to this machine's TPM",
+        _ => DescribeMachineProtection(config),
+    };
 
     private static string DescribeYubiKeySlot(YubiKeySlotBlob blob) =>
         $"YubiKey {blob.Serial}, " + blob.RequiresTouch switch
@@ -198,7 +301,7 @@ public sealed class SlotsCommand : ICliCommand
     /// A recovery slot's presence guarantee is not a weaker machine slot — it's a deliberately
     /// different kind of slot with a different job: a break-glass credential that must work
     /// offline, with nobody present, potentially years after enrollment (see
-    /// <c>MULTI_MACHINE_KEYING.md</c>'s "The recovery slot" section and its per-backend table,
+    /// <c>docs/design/multi-machine-keying.md</c>'s "The recovery slot" section and its per-backend table,
     /// where the recovery row is explicitly "none — this is the deliberately presence-free,
     /// offline-capable break-glass slot"). Custody of the recovery private key is the only real
     /// control, by design.

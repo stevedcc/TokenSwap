@@ -89,6 +89,50 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ANoTouchSlot_Unlocks_WithoutInteraction()
+    {
+        // T17 fix round 2: a slot recorded as made without presence (RequiresTouch false) unwraps through
+        // tswap_se_unwrap_no_interaction; a key made without presence must open there as before.
+        if (!CanRun() || !OperatingSystem.IsMacOS())
+            return;
+        NoTouchSlotUnlocks();
+    }
+
+    [SupportedOSPlatform("macos")]
+    private static void NoTouchSlotUnlocks()
+    {
+        var service = new SecureEnclaveHardwareService(requirePresence: false);
+        var (kek, hwBlob) = service.Enroll(password: null);
+        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+            SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob), RequiresTouch: false);
+
+        Assert.Equal(kek, Bounded(() => service.Unlock(config, _ => 0, password: null)));
+    }
+
+    [Fact]
+    public void ATouchKey_WithoutInteraction_RefusedAtOnce()
+    {
+        // A presence key under the no-interaction unwrap (a slot recorded wrongly as no-touch) is refused with the
+        // generic text, without a Touch ID prompt: interactionNotAllowed holds for presence too.
+        if (!CanRun() || !OperatingSystem.IsMacOS())
+            return;
+        TouchKeyRefusedWithoutInteraction();
+    }
+
+    [SupportedOSPlatform("macos")]
+    private static void TouchKeyRefusedWithoutInteraction()
+    {
+        var wrapped = Bounded(() => new SecureEnclaveHardwareService(requirePresence: true).Wrap(RandomNumberGenerator.GetBytes(32)));
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var ex = Bounded(() => Assert.Throws<TswapException>(() => AppleSecureEnclaveInterop.UnwrapWithoutInteraction(wrapped)));
+        watch.Stop();
+
+        Assert.StartsWith("Could not unlock with the Secure Enclave.", ex.Message);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"refused after {watch.Elapsed.TotalSeconds:F1} s, not at once");
+    }
+
+    [Fact]
     public void ATouchKey_Wraps_WithoutUnwrapping()
     {
         // Creating a presence-gated key doesn't prompt; only using it does. This runs

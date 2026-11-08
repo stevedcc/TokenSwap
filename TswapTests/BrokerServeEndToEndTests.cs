@@ -45,7 +45,11 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
             Directory.Delete(_root, true);
     }
 
-    private ProcessStartInfo Psi(bool withVault, params string[] args)
+    private string RunDir => Path.Combine(_root, "run");
+
+    private ProcessStartInfo Psi(bool withVault, params string[] args) => Psi(withVault, terminal: false, args);
+
+    private ProcessStartInfo Psi(bool withVault, bool terminal, params string[] args)
     {
         var psi = new ProcessStartInfo(_binary)
         {
@@ -61,6 +65,12 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
             psi.Environment["TSWAP_TEST_KEY"] = TestKeyHex;
             psi.Environment["TSWAP_TEST_SUDO_BYPASS"] = "1";
             psi.Environment["TSWAP_CONFIG_DIR"] = ConfigDir;
+            // Brief T17: the control socket's run folder in this test's temp folder (Debug, test key only).
+            psi.Environment["TSWAP_TEST_BROKER_RUN_DIR"] = RunDir;
+            if (terminal)
+                psi.Environment["TSWAP_TEST_TERMINAL"] = "1";
+            else
+                psi.Environment.Remove("TSWAP_TEST_TERMINAL");
         }
         else
         {
@@ -73,9 +83,14 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         return psi;
     }
 
-    private (int Exit, string Out, string Err) Run(string stdin, params string[] args)
+    private (int Exit, string Out, string Err) Run(string stdin, params string[] args) => Run(stdin, terminal: false, args);
+
+    /// <summary>With <c>TSWAP_TEST_TERMINAL</c>: stdin plays a terminal, so the vault password can be typed.</summary>
+    private (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) => Run(stdin, terminal: true, args);
+
+    private (int Exit, string Out, string Err) Run(string stdin, bool terminal, params string[] args)
     {
-        using var p = Process.Start(Psi(true, args))!;
+        using var p = Process.Start(Psi(true, terminal, args))!;
         p.StandardInput.Write(stdin);
         p.StandardInput.Close();
         var stdout = p.StandardOutput.ReadToEndAsync();
@@ -145,10 +160,9 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
             return; // prctl and /proc are Linux; serve on macOS is covered by the in-process tests
         Ok("", "init", "--tpm", "--no-recovery");
         Ok("tok-value\ntok-value\n", "add", "tok");
-        Ok("", "migrate", "--to-records"); // serve needs a record-store vault
         // An upstream nothing listens on: the request unlocks, then fails upstream (502).
         Ok("", "broker", "route", "add", "api", "--upstream", "https://127.0.0.1:1/v1", "--auth", "bearer", "--secret", "tok", "--path", "");
-        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir);
+        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir, "--uid-only");
 
         var (serve, serveLines) = Start(true, "broker", "serve");
         await WaitForLineAsync(serveLines, "event started");
@@ -196,6 +210,76 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         Assert.Contains("route=api", logText);
         Assert.Contains("event stopped", logText);
         Assert.DoesNotContain("tok-value", logText);
+    }
+
+    /// <summary>The owner of <c>/proc/&lt;pid&gt;/environ</c>: the process's uid while it is dumpable, root while it isn't.</summary>
+    private static uint ProcOwner(Process p) => BrokerNative.LStat($"/proc/{p.Id}/environ")!.Value.Uid;
+
+    /// <summary>
+    /// Brief T17 task 12, the real binary and the real <c>/proc</c> (which the seams can't stand in for): a
+    /// broker whose TPM slot has the vault password starts locked and dumpable, refuses requests as busy,
+    /// is unlocked by 'broker unlock' (non-dumpable from then on, so a second unlock can't read its link),
+    /// serves, and after 'broker lock' is locked and dumpable again.
+    /// </summary>
+    [Fact]
+    public async Task Unlock_ThenLock_ThenLockedAgain()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // prctl and /proc are Linux; the macOS side is covered in process
+        const string password = "correct horse battery staple";
+        Ok(password + "\n" + password + "\n", "init", "--tpm", "--password", "--no-recovery");
+        var (added, _, addErr) = RunOnTerminal("tok-value\ntok-value\n" + password + "\n", "add", "tok");
+        Assert.True(added == 0, addErr);
+        Ok("", "broker", "route", "add", "api", "--upstream", "https://127.0.0.1:1/v1", "--auth", "bearer", "--secret", "tok", "--path", "");
+        Ok("", "broker", "socket", "add", "lane1", "--uids", BrokerHarness.MyUid.ToString(), "--routes", "api", "--socket-dir", SocketDir, "--uid-only");
+
+        var (serve, serveLines) = Start(true, "broker", "serve");
+        await WaitForLineAsync(serveLines, "locked: this broker's slot has the vault password");
+
+        // Locked: dumpable (nothing held), and a request gets the busy refusal, logged as locked.
+        Assert.Equal(BrokerHarness.MyUid, ProcOwner(serve));
+        Assert.Equal(503, await StatusOverSocketAsync(SocketPath, "/api/x"));
+        Assert.Contains("reason=locked", await WaitForLineAsync(serveLines, "route=api"));
+        var control = Directory.GetFiles(RunDir, "control.sock", SearchOption.AllDirectories).Single();
+        Assert.Equal((UnixFileMode)0b111_000_000, BrokerNative.LStat(Path.GetDirectoryName(control)!)!.Value.Mode & (UnixFileMode)0b111_111_111);
+        Assert.Contains("The broker is locked.", Run("", "broker", "status").Out);
+
+        // A wrong password: refused at the TPM, still locked and dumpable.
+        var wrong = RunOnTerminal("not the password\n", "broker", "unlock");
+        Assert.NotEqual(0, wrong.Exit);
+        Assert.Contains(TswapCore.VaultPassword.VaultPasswordMessages.WrongPasswordKdf, wrong.Err);
+        Assert.Equal(BrokerHarness.MyUid, ProcOwner(serve));
+
+        // The right one: unlocked, non-dumpable, and the request now unlocks (and fails upstream: 502).
+        var unlock = RunOnTerminal(password + "\n", "broker", "unlock", "--timeout", "8h");
+        Assert.True(unlock.Exit == 0, unlock.Err);
+        Assert.Contains("The broker is unlocked", unlock.Out);
+        Assert.Contains("The broker keeps your stretched vault password in memory", unlock.Err);
+        Assert.Equal(0u, ProcOwner(serve));
+        Assert.Equal(502, await StatusOverSocketAsync(SocketPath, "/api/x"));
+        var served = await WaitForLineAsync(serveLines, "reason=upstream-error");
+        Assert.Contains("unlocks=1", served);
+        Assert.Contains("The broker is unlocked until", Run("", "broker", "status").Out);
+
+        // Unlocked, it is non-dumpable: a second 'broker unlock' can't read its namespace link and sends nothing.
+        var again = RunOnTerminal(password + "\n", "broker", "unlock");
+        Assert.NotEqual(0, again.Exit);
+        Assert.Contains(BrokerControlClient.UnreadableServerLinkText, again.Err);
+
+        // Locked again: dumpable, and the next request is refused as locked.
+        var locked = Run("", "broker", "lock");
+        Assert.True(locked.Exit == 0, locked.Err);
+        Assert.Contains("The broker is locked.", locked.Out);
+        Assert.Equal(BrokerHarness.MyUid, ProcOwner(serve));
+        Assert.Equal(503, await StatusOverSocketAsync(SocketPath, "/api/x"));
+        Assert.Contains("reason=locked", await WaitForLineAsync(serveLines, "route=api"));
+        Assert.Contains("The broker is locked.", Run("", "broker", "status").Out);
+
+        Signal(serve, "-TERM");
+        await serve.WaitForExitAsync(new CancellationTokenSource(TimeSpan.FromSeconds(60)).Token);
+        Assert.Equal(0, serve.ExitCode);
+        Assert.Equal(BrokerNative.EntryType.Missing, BrokerNative.LStat(control)!.Value.Type);
+        Assert.DoesNotContain("tok-value", File.ReadAllText(Path.Combine(ConfigDir, BrokerLog.FileName)));
     }
 
     [Fact]

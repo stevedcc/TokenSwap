@@ -20,10 +20,17 @@ public static class RecoveryKeyUnlock
     /// <summary>Most characters read from stdin; a base64 X25519 key is 44.</summary>
     public const int MaxInputChars = 1024;
 
-    public const string FailureMessage =
-        "The recovery key did not open this vault. Pipe in the recovery private key (base64) that 'tswap init' " +
-        "printed for this vault, for example: sudo tswap get recovery-key | sudo tswap recover --yubikey " +
-        "(or another command with --recovery-key-stdin). Nothing was written.";
+    public static readonly string FailureMessage =
+        "The recovery key did not open this vault. It is the recovery private key (base64) that 'tswap init' printed " +
+        $"for this vault, or wrote to its --recovery-key-out file; {SourceHint("tswap")} (or another command with --recovery-key-stdin). Nothing was written.";
+
+    /// <summary>
+    /// Where the recovery key comes from, for the messages that ask for it: never the vault being recovered,
+    /// whose hardware is usually the thing that was lost.
+    /// </summary>
+    public static string SourceHint(string prefix) =>
+        "pipe it in from somewhere other than this vault (another vault, a file, a password manager), for example: " +
+        $"sudo TSWAP_CONFIG_DIR=<another vault's config folder> {prefix} get recovery-key | sudo {prefix} recover --yubikey";
 
     /// <summary>
     /// Reads the recovery private key from <paramref name="input"/> (stdin): at most
@@ -31,7 +38,14 @@ public static class RecoveryKeyUnlock
     /// <see cref="SlotKeyPair.KeySize"/> bytes. Anything else throws <see cref="FailureMessage"/>.
     /// The read buffer is zeroed before returning.
     /// </summary>
-    public static byte[] ReadKey(TextReader input)
+    public static byte[] ReadKey(TextReader input) => ReadKey(input, firstLineOnly: false);
+
+    /// <summary>
+    /// Brief T17: as <see cref="ReadKey(TextReader)"/>, but with <paramref name="firstLineOnly"/> it stops at
+    /// the first line break, so the lines after the key stay on stdin for the vault password that a
+    /// <c>--password</c> enrolment then reads.
+    /// </summary>
+    public static byte[] ReadKey(TextReader input, bool firstLineOnly)
     {
         var buffer = new char[MaxInputChars + 1];
         var decoded = new byte[MaxInputChars];
@@ -39,8 +53,16 @@ public static class RecoveryKeyUnlock
         {
             var total = 0;
             int read;
-            while (total < buffer.Length && (read = input.Read(buffer, total, buffer.Length - total)) > 0)
-                total += read;
+            if (firstLineOnly)
+            {
+                while (total < buffer.Length && (read = input.Read()) >= 0 && read != '\n')
+                    buffer[total++] = (char)read;
+            }
+            else
+            {
+                while (total < buffer.Length && (read = input.Read(buffer, total, buffer.Length - total)) > 0)
+                    total += read;
+            }
             if (total > MaxInputChars)
                 throw new TswapException(FailureMessage);
 

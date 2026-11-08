@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using TswapCore.Keyring;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
@@ -26,12 +28,33 @@ namespace TswapCore.Vault;
 /// as one flag byte (<c>1</c> presence required, <c>0</c> none), so tests read what reached the
 /// backend from the saved slot blob. This blob format is test-only. <see cref="Unlock"/> accepts
 /// the old length (read as presence) and the new one; it doesn't enforce the flag.</para>
+///
+/// <para>Brief T17: it enforces the vault password like the real backends. A password slot's
+/// <c>KEK_slot</c> is wrapped under <c>HKDF-SHA256(machineKey || stretched, info
+/// "tswap-simulated-password-v1")</c>, so a wrong password fails like a wrong machine (with ruling 18's
+/// YubiKey/KDF text), and its blob is the backend's password header (<see cref="TpmSlotBlob"/> or
+/// <see cref="SecureEnclaveSlotBlob"/>) around the package. The package also ends with one more byte,
+/// <c>'P'</c> after the presence flag ("the object needs a password"), the simulated counterpart of a
+/// TPM object's auth value: a package whose header was stripped fails with ruling 3's stripped-header
+/// text, as <c>TPM_RC_AUTH_FAIL</c> does. A simulated Secure Enclave mirrors the shim instead (brief T17 task 13):
+/// a wrong password gives the <c>-7</c> text, and a stripped header today's generic unwrap text, as the old
+/// <c>tswap_se_unwrap</c> it then goes through says.</para>
+///
+/// <para>Issue #261: it has no Linux or Windows notion, so a simulated TPM slot always has the Linux layout, a
+/// <c>TSTP</c> header with the ECC-primary bit (<c>0x02</c> password-free, <c>0x03</c> with the password). There is
+/// no primary to choose, so <see cref="Unlock"/> reads the bit and ignores it; it still opens a header-less
+/// password-free blob. The Windows layout (a header-less package, <c>0x01</c>) is covered by the real Windows TPM
+/// tests only.</para>
 /// </summary>
 public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
 {
     private const int KeySize = 32;
     private static readonly int NonceSize = AesGcm.NonceByteSizes.MaxSize;
     private static readonly int TagSize = AesGcm.TagByteSizes.MaxSize;
+
+    private const byte PresenceFlag = 1;
+    private const byte NeedsPasswordMarker = (byte)'P';
+    private static ReadOnlySpan<byte> PasswordInfo => "tswap-simulated-password-v1"u8;
 
     private readonly byte[] _machineKey;
     private readonly bool _requirePresence;
@@ -75,52 +98,133 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
 
     public bool IsSimulated => true;
 
-    /// <summary>Generates a random <c>KEK_slot</c> and wraps it to this simulated machine.</summary>
-    public HardwareEnrollment Enroll()
+    /// <summary>
+    /// Generates a random <c>KEK_slot</c> and wraps it to this simulated machine; with
+    /// <paramref name="password"/>, to the machine and the password (brief T17).
+    /// </summary>
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         CallObserver.Value?.Invoke(Backend, nameof(Enroll));
         var kekSlot = RandomNumberGenerator.GetBytes(KeySize);
 
-        var blob = new byte[NonceSize + TagSize + kekSlot.Length + 1];
+        var blob = new byte[NonceSize + TagSize + kekSlot.Length + 1 + (password is null ? 0 : 1)];
         var nonce = blob.AsSpan(0, NonceSize);
         RandomNumberGenerator.Fill(nonce);
-        using var aes = new AesGcm(_machineKey, TagSize);
-        aes.Encrypt(nonce, kekSlot, blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize));
-        blob[^1] = _requirePresence ? (byte)1 : (byte)0; // the test seam (brief T11 decision 5)
+        var wrapKey = WrapKey(password);
+        try
+        {
+            using var aes = new AesGcm(wrapKey, TagSize);
+            aes.Encrypt(nonce, kekSlot, blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize));
+        }
+        finally
+        {
+            if (password is not null)
+                CryptographicOperations.ZeroMemory(wrapKey);
+        }
+        if (password is null)
+        {
+            blob[^1] = _requirePresence ? PresenceFlag : (byte)0; // the test seam (brief T11 decision 5)
+            return new HardwareEnrollment(kekSlot,
+                Backend == HardwareBackend.Tpm ? TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary) : blob);
+        }
 
-        return new HardwareEnrollment(kekSlot, blob);
+        blob[^2] = _requirePresence ? PresenceFlag : (byte)0;
+        blob[^1] = NeedsPasswordMarker;
+        return new HardwareEnrollment(kekSlot, Backend switch
+        {
+            HardwareBackend.Tpm => TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary | TpmSlotBlob.Password),
+            HardwareBackend.SecureEnclave => SecureEnclaveSlotBlob.Wrap(blob),
+            _ => throw new InvalidOperationException($"The simulated '{Backend.DisplayName}' backend has no password slot blob"),
+        });
+    }
+
+    /// <summary>The machine key, or for a password slot <c>HKDF(machineKey || stretched)</c>.</summary>
+    private byte[] WrapKey(StretchedPassword? password)
+    {
+        if (password is null)
+            return _machineKey;
+        var ikm = new byte[KeySize + StretchedPassword.Size];
+        try
+        {
+            _machineKey.CopyTo(ikm, 0);
+            password.CopyTo(ikm.AsSpan(KeySize));
+            return HKDF.DeriveKey(HashAlgorithmName.SHA256, ikm, KeySize, salt: [], info: PasswordInfo.ToArray());
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(ikm);
+        }
     }
 
     /// <summary>
     /// Recovers <c>KEK_slot</c> from this backend's blob in <paramref name="config"/>.
     /// <paramref name="chooseSerial"/> is unused: a simulated TPM/Secure Enclave is one device.
     /// </summary>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
     {
         _ = chooseSerial;
         CallObserver.Value?.Invoke(Backend, nameof(Unlock));
-        var blob = HardwareBlobLocator.Read(config, Backend);
+        var hwBlob = HardwareBlobLocator.Read(config, Backend);
 
-        // The old length (no flag byte, read as presence) or the new one with a flag of 0 or 1.
+        // Brief T17: split off the password header, as the real backends do.
+        bool needsPassword;
+        byte[] blob;
+        if (Backend == HardwareBackend.SecureEnclave)
+            (needsPassword, blob) = SecureEnclaveSlotBlob.Split(hwBlob);
+        else
+            (needsPassword, _, blob) = TpmSlotBlob.Split(hwBlob);
+
+        // The old length (no flag byte, read as presence), the new one with a flag of 0 or 1, or (brief
+        // T17) a password object: the flag, then the 'P' marker.
         var sealedLength = NonceSize + TagSize + KeySize;
-        if (!(blob.Length == sealedLength || (blob.Length == sealedLength + 1 && blob[^1] is 0 or 1)))
+        var objectNeedsPassword = blob.Length == sealedLength + 2 && blob[^2] is 0 or 1 && blob[^1] == NeedsPasswordMarker;
+        if (!(blob.Length == sealedLength || (blob.Length == sealedLength + 1 && blob[^1] is 0 or 1) || objectNeedsPassword))
             throw new TswapException(
                 $"Config is corrupted: the simulated '{Backend.DisplayName}' blob has the wrong length. " +
                 "Restore config.json from backup or re-run 'tswap init'.");
 
-        var kekSlot = new byte[KeySize];
-        using var aes = new AesGcm(_machineKey, TagSize);
-        try
+        if (!needsPassword)
         {
-            aes.Decrypt(blob.AsSpan(0, NonceSize), blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize), kekSlot);
-        }
-        catch (CryptographicException)
-        {
-            throw new TswapException(
+            if (objectNeedsPassword)
+                throw Backend == HardwareBackend.SecureEnclave
+                    // Brief T17 task 13 (the controller's ruling on ruling 3): a stripped Secure Enclave slot
+                    // goes through the old tswap_se_unwrap, which says today's generic text.
+                    ? Interop.SecureEnclaveReturnCodes.UnwrapFailure(-2)
+                    : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader, VaultPasswordRefusal.StrippedHeader);
+            return Decrypt(blob, _machineKey) ?? throw new TswapException(
                 $"Simulated '{Backend.DisplayName}' operation failed while unwrapping the key: the blob was made " +
                 "on a different machine or is corrupted.");
         }
 
-        return kekSlot;
+        if (password is null)
+            throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+        using var stretched = password();
+        var wrapKey = WrapKey(stretched);
+        try
+        {
+            // The Secure Enclave mirrors the shim's -7 (brief T17 task 13); the TPM keeps ruling 18's KDF text.
+            return Decrypt(blob, wrapKey) ?? throw (Backend == HardwareBackend.SecureEnclave
+                ? Interop.SecureEnclaveReturnCodes.UnwrapV2Failure(Interop.SecureEnclaveReturnCodes.WrongCredential)
+                : new VaultPasswordRefusedException(VaultPasswordMessages.WrongPasswordKdf, VaultPasswordRefusal.WrongPassword));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(wrapKey);
+        }
+    }
+
+    private static byte[]? Decrypt(byte[] blob, byte[] key)
+    {
+        var kekSlot = new byte[KeySize];
+        using var aes = new AesGcm(key, TagSize);
+        try
+        {
+            aes.Decrypt(blob.AsSpan(0, NonceSize), blob.AsSpan(NonceSize + TagSize, KeySize), blob.AsSpan(NonceSize, TagSize), kekSlot);
+            return kekSlot;
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
     }
 }

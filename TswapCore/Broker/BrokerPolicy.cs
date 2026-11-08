@@ -26,7 +26,7 @@ public sealed class BrokerPolicy
     private BrokerPolicy(BrokerConfig source, string socketDir,
         IReadOnlyDictionary<string, BrokerSocketPolicy> sockets, IReadOnlyDictionary<string, BrokerRoutePolicy> routes,
         IReadOnlyDictionary<string, BrokerTemplatePolicy> templates, IReadOnlyDictionary<string, BrokerSshKeyPolicy> sshKeys,
-        string bwrapPath, BrokerHostContext? host)
+        string bwrapPath, BrokerHostContext? host, IReadOnlyList<string> warnings)
     {
         Source = source;
         SocketDir = socketDir;
@@ -36,6 +36,7 @@ public sealed class BrokerPolicy
         SshKeys = sshKeys;
         BwrapPath = bwrapPath;
         Host = host;
+        Warnings = warnings;
     }
 
     /// <summary>The raw config this was built from (for edits by the CLI).</summary>
@@ -60,6 +61,12 @@ public sealed class BrokerPolicy
     public string BwrapPath { get; }
 
     public const string DefaultBwrapPath = "/usr/bin/bwrap";
+
+    /// <summary>
+    /// Brief I224 D1: what validation accepted but warns about (a socket that admits uid 0), one line
+    /// each; <c>serve</c> logs them at start and after a successful reload.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; }
 
     /// <summary>The host context the templates' binds were checked against (null when there are no templates); re-used before every run.</summary>
     public BrokerHostContext? Host { get; }
@@ -118,9 +125,11 @@ public sealed class BrokerPolicy
     /// Checks everything and compiles the path regexes; throws <see cref="BrokerConfigException"/>
     /// naming the first problem. Templates' binds are checked against <paramref name="host"/> (the
     /// vault user and the protected paths); null means this process's user, with only its home and
-    /// the fixed paths protected.
+    /// the fixed paths protected. <paramref name="requireBinding"/> false suspends one rule, that every
+    /// socket names its container or says <c>uid_only</c> (brief I224 D1): the editing commands use it, so
+    /// they can write a v0.1 file while its sockets are bound one by one; every other load keeps it.
     /// </summary>
-    public static BrokerPolicy Validate(BrokerConfig config, BrokerHostContext? host = null)
+    public static BrokerPolicy Validate(BrokerConfig config, BrokerHostContext? host = null, bool requireBinding = true)
     {
         if (config.Version != BrokerConfig.CurrentVersion)
             throw new BrokerConfigException($"broker.json version {config.Version} is not supported (this tswap reads version {BrokerConfig.CurrentVersion}).");
@@ -138,8 +147,10 @@ public sealed class BrokerPolicy
         }
 
         string? bwrap = config.BwrapPath;
-        if (bwrap is not null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl) || bwrap.Split('/').Any(s => s is "." or "..")))
+        if (bwrap is not null && (!bwrap.StartsWith('/') || bwrap.Any(char.IsControl)))
             throw new BrokerConfigException($"bwrap_path must be an absolute path (got '{Printable(bwrap)}'); bwrap is never looked up on PATH.");
+        if (bwrap is not null && BrokerTemplateValidator.HasDotSegment(bwrap))
+            throw new BrokerConfigException($"bwrap_path {Printable(bwrap)} has a \".\" or \"..\" segment; give the literal absolute path");
 
         // Brief T9: templates (Linux only; checked against the host on every load).
         var templates = new Dictionary<string, BrokerTemplatePolicy>(StringComparer.Ordinal);
@@ -153,7 +164,7 @@ public sealed class BrokerPolicy
             {
                 if (template is null)
                     throw new BrokerConfigException("broker.json has a null template.");
-                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds);
+                var compiled = BrokerTemplateValidator.Validate(template, host, socketDirForBinds, bwrap ?? DefaultBwrapPath);
                 if (!templates.TryAdd(compiled.Name, compiled))
                     throw new BrokerConfigException($"Template '{compiled.Name}' is defined twice.");
             }
@@ -171,11 +182,12 @@ public sealed class BrokerPolicy
         }
 
         var sockets = new Dictionary<string, BrokerSocketPolicy>(StringComparer.Ordinal);
+        List<string> warnings = [];
         foreach (var socket in config.Sockets)
         {
             if (socket is null)
                 throw new BrokerConfigException("broker.json has a null socket.");
-            var compiled = ValidateSocket(socket, routes, templates, sshKeys);
+            var compiled = ValidateSocket(socket, routes, templates, sshKeys, requireBinding, warnings);
             if (!sockets.TryAdd(compiled.Name, compiled))
                 throw new BrokerConfigException($"Socket '{compiled.Name}' is defined twice.");
         }
@@ -193,8 +205,23 @@ public sealed class BrokerPolicy
         }
 
         return new BrokerPolicy(config, socketDir, sockets, routes, templates, sshKeys, bwrap ?? DefaultBwrapPath,
-            templates.Count > 0 ? host : null);
+            templates.Count > 0 ? host : null, warnings);
     }
+
+    /// <summary>
+    /// Tests only (brief I224 D7 H2): <paramref name="policy"/> with no host context although it may
+    /// have templates, a state <see cref="Validate"/> never produces, to show template calls fail closed.
+    /// </summary>
+    internal static BrokerPolicy WithoutHostForTests(BrokerPolicy policy) =>
+        new(policy.Source, policy.SocketDir, policy.Sockets, policy.Routes, policy.Templates, policy.SshKeys,
+            policy.BwrapPath, null, policy.Warnings);
+
+    /// <summary>
+    /// Brief I224 D1: the sockets that name neither a container nor <c>uid_only</c>, in file order;
+    /// <c>serve</c> refuses the file until this is empty.
+    /// </summary>
+    public static IReadOnlyList<string> UnboundSocketNames(BrokerConfig config) =>
+        [.. (config.Sockets ?? []).Where(s => s is { Container: null, UidOnly: null }).Select(s => s.Name)];
 
     /// <summary>Checks a route or socket name; <paramref name="kind"/> is for the message.</summary>
     public static void ValidateName(string? name, string kind)
@@ -382,7 +409,8 @@ public sealed class BrokerPolicy
     }
 
     private static BrokerSocketPolicy ValidateSocket(BrokerSocketConfig socket, Dictionary<string, BrokerRoutePolicy> routes,
-        Dictionary<string, BrokerTemplatePolicy> templates, Dictionary<string, BrokerSshKeyPolicy> sshKeys)
+        Dictionary<string, BrokerTemplatePolicy> templates, Dictionary<string, BrokerSshKeyPolicy> sshKeys,
+        bool requireBinding, List<string> warnings)
     {
         ValidateName(socket.Name, "socket");
         var name = socket.Name;
@@ -413,7 +441,32 @@ public sealed class BrokerPolicy
                 throw new BrokerConfigException($"Socket '{name}' allows ssh key '{Printable(key ?? "")}', which is not defined.");
             allowedKeys.Add(key);
         }
-        return new BrokerSocketPolicy(name, ranges, allowed, allowedTemplates, allowedKeys);
+        var container = ValidateBinding(socket, requireBinding);
+        // Brief I224 D1 (owner rule: warn, don't refuse).
+        if (ranges.Any(r => r.From == 0))
+            warnings.Add($"socket {name} admits uid 0: every root process and rootful container on this host has it");
+        return new BrokerSocketPolicy(name, ranges, allowed, allowedTemplates, allowedKeys, container);
+    }
+
+    /// <summary>
+    /// Brief I224 D1: a socket names its container (<c>container</c>) or says <c>uid_only: true</c>,
+    /// exactly one. Returns the binding, or null for a uid-only socket (or, with
+    /// <paramref name="requireBinding"/> false, an unbound one).
+    /// </summary>
+    private static BrokerContainerIdentity? ValidateBinding(BrokerSocketConfig socket, bool requireBinding)
+    {
+        var name = socket.Name;
+        if (socket.UidOnly == false)
+            throw new BrokerConfigException($"socket {name}: \"uid_only\": false is not allowed (say true or leave it out)");
+        if (socket.Container is not null && socket.UidOnly == true)
+            throw new BrokerConfigException($"socket {name} has both \"container\" and \"uid_only\": remove one");
+        if (socket.Container is { } container)
+            return BrokerContainerIdentity.Validate(name, container);
+        if (socket.UidOnly is null && requireBinding)
+            throw new BrokerConfigException(
+                $"socket {name} names no container: run \"sudo tswap broker socket bind {name} --pid <pid>\" or " +
+                $"\"sudo tswap broker socket bind {name} --uid-only\"");
+        return null;
     }
 
     /// <summary>
@@ -477,9 +530,12 @@ public sealed class BrokerPolicy
 
 /// <summary>A validated socket: its peer-uid ranges and its route, template and ssh-key allow-lists (each empty unless listed).</summary>
 public sealed class BrokerSocketPolicy(string name, IReadOnlyList<(uint From, uint To)> uids, IReadOnlySet<string> routes,
-    IReadOnlySet<string>? templates = null, IReadOnlySet<string>? sshKeys = null)
+    IReadOnlySet<string>? templates = null, IReadOnlySet<string>? sshKeys = null, BrokerContainerIdentity? container = null)
 {
     public string Name { get; } = name;
+
+    /// <summary>Brief I224 D1: the container this socket is bound to; null for a <c>uid_only</c> socket.</summary>
+    public BrokerContainerIdentity? Container { get; } = container;
     public IReadOnlyList<(uint From, uint To)> Uids { get; } = uids;
     public IReadOnlySet<string> Routes { get; } = routes;
 

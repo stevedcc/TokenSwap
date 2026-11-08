@@ -16,7 +16,7 @@ namespace TswapTests;
 /// </code>
 ///
 /// <b>Dev/test setup:</b> these tests were developed and are meant to run against a software
-/// TPM simulator (swtpm), not real hardware — see <c>HARDWARE_BACKENDS.md</c>'s Linux TPM
+/// TPM simulator (swtpm), not real hardware — see <c>docs/design/hardware-backends.md</c>'s Linux TPM
 /// section ("Dev/test setup: swtpm in a container") for the container setup
 /// (<c>danieltrick/swtpm-docker</c>) and the <c>TPM2TOOLS_TCTI</c> environment variable that
 /// points <c>tpm2-tools</c> at it. On real TPM hardware no environment variable is needed —
@@ -24,6 +24,7 @@ namespace TswapTests;
 /// </summary>
 [SupportedOSPlatform("linux")]
 [Trait("Category", "Tpm")]
+[Collection(TpmDeviceCollection.Name)]
 public class LinuxTpmHardwareServiceTests
 {
     [Fact]
@@ -35,7 +36,7 @@ public class LinuxTpmHardwareServiceTests
         var key = RandomNumberGenerator.GetBytes(32);
 
         var sealedKey = svc.Seal(key);
-        var recovered = svc.Unseal(sealedKey);
+        var recovered = svc.Unseal(sealedKey, eccPrimary: true);
 
         Assert.Equal(key, recovered);
         Assert.NotEqual(key, sealedKey);
@@ -47,12 +48,12 @@ public class LinuxTpmHardwareServiceTests
         // Enrollment seam (issue #151): Enroll generates KEK_slot itself and returns the blob;
         // the unlock seam must recover exactly that KEK_slot from the blob on this machine.
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (kekSlot, hwBlob) = enrollment.Enroll();
+        var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(hwBlob));
-        var recovered = new LinuxTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"));
+        var recovered = new LinuxTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"), password: null);
 
         Assert.Equal(32, kekSlot.Length);
         Assert.Equal(kekSlot, recovered);
@@ -65,7 +66,7 @@ public class LinuxTpmHardwareServiceTests
         // Issue #154: what 'tswap init' writes now. The blob is the machine slot's hwBlob in a
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new LinuxTpmHardwareService();
-        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll();
+        var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
         var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 
@@ -80,13 +81,14 @@ public class LinuxTpmHardwareServiceTests
     {
         var svc = new LinuxTpmHardwareService();
         var vaultKey = RandomNumberGenerator.GetBytes(32);
-        var sealedKey = svc.Seal(vaultKey);
+        // Issue #261: the public Seal seals under the ECC primary, so the blob carries the TSTP ECC bit.
+        var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(vaultKey), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
 
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(sealedKey));
 
-        var recovered = svc.Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"));
+        var recovered = svc.Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"), password: null);
 
         Assert.Equal(vaultKey, recovered);
     }
@@ -97,7 +99,7 @@ public class LinuxTpmHardwareServiceTests
         var svc = new LinuxTpmHardwareService();
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("tpm", ex.Message);
     }
 
@@ -109,7 +111,7 @@ public class LinuxTpmHardwareServiceTests
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: "not valid base64!!");
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("base64", ex.Message);
     }
 
@@ -120,12 +122,13 @@ public class LinuxTpmHardwareServiceTests
         // SealUnseal_RoundTripsKey), so a 16-byte payload round-trips fine at that layer.
         // Unlock specifically promises a 32-byte vault key, so it must reject this.
         var svc = new LinuxTpmHardwareService();
-        var sealedKey = svc.Seal(RandomNumberGenerator.GetBytes(16));
+        // Issue #261: an ECC package, so the blob carries the TSTP ECC bit.
+        var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(RandomNumberGenerator.GetBytes(16)), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
         var config = new Config([], "", DateTime.UtcNow,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(sealedKey));
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0));
+        var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("32-byte", ex.Message);
     }
 
@@ -134,7 +137,7 @@ public class LinuxTpmHardwareServiceTests
     {
         var svc = new LinuxTpmHardwareService();
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(new byte[3]));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(new byte[3], eccPrimary: true));
         Assert.Contains("too short", ex.Message);
     }
 
@@ -149,7 +152,7 @@ public class LinuxTpmHardwareServiceTests
         var corrupted = new byte[8];
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(corrupted, int.MaxValue - 1);
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted, eccPrimary: true));
         Assert.Contains("length prefix", ex.Message);
     }
 
@@ -169,7 +172,7 @@ public class LinuxTpmHardwareServiceTests
         for (var i = 4 + pubLen; i < corrupted.Length; i++)
             corrupted[i] ^= 0xFF;
 
-        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted));
+        var ex = Assert.Throws<TswapException>(() => svc.Unseal(corrupted, eccPrimary: true));
         Assert.Contains("Could not unlock", ex.Message);
     }
 }

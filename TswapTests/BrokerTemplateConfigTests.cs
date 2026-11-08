@@ -42,14 +42,14 @@ public class BrokerTemplateConfigTests : IDisposable
 
     /// <summary>A host context for this uid with no protected folders of its own.</summary>
     private static BrokerHostContext Host(uint? vaultUid = null, params string[] protectedPaths) =>
-        new(vaultUid ?? BrokerHarness.MyUid, protectedPaths, []);
+        new(vaultUid ?? BrokerHarness.MyUid, protectedPaths, [], []);
 
     /// <summary>A whole broker.json with one template (as JSON) and a socket that may call it.</summary>
     private static string WithTemplate(string templateJson, string socketTemplates = "\"deploy\"") => $$"""
         {
           "version": 1,
           "socket_dir": "/run/tswap-broker",
-          "sockets": [ { "name": "lane1", "uids": ["100999"], "routes": [], "templates": [{{socketTemplates}}] } ],
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": [], "templates": [{{socketTemplates}}] } ],
           "routes": [],
           "templates": [ {{templateJson}} ]
         }
@@ -141,7 +141,7 @@ public class BrokerTemplateConfigTests : IDisposable
             {
               "version": 1,
               "socket_dir": "/run/tswap-broker",
-              "sockets": [ { "name": "lane1", "uids": ["100999"], "routes": [], "ssh_keys": ["github-deploy"] } ],
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": [], "ssh_keys": ["github-deploy"] } ],
               "routes": [],
               "ssh_keys": [
                 { "name": "github-deploy", "secret": "gh-ssh-key",
@@ -514,7 +514,7 @@ public class BrokerTemplateConfigTests : IDisposable
     {
         if (!OperatingSystem.IsLinux())
             return; // templates are Linux only (bwrap)
-        var host = new BrokerHostContext(BrokerHarness.MyUid, [], [Work]); // Work plays the home folder
+        var host = new BrokerHostContext(BrokerHarness.MyUid, [], [Work], []); // Work plays the home folder
         var inside = Path.Combine(Work, "deploy");
         Directory.CreateDirectory(inside);
         File.SetUnixFileMode(inside, (UnixFileMode)0b111_101_101);
@@ -694,7 +694,7 @@ public class BrokerTemplateConfigTests : IDisposable
         File.WriteAllText(file, Template());
 
         m.Ok("", "broker", "template", "add", file);
-        m.Ok("", "broker", "socket", "add", "lane1", "--uids", "100999", "--templates", "deploy", "--socket-dir", "/run/tswap-broker");
+        m.Ok("", "broker", "socket", "add", "lane1", "--uids", "100999", "--templates", "deploy", "--socket-dir", "/run/tswap-broker", "--uid-only");
 
         var policy = BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, m.Dir);
         Assert.Equal("/usr/bin/git", policy.Templates["deploy"].Program);

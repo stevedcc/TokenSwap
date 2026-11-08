@@ -24,6 +24,9 @@ public sealed class FakeConsole(string stdin = "") : IConsole
     // for a fingerprint confirmation only on a terminal).
     public bool IsInputRedirected { get; init; } = true;
 
+    /// <summary>Guided init: false (stdout a terminal) unless a test plays a piped stdout.</summary>
+    public bool IsOutputRedirected { get; init; }
+
     /// <summary>Brief T7 item 4: how many times a command read a line or password from stdin.</summary>
     public int Reads { get; private set; }
 

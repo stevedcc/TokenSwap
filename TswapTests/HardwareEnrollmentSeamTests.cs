@@ -37,6 +37,18 @@ public class HardwareEnrollmentSeamTests
     }
 
     [Fact]
+    public void YubiKeyService_RefusesAPasswordItCantUse()
+    {
+        // Review T17 p1 MiMo M9: a legacy pair slot or classic vault never has the vault password; a route
+        // that hands this service one is a bug, and must fail loudly instead of unlocking without it.
+        var service = new YubiKeyHardwareService(SimulatedYubiKeyService.WithKeys(), overrideKey: new byte[32]);
+
+        Assert.Throws<ArgumentException>(() => service.Unlock(new Config([], "", DateTime.UtcNow), serials => serials[0],
+            () => throw new InvalidOperationException("never called")));
+        Assert.Equal(new byte[32], service.Unlock(new Config([], "", DateTime.UtcNow), serials => serials[0], password: null));
+    }
+
+    [Fact]
     public void HardwareEnrollment_CarriesOnlyTheKekAndTheBackendBlob_NotAConfig()
     {
         // The backend returns its own field (the blob) and never builds a whole Config.

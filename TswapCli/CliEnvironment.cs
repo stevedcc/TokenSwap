@@ -41,6 +41,13 @@ public sealed class CliEnvironment
     /// </summary>
     public string? YubiKeySerialVariable { get; init; }
 
+    /// <summary>
+    /// <c>TSWAP_AGENT_SOCK</c> as given (brief T17 ruling 6): the agent's socket path, for clients, <c>agent start</c>
+    /// and <c>agent serve</c> alike (Unix only). Null when unset; <c>sudo</c> drops it, and the path then comes from
+    /// the vault owner's uid.
+    /// </summary>
+    public string? AgentSocketVariable { get; init; }
+
     /// <summary>Command-line args with the leading global -v/--verbose flags removed.</summary>
     public required string[] CommandArgs { get; init; }
 
@@ -68,6 +75,7 @@ public sealed class CliEnvironment
             Verbose = verbose,
             CommandArgs = commandArgs,
             YubiKeySerialVariable = getEnv("TSWAP_YUBIKEY_SERIAL"),
+            AgentSocketVariable = getEnv(TswapCore.Agent.AgentSocketPath.Variable),
         };
     }
 

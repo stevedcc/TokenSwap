@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 
 namespace TswapCore.Broker.SshAgent;
 
-/// <summary>A message (or key, or payload) that doesn't parse as <c>docs/ssh-agent-wire.md</c> says.</summary>
+/// <summary>A message (or key, or payload) that doesn't parse as <c>docs/design/ssh-agent-wire.md</c> says.</summary>
 public sealed class SshWireException(string message) : Exception(message);
 
 /// <summary>

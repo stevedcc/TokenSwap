@@ -55,9 +55,16 @@ public sealed class TimeProviderTests : IDisposable
         return _clock.GetUtcNow().UtcDateTime;
     }
 
-    /// <summary>A classic vault's secrets, read with the machine's simulated YubiKey.</summary>
-    private SecretsDb ClassicSecrets() =>
-        new Storage(_m.Dir).LoadSecrets(new VaultUnlocker(_keys).Unlock(_m.Config, s => s[0]), TextWriter.Null);
+    /// <summary>
+    /// The vault's secrets, read with the machine's simulated YubiKey. Brief T16-S1: init makes a
+    /// record vault now, so they are read through the store (which composes the keyring), not the
+    /// classic file.
+    /// </summary>
+    private SecretsDb Secrets()
+    {
+        var store = VaultStores.Open(_m.Dir);
+        return store.LoadSecrets(new VaultUnlocker(_keys).Unlock(store.LoadConfig(), s => s[0]), TextWriter.Null);
+    }
 
     private static void AssertUtc(DateTime expected, DateTime? actual)
     {
@@ -70,7 +77,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Init_WritesCreated_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
 
         AssertUtc(T0, _m.Config.Created);
     }
@@ -78,12 +85,12 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Create_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("", "create", "db-pw");
 
-        var secret = ClassicSecrets().Secrets["db-pw"];
+        var secret = Secrets().Secrets["db-pw"];
         AssertUtc(t1, secret.Created);
         AssertUtc(t1, secret.Modified);
     }
@@ -91,12 +98,12 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Add_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("typed-value\ntyped-value\n", "add", "api-key");
 
-        var secret = ClassicSecrets().Secrets["api-key"];
+        var secret = Secrets().Secrets["api-key"];
         Assert.Equal("typed-value", secret.Value);
         AssertUtc(t1, secret.Created);
         AssertUtc(t1, secret.Modified);
@@ -105,12 +112,12 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Ingest_WritesCreatedAndModified_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("piped-value", "ingest", "token");
 
-        var secret = ClassicSecrets().Secrets["token"];
+        var secret = Secrets().Secrets["token"];
         AssertUtc(t1, secret.Created);
         AssertUtc(t1, secret.Modified);
     }
@@ -118,13 +125,13 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Burn_WritesBurnedAt_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("", "burn", "db-pw", "seen in a log");
 
-        var secret = ClassicSecrets().Secrets["db-pw"];
+        var secret = Secrets().Secrets["db-pw"];
         AssertUtc(t1, secret.BurnedAt);
         AssertUtc(T0, secret.Created);
     }
@@ -132,13 +139,13 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Rotate_WritesModified_FromTheTimeProvider_AndKeepsCreated()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
 
         _m.Ok("", "rotate", "db-pw");
 
-        var secret = ClassicSecrets().Secrets["db-pw"];
+        var secret = Secrets().Secrets["db-pw"];
         AssertUtc(t1, secret.Modified);
         AssertUtc(T0, secret.Created);
     }
@@ -146,7 +153,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void Export_WritesItsCreatedTimestamp_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         _m.Ok("", "create", "db-pw");
         var t1 = Later(TimeSpan.FromHours(1));
         var exportPath = _m.PathOf("export.json");
@@ -160,7 +167,7 @@ public sealed class TimeProviderTests : IDisposable
     [Fact]
     public void SlotRequestApproveAccept_WriteTheirTimes_FromTheTimeProvider()
     {
-        _m.Ok("", "init", "--keyring");
+        _m.Ok("", "init", "--yubikey");
         using var requester = new FleetMachine("time-requester", SimulatedYubiKeyService.WithKeys(SerialB)) { Time = _clock };
         var requestFile = requester.PathOf("request.json");
         var approveFile = _m.PathOf("approve.json");
@@ -277,35 +284,41 @@ public sealed class TimeProviderTests : IDisposable
         var dir = NewDir();
         var testKey = new byte[32];
         testKey[0] = 0x42;
-        var env = new Dictionary<string, string?>
+        // Brief T16-S1: init makes a record vault, so the migration half runs on a classic keyring
+        // vault of its own (as 0.1's init --keyring made it), in a second config folder.
+        var classicDir = NewDir();
+        (int Exit, string Out, string Err) Run(string configDir, params string[] args)
         {
-            ["TSWAP_CONFIG_DIR"] = dir,
-            ["TSWAP_TEST_KEY"] = Convert.ToHexString(testKey),
-            ["TSWAP_TEST_SUDO_BYPASS"] = "1",
-        };
-        (int Exit, string Out, string Err) Run(params string[] args)
-        {
+            var env = new Dictionary<string, string?>
+            {
+                ["TSWAP_CONFIG_DIR"] = configDir,
+                ["TSWAP_TEST_KEY"] = Convert.ToHexString(testKey),
+                ["TSWAP_TEST_SUDO_BYPASS"] = "1",
+            };
             var console = new FakeConsole("");
             var exit = CliHost.Run(args, console, name => env.GetValueOrDefault(name), isPrivileged: false,
                 processPath: "/usr/local/bin/tswap", timeForTests: _clock);
             return (exit, console.OutText, console.ErrorText);
         }
 
-        var init = Run("init", "--keyring");
+        var init = Run(dir, "init", "--yubikey");
         Assert.True(init.Exit == 0, init.Err);
         var created = Later(TimeSpan.FromHours(1));
-        var create = Run("create", "db-pw");
+        var create = Run(dir, "create", "db-pw");
         Assert.True(create.Exit == 0, create.Err);
+        var classicInit = Run(classicDir, "init", "--yubikey");
+        Assert.True(classicInit.Exit == 0, classicInit.Err);
+        ClassicVaultTestSupport.FoldIntoClassicKeyringVault(classicDir, classicInit.Out);
         var migrated = Later(TimeSpan.FromHours(1));
-        var migrate = Run("migrate", "--to-records");
+        var migrate = Run(classicDir, "migrate", "--to-records");
         Assert.True(migrate.Exit == 0, migrate.Err);
 
         var stamp = "yyyyMMdd'T'HHmmssfff'Z'";
         var config = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(dir, "config.json")), TswapJsonContext.Default.Config)!;
         AssertUtc(T0, config.Created);
         // The store's backup of config.json and the command's move of secrets.json.enc, both at the migration's time.
-        Assert.True(File.Exists(Path.Combine(dir, "config.json.bak-" + migrated.ToString(stamp))), migrate.Out);
-        Assert.True(File.Exists(Path.Combine(dir, "secrets.json.enc.bak-" + migrated.ToString(stamp))), migrate.Out);
+        Assert.True(File.Exists(Path.Combine(classicDir, "config.json.bak-" + migrated.ToString(stamp))), migrate.Out);
+        Assert.True(File.Exists(Path.Combine(classicDir, "secrets.json.enc.bak-" + migrated.ToString(stamp))), migrate.Out);
         var store = new RecordVaultStore(dir);
         var vaultKey = new VaultUnlocker(new TestKeyYubiKeyService(testKey), overrideKey: testKey).Unlock(store.LoadConfig(), s => s[0]);
         var secret = store.LoadSecrets(vaultKey).Secrets["db-pw"];

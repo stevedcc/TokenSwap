@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.VaultPassword;
 
 namespace TswapCli;
 
@@ -91,9 +92,9 @@ internal sealed class OwnerScopedHardwareService : IHardwareKeyService, IHardwar
 
     public bool IsSimulated => _unlock.IsSimulated;
 
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial) =>
-        _scope.Run(() => _unlock.Unlock(config, chooseSerial));
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password) =>
+        _scope.Run(() => _unlock.Unlock(config, chooseSerial, password));
 
     /// <summary>Creates the key (the inner <c>Enroll</c> calls <c>Wrap</c> itself: one scope).</summary>
-    public HardwareEnrollment Enroll() => _scope.Run(_enroll.Enroll);
+    public HardwareEnrollment Enroll(StretchedPassword? password) => _scope.Run(() => _enroll.Enroll(password));
 }

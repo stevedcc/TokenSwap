@@ -8,7 +8,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T4 item 3 (decision 4): <c>init --keyring</c> enrolls <b>one</b> plugged-in YubiKey as a
+/// Brief T4 item 3 (decision 4): <c>init --yubikey</c> (until v0.2.0 <c>init --keyring</c>) enrolls <b>one</b> plugged-in YubiKey as a
 /// one-key slot (plus the recovery slot unless <c>--no-recovery</c>), with no pair fields in
 /// config. Runs outside test mode against <see cref="SimulatedYubiKeyService"/>, so the slot's
 /// <c>KEK_slot</c> really comes from the key's HMAC response.
@@ -33,13 +33,13 @@ public class InitKeyringOneKeyTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
-        var ctx = new CommandContext(console, env, new Storage(_dir), _keys, new VaultUnlocker(_keys), TestKey: null, SudoBypass: true);
+        var ctx = new CommandContext(console, env, VaultStores.Open(_dir), _keys, new VaultUnlocker(_keys), TestKey: null, SudoBypass: true);
         var exit = CliRunner.Run(ctx, args);
         return (exit, console.OutText, console.ErrorText);
     }
 
-    private Config LoadConfig() =>
-        JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(_dir, "config.json")), TswapJsonContext.Default.Config)!;
+    /// <summary>The config as the store composes it (brief T16-S1: a record vault's keyring is in its folder).</summary>
+    private Config LoadConfig() => VaultStores.Open(_dir).LoadConfig();
 
     private static Keyring DecodeKeyring(Config config) => KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
@@ -50,7 +50,7 @@ public class InitKeyringOneKeyTests : IDisposable
     {
         _keys.PluggedIn = [SerialA];
 
-        var (exit, stdout, stderr) = Run("", "init", "--keyring");
+        var (exit, stdout, stderr) = Run("", "init", "--yubikey");
 
         Assert.True(exit == 0, stderr);
         var config = LoadConfig();
@@ -81,7 +81,7 @@ public class InitKeyringOneKeyTests : IDisposable
     public void OneKey_CreateApplyRoundTrip_AndAnotherKeyDoesNotOpenIt()
     {
         _keys.PluggedIn = [SerialA];
-        Assert.Equal(0, Run("", "init", "--keyring").Exit);
+        Assert.Equal(0, Run("", "init", "--yubikey").Exit);
 
         var (createExit, _, createErr) = Run("", "create", "db-password", "24");
         Assert.True(createExit == 0, createErr);
@@ -90,7 +90,7 @@ public class InitKeyringOneKeyTests : IDisposable
         var (applyExit, applyOut, applyErr) = Run("", "apply", valuesFile);
         Assert.True(applyExit == 0, applyErr);
 
-        var stored = new Storage(_dir).LoadSecrets(Unlock(), TextWriter.Null).Secrets["db-password"].Value;
+        var stored = VaultStores.Open(_dir).LoadSecrets(Unlock(), TextWriter.Null).Secrets["db-password"].Value;
         Assert.Equal(24, stored.Length);
         Assert.Contains($"password: \"{stored}\"  # tswap: db-password", applyOut);
 
@@ -106,7 +106,7 @@ public class InitKeyringOneKeyTests : IDisposable
     {
         _keys.PluggedIn = [SerialA, SerialB];
 
-        var (exit, stdout, stderr) = Run("2\n", "init", "--keyring", "--no-recovery");
+        var (exit, stdout, stderr) = Run("2\n", "init", "--yubikey", "--no-recovery");
 
         Assert.True(exit == 0, stderr);
         // Owner decision 2026-10-30 (T7 fix round 1): the enrolment prompt moved to stderr.
@@ -127,7 +127,7 @@ public class InitKeyringOneKeyTests : IDisposable
     public void TheRecoveryKeyRecoversKv()
     {
         _keys.PluggedIn = [SerialA];
-        var (_, stdout, _) = Run("", "init", "--keyring");
+        var (_, stdout, _) = Run("", "init", "--yubikey");
         var lines = stdout.Split('\n').Select(l => l.Trim()).ToList();
         var recoveryPrivateKey = Convert.FromBase64String(lines[lines.IndexOf("Recovery Private Key (base64):") + 1]);
 
@@ -144,24 +144,11 @@ public class InitKeyringOneKeyTests : IDisposable
     {
         _keys.PluggedIn = [];
 
-        var (exit, _, stderr) = Run("", "init", "--keyring");
+        var (exit, _, stderr) = Run("", "init", "--yubikey");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("No YubiKey detected", stderr);
         Assert.False(File.Exists(Path.Combine(_dir, "config.json")));
     }
 
-    [Fact]
-    public void Reinit_BacksUpTheOldConfigAndVault()
-    {
-        _keys.PluggedIn = [SerialA];
-        Assert.Equal(0, Run("", "init", "--keyring").Exit);
-        var oldConfig = File.ReadAllText(Path.Combine(_dir, "config.json"));
-
-        Assert.Equal(0, Run("yes\n", "init", "--keyring").Exit);
-
-        var backup = Assert.Single(Directory.GetFiles(_dir, "config.json.bak-*"));
-        Assert.Equal(oldConfig, File.ReadAllText(backup));
-        Assert.Single(Directory.GetFiles(_dir, "secrets.json.enc.bak-*"));
-    }
 }

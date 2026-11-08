@@ -26,24 +26,24 @@ automated/silent unlocking by malicious processes.
 - `%CMD% rotate <name> [length]` — Replace a BURNED secret with a new random value (never displayed); for a
   value from an external source use `<source> | %CMD% ingest --rotate <name>`. No sudo for a burned secret;
   rotating one that is not burned needs sudo (ask the user), because services may still use it.
-  A rotation keeps the value it replaced: use `{{name:previous}}` in `run` (or `# tswap: name:previous` in
-  `apply`) to authenticate the change at the service with the old value, e.g.
+  A rotation keeps the value it replaced: use `{{name:previous}}` in `run` (or `# tswap: name:previous` in a
+  file given to `run` as `{{@file}}`) to authenticate the change at the service with the old value, e.g.
   `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`
   (that works for a burned db-pw; if it isn't burned, the user runs the rotate with sudo, then you run the `run`).
   A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
 - `%CMD% names` — List all secret names (no values shown)
 - `%CMD% migrate` — Guide to upgrade YubiKey slots for touch requirement
-- `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution
+- `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution; `{{@path}}` hands the command a private copy of a file whose `# tswap:` markers are filled in
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
 - `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned
-- `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels
-- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers
-- `%CMD% apply <file>` — Read file with `# tswap:` markers and output with actual secret values substituted
+- `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels (it recognises them by fingerprints and decrypts no value)
+- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers (fingerprints too)
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
-## Commands you must NEVER use (require sudo, expose values):
+## Commands you must NEVER use (human use only; most require sudo and expose values):
+- `%CMD% init` — Creates a vault and prints its recovery key once (no sudo, but the user's job; never run it, not even with flags)
 - `sudo %CMD% add <name>` — Only for human interactive use
 - `sudo %CMD% get <name>` — Exposes plaintext value
 - `sudo %CMD% list` — Lists secrets with metadata
@@ -56,6 +56,7 @@ automated/silent unlocking by malicious processes.
 - `sudo %CMD% migrate --to-records [--vault-dir <dir>]` — Converts the vault to one file per secret (human use only)
 - `sudo %CMD% vault merge <folder>` — Merges another copy of the vault folder into this one (human use only)
 - `sudo %CMD% restore <name>` — Puts back the value the last rotation replaced (human use only; ask the user)
+- `sudo %CMD% apply <file>` — Prints a file with the secret values filled in (human use only; use `%CMD% run … {{@file}}` instead)
 
 ## Key rules:
 1. NEVER use sudo commands — they expose secret values
@@ -79,15 +80,27 @@ automated/silent unlocking by malicious processes.
    uses it with `%CMD% run`. Never delete and re-create a secret to rotate it
 8. When you create or ingest a secret, always inform the user of the secret name you used
 9. Check `%CMD% burned` at the start of each session and inform the user of any pending rotations
+10. If a command fails because the vault's slot on this machine needs the vault password, stop and
+   ask the user to run `%CMD% agent start` in their own terminal (or `%CMD% broker unlock` for a locked
+   broker), then retry. You never ask for, type or pass the vault password, and you never run those two
+   commands yourself
+11. If `%CMD% redact` or `%CMD% tocomment` refuses because records have no fingerprints yet, or a command
+   prints a warning about the old record format 2, stop and ask the user to run `sudo %CMD% vault reindex`
+   once in their own terminal, then retry. You never run it yourself (it needs sudo), and you
+   never work around the refusal (by reading or printing the file another way)
 
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty
   values and a tswap comment: `password: """"  # tswap: k8s-namespace-secret-name`
 - Use `%CMD% tocomment <file>` to automatically replace inline secret values with `# tswap:` markers
 - Use `%CMD% check <path>` to verify that all `# tswap:` markers reference secrets that exist in the vault
-- Use `%CMD% apply <file>` to substitute secret values into a file for deployment (outputs to stdout)
-- For Helm deployments, use process substitution: `helm upgrade app ./chart -f <(%CMD% apply values.yaml)`
-  This avoids writing secrets to temporary files
+- To use a file with `# tswap:` markers in a command, put `{{@path}}` where the command takes the file:
+  `%CMD% run … {{@file}}`. tswap fills the file into a private temporary folder, passes the copy's path,
+  hides every secret in the output and deletes the copy when the command ends
+- For Helm deployments: `%CMD% run helm upgrade --install app ./chart -f {{@values.yaml}}`
+- With a `{{@file}}` token `run` refuses a command containing a printer, encoder, copier, shell or interpreter
+  (`cat`, `cp`, `base64`, `sh`, `python`, …): the file is data for a tool, never a program. The refusal
+  names the word (or, after `{{name}}` values are substituted, the token); rename the file, or pass a single secret with a plain `{{name}}` token instead
 - Alternatively, scan for `# tswap:` comments and construct `%CMD% run` commands
   with `--set` flags using `{{token}}` substitution
 - This allows agents to freely read config files without seeing secret values";

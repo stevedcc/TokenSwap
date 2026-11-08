@@ -122,7 +122,9 @@ public static class SlotReceiptCodec
     /// <summary>
     /// The hardware blob rules every slot arriving from another machine must meet (T2's hardening,
     /// shared with <c>slot merge</c>): not empty, at most <see cref="KeyringFormat.MaxHwBlobSize"/>
-    /// bytes, and a blob with the YubiKey magic must decode strictly. Returns the blob.
+    /// bytes, and a blob with the YubiKey magic must decode strictly, as an OTP or a FIDO2 slot's
+    /// (<see cref="YubiKeySlotKinds.Classify"/>; a damaged or newer one is refused with its parser's text).
+    /// Returns the blob.
     /// </summary>
     public static byte[] ValidateHwBlob(byte[] hwBlob, string what)
     {
@@ -131,8 +133,13 @@ public static class SlotReceiptCodec
         if (hwBlob.Length > KeyringFormat.MaxHwBlobSize)
             throw new TswapException(
                 $"Malformed {what}: a slot's hardware blob is {hwBlob.Length} bytes, more than the {KeyringFormat.MaxHwBlobSize}-byte limit.");
-        if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
-            YubiKeySlotBlob.Decode(hwBlob);
+        switch (YubiKeySlotKinds.Classify(hwBlob))
+        {
+            case YubiKeySlotKind.NeedsNewerTswap(var error):
+                throw new TswapException(error);
+            case YubiKeySlotKind.Corrupt(var error):
+                throw new TswapException(error);
+        }
         return hwBlob;
     }
 

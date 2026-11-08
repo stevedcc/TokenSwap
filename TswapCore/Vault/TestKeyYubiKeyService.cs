@@ -20,4 +20,12 @@ public sealed class TestKeyYubiKeyService(byte[] testKey) : IYubiKeyService
     public byte[] Challenge(int serial, string challenge) => testKey[..20];
 
     public bool? DetectTouchRequirement(int serial) => null;
+
+    /// <summary>The one synthetic key, reachable over the keyboard interface.</summary>
+    public IReadOnlyList<YubiKeyInfo> FindKeys() => [new YubiKeyInfo(Serial1, true, "HidKeyboard")];
+
+    public Slot2State GetSlot2State(int serial) => Slot2State.Configured;
+
+    public void ProgramSlot2(int serial, bool requireTouch) =>
+        throw new TswapException("Test mode (TSWAP_TEST_KEY) can't program a YubiKey.");
 }

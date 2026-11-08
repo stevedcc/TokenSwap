@@ -58,7 +58,31 @@ public static class RecordKeyDerivation
     /// and the origin id is part of it, so two machines writing the same record at the same HLC still
     /// encrypt under different keys.
     /// </summary>
-    public static byte[] Derive(byte[] vaultKey, byte[] recordId, Stamp write)
+    public static byte[] Derive(byte[] vaultKey, byte[] recordId, Stamp write) => DeriveForStamp(vaultKey, recordId, write, Info);
+
+    private static readonly byte[] MetadataInfo = Encoding.UTF8.GetBytes("tswap-record-meta-v3");
+    private static readonly byte[] ValueInfo = Encoding.UTF8.GetBytes("tswap-record-value-v3");
+
+    /// <summary>
+    /// Brief T16-S1: the key of a v3 record's metadata section,
+    /// <c>HKDF(K_v, salt = recordId || write stamp, info = "tswap-record-meta-v3")</c>. One key per
+    /// (record, write), like format 2's per-record key, since the metadata is rewritten on every write.
+    /// </summary>
+    public static byte[] DeriveMetadataKey(byte[] vaultKey, byte[] recordId, Stamp write) =>
+        DeriveForStamp(vaultKey, recordId, write, MetadataInfo);
+
+    /// <summary>
+    /// Brief T16-S1: the key of one v3 value section,
+    /// <c>HKDF(K_v, salt = recordId || version stamp, info = "tswap-record-value-v3")</c>. One key per
+    /// (record, value version): the section is encrypted when the version is created (or converted
+    /// from format 2) and copied byte for byte by every later write, so the key only ever meets that
+    /// one plaintext (ruling 1).
+    /// </summary>
+    public static byte[] DeriveValueKey(byte[] vaultKey, byte[] recordId, Stamp version) =>
+        DeriveForStamp(vaultKey, recordId, version, ValueInfo);
+
+    /// <summary><c>HKDF(K_v, salt = recordId || HLC ms (8, LE) || HLC logical (4, LE) || origin (16), info)</c>.</summary>
+    private static byte[] DeriveForStamp(byte[] vaultKey, byte[] recordId, Stamp stamp, byte[] info)
     {
         if (vaultKey.Length != KeyLength)
             throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
@@ -67,11 +91,11 @@ public static class RecordKeyDerivation
 
         var salt = new byte[recordId.Length + 8 + 4 + KeyringFormat.OriginIdSize];
         recordId.CopyTo(salt, 0);
-        BinaryPrimitives.WriteInt64LittleEndian(salt.AsSpan(recordId.Length, 8), write.Hlc.PhysicalMs);
-        BinaryPrimitives.WriteUInt32LittleEndian(salt.AsSpan(recordId.Length + 8, 4), write.Hlc.Logical);
-        write.Origin.CopyTo(salt, recordId.Length + 12);
+        BinaryPrimitives.WriteInt64LittleEndian(salt.AsSpan(recordId.Length, 8), stamp.Hlc.PhysicalMs);
+        BinaryPrimitives.WriteUInt32LittleEndian(salt.AsSpan(recordId.Length + 8, 4), stamp.Hlc.Logical);
+        stamp.Origin.CopyTo(salt, recordId.Length + 12);
 
-        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, KeyLength, salt: salt, info: Info);
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, KeyLength, salt: salt, info: info);
     }
 
     private static readonly byte[] NamesInfo = Encoding.UTF8.GetBytes("tswap-record-names-v1");
@@ -86,5 +110,33 @@ public static class RecordKeyDerivation
         if (vaultKey.Length != KeyLength)
             throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
         return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, FilenameHasher.KeyLength, salt: null, info: NamesInfo);
+    }
+
+    private static readonly byte[] FingerprintInfo = Encoding.UTF8.GetBytes("tswap-fingerprint-v1");
+    private static readonly byte[] RollingHashInfo = Encoding.UTF8.GetBytes("tswap-rollhash-v1");
+
+    /// <summary>
+    /// Brief T16-S1: <c>K_fp = HKDF(K_v, info = "tswap-fingerprint-v1")</c> (no salt), the key of the
+    /// truncated HMAC that confirms a fingerprint match. Its own label keeps it independent of the
+    /// record, names and value keys: a fingerprint reveals nothing usable against them.
+    /// (<c>tswap-extract-plan-v1</c> is reserved for Stage 4's <c>K_plan</c> and not derived here.)
+    /// </summary>
+    public static byte[] DeriveFingerprintKey(byte[] vaultKey)
+    {
+        if (vaultKey.Length != KeyLength)
+            throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, KeyLength, salt: null, info: FingerprintInfo);
+    }
+
+    /// <summary>
+    /// Brief T16-S1: the 8 bytes <c>HKDF(K_v, 8, info = "tswap-rollhash-v1")</c> (no salt) that
+    /// <see cref="Fingerprints.FingerprintKeys"/> maps to the rolling-hash base. Keying the base keeps
+    /// the stored rolling hashes from being a public function of the value.
+    /// </summary>
+    public static byte[] DeriveRollingHashSeed(byte[] vaultKey)
+    {
+        if (vaultKey.Length != KeyLength)
+            throw new ArgumentException($"vaultKey must be {KeyLength} bytes", nameof(vaultKey));
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, vaultKey, sizeof(ulong), salt: null, info: RollingHashInfo);
     }
 }

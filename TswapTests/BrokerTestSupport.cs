@@ -26,11 +26,20 @@ public sealed class BrokerManualClock : TimeProvider
 
     public override long GetTimestamp() => GetUtcNow().UtcTicks;
 
+    /// <summary>
+    /// Every timer's callback, disposed or not, in creation order: a test can fire one late, as a real timer's
+    /// callback that was already queued when it was disposed still runs.
+    /// </summary>
+    public List<Action> CreatedCallbacks { get; } = [];
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = new ManualTimer(this, callback, state);
         lock (_gate)
+        {
             _timers.Add(timer);
+            CreatedCallbacks.Add(() => callback(state));
+        }
         timer.Change(dueTime, period);
         return timer;
     }
@@ -229,8 +238,8 @@ public sealed class BrokerHarness : IAsyncDisposable
           "version": 1,
           "socket_dir": {{System.Text.Json.JsonSerializer.Serialize(SocketDir)}},
           "sockets": [
-            { "name": "lane1", "uids": [{{lane1Uids ?? $"\"{MyUid}\""}}], "routes": [{{lane1Routes}}] },
-            { "name": "other", "uids": ["{{MyUid}}"], "routes": [{{otherRoutes}}] }
+            { "name": "lane1", "uid_only": true, "uids": [{{lane1Uids ?? $"\"{MyUid}\""}}], "routes": [{{lane1Routes}}] },
+            { "name": "other", "uid_only": true, "uids": ["{{MyUid}}"], "routes": [{{otherRoutes}}] }
           ],
           "routes": [ {{routesJson}} ]
         }
@@ -245,11 +254,12 @@ public sealed class BrokerHarness : IAsyncDisposable
     /// The harness connects as its own uid, which the broker refuses (brief T9); true (the default)
     /// turns that refusal off, as the binary's Debug-only test seam does.
     /// </param>
+    /// <param name="password">Brief T17 task 12: a password broker's lock state (null: password-free, as before).</param>
     public async Task<BrokerServer> StartAsync(string? configJson = null, IBrokerForwarder? forwarder = null,
-        IUnixOwnership? ownership = null, BrokerLimits? limits = null, bool allowOwnUid = true)
+        IUnixOwnership? ownership = null, BrokerLimits? limits = null, bool allowOwnUid = true, BrokerPasswordState? password = null)
     {
         Holder = new BrokerPolicyHolder(BrokerPolicy.Parse(configJson ?? Config()));
-        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits) with { AllowOwnUidForTests = allowOwnUid });
+        Server = await BrokerServer.StartAsync(Options(forwarder, ownership, limits) with { AllowOwnUidForTests = allowOwnUid, Password = password });
         return Server;
     }
 
@@ -268,11 +278,27 @@ public sealed class BrokerHarness : IAsyncDisposable
     public string SocketPath(string name) => BrokerServer.SocketPath(SocketDir, name);
 
     /// <summary>Sends raw bytes on a socket and reads until the broker closes the connection.</summary>
-    public async Task<byte[]> SendRawAsync(string socketName, string request)
+    public Task<byte[]> SendRawAsync(string socketName, string request) => SendRawAsync(socketName, request, null, null);
+
+    /// <summary>
+    /// As <see cref="SendRawAsync(string, string)"/>, and calls <paramref name="onMarker"/> once the bytes received so far
+    /// contain <paramref name="marker"/>: a server stub can wait for it to know the client really read that far (an abort
+    /// right after a write can otherwise overtake the write; #234 and the macOS/Ubuntu flakes of 2026-11-03).
+    /// </summary>
+    public async Task<byte[]> SendRawAsync(string socketName, string request, string? marker, Action? onMarker)
     {
         using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await client.ConnectAsync(new UnixDomainSocketEndPoint(SocketPath(socketName)));
-        await client.SendAsync(Encoding.Latin1.GetBytes(request));
+        try
+        {
+            await client.SendAsync(Encoding.Latin1.GetBytes(request));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.Shutdown or SocketError.ConnectionReset)
+        {
+            // EPIPE/ECONNRESET: the broker refused the connection at accept and closed it before the request was
+            // written. Nothing was answered: zero bytes, the same outcome as a close after the write.
+            return [];
+        }
         var received = new MemoryStream();
         var buffer = new byte[8192];
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // a hang fails the test, it never passes it
@@ -290,6 +316,11 @@ public sealed class BrokerHarness : IAsyncDisposable
             if (n == 0)
                 break;
             received.Write(buffer, 0, n);
+            if (marker is not null && onMarker is not null && Encoding.Latin1.GetString(received.ToArray()).Contains(marker, StringComparison.Ordinal))
+            {
+                onMarker();
+                onMarker = null;
+            }
         }
         return received.ToArray();
     }

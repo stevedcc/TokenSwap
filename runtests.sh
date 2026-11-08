@@ -9,17 +9,20 @@
 #                                  prompts for biometry/presence)
 #   ./runtests.sh --tpm            Linux TPM backend tests (Linux + tpm2-tools required; needs
 #                                  a reachable TPM 2.0 device or swtpm simulator — see
-#                                  HARDWARE_BACKENDS.md's Linux TPM section)
+#                                  docs/design/hardware-backends.md's Linux TPM section)
 #   ./runtests.sh --tpm-windows    Windows TPM backend tests (Windows + a TPM 2.0 device or
-#                                  virtual TPM required — see HARDWARE_BACKENDS.md's Windows
+#                                  virtual TPM required — see docs/design/hardware-backends.md's Windows
 #                                  TPM section)
+#   ./runtests.sh --yubikey        YubiKey tests through Yubico's SDK (a real key plugged in;
+#                                  TSWAP_TEST_YUBIKEY_SERIAL names it; TSWAP_TEST_FIDO2=1 runs
+#                                  the read-only FIDO2 ones)
 set -eo pipefail
 
 # Array so the xUnit '&' (AND) in a compound filter isn't treated as a shell operator.
 FILTER=()
 TARGET="./TokenSwap.slnx"
 case "${1:-}" in
-  --unit)        FILTER=(--filter 'Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows') ;;
+  --unit)        FILTER=(--filter 'Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey') ;;
   --e2e|--integration)
                  FILTER=(--filter 'Category=E2E')
                  TARGET="./TswapTests/TswapTests.csproj" ;;
@@ -33,9 +36,12 @@ case "${1:-}" in
   # TPM tests are Windows-only and need a reachable TPM/virtual TPM; run them on purpose.
   --tpm-windows) FILTER=(--filter 'Category=TpmWindows')
                  TARGET="./TswapTests/TswapTests.csproj" ;;
-  # Default: everything except the hardware-gated Secure Enclave/TPM tests.
-  "")            FILTER=(--filter 'Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows') ;;
-  *) echo "Usage: $0 [--unit|--e2e|--secure-enclave|--tpm|--tpm-windows]" >&2; exit 64 ;;
+  # YubiKey tests need a real key plugged in; run them on purpose.
+  --yubikey)     FILTER=(--filter 'Category=YubiKey')
+                 TARGET="./TswapTests/TswapTests.csproj" ;;
+  # Default: everything except the hardware-gated Secure Enclave/TPM/YubiKey tests.
+  "")            FILTER=(--filter 'Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey') ;;
+  *) echo "Usage: $0 [--unit|--e2e|--secure-enclave|--tpm|--tpm-windows|--yubikey]" >&2; exit 64 ;;
 esac
 
 TSWAP_TEST_KEY="${TSWAP_TEST_KEY:-$(openssl rand -hex 32)}" \

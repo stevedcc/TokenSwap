@@ -66,7 +66,8 @@ public class RecoveryKeyTests : IDisposable
 
         Assert.Equal(3, desktop.Keyring.Slots.Count);
         _keys.PluggedIn = [];
-        _router.Ok("", "slot", "merge", desktop.ConfigPath, "--yes");
+        // Brief T16-S1: the copy is a record vault (keyring in its folder), merged back by 'vault merge'.
+        _router.Ok("", "vault", "merge", desktop.VaultDir!, "--yes");
         Assert.Equal(desktop.Keyring.Slots.Select(s => s.SlotId), _router.Keyring.Slots.Select(s => s.SlotId));
 
         var tpm = _router.Tpm;
@@ -120,6 +121,23 @@ public class RecoveryKeyTests : IDisposable
         Assert.DoesNotContain(_recoveryKey, stdout);
     }
 
+    /// <summary>#247: a record vault keeps its slots in the vault folder, so the next step is 'vault merge' of that folder.</summary>
+    [Fact]
+    public void Recover_NextStep_NamesVaultMergeOfThisFolder()
+    {
+        RouterVault();
+        _router.Tpm = RandomNumberGenerator.GetBytes(32);
+
+        var stdout = _router.Ok(Stdin, "recover", "--tpm");
+
+        var nextStep = stdout[stdout.IndexOf("Slots in this machine's keyring", StringComparison.Ordinal)..];
+        Assert.Contains("sudo tswap vault merge", nextStep);
+        Assert.Contains(Path.GetFullPath(_router.VaultDir!), nextStep);
+        Assert.Contains("--yes", nextStep);
+        Assert.DoesNotContain("config.json", nextStep);
+        Assert.DoesNotContain("slot merge", nextStep);
+    }
+
     [Fact]
     public void RecoverTpm_AfterTheTpmWasCleared_TheNewTpmOpensTheVault()
     {
@@ -147,6 +165,58 @@ public class RecoveryKeyTests : IDisposable
 
         Assert.Equal(HardwareBackend.SecureEnclave, mac.Config.Backend);
         Assert.Equal("router-pw", mac.Get("router"));
+    }
+
+    /// <summary>#249: the hint reads the recovery key from somewhere else, never from the vault being recovered.</summary>
+    [Fact]
+    public void RecoverUsage_KeyComesFromAnotherVault()
+    {
+        var (exit, _, stderr) = _router.Run("", "recover");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("Usage:", stderr);
+        Assert.Contains("TSWAP_CONFIG_DIR=", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
+    [Fact]
+    public void RecoveryKeyOnTerminal_HintNamesAnotherVault()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.RunOnTerminal("", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("stdin is a terminal", stderr);
+        Assert.Contains("TSWAP_CONFIG_DIR=", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
+    [Fact]
+    public void WrongKey_HintNamesAnotherVault()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.Run("not-a-key\n", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("did not open this vault", stderr);
+        Assert.Contains("somewhere other than this vault", stderr);
+        Assert.DoesNotContain("sudo tswap get recovery-key | sudo tswap recover", stderr);
+    }
+
+    /// <summary>Review M2: the wrong-key message also fits a key that init wrote to its --recovery-key-out file.</summary>
+    [Fact]
+    public void WrongKey_MessageNamesTheKeyFile()
+    {
+        RouterVault();
+
+        var (exit, _, stderr) = _router.Run("not-a-key\n", "recover", "--tpm");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("--recovery-key-out", stderr);
     }
 
     // --- bad input ---
@@ -318,13 +388,13 @@ public class RecoveryKeyTests : IDisposable
     [Fact]
     public void Recover_OnAVersion2Keyring_IsRefusedWithTheExistingMessage()
     {
-        File.WriteAllText(_router.ConfigPath, KeyringV2FixtureTests.FixtureConfigJson);
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(_router.Dir); // brief T16-S1: a record vault with the v2 keyring
 
         var (exit, _, stderr) = _router.Run("anything\n", "recover", "--yubikey");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", stderr);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, _router.ConfigText);
+        Assert.Equal(configText, _router.ConfigText);
     }
 
     [Fact]
@@ -349,7 +419,7 @@ public class RecoveryKeyTests : IDisposable
     [Theory]
     [InlineData("recover")]
     [InlineData("recover", "--yubikey", "--tpm")]
-    [InlineData("recover", "--keyring")]
+    [InlineData("recover", "--no-recovery")]
     public void RecoverWithoutExactlyOneDevice_IsAUsageError(params string[] args)
     {
         RouterVault();

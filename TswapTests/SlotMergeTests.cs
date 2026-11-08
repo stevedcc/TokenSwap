@@ -244,7 +244,9 @@ public class SlotMergeTests : IDisposable
         }, TswapCore.TswapJsonContext.Default.Config));
         var before = _router.ConfigText;
 
-        var (exit, _, stderr) = _router.Run("", "slot", "merge", copy.ConfigPath);
+        // Brief T16-S1: the copy is a record vault, whose keyring is in its folder (its config.json
+        // carries none), so its slots come in by 'vault merge' of that folder.
+        var (exit, _, stderr) = _router.Run("", "vault", "merge", copy.VaultDir!);
 
         Assert.NotEqual(0, exit);
         Assert.Contains("did not approve", stderr);
@@ -277,7 +279,8 @@ public class SlotMergeTests : IDisposable
         other.Ok("", "init", "--tpm");
         var before = _router.ConfigText;
 
-        var (exit, _, stderr) = _router.Run("", "slot", "merge", other.ConfigPath, "--yes");
+        // Brief T16-S1: another record vault's keyring is in its folder; 'vault merge' reads it.
+        var (exit, _, stderr) = _router.Run("", "vault", "merge", other.VaultDir!, "--yes");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("another vault", stderr);
@@ -290,14 +293,14 @@ public class SlotMergeTests : IDisposable
         RouterVault();
         var receipt = Join(_desktop, _router, SerialA);
         var v2 = Another("v2");
-        File.WriteAllText(v2.ConfigPath, KeyringV2FixtureTests.FixtureConfigJson);
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(v2.Dir); // brief T16-S1: a record vault with the v2 keyring
 
         var (exit, _, stderr) = v2.Run("", "slot", "merge", receipt, "--yes");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("format version 2", stderr);
         Assert.Contains("create a new vault", stderr);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, v2.ConfigText);
+        Assert.Equal(configText, v2.ConfigText);
     }
 
     [Fact]
@@ -315,8 +318,9 @@ public class SlotMergeTests : IDisposable
         Assert.Equal(after, _router.ConfigText);
         Assert.Equal(backups, _router.Backups);
 
-        // The joiner's whole config.json is a no-op too now: every slot in it is here already.
-        Assert.Contains("Nothing to merge", _router.Ok("", "slot", "merge", _desktop.ConfigPath));
+        // The joiner's whole keyring is a no-op too now: every slot in it is here already. (Brief
+        // T16-S1: a plain accept makes a record vault, whose keyring is in its folder: 'vault merge'.)
+        Assert.Contains("Nothing to merge", _router.Ok("", "vault", "merge", _desktop.VaultDir!));
         Assert.Equal(after, _router.ConfigText);
     }
 
@@ -326,7 +330,8 @@ public class SlotMergeTests : IDisposable
         RouterVault();
         Join(_desktop, _router, SerialA);
 
-        _router.Ok("", "slot", "merge", _desktop.ConfigPath);
+        // Brief T16-S1: the joiner is a record vault (keyring in its folder), merged by 'vault merge'.
+        _router.Ok("", "vault", "merge", _desktop.VaultDir!);
 
         Assert.Equal(3, _router.Keyring.Slots.Count);
         Assert.Null(_router.Config.ApprovedSlots);
@@ -347,8 +352,9 @@ public class SlotMergeTests : IDisposable
         Assert.Equal(3, _router.Keyring.Slots.Count);
         Assert.Equal(3, copy.Keyring.Slots.Count);
 
-        // The copy's config.json: its own approval (the laptop) is not the router's, so --yes.
-        var stdout = _router.Ok("", "slot", "merge", copy.ConfigPath, "--yes");
+        // The copy's keyring (brief T16-S1: in its vault folder, merged by 'vault merge'): its own
+        // approval (the laptop) is not the router's, so --yes.
+        var stdout = _router.Ok("", "vault", "merge", copy.VaultDir!, "--yes");
         Assert.Contains("1 slot", stdout);
 
         Assert.Equal(4, _router.Keyring.Slots.Count);
@@ -360,7 +366,7 @@ public class SlotMergeTests : IDisposable
         _router.Tpm = tpm;
 
         // And back the other way: the copy gets the desktop's slot, so both are the union.
-        copy.Ok("", "slot", "merge", _router.ConfigPath, "--yes");
+        copy.Ok("", "vault", "merge", _router.VaultDir!, "--yes");
         Assert.Equal(
             _router.Keyring.Slots.Select(s => Convert.ToBase64String(s.SlotId)).Order(),
             copy.Keyring.Slots.Select(s => Convert.ToBase64String(s.SlotId)).Order());
@@ -447,6 +453,92 @@ public class SlotMergeTests : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains("is neither a slot receipt", stderr);
+    }
+
+    /// <summary>#247: a record vault's config.json holds no slots; the refusal names its vault folder and 'vault merge'.</summary>
+    [Fact]
+    public void Merge_RecordVaultConfigJson_RefusedNamingVaultMerge()
+    {
+        RouterVault();
+        var copy = Another("copy", RandomNumberGenerator.GetBytes(32));
+        copy.Ok("", "init", "--tpm");
+        var before = _router.ConfigText;
+
+        var (exit, _, stderr) = _router.Run("", "slot", "merge", copy.ConfigPath, "--yes");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("holds no slots", stderr);
+        Assert.Contains(copy.VaultDir!, stderr);
+        Assert.Contains("vault merge", stderr);
+        Assert.Equal(before, _router.ConfigText);
+        Assert.Empty(_router.Backups);
+    }
+
+    /// <summary>FIDO2 plan, task 2 row 1: a config whose keyring has a FIDO2 slot merges it; the listing names it.</summary>
+    [Fact]
+    public void Merge_KeyringWithFido2Slot_Accepted()
+    {
+        RouterVault();
+        var copy = Another("copy", _router.Tpm);
+        _router.CopyVaultTo(copy);
+        var blob = Fido2TestSlots.Blob();
+        var withFido2 = Fido2TestSlots.WithFido2Slot(copy.Keyring, blob);
+        File.WriteAllText(copy.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
+            copy.Config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(withFido2)) }, TswapCore.TswapJsonContext.Default.Config));
+
+        var stdout = _router.Ok("", "slot", "merge", copy.ConfigPath, "--yes");
+
+        var merged = _router.Keyring.Slots.Single(s => s.SlotId.AsSpan().SequenceEqual(withFido2.Slots[^1].SlotId));
+        Assert.Equal(blob.Encode(), merged.HwBlob);
+        Assert.Contains($"(YubiKey {Fido2TestSlots.Fido2Serial}, FIDO2)", stdout);
+        Assert.Equal("router-pw", GetWith(_router)); // the TPM slot still opens it
+    }
+
+    /// <summary>FIDO2 plan, task 2 row 1: a damaged FIDO2 blob is refused with the FIDO2 text, a newer one as needing a newer tswap.</summary>
+    [Theory]
+    [InlineData("truncated", "Malformed FIDO2 slot blob")]
+    [InlineData("version 4", "needs a newer tswap (blob version 4")]
+    [InlineData("flag bits", "needs a newer tswap (FIDO2 slot flags 0x02)")]
+    [InlineData("PRF version", "needs a newer tswap (FIDO2 slot PRF version 2)")]
+    public void ValidateHwBlob_Fido2_RefusesDamagedOrNewer(string defect, string expected)
+    {
+        var bytes = Fido2TestSlots.Blob().Encode();
+        switch (defect)
+        {
+            case "truncated":
+                bytes = bytes[..^1];
+                break;
+            case "version 4":
+                bytes[4] = 4;
+                break;
+            case "flag bits":
+                bytes[5] = 0x02;
+                break;
+            case "PRF version":
+                bytes[6] = 2;
+                break;
+        }
+
+        var ex = Assert.Throws<TswapCore.TswapException>(() => SlotReceiptCodec.ValidateHwBlob(bytes, "slot receipt"));
+
+        Assert.Contains(expected, ex.Message);
+    }
+
+    /// <summary>FIDO2 plan, task 2 row 17: the merge listing names a FIDO2 slot's key, by its model when the serial is unknown.</summary>
+    [Fact]
+    public void MergeListing_DescribesFido2()
+    {
+        var slots = new Fido2TestSlots();
+        var withSerial = slots.AddFido2(Fido2TestSlots.Blob());
+        var withoutSerial = slots.AddFido2(Fido2TestSlots.Blob(serial: null));
+
+        var line = TswapCli.Commands.SlotCommand.DescribeSlot(withSerial);
+        var modelLine = TswapCli.Commands.SlotCommand.DescribeSlot(withoutSerial);
+
+        Assert.Equal(
+            $"slot {Fido2TestSlots.Id8(withSerial)} (YubiKey {Fido2TestSlots.Fido2Serial}, FIDO2), fingerprint {SlotFingerprint.Compute(withSerial.PublicKey)}",
+            line);
+        Assert.Contains($"({Fido2TestSlots.ModelName}, FIDO2)", modelLine);
     }
 
     [Theory]

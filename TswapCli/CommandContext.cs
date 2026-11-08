@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -45,8 +46,69 @@ public sealed record CommandContext(
         _storage = new(openStorage);
     }
 
-    /// <summary>The vault store, opened on first use.</summary>
-    public IVaultStore Storage => _storage.Value;
+    /// <summary>
+    /// The vault store, opened on first use. Brief T16-S1 (ruling 5): a classic single-file vault is
+    /// refused here, when the store opens, unless the running command works on one
+    /// (<see cref="ClassicVaultAllowed"/>), so a command that never opens the store is unaffected.
+    /// </summary>
+    public IVaultStore Storage
+    {
+        get
+        {
+            var store = _storage.Value;
+            // Once, at the first use: a command that has since written config.json (slot request on a
+            // machine without a vault) must not refuse its own later reads.
+            if (!_classicChecked)
+            {
+                if (!ClassicVaultAllowed && IsClassicVault(store))
+                    throw ClassicVaultRefusal(Prefix);
+                _classicChecked = true;
+            }
+            return store;
+        }
+    }
+
+    private bool _classicChecked;
+
+    /// <summary>
+    /// Brief T16-S1: whether the running command may open a classic vault
+    /// (<see cref="ICliCommand.WorksOnClassicVault"/>); set by <see cref="CommandRegistry.Dispatch"/>.
+    /// </summary>
+    public bool ClassicVaultAllowed { get; set; }
+
+    /// <summary>
+    /// A classic vault: the single-file store holding an initialized vault, i.e. a
+    /// <c>secrets.json.enc</c>, or a <c>config.json</c> that names a way to open one (a keyring, the
+    /// two-YubiKey pair, or a single-slot TPM / Secure Enclave key). A folder with neither is not
+    /// initialized (commands report that as before), and a <c>config.json</c> holding only a pending
+    /// <c>slot request</c> belongs to a machine about to join a shared vault folder with
+    /// <c>slot accept --vault-dir</c>: neither is refused. An unreadable config.json is left to the
+    /// command, which reports it as before.
+    /// </summary>
+    internal static bool IsClassicVault(IVaultStore store)
+    {
+        if (store is not TswapCore.Storage classic)
+            return false;
+        if (classic.Owner.FileExists(classic.SecretsFile))
+            return true;
+        if (!classic.Owner.FileExists(classic.ConfigFile))
+            return false;
+        try
+        {
+            var config = classic.LoadConfig();
+            return config.Keyring is not null || config.YubiKeySerials is { Count: > 0 }
+                || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null;
+        }
+        catch (Exception ex) when (ex is TswapException or System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Brief T16-S1 (ruling 5): the one refusal every command but init, migrate and export gives on a classic vault.</summary>
+    internal static TswapException ClassicVaultRefusal(string prefix) => new(
+        $"This is a classic single-file vault (secrets.json.enc), which tswap 0.2 only migrates. Run 'sudo {prefix} migrate " +
+        $"--to-records' to convert it (or 'sudo {prefix} export <file>' to take your secrets out).");
 
     /// <summary>
     /// Brief T12: runs a Secure Enclave call as this vault folder's owner (see
@@ -60,6 +122,39 @@ public sealed record CommandContext(
     /// times). The composition root (<see cref="CliHost"/>) hands the store chain the same instance.
     /// </summary>
     public TimeProvider Time { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// Which chip this machine can offer (guided init); tests substitute their simulated one.
+    /// </summary>
+    public Func<MachineChip> ChipProbe { get; init; } = TswapCli.ChipProbe.Detect;
+
+    /// <summary>
+    /// How <c>run</c> starts its child: RedactingPty's runner for this console (tests substitute a fake
+    /// that streams its output through the same redactor).
+    /// </summary>
+    public Func<RedactingPty.IPtyRunner> PtyRunner { get; init; } = RedactingPty.PtyRunnerFactory.Create;
+
+    /// <summary>Issue #251: the machine seams of <c>run</c>'s <c>{{@file}}</c> copies (null: the real machine).</summary>
+    internal FilledFilesEnvironment? FilledFilesEnvironment { get; init; }
+
+    /// <summary>
+    /// The FIDO2 slots' key service (FIDO2 plan, task 4): Yubico's SDK on Linux and macOS
+    /// (<see cref="CliHost.Fido2Service"/>); null in test mode unless a test sets it.
+    /// </summary>
+    public IFido2Service? Fido2 { get; init; }
+
+    /// <summary>
+    /// Opens the controlling terminal (FIDO2 plan, task 6: <see cref="ControllingTerminal.Open"/> in the binary, a
+    /// script in tests); null, or a null result, means there is none. The FIDO2 PIN is read there
+    /// (<see cref="Fido2PinPrompt"/>), never from stdin. The caller disposes what it opened.
+    /// </summary>
+    public Func<ITerminal?>? Terminal { get; init; }
+
+    /// <summary>
+    /// The OS whose order and wording the guided <c>init</c> uses for its list (FIDO2 plan, task 8): this one, unless a
+    /// test words another's (as <see cref="YubiKeyAccessTexts.ExplainHidden"/> takes the OS).
+    /// </summary>
+    public System.Runtime.InteropServices.OSPlatform Os { get; init; } = YubiKeyAccessTexts.CurrentOs();
 
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
@@ -79,7 +174,88 @@ public sealed record CommandContext(
         // last acknowledged.
         if (warnIfNoTouch && TestKey is null)
             SecurityWarnings.NoticeIfChanged(Console, config);
-        return Unlocker.Unlock(config, UnlockSelection());
+        // Brief T17 ruling 13: pass 2 asks the agent (task 11 fills AgentSource), pass 3 the terminal.
+        // Task 4b: each key's remembered slot first, and the slot that opens is remembered.
+        // FIDO2 plan, task 7: pass 4's PIN at the terminal and its touch line on stderr.
+        return Unlocker.Unlock(config, UnlockSelection(),
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: TerminalPasswordProvider.For(this, config))
+            {
+                Remembered = RememberedSlots,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
+    }
+
+    /// <summary>
+    /// FIDO2 plan, task 7: the terminal's PIN source for an unlock of <paramref name="config"/>, opened only when the
+    /// vault has a FIDO2 slot (so no other unlock looks for a terminal); null when there is none.
+    /// </summary>
+    private Fido2Pin? Fido2PinFor(Config config) => VaultUnlocker.HasFido2Slots(config) ? Fido2PinPrompt.For(this) : null;
+
+    /// <summary>
+    /// YubiKey SDK stage 1, task 4b (<c>slot add --yubikey</c> re-enrolling a key): <see cref="Unlock"/> without
+    /// YubiKey <paramref name="excludeSerial"/>, with <paramref name="prompt"/> as pass 3's password (the command's one
+    /// password, asked before its challenges or on first use).
+    /// </summary>
+    /// <remarks>
+    /// Round 2: the slot that opened the vault isn't remembered here; it is handed to <paramref name="rememberLater"/>, so
+    /// the caller writes the hint only after its own write (an abort before it leaves the machine-local file alone).
+    /// </remarks>
+    internal byte[] UnlockExcluding(Config config, int excludeSerial, TswapCore.VaultPassword.VaultPasswordProvider prompt,
+        Action<byte[], int, byte[]> rememberLater)
+    {
+        if (TestKey is null)
+            SecurityWarnings.NoticeIfChanged(Console, config);
+        return Unlocker.Unlock(config, UnlockSelection() with { ExcludeSerial = excludeSerial },
+            new UnlockSources(AskAgent: AgentSource(config), Prompt: prompt)
+            {
+                Remembered = RememberedSlots,
+                RememberLater = rememberLater,
+                Fido2Pin = Fido2PinFor(config),
+                Fido2Notice = Console.Error.WriteLine,
+            });
+    }
+
+    /// <summary>
+    /// Task 4b: this machine's remembered YubiKey slots (<c>yubikey-slots.json</c> in the config folder, beside
+    /// <c>config.json</c>), written through the store's owner-preserving file layer. The store as it is opened (not
+    /// through <see cref="Storage"/>): a hint beside the config is no reason for the classic-vault refusal.
+    /// </summary>
+    internal RememberedYubiKeySlots RememberedSlots => _storage.Value is TswapCore.IFileVaultStore fileStore
+        ? new(fileStore.ConfigDir, fileStore.Owner)
+        : new(Env.ConfigDir, TswapCore.DirectoryOwnerMatcher.Default);
+
+    /// <summary>
+    /// Brief T17 task 11: how <see cref="Unlock"/> asks a running <c>tswap agent</c> (ruling 13's pass 2,
+    /// <see cref="AgentUnlock"/>). <c>agent serve</c> and <c>broker serve</c> never come here: their own unlocks
+    /// pass no agent source, so an agent never asks itself.
+    /// </summary>
+    internal Func<byte[]?>? AgentSource(Config config) => AgentUnlock.For(this, config);
+
+    /// <summary>Test seam (ruling 8): sees each vault key an agent handed this command, after it was zeroed.</summary>
+    internal static Action<ReadOnlySpan<byte>>? AgentKeyZeroedObserver;
+
+    private readonly List<byte[]> _agentKeys = [];
+
+    /// <summary>A vault key from the agent, zeroed by <see cref="ZeroAgentKeys"/> when the command is done with it.</summary>
+    internal void TrackAgentKey(byte[] key)
+    {
+        lock (_agentKeys)
+            _agentKeys.Add(key);
+    }
+
+    /// <summary>Ruling 8: zeroes every vault key an agent handed this command (<see cref="CliRunner"/>'s <c>finally</c>).</summary>
+    internal void ZeroAgentKeys()
+    {
+        lock (_agentKeys)
+        {
+            foreach (var key in _agentKeys)
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+                AgentKeyZeroedObserver?.Invoke(key);
+            }
+            _agentKeys.Clear();
+        }
     }
 
     /// <summary>
@@ -133,6 +309,14 @@ public sealed record CommandContext(
     public TswapCore.SecretsDb LoadSecrets(byte[] key)
         => Storage.LoadSecrets(key, Console.Error);
 
+    /// <summary>
+    /// Brief T16-S2: the vault as a <see cref="VaultView"/> (metadata first, values only where a
+    /// command uses them), its load-time findings on stderr. Classic vaults were refused when the
+    /// store opened (<see cref="Storage"/>), so the store is always a record store here.
+    /// </summary>
+    public VaultView OpenVault(byte[] key) => new(
+        Storage as RecordVaultStore ?? throw new TswapException("This command needs a record vault."), key, Console.Error);
+
     /// <summary>Resolves a connected YubiKey serial, prompting when several are present.</summary>
     public int SelectSerial(int? requiredSerial = null)
         => Unlocker.SelectConnectedSerial(ChooseSerial, requiredSerial);
@@ -163,11 +347,26 @@ public sealed record CommandContext(
         return serials.Count == 1 ? serials[0] : ChooseSerial(serials);
     }
 
-    private int ChooseSerial(IReadOnlyList<int> serials)
+    /// <summary>
+    /// The same prompt, always shown (even for one key), with <paramref name="note"/> under the list: <c>yubikey
+    /// setup</c> offers only the keyboard-reachable keys and says which other keys are plugged in but not offered.
+    /// </summary>
+    public int PromptForSerial(IReadOnlyList<int> serials, string? note)
+    {
+        if (serials.Count == 0)
+            throw new TswapException("No YubiKey detected. Please insert YubiKey.");
+        return ChooseSerial(serials, note);
+    }
+
+    private int ChooseSerial(IReadOnlyList<int> serials) => ChooseSerial(serials, note: null);
+
+    private int ChooseSerial(IReadOnlyList<int> serials, string? note)
     {
         Console.Error.WriteLine("\nMultiple YubiKeys detected:");
         for (int i = 0; i < serials.Count; i++)
             Console.Error.WriteLine($"  {i + 1}. Serial: {serials[i]}");
+        if (note is not null)
+            Console.Error.WriteLine(note);
         Console.Error.Write($"Select YubiKey (1-{serials.Count}): ");
         var input = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))

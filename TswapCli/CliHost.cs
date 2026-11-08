@@ -1,5 +1,6 @@
 using TswapCore;
 using TswapCore.Vault;
+using TswapCore.Vault.Fido2;
 
 namespace TswapCli;
 
@@ -52,11 +53,15 @@ internal static class CliHost
             bool sudoBypass = false;
 #if DEBUG
             sudoBypass = getEnv("TSWAP_TEST_SUDO_BYPASS") == "1";
+            // Brief T17 test seam: TSWAP_TEST_TERMINAL=1 with TSWAP_TEST_KEY plays a terminal on piped
+            // stdin, so an E2E test can type the vault password at its prompt. Debug builds only.
+            if (testKey is not null && getEnv("TSWAP_TEST_TERMINAL") == "1")
+                console = new TestTerminalConsole(console);
 #endif
 
             IYubiKeyService yubiKeys = testKey is not null
                 ? new TestKeyYubiKeyService(testKey)
-                : new YkmanYubiKeyService(env.Verbose ? console.Out : null);
+                : new SdkYubiKeyService(env.Verbose ? console.Out : null);
             // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or
             // their simulated stand-ins in test mode) register via the additionalBackends argument;
             // the YubiKey backend is always present and VaultUnlocker picks the right one from
@@ -66,9 +71,17 @@ internal static class CliHost
             // Secure Enclave's owner scope (brief T12) reads the same store, at call time.
             var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
-            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends);
+            // One FIDO2 service for enrolment (CommandContext.Fido2) and unlock (pass 4, FIDO2 plan task 7).
+            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error);
+            var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
-            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass) { Time = time };
+            var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
+            {
+                Time = time,
+                Fido2 = fido2,
+                // Test mode has no FIDO2 service, so it needs no terminal either (a test's own may never answer).
+                Terminal = testKey is null ? ControllingTerminal.Open : null,
+            };
             return CliRunner.Run(ctx, env.CommandArgs);
         }
         // CliRunner maps command errors; these catches cover composition failures only
@@ -84,4 +97,37 @@ internal static class CliHost
             return 1;
         }
     }
+
+    /// <summary>
+    /// The FIDO2 service (FIDO2 plan, tasks 4 and 5): Yubico's SDK on Linux and macOS, <c>webauthn.dll</c> on Windows;
+    /// none in test mode (a test that needs one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, or calls
+    /// into <c>webauthn.dll</c>, until a command calls it.
+    /// </summary>
+    internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null)
+    {
+        if (testKey is not null)
+            return null;
+        if (OperatingSystem.IsWindows())
+            return new Fido2Service(new WebAuthnFido2Keys(), verbose);
+        return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? new Fido2Service(new SdkFido2Keys(notices), verbose) : null;
+    }
+
+#if DEBUG
+    /// <summary>
+    /// Brief T17 test seam (Debug only): <paramref name="inner"/> reporting a terminal although stdin is
+    /// piped. Its password reads still take a line from stdin, as <see cref="SystemConsole"/> does on piped input.
+    /// </summary>
+    private sealed class TestTerminalConsole(IConsole inner) : IConsole
+    {
+        public TextWriter Out => inner.Out;
+        public TextWriter Error => inner.Error;
+        public TextReader In => inner.In;
+        public bool IsInputRedirected => false;
+        public bool IsOutputRedirected => false;
+        public string? ReadLine() => inner.ReadLine();
+        public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo);
+        public void SetForeground(ConsoleColor color) => inner.SetForeground(color);
+        public void ResetColor() => inner.ResetColor();
+    }
+#endif
 }

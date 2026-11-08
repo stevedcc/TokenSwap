@@ -118,9 +118,23 @@ public class BrokerContribTests(ITestOutputHelper output)
         Assert.Contains("(typetransition init_t tswap_broker_exec_t process tswap_broker_t)", rendered);
         Assert.Contains("(allow tswap_broker_t tswap_broker_exec_t (file (entrypoint execute read open getattr map)))", rendered);
 
-        // Exactly one rule for containers: connect to the broker's sockets, nothing else.
-        var containerRules = rendered.Where(r => r.Contains("container_t")).ToList();
+        // Exactly one rule for containers: connect to the broker's sockets, nothing else. (Brief I224, by
+        // controller ruling: the rules whose SOURCE is container_t; the broker's own rules below only name
+        // container_t as a target and grant containers nothing.)
+        var containerRules = statements.Where(s => s.Count > 1 && s[1] is "container_t").Select(Render).ToList();
         Assert.Equal(["(allow container_t tswap_broker_t (unix_stream_socket (connectto)))"], containerRules);
+
+        // Brief I224 D3 / task 5: the broker may look at a container's process (/proc/<pid> as a directory, status
+        // and cgroup), and these are the only other statements that name container_t. No signull: the liveness
+        // check polls the pidfd instead of signalling it (router finding, 2026-11-03).
+        string[] brokerReadsContainers =
+        [
+            "(allow tswap_broker_t container_t (dir (open read search getattr)))",
+            "(allow tswap_broker_t container_t (file (open read getattr)))",
+        ];
+        foreach (var rule in brokerReadsContainers)
+            Assert.Contains(rule, rendered);
+        Assert.Equal([.. containerRules, .. brokerReadsContainers], rendered.Where(r => r.Contains("container_t")).ToList());
 
         if (!File.Exists("/usr/bin/secilc"))
             output.WriteLine("secilc is not installed: the module was checked for structure only; `sudo semodule -i` on the target host compiles it against the real policy.");

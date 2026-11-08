@@ -19,7 +19,7 @@ public sealed class RecordStoreTests : IDisposable
 
     public RecordStoreTests()
     {
-        _recoveryKey = InitRecordVault(_m);
+        _recoveryKey = InitFormatTwoVault(_m);
         _vaultKey = VaultKey(_m, _recoveryKey);
     }
 
@@ -31,7 +31,7 @@ public sealed class RecordStoreTests : IDisposable
         Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
 
         using var classic = new FleetMachine("classic", SimulatedYubiKeyService.WithKeys(SerialA));
-        classic.Ok("", "init", "--keyring");
+        ClassicVaultTestSupport.CreateKeyringVault(classic, "--yubikey"); // brief T16-S1: init makes record vaults now
         Assert.IsType<Storage>(VaultStores.Open(classic.Dir));
     }
 
@@ -151,10 +151,10 @@ public sealed class RecordStoreConfigGuardTests : IDisposable
     [Fact]
     public void InitOnARecordStoreMachine_IsRefused_AndTheConfigKeepsTheStore()
     {
-        RecordVaultTestSupport.InitRecordVault(_m);
+        RecordVaultTestSupport.InitFormatTwoVault(_m);
         _m.Ok("v", "ingest", "s");
 
-        var (exit, _, err) = _m.Run("yes\n", "init", "--keyring");
+        var (exit, _, err) = _m.Run("yes\n", "init", "--yubikey");
 
         Assert.NotEqual(0, exit);
         Assert.Contains("TSWAP_CONFIG_DIR", err);

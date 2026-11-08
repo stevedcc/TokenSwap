@@ -9,8 +9,8 @@ namespace TswapCore.Keyring;
 /// same record without either side ever writing the plaintext name to disk — the property the
 /// per-secret record split (issue #112) depends on for mergeability.
 ///
-/// <para><b>Settled, not open</b> (see <c>REFACTORING_PLAN.md</c> §Phase 6, "per-file security
-/// considerations", item 2, and <c>MULTI_MACHINE_KEYING.md</c>): deterministic filenames were
+/// <para><b>Settled, not open</b> (see <c>docs/design/refactoring-plan.md</c> §Phase 6, "per-file security
+/// considerations", item 2, and <c>docs/design/multi-machine-keying.md</c>): deterministic filenames were
 /// chosen over randomizing the filename per write plus an internal record-id and a periodic
 /// compaction pass. Randomizing defeats which-secret correlation but not "an edit of about this
 /// size happened around now", and the compaction machinery needed to keep it bounded is real,
@@ -28,7 +28,7 @@ namespace TswapCore.Keyring;
 /// <c>K_v</c> (so a v1 rotation renames every record) versus a separate, non-rotated fleet
 /// constant (avoids mass renames, but must never be reconstructible without fleet membership) —
 /// is intentionally left to the caller. This type takes <c>K_names</c> as a plain
-/// <c>byte[]</c> and has no opinion on its provenance; see <c>MULTI_MACHINE_KEYING.md</c>
+/// <c>byte[]</c> and has no opinion on its provenance; see <c>docs/design/multi-machine-keying.md</c>
 /// §Open questions.</para>
 /// </summary>
 public static class FilenameHasher

@@ -16,13 +16,13 @@ public enum SlotKind : byte
 
     /// <summary>A break-glass recovery slot (issue #120): wraps <c>K_v</c> alone to a bare X25519
     /// keypair's public key, no hardware and no PKI involved — see
-    /// <see cref="RecoverySlotWrap"/> and <c>MULTI_MACHINE_KEYING.md</c> §The recovery slot.
+    /// <see cref="RecoverySlotWrap"/> and <c>docs/design/multi-machine-keying.md</c> §The recovery slot.
     /// </summary>
     Recovery = 1,
 }
 
 /// <summary>
-/// One entry in a vault's <see cref="Keyring"/> (issue #119, design: <c>MULTI_MACHINE_KEYING.md</c>
+/// One entry in a vault's <see cref="Keyring"/> (issue #119, design: <c>docs/design/multi-machine-keying.md</c>
 /// §The model / §Two-layer slot wrap / §Per-slot X25519 keypair). A slot is one machine's share
 /// of the vault: an opaque identifier, an X25519 public key kept in the clear (so any holder of
 /// <c>K_v</c> can wrap a fresh slot for this device offline — see the design doc), and the
@@ -71,7 +71,7 @@ public sealed record Slot(byte[] SlotId, byte[] PublicKey, byte[] Wrapped, SlotK
 /// <summary>
 /// A vault's keyring (issue #119): the format version and vault id that feed every slot's AEAD
 /// associated data (see <see cref="SlotPayloadWrap.BuildAad"/>), the unlock threshold <c>k</c>
-/// (always 1 in v0 — see <c>MULTI_MACHINE_KEYING.md</c> §Why not k >= 2), and the list of slots
+/// (always 1 in v0 — see <c>docs/design/multi-machine-keying.md</c> §Why not k >= 2 (yet)), and the list of slots
 /// (always exactly one in v0, this machine's; #121 is where a second machine's slot gets
 /// appended via hand-carried enrollment).
 /// </summary>
@@ -228,7 +228,7 @@ public static class KeyringCodec
         if (formatVersion < KeyringFormat.KeyringFormatVersionWithoutHwBlob)
             throw new TswapException(
                 $"Unsupported keyring format version: {formatVersion}. This vault was created by a pre-release tswap " +
-                "whose keyring format is no longer supported; re-run 'tswap init --keyring'.");
+                "whose keyring format is no longer supported; re-run 'tswap init'.");
         var hasHwBlobColumn = formatVersion >= KeyringFormat.KeyringFormatVersion;
 
         var vaultId = bytes.AsSpan(1, KeyringFormat.VaultIdSize).ToArray();

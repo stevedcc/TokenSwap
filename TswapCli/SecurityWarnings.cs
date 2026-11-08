@@ -79,8 +79,10 @@ public static class SecurityWarnings
         {
             var key = Convert.ToBase64String(slot.SlotId);
             var shortId = Convert.ToHexStringLower(slot.SlotId)[..8];
-            if (YubiKeySlotBlob.IsYubiKeyBlob(slot.HwBlob))
+            if (YubiKeySlotKinds.IsYubiKey(slot.HwBlob))
             {
+                // FIDO2 plan, task 2: a FIDO2 slot always asks for the PIN and a touch, so it has no posture to warn
+                // about; a slot this build can't read has none either.
                 if (TryDecodeBlob(slot.HwBlob, out var blob))
                     result.Add(new(key, PostureName(blob.RequiresTouch), $"YubiKey {blob.Serial} (slot {shortId})"));
             }
@@ -105,20 +107,16 @@ public static class SecurityWarnings
         }
     }
 
+    /// <summary>True for an OTP slot's blob (the only kind with a touch posture), which <paramref name="blob"/> then holds.</summary>
     private static bool TryDecodeBlob(byte[]? hwBlob, out YubiKeySlotBlob blob)
     {
-        blob = null!;
-        if (!YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
-            return false;
-        try
+        if (YubiKeySlotKinds.Classify(hwBlob) is YubiKeySlotKind.Otp(var otp))
         {
-            blob = YubiKeySlotBlob.Decode(hwBlob!);
+            blob = otp;
             return true;
         }
-        catch (TswapException)
-        {
-            return false;
-        }
+        blob = null!;
+        return false;
     }
 
     /// <summary>
@@ -192,13 +190,16 @@ public static class SecurityWarnings
             case false:
                 console.SetForeground(ConsoleColor.Yellow);
                 e.WriteLine($"⚠ {keyLabel}: no touch required, so any process running as you can unlock the vault while the key is plugged in.");
-                e.WriteLine("  That can be deliberate (an always-on machine). To require a touch instead, reprogram the key");
-                e.WriteLine("  (ykman otp chalresp --generate --touch 2) and enroll it again. 'tswap slots' shows each key's setting.");
+                // Task 4b: the touch upgrade re-enrols the key through another way in, one key at a time.
+                e.WriteLine("  That can be deliberate (an always-on machine). To require a touch instead, one key at a time and with");
+                e.WriteLine("  another way into the vault available: tswap yubikey setup --replace --touch --serial N, then");
+                e.WriteLine($"  {ElevatedCommand.Line("tswap", "slot add --yubikey")} (it enrols the reprogrammed key again), then tswap names");
+                e.WriteLine("  with only that key plugged in. 'tswap slots' shows each key's setting.");
                 console.ResetColor();
                 break;
             default:
-                e.WriteLine($"{keyLabel}: Couldn't check the touch setting (ykman didn't report whether the key asked for a touch).");
-                e.WriteLine("  Fix: install yubikey-manager 5 or later (ykman on PATH) and enroll the key again; until then");
+                e.WriteLine($"{keyLabel}: Couldn't check the touch setting (the key's first answer didn't say whether it asked for a touch).");
+                e.WriteLine("  Fix: enroll the key again with it plugged in; until then");
                 e.WriteLine("  'tswap slots' shows it as unknown, and if it needs no touch, any process running as you can use it.");
                 break;
         }

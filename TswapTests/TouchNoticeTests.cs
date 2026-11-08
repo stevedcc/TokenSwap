@@ -35,7 +35,7 @@ public class TouchNoticeTests : IDisposable
     {
         _m.Keys.SetTouch(serial, touch);
         _m.Keys.PluggedIn = [serial];
-        var result = _m.Run("", "init", "--keyring", "--no-recovery");
+        var result = _m.Run("", "init", "--yubikey", "--no-recovery");
         Assert.True(result.Exit == 0, result.Err);
         return result;
     }
@@ -126,7 +126,9 @@ public class TouchNoticeTests : IDisposable
         copy.Keys.PluggedIn = [SerialA, SerialB];
         copy.Ok("", "slot", "add", "--yubikey");
         _m.Keys.PluggedIn = [SerialA];
-        _m.Ok("", "slot", "merge", copy.ConfigPath, "--yes");
+        // Brief T16-S1: the copy is a record vault (keyring in its folder), merged by 'vault merge',
+        // which doesn't explain either.
+        _m.Ok("", "vault", "merge", copy.VaultDir!, "--yes");
 
         // `create` unlocks and shows the notice (names, burned, burn and check never did show it).
         var (exit, _, stderr) = _m.Run("", "create", "after-merge");
@@ -161,7 +163,7 @@ public class TouchNoticeTests : IDisposable
         Assert.Contains("no touch", stderr);
 
         using var touchVault = new FleetMachine("touch-only", SimulatedYubiKeyService.WithKeys(SerialA));
-        touchVault.Ok("", "init", "--keyring", "--no-recovery");
+        touchVault.Ok("", "init", "--yubikey", "--no-recovery");
         ForgetAcknowledgements(touchVault);
         Assert.Equal("", touchVault.Run("", "create", "touch-only-secret").Err);
     }
@@ -181,14 +183,13 @@ public class TouchNoticeTests : IDisposable
         Assert.DoesNotContain("not acknowledged", stdout);
     }
 
-    // The posture comes from whether the challenge asked for a touch (ykman prints "Touch your
-    // YubiKey..." on stderr), not from `ykman otp info`, which can't read it.
+    // The posture comes from whether the challenge asked for a touch, not from a separate slot read.
     [Theory]
     [InlineData(true, true)]
     [InlineData(false, false)]
     public void Enrolment_RecordsWhetherTheChallengeAskedForATouch(bool askedForTouch, bool expectedRequiresTouch)
     {
-        _m.Keys.DetectionWorks = false; // like real ykman: otp info can't tell
+        _m.Keys.DetectionWorks = false; // like the real service: a slot read can't tell
         Init(SerialA, touch: askedForTouch);
 
         var blob = YubiKeySlotBlob.Decode(_m.Keyring.Slots.Single(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob)).HwBlob!);
@@ -203,32 +204,8 @@ public class TouchNoticeTests : IDisposable
         var (_, _, stderr) = Init(SerialA, touch: null);
 
         Assert.Equal(1, Count(stderr, "Couldn't check"));
-        Assert.Contains("ykman", stderr);
+        Assert.DoesNotContain("ykman", stderr, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("unknown", _m.Config.AcknowledgedTouch![SlotIdOf(SerialA)]);
-        Assert.Equal("", _m.Run("", "names").Err);
-    }
-
-    [Theory]
-    [InlineData("Touch your YubiKey...\n", true)]
-    [InlineData("", false)]
-    [InlineData("WARNING: something else\n", false)]
-    public void Ykman_TouchPromptOnStderr_MeansTouchRequired(string stderr, bool expected)
-    {
-        Assert.Equal(expected, YkmanYubiKeyService.AskedForTouch(stderr));
-    }
-
-    [Fact]
-    public void ClassicInit_ExplainsOnce_AndAcknowledgesTheVault()
-    {
-        _m.Keys.SetTouch(SerialA, false);
-        _m.Keys.SetTouch(SerialB, false);
-        _m.Keys.PluggedIn = [SerialA, SerialB];
-
-        var (exit, _, stderr) = _m.Run("1\n2\n1\n", "init");
-
-        Assert.True(exit == 0, stderr);
-        Assert.Equal(1, Count(stderr, NoTouchExplanation));
-        Assert.Equal("no-touch", _m.Config.AcknowledgedTouch!["vault"]);
         Assert.Equal("", _m.Run("", "names").Err);
     }
 
@@ -238,16 +215,22 @@ public class TouchNoticeTests : IDisposable
         _m.Keys.SetTouch(SerialA, false);
         _m.Keys.SetTouch(SerialB, false);
         _m.Keys.PluggedIn = [SerialA, SerialB];
-        _m.Ok("1\n2\n1\n", "init");
+        // Brief T16-S1: init can't make a classic XOR vault any more (written as 0.1's init did), and a
+        // classic vault opens for export and migrate only (ruling 5), so export shows the notice where
+        // create did; its passphrase prompts are on stderr too, so the notice is looked for, not an
+        // empty stderr.
+        ClassicVaultTestSupport.CreateXorVault(_m, SerialA, SerialB);
         ForgetAcknowledgements(_m); // a classic vault from before this release
-        Assert.Contains("no touch", _m.Run("", "create", "before-migrate").Err);
+        Assert.Contains("no touch", _m.Run("pass\npass\n", "export", _m.PathOf("before.json")).Err);
 
         var (exit, _, stderr) = _m.Run("", "migrate");
 
         Assert.True(exit == 0, stderr);
         Assert.Equal(1, Count(stderr, NoTouchExplanation));
         Assert.Equal("no-touch", _m.Config.AcknowledgedTouch!["vault"]);
-        Assert.Equal("", _m.Run("", "create", "after-migrate").Err);
+        var after = _m.Run("pass\npass\n", "export", _m.PathOf("after.json"));
+        Assert.True(after.Exit == 0, after.Err);
+        Assert.DoesNotContain("touch", after.Err);
     }
 
     // Fix round 1 (MiMo): on a keyring vault, migrate explains each changed slot's own posture (not the
@@ -333,7 +316,7 @@ public class TouchNoticeTests : IDisposable
     public void Migrate_OnAClassicConfigWithoutTwoSerials_SaysItIsCorrupted()
     {
         _m.Keys.PluggedIn = [SerialA, SerialB];
-        _m.Ok("1\n2\n1\n", "init");
+        ClassicVaultTestSupport.CreateXorVault(_m, SerialA, SerialB); // brief T16-S1: init can't make a classic vault any more
         File.WriteAllText(_m.ConfigPath, System.Text.Json.JsonSerializer.Serialize(
             _m.Config with { YubiKeySerials = [SerialA] }, TswapJsonContext.Default.Config));
         var before = _m.ConfigText;

@@ -12,6 +12,9 @@ public interface IConsole
     TextWriter Error { get; }
     TextReader In { get; }
     bool IsInputRedirected { get; }
+
+    /// <summary>Whether stdout is a pipe or file: guided init asks only when both ends are a terminal.</summary>
+    bool IsOutputRedirected { get; }
     string? ReadLine();
 
     /// <summary>

@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 
 namespace TswapCore;
@@ -20,6 +22,15 @@ namespace TswapCore;
 /// since this command loaded it (decision 6).
 /// </para>
 /// <para>Every file goes through <see cref="DirectoryOwnerMatcher"/> (decision 10).</para>
+/// <para>
+/// Brief T16-S1: records are written in format 3 (a metadata section with keyed fingerprints plus
+/// value sections encrypted once and then copied) once the vault folder holds the
+/// <see cref="RecordFormatMarkerFileName"/> marker or this command read a format 3 record
+/// (<see cref="WritesV3"/>), in format 2 before that, so older machines on the folder keep reading
+/// it. Every copy of a record is merged in one <see cref="RecordMerge.MergeAll"/> step; a conflict
+/// makes that one record unreadable, never the load. <see cref="LoadMetadata"/> reads metadata
+/// sections only, for commands that need names, burns or fingerprints but no value.
+/// </para>
 /// </summary>
 public sealed class RecordVaultStore : IFileVaultStore
 {
@@ -32,6 +43,23 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>The records folder's name in the vault folder.</summary>
     public const string RecordsFolderName = "records";
 
+    /// <summary>
+    /// Brief T16-S1 (ruling 3): the vault folder's record-format marker. Holding <c>3</c>, every
+    /// machine sharing the folder writes format 3 (it lives in the shared folder so they all see it
+    /// through the same sync as the records). A higher number refuses every write (a newer tswap
+    /// wrote the vault); anything else is a warning and counts as absent, so a sync artefact can't
+    /// block all writes. Deleting it can't downgrade a reindexed vault: reading any format 3 record
+    /// also selects format 3. Its conflicted copies are ignored.
+    /// </summary>
+    public const string RecordFormatMarkerFileName = "record-format";
+
+    /// <summary>
+    /// Brief T17 ruling 2: the vault folder's <c>vault-password</c> file (<see cref="VaultPassword.VaultPasswordFile"/>):
+    /// the vault password's salt, Argon2id parameters, verifier and key check, shared by every machine of
+    /// the vault. Sync tools' conflicted copies that differ from it make every password operation refuse.
+    /// </summary>
+    public const string VaultPasswordFileName = "vault-password";
+
     private readonly DirectoryOwnerMatcher _owner;
     private readonly TimeProvider _time;
 
@@ -41,6 +69,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     private Hlc _highestSeen = Hlc.Zero;
     private Dictionary<string, LoadedRecord>? _loaded;
     private TextWriter? _warnings;
+    private int? _markerFormat;
+    private string? _markerText;
+    private bool _sawV3;
 
     /// <param name="configDir">The machine's config dir (holds <c>config.json</c>).</param>
     /// <param name="owner">The file layer (null: <see cref="DirectoryOwnerMatcher.Default"/>).</param>
@@ -94,8 +125,44 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>The records folder in the vault folder.</summary>
     public string RecordsDir => Path.Combine(VaultDir, RecordsFolderName);
 
-    /// <summary>Test seam (brief T8): called with a record file's name each time one is decrypted.</summary>
+    /// <summary>
+    /// Test seam (brief T8): called with a record file's name each time one is decrypted (a format 2
+    /// payload, or a format 3 metadata section).
+    /// </summary>
     internal Action<string>? RecordDecrypted { get; set; }
+
+    /// <summary>
+    /// Test seam (brief T16-S1): called with the record's file name and the version stamp for every
+    /// value decrypted (a format 3 value section, or a value inside a format 2 payload).
+    /// </summary>
+    internal Action<string, Stamp>? ValueDecrypted { get; set; }
+
+    /// <summary>Test seam (brief T16-S1): called after each record a write writes (the reindex crash test).</summary>
+    internal Action? AfterRecordWritten { get; set; }
+
+    /// <summary>Test seam (brief T16-S1): the value sections <see cref="LoadMetadata"/> chose, by record file name.</summary>
+    internal IReadOnlyDictionary<string, IReadOnlyDictionary<Stamp, byte[]>>? MetadataSections { get; private set; }
+
+    /// <summary>
+    /// Brief T16-S1 (ruling 3), evaluated after a load: true when the vault folder's
+    /// <see cref="RecordFormatMarkerFileName"/> holds 3, or this command read a format 3 record (from
+    /// this folder, or, in <c>vault merge</c>, from the other copy), so a deleted marker can't
+    /// silently downgrade a reindexed vault. Writes are then format 3, otherwise format 2.
+    /// </summary>
+    public bool WritesV3 => _markerFormat == KeyringFormat.RecordFormatVersion || _sawV3;
+
+    /// <summary>
+    /// Brief T16-S1 (ruling 3): whether this store's last load read a format 3 record. <c>vault
+    /// merge</c> passes the other copy's to <see cref="MergeRecords"/>, so state merged in from a
+    /// format 3 copy is written in format 3 (a tombstone carries no sections to tell by).
+    /// </summary>
+    public bool ReadFormat3 => _sawV3;
+
+    /// <summary>The marker file in the vault folder.</summary>
+    public string RecordFormatMarkerFile => Path.Combine(VaultDir, RecordFormatMarkerFileName);
+
+    /// <summary>Brief T17: the <c>vault-password</c> file in the vault folder.</summary>
+    public string VaultPasswordPath => Path.Combine(VaultDir, VaultPasswordFileName);
 
     /// <summary>Test seam: removes a redundant conflicted copy (default: through the file layer).</summary>
     internal Action<string>? DeleteFile { get; init; }
@@ -264,6 +331,112 @@ public sealed class RecordVaultStore : IFileVaultStore
         }
     }
 
+    // ------------------------------------------------------------------ brief T17: vault-password
+
+    /// <summary>
+    /// The <c>vault-password</c> file, decoded strictly for the vault <paramref name="vaultId"/>
+    /// (<see cref="VaultPassword.VaultPasswordFile.Decode"/>); null when the folder has none. Throws ruling 2's
+    /// conflict message when a sync tool's conflicted copy differs from it.
+    /// </summary>
+    public VaultPassword.VaultPasswordFile? ReadVaultPassword(byte[] vaultId) =>
+        ReadVaultPasswordBytes() is { } bytes ? VaultPassword.VaultPasswordFile.Decode(bytes, vaultId) : null;
+
+    /// <summary>
+    /// The raw bytes of the <c>vault-password</c> file (for <c>slot request</c> and approve files), or null
+    /// when the folder has none. Byte-identical conflicted copies are fine; a differing one throws ruling 2's
+    /// conflict message.
+    /// </summary>
+    public byte[]? ReadVaultPasswordBytes() => ReadVaultPasswordWithCopies().Bytes;
+
+    /// <summary>A sync tool's conflict copy of <c>vault-password</c> and no <c>vault-password</c> file ({0}: the copy's name).</summary>
+    public const string LoneConflictCopyText =
+        "The vault folder has a conflict copy of the vault-password file ({0}) but no vault-password file. " +
+        "If it holds this vault's password, rename it to vault-password; otherwise delete it.";
+
+    /// <summary>
+    /// The <c>vault-password</c> file and its sync-tool conflict copies, grouped by content (ruling 2, review T17
+    /// fix round 1): byte-identical copies are not a conflict (they are returned for removal on the next write,
+    /// and a read uses any one of them); two or more different contents refuse with the "two different" text,
+    /// naming every file; a lone conflict copy with no <c>vault-password</c> file refuses with
+    /// <see cref="LoneConflictCopyText"/>. An unreadable copy can't be shown identical, so it counts as a
+    /// content of its own. <c>Canonical</c> says whether the <c>vault-password</c> file itself exists.
+    /// </summary>
+    private (byte[]? Bytes, bool Canonical, List<(string Path, byte[] Bytes)> IdenticalCopies) ReadVaultPasswordWithCopies()
+    {
+        var vaultDir = VaultDir;
+        var bytes = ReadCanonicalVaultPassword();
+        var copies = _owner.AsOwner(vaultDir, () => RecordDirectoryScanner.FindConflictCopies(new DirectoryInfo(vaultDir), VaultPasswordFileName))
+            .Select(c => c.ConflictingFilename)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        List<byte[]> contents = bytes is null ? [] : [bytes];
+        var unreadable = 0;
+        List<(string, byte[])> readable = [];
+        foreach (var name in copies)
+        {
+            var copyPath = Path.Combine(vaultDir, name);
+            byte[] copyBytes;
+            try
+            {
+                copyBytes = _owner.ReadAllBytes(copyPath);
+            }
+            catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+            {
+                unreadable++;
+                continue;
+            }
+            readable.Add((copyPath, copyBytes));
+            if (!contents.Any(c => c.AsSpan().SequenceEqual(copyBytes)))
+                contents.Add(copyBytes);
+        }
+        if (contents.Count + unreadable >= 2)
+            throw new TswapException(
+                $"The vault folder has two different vault-password files ({string.Join(", ", (bytes is null ? [] : new[] { VaultPasswordFileName }).Concat(copies))}). " +
+                "Keep one (delete the other) before using the vault password.");
+        if (bytes is null && copies.Count == 1)
+            throw new TswapException(string.Format(System.Globalization.CultureInfo.InvariantCulture, LoneConflictCopyText, copies[0]));
+        return (bytes ?? (contents.Count == 1 ? contents[0] : null), bytes is not null, readable);
+    }
+
+    /// <summary>The <c>vault-password</c> file's bytes, or null when there is none (also when a sync tool removed it just now).</summary>
+    private byte[]? ReadCanonicalVaultPassword()
+    {
+        var path = VaultPasswordPath;
+        if (!_owner.FileExists(path))
+            return null;
+        try
+        {
+            return _owner.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null; // gone between the two calls: no file, as if the check had come a moment later
+        }
+    }
+
+    /// <summary>
+    /// Writes the <c>vault-password</c> file atomically and durably through the file layer, as the keyring
+    /// is written (0600, as the folder's owner). Refuses while a differing conflicted copy exists (ruling 2)
+    /// or when the folder already has a different file (another machine created the vault password first:
+    /// overwriting it would lock out that machine's password slots). Byte-identical conflicted copies are
+    /// then removed (only files matching the sync tools' conflict-copy names, never the file itself); a
+    /// failed removal is a warning.
+    /// </summary>
+    public void WriteVaultPassword(VaultPassword.VaultPasswordFile file)
+    {
+        var bytes = file.Encode();
+        var (existing, canonical, identical) = ReadVaultPasswordWithCopies();
+        if (existing is not null && !existing.AsSpan().SequenceEqual(bytes))
+            throw new TswapException(
+                $"The vault folder {VaultDir} already has a different vault-password file. Every password slot of a vault " +
+                "uses the same password: use the existing one, or remove the file by hand only if no slot uses it.");
+        TightenModes();
+        _owner.CreateDirectory(VaultDir);
+        if (!canonical)
+            _owner.WriteDurable(VaultPasswordPath, bytes);
+        RemoveRedundantCopies(identical);
+    }
+
     private static string ToolName(SyncConflictTool tool) => tool switch
     {
         SyncConflictTool.DropboxOrGoogleDrive => "Dropbox / Google Drive",
@@ -303,9 +476,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <param name="State">The merged state of the main file and its readable conflicted copies (null: absent or unreadable).</param>
     /// <param name="UnreadableReason">Why the main file can't be read (fail closed), or null.</param>
     /// <param name="FoldedCopies">The conflicted copies merged into <paramref name="State"/>: redundant once it is written.</param>
+    /// <param name="MainState">The main file alone, decoded (null: absent or unreadable): its sections decide whether a merge must write.</param>
+    /// <param name="Inputs">Every decoded copy merged into <paramref name="State"/> (main first): <c>vault merge</c> merges the incoming state with all of them at once.</param>
     private sealed record LoadedRecord(
         string FileName, byte[]? MainBytes, SecretRecord? State, string? UnreadableReason,
-        IReadOnlyList<(string Path, byte[] Bytes)>? FoldedCopies = null);
+        IReadOnlyList<(string Path, byte[] Bytes)>? FoldedCopies = null, SecretRecord? MainState = null,
+        IReadOnlyList<SecretRecord>? Inputs = null);
 
     public SecretsDb LoadSecrets(byte[] key, TextWriter? warnings = null)
     {
@@ -339,13 +515,54 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// Brief T8 (owner decision, fix round 1): the current value of ONE secret, decrypting only its
     /// record (<c>records/HMAC(K_names, name)</c>) and that record's sync-conflict copies, folded by
     /// the merge rules; no other record is read. Returns null when the secret doesn't exist (no
-    /// record, or a tombstone). A record that can't be read or authenticated is a
-    /// <see cref="TswapException"/> (fail closed). The names key is zeroed before returning, the
-    /// record key inside the codec, and every value byte array except the copy returned (the
-    /// caller zeroes that).
+    /// record, or a tombstone), or <paramref name="previous"/> is asked and there is no previous
+    /// value. A record that can't be read or authenticated, or whose copies can't be merged, is a
+    /// <see cref="TswapException"/> (fail closed) with the text of the
+    /// <see cref="UnreadableRecordException"/> <see cref="OpenSecret"/> throws. Keys are zeroed before
+    /// returning, and every value byte array except the copy returned (the caller zeroes that).
+    /// <para>
+    /// Brief T16-S1: when every file of the record is format 3, only the metadata sections and the
+    /// one value section asked for are decrypted (the current value, or with
+    /// <paramref name="previous"/> the value a rotation replaced, for a <c>name:previous</c> token),
+    /// and the copies are folded on the metadata path (<see cref="RecordMerge.MergeAllMetadata"/>).
+    /// A format 2 file has no separate sections, so such a record is decoded whole and merged by
+    /// <see cref="RecordMerge.MergeAll"/>, as before. Brief T16-S2: <see cref="OpenSecret"/> plus
+    /// <see cref="SecretEntry.DecryptValue"/>.
+    /// </para>
     /// </summary>
-    public byte[]? ReadSecretValue(string name, byte[] vaultKey)
+    public byte[]? ReadSecretValue(string name, byte[] vaultKey, bool previous = false)
     {
+        try
+        {
+            using var entry = OpenSecret(name, vaultKey);
+            return entry?.DecryptValue(previous);
+        }
+        catch (UnreadableRecordException ex)
+        {
+            // This read's contract is a plain TswapException with exactly this text (the broker shows it).
+            throw new TswapException(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Brief T16-S2: ONE secret's record (its main file and its conflicted copies), nothing else
+    /// read, or null when there is no file. When every file is format 3, the metadata sections are
+    /// decrypted and folded (<see cref="RecordMerge.MergeAllMetadata"/>) and <b>no value</b> is
+    /// decrypted; <see cref="SecretEntry.DecryptValue"/> opens one version later. A record with any
+    /// format 2 file is decoded whole (the only way to read format 2: both its versions are reported
+    /// to <see cref="ValueDecrypted"/>) and held until the entry is disposed. A record that can't be
+    /// read, or whose copies can't be merged, throws <see cref="UnreadableRecordException"/>.
+    /// </summary>
+    public SecretEntry? OpenSecret(string name, byte[] vaultKey) => OpenSecret(name, vaultKey, ScanRecords());
+
+    /// <summary>
+    /// <see cref="OpenSecret(string, byte[])"/> with a scan of the records folder made earlier
+    /// (<see cref="ScanRecords"/>; null: the folder doesn't exist), so a caller opening many secrets
+    /// lists the folder once.
+    /// </summary>
+    internal SecretEntry? OpenSecret(string name, byte[] vaultKey, DirectoryScanResult? scan)
+    {
+        ArgumentNullException.ThrowIfNull(vaultKey);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(vaultKey);
         string fileName;
         try
@@ -356,59 +573,188 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             CryptographicOperations.ZeroMemory(namesKey);
         }
-        var recordsDir = RecordsDir;
-        if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
+        if (scan is null)
             return null;
+        var recordsDir = RecordsDir;
         var mainPath = Path.Combine(recordsDir, fileName);
-        var copies = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir)).Conflicts
+        var copies = scan.Conflicts
             .Where(c => c.RecordFilename == fileName)
             .OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal)
             .ToList();
-        LoadedRecord? main = _owner.FileExists(mainPath) ? ReadRecord(fileName, vaultKey) : null;
-        if (main is null && copies.Count == 0)
+        var mainExists = _owner.FileExists(mainPath);
+        if (!mainExists && copies.Count == 0)
             return null;
-        if (copies.Count > 0)
-            main = FoldConflictCopies(fileName, copies, main, vaultKey, _warnings);
-        if (main!.UnreadableReason is { } reason)
-            throw new TswapException($"The record of '{name}' can't be read ({reason}).");
+
+        // Code review (MiMo A I-1): only a format 2 file (its cleartext format byte) sends the record
+        // down the whole-record path. A file that can't be read, or isn't a record of a format this
+        // build reads, is no reason to decrypt both versions: an unreadable main file is an
+        // unreadable record (as the full load says), an unusable copy is warned about and skipped.
+        List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files = [];
+        if (mainExists)
+        {
+            try
+            {
+                files.Add((fileName, null, _owner.ReadAllBytes(mainPath)));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                throw new UnreadableRecordException(name, fileName, ex.Message);
+            }
+        }
+        List<string> unreadableCopies = [];
+        foreach (var copy in copies)
+        {
+            try
+            {
+                files.Add((copy.ConflictingFilename, copy.Tool, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename))));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+            {
+                unreadableCopies.Add(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, ex.Message));
+            }
+        }
+        // The whole-record path reads the copies itself and reports the ones it can't read.
+        if (files.Any(f => SecretRecordCodec.FormatVersionOf(f.Bytes) == KeyringFormat.RecordFormatVersionV2))
+            return OpenFull(name, fileName, copies, mainExists, vaultKey);
+        foreach (var warning in unreadableCopies)
+            _warnings?.WriteLine(warning);
+        return OpenFromMetadata(name, fileName, files, vaultKey);
+    }
+
+    /// <summary>The records folder's scan, or null when the folder doesn't exist.</summary>
+    internal DirectoryScanResult? ScanRecords()
+    {
+        var recordsDir = RecordsDir;
+        return _owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir))
+            ? _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir))
+            : null;
+    }
+
+    private SecretEntry OpenFull(string name, string fileName, List<ConflictWarning> copies, bool mainExists, byte[] vaultKey)
+    {
+        LoadedRecord? main = mainExists ? ReadRecord(fileName, vaultKey) : null;
+        using (var fingerprintKeys = FingerprintKeys.Derive(vaultKey))
+            main = FoldConflictCopies(fileName, copies, main, vaultKey, fingerprintKeys, _warnings);
+        var inputs = main.Inputs ?? [];
+        if (main.UnreadableReason is { } reason)
+        {
+            ZeroValues(inputs);
+            throw new UnreadableRecordException(name, fileName, reason);
+        }
         if (main.State is not { } state)
-            throw new TswapException($"The record of '{name}' can't be read (no readable copy).");
+            throw new UnreadableRecordException(name, fileName, "no readable copy");
+        return new SecretEntry(this, name, fileName, vaultKey, state, inputs);
+    }
+
+    private SecretEntry OpenFromMetadata(string name, string fileName, List<(string File, SyncConflictTool? Tool, byte[] Bytes)> files, byte[] vaultKey)
+    {
+        List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
+        foreach (var (file, tool, bytes) in files)
+        {
+            var isMain = tool is null;
+            try
+            {
+                RecordDecrypted?.Invoke(file);
+                var decoded = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
+                    ?? throw new TswapException("it is not a format 3 record");
+                if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
+                    throw new TswapException(isMain ? "its record id does not match its file name" : "its record id belongs to another record");
+                inputs.Add(decoded);
+            }
+            catch (Exception ex) when (ex is TswapException or CryptographicException)
+            {
+                if (isMain)
+                    throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "it fails authentication" : ex.Message);
+                // The full load's text, sync tool included.
+                _warnings?.WriteLine(UnusableCopyText(file, tool!.Value, fileName,
+                    ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message));
+            }
+        }
+        if (inputs.Count == 0)
+            throw new UnreadableRecordException(name, fileName, "no readable copy");
+
         try
         {
-            return state.Type == RecordType.Tombstone ? null : (byte[])state.Value.Clone();
+            var (metadata, sections) = RecordMerge.MergeAllMetadata(inputs);
+            return new SecretEntry(this, name, fileName, vaultKey, metadata, sections);
         }
-        finally
+        catch (RecordConflictException ex)
         {
-            CryptographicOperations.ZeroMemory(state.Value);
-            if (state.Previous is { } previous)
-                CryptographicOperations.ZeroMemory(previous.Value);
+            var reason = $"its copies can't be merged ({ex.Message})";
+            throw new UnreadableRecordException(name, fileName, reason,
+                $"The record of '{name}' can't be read: {reason}. Remove the damaged conflicted copy.");
         }
     }
 
-    private static Secret ToSecret(SecretRecord state)
+    /// <summary>
+    /// Brief T16-S2, for <see cref="SecretEntry.DecryptValue"/>: decrypts the value section of
+    /// <paramref name="version"/> (one of the store's two value-decryption sites, so it reports to
+    /// <see cref="ValueDecrypted"/>) and checks the plaintext against its stored fingerprints, as a
+    /// full load checks every copy (ruling 11, validation per input).
+    /// </summary>
+    internal byte[] OpenValueSection(string name, string fileName, RecordMetadata metadata, Stamp version,
+        FingerprintSet? fingerprints, IReadOnlyDictionary<Stamp, byte[]> sections, byte[] vaultKey)
     {
-        var outstanding = state.OutstandingBurn;
-        var history = state.Burns
-            .Where(b => !ReferenceEquals(b, outstanding))
-            .OrderBy(b => b.Burn)
-            .Select(b => new PastBurn(Hlc.ToDisplayDate(b.Burn.Hlc.PhysicalMs), b.Reason))
-            .ToList();
-        return new Secret(
-            Encoding.UTF8.GetString(state.Value),
-            Hlc.ToDisplayDate(state.CreatedMs),
-            Hlc.ToDisplayDate(state.Version.Hlc.PhysicalMs),
-            outstanding is null ? null : Hlc.ToDisplayDate(outstanding.Burn.Hlc.PhysicalMs),
-            outstanding?.Reason)
+        if (!sections.TryGetValue(version, out var section))
+            throw new UnreadableRecordException(name, fileName, "a version is listed without its value section");
+        ValueDecrypted?.Invoke(fileName, version);
+        byte[] value;
+        try
         {
-            History = history.Count == 0 ? null : history,
+            value = SecretRecordCodec.OpenSealed(metadata.RecordId, version, section, vaultKey);
+        }
+        catch (Exception ex) when (ex is TswapException or CryptographicException)
+        {
+            throw new UnreadableRecordException(name, fileName, ex is CryptographicException ? "a value section fails authentication" : ex.Message);
+        }
+        if (fingerprints is { } stored && stored.VariantSetVersion == SecretVariants.CurrentSetVersion)
+        {
+            using var fingerprintKeys = FingerprintKeys.Derive(vaultKey);
+            if (!Fingerprinter.Compute(value, fingerprintKeys).Equals(stored))
+            {
+                CryptographicOperations.ZeroMemory(value);
+                throw new UnreadableRecordException(name, fileName, "its fingerprints don't match its value");
+            }
+        }
+        return value;
+    }
+
+    private static void ZeroValues(IEnumerable<SecretRecord> records)
+    {
+        foreach (var record in records)
+        {
+            CryptographicOperations.ZeroMemory(record.Value);
+            if (record.Previous is { } p)
+                CryptographicOperations.ZeroMemory(p.Value);
+        }
+    }
+
+    /// <summary>
+    /// Brief T16-S2: the metadata of a record decoded whole (format 2), carrying no fingerprints, so
+    /// such a record still counts as not fingerprinted wherever it is listed.
+    /// </summary>
+    internal static RecordMetadata MetadataOf(SecretRecord state) =>
+        new(state.RecordId, state.Write, state.Type, state.Version, state.Name, state.CreatedMs, state.Burns,
+            Fingerprints: null, state.Previous?.Version, PreviousFingerprints: null, state.Extensions);
+
+    /// <summary>A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>.</summary>
+    internal static Secret ToSecret(SecretRecord state)
+    {
+        var info = SecretInfo.From(MetadataOf(state))
+            ?? throw new InvalidOperationException("A tombstone is no secret.");
+        return new Secret(Encoding.UTF8.GetString(state.Value), info.Created, info.Modified, info.BurnedAt, info.BurnReason)
+        {
+            History = info.History.Count == 0 ? null : info.History,
             PreviousValue = state.Previous is null ? null : Encoding.UTF8.GetString(state.Previous.Value),
-            PreviousBurned = state.Previous is not null && state.Burns.Any(b => b.Version.Equals(state.Previous.Version)),
+            PreviousBurned = info.PreviousBurned,
         };
     }
 
     private Dictionary<string, LoadedRecord> LoadRecords(byte[] key, TextWriter? warnings)
     {
         _highestSeen = Hlc.TryParse(MachineConfig.LastHlc) ?? Hlc.Zero;
+        _sawV3 = false;
+        ReadMarker(warnings);
         var loaded = new Dictionary<string, LoadedRecord>(StringComparer.Ordinal);
         var recordsDir = RecordsDir;
         if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
@@ -420,30 +766,28 @@ public sealed class RecordVaultStore : IFileVaultStore
         // Do NOT order by filesystem mtime anywhere here: sync tools rewrite it freely. The only
         // ordering authority is the (HLC, origin) stamp inside each record.
         var scan = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir));
-        foreach (var fileName in scan.ValidRecordFilenames.Order(StringComparer.Ordinal))
-            loaded[fileName] = ReadRecord(fileName, key);
-
-        foreach (var group in scan.Conflicts.GroupBy(c => c.RecordFilename).OrderBy(g => g.Key, StringComparer.Ordinal))
-            loaded[group.Key] = FoldConflictCopies(group.Key, group.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(),
-                loaded.GetValueOrDefault(group.Key), key, warnings);
+        var mains = scan.ValidRecordFilenames.ToHashSet(StringComparer.Ordinal);
+        var copiesByRecord = scan.Conflicts.GroupBy(c => c.RecordFilename, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+        using (var fingerprintKeys = FingerprintKeys.Derive(key))
+        {
+            foreach (var fileName in mains.Concat(copiesByRecord.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            {
+                var main = mains.Contains(fileName) ? ReadRecord(fileName, key) : null;
+                loaded[fileName] = FoldConflictCopies(fileName, copiesByRecord.GetValueOrDefault(fileName) ?? [], main, key, fingerprintKeys, warnings);
+            }
+        }
 
         foreach (var record in loaded.Values.Where(r => r.UnreadableReason is not null))
-            warnings?.WriteLine(
-                $"Warning: record {record.FileName} can't be read ({record.UnreadableReason}). Its secret is kept as " +
-                "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
-                "from a backup or another copy, or wait for the sync to finish.");
+            warnings?.WriteLine(UnreadableText(record.FileName, record.UnreadableReason!));
         var unreadableCount = loaded.Values.Count(r => r.UnreadableReason is not null);
         if (unreadableCount > 0)
             warnings?.WriteLine($"Warning: {unreadableCount} unreadable record(s) in {recordsDir}.");
 
         // Decision 3, absurd stamps: accepted (merge needs a total order) but reported.
-        var nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
-        const long year = 365L * 24 * 60 * 60 * 1000;
-        var yearAhead = nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
+        var yearAhead = YearAhead();
         foreach (var record in loaded.Values.Where(r => r.State is not null && MaxPhysical(r.State) > yearAhead))
-            warnings?.WriteLine(
-                $"Warning: record {record.FileName} carries a time stamp more than a year ahead of this machine's clock " +
-                "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.");
+            warnings?.WriteLine(YearAheadText(record.FileName));
 
         _loaded = loaded;
         return loaded;
@@ -452,51 +796,102 @@ public sealed class RecordVaultStore : IFileVaultStore
     private static long MaxPhysical(SecretRecord state) =>
         state.Burns.Select(b => b.Burn.Hlc.PhysicalMs).Append(state.Write.Hlc.PhysicalMs).Append(state.Version.Hlc.PhysicalMs).Max();
 
+    private static long MaxPhysical(RecordMetadata metadata) =>
+        metadata.Burns.Select(b => b.Burn.Hlc.PhysicalMs).Append(metadata.Write.Hlc.PhysicalMs).Append(metadata.Version.Hlc.PhysicalMs).Max();
+
+    private long YearAhead()
+    {
+        var nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
+        const long year = 365L * 24 * 60 * 60 * 1000;
+        return nowMs > long.MaxValue - year ? long.MaxValue : nowMs + year;
+    }
+
+    // The load-time diagnostics, one text each for the full load and the metadata path (brief T16-S2).
+
+    private static string UnreadableText(string fileName, string reason) =>
+        $"Warning: record {fileName} can't be read ({reason}). Its secret is kept as " +
+        "present but unknown: commands that need it stop, and nothing overwrites or deletes it. Restore the file " +
+        "from a backup or another copy, or wait for the sync to finish.";
+
+    private static string YearAheadText(string fileName) =>
+        $"Warning: record {fileName} carries a time stamp more than a year ahead of this machine's clock " +
+        "(a machine with a wrong clock wrote it). It still orders correctly; check that machine's clock.";
+
+    private static string UnusableCopyText(string copyName, SyncConflictTool tool, string fileName, string reason) =>
+        $"Warning: {copyName} ({ToolName(tool)} conflicted copy of record {fileName}) can't be used ({reason}). " +
+        "It is kept as it is and never chosen; remove it once you no longer need it.";
+
+    private static string CopyNote(string fileName, SyncConflictTool tool, string copyName, Stamp copyVersion, Stamp? mainVersion) =>
+        $"Note: record {fileName} has a {ToolName(tool)} conflicted copy ({copyName}): version {copyVersion} " +
+        $"vs {(mainVersion is null ? "no main file" : $"version {mainVersion}")}. Combined by the merge rules; the copy is " +
+        "removed the next time this record is written.";
+
     /// <summary>
     /// Decision 4: folds a record's sync-conflict copies into its main file by the merge rules. A
     /// copy that can't be decrypted or authenticated is a warning and is never chosen or deleted. A
     /// main file that can't be read stays unreadable (fail closed): its copies are not used, since
     /// the main file may hold the newest version.
+    /// <para>
+    /// Brief T16-S1 (ruling 11): every decoded copy (the main file first) is validated
+    /// (<see cref="RecordMerge.ValidateFingerprints"/>) and all of them are merged in one
+    /// <see cref="RecordMerge.MergeAll"/> call. A conflict there makes the <b>record</b> unreadable
+    /// (warned, never merged or overwritten; the main file's bytes are kept for the stale-write
+    /// guard). It is deliberately handled apart from the per-copy decode failures below, which only
+    /// mean "this copy can't be used" and leave the record readable.
+    /// </para>
     /// </summary>
     private LoadedRecord FoldConflictCopies(
-        string fileName, List<ConflictWarning> copies, LoadedRecord? main, byte[] key, TextWriter? warnings)
+        string fileName, List<ConflictWarning> copies, LoadedRecord? main, byte[] key, FingerprintKeys fingerprintKeys, TextWriter? warnings)
     {
         main ??= new LoadedRecord(fileName, null, null, null);
-        var state = main.State;
+        List<SecretRecord> inputs = main.State is null ? [] : [main.State];
         List<(string Path, byte[] Bytes)> folded = [];
         foreach (var copy in copies)
         {
             var path = Path.Combine(RecordsDir, copy.ConflictingFilename);
-            var tool = ToolName(copy.Tool);
             byte[] bytes;
             SecretRecord copyState;
             try
             {
                 bytes = _owner.ReadAllBytes(path);
-                RecordDecrypted?.Invoke(copy.ConflictingFilename);
-                copyState = SecretRecordCodec.Decode(bytes, key);
+                copyState = DecodeFull(copy.ConflictingFilename, bytes, key);
                 if (FilenameHasher.ToFilename(copyState.RecordId) != fileName)
                     throw new TswapException("its record id belongs to another record");
             }
             catch (Exception ex) when (ex is TswapException or CryptographicException or IOException or UnauthorizedAccessException)
             {
                 var reason = ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message;
-                warnings?.WriteLine(
-                    $"Warning: {copy.ConflictingFilename} ({tool} conflicted copy of record {fileName}) can't be used ({reason}). " +
-                    "It is kept as it is and never chosen; remove it once you no longer need it.");
+                warnings?.WriteLine(UnusableCopyText(copy.ConflictingFilename, copy.Tool, fileName, reason));
                 continue;
             }
             ObserveAll(copyState);
             if (main.UnreadableReason is not null)
                 continue;
-            warnings?.WriteLine(
-                $"Note: record {fileName} has a {tool} conflicted copy ({copy.ConflictingFilename}): version {copyState.Version} " +
-                $"vs {(state is null ? "no main file" : $"version {state.Version}")}. Combined by the merge rules; the copy is " +
-                "removed the next time this record is written.");
-            state = state is null ? copyState : RecordMerge.Merge(state, copyState);
+            warnings?.WriteLine(CopyNote(fileName, copy.Tool, copy.ConflictingFilename, copyState.Version, main.State?.Version));
+            inputs.Add(copyState);
             folded.Add((path, bytes));
         }
-        return main with { State = state, FoldedCopies = folded };
+        if (main.UnreadableReason is not null || inputs.Count == 0)
+            return main with { FoldedCopies = folded };
+
+        // Outside the per-copy catch above: a conflict is about the record, not one copy.
+        try
+        {
+            foreach (var input in inputs)
+                RecordMerge.ValidateFingerprints(input, fingerprintKeys);
+            return main with { State = RecordMerge.MergeAll(inputs), FoldedCopies = folded, MainState = main.State, Inputs = inputs };
+        }
+        catch (RecordConflictException ex)
+        {
+            return main with
+            {
+                State = null,
+                UnreadableReason = $"its copies can't be merged: {ex.Message}; remove the damaged conflicted copy",
+                FoldedCopies = null,
+                MainState = main.State,
+                Inputs = null,
+            };
+        }
     }
 
     private LoadedRecord ReadRecord(string fileName, byte[] key)
@@ -515,18 +910,172 @@ public sealed class RecordVaultStore : IFileVaultStore
         // (ObserveAll below); a planted header could otherwise push LastHlc anywhere.
         try
         {
-            RecordDecrypted?.Invoke(fileName);
-            var state = SecretRecordCodec.Decode(bytes, key);
+            var state = DecodeFull(fileName, bytes, key);
             if (FilenameHasher.ToFilename(state.RecordId) != fileName)
                 return new LoadedRecord(fileName, bytes, null, "its record id does not match its file name");
             ObserveAll(state);
-            return new LoadedRecord(fileName, bytes, state, null);
+            return new LoadedRecord(fileName, bytes, state, null, MainState: state);
         }
         catch (Exception ex) when (ex is TswapException or CryptographicException)
         {
             return new LoadedRecord(fileName, bytes, null, ex is CryptographicException ? "it fails authentication" : ex.Message);
         }
     }
+
+    /// <summary>
+    /// Decodes a whole record file (every value it holds), noting a format 3 file for
+    /// <see cref="WritesV3"/> and reporting the decryptions to the test seams.
+    /// </summary>
+    private SecretRecord DecodeFull(string file, byte[] bytes, byte[] key)
+    {
+        RecordDecrypted?.Invoke(file);
+        var state = SecretRecordCodec.Decode(bytes, key);
+        // Ruling 3 ("has read any v3 record"): only a format 3 record that decoded counts (fix round 1);
+        // a damaged file carrying a format 3 byte selects nothing.
+        if (SecretRecordCodec.FormatVersionOf(bytes) == KeyringFormat.RecordFormatVersion)
+            _sawV3 = true;
+        if (ValueDecrypted is { } seam)
+        {
+            if (state.Type != RecordType.Tombstone)
+                seam(file, state.Version);
+            if (state.Previous is { } previous)
+                seam(file, previous.Version);
+        }
+        return state;
+    }
+
+    /// <summary>
+    /// Ruling 3: reads the vault folder's <see cref="RecordFormatMarkerFileName"/> (a UTF-8 BOM and
+    /// surrounding whitespace, CR/LF included, are ignored). A number of 3 or more is kept; anything
+    /// else is a warning with a repair hint and counts as absent.
+    /// </summary>
+    private void ReadMarker(TextWriter? warnings)
+    {
+        _markerFormat = null;
+        _markerText = null;
+        var path = RecordFormatMarkerFile;
+        if (!_owner.FileExists(path))
+            return;
+        string text;
+        try
+        {
+            ReadOnlySpan<byte> bytes = _owner.ReadAllBytes(path);
+            if (bytes.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
+                bytes = bytes[3..];
+            text = Encoding.UTF8.GetString(bytes).Trim();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+        {
+            warnings?.WriteLine($"Warning: the vault folder's {RecordFormatMarkerFileName} marker can't be read ({ex.Message}); it is ignored.");
+            return;
+        }
+        // Digits only: a number of 3 or more is a format; one too large for an int is still a number
+        // above 3 (fix round 1), so it refuses writes like any other newer format.
+        if (text.Length > 0 && text.All(char.IsAsciiDigit))
+        {
+            var fits = int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var format);
+            if (!fits || format >= KeyringFormat.RecordFormatVersion)
+            {
+                _markerFormat = fits ? format : int.MaxValue;
+                _markerText = text;
+                return;
+            }
+        }
+        warnings?.WriteLine(
+            $"Warning: the vault folder's {RecordFormatMarkerFileName} marker ({path}) doesn't hold a record format this tswap " +
+            "understands, so it is ignored (records are written in format 2 unless a format 3 record is read). If this vault " +
+            "was reindexed, write 3 into it; otherwise delete it.");
+    }
+
+    /// <summary>
+    /// Ruling 3: the record format the vault folder's marker names (3, or a newer one), or null when
+    /// it is absent or not understood (warned about on <paramref name="warnings"/>). Reads only.
+    /// </summary>
+    public int? ReadFormatMarker(TextWriter? warnings = null)
+    {
+        ReadMarker(warnings ?? _warnings);
+        return _markerFormat;
+    }
+
+    /// <summary>
+    /// Ruling 3: writes the vault folder's marker (<c>3</c>) through the file layer (as the folder's
+    /// owner, mode 0600, atomically and durably). From then on every machine sharing the folder
+    /// writes format 3. <c>vault reindex</c> writes it after every record succeeded; <c>init</c> and
+    /// <c>migrate --to-records</c> create new vaults with it; <c>vault merge</c> copies it from a
+    /// reindexed copy.
+    /// </summary>
+    public void WriteFormatMarker()
+    {
+        TightenModes();
+        _owner.CreateDirectory(VaultDir);
+        _owner.WriteDurable(RecordFormatMarkerFile, Encoding.UTF8.GetBytes($"{KeyringFormat.RecordFormatVersion}\n"));
+        _markerFormat = KeyringFormat.RecordFormatVersion;
+    }
+
+    /// <summary>
+    /// Brief T16-S1 (<c>sudo tswap vault reindex</c>): rewrites every record that isn't already
+    /// current as format 3 with fingerprints, each with a new write stamp, so it merges like any other
+    /// write; tombstones become format 3 metadata-only records. A record is current (ruling 9) when its
+    /// main file is format 3, it has no conflicted copies, its retained values carry fingerprint sets of
+    /// this build's variant-set version (or newer), and its merged state and sections equal the main
+    /// file's: anything else is rewritten, which also folds a lingering format 2 copy and converges two
+    /// machines' sections. Value sections are copied where they exist; a value read from format 2 is
+    /// sealed now. Refuses before writing anything when a record can't be read. The marker is written
+    /// last, so "marker present" means a reindex finished once; a run interrupted midway is finished by
+    /// running it again (the records already rewritten are current by then).
+    /// </summary>
+    public ReindexResult Reindex(byte[] vaultKey)
+    {
+        var loaded = LoadRecords(vaultKey, _warnings);
+        if (_markerFormat > KeyringFormat.RecordFormatVersion)
+            throw NewerFormatMarker();
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).Order(StringComparer.Ordinal).ToList();
+        if (unreadable.Count > 0)
+            throw new TswapException(
+                $"Refusing to reindex: {unreadable.Count} record(s) can't be read ({string.Join(", ", unreadable)}). Restore each from a " +
+                "backup or another copy, wait for the sync to finish, or delete it, then run the reindex again. Nothing was written.");
+
+        List<(string FileName, SecretRecord State)> writes = [];
+        int alreadyCurrent = 0, tombstones = 0;
+        foreach (var record in loaded.Values.OrderBy(r => r.FileName, StringComparer.Ordinal))
+        {
+            if (record.State is not { } state)
+                continue; // no main file and no usable copy: nothing to rewrite
+            if (state.Type == RecordType.Tombstone)
+                tombstones++;
+            if (IsCurrent(record))
+            {
+                alreadyCurrent++;
+                continue;
+            }
+            writes.Add((record.FileName, state));
+        }
+        WriteRecords(writes, vaultKey, loaded, reindex: true);
+        if (_markerFormat != KeyringFormat.RecordFormatVersion)
+            WriteFormatMarker();
+        return new ReindexResult(writes.Count, alreadyCurrent, tombstones);
+    }
+
+    /// <summary>Ruling 9: a record <see cref="Reindex"/> leaves as it is.</summary>
+    private static bool IsCurrent(LoadedRecord record)
+    {
+        if (record.FoldedCopies is { Count: > 0 } || record.MainBytes is null || record.MainState is not { } main || record.State is not { } state)
+            return false;
+        if (SecretRecordCodec.FormatVersionOf(record.MainBytes) != KeyringFormat.RecordFormatVersion)
+            return false;
+        if (!state.SameState(main) || !SameSections(state.Sealed, main.Sealed))
+            return false;
+        if (state.Type == RecordType.Tombstone)
+            return true;
+        return CurrentSet(state.Fingerprints) && (state.Previous is null || CurrentSet(state.Previous.Fingerprints));
+
+        static bool CurrentSet(FingerprintSet? set) => set is not null && set.VariantSetVersion >= SecretVariants.CurrentSetVersion;
+    }
+
+    private TswapException NewerFormatMarker() => new(
+        $"This vault folder was written by a newer tswap: its {RecordFormatMarkerFileName} marker says record format " +
+        $"{_markerText ?? _markerFormat?.ToString(CultureInfo.InvariantCulture)}, and this build writes formats {KeyringFormat.RecordFormatVersionV2} and {KeyringFormat.RecordFormatVersion} " +
+        "only. Upgrade tswap before changing this vault; nothing was written.");
 
     private void Observe(Hlc hlc) => _highestSeen = Hlc.Max(_highestSeen, hlc);
 
@@ -578,7 +1127,13 @@ public sealed class RecordVaultStore : IFileVaultStore
                 var burns = (state?.Burns ?? []).ToList();
                 // Fix round 1, B: the value this version replaces is kept (one level).
                 var live = state is { Type: not RecordType.Tombstone };
-                var previous = live ? new PreviousValue(state!.Version, state.Value) : null;
+                // Brief T16-S1: the replaced value keeps its fingerprints and its sealed section
+                // (copied, never encrypted again).
+                var previous = live ? new PreviousValue(state!.Version, state.Value, state.Fingerprints) : null;
+                IReadOnlyDictionary<Stamp, byte[]>? sealedPrevious = live && state!.Sealed is { } sealedSections
+                    && sealedSections.TryGetValue(state.Version, out var previousSection)
+                        ? new Dictionary<Stamp, byte[]> { [state.Version] = previousSection }
+                        : null;
                 // restore: the previous value comes back with its burn outstanding again (it is
                 // still compromised), keeping the original burn's time and reason.
                 if (secret.Restored && live && state!.Previous is { } restoredFrom)
@@ -591,7 +1146,11 @@ public sealed class RecordVaultStore : IFileVaultStore
                     ? state.CreatedMs
                     : new DateTimeOffset(DateTime.SpecifyKind(secret.Created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
                 next = new SecretRecord(
-                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous);
+                    FilenameHasher.ComputeRecordId(namesKey, name), Stamp.Zero, RecordType.Value, version, name, createdMs, value, burns, previous)
+                {
+                    Extensions = state?.Extensions ?? [], // ruling 6: unknown extensions survive every rewrite
+                    Sealed = sealedPrevious,
+                };
             }
             else if (secret.BurnedAt is not null && state.OutstandingBurn is null)
             {
@@ -605,7 +1164,10 @@ public sealed class RecordVaultStore : IFileVaultStore
         {
             if (current.State is not { Type: not RecordType.Tombstone } state || db.Secrets.ContainsKey(state.Name))
                 continue;
-            var tombstone = state with { Type = RecordType.Tombstone, Version = NextStamp(), Value = [], Previous = null };
+            var tombstone = state with
+            {
+                Type = RecordType.Tombstone, Version = NextStamp(), Value = [], Previous = null, Fingerprints = null, Sealed = null,
+            };
             writes.Add((current.FileName, RecordMerge.Normalize(tombstone)));
         }
 
@@ -650,6 +1212,221 @@ public sealed class RecordVaultStore : IFileVaultStore
             .ToUnixTimeMilliseconds();
 
     /// <summary>
+    /// Brief T16-S1: every record's metadata, decrypting metadata sections only and no value section
+    /// (<see cref="SecretRecordCodec.DecodeMetadata"/>). Conflicted copies fold in all at once by
+    /// <see cref="RecordMerge.MergeAllMetadata"/> (the value sections are read from the framing,
+    /// still encrypted, and compared by bytes and fingerprints). A record whose main file or any
+    /// conflicted copy is format 2 counts as not fingerprinted; with <see cref="FormatTwoRecords.Skip"/>
+    /// that file is not decrypted (ruling 12: its version stamp is inside its payload, so this path
+    /// can't tell whether it is the newer version) and the record isn't listed. A record that can't
+    /// be read, or whose copies can't be merged here, is listed in <see cref="VaultMetadata.Unreadable"/>
+    /// and warned about. Reads only.
+    /// <para>
+    /// Brief T16-S2: with <see cref="FormatTwoRecords.Decode"/> (owner decision 1, for <c>names</c>,
+    /// <c>list</c> and <c>burned</c>) exactly the records with a format 2 file are decoded whole, as the
+    /// full load does (<see cref="ReadRecord"/>, <see cref="FoldConflictCopies"/>), listed without
+    /// fingerprints and counted in <see cref="VaultMetadata.FormatTwoDecoded"/>; their values are
+    /// zeroed at once. The warnings are the full load's texts (unreadable records, conflicted copies
+    /// with the sync tool's name, stamps more than a year ahead), in its order.
+    /// </para>
+    /// </summary>
+    public VaultMetadata LoadMetadata(byte[] vaultKey, TextWriter? warnings = null, FormatTwoRecords formatTwo = FormatTwoRecords.Skip)
+    {
+        warnings ??= _warnings;
+        List<RecordMetadata> records = [];
+        List<(string FileName, string Text)> unreadable = [];
+        Dictionary<string, IReadOnlyDictionary<Stamp, byte[]>> chosenSections = new(StringComparer.Ordinal);
+        int notFingerprinted = 0, olderVariantSet = 0, formatTwoDecoded = 0;
+        var recordsDir = RecordsDir;
+        if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
+        {
+            MetadataSections = chosenSections;
+            return new VaultMetadata(records, 0, 0, []);
+        }
+
+        var scan = _owner.AsOwner(recordsDir, () => RecordDirectoryScanner.Scan(recordsDir));
+        var mains = scan.ValidRecordFilenames.ToHashSet(StringComparer.Ordinal);
+        var copiesByRecord = scan.Conflicts.GroupBy(c => c.RecordFilename, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ConflictingFilename, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+        FingerprintKeys? fingerprintKeys = null;
+        try
+        {
+            foreach (var fileName in mains.Concat(copiesByRecord.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+            {
+                var copies = copiesByRecord.GetValueOrDefault(fileName) ?? [];
+                byte[]? mainBytes = null;
+                string? mainProblem = null;
+                if (mains.Contains(fileName))
+                {
+                    try
+                    {
+                        mainBytes = _owner.ReadAllBytes(Path.Combine(recordsDir, fileName));
+                    }
+                    catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+                    {
+                        mainProblem = ex.Message;
+                    }
+                }
+                if (mainBytes is not null && SecretRecordCodec.FormatVersionOf(mainBytes) == KeyringFormat.RecordFormatVersionV2)
+                {
+                    notFingerprinted++;
+                    if (formatTwo == FormatTwoRecords.Decode)
+                        DecodeFormatTwo(fileName, copies);
+                    continue;
+                }
+
+                List<(string Name, SyncConflictTool Tool, byte[] Bytes)> copyBytes = [];
+                foreach (var copy in copies)
+                {
+                    try
+                    {
+                        copyBytes.Add((copy.ConflictingFilename, copy.Tool, _owner.ReadAllBytes(Path.Combine(recordsDir, copy.ConflictingFilename))));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TswapException)
+                    {
+                        WarnUnusableCopy(copy.ConflictingFilename, copy.Tool, fileName, ex.Message);
+                    }
+                }
+                // Ruling 12: a format 2 copy is never decrypted with Skip; the record is not fingerprinted.
+                if (copyBytes.Any(c => SecretRecordCodec.FormatVersionOf(c.Bytes) == KeyringFormat.RecordFormatVersionV2))
+                {
+                    notFingerprinted++;
+                    if (formatTwo == FormatTwoRecords.Decode)
+                        DecodeFormatTwo(fileName, copies);
+                    continue;
+                }
+
+                List<(RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>)> inputs = [];
+                RecordMetadata? main = null;
+                if (mainBytes is not null)
+                {
+                    mainProblem = ReadMainMetadata(fileName, mainBytes, vaultKey, out var decoded);
+                    if (decoded is { } d)
+                    {
+                        inputs.Add(d);
+                        main = d.Metadata;
+                    }
+                }
+                foreach (var (copyName, tool, bytes) in copyBytes)
+                {
+                    RecordMetadata copyMetadata;
+                    try
+                    {
+                        RecordDecrypted?.Invoke(copyName);
+                        var decoded = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
+                            ?? throw new TswapException("it is not a format 3 record");
+                        if (FilenameHasher.ToFilename(decoded.Metadata.RecordId) != fileName)
+                            throw new TswapException("its record id belongs to another record");
+                        copyMetadata = decoded.Metadata;
+                        if (mainProblem is null)
+                            inputs.Add(decoded);
+                    }
+                    catch (Exception ex) when (ex is TswapException or CryptographicException)
+                    {
+                        WarnUnusableCopy(copyName, tool, fileName, ex is CryptographicException ? "it can't be decrypted or authenticated" : ex.Message);
+                        continue;
+                    }
+                    if (mainProblem is null)
+                        warnings?.WriteLine(CopyNote(fileName, tool, copyName, copyMetadata.Version, main?.Version));
+                }
+                if (mainProblem is not null)
+                {
+                    unreadable.Add((fileName, UnreadableText(fileName, mainProblem)));
+                    continue;
+                }
+                if (inputs.Count == 0)
+                    continue;
+
+                (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed) merged;
+                try
+                {
+                    merged = RecordMerge.MergeAllMetadata(inputs);
+                }
+                catch (RecordConflictException ex)
+                {
+                    unreadable.Add((fileName,
+                        $"Warning: record {fileName} can't be read: its copies can't be merged ({ex.Message}). Remove the damaged " +
+                        "conflicted copy; a full load (any command that writes this record) may still be able to merge them."));
+                    continue;
+                }
+                records.Add(merged.Metadata);
+                chosenSections[fileName] = merged.Sealed;
+                var retained = merged.Metadata.RetainedVersions().ToList();
+                if (retained.Any(v => v.Fingerprints is null))
+                    notFingerprinted++;
+                if (retained.Any(v => v.Fingerprints is { } set && set.VariantSetVersion < SecretVariants.CurrentSetVersion))
+                    olderVariantSet++;
+            }
+        }
+        finally
+        {
+            fingerprintKeys?.Dispose();
+        }
+
+        foreach (var (_, text) in unreadable)
+            warnings?.WriteLine(text);
+        if (unreadable.Count > 0)
+            warnings?.WriteLine($"Warning: {unreadable.Count} unreadable record(s) in {recordsDir}.");
+        var yearAhead = YearAhead();
+        foreach (var record in records.Where(r => MaxPhysical(r) > yearAhead))
+            warnings?.WriteLine(YearAheadText(FilenameHasher.ToFilename(record.RecordId)));
+        MetadataSections = chosenSections;
+        return new VaultMetadata(records, notFingerprinted, olderVariantSet, [.. unreadable.Select(u => u.FileName).Order(StringComparer.Ordinal)])
+        {
+            FormatTwoDecoded = formatTwoDecoded,
+        };
+
+        void WarnUnusableCopy(string copyName, SyncConflictTool tool, string fileName, string reason) =>
+            warnings?.WriteLine(UnusableCopyText(copyName, tool, fileName, reason));
+
+        // A record with a format 2 file, decoded whole as the full load does; its values zeroed at once.
+        void DecodeFormatTwo(string fileName, List<ConflictWarning> copies)
+        {
+            fingerprintKeys ??= FingerprintKeys.Derive(vaultKey);
+            var main = mains.Contains(fileName) ? ReadRecord(fileName, vaultKey) : null;
+            var folded = FoldConflictCopies(fileName, copies, main, vaultKey, fingerprintKeys, warnings);
+            try
+            {
+                if (folded.UnreadableReason is { } reason)
+                    unreadable.Add((fileName, UnreadableText(fileName, reason)));
+                else if (folded.State is { } state)
+                {
+                    // Code review (GLM B-2): counted only when it was decrypted whole, not when it failed.
+                    formatTwoDecoded++;
+                    records.Add(MetadataOf(state));
+                }
+            }
+            finally
+            {
+                ZeroValues((folded.Inputs ?? []).Concat(folded.State is null ? [] : [folded.State]));
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="LoadMetadata"/>'s format 3 main file: its metadata and sections, or why it can't be read.
+    /// </summary>
+    private string? ReadMainMetadata(string fileName, byte[] bytes, byte[] vaultKey,
+        out (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sealed)? decoded)
+    {
+        decoded = null;
+        try
+        {
+            RecordDecrypted?.Invoke(fileName);
+            var read = SecretRecordCodec.DecodeMetadataAndSections(bytes, vaultKey)
+                ?? throw new TswapException("it is not a format 3 record");
+            if (FilenameHasher.ToFilename(read.Metadata.RecordId) != fileName)
+                return "its record id does not match its file name";
+            decoded = read;
+            return null;
+        }
+        catch (Exception ex) when (ex is TswapException or CryptographicException)
+        {
+            return ex is CryptographicException ? "it fails authentication" : ex.Message;
+        }
+    }
+
+    /// <summary>
     /// Brief T6 decision 5 (<c>vault merge</c>): every readable record of this vault folder as its
     /// merged state (conflicted copies folded in), by hashed file name, plus the file names of
     /// records that can't be read. Reads only.
@@ -665,8 +1442,9 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>
     /// Brief T6 decision 5 (<c>vault merge</c>): merges <paramref name="incoming"/> states (another
     /// copy of this vault) into this folder by <see cref="RecordMerge"/>, writing only records whose
-    /// state changes (a new write stamp; version and burn stamps are kept, so merging in either
-    /// direction gives the same states). A record that can't be read here is never overwritten
+    /// state or sections change, whose conflicted copies were folded, or (owner decision 2026-11-02)
+    /// whose main file isn't format 3 while this folder writes format 3 (a new write stamp; version
+    /// and burn stamps are kept, so merging in either direction gives the same states). A record that can't be read here is never overwritten
     /// (a warning). Call after <see cref="LoadSecrets"/> or <see cref="LoadRecordStates"/>; the
     /// stale-write guard applies. Returns how many records were written.
     /// </summary>
@@ -674,9 +1452,17 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// Fix round 1 (C): runs after every record's stale-write guard passed and before any record is
     /// written (vault merge saves the keyring there), so a refusal really writes nothing.
     /// </param>
-    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, Action? beforeWrite = null)
+    /// <param name="incomingReadFormat3">
+    /// Brief T16-S1 (ruling 3, fix round 1): the other copy's load read a format 3 record
+    /// (<see cref="ReadFormat3"/>), so this merge writes format 3: its sections, fingerprints and
+    /// extensions aren't dropped (and the next merge doesn't rewrite them again). Decided by the
+    /// source format, not by whether a state carries sections (a format 3 tombstone has none).
+    /// </param>
+    public int MergeRecords(IReadOnlyDictionary<string, SecretRecord> incoming, byte[] key, bool incomingReadFormat3, Action? beforeWrite = null)
     {
         var loaded = _loaded ?? LoadRecords(key, _warnings);
+        if (incomingReadFormat3)
+            _sawV3 = true;
         List<(string FileName, SecretRecord State)> writes = [];
         foreach (var (fileName, state) in incoming.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
@@ -687,8 +1473,27 @@ public sealed class RecordVaultStore : IFileVaultStore
                 _warnings?.WriteLine($"Warning: record {fileName} can't be read here, so the other copy's version was not merged into it.");
                 continue;
             }
-            var merged = current?.State is null ? RecordMerge.Normalize(state) : RecordMerge.Merge(current.State, state);
-            if (current?.State is not null && merged.SameState(current.State) && current.FoldedCopies is not { Count: > 0 })
+            // Ruling 11: the main file, its conflicted copies and the incoming state, all at once.
+            SecretRecord merged;
+            try
+            {
+                merged = RecordMerge.MergeAll([.. current?.Inputs ?? [], state]);
+            }
+            catch (RecordConflictException ex)
+            {
+                _warnings?.WriteLine(
+                    $"Warning: record {fileName} can't be merged with the other copy's version ({ex.Message}); it was skipped and " +
+                    "left as it is. Find the damaged copy (here or in the other folder) and remove it, then merge again.");
+                continue;
+            }
+            // Write when the state differs, when the sections differ from the main file's (so both
+            // folders converge on one section), to remove the conflicted copies folded in, or (owner
+            // decision 2026-11-02, a fourth trigger) when this folder writes format 3 and the main
+            // file isn't format 3, so equal format 2 records (tombstones included) don't keep the
+            // folder "not fully fingerprinted" until a reindex.
+            if (current?.State is not null && merged.SameState(current.State)
+                && SameSections(merged.Sealed, current.MainState?.Sealed) && current.FoldedCopies is not { Count: > 0 }
+                && !(WritesV3 && SecretRecordCodec.FormatVersionOf(current.MainBytes ?? []) != KeyringFormat.RecordFormatVersion))
                 continue;
             writes.Add((fileName, merged));
         }
@@ -696,6 +1501,13 @@ public sealed class RecordVaultStore : IFileVaultStore
         beforeWrite?.Invoke();
         WriteRecords(writes, key, loaded);
         return writes.Count;
+    }
+
+    private static bool SameSections(IReadOnlyDictionary<Stamp, byte[]>? a, IReadOnlyDictionary<Stamp, byte[]>? b)
+    {
+        if ((a?.Count ?? 0) != (b?.Count ?? 0))
+            return false;
+        return a is null || b is null || a.All(kv => b.TryGetValue(kv.Key, out var other) && other.AsSpan().SequenceEqual(kv.Value));
     }
 
     private static TswapException Unreadable(string name, string fileName) => new(
@@ -707,10 +1519,17 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// loaded first, and any change refuses the whole save before anything is written (decision 6).
     /// Each record gets its own write stamp; <c>LastHlc</c> is saved afterwards.
     /// </summary>
-    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded)
+    /// <param name="reindex">
+    /// <c>vault reindex</c>: format 3 regardless of the marker, and fingerprint sets of an older
+    /// variant-set version are recomputed.
+    /// </param>
+    private void WriteRecords(List<(string FileName, SecretRecord State)> writes, byte[] key, Dictionary<string, LoadedRecord> loaded, bool reindex = false)
     {
         if (writes.Count == 0)
             return;
+        // Ruling 3: a vault folder marked by a newer tswap is never written by this one.
+        if (_markerFormat > KeyringFormat.RecordFormatVersion)
+            throw NewerFormatMarker();
         var recordsDir = RecordsDir;
         CheckUnchanged(writes, loaded);
 
@@ -718,22 +1537,71 @@ public sealed class RecordVaultStore : IFileVaultStore
         _owner.CreateDirectory(VaultDir);
         _owner.CreateDirectory(recordsDir);
         var origin = OriginId();
+        using var fingerprintKeys = WritesV3 || reindex ? FingerprintKeys.Derive(key) : null;
         foreach (var (fileName, state) in writes)
         {
             var hlc = Hlc.Next(_highestSeen, _time.GetUtcNow().ToUnixTimeMilliseconds());
             _highestSeen = hlc;
             var written = state with { Write = new Stamp(hlc, origin) };
-            var bytes = SecretRecordCodec.Encode(written, key);
+            byte[] bytes;
+            if (fingerprintKeys is not null)
+            {
+                written = PrepareV3(written, fingerprintKeys, recomputeOlderSets: reindex);
+                bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersion);
+                written = written with { Sealed = written.Type == RecordType.Tombstone ? null : SecretRecordCodec.SectionsOf(bytes, written) };
+            }
+            else
+            {
+                bytes = SecretRecordCodec.Encode(written, key, KeyringFormat.RecordFormatVersionV2);
+                // What format 2 holds: no fingerprints, extensions or sections.
+                written = written with
+                {
+                    Fingerprints = null, Previous = written.Previous is { } p ? p with { Fingerprints = null } : null, Extensions = [], Sealed = null,
+                };
+            }
             _owner.WriteDurable(Path.Combine(recordsDir, fileName), bytes);
             // Decision 4: the copies merged into what was just written are redundant now.
             if (loaded.TryGetValue(fileName, out var before) && before.FoldedCopies is { Count: > 0 } copies)
                 RemoveRedundantCopies(copies);
-            loaded[fileName] = new LoadedRecord(fileName, bytes, written, null);
+            loaded[fileName] = new LoadedRecord(fileName, bytes, written, null, MainState: written, Inputs: [written]);
+            AfterRecordWritten?.Invoke();
         }
 
         var machine = MachineConfig with { LastHlc = _highestSeen.ToString() };
         _machineConfig = machine;
         WriteMachineConfig(machine);
+    }
+
+    /// <summary>
+    /// Brief T16-S1: a record ready for format 3. A retained value without a fingerprint set gets one
+    /// computed now from its plaintext (known from the load); with <paramref name="recomputeOlderSets"/>
+    /// (<c>vault reindex</c>) so does one with an older variant set. A version that already has a
+    /// sealed section keeps it (copied, never encrypted again); one without (new, or read from
+    /// format 2) is sealed by the codec. Sections of versions no longer retained are dropped.
+    /// </summary>
+    private static SecretRecord PrepareV3(SecretRecord record, FingerprintKeys keys, bool recomputeOlderSets)
+    {
+        if (record.Type == RecordType.Tombstone)
+            return record with { Fingerprints = null, Previous = null, Sealed = null };
+        FingerprintSet For(byte[] value, FingerprintSet? stored) =>
+            stored is not null && !(recomputeOlderSets && stored.VariantSetVersion < SecretVariants.CurrentSetVersion)
+                ? stored
+                : Fingerprinter.Compute(value, keys);
+        var previous = record.Previous is { } p ? p with { Fingerprints = For(p.Value, p.Fingerprints) } : null;
+        Dictionary<Stamp, byte[]> sealedSections = [];
+        if (record.Sealed is { } existing)
+        {
+            if (existing.TryGetValue(record.Version, out var current))
+                sealedSections[record.Version] = current;
+            if (previous is not null && existing.TryGetValue(previous.Version, out var old))
+                sealedSections[previous.Version] = old;
+        }
+        return record with
+        {
+            Fingerprints = For(record.Value, record.Fingerprints),
+            Previous = previous,
+            Sealed = sealedSections.Count == 0 ? null : sealedSections,
+        };
     }
 
     /// <summary>
@@ -818,3 +1686,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// <summary>A new random origin id (base64) for a machine config (decision 1).</summary>
     public static string NewOriginId() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyringFormat.OriginIdSize));
 }
+
+/// <summary>
+/// Brief T16-S1: what <see cref="RecordVaultStore.Reindex"/> did. <paramref name="Rewritten"/> and
+/// <paramref name="AlreadyCurrent"/> together count every record that has a state: one whose main
+/// file is absent and whose conflicted copies all can't be used has nothing to rewrite and is
+/// counted in neither (its copies are warned about and kept). <paramref name="Tombstones"/> says how
+/// many of the counted records are deletes (in either group).
+/// </summary>
+public sealed record ReindexResult(int Rewritten, int AlreadyCurrent, int Tombstones);

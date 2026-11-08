@@ -9,7 +9,7 @@ namespace TswapCore.Keyring;
 /// accept</c> (issue #121) can reuse the exact same construction</b> rather than re-deriving it.
 /// Per this issue's PR body: <c>slot accept</c>'s final step — producing the new machine's own
 /// real <see cref="SlotKind.Machine"/> slot once it has recovered <c>K_v</c> from another
-/// machine's <c>slot approve</c> file — is functionally identical to what <c>init --keyring</c>
+/// machine's <c>slot approve</c> file — is functionally identical to what a keyring <c>init</c>
 /// already does for a fresh vault's first slot. The only difference is where <c>vaultKey</c> and
 /// the slot's own X25519 keypair come from (freshly random for <c>init</c>; recovered from a
 /// hand-carried file, and generated at <c>slot request</c> time respectively, for <c>slot

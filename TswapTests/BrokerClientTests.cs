@@ -231,7 +231,6 @@ public class BrokerClientTests : IAsyncLifetime
         m.Ok("", "init", "--tpm", "--no-recovery");
         m.Ok("vault-token-value\nvault-token-value\n", "add", "tok");
         m.Ok("other-value\nother-value\n", "add", "tok2");
-        m.Ok("", "migrate", "--to-records"); // serve's source reads one record of a record store
         var store = (RecordVaultStore)VaultStores.Open(m.Dir);
         var unlocker = new VaultUnlocker(m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, m.Tpm)]);
         var source = new VaultBrokerSecretSource(store, unlocker);

@@ -119,11 +119,66 @@ public static partial class BrokerNative
         return prctl(PrSetDumpable, 0, 0, 0, 0) == 0;
     }
 
+    /// <summary>
+    /// Linux: <c>prctl(PR_SET_DUMPABLE, dumpable ? 1 : 0)</c> (brief T17 ruling 12: a password broker is
+    /// dumpable only while it holds nothing). Returns false when it failed; a no-op returning true elsewhere.
+    /// </summary>
+    public static bool SetDumpable(bool dumpable)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+        return prctl(PrSetDumpable, dumpable ? 1u : 0u, 0, 0, 0) == 0;
+    }
+
     /// <summary>Linux: <c>prctl(PR_GET_DUMPABLE)</c> (1 dumpable, 0 not); -1 elsewhere.</summary>
     public static int GetDumpable() => OperatingSystem.IsLinux() ? prctl(PrGetDumpable, 0, 0, 0, 0) : -1;
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial int prctl(int option, nuint arg2, nuint arg3, nuint arg4, nuint arg5);
+
+    // ------------------------------------------------------------------ SO_PEERPIDFD probe (brief I224 D2)
+
+    private const int AfUnix = 1, SockStream = 1, SockCloexec = 0x80000, SoPeerPidfd = 77;
+
+    /// <summary>
+    /// Linux: whether the kernel gives a connected Unix socket's peer as a pidfd (<c>SO_PEERPIDFD</c>,
+    /// Linux 6.5 and later). Probed on a <c>socketpair()</c>: a listening socket has no peer, so the option
+    /// would fail there on any kernel. The answer comes from the call, not a version number. False
+    /// elsewhere and on any failure.
+    /// </summary>
+    public static unsafe bool PeerPidfdAvailable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return false;
+        var fds = stackalloc int[2];
+        if (socketpair(AfUnix, SockStream | SockCloexec, 0, fds) != 0)
+            return false;
+        try
+        {
+            int pidfd = -1;
+            uint length = sizeof(int);
+            var got = getsockopt(fds[0], SolSocket, SoPeerPidfd, &pidfd, &length) == 0;
+            // I224 fix round 1 (MiMo p1 M2, GLM p1 m7): close the probed pidfd on every path. A short write
+            // leaves the high bytes of -1 in place, so a partial value is negative and never closed by mistake.
+            if (got && pidfd >= 0)
+                close(pidfd);
+            return got && length == sizeof(int) && pidfd >= 0;
+        }
+        finally
+        {
+            close(fds[0]);
+            close(fds[1]);
+        }
+    }
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int socketpair(int domain, int type, int protocol, int* fds);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int getsockopt(int fd, int level, int name, void* value, uint* length);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static partial int close(int fd);
 
     // ------------------------------------------------------------------ realpath
 
@@ -263,6 +318,23 @@ public static partial class BrokerNative
             // struct passwd { char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid; char *pw_gecos; char *pw_dir; char *pw_shell; }
             var dir = *(nint*)(entry + (OperatingSystem.IsMacOS() ? 48 : 32));
             return dir == 0 ? null : Marshal.PtrToStringUTF8(dir);
+        }
+    }
+
+    /// <summary>The user name of <paramref name="uid"/> from the password database (<c>getpwuid_r</c>), or null.</summary>
+    public static unsafe string? NameOf(uint uid)
+    {
+        if (OperatingSystem.IsWindows())
+            return null;
+        var entry = stackalloc byte[256];
+        var buffer = new byte[16384];
+        nint result;
+        fixed (byte* b = buffer)
+        {
+            if (getpwuid_r(uid, entry, b, (nuint)buffer.Length, &result) != 0 || result == 0)
+                return null;
+            var name = *(nint*)entry; // pw_name is the first field on Linux and macOS
+            return name == 0 ? null : Marshal.PtrToStringUTF8(name);
         }
     }
 

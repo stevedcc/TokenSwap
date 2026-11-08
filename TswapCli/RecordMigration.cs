@@ -78,8 +78,9 @@ internal static class RecordMigration
             throw new TswapException("This machine has a pending 'slot request'; finish it with 'slot accept' before converting.");
         if (plainXor && (config.Backend is not (null or HardwareBackend.YubiKey) || config.TpmSealedKey is not null || config.SecureEnclaveWrappedKey is not null))
             throw new TswapException(
-                "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Create a keyring " +
-                $"vault ('{ctx.Prefix} init --tpm' or '--secure-enclave'), move the secrets over with export / import, then convert that.");
+                "This is a single-slot TPM / Secure Enclave vault from before keyring vaults; it can't be converted. Take the secrets " +
+                $"out with 'sudo {ctx.Prefix} export <file>', create a new vault in another config folder ('{ctx.Prefix} init --tpm' or " +
+                "'--secure-enclave', with TSWAP_CONFIG_DIR set), and import the file there.");
         if (plainXor)
         {
             var pluggedIn = ctx.YubiKeys.ListSerials();
@@ -156,11 +157,15 @@ internal static class RecordMigration
         // vault is untouched, and the next run removes the folder (with a notice).
         var temp = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
         temp.SaveConfig(newConfig with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(keyring)) });
+        // Brief T16-S1 (ruling 3): a new record vault starts in record format 3. The marker goes into
+        // the temp folder first, so the snapshot is written in format 3 and the rename carries it.
+        temp.WriteFormatMarker();
         var lastHlc = temp.WriteSnapshot(db, key);
         ctx.MigrationSeams?.AfterStep?.Invoke(1);
 
         // Step 2: read it all back and compare.
-        var problems = Verify(ctx, tempDir, newConfig, owner, keyring, db, key, recoveryPrivateKey, plainXor);
+        List<string> notes = [];
+        var problems = Verify(ctx, tempDir, newConfig, owner, keyring, db, key, recoveryPrivateKey, plainXor, notes);
         if (problems.Count > 0)
         {
             owner.DeleteDirectory(tempDir);
@@ -173,6 +178,8 @@ internal static class RecordMigration
         // verification and before the config switch, so a crash later can't lose it unseen.
         if (plainXor)
         {
+            foreach (var note in notes)
+                c.Out.WriteLine(note);
             c.Out.WriteLine("\nThe converted copy checked out. Its recovery slot opens the vault without any YubiKey:");
             InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, "every enrolled YubiKey");
         }
@@ -261,7 +268,7 @@ internal static class RecordMigration
     }
 
     /// <summary>What a non-empty target folder's keyring says about where it came from.</summary>
-    private enum ConvertedCopy
+    internal enum ConvertedCopy
     {
         /// <summary>Not recognised.</summary>
         None,
@@ -280,7 +287,7 @@ internal static class RecordMigration
     /// slot per enrolled serial plus a recovery slot, which another XOR vault on the same keys also
     /// matches: <see cref="ConvertedCopy.SameYubiKeys"/>.
     /// </summary>
-    private static ConvertedCopy LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher owner, string vaultDir, Config config)
+    internal static ConvertedCopy LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher owner, string vaultDir, Config config)
     {
         try
         {
@@ -292,8 +299,22 @@ internal static class RecordMigration
                 return there.VaultId.AsSpan().SequenceEqual(SlotCommand.DecodeKeyringOrCorrupt(config).VaultId)
                     ? ConvertedCopy.ThisVault
                     : ConvertedCopy.None;
-            var serials = there.Slots.Where(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob))
-                .Select(s => YubiKeySlotBlob.Decode(s.HwBlob!).Serial).Order().ToList();
+            // FIDO2 plan, task 2: only the OTP slots are compared (a FIDO2 slot added later is not the conversion's).
+            List<int> serials = [];
+            foreach (var slot in there.Slots)
+            {
+                switch (YubiKeySlotKinds.Classify(slot.HwBlob))
+                {
+                    case YubiKeySlotKind.Otp(var blob):
+                        serials.Add(blob.Serial);
+                        break;
+                    case YubiKeySlotKind.NeedsNewerTswap(var error):
+                        throw new TswapException(error);
+                    case YubiKeySlotKind.Corrupt(var error):
+                        throw new TswapException(error);
+                }
+            }
+            serials.Sort();
             return serials.Count > 0 && serials.SequenceEqual(config.YubiKeySerials.Distinct().Order())
                 && there.Slots.Any(s => s.Kind == SlotKind.Recovery)
                 ? ConvertedCopy.SameYubiKeys
@@ -366,7 +387,7 @@ internal static class RecordMigration
     /// <summary>Step 2: what differs between the temp folder and the classic vault (empty: nothing).</summary>
     private static List<string> Verify(
         CommandContext ctx, string tempDir, Config newConfig, DirectoryOwnerMatcher owner, Keyring keyring,
-        SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots)
+        SecretsDb expected, byte[] key, byte[]? recoveryPrivateKey, bool checkSlots, List<string> notes)
     {
         List<string> problems = [];
         var reader = RecordVaultStore.ForFolder(tempDir, newConfig, owner, ctx.Time);
@@ -399,40 +420,75 @@ internal static class RecordMigration
 
         if (checkSlots)
         {
-            foreach (var slot in readKeyring.Slots)
-            {
-                byte[] unwrapped;
-                try
-                {
-                    if (slot.Kind == SlotKind.Recovery)
-                    {
-                        unwrapped = RecoveryKeyUnlock.Unlock(readKeyring with { Slots = [slot] }, recoveryPrivateKey!);
-                    }
-                    else
-                    {
-                        var blob = YubiKeySlotBlob.Decode(slot.HwBlob!);
-                        var kekSlot = YubiKeySlotKek.Recover(ctx.YubiKeys, blob, slot.SlotId);
-                        try
-                        {
-                            var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, readKeyring.FormatVersion, readKeyring.VaultId, readKeyring.K, slot.SlotId);
-                            unwrapped = SlotSecretPayload.Decode(payload).VaultKey;
-                        }
-                        finally
-                        {
-                            CryptographicOperations.ZeroMemory(kekSlot);
-                        }
-                    }
-                }
-                catch (Exception ex) when (ex is TswapException or CryptographicException)
-                {
-                    problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} does not open: {ex.Message}");
-                    continue;
-                }
-                if (!CryptographicOperations.FixedTimeEquals(unwrapped, key))
-                    problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} opens to a different key");
-                CryptographicOperations.ZeroMemory(unwrapped);
-            }
+            var slots = CheckSlots(ctx.YubiKeys, readKeyring, key, recoveryPrivateKey);
+            problems.AddRange(slots.Problems);
+            notes.AddRange(slots.Notes);
         }
         return problems;
+    }
+
+    /// <summary>What <see cref="CheckSlots"/> found: slots that failed (<see cref="Problems"/>) and slots it didn't check (<see cref="Notes"/>).</summary>
+    internal sealed record SlotCheck(List<string> Problems, List<string> Notes);
+
+    /// <summary>
+    /// Step 2 for a converted XOR vault: every slot of <paramref name="keyring"/> must unwrap <paramref name="key"/>. A
+    /// FIDO2 slot is not checked (it needs the key's PIN and a touch) and is not a failure: it is named in
+    /// <see cref="SlotCheck.Notes"/>, and so is a check that opened no slot at all (FIDO2 plan, task 2).
+    /// </summary>
+    internal static SlotCheck CheckSlots(TswapCore.Vault.IYubiKeyService yubiKeys, Keyring keyring, byte[] key, byte[]? recoveryPrivateKey)
+    {
+        List<string> problems = [];
+        List<string> notes = [];
+        var opened = 0;
+        foreach (var slot in keyring.Slots)
+        {
+            var kind = slot.Kind == SlotKind.Recovery ? null : YubiKeySlotKinds.Classify(slot.HwBlob);
+            if (kind is YubiKeySlotKind.Fido2)
+            {
+                notes.Add($"Slot {Convert.ToHexStringLower(slot.SlotId)[..8]} (FIDO2): not checked here (needs the key's PIN and a touch).");
+                continue;
+            }
+            byte[] unwrapped;
+            try
+            {
+                if (slot.Kind == SlotKind.Recovery)
+                {
+                    unwrapped = RecoveryKeyUnlock.Unlock(keyring with { Slots = [slot] }, recoveryPrivateKey!);
+                }
+                else
+                {
+                    var blob = kind switch
+                    {
+                        YubiKeySlotKind.Otp(var otp) => otp,
+                        YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
+                        YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
+                        _ => throw new TswapException("it is not a YubiKey or recovery slot"),
+                    };
+                    var kekSlot = YubiKeySlotKek.Recover(yubiKeys, blob, slot.SlotId);
+                    try
+                    {
+                        var payload = SlotPayloadWrap.Unwrap(slot.Wrapped, kekSlot, keyring.FormatVersion, keyring.VaultId, keyring.K, slot.SlotId);
+                        unwrapped = SlotSecretPayload.Decode(payload).VaultKey;
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(kekSlot);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is TswapException or CryptographicException)
+            {
+                problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} does not open: {ex.Message}");
+                continue;
+            }
+            if (!CryptographicOperations.FixedTimeEquals(unwrapped, key))
+                problems.Add($"slot {Convert.ToHexStringLower(slot.SlotId)[..8]} opens to a different key");
+            else
+                opened++;
+            CryptographicOperations.ZeroMemory(unwrapped);
+        }
+        if (opened == 0 && problems.Count == 0)
+            notes.Add("No slot was opened here, so nothing here was checked.");
+        return new(problems, notes);
     }
 }

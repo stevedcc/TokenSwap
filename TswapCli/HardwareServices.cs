@@ -105,4 +105,19 @@ internal static class HardwareServices
             throw new TswapException("--secure-enclave is only supported on macOS.");
         return OwnerScopedHardwareService.Wrap(new SecureEnclaveHardwareService(requirePresence), ownerScope);
     }
+
+    /// <summary>
+    /// <see cref="ChipProbe"/>'s presence checks, here because the Secure Enclave service may be named
+    /// in code only in this file (<c>SecureEnclaveFactoryScanTests</c>). They create no key.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    public static bool SecureEnclaveAvailable() => SecureEnclaveHardwareService.IsAvailable();
+
+    /// <summary>On Linux the probe also says why the TPM isn't usable (tpm2-tools missing, no TPM, no access).</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    public static (bool Available, string? Reason) LinuxTpmProbe() => LinuxTpmHardwareService.Probe();
+
+    /// <summary>On Windows too: why the Platform Crypto Provider can't be used.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static (bool Available, string? Reason) WindowsTpmProbe() => WindowsTpmHardwareService.Probe();
 }

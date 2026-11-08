@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TswapCore.Vault;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Broker;
 
@@ -56,8 +57,10 @@ public interface IBrokerSecretSource
 /// router's TPM unseals unattended), decrypts only the route's record
 /// (<see cref="RecordVaultStore.ReadSecretValue"/>) and zeroes the vault key. It needs a
 /// record-store vault; <c>serve</c> refuses a classic one.
+/// <para>Brief T17: <paramref name="password"/> is a password broker's held password
+/// (<see cref="BrokerPasswordState.Provider"/>), null for a password-free one; no unlock asks an agent.</para>
 /// </summary>
-public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocker unlocker) : IBrokerSecretSource
+public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocker unlocker, VaultPasswordProvider? password = null) : IBrokerSecretSource
 {
     public BrokerSecret Read(string secretName)
     {
@@ -65,10 +68,9 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, _ => throw new TswapException(
-                "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
+            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {
             throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
         }
@@ -102,10 +104,9 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
         try
         {
             var config = store.LoadConfig();
-            key = unlocker.Unlock(config, _ => throw new TswapException(
-                "Several YubiKeys are plugged in; 'tswap broker serve' can't ask which one to use."));
+            key = unlocker.Unlock(config, BrokerPasswordProof.NoChoice, BrokerPasswordProof.SourcesFor(password));
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (Exception ex) when (ex is not (OutOfMemoryException or BrokerLockedException))
         {
             throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
         }

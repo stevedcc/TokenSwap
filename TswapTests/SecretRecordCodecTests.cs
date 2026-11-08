@@ -16,6 +16,12 @@ namespace TswapTests;
 /// </summary>
 public class SecretRecordCodecTests
 {
+    /// <summary>
+    /// Brief T16-S1: these golden tests pin format 2, which this build still reads and (until a vault
+    /// is reindexed) writes; the default <c>Encode</c> overload now writes format 3, so they ask for 2.
+    /// </summary>
+    private const byte V2 = KeyringFormat.RecordFormatVersionV2;
+
     private static readonly byte[] VaultKey = Convert.FromHexString("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f");
     private static readonly byte[] OriginA = Enumerable.Repeat((byte)0xAA, 16).ToArray();
     private static readonly byte[] OriginB = Enumerable.Repeat((byte)0xBB, 16).ToArray();
@@ -84,7 +90,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Encode_HeaderIsExactAndDeterministic()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
 
         Assert.Equal(69, SecretRecordCodec.HeaderSize);
         Assert.Equal(ExpectedHeaderHex, Convert.ToHexStringLower(encoded[..69]));
@@ -94,19 +100,19 @@ public class SecretRecordCodecTests
     [Fact]
     public void Encode_ValueRecord_InnerPayloadMatchesGoldenBytes()
     {
-        Assert.Equal(ExpectedValueInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(ValueRecord(), VaultKey))));
+        Assert.Equal(ExpectedValueInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2))));
     }
 
     [Fact]
     public void Encode_TombstoneRecord_InnerPayloadMatchesGoldenBytes()
     {
-        Assert.Equal(ExpectedTombstoneInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(TombstoneRecord(), VaultKey))));
+        Assert.Equal(ExpectedTombstoneInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(TombstoneRecord(), VaultKey, V2))));
     }
 
     [Fact]
     public void Encode_BurnedRecord_InnerPayloadMatchesGoldenBytes()
     {
-        Assert.Equal(ExpectedBurnedInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(BurnedRecord(), VaultKey))));
+        Assert.Equal(ExpectedBurnedInnerHex, Convert.ToHexStringLower(DecryptInner(SecretRecordCodec.Encode(BurnedRecord(), VaultKey, V2))));
     }
 
     [Fact]
@@ -116,7 +122,7 @@ public class SecretRecordCodecTests
         var previous = new PreviousValue(new Stamp(new Hlc(1_690_000_000_000, 3), Enumerable.Repeat((byte)0xCC, 16).ToArray()), "old-pw"u8.ToArray());
         var record = ValueRecord() with { Previous = previous };
 
-        var encoded = SecretRecordCodec.Encode(record, VaultKey);
+        var encoded = SecretRecordCodec.Encode(record, VaultKey, V2);
 
         Assert.Equal(ExpectedPreviousInnerHex, Convert.ToHexStringLower(DecryptInner(encoded)));
         var decoded = SecretRecordCodec.Decode(encoded, VaultKey);
@@ -127,7 +133,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Header_IsAuthenticated_AnyFlippedHeaderByteFailsToOpen()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
 
         // Every header byte past the magic and version (checked first with their own messages),
         // the payload length included (also checked first): the write stamp and origin feed the
@@ -153,7 +159,7 @@ public class SecretRecordCodecTests
             _ => BurnedRecord(),
         };
 
-        var decoded = SecretRecordCodec.Decode(SecretRecordCodec.Encode(record, VaultKey), VaultKey);
+        var decoded = SecretRecordCodec.Decode(SecretRecordCodec.Encode(record, VaultKey, V2), VaultKey);
 
         Assert.True(record.SameState(decoded));
         Assert.Equal(record.Write, decoded.Write);
@@ -163,14 +169,14 @@ public class SecretRecordCodecTests
     [Fact]
     public void Encode_TombstoneAndSmallValueRecordProduceTheSameFileSize()
     {
-        Assert.Equal(SecretRecordCodec.Encode(ValueRecord(), VaultKey).Length, SecretRecordCodec.Encode(TombstoneRecord(), VaultKey).Length);
+        Assert.Equal(SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2).Length, SecretRecordCodec.Encode(TombstoneRecord(), VaultKey, V2).Length);
     }
 
     [Fact]
     public void Encode_RecordTypeIsNotVisibleInCleartext()
     {
-        var value = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
-        var burned = SecretRecordCodec.Encode(BurnedRecord(), VaultKey);
+        var value = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
+        var burned = SecretRecordCodec.Encode(BurnedRecord(), VaultKey, V2);
 
         Assert.Equal(value[..69], burned[..69]);
         Assert.Equal(value.Length, burned.Length);
@@ -193,25 +199,26 @@ public class SecretRecordCodecTests
     public void Encode_ValueOneBytePastTheBucket_TakesTheNextBucket()
     {
         // Inner payload: 39 fixed + 7 (name) + 4 + value + 1 (previous flag) + 1 (burn count) = 52 + value bytes.
-        var fits = SecretRecordCodec.Encode(ValueRecord(new byte[256 - 52]), VaultKey);
-        var past = SecretRecordCodec.Encode(ValueRecord(new byte[256 - 52 + 1]), VaultKey);
+        var fits = SecretRecordCodec.Encode(ValueRecord(new byte[256 - 52]), VaultKey, V2);
+        var past = SecretRecordCodec.Encode(ValueRecord(new byte[256 - 52 + 1]), VaultKey, V2);
 
         Assert.Equal(69 + 28 + 256, fits.Length);
         Assert.Equal(69 + 28 + 512, past.Length);
     }
 
     [Fact]
-    public void TheRecordFormatVersion_IsPinnedAt2()
+    public void TheV2RecordFormatVersion_IsPinnedAt2()
     {
         // Fix round 3: version 2 since fix round 1 added the previous value to the payload.
-        Assert.Equal(2, KeyringFormat.RecordFormatVersion);
-        Assert.Equal(2, SecretRecordCodec.Encode(ValueRecord(), VaultKey)[4]);
+        // Brief T16-S1: the current format is 3 (SecretRecordCodecV3Tests); format 2 keeps its number.
+        Assert.Equal(2, KeyringFormat.RecordFormatVersionV2);
+        Assert.Equal(2, SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2)[4]);
     }
 
     [Fact]
     public void Decode_ARecordOfThePreviousFormatVersion_IsRefusedNamingTheVersion()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
         encoded[4] = 1;
 
         var ex = Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey));
@@ -230,7 +237,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_BadMagicThrowsDistinctError()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
         encoded[0] ^= 0xFF;
 
         Assert.Contains("magic", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey)).Message);
@@ -239,7 +246,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_UnsupportedFormatVersionThrowsDistinctError()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
         encoded[4] = 99;
 
         Assert.Contains("format version", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey)).Message);
@@ -248,7 +255,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_HugePayloadLengthPrefixThrowsInsteadOfOverflowing()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
         BinaryPrimitives.WriteUInt32LittleEndian(encoded.AsSpan(65, 4), uint.MaxValue - 1);
 
         Assert.Contains("length prefix", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey)).Message);
@@ -257,7 +264,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_PayloadShorterThanAesGcmOverheadThrowsDistinctError()
     {
-        var forged = SecretRecordCodec.Encode(ValueRecord(), VaultKey)[..74];
+        var forged = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2)[..74];
         BinaryPrimitives.WriteUInt32LittleEndian(forged.AsSpan(65, 4), 5);
 
         Assert.Contains("payload", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(forged, VaultKey)).Message);
@@ -267,7 +274,7 @@ public class SecretRecordCodecTests
     public void Decode_TruncatedRecordThrowsTswapException()
     {
         // A record cut short mid-sync: the length prefix no longer fits the data.
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
 
         Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded[..^1], VaultKey));
     }
@@ -275,7 +282,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_TrailingBytesThrow()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
 
         Assert.Contains("trailing", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode([.. encoded, 0], VaultKey)).Message);
     }
@@ -283,7 +290,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_TamperedCiphertextFailsAuthentication()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
         encoded[^1] ^= 0xFF;
 
         Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.Decode(encoded, VaultKey));
@@ -292,7 +299,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Decode_WrongVaultKeyFailsAuthentication()
     {
-        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord(), VaultKey, V2);
 
         Assert.ThrowsAny<CryptographicException>(() => SecretRecordCodec.Decode(encoded, new byte[32]));
     }
@@ -303,7 +310,7 @@ public class SecretRecordCodecTests
         // A record re-encrypted under another secret's id (as a K_v holder could) is not accepted
         // in that secret's place: the id must be HMAC(K_names, name of the record).
         var otherId = FilenameHasher.ComputeRecordId(RecordKeyDerivation.DeriveNamesKey(VaultKey), "other");
-        var encoded = SecretRecordCodec.Encode(ValueRecord() with { RecordId = otherId }, VaultKey);
+        var encoded = SecretRecordCodec.Encode(ValueRecord() with { RecordId = otherId }, VaultKey, V2);
 
         Assert.Contains("record id", Assert.Throws<TswapException>(() => SecretRecordCodec.Decode(encoded, VaultKey)).Message);
     }
@@ -311,7 +318,7 @@ public class SecretRecordCodecTests
     [Fact]
     public void Encode_WrongRecordIdLengthThrows()
     {
-        Assert.Throws<ArgumentException>(() => SecretRecordCodec.Encode(ValueRecord() with { RecordId = new byte[10] }, VaultKey));
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.Encode(ValueRecord() with { RecordId = new byte[10] }, VaultKey, V2));
     }
 
     [Fact]
@@ -327,7 +334,7 @@ public class SecretRecordCodecTests
             .Select(i => new BurnEntry(new Stamp(new Hlc(i, 0), OriginA), new Stamp(new Hlc(i, 1), OriginA), null))
             .ToList();
 
-        Assert.Throws<ArgumentException>(() => SecretRecordCodec.Encode(ValueRecord() with { Burns = burns }, VaultKey));
+        Assert.Throws<ArgumentException>(() => SecretRecordCodec.Encode(ValueRecord() with { Burns = burns }, VaultKey, V2));
     }
 
     [Fact]
@@ -343,7 +350,7 @@ public class SecretRecordCodecTests
             ],
         };
 
-        var decoded = SecretRecordCodec.Decode(SecretRecordCodec.Encode(record, VaultKey), VaultKey);
+        var decoded = SecretRecordCodec.Decode(SecretRecordCodec.Encode(record, VaultKey, V2), VaultKey);
 
         Assert.Null(decoded.Burns[0].Reason);
         Assert.Equal("", decoded.Burns[1].Reason);

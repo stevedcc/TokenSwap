@@ -52,6 +52,18 @@
   </ItemGroup>
 
   <!--
+    YubiKey SDK stage 1 (design docs/superpowers/specs/2026-11-04-yubikey-sdk-portable-design.md): tswap talks to
+    YubiKeys through Yubico's .NET SDK (Apache-2.0), no external tool. It brings Yubico.Core and Yubico.NativeShims, whose
+    NativeAOT build targets link a static archive; on Linux its 11 PC/SC calls are answered by TswapCli's own
+    Native/pcsc-loader.c, so libpcsclite is used when present and never required. The one-time set-up (crypto
+    creators, libudev resolver, logging off) is Vault/YubicoSdk.cs. Pinned to an exact version (brackets): TswapCli's
+    link canary checks the archive's PC/SC symbols, which belong to this version.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Yubico.YubiKey" Version="[1.18.1]" />
+  </ItemGroup>
+
+  <!--
     Secure Enclave backend (macOS only): Vault/Interop/swift/TswapSecureEnclave.swift is a
     thin CryptoKit shim, compiled here into a dylib and copied next to the managed output —
     AppleSecureEnclaveInterop.cs P/Invokes into it. See that file's header comment for why a
@@ -63,13 +75,48 @@
   <PropertyGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
     <SecureEnclaveShimSource>$(MSBuildProjectDirectory)/Vault/Interop/swift/TswapSecureEnclave.swift</SecureEnclaveShimSource>
     <SecureEnclaveShimOutput>$(MSBuildProjectDirectory)/Vault/Interop/swift/bin/libtswapse.dylib</SecureEnclaveShimOutput>
+    <!--
+      The shim's minimum macOS (#265). It must equal tswap's own minimum (NativeAOT's LC_BUILD_VERSION minos), which
+      contrib/packaging/package.sh and the pkg's distribution.xml are checked against; without an explicit target
+      swiftc took the SDK's version (26.0), so the dylib refused to load on any older macOS. Every CryptoKit and
+      Security call the shim makes exists since 10.15, and swiftc refuses a newer call than the target.
+    -->
+    <SecureEnclaveShimMinOS>12.0</SecureEnclaveShimMinOS>
+    <!-- The build host's architecture, as swiftc's own default was: an Intel Mac's developer build stays loadable. -->
+    <SecureEnclaveShimArch Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">arm64</SecureEnclaveShimArch>
+    <SecureEnclaveShimArch Condition="'$(SecureEnclaveShimArch)' == ''">x86_64</SecureEnclaveShimArch>
+  </PropertyGroup>
+
+  <!--
+    Release signing of the shim (#240): release.yml passes the Developer ID Application identity (a SHA-1 from its
+    throwaway keychain) and that keychain. The dylib is signed here, right after swiftc and before it is embedded
+    (EmbeddedResource below), so the copy next to tswap and the one installscript writes are the same signed bytes;
+    signing the publish folder afterwards would leave the embedded copy unsigned, and library validation under the
+    hardened runtime would refuse it. Empty by default: local and CI builds keep the linker's ad-hoc signature.
+  -->
+  <PropertyGroup>
+    <_ShimSignKeychainArgument Condition="'$(TswapMacSignKeychain)' != ''">--keychain &quot;$(TswapMacSignKeychain)&quot;</_ShimSignKeychainArgument>
   </PropertyGroup>
 
   <Target Name="BuildSecureEnclaveShim" BeforeTargets="BeforeBuild"
           Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'"
           Inputs="$(SecureEnclaveShimSource)" Outputs="$(SecureEnclaveShimOutput)">
     <MakeDir Directories="$(MSBuildProjectDirectory)/Vault/Interop/swift/bin" />
-    <Exec Command="swiftc -emit-library -O -o &quot;$(SecureEnclaveShimOutput)&quot; &quot;$(SecureEnclaveShimSource)&quot;" />
+    <Exec Command="swiftc -emit-library -O -target $(SecureEnclaveShimArch)-apple-macos$(SecureEnclaveShimMinOS) -o &quot;$(SecureEnclaveShimOutput)&quot; &quot;$(SecureEnclaveShimSource)&quot;" />
+    <!-- The keychain argument before the identity, and the identity before the options: codesign(1) ignores options
+         given before the identity. Pinned by MacPkgScriptTests. -->
+    <Exec Condition="'$(TswapMacSignIdentity)' != ''"
+          Command="codesign $(_ShimSignKeychainArgument) --sign &quot;$(TswapMacSignIdentity)&quot; --options runtime --timestamp --force --identifier dev.crawford.tswap.libtswapse &quot;$(SecureEnclaveShimOutput)&quot;" />
+  </Target>
+
+  <!--
+    A signed build never embeds a dylib left by an earlier unsigned build in the same tree: the shim target's
+    Inputs/Outputs would otherwise skip swiftc and codesign because the output looks up to date. The release job
+    builds a clean checkout anyway, and package.sh's smoke compares the embedded copy with the shipped one.
+  -->
+  <Target Name="ForceSignedSecureEnclaveShim" BeforeTargets="BuildSecureEnclaveShim"
+          Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true' And '$(TswapMacSignIdentity)' != ''">
+    <Delete Files="$(SecureEnclaveShimOutput)" />
   </Target>
 
   <ItemGroup Condition="'$([MSBuild]::IsOSPlatform(`OSX`))' == 'true'">
@@ -88,6 +135,12 @@
     <None Include="$(SecureEnclaveShimOutput)" Link="libtswapse.dylib"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="$(SecureEnclaveShimOutput)" LogicalName="libtswapse.dylib" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The broker's SELinux module, so `tswap installscript` on Linux can reinstall the matching module with
+         the binary (InstallScript.BrokerSelinuxModule). Text; tiny. -->
+    <EmbeddedResource Include="../contrib/selinux/tswap-broker.cil" LogicalName="tswap-broker.cil" />
   </ItemGroup>
 
 </Project>

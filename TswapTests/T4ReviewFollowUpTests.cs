@@ -32,7 +32,7 @@ public class T4ReviewFollowUpTests : IDisposable
     {
         var console = new FakeConsole(stdin);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
-        var exit = CliRunner.Run(new CommandContext(console, env, new Storage(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: true), args);
+        var exit = CliRunner.Run(new CommandContext(console, env, VaultStores.Open(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: true), args);
         return (exit, console.OutText, console.ErrorText);
     }
 
@@ -63,7 +63,7 @@ public class T4ReviewFollowUpTests : IDisposable
     [Fact]
     public void InitKeyring_KeyWithInconsistentResponses_IsRefusedAndNothingIsWritten()
     {
-        var (exit, _, stderr) = Run(new AlternatingYubiKey(SerialA), "", "init", "--keyring");
+        var (exit, _, stderr) = Run(new AlternatingYubiKey(SerialA), "", "init", "--yubikey");
 
         AssertRefusedAsInconsistent(exit, stderr);
         Assert.Empty(Directory.GetFiles(_dir));
@@ -96,7 +96,7 @@ public class T4ReviewFollowUpTests : IDisposable
     public void SlotAdd_KeyWithInconsistentResponses_IsRefusedAndConfigIsUntouched()
     {
         var keyA = SimulatedYubiKeyService.WithKeys(SerialA);
-        Assert.Equal(0, Run(keyA, "", "init", "--keyring").Exit);
+        Assert.Equal(0, Run(keyA, "", "init", "--yubikey").Exit);
         var configPath = Path.Combine(_dir, "config.json");
         var before = File.ReadAllText(configPath);
 
@@ -112,7 +112,7 @@ public class T4ReviewFollowUpTests : IDisposable
     {
         var keys = SimulatedYubiKeyService.WithKeys(SerialA);
 
-        Assert.Equal(0, Run(keys, "", "init", "--keyring").Exit);
+        Assert.Equal(0, Run(keys, "", "init", "--yubikey").Exit);
 
         Assert.Equal(2, keys.Challenges.Count);
         Assert.Equal(keys.Challenges[0], keys.Challenges[1]);
@@ -182,13 +182,13 @@ public class T4ReviewFollowUpTests : IDisposable
     [InlineData(false)]
     public void SlotAdd_Version2Keyring_IsRefusedBeforeSudoAndBeforeAnyUnlock(bool sudoBypass)
     {
-        File.WriteAllText(Path.Combine(_dir, "config.json"), KeyringV2FixtureTests.FixtureConfigJson);
+        var configText = KeyringV2FixtureTests.WriteAsRecordVault(_dir); // brief T16-S1: a record vault with the v2 keyring
         var keys = new UntouchableYubiKeys();
         var console = new FakeConsole();
         string[] args = ["slot", "add", "--yubikey"];
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
         // No override key: an unlock would have to go through the untouchable service.
-        var ctx = new CommandContext(console, env, new Storage(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: sudoBypass);
+        var ctx = new CommandContext(console, env, VaultStores.Open(_dir), keys, new VaultUnlocker(keys), TestKey: null, SudoBypass: sudoBypass);
 
         var exit = CliRunner.Run(ctx, args);
 
@@ -196,6 +196,6 @@ public class T4ReviewFollowUpTests : IDisposable
         Assert.Contains("format version 2", console.ErrorText);
         Assert.DoesNotContain("must not touch", console.ErrorText);
         Assert.DoesNotContain("requires sudo", console.ErrorText);
-        Assert.Equal(KeyringV2FixtureTests.FixtureConfigJson, File.ReadAllText(Path.Combine(_dir, "config.json")));
+        Assert.Equal(configText, File.ReadAllText(Path.Combine(_dir, "config.json")));
     }
 }

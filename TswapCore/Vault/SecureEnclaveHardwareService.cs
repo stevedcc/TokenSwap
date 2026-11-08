@@ -1,11 +1,13 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
 /// <summary>
 /// Apple Secure Enclave <see cref="IHardwareKeyService"/>. Needs a physical Secure Enclave, so
-/// it only builds/runs on macOS — see <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c>
+/// it only builds/runs on macOS — see <c>docs/design/hardware-backends.md</c> and <c>docs/design/multi-machine-keying.md</c>
 /// for the design this implements.
 ///
 /// <para><b>Primitive:</b> ECIES wrap/unwrap against a <b>non-extractable P-256 key</b> created
@@ -13,7 +15,7 @@ namespace TswapCore.Vault;
 /// (through the <see cref="AppleSecureEnclaveInterop"/> Swift shim — see its header comment for
 /// why CryptoKit rather than raw Security.framework <c>SecItem</c> calls). No key material ever
 /// leaves the Enclave; unlock unwraps <c>K_v</c> transiently in memory. The k≥2 threshold
-/// (Shamir shares instead of the whole key) is Phase 6 — see <c>MULTI_MACHINE_KEYING.md</c>.</para>
+/// (Shamir shares instead of the whole key) is Phase 6 — see <c>docs/design/multi-machine-keying.md</c>.</para>
 ///
 /// <para><b>Where the blob lives (issue #154).</b> In a keyring vault (what <c>tswap init</c>
 /// makes since brief T2) the self-contained wrapped blob is this machine's machine slot's
@@ -37,14 +39,22 @@ namespace TswapCore.Vault;
 [SupportedOSPlatform("macos")]
 public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : IHardwareKeyService, IHardwareEnrollmentService
 {
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => AppleSecureEnclaveInterop.IsAvailable();
+
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and ECIES-wraps it to a
     /// new Secure Enclave key via <see cref="Wrap"/>. The returned blob is useless off this Mac.
     /// </summary>
-    public HardwareEnrollment Enroll()
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+        // Brief T17 task 13: a password slot's key is made with .applicationPassword and the stretched
+        // password as its credential, so the Enclave enforces it (ruling 19); its blob gets the TSSE header.
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrollment(kekSlot,
+                SecureEnclaveSlotBlob.Wrap(AppleSecureEnclaveInterop.WrapWithPassword(kekSlot, requirePresence, password)));
     }
 
     public HardwareBackend Backend => HardwareBackend.SecureEnclave;
@@ -60,15 +70,37 @@ public sealed class SecureEnclaveHardwareService(bool requirePresence = true) : 
     /// <paramref name="chooseSerial"/> is unused — the Secure Enclave is a single,
     /// non-removable device.
     /// </summary>
-    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial)
+    public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password)
     {
         // A keyring vault's blob is in this machine's slot (issue #154); a single-slot vault's
         // in SecureEnclaveWrappedKey. Same "Config is corrupted" errors as before for the latter.
         var wrapped = HardwareBlobLocator.Read(config, HardwareBackend.SecureEnclave);
 
-        var key = Unwrap(wrapped);
+        // Brief T17: a password slot's blob carries the TSSE header; the provider is called only then, and
+        // its result is disposed here (ruling 13).
+        var (needsPassword, package) = SecureEnclaveSlotBlob.Split(wrapped);
+        byte[] key;
+        if (needsPassword)
+        {
+            if (password is null)
+                throw new VaultPasswordUnavailableException(VaultPasswordMessages.NoTerminal);
+            using var stretched = password();
+            key = AppleSecureEnclaveInterop.UnwrapWithPassword(package, stretched);
+        }
+        else if (config.RequiresTouch == false)
+        {
+            // T17 fix round 2: a slot recorded as made without presence (brief T11's --no-touch) never needs a
+            // dialog, so none is allowed: a password slot whose TSSE header was stripped fails here at once instead
+            // of waiting for an application-password dialog nobody can answer.
+            key = AppleSecureEnclaveInterop.UnwrapWithoutInteraction(package);
+        }
+        else
+        {
+            // Presence required (or not recorded: every slot before T11 had it): the user is at the machine.
+            key = Unwrap(package);
+        }
         // Unwrap is a generic primitive (Phase 6 will use it for Shamir shares of varying
-        // size too — see MULTI_MACHINE_KEYING.md), so it doesn't itself enforce a length. This
+        // size too — see docs/design/multi-machine-keying.md), so it doesn't itself enforce a length. This
         // call site specifically claims "the vault master key," so it does: a corrupted or
         // truncated wrapped blob that still happens to decrypt should fail here with a clear
         // message, not surface as an opaque AES-GCM key-size exception further downstream.

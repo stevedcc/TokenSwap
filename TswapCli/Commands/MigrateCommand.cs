@@ -9,6 +9,9 @@ public sealed class MigrateCommand : ICliCommand
     public string Description => "Guide to upgrade slots for touch requirement; --to-records (sudo) converts the vault to one file per secret, shareable by sync tools";
     public bool RequiresSudo => false;
 
+    /// <summary>Brief T16-S1 (ruling 5): every form of migrate works on a classic vault (converting it is the point).</summary>
+    public bool WorksOnClassicVault => true;
+
     public int Execute(CommandContext ctx, string[] args)
     {
         // Brief T6 decision 8: the record store conversion.
@@ -67,8 +70,13 @@ public sealed class MigrateCommand : ICliCommand
         if (config.YubiKeySerials is not { Count: 2 })
         {
             c.Out.WriteLine("This is a keyring vault: each YubiKey is its own slot ('tswap slots' shows each key's touch");
-            c.Out.WriteLine("setting). To give a key a touch requirement, reprogram it (ykman otp chalresp --generate --touch 2)");
-            c.Out.WriteLine($"and enroll it again: sudo {ctx.Prefix} slot add --yubikey");
+            c.Out.WriteLine("setting). To give a key a touch requirement, one key at a time and with another way into the vault");
+            c.Out.WriteLine("available (another enrolled key, this machine's TPM or Secure Enclave, or the recovery key):");
+            c.Out.WriteLine($"  {ctx.Prefix} yubikey setup --replace --touch --serial N");
+            c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "slot add --yubikey")}   # enrols the reprogrammed key again");
+            c.Out.WriteLine($"  {ctx.Prefix} names   # with only that key plugged in: it opens the vault alone");
+            c.Out.WriteLine($"Only if no other way in is left: pipe the recovery key into {ElevatedCommand.Line(ctx.Prefix, "recover --yubikey")}");
+            c.Out.WriteLine($"({ctx.Prefix} yubikey setup replaces the old command-line tool: ykman is no longer needed.)");
             return 0;
         }
 
@@ -139,34 +147,51 @@ public sealed class MigrateCommand : ICliCommand
 
             c.Out.WriteLine("\n⚠️  IMPORTANT: Ensure your XOR share is backed up before proceeding.");
 
-            c.Out.Write("\nShow detailed re-initialization instructions? (yes/no): ");
+            c.Out.Write("\nShow detailed conversion instructions? (yes/no): ");
             if ((c.ReadLine()?.ToLower() ?? "") is "yes" or "y")
             {
                 int step = 1;
                 c.Out.WriteLine("\n" + new string('═', 64));
-                c.Out.WriteLine("RE-INITIALIZATION GUIDE");
+                c.Out.WriteLine("CONVERSION GUIDE");
                 c.Out.WriteLine(new string('═', 64) + "\n");
 
+                // Task 4b: convert, then (a legacy pair keyring vault) give each key its own slot, then the touch
+                // upgrade one key at a time: reprogram, re-enrol through another way in, check it alone.
+                var first = config.YubiKeySerials[0];
+                var second = config.YubiKeySerials[1];
+                var pairKeyring = config.Keyring is not null;
                 c.Out.WriteLine($"Step {step++}: Export all secrets to an encrypted backup (requires sudo)");
-                c.Out.WriteLine("  sudo tswap export ~/tswap-backup.enc");
+                c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "export ~/tswap-backup.enc")}");
                 c.Out.WriteLine("  # Choose a strong passphrase — you will need it to import\n");
+
+                c.Out.WriteLine($"Step {step++}: Convert the vault (a classic vault is converted, never re-initialized)");
+                c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "migrate --to-records")}");
+                c.Out.WriteLine(pairKeyring
+                    ? "  # The vault keeps its pair slot, which belongs to both keys together.\n"
+                    : "  # Each YubiKey gets its own slot, and a recovery slot is added: keep the recovery key it shows.\n");
+
+                if (needsTouchMigration && pairKeyring)
+                {
+                    c.Out.WriteLine($"Step {step++}: Give each YubiKey its own slot (a first enrolment), one key at a time, both keys plugged in");
+                    c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "slot add --yubikey")}   # YubiKey #1 ({first})");
+                    c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "slot add --yubikey")}   # YubiKey #2 ({second})\n");
+                }
 
                 if (needsTouchMigration)
                 {
-                    c.Out.WriteLine($"Step {step++}: Reconfigure YubiKey slots to require touch");
-                    c.Out.WriteLine("  Insert YubiKey #1");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp delete 2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[0]} otp chalresp --generate --touch 2");
-                    c.Out.WriteLine("  Remove YubiKey #1, insert YubiKey #2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp delete 2");
-                    c.Out.WriteLine($"  ykman --device {config.YubiKeySerials[1]} otp chalresp --generate --touch 2\n");
+                    c.Out.WriteLine($"Step {step++}: Give each YubiKey a touch requirement, one key at a time");
+                    c.Out.WriteLine("  # Reprogramming a key replaces slot 2's secret, so its slot stops opening the vault; with another way");
+                    c.Out.WriteLine("  # in (the other key, or the recovery key) it is enrolled again. Finish and check one key before the next.");
+                    foreach (var (number, serial, other) in new[] { (1, first, second), (2, second, first) })
+                    {
+                        c.Out.WriteLine($"  # YubiKey #{number} ({serial}), with YubiKey #{3 - number} ({other}) also plugged in:");
+                        c.Out.WriteLine($"  {ctx.Prefix} yubikey setup --replace --touch --serial {serial}");
+                        c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "slot add --yubikey")}   # enrols it again (pick YubiKey {serial} if asked)");
+                        c.Out.WriteLine($"  {ctx.Prefix} names   # with only YubiKey #{number} plugged in: it opens the vault alone");
+                    }
+                    c.Out.WriteLine($"  # {ctx.Prefix} yubikey setup replaces the old command-line tool: ykman is no longer needed.");
+                    c.Out.WriteLine($"  # Only if no other way in is left: pipe the recovery key into {ElevatedCommand.Line(ctx.Prefix, "recover --yubikey")}\n");
                 }
-
-                c.Out.WriteLine($"Step {step++}: Reinitialize tswap (generates a new vault-unique unlock challenge)");
-                c.Out.WriteLine("  tswap init\n");
-
-                c.Out.WriteLine($"Step {step}: Restore secrets from backup");
-                c.Out.WriteLine("  sudo tswap import ~/tswap-backup.enc\n");
 
                 c.Out.WriteLine(new string('═', 64));
             }

@@ -22,6 +22,10 @@ public sealed class FleetMachine : IDisposable
         Dir = Path.Combine(Path.GetTempPath(), $"tswap-fleet-{name}-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Dir);
         Keys = keys ?? SimulatedYubiKeyService.WithKeys();
+        DefaultAgentSocket = OperatingSystem.IsWindows()
+            ? Path.Combine(Dir, "run", "agent.sock")
+            : Path.Combine("/tmp", "tswap-fa-" + Guid.NewGuid().ToString("N")[..8], "agent.sock");
+        AgentSocket = DefaultAgentSocket;
     }
 
     public string Dir { get; }
@@ -36,6 +40,12 @@ public sealed class FleetMachine : IDisposable
 
     public bool Sudo { get; set; } = true;
 
+    /// <summary>
+    /// Guided init: the chip this machine's <c>init</c> sees, instead of the one <see cref="SecureEnclave"/> /
+    /// <see cref="Tpm"/> give (null: those), e.g. a chip that is present but unusable.
+    /// </summary>
+    public Func<MachineChip>? ChipOverride { get; set; }
+
     /// <summary>Brief T7 item 4: the TSWAP_YUBIKEY_SERIAL value this machine's commands see (null: unset).</summary>
     public string? YubiKeySerialVariable { get; set; }
 
@@ -48,6 +58,15 @@ public sealed class FleetMachine : IDisposable
     /// <summary>Brief T6: the test seams of <c>migrate --to-records</c> (null: none).</summary>
     public RecordMigrationSeams? MigrationSeams { get; set; }
 
+    /// <summary>FIDO2 plan, task 8: this machine's FIDO2 keys (null: no FIDO2 service, as in test mode).</summary>
+    internal FakeFido2Keys? Fido2Keys { get; set; }
+
+    /// <summary>FIDO2 plan, task 8: the controlling terminal its commands see (null: none).</summary>
+    internal FakeTerminal? Terminal { get; set; }
+
+    /// <summary>FIDO2 plan, task 8: the OS the guided init words and orders its list for (null: this one).</summary>
+    public System.Runtime.InteropServices.OSPlatform? Os { get; set; }
+
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
     public Func<DateTimeOffset>? Clock { get; set; }
 
@@ -57,6 +76,12 @@ public sealed class FleetMachine : IDisposable
     /// system clock for the commands).
     /// </summary>
     public TimeProvider? Time { get; set; }
+
+    /// <summary>
+    /// Brief T16-S2: run on the record store of each command this machine runs, before the command,
+    /// so a test can watch what it decrypts (<c>ValueDecrypted</c>, <c>RecordDecrypted</c>). Null: none.
+    /// </summary>
+    public Action<RecordVaultStore>? StoreOpened { get; set; }
 
     /// <summary>Brief T6: the record store's vault folder (from config.json), or null for a classic vault.</summary>
     public string? VaultDir => File.Exists(ConfigPath) ? Config.VaultDir : null;
@@ -95,27 +120,67 @@ public sealed class FleetMachine : IDisposable
         return (exit, text);
     }
 
+    /// <summary>#253: runs with stdout redirected (a pipe, a log, an agent's tool), stdin redirected too.</summary>
+    public (int Exit, string Out, string Err) RunWithStdoutRedirected(string stdin, params string[] args) =>
+        Run(new FakeConsole(stdin) { IsOutputRedirected = true }, args);
+
     /// <summary>Runs with stdin as an interactive terminal (not redirected).</summary>
     public (int Exit, string Out, string Err) RunOnTerminal(string stdin, params string[] args) =>
         Run(new FakeConsole(stdin) { IsInputRedirected = false }, args);
 
+    /// <summary>
+    /// Brief T17 task 11: the <c>TSWAP_AGENT_SOCK</c> value this machine's commands see. By default a socket in
+    /// this machine's own folder, so a test never meets the user's real agent; null models an unset variable
+    /// (sudo drops it), where the path comes from the vault owner's uid.
+    /// </summary>
+    public string? AgentSocket { get; set; }
+
+    /// <summary>
+    /// The default <see cref="AgentSocket"/>. On Unix <c>/tmp/tswap-fa-&lt;8 hex&gt;/agent.sock</c>, its folder made by the
+    /// agent (0700) and removed with this machine: not under <see cref="Dir"/>, because a long temp folder (macOS's
+    /// <c>/var/folders/…/T</c>, or any long <c>TMPDIR</c>) pushes that path past the 103-byte socket limit (CI run
+    /// 41619549912). On Windows <c>&lt;Dir&gt;/run/agent.sock</c>, which the agent never uses (its pipe has its own name).
+    /// </summary>
+    public string DefaultAgentSocket { get; }
+
     private (int Exit, string Out, string Err) Run(FakeConsole console, string[] args)
     {
         LastConsole = console;
-        var env = new CliEnvironment { Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable };
+        var ctx = Context(console, args);
+        var exit = CliRunner.Run(ctx, args);
+        return (exit, console.OutText, console.ErrorText);
+    }
+
+    /// <summary>
+    /// Brief T17 task 11: the context one command of this machine runs with (what <see cref="Run(string, string[])"/>
+    /// builds), for a test that runs a command itself, e.g. the <c>agent serve</c> child in process.
+    /// </summary>
+    public CommandContext Context(FakeConsole console, string[] args)
+    {
+        var env = new CliEnvironment
+        {
+            Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable,
+            AgentSocketVariable = AgentSocket,
+        };
         var backends = new List<IHardwareKeyService>();
         if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
         if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
-        var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends);
+        var fido2 = Fido2Keys is null ? null : new TswapCore.Vault.Fido2.Fido2Service(Fido2Keys);
+        var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends, fido2: fido2);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
         var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
-        var ctx = new CommandContext(console, env, VaultStores.Open(Dir, Ownership, storeTime, console.Error), Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
+        var store = VaultStores.Open(Dir, Ownership, storeTime, console.Error);
+        if (store is RecordVaultStore records)
+            StoreOpened?.Invoke(records);
+        return new CommandContext(console, env, store, Keys, unlocker, TestKey: Tpm ?? SecureEnclave, SudoBypass: Sudo)
         {
             MigrationSeams = MigrationSeams,
             Time = Time ?? TimeProvider.System,
+            ChipProbe = ChipOverride ?? (() => new MachineChip(SecureEnclave is not null ? HardwareBackend.SecureEnclave : Tpm is not null ? HardwareBackend.Tpm : null, null)),
+            Fido2 = fido2,
+            Terminal = Terminal is { } terminal ? terminal.Open : null,
+            Os = Os ?? YubiKeyAccessTexts.CurrentOs(),
         };
-        var exit = CliRunner.Run(ctx, args);
-        return (exit, console.OutText, console.ErrorText);
     }
 
     /// <summary>Runs and asserts success, returning stdout.</summary>
@@ -134,16 +199,34 @@ public sealed class FleetMachine : IDisposable
         return stdout.Trim();
     }
 
-    /// <summary>Copies this machine's vault files (config and secrets) into <paramref name="other"/>.</summary>
+    /// <summary>
+    /// Copies this machine's vault into <paramref name="other"/>: a classic vault's config and
+    /// secrets files; a record vault's config and its vault folder (into the other machine's
+    /// <c>vault</c>, its config pointing there, with an origin id of its own, as a copy moved to
+    /// another machine gets). Brief T16-S1: init makes record vaults, so most copies are those.
+    /// </summary>
     public void CopyVaultTo(FleetMachine other)
     {
-        File.Copy(ConfigPath, other.ConfigPath, overwrite: true);
-        File.Copy(SecretsPath, other.SecretsPath, overwrite: true);
+        if (Config.Store != RecordVaultStore.StoreName)
+        {
+            File.Copy(ConfigPath, other.ConfigPath, overwrite: true);
+            File.Copy(SecretsPath, other.SecretsPath, overwrite: true);
+            return;
+        }
+        var copy = Path.Combine(other.Dir, "vault");
+        if (Directory.Exists(copy))
+            Directory.Delete(copy, true);
+        RecordVaultTestSupport.CopyFolder(VaultDir!, copy);
+        File.WriteAllText(other.ConfigPath, JsonSerializer.Serialize(
+            Config with { VaultDir = copy, OriginId = RecordVaultStore.NewOriginId() }, TswapJsonContext.Default.Config));
     }
 
     public void Dispose()
     {
         if (Directory.Exists(Dir))
             Directory.Delete(Dir, true);
+        // Unix: the agent's folder is outside Dir.
+        if (!OperatingSystem.IsWindows() && Path.GetDirectoryName(DefaultAgentSocket) is { } agentDir && Directory.Exists(agentDir))
+            Directory.Delete(agentDir, true);
     }
 }

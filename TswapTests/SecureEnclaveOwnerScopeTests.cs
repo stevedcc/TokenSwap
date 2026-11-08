@@ -16,6 +16,7 @@ namespace TswapTests;
 /// with the simulated hardware (<c>TSWAP_TEST_KEY</c>) and the fake <see cref="IUnixOwnership"/>;
 /// the simulated services report each call with the identity the fake is switched to at that moment.
 /// </summary>
+[Collection(StaticSeamCollection.Name)]
 public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 {
     private const uint UserUid = 1000;
@@ -93,6 +94,20 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     private static Config LoadConfig(string dir) =>
         JsonSerializer.Deserialize(File.ReadAllText(ConfigJson(dir)), TswapJsonContext.Default.Config)!;
+
+    /// <summary>
+    /// Brief T16-S1: a copy of the record vault in <paramref name="from"/> on another machine's folder
+    /// <paramref name="to"/>: its config (pointing at the copy, with its own origin id) and its vault
+    /// folder. (The vaults these tests copy used to be classic: config.json and secrets.json.enc.)
+    /// </summary>
+    private static void CopyVault(string from, string to)
+    {
+        var config = LoadConfig(from);
+        var copy = Path.Combine(to, "vault");
+        RecordVaultTestSupport.CopyFolder(config.VaultDir!, copy);
+        File.WriteAllText(ConfigJson(to), JsonSerializer.Serialize(
+            config with { VaultDir = copy, OriginId = RecordVaultStore.NewOriginId() }, TswapJsonContext.Default.Config));
+    }
 
     private static byte[] OwnSlotBlob(string dir)
     {
@@ -181,8 +196,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         if (OperatingSystem.IsWindows()) return;
         var (router, recoveryKey) = TpmVault();
         var dir = Folder("mac");
-        File.Copy(ConfigJson(router), ConfigJson(dir));
-        File.Copy(Path.Combine(router, "secrets.json.enc"), Path.Combine(dir, "secrets.json.enc"));
+        CopyVault(router, dir);
 
         Ok(dir, Root(), recoveryKey + "\n", "recover", "--secure-enclave", "--with-touch");
 
@@ -430,13 +444,13 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         string Copy(string name)
         {
             var copy = Folder(name);
-            File.Copy(ConfigJson(router), ConfigJson(copy));
-            File.Copy(Path.Combine(router, "secrets.json.enc"), Path.Combine(copy, "secrets.json.enc"));
+            CopyVault(router, copy);
             return copy;
         }
         var (attempt, _) = ScopePoint([Copy("probe1"), Copy("probe2")], recoveryKey + "\n", "recover", "--secure-enclave", "--with-touch");
         var dir = Copy("mac");
-        var before = Directory.GetFileSystemEntries(dir).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList();
+        // Every file, the vault folder's included (brief T16-S1: the copy is a record vault).
+        var before = Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList();
         var fake = Root();
         fake.FailSwitchAt = attempt;
 
@@ -445,7 +459,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Contains(SwitchFailure(dir), stderr);
         Assert.Empty(_calls);
-        Assert.Equal(before, Directory.GetFileSystemEntries(dir).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList());
+        Assert.Equal(before, Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Order().Select(f => (f, Convert.ToHexString(File.ReadAllBytes(f)))).ToList());
     }
 
     // MiMo 2: the exception type the brief asks for, below the CLI (which shows only the message).
@@ -500,7 +514,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         _ = se.IsSimulated;
         Assert.Equal(0, opened);
 
-        ((IHardwareEnrollmentService)se).Enroll();
+        ((IHardwareEnrollmentService)se).Enroll(password: null);
         Assert.Equal(1, opened);
     }
 

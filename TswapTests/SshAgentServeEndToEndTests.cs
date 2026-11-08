@@ -89,17 +89,17 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
     {
         Ok("", "init", "--tpm", "--no-recovery");
         Ok(File.ReadAllText(keyFile), "ingest", "deploy-key");
-        Ok("", "migrate", "--to-records");
         var config = new BrokerConfig
         {
             Version = 1,
             SocketDir = SocketDir,
-            Sockets = [new BrokerSocketConfig { Name = "lane1", Uids = [BrokerHarness.MyUid.ToString()], Routes = [], SshKeys = ["deploy"] }],
+            Sockets = [new BrokerSocketConfig { Name = "lane1", Uids = [BrokerHarness.MyUid.ToString()], Routes = [], SshKeys = ["deploy"], UidOnly = true }],
             SshKeys = [new BrokerSshKeyConfig { Name = "deploy", Secret = "deploy-key", AllowedHostKeys = [SshAgentHarness.SomeHostFingerprint] }],
         };
         var path = Path.Combine(ConfigDir, "broker.json");
         File.WriteAllText(path, JsonSerializer.Serialize(config, BrokerJsonContext.Default.BrokerConfig));
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (!OperatingSystem.IsWindows()) // always true here (the callers run on Linux only); tells the analyser so
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     [Fact]

@@ -4,7 +4,7 @@ using System.Text;
 namespace TswapCore.Keyring;
 
 /// <summary>
-/// Derives the recovery slot's key-encryption key (issue #120, <c>MULTI_MACHINE_KEYING.md</c>
+/// Derives the recovery slot's key-encryption key (issue #120, <c>docs/design/multi-machine-keying.md</c>
 /// §The recovery slot / §Per-backend wrap primitive) from an X25519 ECDH shared secret.
 ///
 /// <para><b>Shape mirrors <c>AppleSecureEnclaveInterop</c>'s ECIES-equivalent construction</b>

@@ -76,10 +76,18 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, Time
     public static DirectoryOwnerMatcher Default { get; } = new();
 
     /// <summary>
-    /// Replaces <paramref name="path"/> atomically: a new temp file in the same folder, then a
-    /// rename over the name. An existing regular file keeps a mode the user chose for it.
+    /// The identity seam this matcher applies (brief T17 task 11: <c>tswap agent</c> reads the euid and the vault
+    /// owner's uid through it, so tests that fake root fake it for the agent too).
     /// </summary>
-    public void WriteAtomic(string path, ReadOnlySpan<byte> bytes)
+    public IUnixOwnership Ownership => _ownership;
+
+    /// <summary>
+    /// Replaces <paramref name="path"/> atomically: a new temp file in the same folder, then a
+    /// rename over the name. An existing regular file keeps a mode the user chose for it, unless
+    /// <paramref name="keepMode"/> is false: then it is 0600 whatever mode it had (task 4b fix round: the
+    /// YubiKey slot hint recovers from a file chmodded away).
+    /// </summary>
+    public void WriteAtomic(string path, ReadOnlySpan<byte> bytes, bool keepMode = true)
     {
         var fullPath = Path.GetFullPath(path);
         using var _ = AsOwnerOf(fullPath);
@@ -101,7 +109,7 @@ public sealed class DirectoryOwnerMatcher(IUnixOwnership? ownership = null, Time
             }
             // Keep a mode the user chose for this file (e.g. a tightened one); never copied from
             // a symlink's target.
-            if (!OperatingSystem.IsWindows() && existing.Exists && existing.LinkTarget is null)
+            if (keepMode && !OperatingSystem.IsWindows() && existing.Exists && existing.LinkTarget is null)
                 File.SetUnixFileMode(tmp, existing.UnixFileMode);
             File.Move(tmp, fullPath, overwrite: true);
         }

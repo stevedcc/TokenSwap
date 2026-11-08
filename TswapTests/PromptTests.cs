@@ -87,6 +87,19 @@ public class PromptTests
         Assert.Contains("- `sudo tswap vault merge <folder>`", never);
     }
 
+    /// <summary>#253: creating a vault is the user's job, and init prints the recovery key.</summary>
+    [Fact]
+    public void Prompt_ListsInitUnderNever()
+    {
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        var should = text[text.IndexOf("## Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)];
+
+        var initLine = Assert.Single(never.Split('\n'), line => line.StartsWith("- `tswap init`", StringComparison.Ordinal));
+        Assert.Contains("recovery key", initLine);
+        Assert.DoesNotContain("tswap init", should);
+    }
+
     [Fact]
     public void Template_ExplainsPreviousAndRestore()
     {
@@ -95,5 +108,56 @@ public class PromptTests
         Assert.Contains("{{db-pw:previous}}", text);
         Assert.Contains("- `sudo tswap restore <name>`", text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..]);
         Assert.Contains("reversible", text);
+    }
+
+    [Fact]
+    public void Template_TellsTheAgentToLeaveTheVaultPasswordToTheUser()
+    {
+        // Brief T17 task 14: a password slot without a running tswap agent fails without a terminal; the AI
+        // agent asks the user to start the tswap agent and never handles the vault password itself.
+        var text = Prompt.GetText("tswap");
+        var rules = text[text.IndexOf("## Key rules", StringComparison.Ordinal)..];
+        Assert.Contains("needs the vault password", rules);
+        Assert.Contains("ask the user to run `tswap agent start`", rules);
+        Assert.Contains("never ask for, type or pass the vault password", rules);
+        var should = text[text.IndexOf("## Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)];
+        Assert.DoesNotContain("agent start", should);
+        Assert.DoesNotContain("broker unlock", should);
+    }
+
+    [Fact]
+    public void Prompt_NeverSuggestsApplyForAgents()
+    {
+        var text = Prompt.GetText("tswap");
+        var never = text[text.IndexOf("Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];
+        var should = text[text.IndexOf("Commands you SHOULD use", StringComparison.Ordinal)..text.IndexOf("Commands you must NEVER use", StringComparison.Ordinal)];
+
+        Assert.Contains("sudo tswap apply <file>", never);
+        Assert.DoesNotContain("tswap apply", should);
+        Assert.Contains("tswap run helm upgrade --install app ./chart -f {{@values.yaml}}", text);
+        Assert.Contains("run … {{@file}}", text);
+        Assert.DoesNotContain("<(", text);
+        Assert.DoesNotMatch(@"<\(\s*(sudo\s+)?\S*tswap apply", text);
+        foreach (var line in text.Split('\n').Where(l => l.Contains("tswap apply")))
+            Assert.True(line.Contains("sudo tswap apply"), $"apply without sudo: {line}");
+    }
+
+    /// <summary>
+    /// Brief T16-S2: redact and tocomment refuse on a vault with records lacking fingerprints, and the
+    /// reading commands warn about format 2 records; the prompt sends the agent to the user for the
+    /// reindex and forbids a workaround.
+    /// </summary>
+    [Fact]
+    public void GetText_SendsTheAgentToTheUserForTheReindex()
+    {
+        // Code review (MiMo B-M3): whitespace-insensitive, and every clause of the rule: both triggers,
+        // the request to the user, never running it, never working around the refusal.
+        var text = System.Text.RegularExpressions.Regex.Replace(Prompt.GetText("tswap"), @"\s+", " ");
+
+        Assert.Contains("If `tswap redact` or `tswap tocomment` refuses because records have no fingerprints yet", text);
+        Assert.Contains("or a command prints a warning about the old record format 2", text);
+        Assert.Contains("stop and ask the user to run `sudo tswap vault reindex` once in their own terminal", text);
+        Assert.Contains("You never run it yourself (it needs sudo)", text);
+        Assert.Contains("never work around the refusal", text);
     }
 }

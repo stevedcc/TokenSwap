@@ -51,6 +51,28 @@ public sealed record BrokerSocketConfig
 
     /// <summary>The ssh keys this socket's agent offers (allow-list; null or empty: none, brief T10).</summary>
     public List<string>? SshKeys { get; init; }
+
+    /// <summary>
+    /// Brief I224 D1: the container this socket serves (its systemd unit's cgroup, optionally its SELinux
+    /// label). Exactly one of this and <see cref="UidOnly"/> is set.
+    /// </summary>
+    public BrokerContainerConfig? Container { get; init; }
+
+    /// <summary>
+    /// Brief I224 D1: <c>true</c> to admit any process with a listed uid (the v0.1 behaviour, chosen on
+    /// purpose). <c>false</c> is refused; leave it out instead.
+    /// </summary>
+    public bool? UidOnly { get; init; }
+}
+
+/// <summary>Brief I224 D1: the container a socket is bound to.</summary>
+public sealed record BrokerContainerConfig
+{
+    /// <summary>The cgroup v2 path of the container's systemd unit, as the host's root cgroup namespace shows it.</summary>
+    public required string Cgroup { get; init; }
+
+    /// <summary>An exact, whole SELinux label (<c>user:role:type:level</c>); corroboration only. Null: not checked.</summary>
+    public string? SelinuxLabel { get; init; }
 }
 
 /// <summary>One upstream the broker adds a credential for.</summary>

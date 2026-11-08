@@ -20,6 +20,8 @@ public static class CommandRegistry
         new RotateCommand(),
         new NamesCommand(),
         new SlotsCommand(),
+        new YubiKeyCommand(),
+        new AgentCommand(),
         new RunCommand(),
         new CheckCommand(),
         new RedactCommand(),
@@ -71,6 +73,7 @@ public static class CommandRegistry
                 $"'-v'/'--verbose' is a global flag: global flags go before the command, e.g. '{ctx.Prefix} -v {command.Name} ...'. " +
                 $"(After the command's first argument, -v belongs to the command: '{ctx.Prefix} run grep -v ...'.)");
 
+        ctx.ClassicVaultAllowed = command.WorksOnClassicVault;
         return command.Execute(ctx, commandArgs);
     }
 
@@ -123,20 +126,22 @@ public static class CommandRegistry
     {
         var p = ctx.Prefix;
         var o = ctx.Console.Out;
-        o.WriteLine("tswap - YubiKey Secret Manager");
+        o.WriteLine("tswap - hardware-backed secret manager");
         o.WriteLine("\nUsage:");
         foreach (var c in Commands.Where(c => !c.RequiresSudo))
             o.WriteLine($"  {p} {c.HelpUsage,-20}    {c.Description}");
         foreach (var c in Commands.Where(c => c.RequiresSudo))
             o.WriteLine($"  [sudo] {p} {c.HelpUsage,-13}    {c.Description}");
         o.WriteLine("\nCommands marked [sudo] require elevated privileges.");
-        o.WriteLine("Add -v or --verbose (before the command) for detailed YubiKey output.");
+        o.WriteLine("Add -v or --verbose (before the command) for detailed output about the hardware keys.");
         o.WriteLine("\nEnvironment:");
         o.WriteLine("  TSWAP_CONFIG_DIR    the config folder to use (overrides everything below)");
         o.WriteLine("  Under sudo (sudo -i included), tswap uses the vault of the user who ran sudo:");
         o.WriteLine("  SUDO_USER's home from the system's user database, checked against SUDO_UID.");
         o.WriteLine("  TSWAP_YUBIKEY_SERIAL the YubiKey to unlock with when several are plugged in (sudo drops");
         o.WriteLine("                      it unless kept, e.g. sudo --preserve-env=TSWAP_YUBIKEY_SERIAL; intended).");
+        o.WriteLine("  TSWAP_AGENT_SOCK    the tswap agent's socket (default: one per vault in the vault user's run folder;");
+        o.WriteLine("                      sudo drops it, and finds that user's agent by the vault folder's owner).");
         o.WriteLine("  With several keys and no terminal, tswap never prompts: it tries the keys with a slot,");
         o.WriteLine("  no-touch first, then unknown, then touch-required. On a terminal it asks (on stderr),");
         o.WriteLine("  offering the touch-required key as the default.");
@@ -149,18 +154,17 @@ public static class CommandRegistry
         o.WriteLine($"  {p} redact values.yaml");
         o.WriteLine($"  {p} tocomment values.yaml --dry-run");
         o.WriteLine($"  {p} tocomment values.yaml");
-        o.WriteLine($"  {p} apply values.yaml");
-        o.WriteLine($"  {p} apply values.yaml > deployed.yaml");
-        o.WriteLine($"  helm upgrade app ./chart -f <({p} apply secrets.yaml)");
+        o.WriteLine($"  {p} run helm upgrade --install app ./chart -f {{{{@values.yaml}}}}");
+        o.WriteLine($"  sudo {p} apply values.yaml > deployed.yaml");
         o.WriteLine($"  {p} burn db-pass \"accidentally logged\"");
         o.WriteLine($"  sudo {p} get storj-pass");
         o.WriteLine($"  sudo {p} list");
         o.WriteLine("\nPrerequisites:");
-        o.WriteLine("  - ykman CLI: pip install yubikey-manager");
-        o.WriteLine("  - Configure YubiKeys with touch requirement (recommended):");
-        o.WriteLine("    ykman otp chalresp --generate --touch 2");
-        o.WriteLine("  - Or without touch (less secure):");
-        o.WriteLine("    ykman otp chalresp --generate 2");
+        o.WriteLine("  - A YubiKey: prepare its slot 2 for challenge-response with a touch requirement (recommended):");
+        o.WriteLine($"    {p} yubikey setup --touch");
+        o.WriteLine("    (without --touch the key answers any process that can reach it: less secure)");
+        o.WriteLine("  - A TPM (Windows, Linux) or the Secure Enclave (macOS) needs no preparation.");
+        o.WriteLine("  - Linux and YubiKeys: your user needs access to the key's hidraw device, which Yubico's udev rule gives.");
         o.WriteLine($"  - For [sudo] commands: copy tswap to /usr/local/bin");
     }
 }

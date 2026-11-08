@@ -287,7 +287,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     }
 
     public static TheoryData<string[]> InitBadChoices() =>
-        Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--keyring", c })));
+        Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--yubikey", c })));
 
     public static TheoryData<string[]> RecoverBadChoices() =>
         Rows(SharedBadRows().Concat(Choices.Select(c => new[] { "--yubikey", c })));
@@ -392,7 +392,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
 
     [Fact]
     public void Enrollment_WithoutTheParameter_RequiresPresence() =>
-        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll().HwBlob));
+        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll(password: null).HwBlob));
 
     [Theory]
     [InlineData(true)]
@@ -401,13 +401,13 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key, requirePresence: false);
-        var (kekSlot, blob) = service.Enroll();
+        var (kekSlot, blob) = service.Enroll(password: null);
         if (!withFlag)
             blob = blob[..^1]; // a blob made before the flag byte existed
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
-        Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.SecureEnclave, key).Unlock(config, _ => 0));
+        Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.SecureEnclave, key).Unlock(config, _ => 0, password: null));
     }
 
     [Fact]
@@ -415,12 +415,12 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key);
-        var blob = service.Enroll().HwBlob;
+        var blob = service.Enroll(password: null).HwBlob;
         blob[^1] = 2;
         var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
-        Assert.Throws<TswapException>(() => service.Unlock(config, _ => 0));
+        Assert.Throws<TswapException>(() => service.Unlock(config, _ => 0, password: null));
     }
 
     // --- the native signature (decision 3); resolved by name: the type is macOS-only ---
@@ -528,20 +528,22 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
         Assert.DoesNotContain("presence required", stdout.Split('\n').Single(l => l.Contains("Secure Enclave, ")));
     }
 
-    // --- the warning comes first (decision 7): before init's reinitialise prompt and recover's stdin ---
+    // --- the warning comes first (decision 7): before init's refusal on an existing vault and recover's stdin ---
 
     [Fact]
-    public void Init_WarnsBeforeTheReinitialisePrompt()
+    public void Init_OnARecordVault_WarnsBeforeTheRefusal()
     {
         var mac = Mac();
         mac.Ok("", "init", "--secure-enclave", "--with-touch");
 
         var (exit, text) = mac.RunInterleaved("no\n", "init", "--secure-enclave", "--no-touch");
 
-        Assert.Equal(0, exit);
+        // Brief T16-S1 (ruling 4): a second init on a record vault refuses instead of asking to
+        // reinitialise; the --no-touch warning still comes first.
+        Assert.Equal(1, exit);
         var warning = text.IndexOf("can't be changed or removed later", StringComparison.Ordinal);
-        var prompt = text.IndexOf("Already initialized. Reinitialize?", StringComparison.Ordinal);
-        Assert.True(warning >= 0 && prompt > warning, text);
+        var refusal = text.IndexOf("shared record-store vault", StringComparison.Ordinal);
+        Assert.True(warning >= 0 && refusal > warning, text);
     }
 
     [Fact]

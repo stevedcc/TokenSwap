@@ -1,12 +1,14 @@
 using System.Runtime.Versioning;
+using TswapCore.Keyring;
 using TswapCore.Vault.Interop;
+using TswapCore.VaultPassword;
 
 namespace TswapCore.Vault;
 
 /// <summary>
 /// Windows TPM 2.0 <see cref="IHardwareKeyService"/>. Needs a TPM 2.0 device exposed through
 /// Windows' CNG "Microsoft Platform Crypto Provider", so it only builds/runs on Windows — see
-/// <c>HARDWARE_BACKENDS.md</c> and <c>MULTI_MACHINE_KEYING.md</c> for the design this
+/// <c>docs/design/hardware-backends.md</c> and <c>docs/design/multi-machine-keying.md</c> for the design this
 /// implements. The <see cref="Unlock"/> validation logic (base64 decode, 32-byte length check)
 /// lives in <see cref="TpmHardwareServiceBase"/>, shared with <see cref="LinuxTpmHardwareService"/>.
 ///
@@ -27,7 +29,7 @@ namespace TswapCore.Vault;
 ///
 /// <para><b>Status: developed and tested only against this machine's (virtual) TPM in a
 /// Parallels VM, not yet verified against physical TPM hardware</b> — see
-/// <c>HARDWARE_BACKENDS.md</c>'s Windows TPM section before trusting this as a primary vault
+/// <c>docs/design/hardware-backends.md</c>'s Windows TPM section before trusting this as a primary vault
 /// backend.</para>
 ///
 /// <para>Registered at the composition root only on Windows — see <c>TswapCli/Program.cs</c>. On
@@ -37,14 +39,24 @@ namespace TswapCore.Vault;
 [SupportedOSPlatform("windows")]
 public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
 {
+    /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
+    public static bool IsAvailable() => PlatformCryptoProviderInterop.IsAvailable();
+
+    /// <summary><see cref="IsAvailable"/>, with why not (guided init lists the reason).</summary>
+    public static (bool Available, string? Reason) Probe() => PlatformCryptoProviderInterop.Probe();
+
     /// <summary>
     /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
     /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.
     /// </summary>
-    public HardwareEnrollment Enroll()
+    public HardwareEnrollment Enroll(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return new HardwareEnrollment(kekSlot, Wrap(kekSlot));
+        // Brief T17 task 9: a password slot's key carries the stretched password as its PCP_USAGEAUTH,
+        // and its blob the TSTP header (ruling 3).
+        return password is null
+            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password), TpmSlotBlob.Password));
     }
 
     /// <summary>
@@ -56,5 +68,10 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     /// <summary>Unlock side: unwraps a payload produced by <see cref="Wrap"/> using this machine's named TPM-backed key.</summary>
     public byte[] Unwrap(byte[] wrapped) => PlatformCryptoProviderInterop.Unwrap(wrapped);
 
-    protected override byte[] RecoverKey(byte[] wrapped) => Unwrap(wrapped);
+    /// <remarks>
+    /// <paramref name="eccPrimary"/> is ignored (issue #261): a Windows package's key is found by the name inside the
+    /// package, not by a primary, and Windows never writes the bit.
+    /// </remarks>
+    protected override byte[] RecoverKey(byte[] wrapped, bool eccPrimary, StretchedPassword? password) =>
+        password is null ? Unwrap(wrapped) : PlatformCryptoProviderInterop.Unwrap(wrapped, password);
 }

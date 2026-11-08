@@ -4,23 +4,15 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  # Brief T15: a pull request that changes what ships (the SDK, project or build files, this
-  # workflow) runs the test job and every build leg too, so each shipped runtime identifier is
-  # built, packed and smoke-tested before a tag. Nothing is published from a pull request:
-  # verify-version and release run only on a tag.
-  pull_request:
-    paths:
-      - global.json
-      - '**/*.csproj'
-      - '**/*.props'
-      - '**/*.targets'
-      - nuget.config
-      - '**/packages.lock.json'
-      - '*.slnx'
-      - .github/workflows/release.yml
-
-permissions:
-  contents: read
+  # A dry run of the signed macOS build (issue #240): the same signing, notarisation and checks as a tag run, then the
+  # archive, the pkg and the notary logs are uploaded as artifacts. A dispatch never publishes, whatever the input says;
+  # the input makes that explicit in the UI. The macos-signing environment allows only main and v* tags.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (a dispatch never publishes a release)'
+        type: boolean
+        default: true
 
 jobs:
   test:
@@ -30,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -46,6 +38,12 @@ jobs:
           fi
           bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
+      # As in ci.yml: the JIT test host loads the YubiKey SDK's own Yubico.NativeShims.so, which links
+      # libpcsclite.so.1 (SdkFido2KeysTests' salt tests go through its ECDH). Only this job installs it; the build
+      # legs below smoke-test the shipped binary, which links tswap's PC/SC stand-in and must start without it.
+      - name: libpcsclite for the JIT test host
+        run: sudo apt-get install -y libpcsclite1
+
       - name: Test
         env:
           CI_REQUIRE_BWRAP: '1'
@@ -53,14 +51,15 @@ jobs:
         run: |
           set -o pipefail
           TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test TokenSwap.slnx \
-            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows" | tee "$RUNNER_TEMP/test.log"
+            --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey" | tee "$RUNNER_TEMP/test.log"
           # A filter that matches no tests exits 0: require one summary line with tests in it.
           grep -qE '^Passed! +- Failed: +0, Passed: +[1-9][0-9]*,' "$RUNNER_TEMP/test.log" \
             || { echo "::error::no 'Passed!' summary with tests in it: no tests ran, or some failed" >&2; exit 1; }
 
   verify-version:
     name: Verify Version
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Tag pushes only; a dispatch has no tag to compare (the jobs below accept it as skipped).
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -80,12 +79,8 @@ jobs:
 
   build:
     needs: [test, verify-version]
-    # On a tag: test and verify-version must both succeed, as before. On a pull request
-    # verify-version is skipped, which must not skip the build.
-    if: >-
-      !cancelled() && needs.test.result == 'success' &&
-      (needs.verify-version.result == 'success' ||
-      (github.event_name == 'pull_request' && needs.verify-version.result == 'skipped'))
+    # A skipped need (verify-version on a dispatch) would otherwise skip this job.
+    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')
     name: Build ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -95,8 +90,6 @@ jobs:
             os: ubuntu-latest
           - rid: linux-arm64
             os: ubuntu-24.04-arm
-          - rid: osx-arm64
-            os: macos-latest
           - rid: win-x64
             os: windows-latest
 
@@ -104,7 +97,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -127,18 +120,14 @@ jobs:
       # Package here, on the binary's own platform, then extract the archive into an empty folder
       # and run what is in it: the smoke test runs the shipped bytes with the shipped permissions
       # (upload-artifact doesn't keep the execute bit, so the archive is made before the upload).
-      # `prompt-hash` needs no vault.
+      # `prompt-hash` needs no vault. contrib/packaging/package.sh also packs the macOS Secure Enclave
+      # dylib next to the binary, and on macOS makes and unlocks a throwaway Secure Enclave vault with
+      # the unpacked tswap, which loads the dylib from the archive (issue #238); CI runs the same script.
       - name: Package and smoke-test the archive (Linux, macOS)
         if: runner.os != 'Windows'
+        timeout-minutes: 10
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          chmod +x ./publish/${{ matrix.rid }}/tswap
-          tar czf "dist/tswap-${{ matrix.rid }}.tar.gz" -C ./publish/${{ matrix.rid }} tswap
-          check="$(mktemp -d)"
-          tar xzf "dist/tswap-${{ matrix.rid }}.tar.gz" -C "$check"
-          "$check/tswap" prompt-hash
+        run: bash contrib/packaging/package.sh "${{ matrix.rid }}" "./publish/${{ matrix.rid }}" dist --smoke
 
       - name: Package and smoke-test the archive (Windows)
         if: runner.os == 'Windows'
@@ -151,6 +140,17 @@ jobs:
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
           & (Join-Path $check 'tswap.exe') prompt-hash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The YubiKey smoke package.sh runs on Linux and macOS (YubiKey SDK stage 1, task 4): a serial no YubiKey has,
+          # never --replace, so the only expected outcome is the refusal.
+          $ErrorActionPreference = 'Continue'
+          $out = (& (Join-Path $check 'tswap.exe') yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -eq 0 -or -not $out.Contains('YubiKey 2147483647 is not plugged in')) {
+            Write-Output "::error::tswap yubikey setup --touch --serial 2147483647 should refuse with 'YubiKey 2147483647 is not plugged in' (exit $code)"
+            exit 1
+          }
+          exit 0
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -159,10 +159,182 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # The macOS build, signed and notarised (issue #240; plan docs/superpowers/plans/2026-11-07-macos-signing.md). Bound
+  # to the macos-signing environment, which holds the secrets and waits for the owner's approval on every run; it starts
+  # only once the tests passed, so no approval, signing or notarisation is spent on a red commit. Upstream
+  # (stevedcc/TokenSwap) a missing secret fails the release; a fork builds the archive unsigned, with no pkg.
+  # The report-only checks (contrib/packaging/macos/runner-checks.sh) gate once TSWAP_MACOS_GATE_RUNNER_CHECKS: '1' is
+  # added to env: below, after the first dry run's strings are in the checks (plan task 10).
+  build-macos:
+    name: Build osx-arm64 (signed)
+    needs: [test, verify-version]
+    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')
+    runs-on: macos-latest
+    # Two notary waits of up to 40 minutes each, plus the build, the smoke and the install test.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    environment: macos-signing
+    env:
+      SIGNING_REQUIRED: ${{ github.repository == 'stevedcc/TokenSwap' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Whether each input is there (true/false only: no value reaches this step).
+      - name: Signing inputs
+        id: inputs
+        shell: bash
+        env:
+          HAVE_MACOS_SIGN_APP_P12_BASE64: ${{ secrets.MACOS_SIGN_APP_P12_BASE64 != '' }}
+          HAVE_MACOS_SIGN_INSTALLER_P12_BASE64: ${{ secrets.MACOS_SIGN_INSTALLER_P12_BASE64 != '' }}
+          HAVE_MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD != '' }}
+          HAVE_MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 != '' }}
+          HAVE_MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID != '' }}
+          HAVE_MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID != '' }}
+          HAVE_MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_REQUIRED" != true ]; then
+            echo "::warning::not stevedcc/TokenSwap: the macOS archive is built unsigned, and there is no pkg"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          missing=
+          for name in MACOS_SIGN_APP_P12_BASE64 MACOS_SIGN_INSTALLER_P12_BASE64 MACOS_SIGN_P12_PASSWORD \
+                      MACOS_NOTARY_KEY_P8_BASE64 MACOS_NOTARY_ISSUER_ID MACOS_NOTARY_KEY_ID MACOS_TEAM_ID; do
+            have="HAVE_$name"
+            [ "${!have}" = true ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the macos-signing environment lacks:$missing (plan G5); the release is not built unsigned (D5)"
+            exit 1
+          fi
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Throwaway keychain with the Developer ID identities
+        id: kc
+        if: steps.inputs.outputs.signed == 'true'
+        shell: bash
+        env:
+          MACOS_SIGN_APP_P12_BASE64: ${{ secrets.MACOS_SIGN_APP_P12_BASE64 }}
+          MACOS_SIGN_INSTALLER_P12_BASE64: ${{ secrets.MACOS_SIGN_INSTALLER_P12_BASE64 }}
+          MACOS_SIGN_P12_PASSWORD: ${{ secrets.MACOS_SIGN_P12_PASSWORD }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        run: bash contrib/packaging/sign-macos.sh keychain-setup
+
+      # The shim (libtswapse.dylib) is signed inside the build, before it is embedded into tswap for installscript.
+      - name: Publish (signed shim)
+        if: steps.inputs.outputs.signed == 'true'
+        run: >
+          dotnet publish TswapCli/TswapCli.csproj
+          --configuration Release
+          --runtime osx-arm64
+          --output ./publish/osx-arm64
+          -p:TswapMacSignIdentity=${{ steps.kc.outputs.app_identity }}
+          -p:TswapMacSignKeychain=${{ steps.kc.outputs.keychain }}
+
+      - name: Publish (unsigned, fork)
+        if: steps.inputs.outputs.signed != 'true'
+        run: >
+          dotnet publish TswapCli/TswapCli.csproj
+          --configuration Release
+          --runtime osx-arm64
+          --output ./publish/osx-arm64
+
+      - name: Sign tswap and verify both files
+        if: steps.inputs.outputs.signed == 'true'
+        shell: bash
+        env:
+          APP_IDENTITY: ${{ steps.kc.outputs.app_identity }}
+          KC: ${{ steps.kc.outputs.keychain }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          bash contrib/packaging/sign-macos.sh sign ./publish/osx-arm64
+          bash contrib/packaging/sign-macos.sh verify ./publish/osx-arm64
+
+      - name: Notarise tswap and libtswapse.dylib
+        if: steps.inputs.outputs.signed == 'true'
+        shell: bash
+        env:
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          bash contrib/packaging/sign-macos.sh zip-for-notary ./publish/osx-arm64 "$RUNNER_TEMP/tswap-osx-arm64.zip"
+          bash contrib/packaging/sign-macos.sh notarise "$RUNNER_TEMP/tswap-osx-arm64.zip"
+
+      # The same package.sh as the unsigned path, plus the signature, notarisation and quarantine checks.
+      - name: Package and smoke-test the archive (signed)
+        if: steps.inputs.outputs.signed == 'true'
+        timeout-minutes: 20
+        shell: bash
+        env:
+          TSWAP_EXPECT_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+        run: bash contrib/packaging/package.sh osx-arm64 ./publish/osx-arm64 dist --smoke
+
+      - name: Package and smoke-test the archive (unsigned, fork)
+        if: steps.inputs.outputs.signed != 'true'
+        timeout-minutes: 10
+        shell: bash
+        run: bash contrib/packaging/package.sh osx-arm64 ./publish/osx-arm64 dist --smoke
+
+      - name: Build, notarise, check and test-install the pkg
+        if: steps.inputs.outputs.signed == 'true'
+        shell: bash
+        env:
+          INSTALLER_IDENTITY: ${{ steps.kc.outputs.installer_identity }}
+          KC: ${{ steps.kc.outputs.keychain }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          # The tag without its v; a dispatch has no tag, so the csproj's version.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+          fi
+          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$version" dist
+          bash contrib/packaging/package-pkg.sh notarise dist/tswap-osx-arm64.pkg
+          bash contrib/packaging/package-pkg.sh check dist/tswap-osx-arm64.pkg dist/tswap-osx-arm64.tar.gz
+          bash contrib/packaging/package-pkg.sh install-test dist/tswap-osx-arm64.pkg
+
+      - name: Upload the archive and the pkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: tswap-osx-arm64
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload the notary logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notary-logs
+          path: ${{ runner.temp }}/notary-log-*.json
+          if-no-files-found: ignore
+
+      - name: Remove the keychain and any key material
+        if: always()
+        shell: bash
+        run: bash contrib/packaging/sign-macos.sh keychain-cleanup
+
   release:
     name: Create Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build-macos]
+    # Tag pushes only: a dispatch (the dry run) never publishes.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -174,7 +346,23 @@ jobs:
           path: ./artifacts
           merge-multiple: true
 
+      # Upstream the signed pkg must be there (fail_on_unmatched_files); a fork's macOS build is unsigned and has none.
       - name: Create GitHub Release
+        if: github.repository == 'stevedcc/TokenSwap'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/tswap-linux-x64.tar.gz
+            artifacts/tswap-linux-arm64.tar.gz
+            artifacts/tswap-osx-arm64.tar.gz
+            artifacts/tswap-osx-arm64.pkg
+            artifacts/tswap-win-x64.zip
+
+      - name: Create GitHub Release (fork, no pkg)
+        if: github.repository != 'stevedcc/TokenSwap'
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}

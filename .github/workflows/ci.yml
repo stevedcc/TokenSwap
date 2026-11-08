@@ -55,6 +55,14 @@ jobs:
           printf '%s\n' 'import CryptoKit' 'print("Secure Enclave available: \(SecureEnclave.isAvailable)")' > "$probe"
           swift "$probe"
 
+      # The JIT test host loads the YubiKey SDK's own Yubico.NativeShims.so, which links libpcsclite.so.1; the SDK's
+      # ECDH (FIDO2 PIN protocol, SdkFido2KeysTests' salt tests) goes through it. The published binary links the shims
+      # statically with tswap's PC/SC stand-in and needs no libpcsclite (package.sh --smoke checks that), so the library
+      # is installed for the unit tests only and removed again before the AOT publish and the E2E tests.
+      - name: libpcsclite for the JIT test host (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libpcsclite1
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
         # CI_REQUIRE_SE=1 on macOS only (it means "this machine must have a Secure Enclave", so never
@@ -63,12 +71,69 @@ jobs:
         env:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
           CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
-        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows"
+        run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey"
+
+      - name: Remove libpcsclite again (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get remove -y libpcsclite1
+          if ldconfig -p | grep -q 'libpcsclite.so.1 '; then echo 'libpcsclite.so.1 is still installed'; exit 1; fi
 
       # NativeAOT publish is the tripwire for AOT-incompatible changes
       # (reflection, unsupported patterns) that a plain build won't catch.
       - name: AOT publish
         run: dotnet publish TswapCli/TswapCli.csproj -c Release
+
+      # Windows: the published binary's YubiKey smoke (YubiKey SDK stage 1, task 4; macOS and Linux run the same line in
+      # package.sh --smoke below). 2147483647 is outside the range YubiKey serials use, so it can never select, let alone
+      # program, a key that happens to be plugged in, and the line never passes --replace: the only expected outcome is
+      # the refusal, which also shows the YubiKey SDK starts in the shipped binary.
+      - name: YubiKey smoke (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = @(Get-ChildItem -Path TswapCli/bin/Release -Recurse -Filter tswap.exe | Where-Object { $_.Directory.Name -eq 'publish' })
+          if ($exe.Count -ne 1) { Write-Output "::error::expected exactly one published tswap.exe, found $($exe.Count)"; exit 1 }
+          $out = (& $exe[0].FullName yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -eq 0 -or -not $out.Contains('YubiKey 2147483647 is not plugged in')) {
+            Write-Output "::error::tswap yubikey setup --touch --serial 2147483647 should refuse with 'YubiKey 2147483647 is not plugged in' (exit $code)"
+            exit 1
+          }
+          exit 0
+
+      # The release archive, packed and smoke-tested by the script release.yml uses, so a PR that breaks
+      # packaging (issue #238: the macOS archive lacked libtswapse.dylib) fails here, not at tag time.
+      # The rid comes from the publish folder's parent (bin/Release/net10.0/<rid>/publish); exactly one such
+      # folder must exist, and package.sh refuses a rid it doesn't know, so a wrong pick fails instead of
+      # packing a Linux-style archive that tests nothing about the dylib.
+      - name: Package and smoke-test the release archive (Linux, macOS)
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_dirs=$(find "$PWD/TswapCli/bin/Release" -type d -path '*/publish')
+          if [ "$(printf '%s\n' "$publish_dirs" | grep -c .)" -ne 1 ]; then
+            echo "::error::expected exactly one Release publish folder under TswapCli/bin/Release, found: ${publish_dirs:-none}" >&2
+            exit 1
+          fi
+          publish=$publish_dirs
+          rid=$(basename "$(dirname "$publish")")
+          bash contrib/packaging/package.sh "$rid" "$publish" "$RUNNER_TEMP/dist" --smoke
+
+      # The macOS archive, for the old-macOS load check below (#265). Packed on the Mac, so the tarball keeps the
+      # execute bit; upload-artifact only zips it.
+      - name: Upload the macOS release archive
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tswap-macos-archive
+          path: ${{ runner.temp }}/dist/tswap-osx-*.tar.gz
+          if-no-files-found: error
 
       # E2E smoke tests exercise the real binary as a subprocess (run/PTY/installscript).
       # A Debug AOT publish is used so the TSWAP_TEST_KEY bypass (Debug-only) exists in
@@ -99,3 +164,47 @@ jobs:
           path: TswapCli/bin/Release/net11.0/*/publish/tswap*
           if-no-files-found: error
 
+  # #265: the Secure Enclave dylib was built for the SDK's macOS (minos 26.0) while tswap itself needs 12.0, so on an
+  # older macOS dyld refused to load it. This job unpacks the archive the macOS leg packed and loads the dylib on the
+  # oldest arm64 macOS GitHub serves (15: the macos-14 images were retired on 2 November 2026; 12 and 13 never had an
+  # arm64 runner). Still older than the 26.0 the dylib declared before the fix. Unsigned, like the rest of ci.yml.
+  macos-older:
+    needs: build-test-publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tswap-macos-archive
+          path: ${{ runner.temp }}/archive
+
+      - name: Load the Secure Enclave dylib on macOS 15
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          check=$(mktemp -d)
+          tar xzf "$RUNNER_TEMP"/archive/tswap-osx-*.tar.gz -C "$check"
+          ls -l "$check"
+          "$check/tswap" prompt-hash
+          probe="$RUNNER_TEMP/se-probe.swift"
+          printf '%s\n' 'import CryptoKit' 'print(SecureEnclave.isAvailable)' > "$probe"
+          available=$(swift "$probe")
+          echo "Secure Enclave available: $available"
+          mkdir -m 700 "$check/config"
+          if [ "$available" = true ]; then
+            TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery
+            TSWAP_CONFIG_DIR="$check/config" "$check/tswap" names
+            echo "loaded libtswapse.dylib on $(sw_vers -productVersion): Secure Enclave vault made and unlocked"
+          else
+            # No Secure Enclave: init still loads the dylib to ask it, and the "no usable Secure Enclave" answer comes
+            # from the dylib; a dyld refusal (the #265 failure) says "Library not loaded" or "newer than running OS".
+            status=0
+            out=$(TSWAP_CONFIG_DIR="$check/config" "$check/tswap" init --secure-enclave --no-touch --no-password --no-recovery 2>&1) || status=$?
+            printf '%s\n' "$out"
+            if ! grep -qF 'does not have a usable Secure Enclave' <<<"$out"; then
+              echo "::error::the dylib did not answer (exit $status); see the output above" >&2
+              exit 1
+            fi
+            echo "loaded libtswapse.dylib on $(sw_vers -productVersion): no Secure Enclave here, the dylib said so"
+          fi

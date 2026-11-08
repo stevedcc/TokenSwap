@@ -88,7 +88,7 @@ public record Config(List<int> YubiKeySerials,
     // a fresh 'tswap init' of the default YubiKey backend). Additive/backward-compatible,
     // following the same pattern as SecureEnclaveWrappedKey/TpmSealedKey above.
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MasterKeySalt = null,
-    // Phase 6 keyring vault only (issue #119, 'tswap init --keyring', and since brief T2 also
+    // Phase 6 keyring vault only (issue #119, then 'tswap init --keyring', now 'tswap init --yubikey'; since brief T2 also
     // 'tswap init --tpm'/'--secure-enclave', whose machine slot carries the TPM/Secure Enclave
     // blob as its hwBlob, issue #154): base64 of a versioned (2 or 3)
     // Keyring.KeyringCodec-encoded Keyring holding a random K_v wrapped by this machine's slot,
@@ -136,7 +136,7 @@ public record Config(List<int> YubiKeySerials,
     // *both* machines' slots, and "first Machine slot" would silently pick whichever one happens
     // to sort first, unwrapping with the wrong slot's AAD and failing (or, worse in a
     // differently-shaped future format, succeeding against the wrong slot). Every keyring vault
-    // created from here on (init --keyring's single slot, or slot accept's finalized slot) sets
+    // created from here on (init's first slot, or slot accept's finalized slot) sets
     // this to its own slot id; VaultUnlocker looks it up by id when present and falls back to the
     // old "first Machine slot" heuristic only when null — i.e. only for a keyring predating this
     // field, which is guaranteed single-machine-slot anyway, so the fallback is exact, not a
@@ -168,7 +168,12 @@ public record Config(List<int> YubiKeySerials,
     // acknowledged on this machine. Written by init, slot add, slot request and migrate when they
     // explain the posture, and by 'tswap slots --ack'; everyday commands print a one-line notice only
     // for a posture that differs from it. Omitted when null (nothing acknowledged yet).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? AcknowledgedTouch = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string>? AcknowledgedTouch = null,
+    // Brief T17 ruling 16, a machine field: base64 of the vault-password file that 'slot request --password'
+    // read (and, for a TPM or Secure Enclave request, sealed against). 'slot accept' requires the approve
+    // file's copy and the target folder's file (if any) to be byte-identical to it, then clears it with
+    // the other pending fields. Omitted when null (every request without --password).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PendingVaultPassword = null);
 
 /// <summary>
 /// A slot this machine approved with <c>slot approve</c> (brief T5 decision 1): the requester's
@@ -218,7 +223,7 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
 /// <summary>A superseded burn (brief T6 decision 4): when it was burned and why.</summary>
 public sealed record PastBurn(DateTime BurnedAt, string? Reason);
 
-public record SecretsDb(Dictionary<string, Secret> Secrets)
+public record SecretsDb(Dictionary<string, Secret> Secrets) : ISecretLookup
 {
     /// <summary>
     /// Brief T6 decision 4 (record store only): for a name whose record file can't be read
@@ -241,6 +246,12 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
 
     /// <summary>The suffix of a token or marker that names a secret's previous value.</summary>
     public const string PreviousSuffix = ":previous";
+
+    /// <inheritdoc/>
+    public bool Contains(string name) => Secrets.ContainsKey(name);
+
+    /// <inheritdoc/>
+    public bool HasPreviousValue(string name) => Secrets.TryGetValue(name, out var secret) && secret.PreviousValue is not null;
 
     /// <summary>
     /// Fix round 3: true when <paramref name="token"/> (a name or <c>name:previous</c>) refers to a
@@ -285,10 +296,13 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public void ThrowIfAnyUnreadable(string command)
     {
         if (UnreadableFiles is { Count: > 0 } files)
-            throw new TswapException(
-                $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
-                "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.");
+            throw new TswapException(AnyUnreadableText(command, files));
     }
+
+    /// <summary>Brief T16-S2: <see cref="ThrowIfAnyUnreadable"/>'s text, shared with <see cref="VaultView"/>.</summary>
+    public static string AnyUnreadableText(string command, IReadOnlyList<string> files) =>
+        $"'{command}' covers every secret, but {files.Count} record(s) can't be read: {string.Join(", ", files)}. " +
+        "Restore them from a backup or another copy, or wait for the sync to finish; nothing was written.";
 
     /// <summary>
     /// Throws when <paramref name="name"/> is in a record that can't be read, naming the file (fail
@@ -297,10 +311,16 @@ public record SecretsDb(Dictionary<string, Secret> Secrets)
     public void ThrowIfUnreadable(string name)
     {
         if (UnreadableRecord?.Invoke(name) is { } file)
-            throw new TswapException(
-                $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
-                "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.");
+            throw new TswapException(UnreadableRecordText(name, file));
     }
+
+    /// <summary>
+    /// Brief T16-S2: <see cref="ThrowIfUnreadable"/>'s text for the record <paramref name="file"/>
+    /// (hashed name), shared with <see cref="VaultView"/>, so every command names the file alike.
+    /// </summary>
+    public static string UnreadableRecordText(string name, string file) =>
+        $"The record holding '{name}' ({file}) can't be read: it is damaged, truncated, or still being synced. " +
+        "Restore that file from a backup or another copy, or wait for the sync to finish; nothing was changed.";
 }
 
 /// <summary>
@@ -366,6 +386,7 @@ public record ExportFile(string Version, DateTime Created, string Salt, string C
 [JsonSerializable(typeof(SlotApproveFile))]
 [JsonSerializable(typeof(SlotDto))]
 [JsonSerializable(typeof(SlotReceiptFile))]
+[JsonSerializable(typeof(Vault.RememberedYubiKeySlotsFile))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 public partial class TswapJsonContext : JsonSerializerContext { }
 

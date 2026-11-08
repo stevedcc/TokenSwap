@@ -4,7 +4,7 @@ namespace TswapCore.Keyring;
 
 /// <summary>
 /// The AEAD "wrap" half of the Phase 6 two-layer slot scheme (issues #116/#117 — see
-/// <c>MULTI_MACHINE_KEYING.md</c> §Two-layer slot wrap and §AAD binding).
+/// <c>docs/design/multi-machine-keying.md</c> §Two-layer slot wrap and §AAD binding).
 ///
 /// <para>Given a 32-byte per-slot key-encryption-key (<c>KEK_slot</c> — recovered however a
 /// backend's own wrap/seal primitive or <see cref="Vault.IHardwareKeyService.Unlock"/> produces

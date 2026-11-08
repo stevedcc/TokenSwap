@@ -53,7 +53,9 @@ public class CommandTests : IDisposable
             Verbose = verbose,
             CommandArgs = commandArgs,
         };
-        var storage = new Storage(_tempDir);
+        // Brief T16-S1: the store is chosen per invocation, as the binary does (VaultStores.Open):
+        // init makes a record vault, which the next invocation opens as one.
+        var storage = VaultStores.Open(_tempDir, warnings: console.Error);
         var yubiKeys = new TestKeyYubiKeyService(_testKey);
         var unlocker = new VaultUnlocker(yubiKeys, overrideKey: _testKey);
         var ctx = new CommandContext(console, env, storage, yubiKeys, unlocker, _testKey, SudoBypass: true);
@@ -62,28 +64,35 @@ public class CommandTests : IDisposable
         return (exit, console.OutText, console.ErrorText);
     }
 
+    /// <summary>
+    /// Brief T16-S1 (ruling 4): <c>init</c> refuses on an existing vault (it used to re-initialize
+    /// after a "yes"), so a test that needs a fresh vault in the same config folder removes the old
+    /// one (config.json and the vault folder) and runs init again.
+    /// </summary>
+    private void FreshVault()
+    {
+        File.Delete(Path.Combine(_tempDir, "config.json"));
+        var vault = Path.Combine(_tempDir, "vault");
+        if (Directory.Exists(vault))
+            Directory.Delete(vault, true);
+        Assert.Equal(0, RunTswap("init", "--yubikey").exitCode);
+    }
+
+    /// <summary>The config as the store composes it (a record vault's keyring lives in its vault folder).</summary>
+    private Config LoadedConfig() => VaultStores.Open(_tempDir).LoadConfig();
+
     // --- Init ---
 
     [Fact]
     public void Init_CreatesConfigFile()
     {
-        var (exit, stdout, _) = RunTswap("init");
+        var (exit, stdout, _) = RunTswap("init", "--yubikey");
 
         Assert.Equal(0, exit);
-        Assert.Contains("test mode", stdout);
+        Assert.Contains("Vault folder", stdout);
         Assert.True(File.Exists(Path.Combine(_tempDir, "config.json")));
     }
 
-    [Fact]
-    public void Init_ConfigHasSyntheticSerials()
-    {
-        RunTswap("init");
-
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
-
-        Assert.Equal(new List<int> { 99999999, 99999998 }, config.YubiKeySerials);
-    }
 
     [Fact]
     public void Init_SecureEnclaveAndTpmBothPassed_RejectsAsUsageError()
@@ -96,18 +105,17 @@ public class CommandTests : IDisposable
         Assert.Contains("Usage:", stderr);
     }
 
-    // --- Init --keyring (Phase 6, issue #119) ---
+    // --- Init --yubikey (Phase 6, issue #119; the flag was --keyring until v0.2.0) ---
 
     [Fact]
     public void InitKeyring_CreatesConfigWithKeyringFieldAndNoBackend()
     {
-        var (exit, stdout, _) = RunTswap("init", "--keyring");
+        var (exit, stdout, _) = RunTswap("init", "--yubikey");
 
         Assert.Equal(0, exit);
         Assert.Contains("keyring", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
 
         Assert.NotNull(config.Keyring);
         // Still a YubiKey vault as far as VaultUnlocker's backend dispatch is concerned —
@@ -121,9 +129,9 @@ public class CommandTests : IDisposable
     [Fact]
     public void InitKeyring_FullRoundTrip_AddThenGetRecoversValue()
     {
-        // The end-to-end proof this issue's verification bar asks for: init --keyring, add a
+        // The end-to-end proof this issue's verification bar asks for: init --yubikey, add a
         // secret, get it back — through the real CLI dispatch path, not just unit-level pieces.
-        RunTswap("init", "--keyring");
+        RunTswap("init", "--yubikey");
 
         var (addExit, _, _) = RunTswapWithStdin("hunter2\nhunter2\n", "add", "my-secret");
         Assert.Equal(0, addExit);
@@ -137,33 +145,41 @@ public class CommandTests : IDisposable
     [Fact]
     public void InitKeyring_Reinit_GeneratesFreshVaultKey_OldSecretNoLongerAccessible()
     {
-        // Every 'init --keyring' generates a brand-new random K_v (unlike the default flow,
+        // Every 'init --yubikey' generates a brand-new random K_v (unlike the default flow,
         // where re-init with the same test key would still decrypt an old vault under some
         // circumstances) — reinitializing must leave the old secret behind, not silently expose
         // or destroy data without the documented backup-file dance.
-        RunTswap("init", "--keyring");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("first-value\nfirst-value\n", "add", "first-secret");
 
-        RunTswapWithStdin("yes", "init", "--keyring");
+        // Brief T16-S1: init refuses on an existing vault, so the old vault folder is moved aside
+        // and the new vault gets the old record files: they stay unreadable under the new K_v.
+        var vault = Path.Combine(_tempDir, "vault");
+        var old = Path.Combine(_tempDir, "vault-old");
+        Directory.Move(vault, old);
+        File.Delete(Path.Combine(_tempDir, "config.json"));
+        RunTswap("init", "--yubikey");
+        Directory.CreateDirectory(Path.Combine(vault, "records"));
+        foreach (var file in Directory.GetFiles(Path.Combine(old, "records")))
+            File.Copy(file, Path.Combine(vault, "records", Path.GetFileName(file)));
 
         var (getExit, _, getStderr) = RunTswap("get", "first-secret");
         Assert.NotEqual(0, getExit);
         Assert.Contains("not found", getStderr);
     }
 
-    // --- Init --keyring recovery slot (Phase 6, issue #120) ---
+    // --- Init --yubikey recovery slot (Phase 6, issue #120) ---
 
     [Fact]
     public void InitKeyring_DefaultOn_GeneratesRecoverySlotAndDisplaysPrivateKeyOnce()
     {
-        var (exit, stdout, _) = RunTswap("init", "--keyring");
+        var (exit, stdout, _) = RunTswap("init", "--yubikey");
 
         Assert.Equal(0, exit);
         Assert.Contains("CRITICAL: BACKUP RECOVERY PRIVATE KEY NOW", stdout);
         Assert.Contains("Recovery Private Key (base64):", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
         var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
         Assert.Equal(2, keyring.Slots.Count);
@@ -174,14 +190,13 @@ public class CommandTests : IDisposable
     [Fact]
     public void InitKeyring_NoRecovery_SkipsRecoverySlotAndDoesNotDisplayAKey()
     {
-        var (exit, stdout, _) = RunTswap("init", "--keyring", "--no-recovery");
+        var (exit, stdout, _) = RunTswap("init", "--yubikey", "--no-recovery");
 
         Assert.Equal(0, exit);
         Assert.DoesNotContain("Recovery Private Key", stdout);
         Assert.Contains("No recovery slot generated", stdout);
 
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
+        var config = LoadedConfig();
         var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
 
         Assert.Single(keyring.Slots);
@@ -192,7 +207,7 @@ public class CommandTests : IDisposable
     public void InitKeyring_NoRecovery_VaultStillFullyUsable()
     {
         // --no-recovery must only remove the recovery slot, not otherwise change vault behavior.
-        RunTswap("init", "--keyring", "--no-recovery");
+        RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("hunter2\nhunter2\n", "add", "my-secret");
 
         var (getExit, getStdout, _) = RunTswap("get", "my-secret");
@@ -201,14 +216,6 @@ public class CommandTests : IDisposable
         Assert.Contains("hunter2", getStdout);
     }
 
-    [Fact]
-    public void Init_NoRecoveryWithoutKeyring_RejectsAsUsageError()
-    {
-        var (exit, _, stderr) = RunTswap("init", "--no-recovery");
-
-        Assert.Equal(1, exit);
-        Assert.Contains("Usage:", stderr);
-    }
 
     [Fact]
     public void BuildKeyringConfig_RecoveryPrivateKey_RecoversSameVaultKeyAsMachineSlot()
@@ -317,7 +324,7 @@ public class CommandTests : IDisposable
     {
         // The exact failure mode this issue calls out by name: a no-touch YubiKey slot has a
         // real, if unusual, control (custody) and must never be reduced to a bare
-        // "unprotected"/"insecure" label. See MULTI_MACHINE_KEYING.md §Why not k >= 2 (yet).
+        // "unprotected"/"insecure" label. See docs/design/multi-machine-keying.md §Why not k >= 2 (yet).
         var (config, _, _) = InitCommand.BuildKeyringConfig(
             RandomNumberGenerator.GetBytes(32),
             new List<int> { 11111111, 22222222 },
@@ -397,7 +404,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Slots_EndToEnd_InitKeyringThenSlots_ListsMachineAndRecoverySlots()
     {
-        RunTswap("init", "--keyring");
+        RunTswap("init", "--yubikey");
 
         var (exit, stdout, _) = RunTswap("slots");
 
@@ -407,23 +414,13 @@ public class CommandTests : IDisposable
         Assert.DoesNotContain("unprotected", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Slots_NonKeyringVault_ReturnsHonestMessageWithoutError()
-    {
-        RunTswap("init");
-
-        var (exit, stdout, _) = RunTswap("slots");
-
-        Assert.Equal(0, exit);
-        Assert.Contains("no keyring", stdout);
-    }
 
     // --- Create ---
 
     [Fact]
     public void Create_GeneratesSecret()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswap("create", "my-secret");
 
         Assert.Equal(0, exit);
@@ -434,7 +431,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_CustomLength()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswap("create", "short-secret", "8");
 
         Assert.Equal(0, exit);
@@ -444,7 +441,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_DuplicateNameFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "dup-secret");
         var (exit, _, stderr) = RunTswap("create", "dup-secret");
 
@@ -455,7 +452,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_EmptyNameFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "");
 
         Assert.NotEqual(0, exit);
@@ -465,7 +462,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NameWithSpaceFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "bad name");
 
         Assert.NotEqual(0, exit);
@@ -475,7 +472,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NameWithSpecialCharsFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "bad!name");
 
         Assert.NotEqual(0, exit);
@@ -485,7 +482,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NameTooLongFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var longName = new string('a', 65);
         var (exit, _, stderr) = RunTswap("create", longName);
 
@@ -496,7 +493,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NameAtMaxLengthSucceeds()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var maxName = new string('a', 64);
         var (exit, _, _) = RunTswap("create", maxName);
 
@@ -506,7 +503,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_ZeroLengthFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "valid-name", "0");
 
         Assert.NotEqual(0, exit);
@@ -516,7 +513,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NegativeLengthFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "valid-name", "-5");
 
         Assert.NotEqual(0, exit);
@@ -526,7 +523,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_TooLongLengthFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "valid-name", "4097");
 
         Assert.NotEqual(0, exit);
@@ -536,7 +533,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_NonNumericLengthFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("create", "valid-name", "abc");
 
         Assert.NotEqual(0, exit);
@@ -546,7 +543,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_MaxLengthSucceeds()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswap("create", "valid-name", "4096");
 
         Assert.Equal(0, exit);
@@ -556,7 +553,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Create_GeneratedValueIsCorrectLengthAndCharset()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "charset-secret", "200");
         var (exit, stdout, _) = RunTswap("get", "charset-secret");
 
@@ -570,7 +567,7 @@ public class CommandTests : IDisposable
     public void Create_RepeatedCallsProduceDifferentValues()
     {
         // Regression guard: the system-RNG path must not accidentally be deterministic.
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "rand-a", "64");
         RunTswap("create", "rand-b", "64");
         var (_, valueA, _) = RunTswap("get", "rand-a");
@@ -584,7 +581,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Names_ListsCreatedSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "alpha");
         RunTswap("create", "beta");
 
@@ -598,7 +595,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Names_EmptyVault()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswap("names");
 
         Assert.Equal(0, exit);
@@ -610,7 +607,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_StoresStdinValue()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswapWithStdin("piped-secret-value", "ingest", "from-stdin");
 
         Assert.Equal(0, exit);
@@ -624,7 +621,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_DuplicateFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("value1", "ingest", "dup-ingest");
         var (exit, _, stderr) = RunTswapWithStdin("value2", "ingest", "dup-ingest");
 
@@ -635,7 +632,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_EmptyNameFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswapWithStdin("some-value", "ingest", "");
 
         Assert.NotEqual(0, exit);
@@ -645,7 +642,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_NameWithSpaceFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswapWithStdin("some-value", "ingest", "bad name");
 
         Assert.NotEqual(0, exit);
@@ -655,7 +652,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_TooLongValueFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var longValue = new string('x', 65537);
         var (exit, _, stderr) = RunTswapWithStdin(longValue, "ingest", "toolong");
 
@@ -666,7 +663,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Ingest_MaxLengthValueSucceeds()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var maxValue = new string('x', 65536);
         var (exit, stdout, _) = RunTswapWithStdin(maxValue, "ingest", "maxlen");
 
@@ -679,7 +676,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burn_MarksSecretAsBurned()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "burn-me");
         var (exit, stdout, _) = RunTswap("burn", "burn-me", "test reason");
 
@@ -690,7 +687,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burn_ShowsInNames()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "visible-burn");
         RunTswap("burn", "visible-burn", "oops");
 
@@ -701,7 +698,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burn_NonexistentFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("burn", "ghost");
 
         Assert.NotEqual(0, exit);
@@ -711,7 +708,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burn_AlreadyBurnedFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "already-burned");
         RunTswap("burn", "already-burned", "original reason");
 
@@ -727,7 +724,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burned_ShowsBurnedSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "leaked");
         RunTswap("burn", "leaked", "seen in logs");
 
@@ -741,7 +738,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burned_NoBurnedSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "clean-secret");
 
         var (exit, stdout, _) = RunTswap("burned");
@@ -784,7 +781,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_MissingTokenFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var (exit, _, stderr) = RunTswap("run", "true", "{{nonexistent}}");
 
@@ -795,7 +792,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_NoTokensFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var (exit, _, stderr) = RunTswap("run", "true");
 
@@ -806,7 +803,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_BlockedCommandFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "block-test");
 
         var (exit, _, stderr) = RunTswap("run", "echo", "{{block-test}}");
@@ -821,7 +818,7 @@ public class CommandTests : IDisposable
         // A token in argv[0] that expands to a blocked command must still be rejected.
         // The pre-substitution blocklist check sees "{{cmd}}" (not blocked); the
         // post-substitution re-check must catch the expanded value.
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("echo", "ingest", "cmd");
 
         var (exit, _, stderr) = RunTswap("run", "{{cmd}}", "hello");
@@ -834,7 +831,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_ShellWithInlineCode_IsRefused_AndRunsNothing()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "inline-test");
         var marker = Path.Combine(_tempDir, "ran");
 
@@ -851,7 +848,7 @@ public class CommandTests : IDisposable
     {
         // `run sh {{opt}} ...` where opt = "-c": the pre-substitution check sees "{{opt}}";
         // the post-substitution re-check must see "-c".
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("-c", "ingest", "opt");
         var marker = Path.Combine(_tempDir, "ran");
 
@@ -862,13 +859,71 @@ public class CommandTests : IDisposable
         Assert.False(File.Exists(marker), "a refused command must not run");
     }
 
+    // A word the post-substitution check refuses came from a secret's value, so
+    // the refusal names the token, never the word.
+    [Fact]
+    public void Run_ProgramFromATokenAfterSubstitution_RefusalNamesTheTokenNotTheValue()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("printenv", "ingest", "cmd");
+
+        var (exit, stdout, stderr) = RunTswap("run", "{{cmd}}", "PATH");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{cmd}}", stderr);
+        Assert.DoesNotContain("printenv", stderr);
+        Assert.DoesNotContain("printenv", stdout);
+    }
+
+    // A literal refused word is refused before substitution and named as typed: no token is blamed.
+    [Fact]
+    public void Run_LiteralBlockedWordWithAToken_RefusalNamesTheWord()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "innocent");
+
+        var (exit, _, stderr) = RunTswap("run", "printenv", "{{innocent}}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("'printenv'", stderr);
+        Assert.DoesNotContain("{{innocent}}", stderr);
+    }
+
+    // rotating-and-burning.md: run warns about a burned {{name}} value too, not only file markers.
+    [Fact]
+    public void Run_BurnedNameToken_Warns()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "seen");
+        Assert.Equal(0, RunTswap("burn", "seen", "in a log").exitCode);
+
+        var (_, _, stderr) = RunTswap("run", "true", "{{seen}}");
+
+        Assert.Contains("Warning: 'seen' is a burned value", stderr);
+    }
+
+    [Fact]
+    public void Run_InlineCodeFlagFromATokenAfterSubstitution_RefusalDoesNotRepeatTheFlag()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswapWithStdin("-ec", "ingest", "opt");
+        var marker = Path.Combine(_tempDir, "ran");
+
+        var (exit, _, stderr) = RunTswap("run", "sh", "{{opt}}", $"touch {marker}");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("{{opt}}", stderr);
+        Assert.DoesNotContain("-ec", stderr);
+        Assert.False(File.Exists(marker), "a refused command must not run");
+    }
+
     [Fact]
     public void Run_ShellWithAScriptFile_RunsIt()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return; // POSIX sh only (until #181: reported as Passed on Windows)
 
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "script-test");
         var script = Path.Combine(_tempDir, "script.sh");
         File.WriteAllText(script, "test -n \"$1\" && exit 7\n");
@@ -890,7 +945,7 @@ public class CommandTests : IDisposable
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return; // POSIX grep only (until #181: reported as Passed on Windows)
 
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("grep-pattern-value", "ingest", "grep-pat");
         var file = Path.Combine(_tempDir, "lines.txt");
         File.WriteAllText(file, "grep-pattern-value\n");
@@ -908,7 +963,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Burn_ReasonThatIsLiterallyDashV_IsKept()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "dash-v-key");
 
         var (exit, _, stderr) = RunTswap("burn", "dash-v-key", "-v");
@@ -937,7 +992,7 @@ public class CommandTests : IDisposable
     [InlineData("burned", "--json", "-v")]
     public void GlobalFlagAfterTheCommand_AmongItsOptions_GetsAHint(params string[] args)
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var (exit, stdout, stderr) = RunTswap(args);
 
@@ -959,7 +1014,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_ShellBehindAWrapper_IsRefused()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "wrapped-test");
 
         var (exit, _, stderr) = RunTswap("run", "timeout", "5", "sh", "-c", "true {{wrapped-test}}");
@@ -971,7 +1026,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Run_PipeBlockedFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "pipe-test");
 
         var (exit, _, stderr) = RunTswap("run", "curl", "{{pipe-test}}", "|", "cat");
@@ -1008,7 +1063,7 @@ public class CommandTests : IDisposable
     public void SameTestKey_ProducesSameMasterKey()
     {
         // Verify determinism: same TSWAP_TEST_KEY encrypts/decrypts consistently
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "determinism-test");
 
         // Names should still work (proves decrypt with same key succeeds)
@@ -1023,7 +1078,7 @@ public class CommandTests : IDisposable
     public void Apply_OutputsSubstitutedContent()
     {
         // Initialize and create a secret
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "test-secret", "16");
 
         // Create a temp YAML file with tswap marker
@@ -1052,7 +1107,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Apply_FailsOnMissingSecret()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
         File.WriteAllText(yamlFile, @"password: """"  # tswap: nonexistent-secret");
@@ -1074,7 +1129,7 @@ public class CommandTests : IDisposable
         // However, this test still provides value by ensuring that the apply command's
         // stdout output remains clean YAML that can be safely piped or redirected.
 
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "test-secret", "16");
 
         var yamlFile = Path.Combine(_tempDir, "test-values.yaml");
@@ -1100,7 +1155,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Apply_BurnedSecret_AppliesWithWarning()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
         RunTswap("burn", "my-burned", "test");
 
@@ -1120,7 +1175,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Check_ExitCode1_WhenSecretMissing()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var yamlFile = Path.Combine(_tempDir, "check-missing.yaml");
         File.WriteAllText(yamlFile, @"password: """"  # tswap: missing-secret");
@@ -1133,7 +1188,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Check_ExitCode2_WhenSecretBurned()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "burned-check-secret");
         RunTswap("burn", "burned-check-secret", "was leaked");
 
@@ -1149,7 +1204,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void Check_ExitCode1_WhenMixedMissingAndBurned()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "burned-mixed-secret");
         RunTswap("burn", "burned-mixed-secret", "was leaked");
 
@@ -1169,7 +1224,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Check_ExitCode0_WhenAllOk()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "ok-check-secret");
 
         var yamlFile = Path.Combine(_tempDir, "check-ok.yaml");
@@ -1182,21 +1237,11 @@ password2: """"  # tswap: missing-mixed-secret");
 
     // --- Init: new config fields ---
 
-    [Fact]
-    public void Init_ConfigHasUnlockChallenge()
-    {
-        RunTswap("init");
-        var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
-        var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
-
-        Assert.NotNull(config.UnlockChallenge);
-        Assert.Equal(64, config.UnlockChallenge.Length); // 32 bytes as hex
-    }
 
     [Fact]
     public void Init_ConfigHasRngMode()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var json = File.ReadAllText(Path.Combine(_tempDir, "config.json"));
         var config = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
 
@@ -1213,42 +1258,36 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Init_Reinit_PipedYes_DoesNotHang()
     {
-        RunTswap("init");
-        // "yes\n" answers the "Already initialized. Reinitialize?" prompt.
-        var (exit, stdout, _) = RunTswapWithStdin("yes\n", "init");
-        Assert.Equal(0, exit);
-        Assert.Contains("test mode", stdout);
+        RunTswap("init", "--yubikey");
+        // Brief T16-S1: a second init on a record vault refuses at once, without a prompt to answer.
+        var (exit, stdout, stderr) = RunTswapWithStdin("yes\n", "init", "--yubikey");
+        Assert.Equal(1, exit);
+        Assert.Contains("shared record-store vault", stderr);
+        Assert.DoesNotContain("Reinitialize?", stdout);
     }
 
     [Fact]
     public void Init_CreatesVaultFile()
     {
-        var (exit, _, _) = RunTswap("init");
+        var (exit, _, _) = RunTswap("init", "--yubikey");
 
+        // Brief T16-S1: init makes a record vault: its folder holds the keyring and the format
+        // marker, and the next command finds a complete (empty) vault without any warning.
         Assert.Equal(0, exit);
-        Assert.True(File.Exists(Path.Combine(_tempDir, "secrets.json.enc")),
-            "init should create an empty secrets.json.enc so subsequent commands do not warn about a missing vault");
+        Assert.True(File.Exists(Path.Combine(_tempDir, "vault", "keyring")));
+        Assert.True(File.Exists(Path.Combine(_tempDir, "vault", RecordVaultStore.RecordFormatMarkerFileName)));
+        var (namesExit, _, namesErr) = RunTswap("names");
+        Assert.Equal(0, namesExit);
+        Assert.DoesNotContain("arning", namesErr);
     }
 
-    [Fact]
-    public void Names_WarnsMissingVaultOnStderr()
-    {
-        RunTswap("init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
-
-        var (exit, _, stderr) = RunTswap("names");
-
-        // Command succeeds (empty vault) and emits a warning on stderr
-        Assert.Equal(0, exit);
-        Assert.Contains("vault file not found", stderr, StringComparison.OrdinalIgnoreCase);
-    }
 
     // --- Export / Import ---
 
     [Fact]
     public void Export_CreatesEncryptedFile()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "my-secret");
 
         var exportPath = Path.Combine(_tempDir, "backup.enc");
@@ -1264,10 +1303,45 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("argon2id", written);
     }
 
+    // #259: an empty passphrase is refused with a tswap message, not Argon2's exception.
+
+    [Fact]
+    public void Export_EmptyPassphrase_RefusedBeforeUnlock()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "empty.enc");
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n\n", "export", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("An empty passphrase can't protect an export. Run 'sudo tswap export' again.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        Assert.False(File.Exists(exportPath));
+    }
+
+    [Fact]
+    public void Import_EmptyPassphrase_Refused()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "my-secret");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
+        FreshVault();
+
+        var (exit, _, stderr) = RunTswapWithStdin("\n", "import", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("No import passphrase was entered.", stderr);
+        Assert.DoesNotContain("Argon2", stderr);
+        var (_, namesOut, _) = RunTswap("names");
+        Assert.DoesNotContain("my-secret", namesOut);
+    }
+
     [Fact]
     public void Export_Import_RoundTrip()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("secret-value", "ingest", "db-pass");
         RunTswap("create", "api-key");
 
@@ -1277,8 +1351,7 @@ password2: """"  # tswap: missing-mixed-secret");
         // Re-init clears the vault (also delete secrets.json.enc — test key is constant
         // so the old encrypted file remains readable if not explicitly removed)
         // "yes\n" answers the "Already initialized. Reinitialize?" prompt via stdin.
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("strongpassphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1292,7 +1365,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_SkipsBurnedSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "good-secret");
         RunTswap("create", "burned-secret");
         RunTswap("burn", "burned-secret", "compromised");
@@ -1300,8 +1373,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1316,7 +1388,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_SkipsExistingSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "existing-secret");
 
         var exportPath = Path.Combine(_tempDir, "backup.enc");
@@ -1333,7 +1405,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_WrongPassphraseFails()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "a-secret");
 
         var exportPath = Path.Combine(_tempDir, "backup.enc");
@@ -1348,7 +1420,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_SkipsSecretsWithNulOrNullValues()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         // Construct a synthetic export file containing one clean secret, one with a NUL byte,
         // and one with a null value (possible from a tampered/corrupted export file since
@@ -1393,7 +1465,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_IncludeBurned_ImportsBurnedSecrets()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("burned-value", "ingest", "was-burned");
         RunTswap("burn", "was-burned", "compromised");
         RunTswap("create", "good-secret");
@@ -1401,8 +1473,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", "--include-burned", exportPath);
 
         Assert.Equal(0, exit);
@@ -1417,7 +1488,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_Default_SkipsBurnedSecrets_WithHint()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "good-secret");
         RunTswap("create", "burned-secret");
         RunTswap("burn", "burned-secret", "compromised");
@@ -1425,8 +1496,7 @@ password2: """"  # tswap: missing-mixed-secret");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         RunTswapWithStdin("passphrase\npassphrase\n", "export", exportPath);
 
-        RunTswapWithStdin("yes\n", "init");
-        File.Delete(Path.Combine(_tempDir, "secrets.json.enc"));
+        FreshVault();
         var (exit, stdout, _) = RunTswapWithStdin("passphrase\n", "import", exportPath);
 
         Assert.Equal(0, exit);
@@ -1442,7 +1512,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Export_PromptsAreOnStderr()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         var (exit, stdout, stderr) = RunTswapWithStdin("testpass\ntestpass\n", "export", exportPath);
 
@@ -1459,7 +1529,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Export_Cancel_ExitsWithError()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var exportPath = Path.Combine(_tempDir, "backup.enc");
         File.WriteAllText(exportPath, "existing"); // trigger the overwrite prompt
 
@@ -1475,7 +1545,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_InvalidJson_GivesFriendlyError()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var badFile = Path.Combine(_tempDir, "bad.enc");
         File.WriteAllText(badFile, "this is not json at all {{{");
 
@@ -1491,7 +1561,7 @@ password2: """"  # tswap: missing-mixed-secret");
         // A v1-shaped ExportFile has no Kdf field at all (it didn't exist yet — #30/#108).
         // Its key must still be derivable exactly as it always was: Crypto.DeriveKeyFromPassphrase
         // (plain PBKDF2-SHA256 at Crypto.Pbkdf2Iterations), dispatched via ExportFile.V1.
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         const string passphrase = "legacy-passphrase";
         var salt = RandomNumberGenerator.GetBytes(32);
@@ -1517,12 +1587,53 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Contains("legacy-secret", namesOut);
     }
 
+    /// <summary>Review M5: the empty-passphrase refusal is for Argon2id files; a v1 file made with "" still imports.</summary>
+    [Fact]
+    public void Import_V1ExportFileWithEmptyPassphrase_StillImports()
+    {
+        RunTswap("init", "--yubikey");
+        var salt = RandomNumberGenerator.GetBytes(32);
+        var exportKey = Crypto.DeriveKeyFromPassphrase("", salt);
+        var dbJson = JsonSerializer.Serialize(
+            new SecretsDb(new Dictionary<string, Secret> { ["empty-pass-secret"] = new("v", DateTime.UtcNow, DateTime.UtcNow) }),
+            TswapJsonContext.Default.SecretsDb);
+        var exportFile = new ExportFile(ExportFile.V1, DateTime.UtcNow, Convert.ToBase64String(salt),
+            Convert.ToBase64String(Crypto.Encrypt(Encoding.UTF8.GetBytes(dbJson), exportKey)));
+        var exportPath = Path.Combine(_tempDir, "empty-v1.enc");
+        File.WriteAllText(exportPath, JsonSerializer.Serialize(exportFile, TswapJsonContext.Default.ExportFile));
+
+        var (exit, stdout, stderr) = RunTswapWithStdin("\n", "import", exportPath);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains("Imported 1 secret(s)", stdout);
+        Assert.Contains("empty-pass-secret", RunTswap("names").stdout);
+    }
+
+    /// <summary>Review M5: the empty export passphrase is refused before the vault is unlocked (no YubiKey challenge).</summary>
+    [Fact]
+    public void Export_EmptyPassphrase_NoYubiKeyChallenge()
+    {
+        using var m = new FleetMachine("export-empty", SimulatedYubiKeyService.WithKeys(11111111));
+        m.Keys.PluggedIn = [11111111];
+        m.Ok("", "init", "--yubikey", "--no-password");
+        m.Ok("v\nv\n", "add", "db");
+        m.Keys.Challenges.Clear();
+        var exportPath = m.PathOf("empty.enc");
+
+        var (exit, _, stderr) = m.Run("\n\n", "export", exportPath);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("An empty passphrase can't protect an export.", stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.False(File.Exists(exportPath));
+    }
+
     [Fact]
     public void Import_V2ExportFile_UsesArgon2idParamsFromFile()
     {
         // A v2 file carries its own explicit Kdf params (#30); import must derive using those,
         // not any hardcoded default, and must use Argon2id rather than PBKDF2 (#108).
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         const string passphrase = "v2-passphrase";
         var salt = RandomNumberGenerator.GetBytes(32);
@@ -1553,7 +1664,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Import_UnrecognizedVersion_ThrowsClearError()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
 
         var exportFile = new ExportFile("tswap-export-v99", DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy");
         var exportPath = Path.Combine(_tempDir, "future.enc");
@@ -1571,7 +1682,7 @@ password2: """"  # tswap: missing-mixed-secret");
     public void Migrate_OldConfig_UpdatesRngMode()
     {
         // Simulate a pre-feature config: init normally then strip UnlockChallenge
-        RunTswap("init");
+        ClassicVaultTestSupport.CreateTestModeVault(_tempDir, _testKey); // brief T16-S1: init makes record vaults now
         var configPath = Path.Combine(_tempDir, "config.json");
         var config = JsonSerializer.Deserialize(
             File.ReadAllText(configPath), TswapJsonContext.Default.Config)!;
@@ -1595,7 +1706,7 @@ password2: """"  # tswap: missing-mixed-secret");
     {
         // TPM/Secure Enclave vaults have YubiKeySerials: [] — migrate must not blindly index
         // [0]/[1] into that (regression test for the Copilot-flagged crash).
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var configPath = Path.Combine(_tempDir, "config.json");
         var tpmConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
         File.WriteAllText(configPath, JsonSerializer.Serialize(tpmConfig, TswapJsonContext.Default.Config));
@@ -1609,7 +1720,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Migrate_ModernConfig_ReportsUpToDate()
     {
-        RunTswap("init");
+        ClassicVaultTestSupport.CreateTestModeVault(_tempDir, _testKey); // brief T16-S1: init makes record vaults now
         // Modern config has UnlockChallenge set and RequiresTouch from synthetic init
         // We need to also set RequiresTouch = true to satisfy all checks
         var configPath = Path.Combine(_tempDir, "config.json");
@@ -1627,12 +1738,12 @@ password2: """"  # tswap: missing-mixed-secret");
 
     // Regression test for issue #39: migrate must not hang when stdin is piped.
     // Synthetic init leaves RequiresTouch=null → needsTouchMigration=true → the
-    // "Show detailed re-initialization instructions? (yes/no):" prompt is shown.
+    // "Show detailed conversion instructions? (yes/no):" prompt is shown.
     // Piped "no\n" must answer it without blocking and the command must exit 0.
     [Fact]
     public void Migrate_PipedNo_DoesNotHang()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         // Default synthetic config: RngMode=system, UnlockChallenge=set, RequiresTouch=null
         // → needsReInit=true (touch migration required) → yes/no prompt is shown
         var (exit, _, _) = RunTswapWithStdin("no\n", "migrate");
@@ -1644,7 +1755,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void ToComment_DryRun_DoesNotExposeSecretInOutput()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         // Ingest a known secret value via stdin
         var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
         Assert.Equal(0, ingestExit);
@@ -1668,7 +1779,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void ToComment_Live_DoesNotExposeSecretInOutput()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
         Assert.Equal(0, ingestExit);
 
@@ -1688,7 +1799,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void ToComment_ContinuationLine_DoesNotLeakFragmentInOutput()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (ingestExit, _, _) = RunTswapWithStdin("supersecretvalue123", "ingest", "my-password");
         Assert.Equal(0, ingestExit);
 
@@ -1718,7 +1829,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Redact_IncludesBurnedSecretValues()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
         RunTswap("burn", "my-burned", "test");
 
@@ -1735,7 +1846,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void ToComment_IncludesBurnedSecretValues()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswapWithStdin("burned-secret-value", "ingest", "my-burned");
         RunTswap("burn", "my-burned", "test");
 
@@ -1755,7 +1866,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Names_Json_EmptyVault_IsEmptyArray()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, stdout, _) = RunTswap("names", "--json");
 
         Assert.Equal(0, exit);
@@ -1767,7 +1878,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Names_Json_ReportsBurnFlag()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "alpha");
         RunTswap("create", "beta");
         RunTswap("burn", "beta", "leaked");
@@ -1789,7 +1900,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Burned_Json_EmptyIsEmptyArray()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "clean");
 
         var (exit, stdout, _) = RunTswap("burned", "--json");
@@ -1803,7 +1914,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Burned_Json_ListsBurnedWithReason()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "leaked");
         RunTswap("burn", "leaked", "seen in logs");
 
@@ -1820,7 +1931,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Check_Json_NoMarkers_IsEmptyReport()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var yamlFile = Path.Combine(_tempDir, "plain.yaml");
         File.WriteAllText(yamlFile, "password: hunter2\n");
 
@@ -1835,7 +1946,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Check_Json_ReportsStatusesAndPreservesExitCode()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         RunTswap("create", "present");
 
         var yamlFile = Path.Combine(_tempDir, "mixed.yaml");
@@ -1858,7 +1969,7 @@ password2: """"  # tswap: missing-mixed-secret");
     [Fact]
     public void Check_Json_MissingPath_StillUsageError()
     {
-        RunTswap("init");
+        RunTswap("init", "--yubikey");
         var (exit, _, stderr) = RunTswap("check", "--json");
 
         Assert.NotEqual(0, exit);

@@ -77,7 +77,8 @@ public static class BrokerConfigFile
         FileStream stream;
         try
         {
-            var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.ReadWrite };
+            // FileShare.None: .NET takes the exclusive flock at open, in one request. FileShare.ReadWrite took a shared flock that the explicit exclusive flock below then had to upgrade, and upgrade semantics differ by platform (Linux drops the shared lock first, so one taker always wins; where a failed upgrade keeps it, two takers can both lose, which macOS CI hit, #236). Never upgrade.
+            var options = new FileStreamOptions { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             stream = owner.AsOwner(path, () => new FileStream(path, options));
         }
@@ -110,14 +111,20 @@ public static class BrokerConfigFile
         return stream;
     }
 
-    /// <summary>Validates <paramref name="config"/> (templates against <paramref name="host"/>, as <see cref="Load"/>), then writes it (nothing is written when it is invalid).</summary>
-    public static void Save(DirectoryOwnerMatcher owner, string configDir, BrokerConfig config, BrokerHostContext? host = null)
+    /// <summary>
+    /// Validates <paramref name="config"/> (templates against <paramref name="host"/>, as <see cref="Load"/>), then
+    /// writes it (nothing is written when it is invalid). The editing commands are its callers, so the one rule
+    /// that every socket is bound (brief I224 D1) is suspended here, or a v0.1 file could never be fixed; the
+    /// sockets still to bind are returned, in file order, for the command to name.
+    /// </summary>
+    public static IReadOnlyList<string> Save(DirectoryOwnerMatcher owner, string configDir, BrokerConfig config, BrokerHostContext? host = null)
     {
-        BrokerPolicy.Validate(config, HostFor(config, configDir, host));
+        BrokerPolicy.Validate(config, HostFor(config, configDir, host), requireBinding: false);
         var path = PathIn(configDir);
         owner.CreateDirectory(configDir);
         owner.WriteAtomic(path, Encoding.UTF8.GetBytes(BrokerPolicy.Serialize(config) + "\n"));
         owner.Tighten(path); // 0600 even if an earlier file had a wider mode
+        return BrokerPolicy.UnboundSocketNames(config);
     }
 
     /// <summary>Refuses a <c>broker.json</c> not owned by the vault folder's owner.</summary>

@@ -7,8 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace TswapCore.Broker;
 
-/// <summary>Who is at the other end of a connection: the socket it arrived on and the kernel's peer credentials.</summary>
-public sealed record BrokerPeer(string Socket, uint Uid, int Pid);
+/// <summary>
+/// Who is at the other end of a connection: the socket it arrived on and the kernel's peer credentials, plus
+/// (brief I224 D4) the identity observed at accept when the socket was bound to a container: its cgroup path
+/// and, when a label was bound, its SELinux label. Both null for a connection accepted on a uid-only socket.
+/// </summary>
+public sealed record BrokerPeer(string Socket, uint Uid, int Pid, string? Cgroup = null, string? Label = null);
 
 /// <summary>Everything <see cref="BrokerServer"/> needs; tests swap the clock, the secret source and the forwarder.</summary>
 public sealed record BrokerServerOptions
@@ -35,6 +39,24 @@ public sealed record BrokerServerOptions
     /// <c>TSWAP_TEST_KEY</c> (never in Release).
     /// </summary>
     public bool AllowOwnUidForTests { get; init; }
+
+    /// <summary>
+    /// Brief T17 ruling 14: a password broker's lock state (null: password-free). While it is locked every
+    /// request gets the uniform busy refusal, logged as <c>locked</c> and never counted as an unlock failure.
+    /// </summary>
+    public BrokerPasswordState? Password { get; init; }
+
+    /// <summary>Test seam (brief I224 task 3): called with each connection the gate admitted, before any byte is read.</summary>
+    internal Action<BrokerPeer>? OnAdmittedForTests { get; init; }
+
+    /// <summary>
+    /// Test seam (I224 fix round 1, review focus 2): called on a container socket's connection after the uid
+    /// checks and before its identity is read, so a test can make the client exit in between.
+    /// </summary>
+    internal Action? BeforeIdentityReadForTests { get; init; }
+
+    /// <summary>Brief I224 D2: the platform facts a <c>container</c> socket needs (tests fake them).</summary>
+    public BrokerContainerHost ContainerHost { get; init; } = BrokerContainerHost.Real;
 }
 
 /// <summary>
@@ -77,6 +99,9 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>The request slots (tests watch its queue).</summary>
     internal BrokerLimiter Limiter { get; private init; } = null!;
 
+    /// <summary>The unlock-failure limits shared by every socket (brief T17: the control socket's proofs count here too).</summary>
+    public BrokerUnlockGuard UnlockGuard => Handler.UnlockGuard;
+
     /// <summary>The request handler (tests watch its unlock queue).</summary>
     internal BrokerRequestHandler Handler { get; private init; } = null!;
 
@@ -112,6 +137,9 @@ public sealed class BrokerServer : IAsyncDisposable
         var policy = options.Policy.Current;
         if (policy.Sockets.Count == 0)
             throw new TswapException("broker.json defines no sockets; add one with 'sudo tswap broker socket add'.");
+        // Brief I224 D2: a container binding this host can't check refuses the start (nothing is created).
+        if (options.ContainerHost.StartRefusal(policy) is { } containerRefusal)
+            throw new TswapException(containerRefusal);
         var socketDir = CheckSocketDir(policy.SocketDir, options.Ownership);
         var lockFile = TakeLock(socketDir);
         WebApplication? app = null;
@@ -133,8 +161,10 @@ public sealed class BrokerServer : IAsyncDisposable
                 limiter, new BrokerUnlockGuard(options.Limits, options.Time), options.Log, options.Time,
                 options.Limits, reason => fatal.TrySetResult(reason))
             {
+                Password = options.Password,
                 Templates = new Templates.BrokerTemplateRuntime(options.Time),
                 ShortSecretWarnings = new BrokerShortSecretWarnings(), // one per serve process; a reload keeps it
+                Gate = new BrokerContainerGate(options), // brief I224 D4: shared by the HTTP and ssh-agent listeners
             };
             // Brief T9: bwrap is checked at start; a sandbox that can't run refuses template calls (logged), never runs them bare.
             if (policy.Templates.Count > 0 && handler.Templates.Sandbox(policy.BwrapPath).Problem is { } sandboxProblem)
@@ -161,7 +191,7 @@ public sealed class BrokerServer : IAsyncDisposable
                     kestrel.ListenUnixSocket(SocketPath(socketDir, socketName), listen =>
                     {
                         listen.Protocols = HttpProtocols.Http1;
-                        listen.Use(next => connection => GateAsync(connection, socketName, next, options, connections));
+                        listen.Use(next => connection => GateAsync(connection, socketName, next, options, connections, handler.Gate));
                     });
                 }
                 sshAgent?.Listen(kestrel);
@@ -175,6 +205,11 @@ public sealed class BrokerServer : IAsyncDisposable
             foreach (var path in paths)
                 File.SetUnixFileMode(path, (UnixFileMode)0b110_110_110);
 
+            // Brief I224 D2 and D1: how each socket admits its clients, and what validation warned about.
+            foreach (var line in BrokerContainerHost.StartLines(policy))
+                options.Log.Event(line);
+            foreach (var warning in policy.Warnings)
+                options.Log.Event(warning);
             options.Log.Event($"started: {paths.Count} socket(s) in {socketDir}");
             return new BrokerServer(options, lockFile, app, paths) { Limiter = limiter, Connections = connections, Handler = handler, Fatal = fatal.Task, SshAgentListener = sshAgent };
         }
@@ -202,7 +237,7 @@ public sealed class BrokerServer : IAsyncDisposable
     /// socket and closes the connection (unanswered, logged) unless that uid may use this socket.
     /// </summary>
     private static async Task GateAsync(ConnectionContext connection, string socketName, ConnectionDelegate next,
-        BrokerServerOptions options, BrokerConnectionCounter connections)
+        BrokerServerOptions options, BrokerConnectionCounter connections, BrokerContainerGate gate)
     {
         // Fix round 1: one client can't hold every connection (file descriptor) for all sockets.
         if (!connections.TryOpen(socketName))
@@ -212,29 +247,11 @@ public sealed class BrokerServer : IAsyncDisposable
         }
         try
         {
-            var socket = connection.Features.Get<IConnectionSocketFeature>()?.Socket;
-            var peer = socket is null ? null : BrokerNative.TryGetPeerCredentials(socket);
-            if (peer is not { } creds)
-            {
-                options.Log.Connection(socketName, null, null, "no-peer-credentials");
-                return; // returning without next closes the connection
-            }
-            // Brief T9: no client may share the broker's uid (the vault user's). A process with it
-            // could read the broker's config and the vault directly, so the socket is not its way in,
-            // and refusing it keeps a misconfigured container (rootless Podman run by the vault user)
-            // from looking like a client.
-            if (creds.Uid == options.Ownership.EffectiveUid && !options.AllowOwnUidForTests)
-            {
-                options.Log.Connection(socketName, creds.Uid, creds.Pid, "own-uid");
-                return;
-            }
-            var policy = options.Policy.Current;
-            if (!policy.Sockets.TryGetValue(socketName, out var allowed) || !allowed.AllowsUid(creds.Uid))
-            {
-                options.Log.Connection(socketName, creds.Uid, creds.Pid, allowed is null ? "socket-removed" : "uid-not-allowed");
-                return;
-            }
-            connection.Items[PeerItemKey] = new BrokerPeer(socketName, creds.Uid, creds.Pid);
+            // Brief I224 D4: the one gate both listeners use (credentials, own uid, uids, container).
+            var peer = gate.Admit(connection.Features.Get<IConnectionSocketFeature>()?.Socket, socketName, socketName);
+            if (peer is null)
+                return; // returning without next closes the connection, unanswered
+            connection.Items[PeerItemKey] = peer;
             // Kestrel hides the raw Connection header's tokens; read them from the bytes (decision 6).
             var sniffer = new BrokerHeaderSniffer(connection.Transport.Input);
             connection.Transport = new SniffedDuplexPipe(connection.Transport, sniffer);
@@ -313,7 +330,8 @@ public sealed class BrokerServer : IAsyncDisposable
             {
                 Mode = FileMode.OpenOrCreate,
                 Access = FileAccess.ReadWrite,
-                Share = FileShare.ReadWrite,
+                // FileShare.None: .NET takes the exclusive flock at open, in one request. FileShare.ReadWrite took a shared flock that the explicit exclusive flock below then had to upgrade, and upgrade semantics differ by platform (Linux drops the shared lock first, so one taker always wins; where a failed upgrade keeps it, two takers can both lose, which macOS CI hit, #236). Never upgrade.
+                Share = FileShare.None,
             };
             if (!OperatingSystem.IsWindows())
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
@@ -362,10 +380,17 @@ public sealed class BrokerServer : IAsyncDisposable
     /// <summary>Re-reads the config with <paramref name="load"/> (SIGHUP): a valid file is swapped in, an invalid one keeps the current config.</summary>
     public bool Reload(Func<BrokerPolicy> load)
     {
-        var ok = _options.Policy.TryReload(load, _options.Log.Event);
+        var ok = _options.Policy.TryReload(() =>
+        {
+            var next = load();
+            // Brief I224 D2: a new binding this host can't check keeps the current config, like any invalid file.
+            return _options.ContainerHost.StartRefusal(next) is { } refusal ? throw new BrokerConfigException(refusal) : next;
+        }, _options.Log.Event);
         if (ok)
         {
             var current = _options.Policy.Current;
+            foreach (var warning in current.Warnings) // brief I224 D1
+                _options.Log.Event(warning);
             foreach (var path in _socketPaths.Where(p => !SshAgent.SshAgentListener.IsAgentSocketPath(p))) // brief T10: agent sockets (<name>.ssh.sock) are SshAgentListener.Reloaded's
             {
                 var name = Path.GetFileNameWithoutExtension(path);

@@ -114,7 +114,10 @@ public sealed record SlotApproveFile(
     string NewSlotWrapped,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NewSlotHwBlob = null,
     // Brief T5 decision 2: the request's Backend, passed on (null for a YubiKey slot).
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? NewSlotBackend = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] HardwareBackend? NewSlotBackend = null,
+    // Brief T17 ruling 16: base64 of the approver's vault-password file, when its vault folder has one. Optional,
+    // so the format version stays 2: a 0.1.x reader ignores the member (TswapJsonContext allows unmapped members).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? VaultPassword = null)
 {
     /// <summary>Current format version this build writes and requires on read (2 since brief T4,
     /// which added <see cref="NewSlotHwBlob"/>).</summary>
@@ -126,7 +129,7 @@ public sealed record SlotApproveFile(
 /// JSON, with explicit version checks on both this small format's own version and (for the
 /// approve file) the embedded <see cref="KeyringFormat.KeyringFormatVersion"/> — see
 /// <see cref="SlotRequestFile"/>'s doc comment for why JSON was chosen over fixed-binary here, and
-/// <c>MULTI_MACHINE_KEYING.md</c>'s implementation notes on this module's history of
+/// <c>docs/design/multi-machine-keying.md</c>'s implementation notes on this module's history of
 /// version-check gaps (never skip this check for a new persisted format).
 /// </summary>
 public static class SlotEnrollmentFileCodec
@@ -236,24 +239,28 @@ public static class SlotEnrollmentFileCodec
         return file;
     }
 
-    /// <summary>
-    /// Decodes a base64 field to exactly <paramref name="expectedLength"/> bytes. Throws
-    /// <see cref="TswapException"/> — never a raw <see cref="FormatException"/> or silent
-    /// truncation — for invalid base64 or a wrong-length result, naming
-    /// <paramref name="what"/> in the error so a corrupted enrollment file points at the actual
-    /// offending field rather than a generic decode failure.
-    /// </summary>
+    /// <summary>FIDO2 plan, task 2: a request or approve file whose new slot is a FIDO2 slot.</summary>
+    public const string Fido2SlotNotEnrolledText =
+        "A FIDO2 slot isn't requested or approved; add it with 'tswap slot add --fido2' on a machine that can open the vault.";
+
     /// <summary>
     /// The new slot's blob in a request or approve file, checked against the backend the file
     /// names (brief T5 decision 2): none or YubiKey ⇒ a strictly decoded <see cref="YubiKeySlotBlob"/>
     /// (brief T4); TPM or Secure Enclave ⇒ an opaque blob within <see cref="KeyringFormat.MaxHwBlobSize"/>
-    /// that is not a YubiKey blob (a mislabelled request is refused rather than guessed at).
+    /// that is not a YubiKey blob (a mislabelled request is refused rather than guessed at). A FIDO2 slot
+    /// (FIDO2 plan, task 2) is never requested or approved: <see cref="Fido2SlotNotEnrolledText"/>; a damaged
+    /// FIDO2 (version 3) blob gets the FIDO2 parser's corrupt text.
     /// </summary>
     private static void ValidateNewSlotBlob(HardwareBackend? backend, byte[] hwBlob, string what)
     {
         if ((backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey)
         {
-            YubiKeySlotBlob.Decode(hwBlob);
+            var kind = YubiKeySlotKinds.Classify(hwBlob);
+            if (kind is YubiKeySlotKind.Fido2)
+                throw new TswapException(Fido2SlotNotEnrolledText);
+            if (hwBlob.Length > 4 && hwBlob[4] == Fido2SlotBlob.Version)
+                throw new TswapException(kind is YubiKeySlotKind.Corrupt corrupt ? corrupt.Error : Fido2SlotNotEnrolledText);
+            YubiKeySlotBlob.Decode(hwBlob); // not FIDO2: an OTP blob, or the error its parser gives
             return;
         }
         if (YubiKeySlotBlob.IsYubiKeyBlob(hwBlob))
@@ -262,6 +269,13 @@ public static class SlotEnrollmentFileCodec
         SlotReceiptCodec.ValidateHwBlob(hwBlob, what);
     }
 
+    /// <summary>
+    /// Decodes a base64 field to exactly <paramref name="expectedLength"/> bytes. Throws
+    /// <see cref="TswapException"/> — never a raw <see cref="FormatException"/> or silent
+    /// truncation — for invalid base64 or a wrong-length result, naming
+    /// <paramref name="what"/> in the error so a corrupted enrollment file points at the actual
+    /// offending field rather than a generic decode failure.
+    /// </summary>
     public static byte[] DecodeFixed(string base64, int expectedLength, string what)
     {
         var bytes = DecodeVariable(base64, what);
