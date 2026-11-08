@@ -82,8 +82,11 @@ Run from the installed copy, `installscript` writes only those per-user steps: n
 with, it says so on stderr: install the package again, or run `installscript` from the unpacked release
 folder instead.
 
-**Upgrading:** stop a running `tswap agent` (`tswap agent stop`) and a broker (however you started it,
-see [BROKER.md](BROKER.md)) first, then open the new package. Whether Installer replaces a running tswap safely is not yet checked; until it is, stop them.
+**Upgrading:** open the new package; a running `tswap agent` keeps running and the new `tswap` uses it
+(checked on a Mac on 2026-11-08, installing the package over itself with the agent running). Between two
+releases the agent's protocol may change: if the new `tswap` can't reach the agent, or the release notes say
+so, run `tswap agent stop` and start it again. Restart a broker (however you started it, see
+[BROKER.md](BROKER.md)) after an upgrade, so it runs the new release.
 
 #### Uninstall
 
