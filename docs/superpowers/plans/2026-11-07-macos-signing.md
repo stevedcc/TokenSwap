@@ -357,7 +357,11 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
   openssl x509 -inform DER -in developerID_installer.cer -out devid-installer.pem
   curl -fsSLo DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
   openssl x509 -inform DER -in DeveloperIDG2CA.cer -out devid-g2-ca.pem
-  openssl verify -partial_chain -CAfile devid-g2-ca.pem devid-app.pem devid-installer.pem   # both: OK
+  # Developer ID certificates carry Apple's own extension 1.2.840.113635.100.6.1.13 (Application) or …6.1.14
+  # (Installer), marked critical; OpenSSL doesn't know it and fails with "error 34 … unhandled critical extension"
+  # unless told to skip that one rule (the chain and the signatures are still checked; seen 2026-11-08):
+  openssl x509 -in devid-app.pem -noout -text | grep -B1 -A1 critical   # only Basic Constraints, EKU, Key Usage, Apple's OID
+  openssl verify -partial_chain -ignore_critical -CAfile devid-g2-ca.pem devid-app.pem devid-installer.pem   # both: OK
   openssl x509 -in devid-app.pem -noout -subject -enddate        # OU = Team ID; expiry for the calendar
   openssl x509 -in devid-installer.pem -noout -subject -enddate
   # Each certificate belongs to its vault key: the two hashes of each pair must match.
@@ -374,27 +378,39 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
   ```bash
   tswap create macos-sign-p12-password
   sudo -v   # one sudo prompt for the pipelines below
+  # One tswap at a time: two tswap processes that unlock at once race for the YubiKey and one fails
+  # ("Failed connecting to a YubiKey", #273; seen 2026-11-08). So the password is fetched first into fd 3 (a pipe
+  # in this shell, never a file), `wait` lets that tswap finish, and only then does the key's tswap run.
+  exec 3< <(sudo tswap get macos-sign-p12-password); wait $!
   sudo tswap get macos-devid-app-key-b64 | base64 -d \
     | openssl pkcs12 -export -inkey /dev/stdin -in devid-app.pem -certfile devid-g2-ca.pem \
         -name "Developer ID Application" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
-        -passout file:<(sudo tswap get macos-sign-p12-password) \
+        -passout fd:3 \
     | base64 -w0 | tswap ingest macos-sign-app-p12-base64
+  exec 3<&-
+  exec 3< <(sudo tswap get macos-sign-p12-password); wait $!
   sudo tswap get macos-devid-installer-key-b64 | base64 -d \
     | openssl pkcs12 -export -inkey /dev/stdin -in devid-installer.pem -certfile devid-g2-ca.pem \
         -name "Developer ID Installer" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
-        -passout file:<(sudo tswap get macos-sign-p12-password) \
+        -passout fd:3 \
     | base64 -w0 | tswap ingest macos-sign-installer-p12-base64
+  exec 3<&-
+  tswap names | grep macos-sign   # three names; ingest refuses empty input, so a failed openssl stores nothing
   ```
   **Verify each entry** (as the `.p8` was): the stored `.p12` opens with the stored password, uses the expected
   algorithms, and holds the right certificate and a key matching it:
   ```bash
   for kind in app installer; do
+    exec 3< <(sudo tswap get macos-sign-p12-password); wait $!
     sudo tswap get "macos-sign-$kind-p12-base64" | base64 -d \
-      | openssl pkcs12 -info -noout -passin file:<(sudo tswap get macos-sign-p12-password)
+      | openssl pkcs12 -info -noout -passin fd:3
+    exec 3<&-
     # expect: "MAC: sha1", "pbeWithSHA1And3-KeyTripleDES-CBC" (twice), no error
+    exec 3< <(sudo tswap get macos-sign-p12-password); wait $!
     sudo tswap get "macos-sign-$kind-p12-base64" | base64 -d \
-      | openssl pkcs12 -nokeys -clcerts -passin file:<(sudo tswap get macos-sign-p12-password) \
+      | openssl pkcs12 -nokeys -clcerts -passin fd:3 \
       | openssl x509 -noout -subject -pubkey | tee /dev/stderr | sed -n '/BEGIN PUBLIC/,$p' | sha256sum
+    exec 3<&-
     # expect: the subject "Developer ID Application: …" / "Developer ID Installer: …", and the hash from G2
   done
   ```
@@ -405,8 +421,10 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
   (assumed until then); if it doesn't, the fallback is the `-legacy` provider, not a Mac.
 - **G3 Team ID**: developer.apple.com → Account → Membership details (also the OU in each certificate).
 - **G4 API key**: done (D2). Still to note: the **Issuer ID**, shown above the Team Keys table in App Store Connect →
-  Users and Access → Integrations → App Store Connect API.
-- **G5 Environment, secrets and variables.** Settings → Environments → New environment `macos-signing`:
+  Users and Access → Integrations → App Store Connect API. Into the vault like the other values, so G5 pipes it
+  into `gh` (done 2026-11-08): copy it, `sudo tswap add macos-notary-issuer-id`, paste at the hidden prompt.
+- **G5 Environment, secrets and variables.** Settings → Environments → New environment `macos-signing`
+  (before any `gh secret set --env`, which otherwise fails with `HTTP 404` on the environment's public key):
   - Required reviewers: `stevedcc`; "Prevent self-review" **off** (the owner is the only reviewer).
   - Deployment branches and tags: *Selected*: branch `main` (for the dry run) and tag pattern `v*`.
   - Secrets and variables, values from the vault **on `gh`'s stdin** (`gh secret set NAME` without `--body` reads the
@@ -420,17 +438,17 @@ never to the screen. Bash is assumed (`<( )` process substitution passes a value
     sudo tswap get macos-sign-installer-p12-base64 | gh secret set MACOS_SIGN_INSTALLER_P12_BASE64 --env macos-signing -R stevedcc/TokenSwap
     sudo tswap get macos-sign-p12-password         | gh secret set MACOS_SIGN_P12_PASSWORD --env macos-signing -R stevedcc/TokenSwap
     sudo tswap get macos-notary-p8-base64          | gh secret set MACOS_NOTARY_KEY_P8_BASE64 --env macos-signing -R stevedcc/TokenSwap
-    gh secret set MACOS_NOTARY_ISSUER_ID --env macos-signing -R stevedcc/TokenSwap          # prompts
+    sudo tswap get macos-notary-issuer-id          | gh secret set MACOS_NOTARY_ISSUER_ID --env macos-signing -R stevedcc/TokenSwap
     gh variable set MACOS_NOTARY_KEY_ID --env macos-signing -R stevedcc/TokenSwap --body WD7R2PS725
     gh variable set MACOS_TEAM_ID --env macos-signing -R stevedcc/TokenSwap --body <TEAMID>
     ```
     If a line fails, stop and record it; don't move the value another way without deciding that explicitly. The
-    `.p12` password must be a single line: `openssl -passin/-passout file:` read only the first (G2b's verify step
+    `.p12` password must be a single line: `openssl -passin/-passout fd:` read only the first (G2b's verify step
     would catch a mismatch).
   - Optional, recommended: a tag ruleset so only the owner can create `v*` tags (the environment trusts `v*` tags).
 - **G6 Approve the dry run** (task 10), then run the hardware checks (task 11) on the work Mac, within its boundary.
 - **G7 Approve the real `v0.3.0` tag run.**
-- **Calendar:** both certificates' expiry (Developer ID certificates last about five years; the dates came from
+- **Calendar:** both certificates' expiry (the Developer ID certificates issued on 2026-11-08 expire on 2027-12-08, about two years; the dates came from
   `openssl x509 -enddate` in G2), a month before: renew both from new CSRs (G1–G2b on Linux again) and replace the three
   `MACOS_SIGN_*` secrets.
 

@@ -505,6 +505,30 @@ public class ReleasePackagingTests : IDisposable
             Assert.Contains(YubiKeySmokeArgs, File.ReadAllText(RepoFile(".github", "workflows", workflow)));
     }
 
+    /// <summary>
+    /// The JIT test host needs libpcsclite.so.1 for the YubiKey SDK's own shims (SdkFido2KeysTests' salt tests), so
+    /// every workflow that runs the unit tests on Linux installs libpcsclite1 before its <c>dotnet test</c>; release.yml
+    /// once lacked it and its dry run failed on two tests (2026-11-08). In release.yml the install stays inside the Test
+    /// job: the build legs smoke-test the shipped binary, which must start without it.
+    /// </summary>
+    [Fact]
+    public void Workflows_InstallLibpcscliteBeforeTheUnitTests()
+    {
+        const string install = "apt-get install -y libpcsclite1";
+        foreach (var workflow in new[] { "ci.yml", "release.yml" })
+        {
+            var text = File.ReadAllText(RepoFile(".github", "workflows", workflow));
+            var installAt = text.IndexOf(install, StringComparison.Ordinal);
+            var testAt = text.IndexOf("dotnet test TokenSwap.slnx", StringComparison.Ordinal);
+            Assert.True(testAt >= 0, $"{workflow} runs no dotnet test");
+            Assert.True(installAt >= 0 && installAt < testAt, $"{workflow} doesn't install libpcsclite1 before its unit tests");
+        }
+        var release = File.ReadAllText(RepoFile(".github", "workflows", "release.yml"));
+        var testJobEnd = release.IndexOf("\n  verify-version:", StringComparison.Ordinal);
+        Assert.True(testJobEnd > 0, "release.yml has no verify-version job");
+        Assert.True(release.LastIndexOf(install, StringComparison.Ordinal) < testJobEnd, "release.yml installs libpcsclite1 outside its Test job");
+    }
+
     // ---- Issue #240 / #265: the macOS smoke checks the shipped bytes (signed in the release, unsigned in CI). ----
 
     /// <summary>Every run of the fake tswap, in order, including those whose output the script captures.</summary>
