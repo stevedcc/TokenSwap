@@ -281,6 +281,26 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
     private string ArgTemplate => TemplateJson("""echo "$1" """,
         args: """{ "branch": { "pattern": "brief/[a-z0-9-]+", "max_length": 16 } }""", argvExtra: ", \"{branch}\"");
 
+    /// <summary>
+    /// A call's argument names are ordinal (the request body's dictionary, BrokerTemplateCalls' args): "branch" and
+    /// "Branch" are two arguments, so the undeclared "Branch" is refused as undeclared, not as "given twice".
+    /// </summary>
+    [Fact]
+    public async Task ACallWithArgumentsDifferingOnlyInCase_RefusesTheUndeclaredOne()
+    {
+        if (!SandboxBed.CanRun(output))
+            return;
+        await StartAsync(Config(ArgTemplate));
+
+        var response = await PostAsync("lane1", "/_template/t", """{"args": {"branch": "brief/x", "Branch": "brief/y"}}""");
+
+        Assert.Equal(400, BrokerHarness.StatusOf(response));
+        Assert.Contains("'Branch' is not declared", response);
+        Assert.DoesNotContain("given twice", response);
+        Assert.False(File.Exists(Ran));
+        Assert.Equal(0, _h.Secrets.Unlocks);
+    }
+
     [Theory]
     [InlineData("{}", "'branch' is required")]
     [InlineData("""{"args": {"branch": "main"}}""", "does not match")]
