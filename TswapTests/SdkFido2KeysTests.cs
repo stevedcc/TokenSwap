@@ -436,7 +436,7 @@ public class SdkFido2KeysTests
         var parameters = SdkFido2Keys.BuildMakeCredentialParameters(userId, [excludedA, excludedB]);
 
         Assert.Equal(Fido2SlotBlob.TswapRpId, parameters.RelyingParty.Id);
-        Assert.Equal(false, Assert.Contains(AuthenticatorOptions.rk, parameters.Options));
+        Assert.False(Assert.Contains(AuthenticatorOptions.rk, parameters.Options));
         // UV comes from the PIN token (pinUvAuthParam), not the "uv" option: a key without built-in UV refuses that.
         Assert.False(parameters.Options.ContainsKey(AuthenticatorOptions.uv));
         Assert.Equal([0xF5], Assert.Contains(Yubico.YubiKey.Fido2.Extensions.HmacSecret, parameters.Extensions));
@@ -501,7 +501,7 @@ public class SdkFido2KeysTests
 
         Assert.Equal(Fido2SlotBlob.TswapRpId, parameters.RelyingParty.Id);
         Assert.Equal(CredentialId, Assert.Single(parameters.AllowList!).Id.ToArray());
-        Assert.Equal(false, Assert.Contains(AuthenticatorOptions.up, parameters.Options));
+        Assert.False(Assert.Contains(AuthenticatorOptions.up, parameters.Options));
         Assert.False(parameters.Options.ContainsKey(AuthenticatorOptions.uv));
         Assert.Null(parameters.PinUvAuthParam);
         Assert.Null(parameters.Protocol);

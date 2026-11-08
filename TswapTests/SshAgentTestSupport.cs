@@ -172,6 +172,7 @@ public static class SshAgentMessages
 public static class SshTestSkip
 {
     /// <summary>True on Windows, where the broker doesn't run (Unix sockets and peer credentials).</summary>
+    [System.Runtime.Versioning.SupportedOSPlatformGuard("windows")]
     public static bool OnWindows(Xunit.Abstractions.ITestOutputHelper output)
     {
         if (!OperatingSystem.IsWindows())

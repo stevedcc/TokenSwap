@@ -38,6 +38,12 @@ jobs:
           fi
           bwrap --unshare-user --unshare-pid --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
 
+      # As in ci.yml: the JIT test host loads the YubiKey SDK's own Yubico.NativeShims.so, which links
+      # libpcsclite.so.1 (SdkFido2KeysTests' salt tests go through its ECDH). Only this job installs it; the build
+      # legs below smoke-test the shipped binary, which links tswap's PC/SC stand-in and must start without it.
+      - name: libpcsclite for the JIT test host
+        run: sudo apt-get install -y libpcsclite1
+
       - name: Test
         env:
           CI_REQUIRE_BWRAP: '1'

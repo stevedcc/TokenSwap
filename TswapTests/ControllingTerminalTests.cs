@@ -61,7 +61,7 @@ public class ControllingTerminalTests : IDisposable
     // Follow-up review: after a resume (SIGCONT, fg) the echo-off is applied again; when that fails, what is typed
     // next was typed with the echo on, so the pending read is a cancel. A real SIGCONT reaches a read blocked on a FIFO.
     [Fact]
-    public void UnixTty_EchoOffFailsAfterResume_ReadIsCancelled()
+    public async Task UnixTty_EchoOffFailsAfterResume_ReadIsCancelled()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -77,8 +77,7 @@ public class ControllingTerminalTests : IDisposable
         using (var writer = new FileStream(_file, FileMode.Open, FileAccess.Write))
             writer.Write("123456\n"u8);
 
-        Assert.True(read.Wait(TimeSpan.FromSeconds(10)), "the read didn't end");
-        Assert.Null(read.Result);
+        Assert.Null(await read.WaitAsync(TimeSpan.FromSeconds(10))); // a TimeoutException: the read didn't end
         Assert.True(calls.Sets[^1].EchoOn); // the saved settings, put back at the end
     }
 
@@ -91,6 +90,7 @@ public class ControllingTerminalTests : IDisposable
     private static extern int kill(int pid, int signal);
 
     /// <summary>The first echo-off succeeds; the next (the re-apply after a resume) fails.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     private sealed class FailingAfterResume : ControllingTerminal.UnixTty.ITermiosCalls
     {
         private int _echoOffs;
@@ -124,6 +124,7 @@ public class ControllingTerminalTests : IDisposable
     }
 
     /// <summary>tcgetattr gives settings with ECHO on; every tcsetattr that clears ECHO fails.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     private sealed class FailingSetAttr : ControllingTerminal.UnixTty.ITermiosCalls
     {
         public List<(int When, bool EchoOn)> Sets { get; } = [];
