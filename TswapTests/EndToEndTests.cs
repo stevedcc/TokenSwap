@@ -144,19 +144,29 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     /// <summary>
     /// X25519 (SlotKeyPair, the .NET 11 BCL's X25519DiffieHellman) inside the published binary,
-    /// which CI runs as NativeAOT: <c>init --keyring</c> wraps the vault key to a fresh recovery
-    /// keypair (generate, import, derive), and <c>recover --yubikey</c> unwraps it again with the
-    /// printed recovery key. A plain <c>init</c> makes a classic vault and never touches X25519.
+    /// which CI runs as NativeAOT: <c>init</c> wraps the vault key to a fresh recovery keypair
+    /// (generate, import, derive), and <c>recover --yubikey</c> unwraps it again with the recovery
+    /// key init wrote to <c>--recovery-key-out</c>.
     /// </summary>
     [Fact]
     public void InitKeyring_ThenRecoverWithTheRecoveryKey_TheSecretReadsBack()
     {
-        var init = RunTswapWithStdin("\n\n", "init", "--keyring");
-        Assert.True(init.exitCode == 0, $"init --keyring failed: {init.stdout}{init.stderr}");
-        var lines = init.stdout.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
-        var label = lines.IndexOf("Recovery Private Key (base64):");
-        Assert.True(label >= 0, $"init --keyring printed no recovery key: {init.stdout}");
-        var recoveryKey = lines[label + 1];
+        // init --keyring is gone on main (every vault is a keyring now), and since #253 an init whose stdout is not a
+        // terminal writes the recovery key to --recovery-key-out instead of printing it.
+        // The key file must be outside the config folder (init refuses one inside it).
+        var keyFile = _tempDir + "-recovery.key";
+        string recoveryKey;
+        try
+        {
+            var init = RunTswapWithStdin("", "init", "--yubikey", "--no-password", "--recovery-key-out", keyFile);
+            Assert.True(init.exitCode == 0, $"init --yubikey --recovery-key-out failed: {init.stdout}{init.stderr}");
+            Assert.True(File.Exists(keyFile), $"init wrote no recovery key file: {init.stdout}{init.stderr}");
+            recoveryKey = File.ReadAllText(keyFile).TrimEnd('\n', '\r');
+        }
+        finally
+        {
+            File.Delete(keyFile);
+        }
         var recoveryKeyBytes = Convert.FromBase64String(recoveryKey);
         Assert.Equal(32, recoveryKeyBytes.Length);
         // Stored in RFC 7748 §5-clamped form, as v0.1.0 stored it (SlotKeyPair.Generate). Checked
