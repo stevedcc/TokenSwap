@@ -120,4 +120,32 @@ public sealed class FormatTwoWriteTests : IDisposable
         Assert.Contains(Warning(1), err);
         Assert.DoesNotContain("target", Warning(1));
     }
+
+    /// <summary>
+    /// Code review (MiMo C I-1): import looks at every exported name the vault already holds, to skip
+    /// it. A live format 2 one can only be read whole, so it is decoded (and counted in the warning)
+    /// although nothing of it is written; it is skipped, never written over.
+    /// </summary>
+    [Fact]
+    public void Import_SkippedFormatTwoName_IsDecodedToSkip_AndWarns_WritesNothingOfIt()
+    {
+        using var source = new FleetMachine("format-two-write-export", SimulatedYubiKeyService.WithKeys(SerialA));
+        InitRecordVault(source);
+        source.Ok("exported-target", "ingest", "target");
+        source.Ok("exported-new", "ingest", "fresh");
+        var export = _m.PathOf("export.json");
+        source.Ok("pass\npass\n", "export", export);
+        var target = File.ReadAllBytes(RecordFile(_m, _key, "target"));
+
+        var (err, others) = RunWatched("pass\n", ["import", export]);
+
+        Assert.Equal(target, File.ReadAllBytes(RecordFile(_m, _key, "target")));
+        Assert.Equal("target-2", _m.Get("target"));
+        Assert.Equal("exported-new", _m.Get("fresh"));
+        Assert.NotEmpty(_values);
+        Assert.All(_values, v => Assert.Equal(FileOf("target"), v.File));
+        Assert.Contains(Warning(1), err);
+        foreach (var (name, bytes) in others)
+            Assert.Equal(bytes, File.ReadAllBytes(RecordFile(_m, _key, name)));
+    }
 }

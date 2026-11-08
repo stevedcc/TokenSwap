@@ -203,7 +203,8 @@ another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
 Read commands decrypt only what they use (T16 Stage 2, #220): `redact`, `tocomment`, `check`, `names`,
 `list` and `burned` read metadata only (`LoadMetadata`; `redact` and `tocomment` match by fingerprint
 through `SecretMatcher`), and `get` and `apply` decrypt only the records they name (`VaultView`,
-`RecordVaultStore.OpenSecret`). Write commands decrypt only what they use too (T16 Stage 2b): on format 3 records `create`,
+`RecordVaultStore.OpenSecret`).
+Write commands decrypt only what they use too (T16 Stage 2b): on format 3 records `create`,
 `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value and `restore` only the
 previous value it puts back (`VaultWriter`, `RecordVaultStore.OpenForWrite`), except where the
 written record itself can only be decided or merged by its value: `add` compares that record's

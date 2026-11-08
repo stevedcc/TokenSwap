@@ -84,7 +84,7 @@ deployment.
 | Another local user (no root) with the hardware or a copy of the vault folder | Optional **vault password** on a slot (0.2): the TPM or Secure Enclave checks it, a YubiKey slot mixes it into the key; held by `tswap agent` or typed per command. A vault is only as strong as the weakest slot usable on that machine. See [What the vault password does and doesn't protect](#what-the-vault-password-does-and-doesnt-protect) |
 | Privilege escalation by agents | sudo boundary — `get`, `add`, `list`, `apply`, `delete`, `restore`, `import`, `export`, rotating a secret that isn't burned ([rotating-and-burning.md](rotating-and-burning.md)), and vault administration require sudo; agents should never run sudo |
 | Recognising a value in the vault folder | Record format 3 keeps keyed fingerprints of every value only inside AES-GCM-encrypted metadata sections (keys derived from the vault key): no cleartext hash of any value exists to test guesses against |
-| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands and `run` decrypt only the value versions they print or substitute (`run`: its `{{name}}` / `{{name:previous}}` tokens and its files' markers): `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands do the same: `create`, `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value on format 3 records and `restore` only the one it puts back, each reading only the record it writes, except where that record itself can only be decided or merged by its value ([what each command decrypts](#what-each-command-decrypts)) |
+| A reading command decrypting values it doesn't use | Since 0.3 the eight reading commands and `run` decrypt only the value versions they print or substitute (`run`: its `{{name}}` / `{{name:previous}}` tokens and its files' markers): `redact`, `tocomment`, `check`, `names`, `list` and `burned` decrypt none on format 3 records, `get` and `apply` only the ones they output. The write commands do the same: `create`, `ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value on format 3 records and `restore` only the one it puts back, each reading only the records of the names it is given (`import`: every exported name, to skip the ones the vault holds), except where such a record itself can only be decided or merged by its value ([what each command decrypts](#what-each-command-decrypts)) |
 
 ### What tswap does not protect against
 
@@ -102,7 +102,7 @@ deployment.
 
 Since 0.3 the commands that only read (`redact`, `tocomment`, `check`, `names`, `list`, `burned`,
 `get`, `apply`) decrypt only the values they use (owner: "unlocking all secrets is bad practice"),
-and so do the write commands, which read only the record they write (the table). A format 3 record keeps its value versions in separate
+and so do the write commands, which read only the records of the names they are given (the table). A format 3 record keeps its value versions in separate
 encrypted sections, so a command can read a record's name, burns and fingerprints without opening
 a value. A **format 2** record (written by tswap 0.1, and kept until `sudo tswap vault reindex`
 rewrites it) holds name and both value versions in one encrypted block: a command that must read
@@ -119,24 +119,30 @@ and doesn't make the record format 2.
 | `get` | The one value it prints (the current version of that secret) | That record, decrypted whole; a warning |
 | `apply` | The value versions it fills in, each once; none for a line already filled | Each record a marker names, decrypted whole; a warning |
 | `run` | The value versions it substitutes (its tokens and its files' markers), each once; every other record's metadata only | Each record a token or marker names, decrypted whole; a warning after the child's output |
-| `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the record each writes is read, its metadata; a new value is encrypted, a kept one copied as it is (exceptions below) | That record, decrypted whole; a warning |
+| `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the records of the names given are read, their metadata (`import`: every exported name, so it can skip the ones the vault holds); a new value is encrypted, a kept one copied as it is (exceptions below) | Each format 2 record of those names, decrypted whole (`import`: each exported name the vault holds as format 2, up to the whole vault, though it writes none of them); a warning |
 | `restore` | The one value it puts back (the previous version, encrypted again as the new one; exceptions below) | That record, decrypted whole; a warning |
 | `export`, `migrate` | Every value, by their nature | The same |
 | `vault merge`, `vault reindex` | Every value for now (a follow-up, #271, narrows them) | The same |
 
-The write commands' exceptions are confined to the record they write, and decrypt only its values:
+The write commands' exceptions are confined to a record of a name they are given, and decrypt only
+that record's values:
 `add` over a secret whose stored fingerprints are of another variant-set version (a machine of an
 older or newer tswap wrote it), or missing, compares that one current value to tell "same value"
 from a new one (if it can't be decrypted, `add` refuses, naming the file, and writes nothing); a
 kept value version without fingerprints (only a planted record has one) is fingerprinted from its
 own value, and kept without fingerprints, with a warning naming the file, if that value can't be
-decrypted; and a record whose sync-conflict copies only their plaintext can merge is decrypted
-whole, as before, so its copies still converge (for `restore` that is two values, not one).
+decrypted (per kept version: a planted record with neither version fingerprinted gets both
+decrypted); and a record whose sync-conflict copies only their plaintext can merge is decrypted
+whole, as before, so its copies still converge when it is written (for `restore` that is two values,
+not one; `create` or `ingest` of such an existing name, and `import` skipping one, decrypt it whole to
+see that it exists).
 
-What the warning and the refusal say: the count of records and the fix only, never a secret name
-(a format 2 tombstone's would reveal a deleted secret), a hashed file name, a value or its length.
-The count is what anyone who can list the vault folder can tell anyway: a record's format is a
-cleartext byte of its file.
+What the format 2 warning and the `redact`/`tocomment` refusal say: the count of records and the fix
+only, never a secret name (a format 2 tombstone's would reveal a deleted secret), a hashed file name,
+a value or its length. The count is what anyone who can list the vault folder can tell anyway: a
+record's format is a cleartext byte of its file. The texts about one record that can't be read or
+used (an unreadable record, `add`'s refusal above, a kept version without fingerprints) are
+different: they name that record's hashed file, so the user can restore it, and never a value.
 
 Limits of reading metadata only:
 

@@ -142,6 +142,12 @@ internal sealed class BareRecordVault : IDisposable
     /// <summary>
     /// What each write command did before brief T16-S2b: one full load, the change to the
     /// database the command made, one save. Each returns false where the command refused (nothing saved).
+    /// <para>
+    /// Simplified for histories of sound records only (code review, DeepSeek B M-2): the commands'
+    /// <c>ThrowIfUnreadable</c> calls are left out, so <see cref="Create"/> would write over an
+    /// unreadable name and <see cref="Restore"/> returns false where <c>restore</c> names the file.
+    /// The golden and the oracle never make a damaged record; a history that does needs those calls here.
+    /// </para>
     /// </summary>
     public static class Legacy
     {

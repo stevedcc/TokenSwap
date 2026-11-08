@@ -557,8 +557,11 @@ public sealed class WriteCommandDecryptionTests : IDisposable
             state with { Write = later, Fingerprints = null, Previous = state.Previous! with { Fingerprints = null }, Sealed = null }, _key, 3));
         Watch();
 
-        _m.Ok("", "restore", "b");
+        var (exit, _, err) = _m.Run("", "restore", "b");
 
+        Assert.True(exit == 0, err);
+        // A format 3 record decoded whole for its copies is not a format 2 one: no format 2 warning (code review, DeepSeek B M-1).
+        Assert.DoesNotContain("record format 2", err);
         Assert.Equal([state.Previous!.Version, state.Version], _values.Select(v => v.Version).Distinct().Order());
         Assert.All(_values, v => Assert.StartsWith(FileOf("b"), v.File, StringComparison.Ordinal));
         Assert.False(File.Exists(path + " (1)"));
