@@ -439,4 +439,42 @@ public class BrokerConfigTests : IDisposable
         Assert.True(tokens.Contains("x-secret-header"));
         Assert.True(tokens.Contains("X-SECRET-HEADER"));
     }
+
+    // ---- Row 1b's pins: the policy's dictionaries are ordinal. A request names its route, template, socket or ssh key
+    // in its own spelling, so a case-insensitive dictionary would resolve "GITHUB" to the route "github". ----
+
+    private const string TwoKeysJson = """
+        {
+          "version": 1,
+          "socket_dir": "/run/tswap-broker",
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": ["github"], "ssh_keys": ["a", "b"] } ],
+          "routes": [ { "name": "github", "upstream": "https://github.com/stevedcc", "auth": { "type": "bearer", "secret": "{{gh}}" }, "path": "" } ],
+          "ssh_keys": [
+            { "name": "a", "secret": "deploy", "allowed_host_keys": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
+            { "name": "b", "secret": "DEPLOY", "allowed_host_keys": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void PolicyLookups_ByRouteSocketAndSshKeyName_AreCaseSensitive()
+    {
+        var policy = BrokerPolicy.Parse(TwoKeysJson);
+
+        Assert.True(policy.Routes.ContainsKey("github"));
+        Assert.False(policy.Routes.ContainsKey("GITHUB"));
+        Assert.True(policy.Sockets.ContainsKey("lane1"));
+        Assert.False(policy.Sockets.ContainsKey("LANE1"));
+        Assert.True(policy.SshKeys.ContainsKey("a"));
+        Assert.False(policy.SshKeys.ContainsKey("A"));
+    }
+
+    /// <summary>Secret names are case-sensitive vault names: two keys on "deploy" and "DEPLOY" use two secrets.</summary>
+    [Fact]
+    public void SshKeysOnSecretsDifferingOnlyInCase_DoNotShareASecret()
+    {
+        var policy = BrokerPolicy.Parse(TwoKeysJson);
+
+        TswapCore.Broker.SshAgent.SshAgentKeyLoader.Validate(policy);
+    }
 }

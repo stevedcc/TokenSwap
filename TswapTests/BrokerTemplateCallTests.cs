@@ -423,6 +423,28 @@ public class BrokerTemplateVaultReadTests : IDisposable
             v.Dispose();
     }
 
+    /// <summary>Row 1b's pin: secrets whose names differ only in case are two secrets, each read as its own.</summary>
+    [Fact]
+    public void SecretsDifferingOnlyInCase_AreReadAsTwoSecrets()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _m.Ok("", "init", "--tpm", "--no-recovery");
+        _m.Ok("lower-value\n", "ingest", "tok");
+        _m.Ok("upper-value\n", "ingest", "TOK");
+        var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
+        var source = new VaultBrokerSecretSource(store,
+            new VaultUnlocker(_m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, _m.Tpm!)]));
+
+        var values = source.ReadMany(["tok", "TOK"]);
+
+        Assert.Equal(2, values.Count);
+        Assert.Equal("lower-value", Encoding.UTF8.GetString(values["tok"].Value));
+        Assert.Equal("upper-value", Encoding.UTF8.GetString(values["TOK"].Value));
+        foreach (var v in values.Values)
+            v.Dispose();
+    }
+
     [Fact]
     public void AMissingSecret_FailsTheCall_AndZeroesWhatWasRead()
     {

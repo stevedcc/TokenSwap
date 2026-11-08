@@ -302,7 +302,7 @@ public static class BrokerTemplateValidator
             throw Ex($"argv is refused as inline code or a blocked command (#105): {blocked.Reason}");
 
         // Arguments: every placeholder declared, every declared argument used.
-        var args = new Dictionary<string, BrokerTemplateArg>(StringComparer.Ordinal);
+        Dictionary<string, BrokerTemplateArg> args = [with(StringComparer.Ordinal)];
         foreach (var (argName, arg) in t.Args ?? [])
         {
             if (!ArgNameRegex.IsMatch(argName))
