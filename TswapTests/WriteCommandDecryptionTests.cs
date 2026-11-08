@@ -590,10 +590,12 @@ public sealed class WriteCommandDecryptionTests : IDisposable
 
         const string Restored = "\n✓ Secret '{0}' restored to its previous value (a new version; the value it replaced is now the previous one).\n";
         const string Remember = "  Remember to update the external system that uses it.\n";
-        Assert.Equal((string.Format(Restored, "b") + Remember).ReplaceLineEndings(), unburned);
-        Assert.Equal((string.Format(Restored, "a") +
-            "  ⚠ That value was burned (leaked); the burn is outstanding again. Rotate it once the service uses it.\n" + Remember).ReplaceLineEndings(),
-            burned);
+        // restore writes a literal "\n" before its first line, then WriteLine's Environment.NewLine (as before 2b), so the
+        // output is compared with its line endings normalised, as the suite's other output tests do.
+        Assert.Equal(string.Format(Restored, "b") + Remember, unburned.ReplaceLineEndings("\n"));
+        Assert.Equal(string.Format(Restored, "a") +
+            "  ⚠ That value was burned (leaked); the burn is outstanding again. Rotate it once the service uses it.\n" + Remember,
+            burned.ReplaceLineEndings("\n"));
         Assert.Equal("leaked", Db().Secrets["a"].BurnReason);
     }
 
