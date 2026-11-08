@@ -424,12 +424,14 @@ public sealed class BrokerCommand : ICliCommand
     internal static string FormatTime(DateTimeOffset at) =>
         at.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "Z";
 
-    private static TswapException Failure(BrokerControlAnswer answer, string path) => answer switch
+    private static TswapException Failure(BrokerControlAnswer? answer, string path) => answer switch
     {
         BrokerControlAnswer.Refused refused => new TswapException(refused.Message),
         BrokerControlAnswer.NotRunning => new TswapException($"No 'tswap broker serve' answers at {path}; is it running?"),
         BrokerControlAnswer.OtherVault => new TswapException($"Another vault's broker answers at {path}."),
-        _ => new TswapException($"The broker at {path} gave an answer tswap can't read."),
+        // Not a failure answer where one is expected, an unreadable one, or none at all.
+        BrokerControlAnswer.Done or BrokerControlAnswer.State or BrokerControlAnswer.Malformed or null =>
+            new TswapException($"The broker at {path} gave an answer tswap can't read."),
     };
 
     // ------------------------------------------------------------------ forward
