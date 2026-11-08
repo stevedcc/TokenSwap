@@ -98,7 +98,8 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
         };
         var path = Path.Combine(ConfigDir, "broker.json");
         File.WriteAllText(path, JsonSerializer.Serialize(config, BrokerJsonContext.Default.BrokerConfig));
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (!OperatingSystem.IsWindows()) // always true here (the callers run on Linux only); tells the analyser so
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     [Fact]

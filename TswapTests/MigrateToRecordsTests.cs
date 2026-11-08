@@ -775,7 +775,7 @@ public sealed class SlotAcceptVaultDirTests : IDisposable
         Assert.NotEqual(0, exit);
         Assert.Contains("another vault", err);
         Assert.Equal(configBefore, File.ReadAllText(_laptop.ConfigPath));
-        Assert.Empty(Directory.GetFileSystemEntries(_laptop.Dir).Where(e => !before.Contains(e)));
+        Assert.DoesNotContain(Directory.GetFileSystemEntries(_laptop.Dir), e => !before.Contains(e));
         Assert.Empty(_laptop.Backups);
         Assert.False(Directory.Exists(Path.Combine(_laptop.Dir, "vault")));
         Assert.All(foreignBefore, kv => Assert.Equal(kv.Value, File.ReadAllBytes(kv.Key)));
