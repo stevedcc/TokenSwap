@@ -13,6 +13,24 @@ on:
         description: 'Dry run (a dispatch never publishes a release)'
         type: boolean
         default: true
+  # Brief T15: a pull request that changes what ships (the SDK, project or build files, this workflow) runs the test
+  # job and the build legs too, so each shipped runtime identifier is built, packed and smoke-tested before a tag.
+  # Nothing is published from a pull request, and it never reaches the macos-signing environment (verify-version and
+  # release run on a tag push only, build-macos never on a pull request (ci.yml builds, packs and smoke-tests the
+  # unsigned osx-arm64 archive on every pull request)).
+  pull_request:
+    paths:
+      - global.json
+      - '**/*.csproj'
+      - '**/*.props'
+      - '**/*.targets'
+      - nuget.config
+      - '**/packages.lock.json'
+      - '*.slnx'
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -168,7 +186,8 @@ jobs:
   build-macos:
     name: Build osx-arm64 (signed)
     needs: [test, verify-version]
-    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')
+    # Tag pushes and dispatches only: a pull request run must not ask for the environment or its signing inputs.
+    if: always() && github.event_name != 'pull_request' && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')
     runs-on: macos-latest
     # Two notary waits of up to 40 minutes each, plus the build, the smoke and the install test.
     timeout-minutes: 120

@@ -921,7 +921,7 @@ public class ReleasePackagingTests : IDisposable
         var buildMacos = Job(Workflow("release.yml"), "build-macos");
 
         Assert.Contains("    needs: [test, verify-version]\n", buildMacos);
-        Assert.Contains("    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')\n", buildMacos);
+        Assert.Contains("    if: always() && github.event_name != 'pull_request' && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')\n", buildMacos);
         Assert.Contains("    runs-on: macos-latest\n", buildMacos);
         Assert.Contains("    timeout-minutes: 120\n", buildMacos);
         Assert.Contains("    permissions:\n      contents: read\n", buildMacos);
@@ -985,6 +985,47 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(".pkg", fork);
         Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
         Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
+    }
+
+    /// <summary>
+    /// Brief T15: release.yml also runs on pull requests that change what ships, so every shipped runtime identifier is
+    /// built before a tag. A pull request run never reaches the macos-signing environment or a signing secret: every job
+    /// that names an environment or a secret is kept off pull requests by its own if:, and nothing is published.
+    /// </summary>
+    [Fact]
+    public void Workflows_ReleaseOnPullRequests_NeverReachesTheSigningEnvironment() =>
+        AssertPullRequestsStayUnsigned(Workflow("release.yml"));
+
+    private static void AssertPullRequestsStayUnsigned(string release)
+    {
+        var triggers = release[..release.IndexOf("\njobs:", StringComparison.Ordinal)];
+        Assert.Contains("\n  pull_request:\n    paths:\n", triggers);
+        Assert.Contains("\npermissions:\n  contents: read\n", triggers);
+        var jobNames = release.Split('\n')
+            .SkipWhile(line => line != "jobs:").Skip(1)
+            .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^  [A-Za-z0-9_-]+:\s*$"))
+            .Select(line => line.Trim().TrimEnd(':'))
+            .ToList();
+        Assert.Contains("build-macos", jobNames);
+        foreach (var name in jobNames)
+        {
+            var job = Job(release, name);
+            if (!job.Contains("environment:") && !job.Contains("secrets.") && !job.Contains("contents: write"))
+                continue;
+            var condition = job.Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+            Assert.True(
+                condition.Contains("github.event_name != 'pull_request'") || condition == "    if: github.event_name == 'push'",
+                $"job {name} names an environment, a secret or a write permission but can run on a pull request: {condition.Trim()}");
+        }
+    }
+
+    /// <summary>Break-it-once for <see cref="AssertPullRequestsStayUnsigned"/>, kept: build-macos without its guard is caught.</summary>
+    [Fact]
+    public void Workflows_PullRequestCheck_CatchesBuildMacosOnAPullRequest()
+    {
+        var release = Workflow("release.yml").Replace("    if: always() && github.event_name != 'pull_request' && ", "    if: always() && ");
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
     }
 
     /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>
