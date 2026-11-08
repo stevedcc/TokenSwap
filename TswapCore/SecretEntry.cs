@@ -39,6 +39,24 @@ public sealed class SecretEntry : IDisposable
     private readonly IReadOnlyList<SecretRecord> _decodedInputs;
     private bool _disposed;
 
+    /// <summary>
+    /// Brief T16-S2b, for a write (<see cref="RecordVaultStore.OpenForWrite"/>): the main file's
+    /// bytes as read (null: no main file), the stale-write guard's reference.
+    /// </summary>
+    internal byte[]? MainBytes { get; init; }
+
+    /// <summary>
+    /// Brief T16-S2b, for a write: the conflicted copies folded into this entry, with their bytes as
+    /// read; redundant once the record is written (removed if still byte-identical).
+    /// </summary>
+    internal IReadOnlyList<(string Path, byte[] Bytes)> FoldedCopies { get; init; } = [];
+
+    /// <summary>Brief T16-S2b: the held value sections of a format 3 entry (null: decoded whole).</summary>
+    internal IReadOnlyDictionary<Stamp, byte[]>? Sections => _sections;
+
+    /// <summary>Brief T16-S2b: the merged state of an entry decoded whole (null: format 3, metadata only).</summary>
+    internal SecretRecord? Decoded => _decoded;
+
     /// <summary>A format 3 record: its merged metadata and the chosen value section of each retained version.</summary>
     internal SecretEntry(RecordVaultStore store, string name, string fileName, byte[] vaultKey,
         RecordMetadata metadata, IReadOnlyDictionary<Stamp, byte[]> sections)
@@ -52,10 +70,15 @@ public sealed class SecretEntry : IDisposable
         _decodedInputs = [];
     }
 
-    /// <summary>A format 2 record, decoded whole: the merged state and every decoded copy (zeroed on dispose).</summary>
+    /// <summary>
+    /// A record decoded whole: the merged state and every decoded copy (zeroed on dispose). That is a
+    /// format 2 record (<paramref name="formatTwo"/>), or (brief T16-S2b, writes only) a format 3
+    /// record whose copies only plaintext can merge.
+    /// </summary>
     internal SecretEntry(RecordVaultStore store, string name, string fileName, byte[] vaultKey,
-        SecretRecord decoded, IReadOnlyList<SecretRecord> decodedInputs)
+        SecretRecord decoded, IReadOnlyList<SecretRecord> decodedInputs, bool formatTwo = true)
     {
+        IsFormatTwo = formatTwo;
         _store = store;
         _name = name;
         _vaultKey = vaultKey;
@@ -78,8 +101,10 @@ public sealed class SecretEntry : IDisposable
     /// True when the record has a format 2 file (main or conflicted copy, by its cleartext format byte),
     /// so it was decoded whole. <see cref="RecordVaultStore.OpenSecret(string, byte[])"/> takes the
     /// whole-record path for that reason only; an unreadable or unusable file never sends it there.
+    /// (A write also decodes a format 3 record whole when only plaintext can merge its copies; that
+    /// entry is not format 2.)
     /// </summary>
-    public bool IsFormatTwo => _decoded is not null;
+    public bool IsFormatTwo { get; }
 
     /// <summary>
     /// The current value (or with <paramref name="previous"/> the value a rotation replaced), or

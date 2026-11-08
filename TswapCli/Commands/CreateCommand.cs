@@ -47,20 +47,27 @@ public sealed class CreateCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
+        // Brief T16-S2b: only this name's record is read (its metadata; existence needs no value).
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
+        {
+            writer.ThrowIfUnreadable(name);
+            if (writer.Find(name) is not null)
+                throw new TswapException(
+                    $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
 
-        db.ThrowIfUnreadable(name);
-        if (db.Secrets.ContainsKey(name))
-            throw new TswapException(
-                $"Secret '{name}' already exists. To replace its value, use: {ctx.Prefix} rotate {name} [length]");
+            var value = GenerateValue(ctx, config, length);
+            writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime);
+            writer.Commit();
 
-        var value = GenerateValue(ctx, config, length);
-        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
-        ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
-        return 0;
+            ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
+            ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 
     /// <summary>

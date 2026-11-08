@@ -28,26 +28,34 @@ public sealed class IngestCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
 
-        if (rotate)
+        // Brief T16-S2b: only this name's record is read (its metadata; existence needs no value).
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
         {
-            var existing = SecretRotation.Check(ctx, db, name, "ingest --rotate");
-            SecretRotation.Write(ctx, db, key, name, existing, value);
-            SecretRotation.Report(ctx, name, existing, "new value from stdin");
+            if (rotate)
+            {
+                var existing = SecretRotation.Check(ctx, writer, name, "ingest --rotate");
+                SecretRotation.Write(ctx, writer, name, value);
+                SecretRotation.Report(ctx, name, existing, "new value from stdin");
+                return 0;
+            }
+
+            writer.ThrowIfUnreadable(name);
+            if (writer.Find(name) is not null)
+                throw new TswapException(
+                    $"Secret '{name}' already exists. To replace its value, use: <source> | {ctx.Prefix} ingest --rotate {name}");
+
+            writer.SetValue(name, value, ctx.Time.GetUtcNow().UtcDateTime);
+            writer.Commit();
+
+            ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' ingested from stdin");
+            ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
             return 0;
         }
-
-        db.ThrowIfUnreadable(name);
-        if (db.Secrets.ContainsKey(name))
-            throw new TswapException(
-                $"Secret '{name}' already exists. To replace its value, use: <source> | {ctx.Prefix} ingest --rotate {name}");
-
-        db.Secrets[name] = new Secret(value, ctx.Time.GetUtcNow().UtcDateTime, ctx.Time.GetUtcNow().UtcDateTime);
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' ingested from stdin");
-        ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
-        return 0;
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 }

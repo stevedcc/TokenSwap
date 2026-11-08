@@ -18,26 +18,32 @@ public sealed class BurnCommand : ICliCommand
         Validation.ValidateName(name);
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config, warnIfNoTouch: false);
-        var db = ctx.LoadSecrets(key);
-
-        if (!db.Secrets.ContainsKey(name))
+        // Brief T16-S2b: only this record is read; a burn copies every value section, decrypting none.
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
         {
-            db.ThrowIfUnreadable(name);
-            throw new TswapException($"Secret '{name}' not found");
-        }
+            if (writer.Find(name) is not { } existing)
+            {
+                writer.ThrowIfUnreadable(name);
+                throw new TswapException($"Secret '{name}' not found");
+            }
 
-        var existing = db.Secrets[name];
-        if (existing.BurnedAt.HasValue)
+            if (existing.BurnedAt.HasValue)
+            {
+                var originalReason = existing.BurnReason ?? "(no reason given)";
+                throw new TswapException($"Secret '{name}' is already burned (since {existing.BurnedAt:yyyy-MM-dd HH:mm}: {originalReason})");
+            }
+
+            writer.Burn(name, reason);
+            writer.Commit();
+
+            ctx.Console.Out.WriteLine($"\n⚠ Secret '{name}' marked as BURNED");
+            ctx.Console.Out.WriteLine("  This secret should be rotated as soon as possible.");
+            return 0;
+        }
+        finally
         {
-            var originalReason = existing.BurnReason ?? "(no reason given)";
-            throw new TswapException($"Secret '{name}' is already burned (since {existing.BurnedAt:yyyy-MM-dd HH:mm}: {originalReason})");
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
         }
-
-        db.Secrets[name] = existing with { BurnedAt = ctx.Time.GetUtcNow().UtcDateTime, BurnReason = reason };
-        ctx.Storage.SaveSecrets(db, key);
-
-        ctx.Console.Out.WriteLine($"\n⚠ Secret '{name}' marked as BURNED");
-        ctx.Console.Out.WriteLine("  This secret should be rotated as soon as possible.");
-        return 0;
     }
 }

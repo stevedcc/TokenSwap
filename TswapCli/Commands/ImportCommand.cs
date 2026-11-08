@@ -63,41 +63,50 @@ public sealed class ImportCommand : ICliCommand
 
         var config = ctx.Storage.LoadConfig();
         var key = ctx.Unlock(config);
-        var db = ctx.LoadSecrets(key);
-
-        int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
-        foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
+        // Brief T16-S2b: only the records of the names in the export are read (their metadata), no
+        // vault value is decrypted, and every write is staged and committed at once: a refusal
+        // (an unreadable record, one changed on disk) writes nothing.
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
         {
-            if (secret.BurnedAt is not null && !includeBurned)
+            int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
+            foreach (var (name, secret) in exportedDb.Secrets.OrderBy(kv => kv.Key))
             {
-                ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault; use --include-burned to import)");
-                skippedBurned++;
-                continue;
+                if (secret.BurnedAt is not null && !includeBurned)
+                {
+                    ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (was burned in source vault; use --include-burned to import)");
+                    skippedBurned++;
+                    continue;
+                }
+                if (writer.Find(name) is not null)
+                {
+                    ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (already exists)");
+                    skippedExisting++;
+                    continue;
+                }
+                if (secret.Value is null || secret.Value.Contains('\0'))
+                {
+                    // System.Text.Json can produce null for non-nullable string properties when the
+                    // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).
+                    // Treat null the same as NUL: reject rather than propagate a bad value.
+                    ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (value is null or contains a NUL byte — cannot be used as a process argument)");
+                    skippedNul++;
+                    continue;
+                }
+                writer.SetValue(name, secret.Value, secret.Created, importedBurnAt: secret.BurnedAt, importedBurnReason: secret.BurnReason);
+                imported++;
             }
-            if (db.Secrets.ContainsKey(name))
-            {
-                ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (already exists)");
-                skippedExisting++;
-                continue;
-            }
-            if (secret.Value is null || secret.Value.Contains('\0'))
-            {
-                // System.Text.Json can produce null for non-nullable string properties when the
-                // source JSON has "Value": null or omits the field entirely (e.g. a tampered file).
-                // Treat null the same as NUL: reject rather than propagate a bad value.
-                ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (value is null or contains a NUL byte — cannot be used as a process argument)");
-                skippedNul++;
-                continue;
-            }
-            db.Secrets[name] = secret;
-            imported++;
-        }
 
-        ctx.Storage.SaveSecrets(db, key);
-        ctx.Console.Out.WriteLine($"\n✓ Imported {imported} secret(s)");
-        if (skippedBurned > 0)   ctx.Console.Out.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
-        if (skippedExisting > 0) ctx.Console.Out.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
-        if (skippedNul > 0)      ctx.Console.Out.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
-        return 0;
+            writer.Commit();
+            ctx.Console.Out.WriteLine($"\n✓ Imported {imported} secret(s)");
+            if (skippedBurned > 0)   ctx.Console.Out.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
+            if (skippedExisting > 0) ctx.Console.Out.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
+            if (skippedNul > 0)      ctx.Console.Out.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 }

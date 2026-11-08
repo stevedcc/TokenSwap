@@ -516,6 +516,21 @@ a dedicated security review of the format and key derivations.
 > as Stage 2b, a separate brief in v0.3.0 after Stage 2. The v0.3.0 release notes lead with
 > `sudo tswap vault reindex` (amendment 4 above).
 
+> **Owner amendment, 2026-11-07 (brief T16-S2b):** the write commands read only the records of the
+> names they are given (`import`: every exported name, so it can skip the ones the vault holds) and
+> decrypt only what they use. On format 3 records `create`, `ingest`, `ingest --rotate`,
+> `rotate`, `burn`, `delete`, `add` and `import` decrypt no value, and `restore` exactly one: the
+> previous value it puts back, which becomes a new version (value keys are per version stamp, so its
+> section can't be reused and is sealed again). Exceptions, each confined to the values of a record of a
+> name the command was given: `add` over a secret whose stored fingerprint set is of another variant-set version, or
+> missing, compares that current value (and refuses, naming the file, when it can't be decrypted); a
+> retained version without a fingerprint set is fingerprinted from its own section (kept without one,
+> with a warning, when that fails); a record whose conflicted copies only plaintext can merge is
+> decoded whole (for `restore`, two values). A format 2 record is decoded whole when the command
+> reads it (its target; for `import`, every exported name the vault holds as format 2), with the
+> count-only warning. `vault merge` and `vault reindex` still read every value
+> (follow-up #271); `export` and `migrate` do by their nature.
+
 ## Left to the builder
 
 - Exact byte layout of v3 records, the encoding domain of fingerprints, and the RedactingPty

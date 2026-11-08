@@ -8,6 +8,9 @@ internal enum FormatTwoUse
 
     /// <summary><c>get</c>, <c>apply</c>: used some of the values.</summary>
     Substitute,
+
+    /// <summary>Brief T16-S2b: the write commands, which read the records they write.</summary>
+    Write,
 }
 
 /// <summary>
@@ -25,12 +28,19 @@ internal static class FingerprintTexts
         if (count <= 0)
             return;
         var fix = ElevatedCommand.For(prefix, "vault reindex");
-        error.WriteLine(use == FormatTwoUse.Read
-            ? $"Warning: {count} record(s) are stored in the old record format 2, which keeps a secret's name and value in one " +
-              "encrypted block, so tswap decrypted them whole to read their names and burn state and wiped the values without " +
-              $"using them. Ask the user to run {fix} once to convert the vault."
-            : $"Warning: {count} of the records used here are stored in the old record format 2, which tswap can only decrypt " +
-              $"whole; the value versions not used were wiped. Ask the user to run {fix} once to convert the vault.");
+        error.WriteLine(use switch
+        {
+            FormatTwoUse.Read =>
+                $"Warning: {count} record(s) are stored in the old record format 2, which keeps a secret's name and value in one " +
+                "encrypted block, so tswap decrypted them whole to read their names and burn state and wiped the values without " +
+                $"using them. Ask the user to run {fix} once to convert the vault.",
+            FormatTwoUse.Substitute =>
+                $"Warning: {count} of the records used here are stored in the old record format 2, which tswap can only decrypt " +
+                $"whole; the value versions not used were wiped. Ask the user to run {fix} once to convert the vault.",
+            _ =>
+                $"Warning: {count} of the records read here were stored in the old record format 2, which tswap can only decrypt " +
+                $"whole; the value versions not needed were wiped. Ask the user to run {fix} once to convert the vault.",
+        });
     }
 
     /// <summary>

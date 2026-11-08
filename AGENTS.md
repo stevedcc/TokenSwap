@@ -203,8 +203,17 @@ another copy. Every vault-folder file goes through `DirectoryOwnerMatcher`.
 Read commands decrypt only what they use (T16 Stage 2, #220): `redact`, `tocomment`, `check`, `names`,
 `list` and `burned` read metadata only (`LoadMetadata`; `redact` and `tocomment` match by fingerprint
 through `SecretMatcher`), and `get` and `apply` decrypt only the records they name (`VaultView`,
-`RecordVaultStore.OpenSecret`). `LoadSecrets`, which decrypts every record, is left only to the write
-commands until Stage 2b; new code never calls it to read.
+`RecordVaultStore.OpenSecret`).
+Write commands decrypt only what they use too (T16 Stage 2b): on format 3 records `create`,
+`ingest`, `rotate`, `burn`, `delete`, `add` and `import` decrypt no value and `restore` only the
+previous value it puts back (`VaultWriter`, `RecordVaultStore.OpenForWrite`), except where the
+written record itself can only be decided or merged by its value: `add` compares that record's
+current value when its stored fingerprints are of another variant-set version or missing, a
+retained version without fingerprints is fingerprinted from its own value, and a record whose
+conflicted copies only plaintext can merge, like a format 2 record, is decrypted whole. Only
+`export` and `migrate` (by their nature) and `vault merge` and `vault reindex` (follow-up #271)
+read every value; new code never calls `LoadSecrets` or `SaveSecrets` to read or write anything
+else.
 
 ### Code Organization (TswapCli)
 
