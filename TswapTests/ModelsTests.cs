@@ -15,7 +15,7 @@ public class ModelsTests
     [Fact]
     public void Config_RngMode_SerializesAsLegacyLowercaseString()
     {
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.Contains("\"RngMode\": \"system\"", json);
 
@@ -47,7 +47,7 @@ public class ModelsTests
     [Fact]
     public void Config_NullRngMode_RoundTrips()
     {
-        var config = new Config([1], "00", DateTime.UtcNow);
+        var config = new Config([1], "00", TestTime.Fixed);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.Contains("\"RngMode\": null", json);
         var back = JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!;
@@ -59,7 +59,7 @@ public class ModelsTests
     {
         // Backward-compat guarantee: a YubiKey vault (Backend unset) must serialize with
         // no Backend field at all, so existing config.json files are byte-for-byte unchanged.
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.DoesNotContain("Backend", json);
         Assert.Null(config.Backend);
@@ -68,7 +68,7 @@ public class ModelsTests
     [Fact]
     public void Config_Backend_SerializesAsLowercaseAndRoundTrips()
     {
-        var tpm = new Config([1, 2], "aabb", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var tpm = new Config([1, 2], "aabb", TestTime.Fixed, Backend: HardwareBackend.Tpm);
         var json = JsonSerializer.Serialize(tpm, TswapJsonContext.Default.Config);
         Assert.Contains("\"Backend\": \"tpm\"", json);
         Assert.Equal(HardwareBackend.Tpm, JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.Backend);
@@ -101,7 +101,7 @@ public class ModelsTests
     {
         // Same backward-compat guarantee as SecureEnclaveWrappedKey: a non-TPM vault must
         // serialize with no TpmSealedKey field at all.
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.DoesNotContain("TpmSealedKey", json);
         Assert.Null(config.TpmSealedKey);
@@ -110,7 +110,7 @@ public class ModelsTests
     [Fact]
     public void Config_TpmSealedKey_RoundTrips()
     {
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "c2VhbGVk");
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: "c2VhbGVk");
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.Contains("\"TpmSealedKey\": \"c2VhbGVk\"", json);
         Assert.Equal("c2VhbGVk", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.TpmSealedKey);
@@ -122,7 +122,7 @@ public class ModelsTests
         // Same backward-compat guarantee as TpmSealedKey/SecureEnclaveWrappedKey: a vault
         // that hasn't opted into a per-vault salt must serialize with no MasterKeySalt field
         // at all, so every existing config.json on disk stays byte-for-byte unchanged.
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.DoesNotContain("MasterKeySalt", json);
         Assert.Null(config.MasterKeySalt);
@@ -131,7 +131,7 @@ public class ModelsTests
     [Fact]
     public void Config_MasterKeySalt_RoundTrips()
     {
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, MasterKeySalt: "c2FsdHNhbHQ=");
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, MasterKeySalt: "c2FsdHNhbHQ=");
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.Contains("\"MasterKeySalt\": \"c2FsdHNhbHQ=\"", json);
         Assert.Equal("c2FsdHNhbHQ=", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.MasterKeySalt);
@@ -161,7 +161,7 @@ public class ModelsTests
         // a vault that hasn't opted into the Phase 6 keyring format (issue #119) must serialize
         // with no Keyring field at all, so every existing config.json stays byte-for-byte
         // unchanged.
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RngMode: RngMode.System);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RngMode: RngMode.System);
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.DoesNotContain("Keyring", json);
         Assert.Null(config.Keyring);
@@ -170,7 +170,7 @@ public class ModelsTests
     [Fact]
     public void Config_Keyring_RoundTrips()
     {
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, Keyring: "a2V5cmluZ2Jsb2I=");
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, Keyring: "a2V5cmluZ2Jsb2I=");
         var json = JsonSerializer.Serialize(config, TswapJsonContext.Default.Config);
         Assert.Contains("\"Keyring\": \"a2V5cmluZ2Jsb2I=\"", json);
         Assert.Equal("a2V5cmluZ2Jsb2I=", JsonSerializer.Deserialize(json, TswapJsonContext.Default.Config)!.Keyring);
@@ -199,7 +199,7 @@ public class ModelsTests
         // The v1 tag and its (Kdf-less) shape must never change — every export file ever
         // produced with this version tag must keep importing bit-for-bit as before (#108).
         Assert.Equal("tswap-export-v1", ExportFile.V1);
-        var export = new ExportFile(ExportFile.V1, DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy");
+        var export = new ExportFile(ExportFile.V1, TestTime.Fixed, "c2FsdA==", "Y2lwaGVy");
         var json = JsonSerializer.Serialize(export, TswapJsonContext.Default.ExportFile);
         Assert.Contains("\"Version\": \"tswap-export-v1\"", json);
         Assert.DoesNotContain("Kdf", json);
@@ -214,7 +214,7 @@ public class ModelsTests
         Assert.Equal(ExportFile.V2, ExportFile.CurrentVersion);
 
         var kdf = new KdfParams(KdfAlgorithm.Argon2id, MemoryKiB: 19 * 1024, TimeCost: 2, Parallelism: 1);
-        var export = new ExportFile(ExportFile.CurrentVersion, DateTime.UtcNow, "c2FsdA==", "Y2lwaGVy", kdf);
+        var export = new ExportFile(ExportFile.CurrentVersion, TestTime.Fixed, "c2FsdA==", "Y2lwaGVy", kdf);
         var json = JsonSerializer.Serialize(export, TswapJsonContext.Default.ExportFile);
 
         Assert.Contains("\"Version\": \"tswap-export-v2\"", json);

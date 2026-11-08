@@ -16,7 +16,7 @@ namespace TswapTests;
 public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private static Secret S(string value, bool burned = false, string? previous = null, bool previousBurned = false) =>
-        new(value, DateTime.UtcNow, DateTime.UtcNow, burned ? DateTime.UtcNow : null, burned ? "test" : null)
+        new(value, TestTime.Fixed, TestTime.Fixed, burned ? TestTime.Fixed : null, burned ? "test" : null)
         {
             PreviousValue = previous,
             PreviousBurned = previousBurned,

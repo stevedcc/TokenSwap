@@ -915,7 +915,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
     {
         var dir = Path.Combine(_empty, "badkeyring");
         Directory.CreateDirectory(dir);
-        var config = new Config([], "", DateTime.UtcNow, Keyring: "not base64 at all!");
+        var config = new Config([], "", TestTime.Fixed, Keyring: "not base64 at all!");
         File.WriteAllText(Path.Combine(dir, "config.json"), JsonSerializer.Serialize(config, TswapJsonContext.Default.Config));
 
         var keys = Keys(SerialA);
@@ -1272,7 +1272,7 @@ public sealed partial class YubiKeySetupTests : IDisposable
         var dir = Path.Combine(_empty, "kr-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize), 1, slots);
-        var config = new Config([], "", DateTime.UtcNow, Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)),
+        var config = new Config([], "", TestTime.Fixed, Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)),
             KeyringSlotId: Convert.ToBase64String(slots[0].SlotId));
         File.WriteAllText(Path.Combine(dir, "config.json"), JsonSerializer.Serialize(config, TswapJsonContext.Default.Config));
         return dir;

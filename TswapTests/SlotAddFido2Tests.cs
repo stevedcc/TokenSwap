@@ -404,7 +404,7 @@ public class SlotAddFido2Tests : IDisposable
     public void SlotAddFido2_VaultWithoutKeyring_NamesInitFido2()
     {
         File.WriteAllText(Path.Combine(_dir, "config.json"), System.Text.Json.JsonSerializer.Serialize(
-            new Config([], "", DateTime.UtcNow), TswapJsonContext.Default.Config));
+            new Config([], "", TestTime.Fixed), TswapJsonContext.Default.Config));
 
         var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
 

@@ -31,7 +31,7 @@ internal static class ClassicVaultTestSupport
         var config = new Config(
             [serial1, serial2],
             Convert.ToHexString(Crypto.XorBytes(answer1.Response, answer2.Response)),
-            DateTime.UtcNow,
+            TestTime.Fixed,
             touch1.HasValue && touch2.HasValue ? touch1.Value && touch2.Value : null,
             RngMode.System,
             challenge,
@@ -59,7 +59,7 @@ internal static class ClassicVaultTestSupport
         var config = new Config(
             [TestKeyYubiKeyService.Serial1, TestKeyYubiKeyService.Serial2],
             new string('0', 40),
-            DateTime.UtcNow,
+            TestTime.Fixed,
             null,
             RngMode.System,
             Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));

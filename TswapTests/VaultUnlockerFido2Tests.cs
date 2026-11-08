@@ -149,7 +149,7 @@ public class VaultUnlockerFido2Tests
         public Keyring Keyring => new(KeyringFormat.KeyringFormatVersion, VaultId, 1, [.. Slots]);
 
         public Config Config(HardwareBackend? backend, byte[]? own) => new(
-            [], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
+            [], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(Keyring)),
             KeyringSlotId: own is null ? null : Convert.ToBase64String(own));
     }

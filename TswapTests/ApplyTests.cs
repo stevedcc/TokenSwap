@@ -11,7 +11,7 @@ public class ApplyTests
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["db-password"] = new Secret("secret123", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["db-password"] = new Secret("secret123", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"database:
@@ -33,7 +33,7 @@ public class ApplyTests
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["api-key"] = new Secret("key456", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["api-key"] = new Secret("key456", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"api:
@@ -51,8 +51,8 @@ public class ApplyTests
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["db-password"] = new Secret("dbpass", DateTime.UtcNow, DateTime.UtcNow, null, null),
-            ["redis-auth"] = new Secret("redispass", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["db-password"] = new Secret("dbpass", TestTime.Fixed, TestTime.Fixed, null, null),
+            ["redis-auth"] = new Secret("redispass", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"database:
@@ -86,7 +86,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["burned-secret"] = new Secret("burned-value", DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow, "leaked")
+            ["burned-secret"] = new Secret("burned-value", TestTime.Fixed, TestTime.Fixed, TestTime.Fixed, "leaked")
         });
 
         var input = @"password: """"  # tswap: burned-secret";
@@ -105,7 +105,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["secret-with-quotes"] = new Secret(@"value""with""quotes", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["secret-with-quotes"] = new Secret(@"value""with""quotes", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"key: """"  # tswap: secret-with-quotes";
@@ -119,7 +119,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["secret-with-backslash"] = new Secret(@"value\with\backslash""quote", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["secret-with-backslash"] = new Secret(@"value\with\backslash""quote", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"key: """"  # tswap: secret-with-backslash";
@@ -134,7 +134,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["secret-with-quote"] = new Secret("value'with'quote", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["secret-with-quote"] = new Secret("value'with'quote", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"key: ''  # tswap: secret-with-quote";
@@ -149,7 +149,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["secret1"] = new Secret("value1", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["secret1"] = new Secret("value1", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"config:
@@ -170,7 +170,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["secret1"] = new Secret("value1", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["secret1"] = new Secret("value1", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = "key: \"\"  # tswap: secret1";
@@ -184,7 +184,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["api-token"] = new Secret("token123", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["api-token"] = new Secret("token123", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"{
@@ -204,7 +204,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["my-secret"] = new Secret("secretvalue", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["my-secret"] = new Secret("secretvalue", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = "key:  # tswap: my-secret";
@@ -219,7 +219,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["db-pass"] = new Secret("pass123", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["db-pass"] = new Secret("pass123", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"database:
@@ -236,7 +236,7 @@ redis:
     {
         var db = new SecretsDb(new Dictionary<string, Secret>
         {
-            ["db-password"] = new Secret("newsecret", DateTime.UtcNow, DateTime.UtcNow, null, null)
+            ["db-password"] = new Secret("newsecret", TestTime.Fixed, TestTime.Fixed, null, null)
         });
 
         var input = @"password: ""existingvalue""  # tswap: db-password";

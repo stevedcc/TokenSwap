@@ -47,7 +47,7 @@ public sealed class LinuxTpmPasswordTests
     }
 
     private static Config ConfigWith(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
     /// <summary>
     /// Writes a package's public and private parts and loads them under a regenerated primary (issue #261: the ECC

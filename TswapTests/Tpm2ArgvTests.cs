@@ -377,7 +377,7 @@ public class Tpm2ArgvTests
         using var password = Password();
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         var (kek, hwBlob) = enrollment.Enroll(password);
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
         var provided = 0;
 
         var recovered = new LinuxTpmHardwareService().Unlock(config, _ => 0, () => { provided++; return password.Clone(); });

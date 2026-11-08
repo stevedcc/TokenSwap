@@ -41,7 +41,7 @@ public class SlotsRsaPrimaryNoteTests
                 RandomNumberGenerator.GetBytes(32), KeyringFormat.KeyringFormatVersion, vaultId, 1) with { HwBlob = hwBlob });
         }
         var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, 1, slots);
-        var config = new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System, Backend: backend,
+        var config = new Config([], "", TestTime.Fixed, RequiresTouch: false, RngMode: RngMode.System, Backend: backend,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)), KeyringSlotId: nameOwnSlot ? Convert.ToBase64String(slots[0].SlotId) : null);
         return (config, slots);
     }

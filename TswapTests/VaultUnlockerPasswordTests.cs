@@ -74,7 +74,7 @@ public class VaultUnlockerPasswordTests
         }
 
         public Config Config(HardwareBackend? backend, byte[]? ownSlotId) => new(
-            [], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
+            [], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, Slots))),
             KeyringSlotId: ownSlotId is null ? null : Convert.ToBase64String(ownSlotId));
     }
@@ -224,7 +224,7 @@ public class VaultUnlockerPasswordTests
         using var right = StretchedPassword.FromBytes(Password);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
         var (_, hwBlob) = service.Enroll(right);
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
         List<StretchedPassword> given = [];
         var frees = 0;
@@ -744,7 +744,7 @@ public class VaultUnlockerPasswordTests
         // slot accept's path: KEK_slot straight from the hardware, with the password.
         using var stretched = StretchedPassword.FromBytes(Password);
         var (kek, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, MachineKey).Enroll(stretched);
-        var config = new Config([], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System, Backend: HardwareBackend.Tpm,
+        var config = new Config([], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System, Backend: HardwareBackend.Tpm,
             PendingSlotId: Convert.ToBase64String(new byte[16]), PendingSlotHwBlob: Convert.ToBase64String(blob));
 
         var recovered = Unlocker(SimulatedYubiKeyService.WithKeys())

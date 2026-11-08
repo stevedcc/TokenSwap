@@ -43,9 +43,9 @@ public class HardwareEnrollmentSeamTests
         // that hands this service one is a bug, and must fail loudly instead of unlocking without it.
         var service = new YubiKeyHardwareService(SimulatedYubiKeyService.WithKeys(), overrideKey: new byte[32]);
 
-        Assert.Throws<ArgumentException>(() => service.Unlock(new Config([], "", DateTime.UtcNow), serials => serials[0],
+        Assert.Throws<ArgumentException>(() => service.Unlock(new Config([], "", TestTime.Fixed), serials => serials[0],
             () => throw new InvalidOperationException("never called")));
-        Assert.Equal(new byte[32], service.Unlock(new Config([], "", DateTime.UtcNow), serials => serials[0], password: null));
+        Assert.Equal(new byte[32], service.Unlock(new Config([], "", TestTime.Fixed), serials => serials[0], password: null));
     }
 
     [Fact]

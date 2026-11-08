@@ -39,7 +39,7 @@ public class VaultUnlockerTests
         var config = new Config(
             [11111111, 22222222],
             Convert.ToHexString(Crypto.XorBytes(k1, k2)),
-            DateTime.UtcNow,
+            TestTime.Fixed,
             UnlockChallenge: "aabbcc");
         var yubi = new FakeYubiKeys { Responses = { [11111111] = k1, [22222222] = k2 } };
         return (yubi, config, k1, k2);
@@ -312,7 +312,7 @@ public class VaultUnlockerTests
         var config = new Config(
             [11111111, 22222222],
             Convert.ToHexString(Crypto.XorBytes(k1, k2)),
-            DateTime.UtcNow,
+            TestTime.Fixed,
             UnlockChallenge: "aabbcc",
             MasterKeySalt: Convert.ToBase64String(masterKeySalt),
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)));

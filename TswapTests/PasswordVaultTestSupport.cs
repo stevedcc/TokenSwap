@@ -29,7 +29,7 @@ internal static class PasswordVaultTestSupport
         var salt = RandomNumberGenerator.GetBytes(VaultPasswordKdf.SaltSize);
         using var stretched = VaultPasswordKdf.Stretch(password, salt, p);
         var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machine.Tpm!).Enroll(stretched);
-        var backendConfig = new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System, Backend: HardwareBackend.Tpm);
+        var backendConfig = new Config([], "", TestTime.Fixed, RequiresTouch: false, RngMode: RngMode.System, Backend: HardwareBackend.Tpm);
         var (config, vaultKey, _) = InitCommand.AssembleKeyring(kek, backendConfig, includeRecovery: false, hwBlob);
 
         var vaultDir = Path.Combine(machine.Dir, "vault");

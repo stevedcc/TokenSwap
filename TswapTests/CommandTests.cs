@@ -408,7 +408,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void SlotsFormat_NonKeyringVault_ReturnsHonestMessageNotError()
     {
-        var config = new Config(new List<int> { 1, 2 }, new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+        var config = new Config(new List<int> { 1, 2 }, new string('0', 40), TestTime.Fixed, RequiresTouch: true);
 
         var output = SlotsCommand.Format(config);
 
@@ -1723,7 +1723,7 @@ password2: """"  # tswap: missing-mixed-secret");
         // [0]/[1] into that (regression test for the Copilot-flagged crash).
         RunTswap("init", "--yubikey");
         var configPath = Path.Combine(_tempDir, "config.json");
-        var tpmConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
+        var tpmConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
         File.WriteAllText(configPath, JsonSerializer.Serialize(tpmConfig, TswapJsonContext.Default.Config));
 
         var (exit, stdout, _) = RunTswap("migrate");

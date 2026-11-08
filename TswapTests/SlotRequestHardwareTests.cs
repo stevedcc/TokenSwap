@@ -179,7 +179,7 @@ public class SlotRequestHardwareTests : IDisposable
     public void APendingSlotWithoutItsBlob_LocatorGivesATswapException()
     {
         // Review minor: a PendingSlotId with a null blob is a TswapException, never ArgumentNullException.
-        var pending = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm,
+        var pending = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm,
             PendingSlotId: Convert.ToBase64String(new byte[16]));
 
         var ex = Assert.Throws<TswapException>(() => TswapCore.Vault.HardwareBlobLocator.Read(pending, HardwareBackend.Tpm));

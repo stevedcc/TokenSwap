@@ -45,7 +45,7 @@ public class SecureEnclaveHardwareServiceTests
         IHardwareEnrollmentService enrollment = new SecureEnclaveHardwareService();
         var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
         var recovered = new SecureEnclaveHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for Secure Enclave"), password: null);
@@ -62,7 +62,7 @@ public class SecureEnclaveHardwareServiceTests
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new SecureEnclaveHardwareService();
         var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
-        var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave);
+        var backendConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 
         var unlocker = new VaultUnlocker(new TestKeyYubiKeyService(new byte[32]), additionalBackends: [service]);
@@ -78,7 +78,7 @@ public class SecureEnclaveHardwareServiceTests
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var wrapped = svc.Wrap(vaultKey);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
 
@@ -91,7 +91,7 @@ public class SecureEnclaveHardwareServiceTests
     public void Unlock_MissingWrappedKey_ThrowsClearError()
     {
         var svc = new SecureEnclaveHardwareService();
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave);
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave);
 
         var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("secure-enclave", ex.Message);
@@ -101,7 +101,7 @@ public class SecureEnclaveHardwareServiceTests
     public void Unlock_InvalidBase64_ThrowsClearError()
     {
         var svc = new SecureEnclaveHardwareService();
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: "not valid base64!!");
 
@@ -117,7 +117,7 @@ public class SecureEnclaveHardwareServiceTests
         // Unlock specifically promises a 32-byte vault key, so it must reject this.
         var svc = new SecureEnclaveHardwareService();
         var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(16));
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(wrapped));
 

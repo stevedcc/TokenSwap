@@ -434,7 +434,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     public void UnlockExcluding_ClassicConfigOnlyTheExcludedKey_SaysNoOtherKey()
     {
         var keys = SimulatedYubiKeyService.WithKeys(SerialA);
-        var config = new Config([SerialA, SerialA], new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+        var config = new Config([SerialA, SerialA], new string('0', 40), TestTime.Fixed, RequiresTouch: true);
 
         var ex = Assert.ThrowsAny<TswapException>(() => new YubiKeyHardwareService(keys)
             .Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = SerialA }));

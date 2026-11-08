@@ -149,9 +149,9 @@ public class CheckTests : IDisposable
         {
             dict[name] = new Secret(
                 "value",
-                DateTime.UtcNow,
-                DateTime.UtcNow,
-                burned ? DateTime.UtcNow : null,
+                TestTime.Fixed,
+                TestTime.Fixed,
+                burned ? TestTime.Fixed : null,
                 burned ? "test burn" : null
             );
         }

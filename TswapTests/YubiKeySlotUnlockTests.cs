@@ -56,7 +56,7 @@ public class YubiKeySlotUnlockTests
         }
 
         public Config Config(HardwareBackend? backend = null, byte[]? ownSlotId = null) => new(
-            [], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
+            [], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System, Backend: backend,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(new Keyring(KeyringFormat.KeyringFormatVersion, VaultId, 1, Slots))),
             KeyringSlotId: ownSlotId is null ? null : Convert.ToBase64String(ownSlotId));
     }
