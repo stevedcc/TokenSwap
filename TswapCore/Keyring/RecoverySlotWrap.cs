@@ -36,6 +36,33 @@ namespace TswapCore.Keyring;
 /// </summary>
 public static class RecoverySlotWrap
 {
+    private static readonly AsyncLocal<Action<byte[]>?> ReleasedObserver = new();
+
+    /// <summary>
+    /// Test seam: until the result is disposed, every intermediate secret (the X25519 shared secret and the KEK)
+    /// that a wrap or unwrap in the caller's async flow is done with is handed to <paramref name="observer"/> after
+    /// it was released, so a test can see that it was zeroed. Flow-local, so parallel tests don't see each other.
+    /// </summary>
+    internal static IDisposable ObserveReleasedSecrets(Action<byte[]> observer)
+    {
+        var previous = ReleasedObserver.Value;
+        ReleasedObserver.Value = observer;
+        return new ObserverScope(previous);
+    }
+
+    private sealed class ObserverScope(Action<byte[]>? previous) : IDisposable
+    {
+        public void Dispose() => ReleasedObserver.Value = previous;
+    }
+
+    private static void Release(byte[]? secret)
+    {
+        if (secret is null)
+            return;
+        CryptographicOperations.ZeroMemory(secret);
+        ReleasedObserver.Value?.Invoke(secret);
+    }
+
     /// <summary>
     /// Wraps <paramref name="vaultKey"/> (<c>K_v</c>) to <paramref name="recoveryPublicKey"/>.
     /// Returns the freshly-minted ephemeral public key (destined for the recovery slot's
@@ -53,19 +80,28 @@ public static class RecoverySlotWrap
             throw new ArgumentException($"vaultKey must be {KeyringFormat.VaultKeySize} bytes", nameof(vaultKey));
 
         var ephemeral = SlotKeyPair.Generate();
-        byte[] sharedSecret;
+        byte[]? sharedSecret = null;
+        byte[]? kek = null;
         try
         {
-            sharedSecret = SlotKeyPair.ComputeSharedSecret(ephemeral.PrivateKey, recoveryPublicKey);
-        }
-        catch (CryptographicException)
-        {
-            throw new TswapException("Invalid recovery public key: X25519 key agreement with it failed (typically a low-order point)");
-        }
-        var kek = RecoverySlotKek.Derive(sharedSecret, ephemeral.PublicKey);
+            try
+            {
+                sharedSecret = SlotKeyPair.ComputeSharedSecret(ephemeral.PrivateKey, recoveryPublicKey);
+            }
+            catch (CryptographicException)
+            {
+                throw new TswapException("Invalid recovery public key: X25519 key agreement with it failed (typically a low-order point)");
+            }
+            kek = RecoverySlotKek.Derive(sharedSecret, ephemeral.PublicKey);
 
-        var wrapped = SlotPayloadWrap.Wrap(vaultKey, kek, formatVersion, vaultId, k, slotId);
-        return (ephemeral.PublicKey, wrapped);
+            var wrapped = SlotPayloadWrap.Wrap(vaultKey, kek, formatVersion, vaultId, k, slotId);
+            return (ephemeral.PublicKey, wrapped);
+        }
+        finally
+        {
+            Release(sharedSecret);
+            Release(kek);
+        }
     }
 
     /// <summary>
@@ -89,17 +125,26 @@ public static class RecoverySlotWrap
         byte[] wrapped, byte[] ephemeralPublicKey, byte[] recoveryPrivateKey,
         byte formatVersion, byte[] vaultId, byte k, byte[] slotId)
     {
-        byte[] sharedSecret;
+        byte[]? sharedSecret = null;
+        byte[]? kek = null;
         try
         {
-            sharedSecret = SlotKeyPair.ComputeSharedSecret(recoveryPrivateKey, ephemeralPublicKey);
-        }
-        catch (CryptographicException)
-        {
-            throw new TswapException(SlotPayloadWrap.AuthenticationFailedMessage);
-        }
-        var kek = RecoverySlotKek.Derive(sharedSecret, ephemeralPublicKey);
+            try
+            {
+                sharedSecret = SlotKeyPair.ComputeSharedSecret(recoveryPrivateKey, ephemeralPublicKey);
+            }
+            catch (CryptographicException)
+            {
+                throw new TswapException(SlotPayloadWrap.AuthenticationFailedMessage);
+            }
+            kek = RecoverySlotKek.Derive(sharedSecret, ephemeralPublicKey);
 
-        return SlotPayloadWrap.Unwrap(wrapped, kek, formatVersion, vaultId, k, slotId);
+            return SlotPayloadWrap.Unwrap(wrapped, kek, formatVersion, vaultId, k, slotId);
+        }
+        finally
+        {
+            Release(sharedSecret);
+            Release(kek);
+        }
     }
 }

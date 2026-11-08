@@ -202,6 +202,26 @@ public class RecoverySlotWrapTests
         Assert.Contains("Invalid recovery public key", ex.Message);
     }
 
+    // The X25519 shared secret and the KEK derived from it are zeroed once a wrap or unwrap is done with them, also
+    // when the unwrap fails (code review of #216, F3).
+    [Fact]
+    public void WrapAndUnwrap_ZeroTheSharedSecretAndTheKek()
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        List<byte[]> released = [];
+        using var _ = RecoverySlotWrap.ObserveReleasedSecrets(released.Add);
+
+        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+        Assert.Equal(vaultKey, RecoverySlotWrap.Unwrap(wrapped, ephemeralPublicKey, recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+        var tampered = (byte[])wrapped.Clone();
+        tampered[^1] ^= 1;
+        Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(tampered, ephemeralPublicKey, recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(6, released.Count); // a shared secret and a KEK for each of the three calls
+        Assert.All(released, secret => Assert.Equal(new byte[32], secret));
+    }
+
     [Fact]
     public void Wrap_WrongVaultKeyLength_ThrowsArgumentException()
     {
