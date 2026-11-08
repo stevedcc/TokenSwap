@@ -107,7 +107,7 @@ jobs:
 
       # The release archive, packed and smoke-tested by the script release.yml uses, so a PR that breaks
       # packaging (issue #238: the macOS archive lacked libtswapse.dylib) fails here, not at tag time.
-      # The rid comes from the publish folder's parent (bin/Release/net10.0/<rid>/publish); exactly one such
+      # The rid comes from the publish folder's parent (bin/Release/net11.0/<rid>/publish); exactly one such
       # folder must exist, and package.sh refuses a rid it doesn't know, so a wrong pick fails instead of
       # packing a Linux-style archive that tests nothing about the dylib.
       - name: Package and smoke-test the release archive (Linux, macOS)

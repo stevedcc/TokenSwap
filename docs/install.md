@@ -16,7 +16,11 @@ You need one hardware backend:
   the TPM: see [portable.md](portable.md#linux-tpm).
 - **Secure Enclave:** a Mac (Apple Silicon tested).
 
-You need the .NET 10 SDK at build time only. The compiled binary needs no .NET runtime.
+You need the .NET SDK that `global.json` names (.NET 11) at build time only. The compiled binary
+needs no .NET runtime. On x64 (Linux, Windows, Intel Macs) it needs an x86-64-v2 CPU (SSE4.2 and
+POPCNT: Intel Nehalem or AMD Bulldozer and later). .NET 11 raised this floor from x86-64-v1; on an
+older CPU the binary stops at start with "The current CPU is missing one or more of the following
+instruction sets". Arm64 (Linux, Apple Silicon) is unchanged.
 
 ### YubiKey prerequisites
 
@@ -130,13 +134,13 @@ xattr -dr com.apple.quarantine <folder>
 ## Building from source
 
 The compiled binary is a native executable with ~20ms startup. No .NET runtime is needed at run
-time. You need the .NET 10 SDK to build it ([Prerequisites](#prerequisites)).
+time. You need the .NET SDK that `global.json` names (.NET 11) to build it ([Prerequisites](#prerequisites)).
 
 ### Linux (x64)
 
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r linux-x64
-cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
+cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
 sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 ```
 
@@ -145,7 +149,7 @@ sudo cp ~/.local/bin/tswap /usr/local/bin/   # for privileged commands
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-arm64
 # tswap and its Secure Enclave library (libtswapse.dylib) go in the same folder
-sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
+sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 ```
 
 ### macOS (Intel)
@@ -155,7 +159,7 @@ retired and NativeAOT cannot cross-compile. Build locally:
 
 ```bash
 dotnet publish TswapCli/TswapCli.csproj -c Release -r osx-x64
-sudo cp TswapCli/bin/Release/net10.0/osx-x64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
+sudo cp TswapCli/bin/Release/net11.0/osx-x64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 ```
 
 ### Windows (x64)
@@ -165,7 +169,7 @@ In a command prompt (`cmd`):
 ```bat
 dotnet publish TswapCli/TswapCli.csproj -c Release -r win-x64
 REM Copy tswap.exe to a directory on your PATH, e.g.:
-copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
+copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe %USERPROFILE%\AppData\Local\Microsoft\WindowsApps\
 ```
 
 ## Installing with installscript

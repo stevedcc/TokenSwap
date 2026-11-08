@@ -22,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -97,7 +97,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -182,7 +182,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
