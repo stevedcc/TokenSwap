@@ -217,6 +217,21 @@ public class CommandTests : IDisposable
     }
 
 
+    /// <summary>The config's <c>Created</c> comes from the given clock, in UTC (idiomatic .NET 11 plan, row 10).</summary>
+    [Fact]
+    public void BuildKeyringConfig_CreatedIsTheGivenClocksTime()
+    {
+        var at = new DateTimeOffset(2026, 11, 8, 12, 34, 56, TimeSpan.Zero);
+
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32), [11111111], new string('0', 40), requiresTouch: null, RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false, time: new FuncTimeProvider(() => at));
+
+        Assert.Equal(at.UtcDateTime, config.Created);
+        Assert.Equal(DateTimeKind.Utc, config.Created.Kind);
+    }
+
     [Fact]
     public void BuildKeyringConfig_RecoveryPrivateKey_RecoversSameVaultKeyAsMachineSlot()
     {
