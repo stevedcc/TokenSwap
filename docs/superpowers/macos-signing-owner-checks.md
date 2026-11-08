@@ -91,3 +91,26 @@ dialog's exact text.
 ## Results
 
 Paste each step's outcome here (or in the PR), with the date and the dry run's run id.
+
+### 2026-11-08, dry run [42481526863](https://github.com/stevedcc/TokenSwap/actions/runs/42481526863) (from `b9f5d1f`)
+
+The owner, on the work Mac (Apple silicon), within the boundary. Artifact `tswap-osx-arm64` downloaded in
+Safari (signed in to GitHub, which artifact downloads need), unpacked with Archive Utility; the pkg's
+version reads 0.2.0 because the version bump comes with the release PR.
+
+| Step | Result |
+|---|---|
+| Set-up | The zip, the pkg and the tarball all carry `com.apple.quarantine` (`0083;…;Safari;…`). The tswap installed before (`/usr/local/bin`, 4 Nov 14:06, SHA-256 `27feb042…e5905`, 13,870,168 B) was a pre-release build, not v0.2.0 (`6c0d3e27…4225`, 14,715,848 B); `tswap --version` doesn't exist (#276). |
+| M0 | `tar` into `$T/m0t`: both files keep the quarantine mark; the quarantined `tswap prompt-hash` ran with no dialog and printed `c145260b…cde1`, as on the runner. **Pass.** |
+| M0p | With Wi-Fi off, the quarantined pkg installed with no warning. Installed: both files `root wheel -rwxr-xr-x`, no extended attributes; `pkgutil --pkg-info dev.crawford.tswap.pkg` present. `pkgutil --check-signature`: "signed by a developer certificate issued by Apple for distribution", "Notarization: trusted by the Apple notary service", "Signed with a trusted timestamp on: 2026-11-08 13:22:43 +0000", chain Developer ID Installer: Steven Crawford (M49364Z594) (expires 2027-12-08) → Developer ID Certification Authority → Apple Root CA. `installscript` from the installed copy: no `sudo` (`grep -c sudo` 0); per-user steps only. It was run once without the throwaway `HOME`, so it wrote the skill, the Claude Code symlink and the completions into the real home (harmless; outside the boundary; the owner keeps or removes them). Installer's "move the package to the Bin" removed the unpacked pkg; re-unpacked from the zip. **Pass.** |
+| M1 | `--with-touch`, vault password chosen at the prompt (a short one: warned, not refused): `init` and `names` asked for the presence check and the vault password; opens. **Pass.** |
+| M2 | `--no-touch`: no prompt; opens. **Pass.** |
+| M3 | Agent on the M1 vault: `agent start` asked once for Touch ID and the vault password, no `ptrace(PT_DENY_ATTACH)` warning; `names` then asked only for Touch ID, not the password (the agent holds the password, never the key). **Pass.** |
+| M4 | `sudo env TSWAP_CONFIG_DIR=… /usr/local/bin/tswap get` printed the throwaway secret; `init` needed no interaction; `find "$T" -user root` empty. **Pass.** |
+| M5 | v0.2.0's tarball (SHA-256 `6c0d3e27…4225` confirmed), quarantine removed as its docs say; both v0.2.0 vaults (`--no-touch`, `--with-touch`) open with the signed `/usr/local/bin/tswap names`, the touch one with its prompt. A Secure Enclave key made without a Team ID opens under the signed build: **D7 decided, no release-note warning needed.** (v0.2.0's `init` made a recovery slot, as the run had no `--no-recovery`: a throwaway vault's, deleted in M11.) **Pass.** |
+| M6 | OTP slot: refused with tswap's message ("macOS is blocking access to this key's OTP interface (Input Monitoring for the app running tswap) …"): Terminal has no Input Monitoring grant on this Mac and the owner didn't add one (the grant belongs to Terminal, so signing can't change the OTP path). FIDO2 slot: `init` and `names` with the PIN and a touch, **no Input Monitoring**. **Pass** (OTP success path not run). |
+| M7 | Signed tswap + v0.2.0's dylib: refused, no crash; dyld's reason "have different Team IDs", then "tswap and libtswapse.dylib must come from the same release (from v0.3.0 they are signed together): reinstall the package, or replace both from one archive". Cosmetic: the `--no-touch` warning and the init banner print before the error (#277). **Pass.** |
+| M8 | The pkg installed again over the running M1 agent: the agent kept running and `names` used it (only Touch ID, no password). Same build both times, so agent-protocol compatibility between releases is untested. install.md's "stop the agent first" line replaced accordingly. **Pass.** |
+| M9 | Not run (no macOS 12–14 machine to hand). |
+| M10 | The documented uninstall: `pkgutil --pkgs` no longer lists `dev.crawford.tswap.pkg`, both files gone. **Pass.** |
+| M11 | No agent running; `find "$T" -user root` empty; `$T` and the downloads deleted. **Done.** |
