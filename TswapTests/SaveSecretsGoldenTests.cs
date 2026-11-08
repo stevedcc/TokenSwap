@@ -29,7 +29,8 @@ public sealed class SaveSecretsGoldenTests
             ["marked"] = History(marked: true),
             ["unmarked"] = History(marked: false),
         };
-        var text = actual.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n";
+        // NewLine pinned: indented JSON uses Environment.NewLine by default, CRLF on Windows (CI run on PR #281).
+        var text = actual.ToJsonString(new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" }) + "\n";
 
         // Line endings normalised on read: .gitattributes pins eol=lf for every text file, but a copy of
         // the fixture that didn't come through git (an archive, an editor) may carry CRLF.
@@ -38,8 +39,28 @@ public sealed class SaveSecretsGoldenTests
         {
             var written = Path.Combine(AppContext.BaseDirectory, "save-secrets-golden.actual.json");
             File.WriteAllText(written, text);
-            Assert.Fail($"SaveSecrets no longer matches {GoldenPath()}; this run's records are in {written}.");
+            Assert.Fail($"SaveSecrets no longer matches {GoldenPath()}; this run's records are in {written}.\n{FirstDifference(expected, text)}");
         }
+    }
+
+    /// <summary>The first line where the two texts differ, both sides shown with their control characters visible.</summary>
+    private static string FirstDifference(string? expected, string actual)
+    {
+        if (expected is null)
+            return "The golden file is missing.";
+        var want = expected.Split('\n');
+        var got = actual.Split('\n');
+        for (var i = 0; i < Math.Max(want.Length, got.Length); i++)
+        {
+            var w = i < want.Length ? want[i] : null;
+            var g = i < got.Length ? got[i] : null;
+            if (w != g)
+                return $"First difference at line {i + 1}:\n  expected: {Visible(w)}\n  actual:   {Visible(g)}";
+        }
+        return "The texts differ only in their line breaks.";
+
+        static string Visible(string? line) =>
+            line is null ? "(no such line)" : line.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\t", "\\t", StringComparison.Ordinal);
     }
 
     private static JsonArray History(bool marked)
