@@ -5,7 +5,9 @@
 # (AppContext.BaseDirectory), so the archive works unpacked in place, without the install script (issue #238).
 # A missing dylib, or a rid this script doesn't know, fails the packaging rather than shipping a wrong archive.
 # --smoke: unpack the archive into an empty folder and run what is in it (the shipped bytes and permissions):
-# `tswap prompt-hash` (needs no vault) and, on macOS, a Secure Enclave vault in a throwaway config folder (init with
+# first `tswap --version`, whose whole stdout, with the line ending trimmed (a `\r` too), must be
+# `tswap $TSWAP_EXPECT_VERSION` (brief T18: the workflow sets it, the tag without its v or the csproj's <Version>;
+# --smoke without it fails before packing), then `tswap prompt-hash` (needs no vault) and, on macOS, a Secure Enclave vault in a throwaway config folder (init with
 # no touch, password or recovery prompt, then `names` to unlock it): that loads the shipped dylib through tswap's own
 # resolver. Needs a Mac with a Secure Enclave (GitHub's macOS runners have one, see ci.yml's probe).
 # On Linux, --smoke also checks that libpcsclite is used when present and never required (YubiKey SDK, design
@@ -43,6 +45,11 @@ if [ $# -lt 3 ] || [ $# -gt 4 ] || { [ $# -eq 4 ] && [ "$4" != --smoke ]; }; the
 fi
 rid=$1 publish=$2 dist=$3 smoke=${4:-}
 
+if [ "$smoke" = --smoke ] && [ -z "${TSWAP_EXPECT_VERSION:-}" ]; then
+  echo "package.sh: --smoke needs TSWAP_EXPECT_VERSION, the version the binary must report (the tag without its v, or the csproj's <Version>)" >&2
+  exit 2
+fi
+
 case "$rid" in
   linux-x64 | linux-arm64) files=(tswap) ;;
   osx-arm64 | osx-x64) files=(tswap libtswapse.dylib) ;;
@@ -65,6 +72,18 @@ chmod +x "$publish/tswap"
 tar czf "$archive.partial" -C "$publish" "${files[@]}"
 mv -f "$archive.partial" "$archive"
 echo "packed $archive: ${files[*]}"
+
+# Brief T18: `tswap --version` prints exactly `tswap $TSWAP_EXPECT_VERSION` (one line; its line ending trimmed).
+version_smoke() {
+  local bin=$1 out status=0
+  out=$("$bin" --version) || status=$?
+  out=${out%$'\r'}
+  if [ "$status" -ne 0 ] || [ "$out" != "tswap $TSWAP_EXPECT_VERSION" ]; then
+    echo "package.sh: 'tswap --version' printed '$out' (exit $status), expected 'tswap $TSWAP_EXPECT_VERSION'" >&2
+    exit 1
+  fi
+  echo "tswap --version: $out"
+}
 
 # Runs "$@" yubikey setup --touch --serial 2147483647 ("$@": the binary, or bwrap ... -- binary, then tswap's global
 # flags) and requires the refusal; with $1 set to an expected PC/SC strategy, also that strategy line.
@@ -275,6 +294,7 @@ if [ "$smoke" = --smoke ]; then
   check=$(mktemp -d "${TMPDIR:-/tmp}/tswap-check.XXXXXX")
   trap 'rm -rf "$check" "$check".*' EXIT
   tar xzf "$archive" -C "$check"
+  version_smoke "$check/tswap"
   "$check/tswap" prompt-hash
   yubikey_smoke '' "$check/tswap"
   case "$rid" in

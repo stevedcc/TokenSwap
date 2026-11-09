@@ -23,6 +23,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Brief T18: the version each smoke test expects the shipped binary's `tswap --version` to report (package.sh
+      # --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself): the tag without its v on a tag run (a
+      # prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version compares), else TswapCli.csproj's
+      # <Version> (a dispatch, a PR or a push to main).
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "expected version: $version"
+
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -88,7 +108,7 @@ jobs:
       # package.sh --smoke below). 2147483647 is outside the range YubiKey serials use, so it can never select, let alone
       # program, a key that happens to be plugged in, and the line never passes --replace: the only expected outcome is
       # the refusal, which also shows the YubiKey SDK starts in the shipped binary.
-      - name: YubiKey smoke (Windows)
+      - name: Version and YubiKey smoke (Windows)
         if: runner.os == 'Windows'
         timeout-minutes: 5
         shell: pwsh
@@ -96,6 +116,15 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $exe = @(Get-ChildItem -Path TswapCli/bin/Release -Recurse -Filter tswap.exe | Where-Object { $_.Directory.Name -eq 'publish' })
           if ($exe.Count -ne 1) { Write-Output "::error::expected exactly one published tswap.exe, found $($exe.Count)"; exit 1 }
+          # Brief T18: the whole stdout of --version, its line ending trimmed, is `tswap <expected version>`.
+          $out = & $exe[0].FullName --version
+          $code = $LASTEXITCODE
+          $line = ($out | Out-String).TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $line -ne "tswap $env:TSWAP_EXPECT_VERSION") {
+            Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
+            exit 1
+          }
+          Write-Output "tswap --version: $line"
           $out = (& $exe[0].FullName yubikey setup --touch --serial 2147483647 2>&1 | ForEach-Object { "$_" }) -join "`n"
           $code = $LASTEXITCODE
           Write-Output $out

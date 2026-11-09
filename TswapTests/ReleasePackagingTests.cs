@@ -52,7 +52,20 @@ public class ReleasePackagingTests : IDisposable
         ["TSWAP_EXPECT_TEAM_ID"] = null,
         ["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = null,
         ["TSWAP_NOTARY_CHECK_INTERVAL"] = "0",
+        ["TSWAP_EXPECT_VERSION"] = FakeVersion,
     };
+
+    /// <summary>
+    /// Brief T18: the version every smoke expects (<c>TSWAP_EXPECT_VERSION</c>, set in <see cref="Env"/>) and the fake
+    /// <c>tswap --version</c> prints by default; <see cref="VersionOutput"/> replaces its whole stdout.
+    /// </summary>
+    private const string FakeVersion = "9.8.7-rc.1";
+    private string? VersionOutput { get; set; }
+    private List<string> VersionRuns()
+    {
+        var log = Path.Combine(_dir, "version.log");
+        return File.Exists(log) ? [.. File.ReadAllLines(log)] : [];
+    }
 
     public ReleasePackagingTests()
     {
@@ -109,6 +122,8 @@ public class ReleasePackagingTests : IDisposable
             File.WriteAllText(Path.Combine(_dir, "yubikey.exit"), YubiKeyExit.Value.ToString());
         if (StrategyOutput is not null)
             File.WriteAllText(Path.Combine(_dir, "strategy.out"), StrategyOutput);
+        if (VersionOutput is not null)
+            File.WriteAllText(Path.Combine(_dir, "version.out"), VersionOutput);
         psi.Environment["FAKE_DIR"] = _dir;
         psi.Environment["PATH"] = _tools + Path.PathSeparator + _mac.Tools + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
         psi.Environment["RUNNER_TEMP"] = _mac.RunnerTemp;
@@ -136,12 +151,19 @@ public class ReleasePackagingTests : IDisposable
     /// <summary>
     /// A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with
     /// <paramref name="exitCode"/>; <c>yubikey setup</c> answers like the real binary instead (see <see cref="YubiKeyOutput"/>).
+    /// <c>--version</c> (brief T18) answers first, logged only to <c>version.log</c> (<see cref="VersionRuns"/>), so the
+    /// other tests' run lists are as they were.
     /// </summary>
     private string PublishFakeBinary(int exitCode, params string[] extraFiles)
     {
         var publish = Publish(["tswap", .. extraFiles]);
         File.WriteAllText(Path.Combine(publish, "tswap"), $$"""
             #!/bin/sh
+            if [ "$*" = --version ]; then
+              echo "ran from $(dirname "$0") with: $*" >> "$FAKE_DIR/version.log"
+              if [ -f "$FAKE_DIR/version.out" ]; then cat "$FAKE_DIR/version.out"; else echo "tswap {{FakeVersion}}"; fi
+              exit 0
+            fi
             echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})"
             echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})" >> "$FAKE_DIR/runs.log"
             case " $* " in
@@ -294,6 +316,99 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("ran from ", output);
+    }
+
+    // ---- Brief T18: every smoke checks `tswap --version` against TSWAP_EXPECT_VERSION. ----
+
+    [Fact]
+    public void Smoke_ChecksTheUnpackedBinarysVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var publish = PublishFakeBinary(exitCode: 0);
+        var (exitCode, output) = Package("linux-x64", publish, "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        var run = Assert.Single(VersionRuns());
+        Assert.EndsWith(" with: --version", run);
+        Assert.DoesNotContain(publish, run);
+        Assert.Contains($"tswap --version: tswap {FakeVersion}", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ChecksTheVersionToo()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.EndsWith(" with: --version", Assert.Single(VersionRuns()));
+    }
+
+    [Theory]
+    [InlineData("tswap 9.8.6\n")]
+    [InlineData("tswap 9.8.7\n")]
+    [InlineData("tswap 9.8.7-rc.1+cae3bf0\n")]
+    [InlineData("tswap 9.8.7-rc.1\nmore\n")]
+    [InlineData("")]
+    public void Smoke_VersionOtherThanExpected_FailsThePackaging(string printed)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        VersionOutput = printed;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"package.sh: 'tswap --version' printed", output);
+        Assert.Contains($"expected 'tswap {FakeVersion}'", output);
+        Assert.DoesNotContain("ran from ", output); // it fails before any other smoke run
+    }
+
+    /// <summary>A Windows line ending (a git-bash capture keeps the <c>\r</c>) is trimmed, not a mismatch.</summary>
+    [Fact]
+    public void Smoke_VersionWithACarriageReturn_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        VersionOutput = $"tswap {FakeVersion}\r\n";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.True(exitCode == 0, output);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Smoke_WithoutAnExpectedVersion_FailsBeforePacking(string? expected)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Env["TSWAP_EXPECT_VERSION"] = expected;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--smoke needs TSWAP_EXPECT_VERSION", output);
+        Assert.False(File.Exists(Path.Combine(_dir, "dist", "tswap-linux-x64.tar.gz")));
+    }
+
+    /// <summary>Packing without --smoke needs no expected version.</summary>
+    [Fact]
+    public void PackingWithoutSmoke_NeedsNoExpectedVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Env["TSWAP_EXPECT_VERSION"] = null;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0));
+
+        Assert.True(exitCode == 0, output);
+        Assert.Empty(VersionRuns());
     }
 
     // ---- The Linux smoke (YubiKey SDK stage 1, task 1): libpcsclite is used when present, never required. ----
@@ -985,6 +1100,104 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(".pkg", fork);
         Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
         Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
+    }
+
+    /// <summary>
+    /// Brief T18 line 9: the lines of the step that sets <c>TSWAP_EXPECT_VERSION</c> for a build job's smoke tests, the
+    /// same in every such job: the tag without its v on a tag run (a prerelease tag keeps its suffix, as verify-version
+    /// compares), else TswapCli.csproj's <c>&lt;Version&gt;</c>.
+    /// </summary>
+    private static readonly string[] ExpectedVersionStep =
+    [
+        "      - name: Expected version (for the smoke tests' tswap --version)",
+        "        shell: bash",
+        "          if [ \"$GITHUB_REF_TYPE\" = tag ]; then",
+        "            version=${GITHUB_REF_NAME#v}",
+        "            version=$(sed -n 's:.*<Version>\\([^<]*\\)</Version>.*:\\1:p' TswapCli/TswapCli.csproj | head -n 1)",
+        "          echo \"TSWAP_EXPECT_VERSION=$version\" >> \"$GITHUB_ENV\"",
+    ];
+
+    /// <summary>The Windows legs' check, in pwsh: the line ending trimmed, the whole stdout compared, the exit code checked.</summary>
+    private static readonly string[] WindowsVersionCheck =
+    [
+        "--version",
+        "$code = $LASTEXITCODE",
+        "($out | Out-String).TrimEnd(\"`r\", \"`n\")",
+        "if ($code -ne 0 -or $line -ne \"tswap $env:TSWAP_EXPECT_VERSION\")",
+    ];
+
+    /// <summary>
+    /// Every build job's smoke checks the shipped binary's version: the expected-version step comes before the job's
+    /// first smoke, every bash smoke goes through package.sh (which checks <c>--version</c>, the tests above), and each
+    /// Windows leg's pwsh smoke runs the check itself.
+    /// </summary>
+    internal static IEnumerable<string> VersionCheckProblems(string workflowName, string workflow, string jobName, bool hasWindowsLeg)
+    {
+        var job = Job(workflow, jobName);
+        var where = $"{workflowName} {jobName}";
+        var stepAt = job.IndexOf(ExpectedVersionStep[0], StringComparison.Ordinal);
+        if (stepAt < 0)
+        {
+            yield return $"{where}: no '{ExpectedVersionStep[0].Trim()}' step";
+            yield break;
+        }
+        var step = job[stepAt..job.IndexOf("      - ", stepAt + 1, StringComparison.Ordinal)];
+        foreach (var line in ExpectedVersionStep.Where(l => !step.Contains(l + "\n", StringComparison.Ordinal)))
+            yield return $"{where}: the expected-version step lacks '{line.Trim()}'";
+        var firstSmoke = job.IndexOf("bash contrib/packaging/package.sh ", StringComparison.Ordinal);
+        if (firstSmoke < 0)
+            yield return $"{where}: no package.sh smoke";
+        else if (firstSmoke < stepAt)
+            yield return $"{where}: package.sh runs before the expected-version step";
+        if (!hasWindowsLeg)
+            yield break;
+        var windows = job.Split("      - name: ").Where(s => s.Contains("        shell: pwsh\n", StringComparison.Ordinal)
+                                                          && s.Contains("tswap.exe", StringComparison.Ordinal)).ToList();
+        if (windows.Count == 0)
+            yield return $"{where}: no pwsh step runs tswap.exe";
+        foreach (var smoke in windows)
+        {
+            foreach (var part in WindowsVersionCheck.Where(p => !smoke.Contains(p, StringComparison.Ordinal)))
+                yield return $"{where}: the Windows step '{smoke[..smoke.IndexOf('\n')]}' lacks '{part}'";
+            if (job.IndexOf(smoke, StringComparison.Ordinal) < stepAt)
+                yield return $"{where}: the Windows step '{smoke[..smoke.IndexOf('\n')]}' runs before the expected-version step";
+        }
+    }
+
+    private static readonly (string Workflow, string Job, bool HasWindowsLeg)[] BuildJobs =
+    [
+        ("release.yml", "build", true),
+        ("release.yml", "build-macos", false),
+        ("ci.yml", "build-test-publish", true),
+    ];
+
+    [Fact]
+    public void Workflows_EveryBuildLegChecksTheShippedVersion()
+    {
+        var problems = BuildJobs.SelectMany(b => VersionCheckProblems(b.Workflow, Workflow(b.Workflow), b.Job, b.HasWindowsLeg)).ToList();
+
+        Assert.True(problems.Count == 0, string.Join('\n', problems));
+        // The pkg is built with the same version the smokes expect (the step's logic, not a second copy of it).
+        var pkg = Job(Workflow("release.yml"), "build-macos");
+        Assert.Contains("package-pkg.sh build ./publish/osx-arm64 \"$TSWAP_EXPECT_VERSION\" dist", pkg);
+        Assert.DoesNotContain("version=${GITHUB_REF_NAME#v}", pkg.Replace(string.Join('\n', ExpectedVersionStep[2..4]), ""));
+    }
+
+    /// <summary>Break-it-once for <see cref="VersionCheckProblems"/>, kept: each way of losing the check is caught.</summary>
+    [Fact]
+    public void Workflows_VersionCheck_CatchesARemovedCheck()
+    {
+        var release = Workflow("release.yml");
+        var ci = Workflow("ci.yml");
+
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[0], "      - name: Something else"), "build", true),
+            p => p.Contains("no '- name: Expected version", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[5] + "\n", ""), "build-macos", false),
+            p => p.Contains("lacks 'echo \"TSWAP_EXPECT_VERSION", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(WindowsVersionCheck[3], "if ($code -ne 0)"), "build", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(WindowsVersionCheck[2], "$out"), "build-test-publish", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
     }
 
     /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>

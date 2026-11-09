@@ -97,6 +97,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Brief T18: the version each smoke test expects the shipped binary's `tswap --version` to report (package.sh
+      # --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself): the tag without its v on a tag run (a
+      # prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version compares), else TswapCli.csproj's
+      # <Version> (a dispatch, a PR or a push to main).
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "expected version: $version"
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
@@ -138,6 +158,15 @@ jobs:
           Compress-Archive -Path ./publish/${{ matrix.rid }}/tswap.exe -DestinationPath dist/tswap-${{ matrix.rid }}.zip
           $check = Join-Path $env:RUNNER_TEMP 'tswap-check'
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
+          # Brief T18: the whole stdout of --version, its line ending trimmed, is `tswap <expected version>`.
+          $out = & (Join-Path $check 'tswap.exe') --version
+          $code = $LASTEXITCODE
+          $line = ($out | Out-String).TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $line -ne "tswap $env:TSWAP_EXPECT_VERSION") {
+            Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
+            exit 1
+          }
+          Write-Output "tswap --version: $line"
           & (Join-Path $check 'tswap.exe') prompt-hash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # The YubiKey smoke package.sh runs on Linux and macOS (YubiKey SDK stage 1, task 4): a serial no YubiKey has,
@@ -181,6 +210,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Brief T18: the version each smoke test expects the shipped binary's `tswap --version` to report (package.sh
+      # --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself): the tag without its v on a tag run (a
+      # prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version compares), else TswapCli.csproj's
+      # <Version> (a dispatch, a PR or a push to main).
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
+          echo "expected version: $version"
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -299,13 +348,8 @@ jobs:
           MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
         run: |
           set -euo pipefail
-          # The tag without its v; a dispatch has no tag, so the csproj's version.
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            version=${GITHUB_REF_NAME#v}
-          else
-            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
-          fi
-          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$version" dist
+          # The version from the "Expected version" step: the tag without its v; a dispatch has no tag, so the csproj's.
+          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$TSWAP_EXPECT_VERSION" dist
           bash contrib/packaging/package-pkg.sh notarise dist/tswap-osx-arm64.pkg
           bash contrib/packaging/package-pkg.sh check dist/tswap-osx-arm64.pkg dist/tswap-osx-arm64.tar.gz
           bash contrib/packaging/package-pkg.sh install-test dist/tswap-osx-arm64.pkg
