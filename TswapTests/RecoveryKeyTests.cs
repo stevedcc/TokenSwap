@@ -438,4 +438,26 @@ public class RecoveryKeyTests : IDisposable
         Assert.Contains("sudo tswap recover --yubikey", stdout);
         Assert.Contains("--recovery-key-stdin", stdout);
     }
+
+    /// <summary>
+    /// A recovery slot whose stored ephemeral public key is a low-order X25519 point (a tampered keyring) fails as the
+    /// same "did not open" TswapException as a wrong key (code review of #216, F7).
+    /// </summary>
+    [Fact]
+    public void RecoveryKeyUnlock_ALowOrderEphemeralKeyInTheKeyring_FailsLikeAWrongKey()
+    {
+        var (config, _, recoveryPrivateKey) = TswapCli.Commands.InitCommand.BuildKeyringConfig(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), [11111111], new string('0', 40), requiresTouch: null,
+            RngMode.System, Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)),
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), includeRecovery: true);
+        var keyring = KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));
+        var tampered = keyring with
+        {
+            Slots = [.. keyring.Slots.Select(s => s.Kind == SlotKind.Recovery ? s with { PublicKey = new byte[32] } : s)],
+        };
+
+        var ex = Assert.Throws<TswapException>(() => RecoveryKeyUnlock.Unlock(tampered, recoveryPrivateKey!));
+
+        Assert.Equal(RecoveryKeyUnlock.FailureMessage, ex.Message);
+    }
 }
