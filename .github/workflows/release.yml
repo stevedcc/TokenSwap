@@ -14,6 +14,10 @@ on:
         type: boolean
         default: true
 
+# Every job reads only, unless it says otherwise: Create Release writes the release, bump-version opens its PR.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -438,3 +442,72 @@ jobs:
             artifacts/tswap-linux-arm64.tar.gz
             artifacts/tswap-osx-arm64.tar.gz
             artifacts/tswap-win-x64.zip
+
+  # Brief T18 addendum (owner, 2026-11-09): after a release, main's <Version> moves to the next patch, so a development
+  # build reads as "pre the next release" (v0.3.0 tagged: main to 0.3.1, whose builds report 0.3.1-pre-<commit>). This
+  # job opens that PR from main's head; the owner merges it, and nothing here pushes to main. A prerelease tag bumps
+  # nothing (contrib/packaging/next-version.sh). Idempotent: on a re-run the branch and the PR are found and left as
+  # they are. Needs the repository setting "Allow GitHub Actions to create and approve pull requests" (Settings >
+  # Actions > General), or the PR is refused. A PR opened with the job's token starts no workflow, so the job
+  # dispatches ci.yml on the branch; those runs are on the PR's commit and show as its checks.
+  bump-version:
+    name: Open the version bump PR
+    needs: [release]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Bump <Version> on a branch and open the PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=${GITHUB_REF_NAME#v}
+          next=$(bash contrib/packaging/next-version.sh "$tag")
+          if [ -z "$next" ]; then
+            echo "::notice::v$tag is a prerelease: main's <Version> stays until the final release"
+            exit 0
+          fi
+          csproj=TswapCli/TswapCli.csproj
+          current=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' "$csproj" | head -n 1)
+          if [ "$current" = "$next" ]; then
+            echo "::notice::main's <Version> is already $next: nothing to bump"
+            exit 0
+          fi
+          if [ "$current" != "$tag" ]; then
+            echo "::notice::main's <Version> is $current, not v$tag's $tag: it has moved on, so nothing to bump"
+            exit 0
+          fi
+          branch=release/bump-$next
+          title="Version $next for development (after v$tag)"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "the branch $branch is already there"
+          else
+            sed -i "s:<Version>${tag//./\\.}</Version>:<Version>$next</Version>:" "$csproj"
+            if [ "$(grep -c "<Version>$next</Version>" "$csproj")" -ne 1 ]; then
+              echo "::error::could not set <Version>$next</Version> in $csproj" >&2
+              exit 1
+            fi
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch -c "$branch"
+            git commit -m "$title" -- "$csproj"
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          if [ -n "$(gh pr list --head "$branch" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "a PR from $branch is already open: nothing more to do"
+            exit 0
+          fi
+          gh pr create --base main --head "$branch" --title "Version $next for development (after v$tag)" \
+            --body "Opened by release.yml after v$tag: main's <Version> moves to $next, so development builds report $next-pre-<commit>. ci.yml was dispatched on this branch (a PR opened by a workflow starts none itself)."
+          gh workflow run ci.yml --ref "$branch"

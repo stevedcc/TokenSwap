@@ -1317,6 +1317,286 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains(VersionCheckProblems("x.yml", bare, "build", true), p => p.Contains("no pwsh step", StringComparison.Ordinal));
     }
 
+    // ---- T18 addendum (owner, 2026-11-09): after a release, a PR bumps main's <Version> to the next patch. ----
+
+    private (int ExitCode, string Stdout, string Stderr) NextVersion(params string[] args)
+    {
+        var psi = new ProcessStartInfo("bash", [RepoFile("contrib", "packaging", "next-version.sh"), .. args])
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        using var bash = Process.Start(psi)!;
+        var stdout = bash.StandardOutput.ReadToEndAsync();
+        var stderr = bash.StandardError.ReadToEndAsync();
+        bash.WaitForExit();
+        return (bash.ExitCode, stdout.Result, stderr.Result);
+    }
+
+    [Theory]
+    [InlineData("0.3.0", "0.3.1")]
+    [InlineData("0.9.9", "0.9.10")]
+    [InlineData("1.2.10", "1.2.11")]
+    [InlineData("10.0.0", "10.0.1")]
+    public void NextVersion_IsTheNextPatch(string released, string next)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.True(exitCode == 0, stderr);
+        Assert.Equal(next + "\n", stdout);
+    }
+
+    /// <summary>A prerelease tag bumps nothing: its final release is still to come. Exit 0, nothing on stdout, a notice.</summary>
+    [Theory]
+    [InlineData("0.3.0-rc.1")]
+    [InlineData("1.0.0-beta")]
+    public void NextVersion_OfAPrerelease_IsNothing(string released)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("", stdout);
+        Assert.Contains($"{released} is a prerelease", stderr);
+    }
+
+    [Theory]
+    [InlineData("0.3")]
+    [InlineData("v0.3.0")]
+    [InlineData("0.3.0.1")]
+    [InlineData("01.2.3")]
+    [InlineData("0.3.0+cae3bf0")]
+    [InlineData("0.3.0-")]
+    [InlineData("0.3.0-rc.1\n0.3.1")]
+    [InlineData("")]
+    public void NextVersion_OfAMalformedVersion_Fails(string released)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.Equal(2, exitCode);
+        Assert.Equal("", stdout);
+        Assert.Contains("not a version", stderr);
+    }
+
+    [Fact]
+    public void NextVersion_WithoutExactlyOneArgument_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal(2, NextVersion().ExitCode);
+        Assert.Equal(2, NextVersion("0.3.0", "0.3.1").ExitCode);
+    }
+
+    private const string BumpJobIf = "    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.release.result == 'success'\n";
+    private const string BumpJobPermissions = "    permissions:\n      contents: write\n      pull-requests: write\n      actions: write\n";
+
+    /// <summary>
+    /// The bump job's shape: release.yml's last job, after Create Release succeeded on a tag push only; write permissions
+    /// for this job alone (the workflow's top level is <c>contents: read</c>, no other job asks for pull requests or
+    /// actions); no environment and no secret but the job's own token; the bump computed by next-version.sh, branched
+    /// from main's head, idempotent, a PR to main with the agreed title, and ci.yml dispatched on the branch (a PR opened
+    /// with GITHUB_TOKEN triggers no workflow), which ci.yml allows.
+    /// </summary>
+    internal static IEnumerable<string> BumpJobProblems(string release, string ci)
+    {
+        var lines = release.Split('\n');
+        var jobsAt = Array.IndexOf(lines, "jobs:");
+        var top = string.Join('\n', lines[..Math.Max(jobsAt, 0)]) + "\n";
+        if (!top.Contains("\npermissions:\n  contents: read\n", StringComparison.Ordinal))
+            yield return "release.yml: the top level isn't 'permissions: contents: read'";
+        if (System.Text.RegularExpressions.Regex.IsMatch(top, @"\n  [a-z-]+: write"))
+            yield return "release.yml: the top level grants a write permission";
+        var jobNames = lines[(jobsAt + 1)..].Where(l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^  [A-Za-z0-9_-]+:\s*$")).ToList();
+        if (!jobNames.Contains("  bump-version:"))
+        {
+            yield return "release.yml: no bump-version job";
+            yield break;
+        }
+        if (jobNames[^1] != "  bump-version:")
+            yield return "release.yml: bump-version isn't the last job";
+        var job = Job(release, "bump-version");
+        foreach (var other in jobNames.Where(n => n != "  bump-version:"))
+        {
+            var otherJob = Job(release, other.Trim().TrimEnd(':'));
+            if (otherJob.Contains("pull-requests: write", StringComparison.Ordinal) || otherJob.Contains("actions: write", StringComparison.Ordinal))
+                yield return $"release.yml: {other.Trim()} asks for pull-requests or actions write";
+        }
+        string[] required =
+        [
+            "    needs: [release]\n",
+            BumpJobIf,
+            BumpJobPermissions,
+            "bash contrib/packaging/next-version.sh \"$tag\"",
+            "          ref: main\n",
+            "git ls-remote --exit-code --heads origin \"$branch\"",
+            "gh pr list --head \"$branch\" --base main --state open",
+            "--title \"Version $next for development (after v$tag)\"",
+            "gh workflow run ci.yml --ref \"$branch\"",
+            "          GH_TOKEN: ${{ github.token }}\n",
+        ];
+        foreach (var text in required.Where(r => !job.Contains(r, StringComparison.Ordinal)))
+            yield return $"bump-version lacks '{text.Trim()}'";
+        if (job.Contains("environment:", StringComparison.Ordinal))
+            yield return "bump-version names an environment";
+        if (job.Contains("secrets.", StringComparison.Ordinal))
+            yield return "bump-version uses a secret";
+        if (System.Text.RegularExpressions.Regex.IsMatch(job, @"git push[^\n]*\b(main|HEAD:main|refs/heads/main)\b"))
+            yield return "bump-version pushes to main";
+        var ciOn = ci[..ci.IndexOf("\njobs:", StringComparison.Ordinal)];
+        if (!ciOn.Contains("\n  workflow_dispatch:", StringComparison.Ordinal))
+            yield return "ci.yml can't be dispatched (no workflow_dispatch trigger)";
+    }
+
+    [Fact]
+    public void Workflows_BumpVersion_TagOnlyWithItsOwnPermissions()
+    {
+        var problems = BumpJobProblems(Workflow("release.yml"), Workflow("ci.yml")).ToList();
+
+        Assert.True(problems.Count == 0, string.Join('\n', problems));
+    }
+
+    /// <summary>
+    /// The bump job's own script, run as release.yml has it against a local origin (a bare repository) with a fake
+    /// <c>gh</c> that records its calls and answers <c>pr list</c> with the PRs it "created": the first run pushes
+    /// <c>release/bump-0.2.1</c> from main with only <c>&lt;Version&gt;</c> changed, opens the PR with the agreed title and
+    /// dispatches ci.yml on the branch, and main is untouched; a second run finds the branch and the open PR and does
+    /// nothing more; a prerelease tag and a main that has moved on bump nothing.
+    /// </summary>
+    [Fact]
+    public void Workflows_BumpVersion_Script_OpensOnePr_AndIsIdempotent()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // a bash script on an ubuntu runner
+
+        var root = Path.Combine(_dir, "bump");
+        var origin = Path.Combine(root, "origin.git");
+        Directory.CreateDirectory(root);
+        Git(root, "init", "-q", "--bare", "-b", "main", origin);
+        var seed = Clone(origin, "seed");
+        Directory.CreateDirectory(Path.Combine(seed, "TswapCli"));
+        Directory.CreateDirectory(Path.Combine(seed, "contrib", "packaging"));
+        File.WriteAllText(Path.Combine(seed, "TswapCli", "TswapCli.csproj"), "<Project>\n  <PropertyGroup>\n    <Version>0.2.0</Version>\n  </PropertyGroup>\n</Project>\n");
+        File.Copy(RepoFile("contrib", "packaging", "next-version.sh"), Path.Combine(seed, "contrib", "packaging", "next-version.sh"));
+        Git(seed, "add", ".");
+        Git(seed, "commit", "-q", "-m", "seed");
+        Git(seed, "push", "-q", "origin", "HEAD:refs/heads/main");
+        var mainBefore = Git(seed, "rev-parse", "HEAD").Trim();
+
+        var fakeBin = Path.Combine(root, "bin");
+        Directory.CreateDirectory(fakeBin);
+        var ghLog = Path.Combine(root, "gh.log");
+        var prs = Path.Combine(root, "prs");
+        File.WriteAllText(prs, "");
+        File.WriteAllText(Path.Combine(fakeBin, "gh"), $$"""
+            #!/bin/sh
+            printf '%s\n' "$*" >> '{{ghLog}}'
+            case "$1 $2" in
+              "pr list") cat '{{prs}}' ;;
+              "pr create") echo 7 >> '{{prs}}' ;;
+            esac
+            """);
+        File.SetUnixFileMode(Path.Combine(fakeBin, "gh"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var script = StepScript(Job(Workflow("release.yml"), "bump-version"), "      - name: Bump <Version> on a branch and open the PR");
+
+        (int Exit, string Output) RunJob(string tag)
+        {
+            var checkout = Clone(origin, "runner-" + Guid.NewGuid().ToString("N")[..6]);
+            var psi = new ProcessStartInfo("bash", ["-c", script]) { WorkingDirectory = checkout, RedirectStandardOutput = true, RedirectStandardError = true };
+            psi.Environment["GITHUB_REF_NAME"] = tag;
+            psi.Environment["GH_TOKEN"] = "not-a-token";
+            psi.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null"; // no commit signing or other user settings, as on a runner
+            psi.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            psi.Environment["PATH"] = fakeBin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            using var bash = Process.Start(psi)!;
+            var stdout = bash.StandardOutput.ReadToEndAsync();
+            var stderr = bash.StandardError.ReadToEndAsync();
+            bash.WaitForExit();
+            return (bash.ExitCode, stdout.Result + stderr.Result);
+        }
+
+        var first = RunJob("v0.2.0");
+        Assert.True(first.Exit == 0, first.Output);
+        var branchHead = Git(origin, "rev-parse", "refs/heads/release/bump-0.2.1").Trim();
+        Assert.Equal(mainBefore, Git(origin, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(mainBefore, Git(origin, "rev-parse", branchHead + "^").Trim());
+        Assert.Equal("TswapCli/TswapCli.csproj\n", Git(origin, "diff", "--name-only", mainBefore, branchHead));
+        Assert.Contains("<Version>0.2.1</Version>", Git(origin, "show", branchHead + ":TswapCli/TswapCli.csproj"));
+        var calls = File.ReadAllLines(ghLog);
+        Assert.Single(calls, c => c.StartsWith("pr create --base main --head release/bump-0.2.1 --title Version 0.2.1 for development (after v0.2.0) ", StringComparison.Ordinal));
+        Assert.Single(calls, c => c == "workflow run ci.yml --ref release/bump-0.2.1");
+
+        var second = RunJob("v0.2.0");
+        Assert.True(second.Exit == 0, second.Output);
+        Assert.Contains("already open: nothing more to do", second.Output);
+        Assert.Equal(branchHead, Git(origin, "rev-parse", "refs/heads/release/bump-0.2.1").Trim());
+        Assert.Equal(calls.Length + 1, File.ReadAllLines(ghLog).Length); // only the pr list
+        Assert.DoesNotContain(File.ReadAllLines(ghLog).Skip(calls.Length), c => c.StartsWith("pr create", StringComparison.Ordinal) || c.StartsWith("workflow run", StringComparison.Ordinal));
+
+        var prerelease = RunJob("v0.2.0-rc.1");
+        Assert.True(prerelease.Exit == 0, prerelease.Output);
+        Assert.Contains("::notice::v0.2.0-rc.1 is a prerelease", prerelease.Output);
+        var movedOn = RunJob("v0.1.9");
+        Assert.True(movedOn.Exit == 0, movedOn.Output);
+        Assert.Contains("it has moved on, so nothing to bump", movedOn.Output);
+        Assert.Equal(calls.Length + 1, File.ReadAllLines(ghLog).Length);
+        Assert.Equal(["refs/heads/main", "refs/heads/release/bump-0.2.1"],
+            Git(origin, "for-each-ref", "--format=%(refname)", "refs/heads").Split('\n', StringSplitOptions.RemoveEmptyEntries));
+
+        string Clone(string from, string name)
+        {
+            var to = Path.Combine(root, name);
+            Git(root, "clone", "-q", from, to);
+            return to;
+        }
+    }
+
+    /// <summary>Runs git in <paramref name="dir"/> with a fixed identity and no user or system config; returns stdout.</summary>
+    private static string Git(string dir, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git", ["-C", dir, .. args]) { RedirectStandardOutput = true, RedirectStandardError = true };
+        psi.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
+        psi.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        psi.Environment["GIT_AUTHOR_NAME"] = psi.Environment["GIT_COMMITTER_NAME"] = "test";
+        psi.Environment["GIT_AUTHOR_EMAIL"] = psi.Environment["GIT_COMMITTER_EMAIL"] = "test@example.invalid";
+        using var git = Process.Start(psi)!;
+        var stdout = git.StandardOutput.ReadToEndAsync();
+        var stderr = git.StandardError.ReadToEndAsync();
+        git.WaitForExit();
+        Assert.True(git.ExitCode == 0, $"git {string.Join(' ', args)}: {stderr.Result}");
+        return stdout.Result;
+    }
+
+    /// <summary>Break-it-once for <see cref="BumpJobProblems"/>, kept.</summary>
+    [Fact]
+    public void Workflows_BumpVersion_CatchesALooserJob()
+    {
+        var release = Workflow("release.yml");
+        var ci = Workflow("ci.yml");
+
+        // The tag-only condition dropped: a dispatch (dry run) would open a bump PR.
+        Assert.Contains(BumpJobProblems(release.Replace(BumpJobIf, "    if: needs.release.result == 'success'\n"), ci),
+            p => p.Contains("lacks 'if: github.event_name == 'push' && github.ref_type == 'tag'", StringComparison.Ordinal));
+        // The permissions widened to the whole workflow.
+        Assert.Contains(BumpJobProblems(release.Replace("\npermissions:\n  contents: read\n", "\npermissions:\n  contents: write\n  pull-requests: write\n"), ci),
+            p => p.Contains("top level", StringComparison.Ordinal));
+        // Another job given the bump's permissions.
+        Assert.Contains(BumpJobProblems(release.Replace("    permissions:\n      contents: write\n\n    steps:", "    permissions:\n      contents: write\n      pull-requests: write\n\n    steps:"), ci),
+            p => p.Contains("release: asks for", StringComparison.Ordinal));
+        // A push to main, and ci.yml without a dispatch trigger.
+        Assert.Contains(BumpJobProblems(release.Replace("git push origin \"HEAD:refs/heads/$branch\"", "git push origin HEAD:main"), ci),
+            p => p.Contains("pushes to main", StringComparison.Ordinal));
+        Assert.Contains(BumpJobProblems(release, ci.Replace("\n  workflow_dispatch:", "")),
+            p => p.Contains("can't be dispatched", StringComparison.Ordinal));
+    }
+
     /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>
     [Fact]
     public void Workflows_UnsignedCheck_CatchesASecretInCi()

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml's bump-version job dispatches CI on its PR's branch: a PR opened with a workflow's token starts no run.
+  workflow_dispatch:
 
 env:
   DOTNET_NOLOGO: true
