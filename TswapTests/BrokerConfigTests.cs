@@ -459,6 +459,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void PolicyLookups_ByRouteSocketAndSshKeyName_AreCaseSensitive()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var policy = BrokerPolicy.Parse(TwoKeysJson);
 
         Assert.True(policy.Routes.ContainsKey("github"));
@@ -473,6 +475,8 @@ public class BrokerConfigTests : IDisposable
     [Fact]
     public void SshKeysOnSecretsDifferingOnlyInCase_DoNotShareASecret()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         var policy = BrokerPolicy.Parse(TwoKeysJson);
 
         TswapCore.Broker.SshAgent.SshAgentKeyLoader.Validate(policy);

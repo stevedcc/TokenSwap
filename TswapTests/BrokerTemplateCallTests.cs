@@ -250,6 +250,8 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
     [Fact]
     public void TheCallCommand_TakesArgumentNamesDifferingOnlyInCase_AsTwoArguments()
     {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
         using var m = new FleetMachine("tplcase");
         var missing = Path.Combine(m.Dir, "missing.sock");
 
