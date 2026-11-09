@@ -53,6 +53,28 @@ Without a usable bwrap those tests skip with a message, unless `CI_REQUIRE_BWRAP
 Linux CI job, which installs bubblewrap and allows unprivileged user namespaces): then they fail. Never
 point it at real secrets: every value in it is an inert marker.
 
+## Versions and releases
+
+- **A release** is a `vX.Y.Z` tag (or `vX.Y.Z-rc.N`) on main whose commit has the same `<Version>` in
+  `TswapCli/TswapCli.csproj` (release.yml's `verify-version` refuses a mismatch). release.yml builds it with
+  `-p:TswapReleaseBuild=true`, on a tag push only, so its binaries report `tswap X.Y.Z` (`tswap --version`).
+- **Every other build** (local, CI on main and PRs, release.yml dispatches and dry runs) reports
+  `tswap <Version>-pre-<first 7 of the commit>` (`<Version>-pre` without git): the flag is compile-time
+  (`TSWAP_RELEASE_BUILD`, `VersionCommand.IsReleaseBuild`), and nothing at run time changes it. Each build leg's
+  smoke checks the shipped binary's `--version` against this rule (`TSWAP_EXPECT_VERSION`).
+- **After each tag, main's `<Version>` moves to the next patch** (v0.3.0 tagged: main to 0.3.1), so a development
+  build reads as "pre the next release" (`0.3.1-pre-<commit>`). release.yml's last job, `bump-version`, opens that PR
+  (`release/bump-<next>`, "Version <next> for development (after v<tag>)") from main's head and dispatches ci.yml on
+  it; the owner merges it. A prerelease tag (`v0.3.0-rc.1`) bumps nothing, since the final release is still to come
+  (`contrib/packaging/next-version.sh`). The version PR before a release changes `<Version>` only when the next
+  release is a bigger step than that patch (0.3.1 to 0.4.0), and after a prerelease tag it sets the final version
+  (`0.3.0-rc.1` to `0.3.0`) before that is tagged.
+- **Never set a `TswapReleaseBuild` environment variable**: MSBuild reads environment variables as properties, so a
+  local build would then report a plain release version. Only release.yml passes it, as `-p:`.
+- **One-time owner setting** for `bump-version`: Settings > Actions > General > "Allow GitHub Actions to create and
+  approve pull requests" must be on, or the job can push its branch but not open the PR (re-run the job after
+  switching it on: it finds the branch and opens the PR).
+
 ## Architecture
 
 ### Privilege Boundary (sudo separation)
@@ -60,7 +82,7 @@ point it at real secrets: every value in it is an inert marker.
 Commands are split by whether they require sudo (the user-facing table, subcommand by subcommand, is
 [docs/commands.md](docs/commands.md#which-commands-need-sudo)):
 
-- **No sudo**: `init` (needs a terminal for the guided setup; scripts name the slot: `init --yubikey`, `--fido2` (still needs a terminal for the key's PIN), `--tpm`, or `--secure-enclave --with-touch|--no-touch`; AI agents shouldn't run it: creating a vault is the user's work, and it prints the recovery key, #253; with stdout not a terminal it writes the key only to --recovery-key-out <file>), `agent start|serve|stop|status`, `create <name>`, `ingest <name>`, `names`, `slots`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `installscript`, `migrate` — AI agents may use these, except `init` (above) and `agent start|serve` (the user's: they read the vault password at a terminal)
+- **No sudo**: `init` (needs a terminal for the guided setup; scripts name the slot: `init --yubikey`, `--fido2` (still needs a terminal for the key's PIN), `--tpm`, or `--secure-enclave --with-touch|--no-touch`; AI agents shouldn't run it: creating a vault is the user's work, and it prints the recovery key, #253; with stdout not a terminal it writes the key only to --recovery-key-out <file>), `agent start|serve|stop|status`, `create <name>`, `ingest <name>`, `names`, `slots`, `run <cmd>`, `burn <name>`, `burned`, `check <path>`, `redact <file>`, `tocomment <file>`, `prompt`, `prompt-hash`, `completion <shell>`, `installscript`, `version` (or `--version`), `migrate` — AI agents may use these, except `init` (above) and `agent start|serve` (the user's: they read the vault password at a terminal)
 - **No sudo for a burned secret, sudo otherwise**: `rotate <name> [len]`, `ingest --rotate <name>` — replacing a burned (already compromised) secret is the agent's job; replacing one still in use could break the services using it, so that needs sudo. Listed with the no-sudo commands on the help screen.
 - **No sudo, joining a shared vault folder**: `init --vault-dir <folder>` writes this machine's own config only. `slot accept <file>` on a record-store machine, and `slot accept <file> --vault-dir <folder>`, also write the new slot into the **shared keyring** (a union with the file) without sudo: the human gate for that slot is the earlier `sudo tswap slot approve` on an enrolled machine, which produced the approve file.
 - **No sudo, the broker** ([docs/BROKER.md](docs/BROKER.md)): `broker serve` runs as the vault's own user (it refuses root), and `broker forward` and `broker call` run inside a container (they need no vault). `broker unlock|lock|status` (brief T17: a broker whose slot has the vault password starts locked) run as the vault user and refuse sudo. `broker route add|remove`, `broker socket add|bind|remove` and `broker template add|remove` require sudo. On the help screen `broker` is listed without `[sudo]` because its main subcommands never need it.
@@ -99,7 +121,9 @@ on Linux and macOS only; elsewhere it finds no user); anything else refuses with
 HOME; `sudo -i` keeps `SUDO_USER`, so it uses
 the invoking user's vault. `TSWAP_CONFIG_DIR` overrides all of it. The config folder is resolved
 lazily, at the first command that needs the vault (`ICliCommand.NeedsVault`, default true): help,
-`prompt`, `prompt-hash`, `completion` and `installscript` work without a home folder.
+`prompt`, `prompt-hash`, `completion`, `installscript` and `version` work without a home folder.
+`tswap --version` and `tswap version` alone are answered at the top of `CliHost.Run`, before startup reads
+the environment (brief T18): no config folder, vault, hardware, agent or sudo check.
 
 **Global flags**: `-v`/`--verbose` count only before the command name
 (`CliEnvironment.SplitGlobalFlags`); from the command name on, every argument is the command's
@@ -223,7 +247,7 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 3. **`IConsole` / `SystemConsole`** — console seam (output, masked password input) so commands are testable in-process
 4. **`CommandContext`** — services handed to every command (console, storage, YubiKey service, FIDO2 service (`Fido2`), the controlling terminal (`Terminal`), vault unlocker, sudo enforcement)
 5. **`CommandRegistry`** — name → command dispatch; the help screen is generated from command metadata
-6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion, slots, yubikey)
+6. **`Commands/`** — one class per command implementing `ICliCommand` (init, slot, recover, agent, create, ingest, rotate, restore, names, burn, burned, prompt, prompt-hash, run, check, redact, tocomment, apply, migrate, add, get, list, delete, export, import, vault, broker, installscript, completion, slots, yubikey, version)
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`SdkYubiKeyService` implements it over `IOtpKeys`: `YubicoOtpKeys` makes the SDK calls, and `YubicoSdk.EnsureInitialized` sets the SDK's crypto creators, the Linux `libudev.so.1` resolver and silent logging; on Linux the SDK's PC/SC calls go through tswap's own loader, `TswapCli/Native/pcsc-loader.c`, which forwards to `libpcsclite.so.1` when it is present and otherwise uses a stand-in that answers `SCARD_E_NO_SERVICE` (`PcscStrategy.Describe()`); `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
 
