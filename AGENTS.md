@@ -53,6 +53,25 @@ Without a usable bwrap those tests skip with a message, unless `CI_REQUIRE_BWRAP
 Linux CI job, which installs bubblewrap and allows unprivileged user namespaces): then they fail. Never
 point it at real secrets: every value in it is an inert marker.
 
+## Versions and releases
+
+- **A release** is a `vX.Y.Z` tag (or `vX.Y.Z-rc.N`) on main whose commit has the same `<Version>` in
+  `TswapCli/TswapCli.csproj` (release.yml's `verify-version` refuses a mismatch). release.yml builds it with
+  `-p:TswapReleaseBuild=true`, on a tag push only, so its binaries report `tswap X.Y.Z` (`tswap --version`).
+- **Every other build** (local, CI on main and PRs, release.yml dispatches and dry runs) reports
+  `tswap <Version>-pre-<first 7 of the commit>` (`<Version>-pre` without git): the flag is compile-time
+  (`TSWAP_RELEASE_BUILD`, `VersionCommand.IsReleaseBuild`), and nothing at run time changes it. Each build leg's
+  smoke checks the shipped binary's `--version` against this rule (`TSWAP_EXPECT_VERSION`).
+- **After each tag, main's `<Version>` moves to the next patch** (v0.3.0 tagged: main to 0.3.1), so a development
+  build reads as "pre the next release" (`0.3.1-pre-<commit>`). release.yml's last job, `bump-version`, opens that PR
+  (`release/bump-<next>`, "Version <next> for development (after v<tag>)") from main's head and dispatches ci.yml on
+  it; the owner merges it. A prerelease tag (`v0.3.0-rc.1`) bumps nothing, since the final release is still to come
+  (`contrib/packaging/next-version.sh`). The version PR before a release changes `<Version>` only when the next
+  release is a bigger step than that patch (0.3.1 to 0.4.0).
+- **One-time owner setting** for `bump-version`: Settings > Actions > General > "Allow GitHub Actions to create and
+  approve pull requests" must be on, or the job can push its branch but not open the PR (re-run the job after
+  switching it on: it finds the branch and opens the PR).
+
 ## Architecture
 
 ### Privilege Boundary (sudo separation)

@@ -81,3 +81,24 @@ daemons' own protocol.
   prompt-hash before/after.
 - Never run `sudo tswap`, never read secret values, never download toolchains. Don't push.
 - Stop and report if something in the contract can't be met as written.
+
+## Addendum (owner, 2026-11-09): development builds show the commit; the bump after a release
+
+Added during the fix round, after the code reviews.
+
+- **Line 1 changes for development builds.** Only a release build, compiled with `-p:TswapReleaseBuild=true`
+  (release.yml on a tag push, and only there), prints exactly `tswap <Version>`. Every other build (local, CI on main,
+  PRs, release.yml dispatches and dry runs) prints `tswap <Version>-pre-<short hash>`. The hash is the first 7 hex
+  characters of the commit the SDK embeds as `+<40-hex sha>` in AssemblyInformationalVersion; with no hash (no git),
+  it prints `tswap <Version>-pre`. A prerelease Version keeps its suffix: `0.3.0-rc.1-pre-<hash>`, or `0.3.0-rc.1` in
+  a release build. The flag is compile-time (NativeAOT-safe, 0 warnings), and no run-time environment variable may
+  change it.
+- **Line 9 changes to match.** A tag run expects the tag without its v (unchanged). Every other run expects
+  `<csproj Version>-pre-<first 7 of the commit actually built>`.
+- **After each tag, main's `<Version>` moves to the next patch** (v0.3.0 tagged: main to 0.3.1), so a dev build reads
+  as "pre the next release". The version PR changes it only when the next release is a bigger step.
+  - The change is automated: release.yml's last job, `bump-version`, runs on a tag run after Create Release
+    succeeded. It opens a PR from main's head to main, titled "Version <next> for development (after v<tag>)".
+  - It skips a prerelease tag with a notice, and is idempotent. Only this job gets `contents: write` and
+    `pull-requests: write`; the workflow's top level is `contents: read`. No bot pushes to main.
+  - The owner turns on "Allow GitHub Actions to create and approve pull requests" once.
