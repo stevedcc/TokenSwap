@@ -353,6 +353,9 @@ public class ReleasePackagingTests : IDisposable
     [InlineData("tswap 9.8.7\n")]
     [InlineData("tswap 9.8.7-rc.1+cae3bf0\n")]
     [InlineData("tswap 9.8.7-rc.1\nmore\n")]
+    [InlineData("tswap 9.8.7-rc.1\n\n")]
+    [InlineData("tswap 9.8.7-rc.1\r\n\r\n")]
+    [InlineData("tswap 9.8.7-rc.1")]
     [InlineData("")]
     public void Smoke_VersionOtherThanExpected_FailsThePackaging(string printed)
     {
@@ -1117,13 +1120,17 @@ public class ReleasePackagingTests : IDisposable
         "          echo \"TSWAP_EXPECT_VERSION=$version\" >> \"$GITHUB_ENV\"",
     ];
 
-    /// <summary>The Windows legs' check, in pwsh: the line ending trimmed, the whole stdout compared, the exit code checked.</summary>
+    /// <summary>
+    /// The Windows legs' check, in pwsh: stdout as lines (exactly one), the line ending trimmed, compared case-sensitively
+    /// (<c>-cne</c>; review F3), the exit code checked, and a mismatch failing the step (<c>exit 1</c>; review F1).
+    /// </summary>
     private static readonly string[] WindowsVersionCheck =
     [
-        "--version",
+        "--version)",
         "$code = $LASTEXITCODE",
-        "($out | Out-String).TrimEnd(\"`r\", \"`n\")",
-        "if ($code -ne 0 -or $line -ne \"tswap $env:TSWAP_EXPECT_VERSION\")",
+        "$line = ($out -join \"`n\").TrimEnd(\"`r\", \"`n\")",
+        "if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne \"tswap $env:TSWAP_EXPECT_VERSION\") {",
+        "expected 'tswap $env:TSWAP_EXPECT_VERSION'\"\n            exit 1\n          }",
     ];
 
     /// <summary>
@@ -1141,7 +1148,9 @@ public class ReleasePackagingTests : IDisposable
             yield return $"{where}: no '{ExpectedVersionStep[0].Trim()}' step";
             yield break;
         }
-        var step = job[stepAt..job.IndexOf("      - ", stepAt + 1, StringComparison.Ordinal)];
+        // Review F5: a step that is the job's last runs to the job's end (no throw).
+        var nextStep = job.IndexOf("      - ", stepAt + 1, StringComparison.Ordinal);
+        var step = job[stepAt..(nextStep < 0 ? job.Length : nextStep)];
         foreach (var line in ExpectedVersionStep.Where(l => !step.Contains(l + "\n", StringComparison.Ordinal)))
             yield return $"{where}: the expected-version step lacks '{line.Trim()}'";
         var firstSmoke = job.IndexOf("bash contrib/packaging/package.sh ", StringComparison.Ordinal);
@@ -1157,10 +1166,11 @@ public class ReleasePackagingTests : IDisposable
             yield return $"{where}: no pwsh step runs tswap.exe";
         foreach (var smoke in windows)
         {
+            var name = smoke.Split('\n')[0];
             foreach (var part in WindowsVersionCheck.Where(p => !smoke.Contains(p, StringComparison.Ordinal)))
-                yield return $"{where}: the Windows step '{smoke[..smoke.IndexOf('\n')]}' lacks '{part}'";
+                yield return $"{where}: the Windows step '{name}' lacks '{part}'";
             if (job.IndexOf(smoke, StringComparison.Ordinal) < stepAt)
-                yield return $"{where}: the Windows step '{smoke[..smoke.IndexOf('\n')]}' runs before the expected-version step";
+                yield return $"{where}: the Windows step '{name}' runs before the expected-version step";
         }
     }
 
@@ -1196,8 +1206,24 @@ public class ReleasePackagingTests : IDisposable
             p => p.Contains("lacks 'echo \"TSWAP_EXPECT_VERSION", StringComparison.Ordinal));
         Assert.Contains(VersionCheckProblems("release.yml", release.Replace(WindowsVersionCheck[3], "if ($code -ne 0)"), "build", true),
             p => p.Contains("the Windows step", StringComparison.Ordinal));
-        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(WindowsVersionCheck[2], "$out"), "build-test-publish", true),
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(WindowsVersionCheck[2], "$line = $out"), "build-test-publish", true),
             p => p.Contains("the Windows step", StringComparison.Ordinal));
+        // Review F1: a mismatch that only annotates (::error:: without exit 1) is caught, in both workflows.
+        foreach (var (name, text, job) in new[] { ("release.yml", release, "build"), ("ci.yml", ci, "build-test-publish") })
+        {
+            var noExit = text.Replace(WindowsVersionCheck[4], "expected 'tswap $env:TSWAP_EXPECT_VERSION'\"\n          }");
+            Assert.NotEqual(text, noExit);
+            Assert.Contains(VersionCheckProblems(name, noExit, job, true), p => p.Contains("lacks 'expected", StringComparison.Ordinal));
+        }
+        // Review F3: a case-insensitive comparison, and F4's counterpart: a check that allows more than one line.
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace("$line -cne", "$line -ne"), "build", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(" -or $out.Count -ne 1", ""), "build-test-publish", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        // Review F5: a malformed job (the step last, no smoke at all) yields messages instead of throwing.
+        var bare = "jobs:\n  build:\n    steps:\n" + string.Join('\n', ExpectedVersionStep) + "\n";
+        Assert.Contains(VersionCheckProblems("x.yml", bare, "build", true), p => p.Contains("no package.sh smoke", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("x.yml", bare, "build", true), p => p.Contains("no pwsh step", StringComparison.Ordinal));
     }
 
     /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>

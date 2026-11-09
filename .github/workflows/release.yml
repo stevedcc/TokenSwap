@@ -159,10 +159,11 @@ jobs:
           $check = Join-Path $env:RUNNER_TEMP 'tswap-check'
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
           # Brief T18: the whole stdout of --version, its line ending trimmed, is `tswap <expected version>`.
-          $out = & (Join-Path $check 'tswap.exe') --version
+          # Exactly one line (a second, even a blank one, is a mismatch), compared case-sensitively.
+          $out = @(& (Join-Path $check 'tswap.exe') --version)
           $code = $LASTEXITCODE
-          $line = ($out | Out-String).TrimEnd("`r", "`n")
-          if ($code -ne 0 -or $line -ne "tswap $env:TSWAP_EXPECT_VERSION") {
+          $line = ($out -join "`n").TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne "tswap $env:TSWAP_EXPECT_VERSION") {
             Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
             exit 1
           }

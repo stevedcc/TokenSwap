@@ -5,8 +5,8 @@
 # (AppContext.BaseDirectory), so the archive works unpacked in place, without the install script (issue #238).
 # A missing dylib, or a rid this script doesn't know, fails the packaging rather than shipping a wrong archive.
 # --smoke: unpack the archive into an empty folder and run what is in it (the shipped bytes and permissions):
-# first `tswap --version`, whose whole stdout, with the line ending trimmed (a `\r` too), must be
-# `tswap $TSWAP_EXPECT_VERSION` (brief T18: the workflow sets it, the tag without its v or the csproj's <Version>;
+# first `tswap --version`, whose whole stdout must be `tswap $TSWAP_EXPECT_VERSION` and one line ending (`\n` or
+# `\r\n`) (brief T18: the workflow sets it, the tag without its v or the csproj's <Version>;
 # --smoke without it fails before packing), then `tswap prompt-hash` (needs no vault) and, on macOS, a Secure Enclave vault in a throwaway config folder (init with
 # no touch, password or recovery prompt, then `names` to unlock it): that loads the shipped dylib through tswap's own
 # resolver. Needs a Mac with a Secure Enclave (GitHub's macOS runners have one, see ci.yml's probe).
@@ -73,16 +73,20 @@ tar czf "$archive.partial" -C "$publish" "${files[@]}"
 mv -f "$archive.partial" "$archive"
 echo "packed $archive: ${files[*]}"
 
-# Brief T18: `tswap --version` prints exactly `tswap $TSWAP_EXPECT_VERSION` (one line; its line ending trimmed).
+# Brief T18: `tswap --version` prints exactly `tswap $TSWAP_EXPECT_VERSION` and one line ending (\n, or \r\n as on
+# Windows), nothing else. The x after it keeps $(...) from stripping trailing newlines, so a blank line after the
+# version is seen (review F4).
 version_smoke() {
-  local bin=$1 out status=0
-  out=$("$bin" --version) || status=$?
-  out=${out%$'\r'}
-  if [ "$status" -ne 0 ] || [ "$out" != "tswap $TSWAP_EXPECT_VERSION" ]; then
+  local bin=$1 out status=0 want="tswap $TSWAP_EXPECT_VERSION"
+  out=$("$bin" --version && printf x) || status=$?
+  out=${out%x}
+  if [ "$status" -ne 0 ] || { [ "$out" != "$want"$'\n' ] && [ "$out" != "$want"$'\r\n' ]; }; then
+    out=${out%$'\n'}
+    out=${out%$'\r'}
     echo "package.sh: 'tswap --version' printed '$out' (exit $status), expected 'tswap $TSWAP_EXPECT_VERSION'" >&2
     exit 1
   fi
-  echo "tswap --version: $out"
+  echo "tswap --version: $want"
 }
 
 # Runs "$@" yubikey setup --touch --serial 2147483647 ("$@": the binary, or bwrap ... -- binary, then tswap's global

@@ -117,10 +117,11 @@ jobs:
           $exe = @(Get-ChildItem -Path TswapCli/bin/Release -Recurse -Filter tswap.exe | Where-Object { $_.Directory.Name -eq 'publish' })
           if ($exe.Count -ne 1) { Write-Output "::error::expected exactly one published tswap.exe, found $($exe.Count)"; exit 1 }
           # Brief T18: the whole stdout of --version, its line ending trimmed, is `tswap <expected version>`.
-          $out = & $exe[0].FullName --version
+          # Exactly one line (a second, even a blank one, is a mismatch), compared case-sensitively.
+          $out = @(& $exe[0].FullName --version)
           $code = $LASTEXITCODE
-          $line = ($out | Out-String).TrimEnd("`r", "`n")
-          if ($code -ne 0 -or $line -ne "tswap $env:TSWAP_EXPECT_VERSION") {
+          $line = ($out -join "`n").TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne "tswap $env:TSWAP_EXPECT_VERSION") {
             Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
             exit 1
           }

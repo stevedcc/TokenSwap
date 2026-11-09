@@ -51,6 +51,8 @@ public sealed class VersionCommandTests
     [Theory]
     [InlineData("--version")]
     [InlineData("version")]
+    [InlineData("--VERSION")]
+    [InlineData("VERSION")]
     public void Version_PrintsOneLine_TswapAndTheCsprojVersion_AndExitsZero(string form)
     {
         var (exit, stdout, stderr) = Run(new() { ["TSWAP_TEST_KEY"] = TestKeyHex }, [], isPrivileged: false, form);
@@ -114,6 +116,8 @@ public sealed class VersionCommandTests
     [InlineData("version", false)]
     [InlineData("--version", true)]
     [InlineData("version", true)]
+    [InlineData("--VERSION", false)]
+    [InlineData("VERSION", true)]
     public void Version_ReturnsBeforeStartupReadsTheEnvironment_SoNoHardwareAgentOrSudoPathIsReached(string form, bool isPrivileged)
     {
         var asked = new List<string>();
@@ -142,6 +146,38 @@ public sealed class VersionCommandTests
         Assert.Equal(0, exit);
         Assert.Contains("TSWAP_TEST_KEY", asked);
         Assert.Contains("TSWAP_YUBIKEY_SERIAL", asked);
+    }
+
+    /// <summary>
+    /// Review F2: <c>version --help</c> and <c>--version --help</c> are the CLI-wide #177 rule (a command's usage, exit 0),
+    /// not the extra-argument usage error. Through the registry, so through startup.
+    /// </summary>
+    [Theory]
+    [InlineData("version", "--help")]
+    [InlineData("version", "-h")]
+    [InlineData("--version", "--help")]
+    public void VersionHelp_PrintsItsUsage_AndExitsZero(params string[] args)
+    {
+        var (exit, stdout, stderr) = Run(new() { ["TSWAP_TEST_KEY"] = TestKeyHex }, [], isPrivileged: false, args);
+
+        Assert.Equal(0, exit);
+        Assert.Equal($"Usage: tswap version{Environment.NewLine}{Environment.NewLine}{new VersionCommand().Description}{Environment.NewLine}", stdout);
+        Assert.Equal("", stderr);
+    }
+
+    /// <summary>
+    /// A global flag before it (<c>tswap -v version</c>) goes through startup and the registry, and prints the line last
+    /// (in test mode <c>-v</c> first prints its own "[TEST MODE]" line, as for every command).
+    /// </summary>
+    [Theory]
+    [InlineData("-v", "version")]
+    [InlineData("--verbose", "--version")]
+    public void Version_AfterAGlobalFlag_PrintsTheLine(params string[] args)
+    {
+        var (exit, stdout, _) = Run(new() { ["TSWAP_TEST_KEY"] = TestKeyHex }, [], isPrivileged: false, args);
+
+        Assert.Equal(0, exit);
+        Assert.EndsWith($"{Environment.NewLine}tswap {CsprojVersion()}{Environment.NewLine}", stdout);
     }
 
     // ------------------------------------------------------------------ contract line 5 (pinned before T18)
