@@ -77,8 +77,12 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
         if (privateKey.Length != KeySize || peerPublicKey.Length != KeySize)
             throw new CryptographicException($"X25519 keys are {KeySize} bytes");
         using var key = X25519DiffieHellman.ImportPrivateKey(privateKey);
+        // A non-canonical peer key (bit 255 set, or u >= p) is masked or refused as the platform provider does; every
+        // outcome fails closed (an import error here, or a different secret that the AEAD then rejects).
         using var peer = X25519DiffieHellman.ImportPublicKey(peerPublicKey);
         var secret = key.DeriveRawSecretAgreement(peer);
+        // Not reached with OpenSSL or CNG, which refuse a low-order point themselves (CryptoKit isn't verified here; the
+        // macOS CI leg runs the low-order tests either way); kept so the guarantee is tswap's own, whatever the provider.
         if (IsAllZero(secret))
             throw new CryptographicException("X25519 key agreement produced an all-zero secret (low-order peer public key)");
         return secret;
