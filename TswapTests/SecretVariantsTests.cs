@@ -89,7 +89,7 @@ public class SecretVariantsTests
         {
             var db = new SecretsDb(new Dictionary<string, Secret>
             {
-                ["s"] = new(value, DateTime.UtcNow, DateTime.UtcNow),
+                ["s"] = new(value, TestTime.Fixed, TestTime.Fixed),
             });
             var fromMatcher = MatchListProbe.Build(db)
                 .Select(e => (e.Type, e.SearchText))

@@ -192,7 +192,7 @@ public class SecretRecordCodecV3Tests
     }
 
     /// <summary>A file with the section list replaced (header, metadata and count kept).</summary>
-    private static byte[] WithSections(byte[] file, params byte[][] sections)
+    private static byte[] WithSections(byte[] file, params ReadOnlySpan<byte[]> sections)
     {
         var meta = Sections(file)[0];
         List<byte> rebuilt = [.. file.AsSpan(0, meta.Start + meta.Length)];

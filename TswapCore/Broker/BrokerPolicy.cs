@@ -136,7 +136,7 @@ public sealed class BrokerPolicy
         if (config.Sockets is null || config.Routes is null)
             throw new BrokerConfigException("broker.json needs 'sockets' and 'routes' lists.");
 
-        var routes = new Dictionary<string, BrokerRoutePolicy>(StringComparer.Ordinal);
+        Dictionary<string, BrokerRoutePolicy> routes = [with(StringComparer.Ordinal)];
         foreach (var route in config.Routes)
         {
             if (route is null)
@@ -153,7 +153,7 @@ public sealed class BrokerPolicy
             throw new BrokerConfigException($"bwrap_path {Printable(bwrap)} has a \".\" or \"..\" segment; give the literal absolute path");
 
         // Brief T9: templates (Linux only; checked against the host on every load).
-        var templates = new Dictionary<string, BrokerTemplatePolicy>(StringComparer.Ordinal);
+        Dictionary<string, BrokerTemplatePolicy> templates = [with(StringComparer.Ordinal)];
         if (config.Templates is { Count: > 0 })
         {
             if (!OperatingSystem.IsLinux())
@@ -171,7 +171,7 @@ public sealed class BrokerPolicy
         }
 
         // Brief T10's keys (only their shape is checked here).
-        var sshKeys = new Dictionary<string, BrokerSshKeyPolicy>(StringComparer.Ordinal);
+        Dictionary<string, BrokerSshKeyPolicy> sshKeys = [with(StringComparer.Ordinal)];
         foreach (var key in config.SshKeys ?? [])
         {
             if (key is null)
@@ -181,7 +181,7 @@ public sealed class BrokerPolicy
                 throw new BrokerConfigException($"Ssh key '{compiled.Name}' is defined twice.");
         }
 
-        var sockets = new Dictionary<string, BrokerSocketPolicy>(StringComparer.Ordinal);
+        Dictionary<string, BrokerSocketPolicy> sockets = [with(StringComparer.Ordinal)];
         List<string> warnings = [];
         foreach (var socket in config.Sockets)
         {
@@ -294,7 +294,7 @@ public sealed class BrokerPolicy
         }
 
         // Methods.
-        var methods = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> methods = [with(StringComparer.Ordinal)];
         foreach (var method in route.Methods ?? [.. DefaultMethods])
         {
             if (method is null || !AllowedMethods.Contains(method))
@@ -419,7 +419,7 @@ public sealed class BrokerPolicy
         List<(uint From, uint To)> ranges = [];
         foreach (var entry in socket.Uids)
             ranges.Add(ParseUidRange(name, entry));
-        var allowed = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowed = [with(StringComparer.Ordinal)];
         foreach (var route in socket.Routes ?? throw new BrokerConfigException($"Socket '{name}' has no 'routes' list."))
         {
             if (route is null || !routes.ContainsKey(route))
@@ -427,14 +427,14 @@ public sealed class BrokerPolicy
             allowed.Add(route);
         }
         // Allow-lists deny by default (brief T9 decision 4): no list, no templates or keys.
-        var allowedTemplates = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowedTemplates = [with(StringComparer.Ordinal)];
         foreach (var template in socket.Templates ?? [])
         {
             if (template is null || !templates.ContainsKey(template))
                 throw new BrokerConfigException($"Socket '{name}' allows template '{Printable(template ?? "")}', which is not defined.");
             allowedTemplates.Add(template);
         }
-        var allowedKeys = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string> allowedKeys = [with(StringComparer.Ordinal)];
         foreach (var key in socket.SshKeys ?? [])
         {
             if (key is null || !sshKeys.ContainsKey(key))

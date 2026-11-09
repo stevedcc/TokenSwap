@@ -121,7 +121,7 @@ public class FileOwnershipTests : IDisposable
 
     private string P(string name) => Path.GetFullPath(Path.Combine(_dir, name));
 
-    private static Config SampleConfig() => new([], "", DateTime.UtcNow);
+    private static Config SampleConfig() => new([], "", TestTime.Fixed);
 
     private static FakeOwnership AsRoot() => new(privileged: true, euid: 0);
 

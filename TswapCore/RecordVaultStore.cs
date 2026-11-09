@@ -1085,7 +1085,7 @@ public sealed class RecordVaultStore : IFileVaultStore
         _highestSeen = Hlc.TryParse(MachineConfig.LastHlc) ?? Hlc.Zero;
         _sawV3 = false;
         ReadMarker(warnings);
-        var loaded = new Dictionary<string, LoadedRecord>(StringComparer.Ordinal);
+        Dictionary<string, LoadedRecord> loaded = [with(StringComparer.Ordinal)];
         var recordsDir = RecordsDir;
         if (!_owner.AsOwner(recordsDir, () => Directory.Exists(recordsDir)))
         {

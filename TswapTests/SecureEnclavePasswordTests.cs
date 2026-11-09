@@ -33,7 +33,7 @@ public class SecureEnclavePasswordTests
     }
 
     private static Config ConfigWith(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave, SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave, SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob));
 
     [Theory]
     [InlineData(false)]

@@ -49,7 +49,7 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
             Directory.Delete(_root, true);
     }
 
-    private ProcessStartInfo Psi(params string[] args)
+    private ProcessStartInfo Psi(params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo(_binary)
         {
@@ -119,7 +119,7 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
         var serve = new Process { StartInfo = Psi("broker", "serve") };
         serve.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data != null)
+            if (e.Data is not null)
                 lines.Writer.TryWrite(e.Data);
         };
         serve.Start();

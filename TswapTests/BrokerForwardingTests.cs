@@ -338,7 +338,7 @@ public class BrokerForwardingTests : IAsyncLifetime
     {
         if (OperatingSystem.IsWindows())
             return;
-        var responses = new List<string>();
+        List<string> responses = [];
         foreach (var target in ((IEnumerable<object[]>)PathTricks).Select(t => (string)t[0]).Concat(["/nope/x", "/second/x", "/narrow/other/x"]))
             responses.Add(await _h.GetAsync("lane1", target));
         responses.Add(await _h.GetAsync("lane1", "/narrow/allowed/x", method: "PUT"));

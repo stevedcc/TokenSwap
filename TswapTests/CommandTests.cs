@@ -217,6 +217,21 @@ public class CommandTests : IDisposable
     }
 
 
+    /// <summary>The config's <c>Created</c> comes from the given clock, in UTC (idiomatic .NET 11 plan, row 10).</summary>
+    [Fact]
+    public void BuildKeyringConfig_CreatedIsTheGivenClocksTime()
+    {
+        var at = new DateTimeOffset(2026, 11, 8, 12, 34, 56, TimeSpan.Zero);
+
+        var (config, _, _) = InitCommand.BuildKeyringConfig(
+            RandomNumberGenerator.GetBytes(32), [11111111], new string('0', 40), requiresTouch: null, RngMode.System,
+            Convert.ToHexString(RandomNumberGenerator.GetBytes(32)), RandomNumberGenerator.GetBytes(32),
+            includeRecovery: false, time: new FuncTimeProvider(() => at));
+
+        Assert.Equal(at.UtcDateTime, config.Created);
+        Assert.Equal(DateTimeKind.Utc, config.Created.Kind);
+    }
+
     [Fact]
     public void BuildKeyringConfig_RecoveryPrivateKey_RecoversSameVaultKeyAsMachineSlot()
     {
@@ -393,7 +408,7 @@ public class CommandTests : IDisposable
     [Fact]
     public void SlotsFormat_NonKeyringVault_ReturnsHonestMessageNotError()
     {
-        var config = new Config(new List<int> { 1, 2 }, new string('0', 40), DateTime.UtcNow, RequiresTouch: true);
+        var config = new Config(new List<int> { 1, 2 }, new string('0', 40), TestTime.Fixed, RequiresTouch: true);
 
         var output = SlotsCommand.Format(config);
 
@@ -951,10 +966,10 @@ public class CommandTests : IDisposable
         File.WriteAllText(file, "grep-pattern-value\n");
         string[] command = ["run", "grep", "-v", "-x", "-e", "{{grep-pat}}", file];
 
-        var (exit, stdout, stderr) = RunTswap(globalFlag == null ? command : [globalFlag, .. command]);
+        var (exit, stdout, stderr) = RunTswap(globalFlag is null ? command : [globalFlag, .. command]);
 
         Assert.True(exit == 1, $"grep must get its -v (exit 1: no non-matching line); exit {exit}: {stdout}{stderr}");
-        if (globalFlag != null)
+        if (globalFlag is not null)
             Assert.Contains("Found tokens: grep-pat", stdout); // tswap's own -v still makes it verbose
         else
             Assert.DoesNotContain("Found tokens", stdout);
@@ -1708,7 +1723,7 @@ password2: """"  # tswap: missing-mixed-secret");
         // [0]/[1] into that (regression test for the Copilot-flagged crash).
         RunTswap("init", "--yubikey");
         var configPath = Path.Combine(_tempDir, "config.json");
-        var tpmConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
+        var tpmConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: "irrelevant");
         File.WriteAllText(configPath, JsonSerializer.Serialize(tpmConfig, TswapJsonContext.Default.Config));
 
         var (exit, stdout, _) = RunTswap("migrate");

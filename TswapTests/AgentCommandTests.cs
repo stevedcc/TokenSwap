@@ -92,7 +92,7 @@ public sealed class AgentCommandTests : IDisposable
     }
 
     /// <summary><c>agent start</c> on a terminal with <paramref name="password"/> typed.</summary>
-    private static (int Exit, string Out, string Err) Start(FleetMachine m, string password = Password, params string[] extra) =>
+    private static (int Exit, string Out, string Err) Start(FleetMachine m, string password = Password, params ReadOnlySpan<string> extra) =>
         m.RunOnTerminal(password + "\n", ["agent", "start", .. extra]);
 
     /// <summary>
@@ -128,7 +128,7 @@ public sealed class AgentCommandTests : IDisposable
     /// <summary>Records each connect of <see cref="AgentClient"/> and then connects.</summary>
     private static List<string> RecordConnects()
     {
-        var connects = new List<string>();
+        List<string> connects = [];
         AgentClient.Connect = async (socket, endpoint, ct) =>
         {
             lock (connects)
@@ -138,7 +138,7 @@ public sealed class AgentCommandTests : IDisposable
         return connects;
     }
 
-    private static void AssertHoldsNoSecret(string text, params byte[][] secrets)
+    private static void AssertHoldsNoSecret(string text, params ReadOnlySpan<byte[]> secrets)
     {
         foreach (var secret in secrets)
         {
@@ -331,7 +331,7 @@ public sealed class AgentCommandTests : IDisposable
         // it while the child proves the password (which may wait for a touch).
         var (m, _) = TpmPasswordVault("parent-zeroes");
         using var freed = new ManualResetEventSlim();
-        var frees = new List<byte[]>();
+        List<byte[]> frees = [];
         StretchedPassword.BeforeFreeObserver = memory =>
         {
             lock (frees)
@@ -878,7 +878,7 @@ public sealed class AgentCommandTests : IDisposable
     {
         var (m, vaultKey) = TpmPasswordVault("zeroes");
         FakeAgent(m, () => vaultKey.ToArray());
-        var seen = new List<byte[]>();
+        List<byte[]> seen = [];
         CommandContext.AgentKeyZeroedObserver = key => seen.Add(key.ToArray());
 
         var (exit, _, stderr) = m.Run("", "get", "db");
@@ -909,7 +909,7 @@ public sealed class AgentCommandTests : IDisposable
     {
         // Review T17 p3 GLM B1: the detached Windows agent must not die after 'ready' on a signal
         // registration; on Windows serve registers no POSIX signal, only a Ctrl+C hook (foreground).
-        var registered = new List<PosixSignal>();
+        List<PosixSignal> registered = [];
         Action? ctrlC = null;
         var unhooked = false;
         var stops = 0;

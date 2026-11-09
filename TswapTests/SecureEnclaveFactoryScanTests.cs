@@ -31,7 +31,7 @@ public class SecureEnclaveFactoryScanTests
 
     private static string RepoRoot()
     {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
             if (File.Exists(Path.Combine(dir.FullName, "TokenSwap.slnx")))
                 return dir.FullName;
         throw new InvalidOperationException("TokenSwap.slnx not found above " + AppContext.BaseDirectory);

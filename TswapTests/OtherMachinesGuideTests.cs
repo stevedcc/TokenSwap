@@ -16,7 +16,7 @@ public class OtherMachinesGuideTests
         return o.ToString();
     }
 
-    private static void AssertInOrder(string text, params string[] parts)
+    private static void AssertInOrder(string text, params ReadOnlySpan<string> parts)
     {
         var from = 0;
         foreach (var part in parts)

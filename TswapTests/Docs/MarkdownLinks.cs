@@ -19,7 +19,7 @@ internal static partial class MarkdownLinks
 {
     public static string RepoRoot()
     {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
         {
             if (File.Exists(Path.Combine(dir.FullName, "TokenSwap.slnx"))) return dir.FullName;
         }
@@ -203,7 +203,7 @@ internal static partial class MarkdownLinks
     /// </summary>
     private static string OutsideCodeSpans(string text, Func<string, string> transform)
     {
-        var spans = new List<string>();
+        List<string> spans = [];
         var hidden = CodeSpan().Replace(text, m => { spans.Add(m.Value); return ((char)(0xE000 + spans.Count - 1)).ToString(); });
         var done = transform(hidden);
         return Regex.Replace(done, "[\uE000-\uF8FF]", m => spans[m.Value[0] - 0xE000]);
@@ -240,8 +240,8 @@ internal static partial class MarkdownLinks
         bool InMoved(int offset) => moved.Any(r => offset >= r.Start && offset < r.End);
 
         var found = new List<(int Offset, Anchor Anchor)>();
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<string, int> counts = [with(StringComparer.Ordinal)];
+        HashSet<string> seen = [with(StringComparer.Ordinal)];
 
         for (var i = 0; i < live.Length; i++)
         {
@@ -280,7 +280,7 @@ internal static partial class MarkdownLinks
     public static IReadOnlyList<int> SetextHeadingLines(string markdown)
     {
         var live = LiveLines(markdown);
-        var hits = new List<int>();
+        List<int> hits = [];
         for (var i = 1; i < live.Length; i++)
         {
             if (!Regex.IsMatch(live[i], @"^ {0,3}(=+|-+)[ \t]*$")) continue;
@@ -371,7 +371,7 @@ internal static partial class MarkdownLinks
     public static (string Path, bool IsDirectory)? ResolveExisting(string root, string fromFile, string pathPart)
     {
         pathPart = Uri.UnescapeDataString(pathPart);
-        var segments = new List<string>();
+        List<string> segments = [];
         if (!pathPart.StartsWith('/'))
             segments.AddRange(fromFile.Split('/')[..^1]);
         foreach (var seg in pathPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
@@ -392,7 +392,7 @@ internal static partial class MarkdownLinks
             if (!isDir) return null;
             var match = Directory.EnumerateFileSystemEntries(current)
                 .FirstOrDefault(e => string.Equals(System.IO.Path.GetFileName(e), seg, StringComparison.Ordinal));
-            if (match == null) return null;
+            if (match is null) return null;
             current = match;
             isDir = Directory.Exists(match);
         }

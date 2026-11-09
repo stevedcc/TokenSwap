@@ -24,8 +24,8 @@ public class SimulatedHardwareServiceTests
 
     private static Config SingleSlotConfig(HardwareBackend backend, byte[] blob) => backend switch
     {
-        HardwareBackend.Tpm => new Config([], "", DateTime.UtcNow, Backend: backend, TpmSealedKey: Convert.ToBase64String(blob)),
-        HardwareBackend.SecureEnclave => new Config([], "", DateTime.UtcNow, Backend: backend, SecureEnclaveWrappedKey: Convert.ToBase64String(blob)),
+        HardwareBackend.Tpm => new Config([], "", TestTime.Fixed, Backend: backend, TpmSealedKey: Convert.ToBase64String(blob)),
+        HardwareBackend.SecureEnclave => new Config([], "", TestTime.Fixed, Backend: backend, SecureEnclaveWrappedKey: Convert.ToBase64String(blob)),
         _ => throw new ArgumentOutOfRangeException(nameof(backend)),
     };
 
@@ -74,7 +74,7 @@ public class SimulatedHardwareServiceTests
         var machine = new SimulatedHardwareService(HardwareBackend.Tpm, MachineA);
 
         var ex = Assert.Throws<TswapException>(
-            () => machine.Unlock(new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm), NoSelection, password: null));
+            () => machine.Unlock(new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm), NoSelection, password: null));
         Assert.Contains("Config is corrupted", ex.Message);
     }
 

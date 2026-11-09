@@ -47,7 +47,7 @@ public sealed class LinuxTpmPasswordTests
     }
 
     private static Config ConfigWith(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
     /// <summary>
     /// Writes a package's public and private parts and loads them under a regenerated primary (issue #261: the ECC
@@ -116,8 +116,8 @@ public sealed class LinuxTpmPasswordTests
         using var wrong = Password(0x22);
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         var (_, hwBlob) = enrollment.Enroll(right);
-        var calls = new List<string>();
-        var stderrs = new List<string>();
+        List<string> calls = [];
+        List<string> stderrs = [];
         TpmToolRunner real = Tpm2ToolsInterop.RunProcess;
         using var _ = Tpm2ToolsInterop.UseRunner((command, args, stdin, started) =>
         {

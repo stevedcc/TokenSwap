@@ -19,7 +19,7 @@ public sealed class MacSigningScriptTests : IDisposable
 
     public void Dispose() => _fake.Dispose();
 
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     private static string Base64(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
@@ -448,7 +448,7 @@ public sealed class MacSigningScriptTests : IDisposable
         var (exitCode, output) = Verify(Publish());
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("minos differs: tswap 12.0, libtswapse.dylib 26.0", output);
+        Assert.Contains("minos differs: tswap 14.0, libtswapse.dylib 26.0", output);
     }
 
     // ---- notarise and zip-for-notary ----
@@ -787,7 +787,7 @@ public sealed class MacSigningScriptTests : IDisposable
         var (exitCode, output) = Verify(Publish());
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("minos differs: tswap 12.0, libtswapse.dylib 26.0", output);
+        Assert.Contains("minos differs: tswap 14.0, libtswapse.dylib 26.0", output);
         Assert.Equal(2, _fake.Log("otool").Count);
     }
 

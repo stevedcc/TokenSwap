@@ -345,7 +345,7 @@ public class Tpm2ArgvTests
     {
         if (!OperatingSystem.IsLinux())
             return;
-        var calls = new List<string>();
+        List<string> calls = [];
         using var _ = Tpm2ToolsInterop.UseRunner((command, args, stdin, started) =>
         {
             calls.Add($"{command} {string.Join(' ', args)}");
@@ -377,7 +377,7 @@ public class Tpm2ArgvTests
         using var password = Password();
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         var (kek, hwBlob) = enrollment.Enroll(password);
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
         var provided = 0;
 
         var recovered = new LinuxTpmHardwareService().Unlock(config, _ => 0, () => { provided++; return password.Clone(); });

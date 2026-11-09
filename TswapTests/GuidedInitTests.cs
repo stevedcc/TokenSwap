@@ -78,7 +78,7 @@ public sealed class GuidedInitTests : IDisposable
     private static string ThisOsChip => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
 
     /// <summary>Runs <c>names</c> with only <paramref name="serials"/> plugged in (and the chip as set), unattended.</summary>
-    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params int[] serials)
+    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params ReadOnlySpan<int> serials)
     {
         var plugged = m.Keys.PluggedIn;
         m.Keys.PluggedIn = [.. serials];
@@ -276,7 +276,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2 3\n\ny\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        var perSerial = m.Keys.Challenges.GroupBy(c => c.Serial).ToDictionary(g => g.Key, g => g.Count());
+        var perSerial = m.Keys.Challenges.CountBy(c => c.Serial).ToDictionary();
         Assert.Equal(new Dictionary<int, int> { [11] = 2, [13] = 2 }, perSerial);
         Assert.Equal([11, 13], YubiKeySerials(m));
         AssertOpensWithKeyAlone(m, 11);

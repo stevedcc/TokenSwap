@@ -80,7 +80,7 @@ public class BrokerShortSecretRedactionTests
     /// <summary>Every input for a case: each pinned form alone, side by side, overlapping, all together, and every form in Forms.</summary>
     private static List<string> Inputs(Case c)
     {
-        var inputs = new List<string>(c.Pinned);
+        List<string> inputs = [.. c.Pinned];
         foreach (var a in c.Pinned)
             foreach (var b in c.Pinned)
             {

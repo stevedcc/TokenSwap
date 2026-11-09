@@ -314,7 +314,7 @@ public sealed class HttpBrokerForwarder : IBrokerForwarder, IDisposable
 
     private static HashSet<string> ConnectionNamed(IEnumerable<string?> connection)
     {
-        var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> named = [with(StringComparer.OrdinalIgnoreCase)];
         foreach (var value in connection)
             foreach (var token in (value ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                 named.Add(token);

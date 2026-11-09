@@ -16,7 +16,7 @@ namespace TswapTests;
 public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     private static Secret S(string value, bool burned = false, string? previous = null, bool previousBurned = false) =>
-        new(value, DateTime.UtcNow, DateTime.UtcNow, burned ? DateTime.UtcNow : null, burned ? "test" : null)
+        new(value, TestTime.Fixed, TestTime.Fixed, burned ? TestTime.Fixed : null, burned ? "test" : null)
         {
             PreviousValue = previous,
             PreviousBurned = previousBurned,
@@ -119,7 +119,7 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
         for (var round = 0; round < 250; round++)
         {
             string Value(int min, int max) => string.Concat(Enumerable.Range(0, random.Next(min, max)).Select(_ => alphabet[random.Next(alphabet.Length)]));
-            var values = new List<string>();
+            List<string> values = [];
             var secrets = new List<(string Name, Secret Secret)>();
             var count = random.Next(1, 7);
             for (var i = 0; i < count; i++)

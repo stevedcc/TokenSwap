@@ -67,7 +67,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         _fake = fake;
         var console = new FakeConsole(stdin);
         using var observer = SimulatedHardwareService.ObserveCalls((backend, call) => _onCall(backend, call));
-        var exit = fake == null
+        var exit = fake is null
             ? CliHost.Run(args, console, name => env.GetValueOrDefault(name), isPrivileged: false, processPath: "/usr/local/bin/tswap")
             : CliHost.Run(args, console, name => env.GetValueOrDefault(name), isPrivileged: false, processPath: "/usr/local/bin/tswap", ownershipForTests: fake);
         return (exit, console.OutText, console.ErrorText);
@@ -255,7 +255,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Assert.Equal("s3cret", value);
         Assert.Equal(0, fake.SwitchAttempts);
-        Assert.Contains(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Unlock" && c.As == null);
+        Assert.Contains(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Unlock" && c.As is null);
     }
 
     [Fact]
@@ -269,7 +269,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Assert.Equal("s3cret", value);
         Assert.Equal(0, fake.SwitchAttempts);
-        Assert.Contains(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Unlock" && c.As == null);
+        Assert.Contains(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Unlock" && c.As is null);
     }
 
     // Decision 2: AsOwner(path) acts as the owner of path's nearest existing PARENT folder, so the

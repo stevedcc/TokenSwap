@@ -59,8 +59,9 @@ internal sealed class MacFakeTools : IDisposable
     public void Identities(string policy, params string[] subjects)
     {
         var applications = 0;
-        var lines = subjects.Select((subject, i) =>
+        var lines = subjects.Index().Select(entry =>
         {
+            var (i, subject) = entry;
             var hash = subject.StartsWith("Developer ID Installer", StringComparison.Ordinal) ? InstallerHash
                 : subject.StartsWith("Developer ID Application", StringComparison.Ordinal) && applications++ == 0 ? AppHash
                 : new string('D', 40);
@@ -75,7 +76,7 @@ internal sealed class MacFakeTools : IDisposable
         string.Join('\n', Directory.GetFiles(Dir, "*.log").Order().Select(File.ReadAllText));
 
     /// <summary>
-    /// A fake <c>otool -l</c> answering the minos of <c>minos-&lt;name&gt;</c> (default 12.0), for runs without
+    /// A fake <c>otool -l</c> answering the minos of <c>minos-&lt;name&gt;</c> (default 14.0), for runs without
     /// <c>vtool</c>: removes the <c>vtool</c> fake (a real one later on PATH fails on the fake files, so the script
     /// falls back to <c>otool</c> either way).
     /// </summary>
@@ -85,7 +86,7 @@ internal sealed class MacFakeTools : IDisposable
         WriteTool("otool", """
             echo "$*" >> "$FAKE_DIR/otool.log"
             name=$(basename "${@: -1}")
-            minos=12.0
+            minos=14.0
             [ -f "$FAKE_DIR/minos-$name" ] && minos=$(cat "$FAKE_DIR/minos-$name")
             printf '%s:\nLoad command 8\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos %s\n      sdk 26.5\n   ntools 1\n' "${@: -1}" "$minos"
 
@@ -224,7 +225,7 @@ internal sealed class MacFakeTools : IDisposable
         WriteTool("vtool", """
             echo "$*" >> "$FAKE_DIR/vtool.log"
             name=$(basename "${@: -1}")
-            minos=12.0
+            minos=14.0
             [ -f "$FAKE_DIR/minos-$name" ] && minos=$(cat "$FAKE_DIR/minos-$name")
             printf '%s:\nLoad command 9\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform MACOS\n    minos %s\n      sdk 26.5\n   ntools 1\n' "${@: -1}" "$minos"
 

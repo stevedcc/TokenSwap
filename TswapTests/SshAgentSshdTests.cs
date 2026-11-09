@@ -282,7 +282,7 @@ public class SshAgentSshdTests(ITestOutputHelper output) : IAsyncLifetime
         return port;
     }
 
-    private (Process Process, Channel<string> Lines) Start(string file, params string[] args)
+    private (Process Process, Channel<string> Lines) Start(string file, params ReadOnlySpan<string> args)
     {
         var lines = Channel.CreateUnbounded<string>();
         var psi = new ProcessStartInfo(file) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
@@ -291,7 +291,7 @@ public class SshAgentSshdTests(ITestOutputHelper output) : IAsyncLifetime
         var p = new Process { StartInfo = psi };
         p.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data != null)
+            if (e.Data is not null)
                 lines.Writer.TryWrite(e.Data);
         };
         p.Start();
@@ -334,7 +334,7 @@ public class SshAgentSshdTests(ITestOutputHelper output) : IAsyncLifetime
             agent.Shutdown(SocketShutdown.Both);
             client.Shutdown(SocketShutdown.Both);
             var bytes = fromClient.ToArray();
-            var frames = new List<byte[]>();
+            List<byte[]> frames = [];
             for (var pos = 0; pos + 4 <= bytes.Length;)
             {
                 var length = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(pos));

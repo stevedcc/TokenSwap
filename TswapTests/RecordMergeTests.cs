@@ -57,7 +57,7 @@ public class RecordMergeTests
     [Fact]
     public void Hlc_Next_InTheSameMillisecond_GivesDistinctIncreasingStamps()
     {
-        var stamps = new List<Hlc>();
+        List<Hlc> stamps = [];
         var last = Hlc.Zero;
         for (var i = 0; i < 5; i++)
             stamps.Add(last = Hlc.Next(last, 1000));
@@ -190,8 +190,8 @@ public class RecordMergeTests
     public void BurnHistories_MergeToTheSameTruncatedList_InBothOrders()
     {
         // 20 rotated-away versions, each burned once; half the burns known to each copy.
-        var aBurns = new List<BurnEntry>();
-        var bBurns = new List<BurnEntry>();
+        List<BurnEntry> aBurns = [];
+        List<BurnEntry> bBurns = [];
         for (var i = 0; i < 20; i++)
             (i % 2 == 0 ? aBurns : bBurns).Add(Burn(S(1000 + i * 10), S(1005 + i * 10, 0, i % 2 == 0 ? OriginA : OriginB), $"burn {i}"));
         var current = S(5000);

@@ -600,14 +600,14 @@ public sealed class InitCommand : ICliCommand
     /// </summary>
     internal static (Config Config, byte[] VaultKey, byte[]? RecoveryPrivateKey) BuildKeyringConfig(
         byte[] kekSlot, List<int> serials, string redundancyXorHex, bool? requiresTouch,
-        RngMode rngMode, string unlockChallenge, byte[] masterKeySalt, bool includeRecovery = true)
+        RngMode rngMode, string unlockChallenge, byte[] masterKeySalt, bool includeRecovery = true, TimeProvider? time = null)
     {
         // The YubiKey backend's own fields, exactly as before the split (issue #151 work item 2):
         // the keyring part below is backend-neutral and only adds Keyring/KeyringSlotId.
         var yubiKeyConfig = new Config(
             serials,
             redundancyXorHex,
-            DateTime.UtcNow,
+            (time ?? TimeProvider.System).GetUtcNow().UtcDateTime,
             requiresTouch,
             rngMode,
             unlockChallenge,

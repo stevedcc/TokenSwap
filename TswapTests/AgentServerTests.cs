@@ -289,7 +289,7 @@ public class AgentServerTests : IAsyncLifetime
     {
         if (!OperatingSystem.IsLinux())
             return;
-        var alive = new List<bool>();
+        List<bool> alive = [];
         PeerIdentity.PidfdAlive = peer => { var a = PeerIdentity.DefaultPidfdAlive(peer); alive.Add(a); return a; };
         await _h.StartAsync();
 
@@ -440,7 +440,7 @@ public class AgentServerTests : IAsyncLifetime
     {
         if (OperatingSystem.IsWindows())
             return;
-        var observed = new List<byte[]>();
+        List<byte[]> observed = [];
         AgentServer.AfterSendObserver = frame => { lock (observed) observed.Add(frame.ToArray()); };
         await _h.StartAsync();
 
@@ -537,7 +537,7 @@ public class AgentServerTests : IAsyncLifetime
         var release = new ManualResetEventSlim();
         _h.Unlock = () => { entered.SetResult(); release.Wait(); return _h.Key.ToArray(); };
         var held = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
-        var freed = new List<byte[]>();
+        List<byte[]> freed = [];
         StretchedPassword.BeforeFreeObserver = memory => { lock (freed) freed.Add(memory.ToArray()); };
         try
         {
@@ -711,7 +711,7 @@ public class AgentServerTests : IAsyncLifetime
         if (OperatingSystem.IsWindows())
             return;
         await _h.StartAsync();
-        var idle = new List<Socket>();
+        List<Socket> idle = [];
         try
         {
             for (var i = 0; i < 16; i++)
@@ -1114,7 +1114,7 @@ public class AgentServerTests : IAsyncLifetime
     [Fact]
     public void Hardening_LinuxDumpableFailure_Refuses_OtherFailuresWarn()
     {
-        var warnings = new List<string>();
+        List<string> warnings = [];
         var failingDumpable = new ProcessHardening.Steps(
             MakeNonDumpable: () => false, DenyAttach: () => true, ZeroCoreLimit: () => true, DenyProcessAccess: () => true);
         var ex = Assert.Throws<TswapException>(() =>
@@ -1135,7 +1135,7 @@ public class AgentServerTests : IAsyncLifetime
         Assert.Contains("DACL", Assert.Single(warnings));
 
         // Each platform runs only its own steps.
-        var calls = new List<string>();
+        List<string> calls = [];
         var counting = new ProcessHardening.Steps(
             MakeNonDumpable: () => { calls.Add("dumpable"); return true; },
             DenyAttach: () => { calls.Add("deny-attach"); return true; },

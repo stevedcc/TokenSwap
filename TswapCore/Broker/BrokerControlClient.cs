@@ -8,7 +8,7 @@ using TswapCore.VaultPassword;
 namespace TswapCore.Broker;
 
 /// <summary>What a password broker's control socket answered (brief T17 ruling 14).</summary>
-public abstract record BrokerControlAnswer
+public closed record BrokerControlAnswer
 {
     private BrokerControlAnswer()
     {

@@ -178,7 +178,7 @@ public class TpmEccPrimaryFormatTests
         throw new InvalidOperationException("chooseSerial must not be called for a single-device backend");
 
     private static Config TpmConfig(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
     [Fact]
     public void SimulatedTpm_PasswordFree_IsEccHeader_AndNeverAsksForThePassword()

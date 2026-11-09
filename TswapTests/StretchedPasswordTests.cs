@@ -147,7 +147,7 @@ public class StretchedPasswordTests(ITestOutputHelper output)
     public void StretchedPassword_Dispose_ZeroesBeforeFree()
     {
         var stretched = StretchedPassword.FromBytes(RandomNumberGenerator.GetBytes(32));
-        var seen = new List<byte[]>();
+        List<byte[]> seen = [];
         StretchedPassword.BeforeFreeObserver = span => seen.Add(span.ToArray());
         try
         {

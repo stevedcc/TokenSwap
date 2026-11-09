@@ -17,7 +17,7 @@ public class VaultPasswordEndToEndTests(TswapBinaryFixture binary) : IClassFixtu
 
     public void Dispose() => Directory.Delete(_dir, true);
 
-    private (int Exit, string Out, string Err) Run(string stdin, bool terminal, params string[] args)
+    private (int Exit, string Out, string Err) Run(string stdin, bool terminal, params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo
         {

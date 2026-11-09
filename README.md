@@ -58,7 +58,7 @@ it needs Yubico's udev rule), a TPM 2.0 (Windows, or Linux with `tpm2-tools`), o
 Enclave. Prerequisites, building from source and notes for Windows
 are in [Installing tswap](docs/install.md).
 
-**macOS (from v0.3.0): two downloads, signed and notarised, from the same bytes.** macOS 12 or later, Apple silicon.
+**macOS (from v0.3.0): two downloads, signed and notarised, from the same bytes.** macOS 14 (Sonoma) or later, Apple silicon.
 
 - **The installer package, `tswap-osx-arm64.pkg`** (recommended). Double-click it: it installs `tswap` and
   `libtswapse.dylib` (the Secure Enclave support) into `/usr/local/bin` and works offline. Then, for the agent skill

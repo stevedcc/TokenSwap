@@ -110,7 +110,7 @@ internal static partial class CommandReference
         }
 
         var flat = RemoveGroups(helpUsage);
-        var found = new List<string>();
+        List<string> found = [];
         foreach (var alternative in flat.Split('|'))
         {
             var words = alternative.Split(' ', StringSplitOptions.RemoveEmptyEntries);

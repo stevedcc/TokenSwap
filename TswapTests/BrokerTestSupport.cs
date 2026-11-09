@@ -147,7 +147,7 @@ public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBr
         var n = Interlocked.Increment(ref _unlocks);
         UnlockStarted?.Invoke(n);
         Gate?.Task.GetAwaiter().GetResult();
-        if (Throw != null)
+        if (Throw is not null)
             throw Throw;
         if (Fail)
             throw new BrokerUnlockException("simulated unlock failure");
@@ -164,7 +164,7 @@ public sealed class FakeBrokerSecrets(Func<string, string>? values = null) : IBr
             ManyReads.Add([.. secretNames]);
         UnlockStarted?.Invoke(n);
         Gate?.Task.GetAwaiter().GetResult();
-        if (Throw != null)
+        if (Throw is not null)
             throw Throw;
         if (Fail)
             throw new BrokerUnlockException("simulated unlock failure");
@@ -188,7 +188,7 @@ public sealed class FakeBrokerForwarder : IBrokerForwarder
             Outbound.Add(request.Outbound);
         var n = Interlocked.Increment(ref _calls);
         Entered?.Invoke(n);
-        if (Gate != null)
+        if (Gate is not null)
             await Gate.Task.WaitAsync(cancellationToken);
         var body = Encoding.ASCII.GetBytes("ok " + request.Outbound.AbsoluteUri);
         http.Response.StatusCode = 200;
@@ -386,7 +386,7 @@ public sealed class BrokerHarness : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (Server != null)
+        if (Server is not null)
             await Server.DisposeAsync();
         if (Directory.Exists(Root))
             Directory.Delete(Root, true);

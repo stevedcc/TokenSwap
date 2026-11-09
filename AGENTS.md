@@ -16,10 +16,10 @@ C# application with a single entry point:
 ```bash
 # Build
 dotnet publish TswapCli/TswapCli.csproj -c Release
-# Linux:   cp TswapCli/bin/Release/net10.0/linux-x64/publish/tswap ~/.local/bin/
-# macOS:   sudo cp TswapCli/bin/Release/net10.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
+# Linux:   cp TswapCli/bin/Release/net11.0/linux-x64/publish/tswap ~/.local/bin/
+# macOS:   sudo cp TswapCli/bin/Release/net11.0/osx-arm64/publish/{tswap,libtswapse.dylib} /usr/local/bin/
 #          (the Secure Enclave library stays next to the binary; the release archive packs both, contrib/packaging/package.sh)
-# Windows: copy TswapCli\bin\Release\net10.0\win-x64\publish\tswap.exe to a folder on PATH
+# Windows: copy TswapCli\bin\Release\net11.0\win-x64\publish\tswap.exe to a folder on PATH
 
 # Or generate a platform install script from the compiled binary
 # Linux/macOS:
@@ -297,5 +297,5 @@ When working in this repository and tswap is initialized (YubiKey present), foll
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
   setting; a key without touch (less secure: no button press) is for CI/automation only.
-- .NET 10 SDK (build time only)
+- The .NET SDK that `global.json` names (.NET 11; build time only)
 - For sudo commands: copy the compiled binary to `/usr/local/bin`

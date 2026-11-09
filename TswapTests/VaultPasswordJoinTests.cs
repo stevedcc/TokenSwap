@@ -117,7 +117,7 @@ public class VaultPasswordJoinTests : IDisposable
     {
         RequestTpm(Password);
         Approve();
-        var calls = new List<string>();
+        List<string> calls = [];
 
         int exit;
         string err;

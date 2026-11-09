@@ -41,7 +41,7 @@ public class SlotAddYubiKeyTests : IDisposable
     {
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _dir, Verbose = false, CommandArgs = args };
         var unlocker = new VaultUnlocker(_keys, overrideKey: null,
-            additionalBackends: tpm == null ? null : [new SimulatedHardwareService(HardwareBackend.Tpm, tpm)]);
+            additionalBackends: tpm is null ? null : [new SimulatedHardwareService(HardwareBackend.Tpm, tpm)]);
         return new CommandContext(console, env, VaultStores.Open(_dir), _keys, unlocker, TestKey: tpm, SudoBypass: sudo);
     }
 

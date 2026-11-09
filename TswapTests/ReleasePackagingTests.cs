@@ -96,7 +96,7 @@ public class ReleasePackagingTests : IDisposable
     private static string RepoFile(params string[] parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
-    private string Publish(params string[] files)
+    private string Publish(params ReadOnlySpan<string> files)
     {
         var publish = Path.Combine(_dir, "publish");
         Directory.CreateDirectory(publish);
@@ -145,7 +145,7 @@ public class ReleasePackagingTests : IDisposable
         return (process.ExitCode, stdout.Result + stderr.Result);
     }
 
-    private (int ExitCode, string Output) Package(string rid, string publish, params string[] extra) =>
+    private (int ExitCode, string Output) Package(string rid, string publish, params ReadOnlySpan<string> extra) =>
         Run("bash", [RepoFile("contrib", "packaging", "package.sh"), rid, publish, Path.Combine(_dir, "dist"), .. extra]);
 
     /// <summary>
@@ -154,7 +154,7 @@ public class ReleasePackagingTests : IDisposable
     /// <c>--version</c> (brief T18) answers first, logged only to <c>version.log</c> (<see cref="VersionRuns"/>), so the
     /// other tests' run lists are as they were.
     /// </summary>
-    private string PublishFakeBinary(int exitCode, params string[] extraFiles)
+    private string PublishFakeBinary(int exitCode, params ReadOnlySpan<string> extraFiles)
     {
         var publish = Publish(["tswap", .. extraFiles]);
         File.WriteAllText(Path.Combine(publish, "tswap"), $$"""
@@ -703,7 +703,7 @@ public class ReleasePackagingTests : IDisposable
         var (exitCode, output) = MacOsSmoke();
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("minos: tswap 12.0, libtswapse.dylib 26.0, SecureEnclaveShimMinOS 12.0: they must be equal (#265)", output);
+        Assert.Contains("minos: tswap 14.0, libtswapse.dylib 26.0, SecureEnclaveShimMinOS 14.0: they must be equal (#265)", output);
     }
 
     /// <summary>Both files agree with each other but not with the csproj's property: still a failure.</summary>
@@ -1039,7 +1039,7 @@ public class ReleasePackagingTests : IDisposable
         var buildMacos = Job(Workflow("release.yml"), "build-macos");
 
         Assert.Contains("    needs: [test, verify-version]\n", buildMacos);
-        Assert.Contains("    if: always() && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')\n", buildMacos);
+        Assert.Contains("    if: always() && github.event_name != 'pull_request' && needs.test.result == 'success' && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped')\n", buildMacos);
         Assert.Contains("    runs-on: macos-latest\n", buildMacos);
         Assert.Contains("    timeout-minutes: 120\n", buildMacos);
         Assert.Contains("    permissions:\n      contents: read\n", buildMacos);
@@ -1103,6 +1103,61 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(".pkg", fork);
         Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
         Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
+    }
+
+    /// <summary>
+    /// Brief T15: release.yml also runs on pull requests that change what ships, so every shipped runtime identifier is
+    /// built before a tag. A pull request run never reaches the macos-signing environment or a signing secret: every job
+    /// that names an environment or a secret is kept off pull requests by its own if:, and nothing is published.
+    /// </summary>
+    [Fact]
+    public void Workflows_ReleaseOnPullRequests_NeverReachesTheSigningEnvironment() =>
+        AssertPullRequestsStayUnsigned(Workflow("release.yml"));
+
+    private static void AssertPullRequestsStayUnsigned(string release)
+    {
+        var triggers = release[..release.IndexOf("\njobs:", StringComparison.Ordinal)];
+        Assert.Contains("\n  pull_request:\n    paths:\n", triggers);
+        Assert.Contains("\npermissions:\n  contents: read\n", triggers);
+        var jobNames = release.Split('\n')
+            .SkipWhile(line => line != "jobs:").Skip(1)
+            .Where(line => System.Text.RegularExpressions.Regex.IsMatch(line, @"^  [A-Za-z0-9_-]+:\s*$"))
+            .Select(line => line.Trim().TrimEnd(':'))
+            .ToList();
+        Assert.Contains("build-macos", jobNames);
+        foreach (var name in jobNames)
+        {
+            var job = Job(release, name);
+            if (!job.Contains("environment:") && !job.Contains("secrets.") && !job.Contains("contents: write"))
+                continue;
+            var condition = job.Split('\n').Single(line => line.StartsWith("    if: ", StringComparison.Ordinal));
+            Assert.True(
+                // == 'push' alone, or ANDed with more (bump-version: a tag push whose release succeeded), never runs on a pull request.
+                condition.Contains("github.event_name != 'pull_request'") || condition == "    if: github.event_name == 'push'"
+                    || condition.StartsWith("    if: github.event_name == 'push' && ", StringComparison.Ordinal),
+                $"job {name} names an environment, a secret or a write permission but can run on a pull request: {condition.Trim()}");
+        }
+    }
+
+    /// <summary>Break-it-once for <see cref="AssertPullRequestsStayUnsigned"/>, kept: build-macos without its guard is caught.</summary>
+    [Fact]
+    public void Workflows_PullRequestCheck_CatchesBuildMacosOnAPullRequest()
+    {
+        var release = Workflow("release.yml").Replace("    if: always() && github.event_name != 'pull_request' && ", "    if: always() && ");
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
+    }
+
+    /// <summary>Break-it-once, kept: bump-version (contents: write) with its push guard dropped is caught.</summary>
+    [Fact]
+    public void Workflows_PullRequestCheck_CatchesBumpVersionOnAPullRequest()
+    {
+        var release = Workflow("release.yml").Replace(
+            "    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.release.result == 'success'",
+            "    if: needs.release.result == 'success'");
+
+        var problem = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertPullRequestsStayUnsigned(release));
+        Assert.Contains("job bump-version", problem.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
