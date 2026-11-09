@@ -79,8 +79,19 @@ public sealed record SlotKeyPair(byte[] PublicKey, byte[] PrivateKey)
         using var key = X25519DiffieHellman.ImportPrivateKey(privateKey);
         using var peer = X25519DiffieHellman.ImportPublicKey(peerPublicKey);
         var secret = key.DeriveRawSecretAgreement(peer);
-        if (!secret.AsSpan().ContainsAnyExcept((byte)0))
+        if (IsAllZero(secret))
             throw new CryptographicException("X25519 key agreement produced an all-zero secret (low-order peer public key)");
         return secret;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="secret"/> is all zero bytes, compared in constant time against a zero buffer, so the
+    /// check's timing doesn't depend on where the first non-zero byte of a shared secret is.
+    /// </summary>
+    internal static bool IsAllZero(ReadOnlySpan<byte> secret)
+    {
+        Span<byte> zero = stackalloc byte[secret.Length];
+        zero.Clear();
+        return CryptographicOperations.FixedTimeEquals(secret, zero);
     }
 }

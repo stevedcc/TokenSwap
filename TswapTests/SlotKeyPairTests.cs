@@ -131,6 +131,21 @@ public class SlotKeyPairTests
         Assert.Equal(RebexSharedSecretHex, Convert.ToHexStringLower(SlotKeyPair.ComputeSharedSecret(privateKey, Convert.FromHexString(RebexPeerPublicHex))));
     }
 
+    // The all-zero check on the shared secret (code review of #216, F4): true only for 32 zero bytes, false with any
+    // one byte set, wherever it is.
+    [Fact]
+    public void IsAllZero_IsTrueOnlyForAllZeroBytes()
+    {
+        Assert.True(SlotKeyPair.IsAllZero(new byte[32]));
+        for (var i = 0; i < 32; i++)
+        {
+            var secret = new byte[32];
+            secret[i] = 1;
+            Assert.False(SlotKeyPair.IsAllZero(secret));
+        }
+        Assert.False(SlotKeyPair.IsAllZero(Enumerable.Repeat((byte)0xFF, 32).ToArray()));
+    }
+
     // Wrong-length keys fail as CryptographicException, the one exception type this primitive throws and its
     // callers map to TswapException (the BCL itself throws ArgumentException for them; code review of #216, F1).
     [Theory]
