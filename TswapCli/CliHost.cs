@@ -1,3 +1,4 @@
+using TswapCli.Commands;
 using TswapCore;
 using TswapCore.Vault;
 using TswapCore.Vault.Fido2;
@@ -38,6 +39,14 @@ internal static class CliHost
     /// <param name="time">The one clock of this run (<see cref="TimeProvider.System"/> outside the Debug test seam).</param>
     private static int Run(string[] args, IConsole console, Func<string, string?> getEnv, bool isPrivileged, string? processPath, DirectoryOwnerMatcher? owner, TimeProvider time)
     {
+        // Brief T18: `tswap --version` / `tswap version` answer before startup reads anything (the environment, the
+        // config folder, the vault, hardware, the agent, sudo), so they work and print the same anywhere.
+        if (VersionCommand.IsBareRequest(args))
+        {
+            console.Out.WriteLine(VersionCommand.Line);
+            return 0;
+        }
+
         try
         {
             var env = CliEnvironment.Create(args, getEnv, isPrivileged, processPath, console.Error);

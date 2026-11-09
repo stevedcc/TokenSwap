@@ -358,6 +358,14 @@ tswap broker <serve|unlock|lock|status|forward|call|route|socket|template> ...
 
 Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve, and unlock|lock|status for a broker whose slot has the vault password, as the vault user; forward/call in the container; sudo for route|socket|template add|remove)
 
+### version
+
+```
+tswap version
+```
+
+Print tswap's version (also: --version)
+
 <!-- END GENERATED: commands -->
 
 ## Environment variables

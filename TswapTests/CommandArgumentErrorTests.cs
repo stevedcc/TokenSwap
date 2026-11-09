@@ -37,6 +37,9 @@ public sealed class CommandArgumentErrorTests : IDisposable
     [InlineData("Usage: sudo tswap restore <name>", "restore")]
     [InlineData("Usage: sudo tswap restore <name>", "restore", "a", "b")]
     [InlineData("Usage: sudo tswap restore <name>", "restore", "--name")]
+    [InlineData("Usage: tswap version", "version", "anything")]
+    [InlineData("Usage: tswap version", "--version", "anything")]
+    [InlineData("Usage: tswap version", "version", "anything", "else")]
     public void AMissingOrExtraArgument_GivesTheCommandsUsage_BeforeAnyOtherCheck(string usage, params string[] args)
     {
         var (exit, stdout, stderr) = _m.Run("", args);
