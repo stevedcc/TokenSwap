@@ -493,7 +493,9 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
             echo "the branch $branch is already there"
           else
-            sed -i "s:<Version>${tag//./\\.}</Version>:<Version>$next</Version>:" "$csproj"
+            # no sed -i: GNU and BSD sed read its argument differently, and a test runs this step on macOS
+            sed "s:<Version>${tag//./\\.}</Version>:<Version>$next</Version>:" "$csproj" > "$csproj.new"
+            mv "$csproj.new" "$csproj"
             if [ "$(grep -c "<Version>$next</Version>" "$csproj")" -ne 1 ]; then
               echo "::error::could not set <Version>$next</Version> in $csproj" >&2
               exit 1
