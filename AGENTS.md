@@ -67,7 +67,10 @@ point it at real secrets: every value in it is an inert marker.
   (`release/bump-<next>`, "Version <next> for development (after v<tag>)") from main's head and dispatches ci.yml on
   it; the owner merges it. A prerelease tag (`v0.3.0-rc.1`) bumps nothing, since the final release is still to come
   (`contrib/packaging/next-version.sh`). The version PR before a release changes `<Version>` only when the next
-  release is a bigger step than that patch (0.3.1 to 0.4.0).
+  release is a bigger step than that patch (0.3.1 to 0.4.0), and after a prerelease tag it sets the final version
+  (`0.3.0-rc.1` to `0.3.0`) before that is tagged.
+- **Never set a `TswapReleaseBuild` environment variable**: MSBuild reads environment variables as properties, so a
+  local build would then report a plain release version. Only release.yml passes it, as `-p:`.
 - **One-time owner setting** for `bump-version`: Settings > Actions > General > "Allow GitHub Actions to create and
   approve pull requests" must be on, or the job can push its branch but not open the PR (re-run the job after
   switching it on: it finds the branch and opens the PR).
