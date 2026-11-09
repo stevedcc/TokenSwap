@@ -289,3 +289,124 @@ MiMo (`tswap-wt/tools/t15-plan-r3-mimo-v.md`): both round-2 findings and the min
 | M-r3 minor | Row 11: name the stays-by-necessity kind. | **Fixed:** a helper whose body needs the array itself (stores it, passes it to a `T[]` API, uses `Array` methods, returns it) stays, beside the overload-resolution case. |
 | (merge) | `origin/main` `a75e5bd` (T16 stage 2b) merged into the branch as `9951f57`. | **Counts re-taken** at `9951f57`. Production: unchanged except `.ToList()`/`.ToArray()` 175 → 174 and `Stack`/`Queue` 1 → 6 (the round-1 grep missed `x = new Queue<…>()` assignments; all six are fill-as-you-go structures, not convertible); the `ToList` 175 → 174 is stage 2b itself (it merged two `.ToList()` calls in `RecordVaultStore.cs`' burn handling into one), not a grep change. The comparer rows' patterns were re-run in assignment form too (`x = new HashSet/Dictionary<…>(comparer)` outside a `var` declaration): none exist, so rows 1a-1c' "all `var` locals" holds. Tests: arrays 173 → 194, `ToList`/`ToArray` 559 → 589, constructor-only-assigns 14 → 17, `params T[]` 132 → 134, `string.Format` 6 → 8, `Guid.NewGuid` 60 → 64 (all still temp names), dictionary initialisers 58 → 63. Rows 1a-1c, 2, 10, 12-15 unchanged. |
 
+
+## Dispositions as applied (2026-11-08/09, brief/t15 on RC 3)
+
+What the implementation did with each row, recorded after the code review of the implementation (MiMo prod/tests
+"request changes", DeepSeek prod/tests and the #216 crypto review "approve"; `tswap-wt/tools/t15/code/`). The commits
+are named by hash on `brief/t15`.
+
+### Row 9: every primary-constructor candidate and why it stays (plan commits 7 and 14: no commit)
+
+No site qualified, so plan commits 7 and 14 made no commit. The candidates are the "constructor that only assigns"
+matches at `655c138`:
+
+| Site | Why it stays |
+|---|---|
+| `TswapCli/FilledFiles.cs:126` | Computes a field (`_signals = env.RegisterSignals(OnSignal)`), and its object is used from signal-handler threads (two `Lock` fields): the thread rule. |
+| `TswapCli/OwnerScopedHardwareService.cs:73` | Private constructor (a primary constructor can't be private). |
+| `TswapCore/Agent/AgentServer.cs:79` | Private constructor; a server used from accept/connection threads (thread rule; lock-file and socket ownership). |
+| `TswapCore/Broker/BrokerControlServer.cs:123` | Private constructor; server, thread rule. |
+| `TswapCore/Broker/BrokerPasswordState.cs:99` | `Broker/`, shared by connection threads (4 synchronisation primitives): thread rule. |
+| `TswapCore/Broker/BrokerPolicy.cs:26` | Private constructor; `Broker/`, read by every request thread: thread rule. |
+| `TswapCore/Broker/BrokerRequestTarget.cs:27` | Private constructor; `Broker/` (thread rule as the plan words it). |
+| `TswapCore/Broker/BrokerServer.cs:86` | Private constructor; server, thread rule. |
+| `TswapCore/Broker/BrokerTcpRelay.cs:18` | Private constructor; `Broker/`, thread rule (named in the plan). |
+| `TswapCore/Broker/SshAgent/SshAgentKey.cs:12` | `Broker/SshAgent/`, thread rule (keys are shared by agent connections). |
+| `TswapCore/Broker/SshAgent/SshAgentListener.cs:31` | `Broker/SshAgent/`, thread rule (6 synchronisation primitives). |
+| `TswapCore/Broker/SshAgent/SshPrivateKey.cs:24` | Private constructor; key material zeroed on dispose (plan exclusion). |
+| `TswapCore/Broker/SshAgent/SshPublicKey.cs:13` | Private constructor; `Broker/SshAgent/`, thread rule. |
+| `TswapCore/Fingerprints/FingerprintKeys.cs:19` | Private constructor; key material (plan exclusion). |
+| `TswapCore/RecordVaultStore.cs:81` | Two constructors, and computes paths (T14 exclusion). |
+| `TswapCore/SecretEntry.cs:61`, `:78` | Two constructors (T14 exclusion). |
+| `TswapCore/Storage.cs:34` | Computes paths and defaults (`Path.Combine`, `owner ?? …`): not "only assigns" (T14 exclusion). |
+| `TswapCore/Vault/SdkYubiKeyService.cs:28` | Two constructors (T14 exclusion). |
+| `TswapTests/AgentTestSupport.cs:17` `AgentHarness()` | Parameterless; computes its set-up (a temp folder, random keys): nothing to capture. |
+| `TswapTests/BareRecordVault.cs:21` | Private constructor. |
+| `TswapTests/BrokerContainerClient.cs:26` | Private constructor. |
+| `TswapTests/BrokerContainerGateTests.cs:35` | Computes a field (`binary.BinaryPath`), and the class's `_output` is used from broker callbacks on other threads (async test with a running server): thread rule. |
+| `TswapTests/BrokerTestUpstream.cs:54` | Private constructor. |
+| `TswapTests/RecordStorePerRecordWriteTests.cs:28` | Private constructor, and two constructors. |
+| `TswapTests/BrokerVaultConflictTests.cs:23`, `FixRoundShouldFixTests.cs:18`, `RecordStoreMetadataTests.cs:22`, `RecordStoreSelectiveReadTests.cs:23`, `RecordStoreTests.cs:19`, `RecordStoreV3Tests.cs:22`, `RotateTests.cs:21`, `VaultReindexTests.cs:24`, `VaultViewTests.cs:19`, `VaultWriterTests.cs:23` | Parameterless test-class constructors that build a vault (`new FleetMachine(...)`, `InitRecordVault`, `VaultKey(...)`): computed set-up, not parameter assignment, so nothing to capture. |
+| `TswapTests/SimulatedYubiKeyService.cs:27` | Computes copies (`ToDictionary`, `Clone`, `ToList`): not "only assigns". |
+
+### Row 2: the 16 switches that stay, and why (owner decision 2026-11-08: (a), they stay as they are)
+
+The owner chose (a): these 16 switches stay as they are. Only `BrokerCommand.Failure` converted (`a895ae9`). Since
+`655c138`, all three bases are `closed`: a compile-time change only, with every switch unchanged. The
+cross-assembly check gave CS8509 with a case left out of each, and the full suite passed (4707).
+
+None of the 16 has a parameter or field as its subject. Each switches on the **result of a producer call** or a local
+holding one. Every producer is declared non-nullable and constructs a case on every return path, including
+`YubiKeySlotKinds.Classify(null)`, which returns `None`. A test therefore can't make the switch see null. The
+helpers that wrap a switch take a `Slot` or a `byte[]`, not the kind. Reaching them by reflection (as
+`BrokerControlFailureTests` does for `Failure`, whose parameter *is* the answer) still can't hand the switch null.
+
+Making null reachable would mean widening a nullability contract, either a producer's return type or a new
+`YubiKeySlotKind?` parameter on a helper. Visibility is not the blocker (DeepSeek's precision is right). No such
+contract was widened, and no null was fed to a non-nullable parameter by reflection.
+
+| Switch | Subject | Why null can't be pinned |
+|---|---|---|
+| `TswapCli/AgentUnlock.cs:72` | inline `AgentClient.Unlock(…)` | producer non-nullable, never returns null |
+| `TswapCli/Commands/AgentCommand.cs:447` | inline `AgentClient.Stop(…)` | same |
+| `TswapCli/Commands/AgentCommand.cs:464` | inline `AgentClient.Status(…)` | same |
+| `TswapCli/Commands/BrokerCommand.cs:378` | inline `BrokerControlClient.Unlock(…)` | same; its `case var other:` hands null to `Failure`, whose `null` arm is pinned |
+| `TswapCli/Commands/BrokerCommand.cs:393` | inline `BrokerControlClient.Lock(…)` | same |
+| `TswapCli/Commands/BrokerCommand.cs:406` | inline `BrokerControlClient.Status(…)` | same |
+| `TswapCli/Commands/YubiKeyCommand.cs:358` `MayBeThisKeys` | inline `YubiKeySlotKinds.Classify(slot.HwBlob)` | `Classify` never returns null; the method takes a `Slot` |
+| `TswapCli/Commands/YubiKeyCommand.cs:389` `Classify` | inline `YubiKeySlotKinds.Classify(slot.HwBlob)` | same |
+| `TswapCore/Vault/VaultUnlocker.cs:814` | inline `YubiKeySlotKinds.Classify(s.HwBlob)` | same |
+| `TswapCli/Commands/SlotCommand.cs:1539` `DescribeSlot` | inline `YubiKeySlotKinds.Classify(slot.HwBlob)` | same |
+| `TswapCli/Commands/SlotCommand.cs:1555` `RequestedOtpBlob` | inline `YubiKeySlotKinds.Classify(hwBlob)` | same; the method takes the blob |
+| `TswapCli/Commands/SlotsCommand.cs:259` `DescribeHardware` | inline `YubiKeySlotKinds.Classify(slot.HwBlob)` | same |
+| `TswapCli/RecordMigration.cs:461` | local `kind` = `Classify(...)` | same (a non-nullable local from the producer) |
+| `TswapCli/RecordMigration.cs:306`, `TswapCore/Keyring/SlotPassword.cs:70`, `TswapCore/Keyring/SlotReceiptFile.cs:136` | inline `Classify(...)` | no catch-all: nothing to convert (plan table) |
+
+### Rows 1a/1b: converted sites with no red pin — orchestrator ruling (2026-11-08)
+
+The plan's gate for these rows is a named test that is red with the opposite comparer. For the sites below no input
+can reach the comparer with a case variant. The orchestrator ruled that, for these sites only, **an identical
+comparer plus no reachable input that can differ** (names validated to `[a-z0-9-]`, an ordinal lookup first, or
+hex-only names) is the gate substitute:
+
+| Site | Why no input can differ | Evidence (opposite comparer at the site) |
+|---|---|---|
+| `TswapCore/Broker/BrokerPolicy.cs:422`, `:430`, `:437` (socket route/template/key allow-lists) | names validated to `[a-z0-9-]` ("Route name 'API' is invalid"); each entry admitted only after an ordinal-dictionary lookup | `OrdinalIgnoreCase`: all 876 broker unit tests passed (`abd4927`) |
+| `TswapCore/Broker/Templates/BrokerTemplatePolicy.cs:317` (used template args) | placeholders match `\{([a-z0-9_-]{1,32})\}` and declared names `[a-z0-9_-]` | same run: 876 passed |
+| `TswapCore/Broker/SshAgent/SshKeys.cs:141` (loaded keys by name) | key names validated to `[a-z0-9-]`; looked up by the socket's own lower-case list | `OrdinalIgnoreCase`: all 1102 broker and ssh-agent tests passed (`4267bbb`) |
+| `TswapCore/RecordVaultStore.cs:1088` (loaded records) | only names matching `^[0-9a-f]{64}$` (`RecordDirectoryScanner.ValidRecordFilename`) are loaded | `OrdinalIgnoreCase`: no record-store test failed (the run's only failures were hardware-category tests outside the unit filter) (`fec7374`) |
+| `TswapCli/Commands/BrokerCommand.cs:842` (option parsing) | keys are only the exact flag spellings matched just before | `OrdinalIgnoreCase`: all 882 broker tests passed (`fec7374`) |
+
+`TswapCore/Broker/Templates/BrokerTemplateCalls.cs:336` is no longer in this list. MiMo was right that a body with
+`"branch"` and `"Branch"` tells the comparers apart. Its pin
+`BrokerTemplateCallTests.ACallWithArgumentsDifferingOnlyInCase_RefusesTheUndeclaredOne` is red with
+`OrdinalIgnoreCase` (`635f1f5`).
+
+### Row 7: the Core count
+
+The plan's 15 Core sites (at `9951f57`) are 14 `new[] { … }` lines found by a line grep, plus
+`TswapCore/Broker/BrokerRedactor.cs:148`, a `new[]` whose `{` is on the next line. A line grep misses that form,
+which is why `6d4fbc8`'s list has 13 stays and 1 conversion. The two sites not in its stay list:
+- `TswapCore/Broker/Templates/BrokerTemplatePolicy.cs:318`: the one converted site.
+- `TswapCore/Broker/BrokerRedactor.cs:148`: stays (untyped `foreach (var json in new[] { … })`; a collection
+  expression has no natural type there; it also builds a secret's redaction forms).
+
+Cli: `InitCommand.cs:104` and `MigrateCommand.cs:185` both stay (untyped). 15/2 reconciled.
+
+### Row 8 in tests (commit 13)
+
+The correct reason for "nothing to convert": **no copy-only test site qualifies**. `8d95f4d`'s message gave
+"`var y = [..x]` doesn't compile", which is a non-sequitur: `List<T> y = [..x]` would be allowed. This entry
+replaces that reason.
+
+### #216 (X25519) review follow-ups
+
+| Finding | Done |
+|---|---|
+| F1 | `5e4c0c6`: wrong-length keys fail as `CryptographicException` in `ComputeSharedSecret`, so they surface as `TswapException`. The BCL threw `ArgumentException` (tests written first, red for that reason). |
+| F3 | `6b3500b`: the shared secret and the KEK are zeroed after each wrap and unwrap, on success and failure (test red without zeroing). |
+| F4 | `87caa1d`: the all-zero check uses `CryptographicOperations.FixedTimeEquals` against a zero buffer. |
+| F7 | `00b025c`: every caller graded. `slot approve`, `slot accept` and `RecoveryKeyUnlock` can see a key from outside and each has a test. `init` and `migrate` wrap to their own fresh key and can't be reached. |
+| F2, F5 | `d24f3b2`: one comment line each. |
+| F6 (more Rebex vectors) | Skipped: no Rebex package is available on this machine, and downloading one is not allowed. |
