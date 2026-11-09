@@ -26,6 +26,37 @@ public sealed class VersionCommandTests
     }
 
     /// <summary>
+    /// What this (development) build's <c>--version</c> reports (owner, 2026-11-09): <c>&lt;Version&gt;-pre-&lt;first 7 of
+    /// HEAD&gt;</c>, the commit the SDK embedded when it built the tests' tswap; <c>&lt;Version&gt;-pre</c> where git
+    /// can't name one. Only a release build (<c>-p:TswapReleaseBuild=true</c>) reports the plain Version.
+    /// </summary>
+    internal static string ExpectedVersion()
+    {
+        var head = GitHead();
+        return head is null ? $"{CsprojVersion()}-pre" : $"{CsprojVersion()}-pre-{head[..7]}";
+    }
+
+    private static string? GitHead()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git", ["rev-parse", "HEAD"])
+        {
+            WorkingDirectory = MarkdownLinks.RepoRoot(), RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        try
+        {
+            using var git = System.Diagnostics.Process.Start(psi)!;
+            var sha = git.StandardOutput.ReadToEnd().Trim();
+            git.StandardError.ReadToEnd();
+            git.WaitForExit();
+            return git.ExitCode == 0 && sha.Length == 40 ? sha : null;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null; // no git on PATH
+        }
+    }
+
+    /// <summary>
     /// Runs through <see cref="CliHost"/> with <paramref name="env"/> as the whole process environment, recording every
     /// variable the run asks for in <paramref name="asked"/>.
     /// </summary>
@@ -58,17 +89,63 @@ public sealed class VersionCommandTests
         var (exit, stdout, stderr) = Run(new() { ["TSWAP_TEST_KEY"] = TestKeyHex }, [], isPrivileged: false, form);
 
         Assert.Equal(0, exit);
-        Assert.Equal($"tswap {CsprojVersion()}", SingleLine(stdout));
+        Assert.Equal($"tswap {ExpectedVersion()}", SingleLine(stdout));
         Assert.Equal("", stderr);
     }
 
+    /// <summary>
+    /// Owner, 2026-11-09: a release build reports the Version (build metadata cut, a prerelease suffix kept); every other
+    /// build adds <c>-pre-</c> and the first 7 hex characters of the commit the SDK embeds (<c>+&lt;40-hex sha&gt;</c>),
+    /// or only <c>-pre</c> when the metadata is no commit (no git when it was built).
+    /// </summary>
     [Theory]
-    [InlineData("0.2.0", "0.2.0")]
-    [InlineData("0.2.0+cae3bf0e1d2c", "0.2.0")]
-    [InlineData("0.3.0-rc.1", "0.3.0-rc.1")]
-    [InlineData("0.3.0-rc.1+cae3bf0e1d2c", "0.3.0-rc.1")]
-    public void Display_CutsOnlyBuildMetadata(string informational, string expected)
-        => Assert.Equal(expected, VersionCommand.Display(informational));
+    [InlineData("0.2.0+cae3bf0695b365f5f98d59653fef7c02bcfafb77", true, "0.2.0")]
+    [InlineData("0.2.0+cae3bf0695b365f5f98d59653fef7c02bcfafb77", false, "0.2.0-pre-cae3bf0")]
+    [InlineData("0.3.0-rc.1+cae3bf0695b365f5f98d59653fef7c02bcfafb77", true, "0.3.0-rc.1")]
+    [InlineData("0.3.0-rc.1+cae3bf0695b365f5f98d59653fef7c02bcfafb77", false, "0.3.0-rc.1-pre-cae3bf0")]
+    [InlineData("0.2.0", true, "0.2.0")]
+    [InlineData("0.2.0", false, "0.2.0-pre")]
+    [InlineData("0.3.0-rc.1", false, "0.3.0-rc.1-pre")]
+    [InlineData("0.2.0+", false, "0.2.0-pre")]
+    [InlineData("0.2.0+cae3bf", false, "0.2.0-pre")]
+    [InlineData("0.2.0+local.build", false, "0.2.0-pre")]
+    [InlineData("0.2.0+cae3bfz695b365f5f98d59653fef7c02bcfafb77", false, "0.2.0-pre")]
+    public void Display_ReleaseBuildIsTheVersion_OtherBuildsArePreWithTheCommit(string informational, bool releaseBuild, string expected)
+        => Assert.Equal(expected, VersionCommand.Display(informational, releaseBuild));
+
+    /// <summary>The tests' tswap is built without <c>TswapReleaseBuild</c>, so it is a development build.</summary>
+    [Fact]
+    public void TheTestsBuild_IsNotAReleaseBuild()
+        => Assert.False(VersionCommand.IsReleaseBuild);
+
+    /// <summary>
+    /// The flag is compile-time: <c>-p:TswapReleaseBuild=true</c> (release.yml on a tag push) defines the
+    /// <c>TSWAP_RELEASE_BUILD</c> compilation symbol that <see cref="VersionCommand.IsReleaseBuild"/> is compiled from;
+    /// without it, or with any other value, the symbol is absent. Evaluated with MSBuild, nothing built.
+    /// </summary>
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("True", true)]
+    [InlineData("false", false)]
+    [InlineData(null, false)]
+    public void ReleaseBuildProperty_DefinesTheCompileTimeSymbol_OnlyWhenTrue(string? value, bool defined)
+    {
+        string[] args = ["msbuild", Path.Combine(MarkdownLinks.RepoRoot(), "TswapCli", "TswapCli.csproj"), "-getProperty:DefineConstants", "-p:Configuration=Release"];
+        if (value is not null)
+            args = [.. args, $"-p:TswapReleaseBuild={value}"];
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet", args) { RedirectStandardOutput = true, RedirectStandardError = true };
+        psi.Environment.Remove("TswapReleaseBuild"); // MSBuild would read an environment variable of that name as the property
+        using var msbuild = System.Diagnostics.Process.Start(psi)!;
+        var stdout = msbuild.StandardOutput.ReadToEnd();
+        var stderr = msbuild.StandardError.ReadToEnd();
+        msbuild.WaitForExit();
+
+        Assert.True(msbuild.ExitCode == 0, stdout + stderr);
+        Assert.Equal(defined, stdout.Trim().Split(';').Contains("TSWAP_RELEASE_BUILD"));
+        // ... and it is the symbol IsReleaseBuild is compiled from.
+        var source = File.ReadAllText(Path.Combine(MarkdownLinks.RepoRoot(), "TswapCli", "Commands", "VersionCommand.cs"));
+        Assert.Contains("#if TSWAP_RELEASE_BUILD\n        true;\n#else\n        false;\n#endif", source.Replace("\r\n", "\n"));
+    }
 
     // ------------------------------------------------------------------ contract lines 2 and 3
 
@@ -92,7 +169,7 @@ public sealed class VersionCommandTests
             var (exit, stdout, stderr) = Run(new() { ["HOME"] = home }, [], isPrivileged: false, form);
 
             Assert.Equal(0, exit);
-            Assert.Equal($"tswap {CsprojVersion()}", SingleLine(stdout));
+            Assert.Equal($"tswap {ExpectedVersion()}", SingleLine(stdout));
             Assert.Equal("", stderr);
             Assert.Empty(Directory.EnumerateFileSystemEntries(home));
         }
@@ -130,7 +207,7 @@ public sealed class VersionCommandTests
         var (exit, stdout, stderr) = Run(env, asked, isPrivileged, form);
 
         Assert.Equal(0, exit);
-        Assert.Equal($"tswap {CsprojVersion()}", SingleLine(stdout));
+        Assert.Equal($"tswap {ExpectedVersion()}", SingleLine(stdout));
         Assert.Equal("", stderr);
         Assert.Empty(asked);
     }
@@ -177,7 +254,7 @@ public sealed class VersionCommandTests
         var (exit, stdout, _) = Run(new() { ["TSWAP_TEST_KEY"] = TestKeyHex }, [], isPrivileged: false, args);
 
         Assert.Equal(0, exit);
-        Assert.EndsWith($"{Environment.NewLine}tswap {CsprojVersion()}{Environment.NewLine}", stdout);
+        Assert.EndsWith($"{Environment.NewLine}tswap {ExpectedVersion()}{Environment.NewLine}", stdout);
     }
 
     // ------------------------------------------------------------------ contract line 5 (pinned before T18)
@@ -201,7 +278,7 @@ public sealed class VersionCommandTests
         Assert.Equal(names.Out, stdout);
         Assert.Equal(names.Err, stderr);
         Assert.Contains("t18-secret", stdout);
-        Assert.DoesNotContain($"tswap {CsprojVersion()}", stdout);
+        Assert.DoesNotContain($"tswap {CsprojVersion()}", stdout); // the plain Version is a prefix of the -pre form
     }
 
     // ------------------------------------------------------------------ contract line 6

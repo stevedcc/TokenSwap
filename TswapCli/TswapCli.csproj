@@ -16,6 +16,16 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <!--
+    Brief T18 addendum (owner, 2026-11-09): only a release build reports the plain <Version> in the version command;
+    every other build reports <Version>-pre-<commit> (TswapCli/Commands/VersionCommand.cs). release.yml sets the
+    property TswapReleaseBuild to true for its publishes on a tag push only; the symbol is compiled in, so nothing at
+    run time changes it.
+  -->
+  <PropertyGroup Condition="'$(TswapReleaseBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);TSWAP_RELEASE_BUILD</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
     <PackageReference Include="RedactingPty" Version="1.1.0" />

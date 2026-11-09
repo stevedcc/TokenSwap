@@ -18,19 +18,44 @@ public sealed class VersionCommand : ICliCommand
     public bool NeedsVault => false;
 
     /// <summary>
-    /// The version: this assembly's (the binary's entry assembly) informational version with any build metadata
-    /// cut off, so it is <c>&lt;Version&gt;</c> in TswapCli.csproj. An assembly attribute, so NativeAOT keeps it.
+    /// True only in a release build: compiled with <c>-p:TswapReleaseBuild=true</c> (release.yml on a tag push), which
+    /// defines <c>TSWAP_RELEASE_BUILD</c> (TswapCli.csproj). A compile-time fact; nothing at run time changes it.
+    /// </summary>
+    public static bool IsReleaseBuild { get; } =
+#if TSWAP_RELEASE_BUILD
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>
+    /// The version, from this assembly's (the binary's entry assembly) informational version: see <see cref="Display"/>.
+    /// An assembly attribute, so NativeAOT keeps it.
     /// </summary>
     public static string Current { get; } = Display(
         typeof(VersionCommand).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-        ?? throw new InvalidOperationException("tswap's assembly has no informational version."));
+        ?? throw new InvalidOperationException("tswap's assembly has no informational version."), IsReleaseBuild);
 
     /// <summary>The one line both forms print.</summary>
     public static string Line => $"tswap {Current}";
 
-    /// <summary><paramref name="informational"/> without its build metadata (<c>+…</c>); a prerelease suffix stays.</summary>
-    public static string Display(string informational)
-        => informational.IndexOf('+') is var plus and >= 0 ? informational[..plus] : informational;
+    /// <summary>
+    /// What <c>--version</c> reports for <paramref name="informational"/> (the SDK's <c>&lt;Version&gt;+&lt;40-hex
+    /// commit&gt;</c>), owner's rule of 2026-11-09: a release build, the Version (the build metadata cut, a prerelease
+    /// suffix kept); every other build, <c>&lt;Version&gt;-pre-&lt;first 7 hex of the commit&gt;</c>, or
+    /// <c>&lt;Version&gt;-pre</c> when the metadata names no commit (built without git).
+    /// </summary>
+    public static string Display(string informational, bool releaseBuild)
+    {
+        var plus = informational.IndexOf('+');
+        var version = plus >= 0 ? informational[..plus] : informational;
+        if (releaseBuild)
+            return version;
+        var metadata = plus >= 0 ? informational[(plus + 1)..] : "";
+        return metadata.Length >= 7 && metadata.All(char.IsAsciiHexDigit)
+            ? $"{version}-pre-{metadata[..7]}"
+            : $"{version}-pre";
+    }
 
     /// <summary>
     /// <c>--version</c> or <c>version</c> alone (in any case, as the registry matches command names): the request

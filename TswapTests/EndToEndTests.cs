@@ -157,7 +157,8 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // --- Version ---
 
     /// <summary>
-    /// Brief T18 lines 1 and 2 on the real binary: one line, <c>tswap &lt;csproj Version&gt;</c>, nothing on stderr,
+    /// Brief T18 lines 1 and 2 on the real binary: one line, <c>tswap &lt;csproj Version&gt;-pre-&lt;HEAD&gt;</c> (a development
+    /// build, see <see cref="VersionCommandTests.ExpectedVersion"/>), nothing on stderr,
     /// exit 0, with no test key, no config folder override and an empty, unwritable HOME that stays empty.
     /// </summary>
     [Theory]
@@ -186,7 +187,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
             Assert.Equal(0, process.ExitCode);
             var line = stdout.TrimEnd('\r', '\n');
             Assert.Equal(line + Environment.NewLine, stdout);
-            Assert.Equal($"tswap {VersionCommandTests.CsprojVersion()}", line);
+            Assert.Equal($"tswap {VersionCommandTests.ExpectedVersion()}", line); // a Debug publish: a development build
             Assert.Equal("", stderr);
             Assert.Empty(Directory.EnumerateFileSystemEntries(home));
         }
