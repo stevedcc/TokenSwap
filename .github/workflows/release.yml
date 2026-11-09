@@ -97,25 +97,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Brief T18: the version each smoke test expects the shipped binary's `tswap --version` to report (package.sh
-      # --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself): the tag without its v on a tag run (a
-      # prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version compares), else TswapCli.csproj's
-      # <Version> (a dispatch, a PR or a push to main).
+      # Brief T18 and its addendum (owner, 2026-11-09): what the shipped binary's `tswap --version` must report, for the
+      # smoke tests (package.sh --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself). A release
+      # build, release.yml on a tag push (its publishes pass -p:TswapReleaseBuild=true then, and only then), reports
+      # the tag without its v (a prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version
+      # compares). Every other build (a dispatch, even on a tag; a PR; a push to main) reports TswapCli.csproj's
+      # <Version>-pre-<first 7 of the commit built>: HEAD, the commit checked out (on a PR, the merge commit, which is
+      # GITHUB_SHA), which the SDK embeds in the binary. TSWAP_VERSION is the plain version, for the pkg.
       - name: Expected version (for the smoke tests' tswap --version)
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
             version=${GITHUB_REF_NAME#v}
+            expect=$version
           else
             version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+            commit=$(git rev-parse HEAD)
+            echo "commit built: $commit (GITHUB_SHA: $GITHUB_SHA)"
+            expect=$version-pre-${commit:0:7}
           fi
           if [ -z "$version" ]; then
             echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
             exit 1
           fi
-          echo "TSWAP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
-          echo "expected version: $version"
+          echo "TSWAP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TSWAP_EXPECT_VERSION=$expect" >> "$GITHUB_ENV"
+          echo "version: $version; tswap --version must print: tswap $expect"
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -134,6 +142,7 @@ jobs:
           --configuration Release
           --runtime ${{ matrix.rid }}
           --output ./publish/${{ matrix.rid }}
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       # Run the shipped (Release, NativeAOT) binary once on its own platform: a command that needs
       # no vault, so a binary that doesn't start fails the release here.
@@ -212,25 +221,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Brief T18: the version each smoke test expects the shipped binary's `tswap --version` to report (package.sh
-      # --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself): the tag without its v on a tag run (a
-      # prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version compares), else TswapCli.csproj's
-      # <Version> (a dispatch, a PR or a push to main).
+      # Brief T18 and its addendum (owner, 2026-11-09): what the shipped binary's `tswap --version` must report, for the
+      # smoke tests (package.sh --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself). A release
+      # build, release.yml on a tag push (its publishes pass -p:TswapReleaseBuild=true then, and only then), reports
+      # the tag without its v (a prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version
+      # compares). Every other build (a dispatch, even on a tag; a PR; a push to main) reports TswapCli.csproj's
+      # <Version>-pre-<first 7 of the commit built>: HEAD, the commit checked out (on a PR, the merge commit, which is
+      # GITHUB_SHA), which the SDK embeds in the binary. TSWAP_VERSION is the plain version, for the pkg.
       - name: Expected version (for the smoke tests' tswap --version)
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
             version=${GITHUB_REF_NAME#v}
+            expect=$version
           else
             version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+            commit=$(git rev-parse HEAD)
+            echo "commit built: $commit (GITHUB_SHA: $GITHUB_SHA)"
+            expect=$version-pre-${commit:0:7}
           fi
           if [ -z "$version" ]; then
             echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
             exit 1
           fi
-          echo "TSWAP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
-          echo "expected version: $version"
+          echo "TSWAP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TSWAP_EXPECT_VERSION=$expect" >> "$GITHUB_ENV"
+          echo "version: $version; tswap --version must print: tswap $expect"
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -289,6 +306,7 @@ jobs:
           --output ./publish/osx-arm64
           -p:TswapMacSignIdentity=${{ steps.kc.outputs.app_identity }}
           -p:TswapMacSignKeychain=${{ steps.kc.outputs.keychain }}
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       - name: Publish (unsigned, fork)
         if: steps.inputs.outputs.signed != 'true'
@@ -297,6 +315,7 @@ jobs:
           --configuration Release
           --runtime osx-arm64
           --output ./publish/osx-arm64
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       - name: Sign tswap and verify both files
         if: steps.inputs.outputs.signed == 'true'
@@ -349,8 +368,9 @@ jobs:
           MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
         run: |
           set -euo pipefail
-          # The version from the "Expected version" step: the tag without its v; a dispatch has no tag, so the csproj's.
-          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$TSWAP_EXPECT_VERSION" dist
+          # The plain version from the "Expected version" step (the tag without its v; on a dispatch, the csproj's):
+          # never the -pre form, which package-pkg.sh doesn't need (the pkg is built on tag runs and dry runs only).
+          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$TSWAP_VERSION" dist
           bash contrib/packaging/package-pkg.sh notarise dist/tswap-osx-arm64.pkg
           bash contrib/packaging/package-pkg.sh check dist/tswap-osx-arm64.pkg dist/tswap-osx-arm64.tar.gz
           bash contrib/packaging/package-pkg.sh install-test dist/tswap-osx-arm64.pkg

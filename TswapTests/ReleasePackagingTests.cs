@@ -1106,19 +1106,31 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>
-    /// Brief T18 line 9: the lines of the step that sets <c>TSWAP_EXPECT_VERSION</c> for a build job's smoke tests, the
-    /// same in every such job: the tag without its v on a tag run (a prerelease tag keeps its suffix, as verify-version
-    /// compares), else TswapCli.csproj's <c>&lt;Version&gt;</c>.
+    /// Brief T18 line 9 and its addendum (owner, 2026-11-09): the lines of the step that sets <c>TSWAP_EXPECT_VERSION</c>
+    /// for a build job's smoke tests (and <c>TSWAP_VERSION</c>, the plain version, for the pkg), the same in every such
+    /// job. A release build (release.yml on a tag push) reports the tag without its v (a prerelease tag keeps its suffix,
+    /// as verify-version compares); every other build reports TswapCli.csproj's <c>&lt;Version&gt;</c>, <c>-pre-</c> and
+    /// the first 7 characters of the commit checked out and built.
     /// </summary>
     private static readonly string[] ExpectedVersionStep =
     [
         "      - name: Expected version (for the smoke tests' tswap --version)",
         "        shell: bash",
-        "          if [ \"$GITHUB_REF_TYPE\" = tag ]; then",
+        "          if [ \"$GITHUB_EVENT_NAME\" = push ] && [ \"$GITHUB_REF_TYPE\" = tag ]; then",
         "            version=${GITHUB_REF_NAME#v}",
+        "            expect=$version",
         "            version=$(sed -n 's:.*<Version>\\([^<]*\\)</Version>.*:\\1:p' TswapCli/TswapCli.csproj | head -n 1)",
-        "          echo \"TSWAP_EXPECT_VERSION=$version\" >> \"$GITHUB_ENV\"",
+        "            commit=$(git rev-parse HEAD)",
+        "            expect=$version-pre-${commit:0:7}",
+        "          echo \"TSWAP_VERSION=$version\" >> \"$GITHUB_ENV\"",
+        "          echo \"TSWAP_EXPECT_VERSION=$expect\" >> \"$GITHUB_ENV\"",
     ];
+
+    /// <summary>
+    /// The release-build flag (T18 addendum) as release.yml's publishes pass it: <c>true</c> on a tag push only, the same
+    /// condition as the expected-version step's. ci.yml never passes it.
+    /// </summary>
+    private const string ReleaseBuildFlag = "          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}";
 
     /// <summary>
     /// The Windows legs' check, in pwsh: stdout as lines (exactly one), the line ending trimmed, compared case-sensitively
@@ -1158,6 +1170,15 @@ public class ReleasePackagingTests : IDisposable
             yield return $"{where}: no package.sh smoke";
         else if (firstSmoke < stepAt)
             yield return $"{where}: package.sh runs before the expected-version step";
+        // T18 addendum: release.yml's publishes pass the release-build flag on a tag push only; ci.yml's never pass it.
+        foreach (var publish in job.Split("      - name: ").Where(st => st.Contains("dotnet publish TswapCli/TswapCli.csproj", StringComparison.Ordinal)))
+        {
+            var name = publish.Split('\n')[0];
+            if (workflowName == "release.yml" && !publish.Contains(ReleaseBuildFlag + "\n", StringComparison.Ordinal))
+                yield return $"{where}: the publish step '{name}' doesn't pass '{ReleaseBuildFlag.Trim()}'";
+            if (workflowName != "release.yml" && publish.Contains("TswapReleaseBuild", StringComparison.Ordinal))
+                yield return $"{where}: the publish step '{name}' passes TswapReleaseBuild, which only release.yml's tag builds may";
+        }
         if (!hasWindowsLeg)
             yield break;
         var windows = job.Split("      - name: ").Where(s => s.Contains("        shell: pwsh\n", StringComparison.Ordinal)
@@ -1187,10 +1208,66 @@ public class ReleasePackagingTests : IDisposable
         var problems = BuildJobs.SelectMany(b => VersionCheckProblems(b.Workflow, Workflow(b.Workflow), b.Job, b.HasWindowsLeg)).ToList();
 
         Assert.True(problems.Count == 0, string.Join('\n', problems));
-        // The pkg is built with the same version the smokes expect (the step's logic, not a second copy of it).
+        // The pkg is built with the step's plain version (no -pre: package-pkg.sh needs none), not a second copy of its logic.
         var pkg = Job(Workflow("release.yml"), "build-macos");
-        Assert.Contains("package-pkg.sh build ./publish/osx-arm64 \"$TSWAP_EXPECT_VERSION\" dist", pkg);
-        Assert.DoesNotContain("version=${GITHUB_REF_NAME#v}", pkg.Replace(string.Join('\n', ExpectedVersionStep[2..4]), ""));
+        Assert.Contains("package-pkg.sh build ./publish/osx-arm64 \"$TSWAP_VERSION\" dist", pkg);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(pkg, System.Text.RegularExpressions.Regex.Escape(ExpectedVersionStep[3])));
+        // Every publish in release.yml is accounted for (the build matrix, the signed and the unsigned macOS publish).
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(Workflow("release.yml"), System.Text.RegularExpressions.Regex.Escape(ReleaseBuildFlag + "\n")).Count);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(Workflow("release.yml"), "dotnet publish TswapCli/TswapCli.csproj").Count);
+    }
+
+    /// <summary>
+    /// The expected-version step's own script, run as each job has it (bash, from the repo root, a temporary
+    /// GITHUB_ENV): a tag push expects the tag's version; a dispatch on a tag ref, a PR and a push to main expect the
+    /// csproj's <c>&lt;Version&gt;-pre-&lt;HEAD's first 7&gt;</c>; <c>TSWAP_VERSION</c> is always the plain version.
+    /// </summary>
+    [Theory]
+    [InlineData("push", "tag", "v0.3.0-rc.1", "0.3.0-rc.1", "0.3.0-rc.1")]
+    [InlineData("push", "tag", "v0.3.0", "0.3.0", "0.3.0")]
+    [InlineData("workflow_dispatch", "tag", "v0.3.0", null, null)]
+    [InlineData("workflow_dispatch", "branch", "main", null, null)]
+    [InlineData("pull_request", "branch", "282/merge", null, null)]
+    [InlineData("push", "branch", "main", null, null)]
+    public void Workflows_ExpectedVersionStep_SetsTheVersionsForEachKindOfRun(string eventName, string refType, string refName, string? version, string? expect)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the script is bash; the Windows legs run it under git-bash, which this test doesn't have
+        var csproj = VersionCommandTests.CsprojVersion();
+        var head = Run("git", "-C", RepoFile(), "rev-parse", "HEAD").Output.Trim();
+        version ??= csproj;
+        expect ??= $"{csproj}-pre-{head[..7]}";
+
+        foreach (var (workflow, job, _) in BuildJobs)
+        {
+            var script = StepScript(Job(Workflow(workflow), job), ExpectedVersionStep[0]);
+            var envFile = Path.Combine(_dir, $"github-env-{workflow}-{job}");
+            File.WriteAllText(envFile, "");
+            var psi = new ProcessStartInfo("bash", ["-c", script]) { WorkingDirectory = RepoFile(), RedirectStandardOutput = true, RedirectStandardError = true };
+            psi.Environment["GITHUB_EVENT_NAME"] = eventName;
+            psi.Environment["GITHUB_REF_TYPE"] = refType;
+            psi.Environment["GITHUB_REF_NAME"] = refName;
+            psi.Environment["GITHUB_SHA"] = head;
+            psi.Environment["GITHUB_ENV"] = envFile;
+            using var bash = Process.Start(psi)!;
+            var output = bash.StandardOutput.ReadToEnd() + bash.StandardError.ReadToEnd();
+            bash.WaitForExit();
+
+            Assert.True(bash.ExitCode == 0, $"{workflow} {job}: {output}");
+            Assert.Equal([$"TSWAP_VERSION={version}", $"TSWAP_EXPECT_VERSION={expect}"], File.ReadAllLines(envFile));
+        }
+    }
+
+    /// <summary>The <c>run: |</c> block of the step named <paramref name="nameLine"/> in <paramref name="job"/>, unindented.</summary>
+    private static string StepScript(string job, string nameLine)
+    {
+        var at = job.IndexOf(nameLine, StringComparison.Ordinal);
+        Assert.True(at >= 0, $"no step '{nameLine.Trim()}'");
+        var next = job.IndexOf("\n      - ", at, StringComparison.Ordinal);
+        var lines = job[at..(next < 0 ? job.Length : next)].Split('\n');
+        var run = Array.IndexOf(lines, "        run: |");
+        Assert.True(run >= 0, $"the step '{nameLine.Trim()}' has no 'run: |' block");
+        return string.Join('\n', lines[(run + 1)..].Select(l => l.Length >= 10 ? l[10..] : l.Trim()));
     }
 
     /// <summary>Break-it-once for <see cref="VersionCheckProblems"/>, kept: each way of losing the check is caught.</summary>
@@ -1202,8 +1279,22 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[0], "      - name: Something else"), "build", true),
             p => p.Contains("no '- name: Expected version", StringComparison.Ordinal));
-        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[5] + "\n", ""), "build-macos", false),
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[9] + "\n", ""), "build-macos", false),
             p => p.Contains("lacks 'echo \"TSWAP_EXPECT_VERSION", StringComparison.Ordinal));
+        // T18 addendum: a development build expected to report the plain Version, or a step that keys on the ref alone
+        // (a dispatch on a tag would then expect a release build's version).
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(ExpectedVersionStep[7], "            expect=$version"), "build-test-publish", true),
+            p => p.Contains("lacks 'expect=$version-pre-", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[2], "          if [ \"$GITHUB_REF_TYPE\" = tag ]; then"), "build", true),
+            p => p.Contains("lacks 'if [", StringComparison.Ordinal));
+        // ... a release publish without the flag, a flag that is always on, and the flag in ci.yml.
+        var buildPublish = Job(release, "build");
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(buildPublish, buildPublish.Replace(ReleaseBuildFlag + "\n", "")), "build", true),
+            p => p.Contains("doesn't pass '-p:TswapReleaseBuild", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ReleaseBuildFlag, "          -p:TswapReleaseBuild=true"), "build-macos", false),
+            p => p.Contains("doesn't pass '-p:TswapReleaseBuild", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace("dotnet publish TswapCli/TswapCli.csproj -c Release", "dotnet publish TswapCli/TswapCli.csproj -c Release -p:TswapReleaseBuild=true"), "build-test-publish", true),
+            p => p.Contains("passes TswapReleaseBuild", StringComparison.Ordinal));
         Assert.Contains(VersionCheckProblems("release.yml", release.Replace(WindowsVersionCheck[3], "if ($code -ne 0)"), "build", true),
             p => p.Contains("the Windows step", StringComparison.Ordinal));
         Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(WindowsVersionCheck[2], "$line = $out"), "build-test-publish", true),
