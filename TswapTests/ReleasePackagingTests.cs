@@ -52,7 +52,20 @@ public class ReleasePackagingTests : IDisposable
         ["TSWAP_EXPECT_TEAM_ID"] = null,
         ["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = null,
         ["TSWAP_NOTARY_CHECK_INTERVAL"] = "0",
+        ["TSWAP_EXPECT_VERSION"] = FakeVersion,
     };
+
+    /// <summary>
+    /// Brief T18: the version every smoke expects (<c>TSWAP_EXPECT_VERSION</c>, set in <see cref="Env"/>) and the fake
+    /// <c>tswap --version</c> prints by default; <see cref="VersionOutput"/> replaces its whole stdout.
+    /// </summary>
+    private const string FakeVersion = "9.8.7-rc.1";
+    private string? VersionOutput { get; set; }
+    private List<string> VersionRuns()
+    {
+        var log = Path.Combine(_dir, "version.log");
+        return File.Exists(log) ? [.. File.ReadAllLines(log)] : [];
+    }
 
     public ReleasePackagingTests()
     {
@@ -109,6 +122,8 @@ public class ReleasePackagingTests : IDisposable
             File.WriteAllText(Path.Combine(_dir, "yubikey.exit"), YubiKeyExit.Value.ToString());
         if (StrategyOutput is not null)
             File.WriteAllText(Path.Combine(_dir, "strategy.out"), StrategyOutput);
+        if (VersionOutput is not null)
+            File.WriteAllText(Path.Combine(_dir, "version.out"), VersionOutput);
         psi.Environment["FAKE_DIR"] = _dir;
         psi.Environment["PATH"] = _tools + Path.PathSeparator + _mac.Tools + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
         psi.Environment["RUNNER_TEMP"] = _mac.RunnerTemp;
@@ -136,12 +151,19 @@ public class ReleasePackagingTests : IDisposable
     /// <summary>
     /// A stand-in binary for --smoke: prints where it ran from and its arguments, then exits with
     /// <paramref name="exitCode"/>; <c>yubikey setup</c> answers like the real binary instead (see <see cref="YubiKeyOutput"/>).
+    /// <c>--version</c> (brief T18) answers first, logged only to <c>version.log</c> (<see cref="VersionRuns"/>), so the
+    /// other tests' run lists are as they were.
     /// </summary>
     private string PublishFakeBinary(int exitCode, params string[] extraFiles)
     {
         var publish = Publish(["tswap", .. extraFiles]);
         File.WriteAllText(Path.Combine(publish, "tswap"), $$"""
             #!/bin/sh
+            if [ "$*" = --version ]; then
+              echo "ran from $(dirname "$0") with: $*" >> "$FAKE_DIR/version.log"
+              if [ -f "$FAKE_DIR/version.out" ]; then cat "$FAKE_DIR/version.out"; else echo "tswap {{FakeVersion}}"; fi
+              exit 0
+            fi
             echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})"
             echo "ran from $(dirname "$0") with: $* (config: ${TSWAP_CONFIG_DIR:-unset})" >> "$FAKE_DIR/runs.log"
             case " $* " in
@@ -294,6 +316,102 @@ public class ReleasePackagingTests : IDisposable
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("ran from ", output);
+    }
+
+    // ---- Brief T18: every smoke checks `tswap --version` against TSWAP_EXPECT_VERSION. ----
+
+    [Fact]
+    public void Smoke_ChecksTheUnpackedBinarysVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var publish = PublishFakeBinary(exitCode: 0);
+        var (exitCode, output) = Package("linux-x64", publish, "--smoke");
+
+        Assert.True(exitCode == 0, output);
+        var run = Assert.Single(VersionRuns());
+        Assert.EndsWith(" with: --version", run);
+        Assert.DoesNotContain(publish, run);
+        Assert.Contains($"tswap --version: tswap {FakeVersion}", output);
+    }
+
+    [Fact]
+    public void MacOsSmoke_ChecksTheVersionToo()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, output) = MacOsSmoke();
+
+        Assert.True(exitCode == 0, output);
+        Assert.EndsWith(" with: --version", Assert.Single(VersionRuns()));
+    }
+
+    [Theory]
+    [InlineData("tswap 9.8.6\n")]
+    [InlineData("tswap 9.8.7\n")]
+    [InlineData("tswap 9.8.7-rc.1+cae3bf0\n")]
+    [InlineData("tswap 9.8.7-rc.1\nmore\n")]
+    [InlineData("tswap 9.8.7-rc.1\n\n")]
+    [InlineData("tswap 9.8.7-rc.1\r\n\r\n")]
+    [InlineData("tswap 9.8.7-rc.1")]
+    [InlineData("")]
+    public void Smoke_VersionOtherThanExpected_FailsThePackaging(string printed)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        VersionOutput = printed;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains($"package.sh: 'tswap --version' printed", output);
+        Assert.Contains($"expected 'tswap {FakeVersion}'", output);
+        Assert.DoesNotContain("ran from ", output); // it fails before any other smoke run
+    }
+
+    /// <summary>A Windows line ending (a git-bash capture keeps the <c>\r</c>) is trimmed, not a mismatch.</summary>
+    [Fact]
+    public void Smoke_VersionWithACarriageReturn_Passes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        VersionOutput = $"tswap {FakeVersion}\r\n";
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.True(exitCode == 0, output);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Smoke_WithoutAnExpectedVersion_FailsBeforePacking(string? expected)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Env["TSWAP_EXPECT_VERSION"] = expected;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--smoke needs TSWAP_EXPECT_VERSION", output);
+        Assert.False(File.Exists(Path.Combine(_dir, "dist", "tswap-linux-x64.tar.gz")));
+    }
+
+    /// <summary>Packing without --smoke needs no expected version.</summary>
+    [Fact]
+    public void PackingWithoutSmoke_NeedsNoExpectedVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        Env["TSWAP_EXPECT_VERSION"] = null;
+
+        var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0));
+
+        Assert.True(exitCode == 0, output);
+        Assert.Empty(VersionRuns());
     }
 
     // ---- The Linux smoke (YubiKey SDK stage 1, task 1): libpcsclite is used when present, never required. ----
@@ -985,6 +1103,498 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(".pkg", fork);
         Assert.Contains("  workflow_dispatch:\n    inputs:\n      dry_run:\n", release);
         Assert.Contains("    if: github.event_name == 'push'\n", Job(release, "verify-version"));
+    }
+
+    /// <summary>
+    /// Brief T18 line 9 and its addendum (owner, 2026-11-09): the lines of the step that sets <c>TSWAP_EXPECT_VERSION</c>
+    /// for a build job's smoke tests (and <c>TSWAP_VERSION</c>, the plain version, for the pkg), the same in every such
+    /// job. A release build (release.yml on a tag push) reports the tag without its v (a prerelease tag keeps its suffix,
+    /// as verify-version compares); every other build reports TswapCli.csproj's <c>&lt;Version&gt;</c>, <c>-pre-</c> and
+    /// the first 7 characters of the commit checked out and built.
+    /// </summary>
+    private static readonly string[] ExpectedVersionStep =
+    [
+        "      - name: Expected version (for the smoke tests' tswap --version)",
+        "        shell: bash",
+        "          if [ \"$GITHUB_EVENT_NAME\" = push ] && [ \"$GITHUB_REF_TYPE\" = tag ]; then",
+        "            version=${GITHUB_REF_NAME#v}",
+        "            expect=$version",
+        "            version=$(sed -n 's:.*<Version>\\([^<]*\\)</Version>.*:\\1:p' TswapCli/TswapCli.csproj | head -n 1)",
+        "            commit=$(git rev-parse HEAD)",
+        "            expect=$version-pre-${commit:0:7}",
+        "          echo \"TSWAP_VERSION=$version\" >> \"$GITHUB_ENV\"",
+        "          echo \"TSWAP_EXPECT_VERSION=$expect\" >> \"$GITHUB_ENV\"",
+    ];
+
+    /// <summary>
+    /// The release-build flag (T18 addendum) as release.yml's publishes pass it: <c>true</c> on a tag push only, the same
+    /// condition as the expected-version step's. ci.yml never passes it.
+    /// </summary>
+    private const string ReleaseBuildFlag = "          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}";
+
+    /// <summary>
+    /// The Windows legs' check, in pwsh: stdout as lines (exactly one), the line ending trimmed, compared case-sensitively
+    /// (<c>-cne</c>; review F3), the exit code checked, and a mismatch failing the step (<c>exit 1</c>; review F1).
+    /// </summary>
+    private static readonly string[] WindowsVersionCheck =
+    [
+        "--version)",
+        "$code = $LASTEXITCODE",
+        "$line = ($out -join \"`n\").TrimEnd(\"`r\", \"`n\")",
+        "if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne \"tswap $env:TSWAP_EXPECT_VERSION\") {",
+        "expected 'tswap $env:TSWAP_EXPECT_VERSION'\"\n            exit 1\n          }",
+    ];
+
+    /// <summary>
+    /// Every build job's smoke checks the shipped binary's version: the expected-version step comes before the job's
+    /// first smoke, every bash smoke goes through package.sh (which checks <c>--version</c>, the tests above), and each
+    /// Windows leg's pwsh smoke runs the check itself.
+    /// </summary>
+    internal static IEnumerable<string> VersionCheckProblems(string workflowName, string workflow, string jobName, bool hasWindowsLeg)
+    {
+        var job = Job(workflow, jobName);
+        var where = $"{workflowName} {jobName}";
+        var stepAt = job.IndexOf(ExpectedVersionStep[0], StringComparison.Ordinal);
+        if (stepAt < 0)
+        {
+            yield return $"{where}: no '{ExpectedVersionStep[0].Trim()}' step";
+            yield break;
+        }
+        // Review F5: a step that is the job's last runs to the job's end (no throw).
+        var nextStep = job.IndexOf("      - ", stepAt + 1, StringComparison.Ordinal);
+        var step = job[stepAt..(nextStep < 0 ? job.Length : nextStep)];
+        foreach (var line in ExpectedVersionStep.Where(l => !step.Contains(l + "\n", StringComparison.Ordinal)))
+            yield return $"{where}: the expected-version step lacks '{line.Trim()}'";
+        var firstSmoke = job.IndexOf("bash contrib/packaging/package.sh ", StringComparison.Ordinal);
+        if (firstSmoke < 0)
+            yield return $"{where}: no package.sh smoke";
+        else if (firstSmoke < stepAt)
+            yield return $"{where}: package.sh runs before the expected-version step";
+        // T18 addendum: release.yml's publishes pass the release-build flag on a tag push only; ci.yml's never pass it.
+        foreach (var publish in job.Split("      - name: ").Where(st => st.Contains("dotnet publish TswapCli/TswapCli.csproj", StringComparison.Ordinal)))
+        {
+            var name = publish.Split('\n')[0];
+            if (workflowName == "release.yml" && !publish.Contains(ReleaseBuildFlag + "\n", StringComparison.Ordinal))
+                yield return $"{where}: the publish step '{name}' doesn't pass '{ReleaseBuildFlag.Trim()}'";
+            if (workflowName != "release.yml" && publish.Contains("TswapReleaseBuild", StringComparison.Ordinal))
+                yield return $"{where}: the publish step '{name}' passes TswapReleaseBuild, which only release.yml's tag builds may";
+        }
+        if (!hasWindowsLeg)
+            yield break;
+        var windows = job.Split("      - name: ").Where(s => s.Contains("        shell: pwsh\n", StringComparison.Ordinal)
+                                                          && s.Contains("tswap.exe", StringComparison.Ordinal)).ToList();
+        if (windows.Count == 0)
+            yield return $"{where}: no pwsh step runs tswap.exe";
+        foreach (var smoke in windows)
+        {
+            var name = smoke.Split('\n')[0];
+            foreach (var part in WindowsVersionCheck.Where(p => !smoke.Contains(p, StringComparison.Ordinal)))
+                yield return $"{where}: the Windows step '{name}' lacks '{part}'";
+            if (job.IndexOf(smoke, StringComparison.Ordinal) < stepAt)
+                yield return $"{where}: the Windows step '{name}' runs before the expected-version step";
+        }
+    }
+
+    private static readonly (string Workflow, string Job, bool HasWindowsLeg)[] BuildJobs =
+    [
+        ("release.yml", "build", true),
+        ("release.yml", "build-macos", false),
+        ("ci.yml", "build-test-publish", true),
+    ];
+
+    [Fact]
+    public void Workflows_EveryBuildLegChecksTheShippedVersion()
+    {
+        var problems = BuildJobs.SelectMany(b => VersionCheckProblems(b.Workflow, Workflow(b.Workflow), b.Job, b.HasWindowsLeg)).ToList();
+
+        Assert.True(problems.Count == 0, string.Join('\n', problems));
+        // The pkg is built with the step's plain version (no -pre: package-pkg.sh needs none), not a second copy of its logic.
+        var pkg = Job(Workflow("release.yml"), "build-macos");
+        Assert.Contains("package-pkg.sh build ./publish/osx-arm64 \"$TSWAP_VERSION\" dist", pkg);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(pkg, System.Text.RegularExpressions.Regex.Escape(ExpectedVersionStep[3])));
+        // Every publish in release.yml is accounted for (the build matrix, the signed and the unsigned macOS publish).
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(Workflow("release.yml"), System.Text.RegularExpressions.Regex.Escape(ReleaseBuildFlag + "\n")).Count);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(Workflow("release.yml"), "dotnet publish TswapCli/TswapCli.csproj").Count);
+    }
+
+    /// <summary>
+    /// The expected-version step's own script, run as each job has it (bash, from the repo root, a temporary
+    /// GITHUB_ENV): a tag push expects the tag's version; a dispatch on a tag ref, a PR and a push to main expect the
+    /// csproj's <c>&lt;Version&gt;-pre-&lt;HEAD's first 7&gt;</c>; <c>TSWAP_VERSION</c> is always the plain version.
+    /// </summary>
+    [Theory]
+    [InlineData("push", "tag", "v0.3.0-rc.1", "0.3.0-rc.1", "0.3.0-rc.1")]
+    [InlineData("push", "tag", "v0.3.0", "0.3.0", "0.3.0")]
+    [InlineData("workflow_dispatch", "tag", "v0.3.0", null, null)]
+    [InlineData("workflow_dispatch", "branch", "main", null, null)]
+    [InlineData("pull_request", "branch", "282/merge", null, null)]
+    [InlineData("push", "branch", "main", null, null)]
+    public void Workflows_ExpectedVersionStep_SetsTheVersionsForEachKindOfRun(string eventName, string refType, string refName, string? version, string? expect)
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the script is bash; the Windows legs run it under git-bash, which this test doesn't have
+        var csproj = VersionCommandTests.CsprojVersion();
+        var head = Run("git", "-C", RepoFile(), "rev-parse", "HEAD").Output.Trim();
+        version ??= csproj;
+        expect ??= $"{csproj}-pre-{head[..7]}";
+
+        foreach (var (workflow, job, _) in BuildJobs)
+        {
+            var script = StepScript(Job(Workflow(workflow), job), ExpectedVersionStep[0]);
+            var envFile = Path.Combine(_dir, $"github-env-{workflow}-{job}");
+            File.WriteAllText(envFile, "");
+            var psi = new ProcessStartInfo("bash", ["-c", script]) { WorkingDirectory = RepoFile(), RedirectStandardOutput = true, RedirectStandardError = true };
+            psi.Environment["GITHUB_EVENT_NAME"] = eventName;
+            psi.Environment["GITHUB_REF_TYPE"] = refType;
+            psi.Environment["GITHUB_REF_NAME"] = refName;
+            psi.Environment["GITHUB_SHA"] = head;
+            psi.Environment["GITHUB_ENV"] = envFile;
+            using var bash = Process.Start(psi)!;
+            var output = bash.StandardOutput.ReadToEnd() + bash.StandardError.ReadToEnd();
+            bash.WaitForExit();
+
+            Assert.True(bash.ExitCode == 0, $"{workflow} {job}: {output}");
+            Assert.Equal([$"TSWAP_VERSION={version}", $"TSWAP_EXPECT_VERSION={expect}"], File.ReadAllLines(envFile));
+        }
+    }
+
+    /// <summary>The <c>run: |</c> block of the step named <paramref name="nameLine"/> in <paramref name="job"/>, unindented.</summary>
+    private static string StepScript(string job, string nameLine)
+    {
+        var at = job.IndexOf(nameLine, StringComparison.Ordinal);
+        Assert.True(at >= 0, $"no step '{nameLine.Trim()}'");
+        var next = job.IndexOf("\n      - ", at, StringComparison.Ordinal);
+        var lines = job[at..(next < 0 ? job.Length : next)].Split('\n');
+        var run = Array.IndexOf(lines, "        run: |");
+        Assert.True(run >= 0, $"the step '{nameLine.Trim()}' has no 'run: |' block");
+        return string.Join('\n', lines[(run + 1)..].Select(l => l.Length >= 10 ? l[10..] : l.Trim()));
+    }
+
+    /// <summary>Break-it-once for <see cref="VersionCheckProblems"/>, kept: each way of losing the check is caught.</summary>
+    [Fact]
+    public void Workflows_VersionCheck_CatchesARemovedCheck()
+    {
+        var release = Workflow("release.yml");
+        var ci = Workflow("ci.yml");
+
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[0], "      - name: Something else"), "build", true),
+            p => p.Contains("no '- name: Expected version", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[9] + "\n", ""), "build-macos", false),
+            p => p.Contains("lacks 'echo \"TSWAP_EXPECT_VERSION", StringComparison.Ordinal));
+        // T18 addendum: a development build expected to report the plain Version, or a step that keys on the ref alone
+        // (a dispatch on a tag would then expect a release build's version).
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(ExpectedVersionStep[7], "            expect=$version"), "build-test-publish", true),
+            p => p.Contains("lacks 'expect=$version-pre-", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ExpectedVersionStep[2], "          if [ \"$GITHUB_REF_TYPE\" = tag ]; then"), "build", true),
+            p => p.Contains("lacks 'if [", StringComparison.Ordinal));
+        // ... a release publish without the flag, a flag that is always on, and the flag in ci.yml.
+        var buildPublish = Job(release, "build");
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(buildPublish, buildPublish.Replace(ReleaseBuildFlag + "\n", "")), "build", true),
+            p => p.Contains("doesn't pass '-p:TswapReleaseBuild", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(ReleaseBuildFlag, "          -p:TswapReleaseBuild=true"), "build-macos", false),
+            p => p.Contains("doesn't pass '-p:TswapReleaseBuild", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace("dotnet publish TswapCli/TswapCli.csproj -c Release", "dotnet publish TswapCli/TswapCli.csproj -c Release -p:TswapReleaseBuild=true"), "build-test-publish", true),
+            p => p.Contains("passes TswapReleaseBuild", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace(WindowsVersionCheck[3], "if ($code -ne 0)"), "build", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(WindowsVersionCheck[2], "$line = $out"), "build-test-publish", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        // Review F1: a mismatch that only annotates (::error:: without exit 1) is caught, in both workflows.
+        foreach (var (name, text, job) in new[] { ("release.yml", release, "build"), ("ci.yml", ci, "build-test-publish") })
+        {
+            var noExit = text.Replace(WindowsVersionCheck[4], "expected 'tswap $env:TSWAP_EXPECT_VERSION'\"\n          }");
+            Assert.NotEqual(text, noExit);
+            Assert.Contains(VersionCheckProblems(name, noExit, job, true), p => p.Contains("lacks 'expected", StringComparison.Ordinal));
+        }
+        // Review F3: a case-insensitive comparison, and F4's counterpart: a check that allows more than one line.
+        Assert.Contains(VersionCheckProblems("release.yml", release.Replace("$line -cne", "$line -ne"), "build", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("ci.yml", ci.Replace(" -or $out.Count -ne 1", ""), "build-test-publish", true),
+            p => p.Contains("the Windows step", StringComparison.Ordinal));
+        // Review F5: a malformed job (the step last, no smoke at all) yields messages instead of throwing.
+        var bare = "jobs:\n  build:\n    steps:\n" + string.Join('\n', ExpectedVersionStep) + "\n";
+        Assert.Contains(VersionCheckProblems("x.yml", bare, "build", true), p => p.Contains("no package.sh smoke", StringComparison.Ordinal));
+        Assert.Contains(VersionCheckProblems("x.yml", bare, "build", true), p => p.Contains("no pwsh step", StringComparison.Ordinal));
+    }
+
+    // ---- T18 addendum (owner, 2026-11-09): after a release, a PR bumps main's <Version> to the next patch. ----
+
+    private (int ExitCode, string Stdout, string Stderr) NextVersion(params string[] args)
+    {
+        var psi = new ProcessStartInfo("bash", [RepoFile("contrib", "packaging", "next-version.sh"), .. args])
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        using var bash = Process.Start(psi)!;
+        var stdout = bash.StandardOutput.ReadToEndAsync();
+        var stderr = bash.StandardError.ReadToEndAsync();
+        bash.WaitForExit();
+        return (bash.ExitCode, stdout.Result, stderr.Result);
+    }
+
+    [Theory]
+    [InlineData("0.3.0", "0.3.1")]
+    [InlineData("0.9.9", "0.9.10")]
+    [InlineData("1.2.10", "1.2.11")]
+    [InlineData("10.0.0", "10.0.1")]
+    public void NextVersion_IsTheNextPatch(string released, string next)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.True(exitCode == 0, stderr);
+        Assert.Equal(next + "\n", stdout);
+    }
+
+    /// <summary>A prerelease tag bumps nothing: its final release is still to come. Exit 0, nothing on stdout, a notice.</summary>
+    [Theory]
+    [InlineData("0.3.0-rc.1")]
+    [InlineData("1.0.0-beta")]
+    public void NextVersion_OfAPrerelease_IsNothing(string released)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("", stdout);
+        Assert.Contains($"{released} is a prerelease", stderr);
+    }
+
+    [Theory]
+    [InlineData("0.3")]
+    [InlineData("v0.3.0")]
+    [InlineData("0.3.0.1")]
+    [InlineData("01.2.3")]
+    [InlineData("0.3.0+cae3bf0")]
+    [InlineData("0.3.0-")]
+    [InlineData("0.3.0-rc.1\n0.3.1")]
+    [InlineData("")]
+    public void NextVersion_OfAMalformedVersion_Fails(string released)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = NextVersion(released);
+
+        Assert.Equal(2, exitCode);
+        Assert.Equal("", stdout);
+        Assert.Contains("not a version", stderr);
+    }
+
+    [Fact]
+    public void NextVersion_WithoutExactlyOneArgument_Fails()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal(2, NextVersion().ExitCode);
+        Assert.Equal(2, NextVersion("0.3.0", "0.3.1").ExitCode);
+    }
+
+    private const string BumpJobIf = "    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.release.result == 'success'\n";
+    private const string BumpJobPermissions = "    permissions:\n      contents: write\n      pull-requests: write\n      actions: write\n";
+
+    /// <summary>
+    /// The bump job's shape: release.yml's last job, after Create Release succeeded on a tag push only; write permissions
+    /// for this job alone (the workflow's top level is <c>contents: read</c>, no other job asks for pull requests or
+    /// actions); no environment and no secret but the job's own token; the bump computed by next-version.sh, branched
+    /// from main's head, idempotent, a PR to main with the agreed title, and ci.yml dispatched on the branch (a PR opened
+    /// with GITHUB_TOKEN triggers no workflow), which ci.yml allows.
+    /// </summary>
+    internal static IEnumerable<string> BumpJobProblems(string release, string ci)
+    {
+        var lines = release.Split('\n');
+        var jobsAt = Array.IndexOf(lines, "jobs:");
+        var top = string.Join('\n', lines[..Math.Max(jobsAt, 0)]) + "\n";
+        if (!top.Contains("\npermissions:\n  contents: read\n", StringComparison.Ordinal))
+            yield return "release.yml: the top level isn't 'permissions: contents: read'";
+        if (System.Text.RegularExpressions.Regex.IsMatch(top, @"\n  [a-z-]+: write"))
+            yield return "release.yml: the top level grants a write permission";
+        var jobNames = lines[(jobsAt + 1)..].Where(l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^  [A-Za-z0-9_-]+:\s*$")).ToList();
+        if (!jobNames.Contains("  bump-version:"))
+        {
+            yield return "release.yml: no bump-version job";
+            yield break;
+        }
+        if (jobNames[^1] != "  bump-version:")
+            yield return "release.yml: bump-version isn't the last job";
+        var job = Job(release, "bump-version");
+        foreach (var other in jobNames.Where(n => n != "  bump-version:"))
+        {
+            var otherJob = Job(release, other.Trim().TrimEnd(':'));
+            if (otherJob.Contains("pull-requests: write", StringComparison.Ordinal) || otherJob.Contains("actions: write", StringComparison.Ordinal))
+                yield return $"release.yml: {other.Trim()} asks for pull-requests or actions write";
+        }
+        string[] required =
+        [
+            "    needs: [release]\n",
+            BumpJobIf,
+            BumpJobPermissions,
+            "bash contrib/packaging/next-version.sh \"$tag\"",
+            "          ref: main\n",
+            "git ls-remote --exit-code --heads origin \"$branch\"",
+            "gh pr list --head \"$branch\" --base main --state open",
+            "--title \"Version $next for development (after v$tag)\"",
+            "gh workflow run ci.yml --ref \"$branch\"",
+            "          GH_TOKEN: ${{ github.token }}\n",
+        ];
+        foreach (var text in required.Where(r => !job.Contains(r, StringComparison.Ordinal)))
+            yield return $"bump-version lacks '{text.Trim()}'";
+        if (job.Contains("environment:", StringComparison.Ordinal))
+            yield return "bump-version names an environment";
+        if (job.Contains("secrets.", StringComparison.Ordinal))
+            yield return "bump-version uses a secret";
+        if (System.Text.RegularExpressions.Regex.IsMatch(job, @"git push[^\n]*\b(main|HEAD:main|refs/heads/main)\b"))
+            yield return "bump-version pushes to main";
+        var ciOn = ci[..ci.IndexOf("\njobs:", StringComparison.Ordinal)];
+        if (!ciOn.Contains("\n  workflow_dispatch:", StringComparison.Ordinal))
+            yield return "ci.yml can't be dispatched (no workflow_dispatch trigger)";
+    }
+
+    [Fact]
+    public void Workflows_BumpVersion_TagOnlyWithItsOwnPermissions()
+    {
+        var problems = BumpJobProblems(Workflow("release.yml"), Workflow("ci.yml")).ToList();
+
+        Assert.True(problems.Count == 0, string.Join('\n', problems));
+    }
+
+    /// <summary>
+    /// The bump job's own script, run as release.yml has it against a local origin (a bare repository) with a fake
+    /// <c>gh</c> that records its calls and answers <c>pr list</c> with the PRs it "created": the first run pushes
+    /// <c>release/bump-0.2.1</c> from main with only <c>&lt;Version&gt;</c> changed, opens the PR with the agreed title and
+    /// dispatches ci.yml on the branch, and main is untouched; a second run finds the branch and the open PR and does
+    /// nothing more; a prerelease tag and a main that has moved on bump nothing.
+    /// </summary>
+    [Fact]
+    public void Workflows_BumpVersion_Script_OpensOnePr_AndIsIdempotent()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // a bash script on an ubuntu runner
+
+        var root = Path.Combine(_dir, "bump");
+        var origin = Path.Combine(root, "origin.git");
+        Directory.CreateDirectory(root);
+        Git(root, "init", "-q", "--bare", "-b", "main", origin);
+        var seed = Clone(origin, "seed");
+        Directory.CreateDirectory(Path.Combine(seed, "TswapCli"));
+        Directory.CreateDirectory(Path.Combine(seed, "contrib", "packaging"));
+        File.WriteAllText(Path.Combine(seed, "TswapCli", "TswapCli.csproj"), "<Project>\n  <PropertyGroup>\n    <Version>0.2.0</Version>\n  </PropertyGroup>\n</Project>\n");
+        File.Copy(RepoFile("contrib", "packaging", "next-version.sh"), Path.Combine(seed, "contrib", "packaging", "next-version.sh"));
+        Git(seed, "add", ".");
+        Git(seed, "commit", "-q", "-m", "seed");
+        Git(seed, "push", "-q", "origin", "HEAD:refs/heads/main");
+        var mainBefore = Git(seed, "rev-parse", "HEAD").Trim();
+
+        var fakeBin = Path.Combine(root, "bin");
+        Directory.CreateDirectory(fakeBin);
+        var ghLog = Path.Combine(root, "gh.log");
+        var prs = Path.Combine(root, "prs");
+        File.WriteAllText(prs, "");
+        File.WriteAllText(Path.Combine(fakeBin, "gh"), $$"""
+            #!/bin/sh
+            printf '%s\n' "$*" >> '{{ghLog}}'
+            case "$1 $2" in
+              "pr list") cat '{{prs}}' ;;
+              "pr create") echo 7 >> '{{prs}}' ;;
+            esac
+            """);
+        File.SetUnixFileMode(Path.Combine(fakeBin, "gh"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var script = StepScript(Job(Workflow("release.yml"), "bump-version"), "      - name: Bump <Version> on a branch and open the PR");
+
+        (int Exit, string Output) RunJob(string tag)
+        {
+            var checkout = Clone(origin, "runner-" + Guid.NewGuid().ToString("N")[..6]);
+            var psi = new ProcessStartInfo("bash", ["-c", script]) { WorkingDirectory = checkout, RedirectStandardOutput = true, RedirectStandardError = true };
+            psi.Environment["GITHUB_REF_NAME"] = tag;
+            psi.Environment["GH_TOKEN"] = "not-a-token";
+            psi.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null"; // no commit signing or other user settings, as on a runner
+            psi.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+            psi.Environment["PATH"] = fakeBin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
+            using var bash = Process.Start(psi)!;
+            var stdout = bash.StandardOutput.ReadToEndAsync();
+            var stderr = bash.StandardError.ReadToEndAsync();
+            bash.WaitForExit();
+            return (bash.ExitCode, stdout.Result + stderr.Result);
+        }
+
+        var first = RunJob("v0.2.0");
+        Assert.True(first.Exit == 0, first.Output);
+        var branchHead = Git(origin, "rev-parse", "refs/heads/release/bump-0.2.1").Trim();
+        Assert.Equal(mainBefore, Git(origin, "rev-parse", "refs/heads/main").Trim());
+        Assert.Equal(mainBefore, Git(origin, "rev-parse", branchHead + "^").Trim());
+        Assert.Equal("TswapCli/TswapCli.csproj\n", Git(origin, "diff", "--name-only", mainBefore, branchHead));
+        Assert.Contains("<Version>0.2.1</Version>", Git(origin, "show", branchHead + ":TswapCli/TswapCli.csproj"));
+        var calls = File.ReadAllLines(ghLog);
+        Assert.Single(calls, c => c.StartsWith("pr create --base main --head release/bump-0.2.1 --title Version 0.2.1 for development (after v0.2.0) ", StringComparison.Ordinal));
+        Assert.Single(calls, c => c == "workflow run ci.yml --ref release/bump-0.2.1");
+
+        var second = RunJob("v0.2.0");
+        Assert.True(second.Exit == 0, second.Output);
+        Assert.Contains("already open: nothing more to do", second.Output);
+        Assert.Equal(branchHead, Git(origin, "rev-parse", "refs/heads/release/bump-0.2.1").Trim());
+        Assert.Equal(calls.Length + 1, File.ReadAllLines(ghLog).Length); // only the pr list
+        Assert.DoesNotContain(File.ReadAllLines(ghLog).Skip(calls.Length), c => c.StartsWith("pr create", StringComparison.Ordinal) || c.StartsWith("workflow run", StringComparison.Ordinal));
+
+        var prerelease = RunJob("v0.2.0-rc.1");
+        Assert.True(prerelease.Exit == 0, prerelease.Output);
+        Assert.Contains("::notice::v0.2.0-rc.1 is a prerelease", prerelease.Output);
+        var movedOn = RunJob("v0.1.9");
+        Assert.True(movedOn.Exit == 0, movedOn.Output);
+        Assert.Contains("it has moved on, so nothing to bump", movedOn.Output);
+        Assert.Equal(calls.Length + 1, File.ReadAllLines(ghLog).Length);
+        Assert.Equal(["refs/heads/main", "refs/heads/release/bump-0.2.1"],
+            Git(origin, "for-each-ref", "--format=%(refname)", "refs/heads").Split('\n', StringSplitOptions.RemoveEmptyEntries));
+
+        string Clone(string from, string name)
+        {
+            var to = Path.Combine(root, name);
+            Git(root, "clone", "-q", from, to);
+            return to;
+        }
+    }
+
+    /// <summary>Runs git in <paramref name="dir"/> with a fixed identity and no user or system config; returns stdout.</summary>
+    private static string Git(string dir, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git", ["-C", dir, .. args]) { RedirectStandardOutput = true, RedirectStandardError = true };
+        psi.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
+        psi.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        psi.Environment["GIT_AUTHOR_NAME"] = psi.Environment["GIT_COMMITTER_NAME"] = "test";
+        psi.Environment["GIT_AUTHOR_EMAIL"] = psi.Environment["GIT_COMMITTER_EMAIL"] = "test@example.invalid";
+        using var git = Process.Start(psi)!;
+        var stdout = git.StandardOutput.ReadToEndAsync();
+        var stderr = git.StandardError.ReadToEndAsync();
+        git.WaitForExit();
+        Assert.True(git.ExitCode == 0, $"git {string.Join(' ', args)}: {stderr.Result}");
+        return stdout.Result;
+    }
+
+    /// <summary>Break-it-once for <see cref="BumpJobProblems"/>, kept.</summary>
+    [Fact]
+    public void Workflows_BumpVersion_CatchesALooserJob()
+    {
+        var release = Workflow("release.yml");
+        var ci = Workflow("ci.yml");
+
+        // The tag-only condition dropped: a dispatch (dry run) would open a bump PR.
+        Assert.Contains(BumpJobProblems(release.Replace(BumpJobIf, "    if: needs.release.result == 'success'\n"), ci),
+            p => p.Contains("lacks 'if: github.event_name == 'push' && github.ref_type == 'tag'", StringComparison.Ordinal));
+        // The permissions widened to the whole workflow.
+        Assert.Contains(BumpJobProblems(release.Replace("\npermissions:\n  contents: read\n", "\npermissions:\n  contents: write\n  pull-requests: write\n"), ci),
+            p => p.Contains("top level", StringComparison.Ordinal));
+        // Another job given the bump's permissions.
+        Assert.Contains(BumpJobProblems(release.Replace("    permissions:\n      contents: write\n\n    steps:", "    permissions:\n      contents: write\n      pull-requests: write\n\n    steps:"), ci),
+            p => p.Contains("release: asks for", StringComparison.Ordinal));
+        // A push to main, and ci.yml without a dispatch trigger.
+        Assert.Contains(BumpJobProblems(release.Replace("git push origin \"HEAD:refs/heads/$branch\"", "git push origin HEAD:main"), ci),
+            p => p.Contains("pushes to main", StringComparison.Ordinal));
+        Assert.Contains(BumpJobProblems(release, ci.Replace("\n  workflow_dispatch:", "")),
+            p => p.Contains("can't be dispatched", StringComparison.Ordinal));
     }
 
     /// <summary>Break-it-once for <see cref="AssertUnsigned"/>, kept: a signing secret in ci.yml's text is caught.</summary>

@@ -154,6 +154,50 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
 
     // --- Prompt ---
 
+    // --- Version ---
+
+    /// <summary>
+    /// Brief T18 lines 1 and 2 on the real binary: one line, <c>tswap &lt;csproj Version&gt;-pre-&lt;HEAD&gt;</c> (a development
+    /// build, see <see cref="VersionCommandTests.ExpectedVersion"/>), nothing on stderr,
+    /// exit 0, with no test key, no config folder override and an empty, unwritable HOME that stays empty.
+    /// </summary>
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("version")]
+    public void Version_PrintsOneLine_AndTouchesNoFiles(string form)
+    {
+        var home = Path.Combine(_tempDir, "home");
+        Directory.CreateDirectory(home);
+        var psi = MakePsi();
+        psi.Environment.Remove("TSWAP_TEST_KEY");
+        psi.Environment.Remove("TSWAP_TEST_SUDO_BYPASS");
+        psi.Environment.Remove("TSWAP_CONFIG_DIR");
+        psi.Environment.Remove("XDG_CONFIG_HOME");
+        psi.Environment["HOME"] = home;
+        psi.ArgumentList.Add(form);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(home, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            using var process = Process.Start(psi)!;
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.Equal(0, process.ExitCode);
+            var line = stdout.TrimEnd('\r', '\n');
+            Assert.Equal(line + Environment.NewLine, stdout);
+            Assert.Equal($"tswap {VersionCommandTests.ExpectedVersion()}", line); // a Debug publish: a development build
+            Assert.Equal("", stderr);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(home));
+        }
+        finally
+        {
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(home, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     // --- InstallScript ---
 
     /// <summary>

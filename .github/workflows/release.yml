@@ -14,6 +14,10 @@ on:
         type: boolean
         default: true
 
+# Every job reads only, unless it says otherwise: Create Release writes the release, bump-version opens its PR.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -97,6 +101,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Brief T18 and its addendum (owner, 2026-11-09): what the shipped binary's `tswap --version` must report, for the
+      # smoke tests (package.sh --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself). A release
+      # build, release.yml on a tag push (its publishes pass -p:TswapReleaseBuild=true then, and only then), reports
+      # the tag without its v (a prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version
+      # compares). Every other build (a dispatch, even on a tag; a PR; a push to main) reports TswapCli.csproj's
+      # <Version>-pre-<first 7 of the commit built>: HEAD, the commit checked out (on a PR, the merge commit, which is
+      # GITHUB_SHA), which the SDK embeds in the binary. TSWAP_VERSION is the plain version, for the pkg.
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+            expect=$version
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+            commit=$(git rev-parse HEAD)
+            echo "commit built: $commit (GITHUB_SHA: $GITHUB_SHA)"
+            expect=$version-pre-${commit:0:7}
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TSWAP_EXPECT_VERSION=$expect" >> "$GITHUB_ENV"
+          echo "version: $version; tswap --version must print: tswap $expect"
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
@@ -114,6 +146,7 @@ jobs:
           --configuration Release
           --runtime ${{ matrix.rid }}
           --output ./publish/${{ matrix.rid }}
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       # Run the shipped (Release, NativeAOT) binary once on its own platform: a command that needs
       # no vault, so a binary that doesn't start fails the release here.
@@ -138,6 +171,16 @@ jobs:
           Compress-Archive -Path ./publish/${{ matrix.rid }}/tswap.exe -DestinationPath dist/tswap-${{ matrix.rid }}.zip
           $check = Join-Path $env:RUNNER_TEMP 'tswap-check'
           Expand-Archive dist/tswap-${{ matrix.rid }}.zip -DestinationPath $check
+          # Brief T18: the whole stdout of --version, its line ending trimmed, is `tswap <expected version>`.
+          # Exactly one line (a second, even a blank one, is a mismatch), compared case-sensitively.
+          $out = @(& (Join-Path $check 'tswap.exe') --version)
+          $code = $LASTEXITCODE
+          $line = ($out -join "`n").TrimEnd("`r", "`n")
+          if ($code -ne 0 -or $out.Count -ne 1 -or $line -cne "tswap $env:TSWAP_EXPECT_VERSION") {
+            Write-Output "::error::tswap --version printed '$line' (exit $code), expected 'tswap $env:TSWAP_EXPECT_VERSION'"
+            exit 1
+          }
+          Write-Output "tswap --version: $line"
           & (Join-Path $check 'tswap.exe') prompt-hash
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # The YubiKey smoke package.sh runs on Linux and macOS (YubiKey SDK stage 1, task 4): a serial no YubiKey has,
@@ -181,6 +224,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Brief T18 and its addendum (owner, 2026-11-09): what the shipped binary's `tswap --version` must report, for the
+      # smoke tests (package.sh --smoke reads TSWAP_EXPECT_VERSION; the Windows smoke checks it itself). A release
+      # build, release.yml on a tag push (its publishes pass -p:TswapReleaseBuild=true then, and only then), reports
+      # the tag without its v (a prerelease tag keeps its suffix, v0.3.0-rc.1 -> 0.3.0-rc.1, as verify-version
+      # compares). Every other build (a dispatch, even on a tag; a PR; a push to main) reports TswapCli.csproj's
+      # <Version>-pre-<first 7 of the commit built>: HEAD, the commit checked out (on a PR, the merge commit, which is
+      # GITHUB_SHA), which the SDK embeds in the binary. TSWAP_VERSION is the plain version, for the pkg.
+      - name: Expected version (for the smoke tests' tswap --version)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+            expect=$version
+          else
+            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
+            commit=$(git rev-parse HEAD)
+            echo "commit built: $commit (GITHUB_SHA: $GITHUB_SHA)"
+            expect=$version-pre-${commit:0:7}
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::no version: neither a tag nor a <Version> in TswapCli/TswapCli.csproj" >&2
+            exit 1
+          fi
+          echo "TSWAP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "TSWAP_EXPECT_VERSION=$expect" >> "$GITHUB_ENV"
+          echo "version: $version; tswap --version must print: tswap $expect"
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -239,6 +310,7 @@ jobs:
           --output ./publish/osx-arm64
           -p:TswapMacSignIdentity=${{ steps.kc.outputs.app_identity }}
           -p:TswapMacSignKeychain=${{ steps.kc.outputs.keychain }}
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       - name: Publish (unsigned, fork)
         if: steps.inputs.outputs.signed != 'true'
@@ -247,6 +319,7 @@ jobs:
           --configuration Release
           --runtime osx-arm64
           --output ./publish/osx-arm64
+          -p:TswapReleaseBuild=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
 
       - name: Sign tswap and verify both files
         if: steps.inputs.outputs.signed == 'true'
@@ -299,13 +372,9 @@ jobs:
           MACOS_NOTARY_KEY_ID: ${{ vars.MACOS_NOTARY_KEY_ID }}
         run: |
           set -euo pipefail
-          # The tag without its v; a dispatch has no tag, so the csproj's version.
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            version=${GITHUB_REF_NAME#v}
-          else
-            version=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' TswapCli/TswapCli.csproj | head -n 1)
-          fi
-          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$version" dist
+          # The plain version from the "Expected version" step (the tag without its v; on a dispatch, the csproj's):
+          # never the -pre form, which package-pkg.sh doesn't need (the pkg is built on tag runs and dry runs only).
+          bash contrib/packaging/package-pkg.sh build ./publish/osx-arm64 "$TSWAP_VERSION" dist
           bash contrib/packaging/package-pkg.sh notarise dist/tswap-osx-arm64.pkg
           bash contrib/packaging/package-pkg.sh check dist/tswap-osx-arm64.pkg dist/tswap-osx-arm64.tar.gz
           bash contrib/packaging/package-pkg.sh install-test dist/tswap-osx-arm64.pkg
@@ -373,3 +442,74 @@ jobs:
             artifacts/tswap-linux-arm64.tar.gz
             artifacts/tswap-osx-arm64.tar.gz
             artifacts/tswap-win-x64.zip
+
+  # Brief T18 addendum (owner, 2026-11-09): after a release, main's <Version> moves to the next patch, so a development
+  # build reads as "pre the next release" (v0.3.0 tagged: main to 0.3.1, whose builds report 0.3.1-pre-<commit>). This
+  # job opens that PR from main's head; the owner merges it, and nothing here pushes to main. A prerelease tag bumps
+  # nothing (contrib/packaging/next-version.sh). Idempotent: on a re-run the branch and the PR are found and left as
+  # they are. Needs the repository setting "Allow GitHub Actions to create and approve pull requests" (Settings >
+  # Actions > General), or the PR is refused. A PR opened with the job's token starts no workflow, so the job
+  # dispatches ci.yml on the branch; those runs are on the PR's commit and show as its checks.
+  bump-version:
+    name: Open the version bump PR
+    needs: [release]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Bump <Version> on a branch and open the PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=${GITHUB_REF_NAME#v}
+          next=$(bash contrib/packaging/next-version.sh "$tag")
+          if [ -z "$next" ]; then
+            echo "::notice::v$tag is a prerelease: main's <Version> stays until the final release"
+            exit 0
+          fi
+          csproj=TswapCli/TswapCli.csproj
+          current=$(sed -n 's:.*<Version>\([^<]*\)</Version>.*:\1:p' "$csproj" | head -n 1)
+          if [ "$current" = "$next" ]; then
+            echo "::notice::main's <Version> is already $next: nothing to bump"
+            exit 0
+          fi
+          if [ "$current" != "$tag" ]; then
+            echo "::notice::main's <Version> is $current, not v$tag's $tag: it has moved on, so nothing to bump"
+            exit 0
+          fi
+          branch=release/bump-$next
+          title="Version $next for development (after v$tag)"
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            echo "the branch $branch is already there"
+          else
+            # no sed -i: GNU and BSD sed read its argument differently, and a test runs this step on macOS
+            sed "s:<Version>${tag//./\\.}</Version>:<Version>$next</Version>:" "$csproj" > "$csproj.new"
+            mv "$csproj.new" "$csproj"
+            if [ "$(grep -c "<Version>$next</Version>" "$csproj")" -ne 1 ]; then
+              echo "::error::could not set <Version>$next</Version> in $csproj" >&2
+              exit 1
+            fi
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch -c "$branch"
+            git commit -m "$title" -- "$csproj"
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          if [ -n "$(gh pr list --head "$branch" --base main --state open --json number --jq '.[].number')" ]; then
+            echo "a PR from $branch is already open: nothing more to do"
+            exit 0
+          fi
+          gh pr create --base main --head "$branch" --title "Version $next for development (after v$tag)" \
+            --body "Opened by release.yml after v$tag: main's <Version> moves to $next, so development builds report $next-pre-<commit>. ci.yml was dispatched on this branch (a PR opened by a workflow starts none itself)."
+          gh workflow run ci.yml --ref "$branch"

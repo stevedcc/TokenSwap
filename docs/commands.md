@@ -358,6 +358,14 @@ tswap broker <serve|unlock|lock|status|forward|call|route|socket|template> ...
 
 Credentials for containers that never hold them: HTTP routes, command templates and an ssh-agent (serve, and unlock|lock|status for a broker whose slot has the vault password, as the vault user; forward/call in the container; sudo for route|socket|template add|remove)
 
+### version
+
+```
+tswap version
+```
+
+Print tswap's version (also: --version)
+
 <!-- END GENERATED: commands -->
 
 ## Environment variables
@@ -370,7 +378,7 @@ Credentials for containers that never hold them: HTTP routes, command templates 
 | `XDG_RUNTIME_DIR` | Linux and macOS: where `run` puts the private folder holding the filled copies of its `{{@file}}` tokens, when it is an absolute path to a folder of your own (not a symlink) that no group or other user can write to; otherwise the temp folder |
 | `TSWAP_AGENT_SOCK` | The tswap agent's socket path (Unix only), for commands and for `agent start\|serve`, like `SSH_AUTH_SOCK`; it picks a path, not a trust level (the server's uid is checked as always). `sudo` drops it: root's commands find the vault owner's agent by the vault folder's owner (see [Which agent a command asks](vault-password-and-agent.md#which-agent-a-command-asks)) |
 
-Commands that need no vault (`--help`, `<command> --help`, `prompt`, `prompt-hash`, `completion`,
+Commands that need no vault (`--help`, `<command> --help`, `--version`, `version`, `prompt`, `prompt-hash`, `completion`,
 `installscript`, `broker forward`, `broker call`) work without a home folder; the others say "Cannot determine the config folder"
 if there is none and `TSWAP_CONFIG_DIR` isn't set.
 

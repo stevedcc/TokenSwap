@@ -43,6 +43,7 @@ public static class CommandRegistry
         new RecoverCommand(),
         new CompletionCommand(),
         new BrokerCommand(),
+        new VersionCommand(),
     ];
 
     /// <summary>All registered commands in help/display order. Read by
@@ -58,6 +59,9 @@ public static class CommandRegistry
         }
 
         var name = args[0].ToLower();
+        // Brief T18: `--version` with more after it is the version command's usage error (alone, CliHost answers it).
+        if (name == "--version")
+            name = "version";
         var command = Commands.FirstOrDefault(c => c.Name == name)
             ?? throw new TswapException($"Unknown command: {name}");
 

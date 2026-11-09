@@ -35,6 +35,8 @@ public class VaultFreeCommandTests
         ["completion", "bash"],
         ["installscript"],
         ["-v", "--help"],
+        ["--version"],
+        ["version"],
     ];
 
     [Theory]
@@ -57,7 +59,7 @@ public class VaultFreeCommandTests
     {
         var vaultFree = CommandRegistry.All.Where(c => !c.NeedsVault).Select(c => c.Name).Order().ToArray();
 
-        Assert.Equal(["completion", "installscript", "prompt", "prompt-hash", "yubikey"], vaultFree);
+        Assert.Equal(["completion", "installscript", "prompt", "prompt-hash", "version", "yubikey"], vaultFree);
     }
 
     [Fact]
