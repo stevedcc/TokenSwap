@@ -663,6 +663,20 @@ public class Fido2ServiceTests
         Assert.DoesNotContain("Windows", error.Message);
     }
 
+    /// <summary>Review N8: on Windows (keys can't be listed) Unsupported keeps its WebAuthn wording.</summary>
+    [Fact]
+    public void Unsupported_OnWindows_SaysTheWebAuthnApiIsTooOld()
+    {
+        _keys.CanList = false;
+        _keys.Picked = _keys.AddKey(null, Yubico5Nfc);
+        _keys.FailNext(FakeFido2Op.MakeCredential, Fido2Failure.Unsupported, detail: "3");
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
+
+        Assert.Equal(Fido2Texts.Unsupported("3"), error.Message);
+        Assert.Equal("Windows' WebAuthn API on this machine is too old for FIDO2 slots (version 3; needs 4).", error.Message);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

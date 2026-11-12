@@ -97,6 +97,7 @@ public class Libfido2LoaderTests
     private sealed class LoadRecorder(FakeTree tree) : ILibfido2LoadApi
     {
         public List<string> Loaded { get; } = [];
+        public List<nint> Freed { get; } = [];
         public HashSet<string> MissingExports { get; } = [];
         public int Inits { get; private set; }
 
@@ -117,9 +118,7 @@ public class Libfido2LoaderTests
             return address != 0;
         }
 
-        public void Free(nint handle)
-        {
-        }
+        public void Free(nint handle) => Freed.Add(handle);
 
         public void Init(Libfido2Native library) => Inits++;
     }
@@ -158,6 +157,7 @@ public class Libfido2LoaderTests
         Assert.Equal(0, native.Inits);
         Assert.Contains("fido_assert_id_len", loader.Detail);
         Assert.Contains("fido_assert_id_len", verbose.ToString());
+        Assert.Equal([(nint)1234], native.Freed); // the handle that couldn't be bound is released
     }
 
     [Fact]
@@ -175,12 +175,29 @@ public class Libfido2LoaderTests
         Assert.Equal([LinuxFile], native.Loaded);
     }
 
+    /// <summary>Review N1: the exact names of brief T19's Appendix A (libfido2 1.16.0's fido.h), not only their count.</summary>
+    private static readonly string[] AppendixA =
+    [
+        "fido_assert_allow_cred", "fido_assert_count", "fido_assert_flags", "fido_assert_free", "fido_assert_hmac_secret_len",
+        "fido_assert_hmac_secret_ptr", "fido_assert_id_len", "fido_assert_id_ptr", "fido_assert_new", "fido_assert_set_clientdata_hash",
+        "fido_assert_set_extensions", "fido_assert_set_hmac_salt", "fido_assert_set_rp", "fido_assert_set_up", "fido_cbor_info_aaguid_len",
+        "fido_cbor_info_aaguid_ptr", "fido_cbor_info_extensions_len", "fido_cbor_info_extensions_ptr", "fido_cbor_info_free",
+        "fido_cbor_info_new", "fido_cbor_info_options_len", "fido_cbor_info_options_name_ptr", "fido_cbor_info_options_value_ptr",
+        "fido_cred_aaguid_len", "fido_cred_aaguid_ptr", "fido_cred_exclude", "fido_cred_flags", "fido_cred_free", "fido_cred_id_len",
+        "fido_cred_id_ptr", "fido_cred_new", "fido_cred_set_clientdata_hash", "fido_cred_set_extensions", "fido_cred_set_rk",
+        "fido_cred_set_rp", "fido_cred_set_type", "fido_cred_set_user", "fido_dev_close", "fido_dev_free", "fido_dev_get_assert",
+        "fido_dev_get_cbor_info", "fido_dev_get_retry_count", "fido_dev_info_free", "fido_dev_info_manifest",
+        "fido_dev_info_manufacturer_string", "fido_dev_info_new", "fido_dev_info_path", "fido_dev_info_product",
+        "fido_dev_info_product_string", "fido_dev_info_ptr", "fido_dev_info_vendor", "fido_dev_make_cred", "fido_dev_new",
+        "fido_dev_open", "fido_dev_set_pin", "fido_init", "fido_strerr",
+    ];
+
     [Fact]
-    public void TheBindingResolvesTheFiftySevenFunctionsOfAppendixA()
+    public void TheBindingResolvesExactlyTheFunctionsOfAppendixA()
     {
+        Assert.Equal(57, AppendixA.Length);
         Assert.Equal(57, Libfido2Native.Symbols.Count);
-        Assert.Equal(57, Libfido2Native.Symbols.Distinct().Count());
-        Assert.All(Libfido2Native.Symbols, s => Assert.StartsWith("fido_", s));
+        Assert.Equal(AppendixA, Libfido2Native.Symbols.Order(StringComparer.Ordinal));
     }
 
     // --- unprivileged (decision 6) ---

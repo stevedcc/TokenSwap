@@ -25,12 +25,14 @@ public class CliHostFido2WiringTests
     public void Fido2_LinuxAndMacOS_IsTheCompositeAndLoadsNothing()
     {
         var loads = 0;
-        var keys = CliHost.Fido2Keys(testKey: null, loadOther: () =>
+        Func<Libfido2LoadResult> counting = () =>
         {
             loads++;
             return new Libfido2LoadResult(Libfido2Status.NotInstalled, null);
-        });
-        var service = CliHost.Fido2Service(testKey: null);
+        };
+        var keys = CliHost.Fido2Keys(testKey: null, loadOther: counting);
+        // Review S2: the same counting loader through the service, so building the service is checked too.
+        var service = CliHost.Fido2Service(testKey: null, loadOther: counting);
 
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {

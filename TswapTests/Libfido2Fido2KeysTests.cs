@@ -245,12 +245,15 @@ public class Libfido2Fido2KeysTests
     {
         var (device, _) = Token2();
         device.ClientPin = null;
-        device.RetryCountResult = Libfido2Errors.PinNotSet;
+        // Review S1: the key would answer a retry-count request (8), so only not asking keeps PinRetries null.
+        device.RetryCountResult = Libfido2Errors.Ok;
+        device.Retries = 8;
 
         var key = Assert.Single(Keys().Find());
 
         Assert.False(key.PinSet);
         Assert.Null(key.PinRetries);
+        Assert.Equal(0, _fido.RetryCountCalls);
     }
 
     [Fact]
@@ -643,4 +646,105 @@ public class Libfido2Fido2KeysTests
         Assert.Equal(new string('x', 62) + "\U0001F600", name);
         Assert.Equal(64, name!.Length);
     }
+
+    // --- fix round 1 (review N2, N3, N5, N7) ---
+
+    [Fact]
+    public void MakeCredential_EachCallSendsAFreshClientDataHash()
+    {
+        var (_, key) = Token2();
+
+        Keys().MakeCredential(key, new byte[16], [], Pin([]));
+        Keys().MakeCredential(key, new byte[16], [], Pin([]));
+
+        Assert.Equal(2, _fido.Creds.Count);
+        Assert.All(_fido.Creds, c => Assert.Equal(32, c.ClientDataHash!.Length));
+        Assert.NotEqual(_fido.Creds[0].ClientDataHash, _fido.Creds[1].ClientDataHash);
+    }
+
+    [Fact]
+    public void GetHmacSecret_ZeroesThePinArray()
+    {
+        var (_, key) = Token2();
+        var bytes = Encoding.UTF8.GetBytes(PinText);
+
+        Keys().GetHmacSecret(key, [(CredentialId, PrfInput)], _ => bytes);
+
+        Assert.Equal(PinText, Assert.Single(_fido.Asserts).Pin);
+        Assert.All(bytes, b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public void GetHmacSecret_APinWithANulByte_IsRefusedWithNothingSent()
+    {
+        var (_, key) = Token2();
+        byte[] bytes = [0x31, 0x00, 0x32, 0x33];
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys().GetHmacSecret(key, [(CredentialId, PrfInput)], _ => bytes));
+
+        Assert.Equal("PinNotSendable", e.Detail);
+        Assert.False(Assert.Single(_fido.Asserts).Sent);
+        Assert.All(bytes, b => Assert.Equal(0, b));
+        Assert.Equal(0, _fido.Live);
+    }
+
+    [Fact]
+    public void SetPin_ZeroesThePinArray()
+    {
+        var (device, key) = Token2();
+        device.ClientPin = false;
+        var bytes = Encoding.UTF8.GetBytes(PinText);
+
+        Keys().SetPin(key, _ => bytes);
+
+        Assert.Equal(PinText, Assert.Single(_fido.PinsSet).Pin);
+        Assert.All(bytes, b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public void SetPin_APinWithANulByte_IsRefusedWithNothingSent()
+    {
+        var (device, key) = Token2();
+        device.ClientPin = false;
+        byte[] bytes = [0x31, 0x00, 0x32, 0x33];
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys().SetPin(key, _ => bytes));
+
+        Assert.Equal("PinNotSendable", e.Detail);
+        Assert.Empty(_fido.PinsSet);
+        Assert.All(bytes, b => Assert.Equal(0, b));
+        Assert.Equal(0, _fido.Live);
+    }
+
+    [Fact]
+    public void MakeCredential_AFailingSetter_FreesEverythingAndSendsNothing()
+    {
+        var (_, key) = Token2();
+        _fido.FailingSetter = ("fido_cred_set_rp", Libfido2Errors.InvalidArgument);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys().MakeCredential(key, new byte[16], [], NoPin));
+
+        Assert.Equal("FIDO_ERR_INVALID_ARGUMENT", e.Detail);
+        Assert.False(Assert.Single(_fido.Creds).Sent);
+        Assert.Equal(0, _fido.Live);
+    }
+
+    [Fact]
+    public void GetHmacSecret_AFailingSetter_FreesEverythingAndSendsNothing()
+    {
+        var (_, key) = Token2();
+        _fido.FailingSetter = ("fido_assert_set_hmac_salt", Libfido2Errors.InvalidArgument);
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys().GetHmacSecret(key, [(CredentialId, PrfInput)], NoPin));
+
+        Assert.Equal("FIDO_ERR_INVALID_ARGUMENT", e.Detail);
+        Assert.False(Assert.Single(_fido.Asserts).Sent);
+        Assert.Equal(0, _fido.Live);
+    }
+
+    [Theory]
+    [InlineData("Token2", "token2 PIN+", "token2 PIN+")] // the maker repeated in another case: not said twice
+    [InlineData("NITROKEY", "Nitrokey 3", "Nitrokey 3")]
+    public void ProductName_TheMakerIsMatchedIgnoringCase(string manufacturer, string product, string expected) =>
+        Assert.Equal(expected, Libfido2Fido2Keys.ProductName(manufacturer, product));
 }

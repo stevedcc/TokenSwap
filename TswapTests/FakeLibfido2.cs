@@ -116,6 +116,12 @@ internal sealed class FakeLibfido2 : ILibfido2
 
     public List<Device> Devices { get; } = [];
     public int ManifestResult { get; set; } = Libfido2Errors.Ok;
+
+    /// <summary>Review N5: the setter that fails (its exported name, e.g. <c>fido_cred_set_rp</c>) and what it returns.</summary>
+    public (string Setter, int Result)? FailingSetter { get; set; }
+
+    /// <summary>Review S1: how many times <c>fido_dev_get_retry_count</c> was called.</summary>
+    public int RetryCountCalls { get; private set; }
     public List<Cred> Creds { get; } = [];
     public List<Assert> Asserts { get; } = [];
 
@@ -217,6 +223,7 @@ internal sealed class FakeLibfido2 : ILibfido2
 
     public int DevGetRetryCount(nint dev, out int retries)
     {
+        RetryCountCalls++;
         var device = OpenDevice(dev);
         retries = device.RetryCountResult == Libfido2Errors.Ok ? device.Retries : 0;
         return device.RetryCountResult;
@@ -290,10 +297,11 @@ internal sealed class FakeLibfido2 : ILibfido2
     }
 
     public void CredFree(nint cred) => Free(cred);
-    public int CredSetType(nint cred, int coseAlgorithm) => Set(() => Get<Cred>(cred).Type = coseAlgorithm);
-    public int CredSetClientDataHash(nint cred, ReadOnlySpan<byte> hash) => Set(Get<Cred>(cred), hash.ToArray(), (c, h) => c.ClientDataHash = h);
+    public int CredSetType(nint cred, int coseAlgorithm) => Failing("fido_cred_set_type") ?? Set(() => Get<Cred>(cred).Type = coseAlgorithm);
+    public int CredSetClientDataHash(nint cred, ReadOnlySpan<byte> hash) =>
+        Failing("fido_cred_set_clientdata_hash") ?? Set(Get<Cred>(cred), hash.ToArray(), (c, h) => c.ClientDataHash = h);
 
-    public int CredSetRp(nint cred, string id, string? name) => Set(() =>
+    public int CredSetRp(nint cred, string id, string? name) => Failing("fido_cred_set_rp") ?? Set(() =>
     {
         Get<Cred>(cred).RpId = id;
         Get<Cred>(cred).RpName = name;
@@ -328,7 +336,8 @@ internal sealed class FakeLibfido2 : ILibfido2
     public int AssertSetClientDataHash(nint assert, ReadOnlySpan<byte> hash) => Set(Get<Assert>(assert), hash.ToArray(), (a, h) => a.ClientDataHash = h);
     public int AssertAllowCred(nint assert, ReadOnlySpan<byte> credentialId) => Set(Get<Assert>(assert), credentialId.ToArray(), (a, id) => a.Allowed.Add(id));
     public int AssertSetExtensions(nint assert, int extensions) => Set(() => Get<Assert>(assert).Extensions = extensions);
-    public int AssertSetHmacSalt(nint assert, ReadOnlySpan<byte> salt) => Set(Get<Assert>(assert), salt.ToArray(), (a, s) => a.Salt = s);
+    public int AssertSetHmacSalt(nint assert, ReadOnlySpan<byte> salt) =>
+        Failing("fido_assert_set_hmac_salt") ?? Set(Get<Assert>(assert), salt.ToArray(), (a, s) => a.Salt = s);
     public int AssertSetUp(nint assert, FidoOpt up) => Set(() => Get<Assert>(assert).Up = (int)up);
     public nuint AssertCount(nint assert) => (nuint)Get<Assert>(assert).Count;
     public byte[] AssertHmacSecret(nint assert, nuint index)
@@ -342,6 +351,8 @@ internal sealed class FakeLibfido2 : ILibfido2
     public List<byte[]> HmacSecretsReturned { get; } = [];
     public byte AssertFlags(nint assert, nuint index) => Get<Assert>(assert).Flags;
     public byte[] AssertId(nint assert, nuint index) => [.. Get<Assert>(assert).Id];
+
+    private int? Failing(string setter) => FailingSetter is { } f && f.Setter == setter ? f.Result : null;
 
     private static int Set(Action set)
     {
