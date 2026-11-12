@@ -109,6 +109,29 @@ public static class Fido2Texts
     public static string KeyLeftOut(string problem) =>
         $"A plugged-in key's FIDO2 interface couldn't be read ({problem}), so it is left out of the list.";
 
+    /// <summary>
+    /// Brief T19, item 2: one more line under <see cref="KeyLeftOut"/> on Linux when a listed key couldn't be opened
+    /// (<c>OpenFailed:...</c>): systemd gives the user at the machine's active local seat access to security keys, so a
+    /// login over SSH (or with no active seat) has none.
+    /// </summary>
+    public const string NoDeviceAccess =
+        "A security key is plugged in, but this user can't open it: Linux gives access to the user logged in at the machine (not over SSH).";
+
+    /// <summary>The device-layer detail of a key that is listed but couldn't be opened.</summary>
+    public const string OpenFailedPrefix = "OpenFailed:";
+
+    /// <summary>
+    /// The notice for a plugged-in key left out of a listing: <see cref="KeyLeftOut"/> with its problem, and on Linux,
+    /// for a key that couldn't be opened, <see cref="NoDeviceAccess"/> on a second line.
+    /// </summary>
+    public static string LeftOut(Fido2DeviceException problem, bool linux)
+    {
+        var detail = problem.Detail ?? problem.Kind.ToString();
+        return linux && detail.StartsWith(OpenFailedPrefix, StringComparison.Ordinal)
+            ? KeyLeftOut(detail) + Environment.NewLine + NoDeviceAccess
+            : KeyLeftOut(detail);
+    }
+
     /// <summary><paramref name="detail"/>: the API version Windows reported, when the device layer knows it.</summary>
     public static string Unsupported(string? detail) => detail is null
         ? "Windows' WebAuthn API on this machine is too old for FIDO2 slots (needs version 4)."
