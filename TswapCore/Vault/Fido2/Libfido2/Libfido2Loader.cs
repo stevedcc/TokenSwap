@@ -178,7 +178,7 @@ public sealed class Libfido2Loader
     {
         foreach (var folder in at.UnprivilegedFolders)
         {
-            var path = $"{folder}/{at.FileName}";
+            var path = UnixPath.Combine(folder, at.FileName);
             if (files.Exists(path))
                 return Load(path);
         }
@@ -205,7 +205,7 @@ public sealed class Libfido2Loader
         List<string> skipped = [];
         foreach (var folder in at.PrivilegedFolders)
         {
-            var path = $"{folder}/{at.FileName}";
+            var path = UnixPath.Combine(folder, at.FileName);
             if (!files.Exists(path))
                 continue;
             if (Refusal(path, at.PrivilegedFolders) is { } why)
@@ -219,7 +219,7 @@ public sealed class Libfido2Loader
 
         if (skipped.Count > 0)
             return Done(Libfido2Status.RefusedUnderSudo, string.Join("; ", skipped));
-        var elsewhere = at.UnprivilegedFolders.Select(f => $"{f}/{at.FileName}").FirstOrDefault(files.Exists);
+        var elsewhere = at.UnprivilegedFolders.Select(f => UnixPath.Combine(f, at.FileName)).FirstOrDefault(files.Exists);
         return elsewhere is not null
             ? Done(Libfido2Status.RefusedUnderSudo, $"only {elsewhere}, which is outside the root-owned folders tswap loads from under sudo")
             : Done(Libfido2Status.NotInstalled, "not installed in a root-owned folder");
@@ -234,10 +234,10 @@ public sealed class Libfido2Loader
     {
         if (files.FinalTarget(path) is not { } real)
             return "its link can't be resolved";
-        var folder = Path.GetDirectoryName(real);
+        var folder = UnixPath.Parent(real);
         if (folder is null || !allowed.Contains(folder, StringComparer.Ordinal))
             return $"it resolves to {real}, outside the root-owned folders";
-        for (var current = real; current is not null; current = Path.GetDirectoryName(current))
+        for (var current = real; current is not null; current = UnixPath.Parent(current))
         {
             if (files.IsLink(current))
                 return $"{current} is a symbolic link";

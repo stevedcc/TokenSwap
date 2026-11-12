@@ -63,7 +63,7 @@ public class Libfido2LoaderTests
 
         private void AddFolders(string path)
         {
-            for (var dir = Path.GetDirectoryName(path); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+            foreach (var dir in UnixPath.Parents(path))
                 _entries.TryAdd(dir, new Entry());
         }
 
@@ -80,7 +80,7 @@ public class Libfido2LoaderTests
                     return current;
                 if (e.LinkTarget is null)
                     return current;
-                current = e.LinkTarget.StartsWith('/') ? e.LinkTarget : Path.Combine(Path.GetDirectoryName(current)!, e.LinkTarget);
+                current = UnixPath.Combine(UnixPath.Parent(current)!, e.LinkTarget);
             }
             return null;
         }
