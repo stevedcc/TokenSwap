@@ -24,23 +24,32 @@ full suite (`./runtests.sh`) after the last change of each item, and a Release p
    agreement. tswap's code is a thin binding plus the mapping to `IFido2Keys`.
 2. **Loaded at run time, only if installed** (the spec's decision 5, the `libpcsclite` pattern). tswap
    starts, runs and opens every other slot kind with no libfido2 present; it is never a link-time
-   dependency, and nothing is bundled into the release archives.
+   dependency. Bundling libfido2 into a release is not decided and not in this brief; item 1's lookup
+   next to the binary leaves room for it.
 3. **YubiKeys stay on Yubico's SDK** on Linux and macOS. The libfido2 backend skips Yubico devices
    (USB vendor id `0x1050`) so no key is listed twice, and a YubiKey user needs nothing new.
 4. **Not Fido2Net** (the existing libfido2 binding on NuGet, noted in the spec as "small, quiet"): a
    binding of the ~35 functions used is small, NativeAOT-safe and reviewable here, and adds no package.
    The protocol stays libfido2's, so this is not self-rolling. (Agents add no packages anyway.)
 
-## Open question for the owner (answer before launch)
-
-**macOS + Homebrew + sudo.** Item 1's rule loads libfido2 into a privileged tswap only from a file and
-folders owned by root and not writable by group or others. Homebrew's `/opt/homebrew` belongs to the
-user, so `sudo tswap slot add --fido2` (sudo by design) can't use a Homebrew libfido2: anything running as
-that user could swap the library and run code as root. Unprivileged unlocks on the Mac work either way.
-The proposed answer: keep the rule, and say plainly in the refusal and in `docs/install.md` that a Mac
-enrols another brand's key with a root-owned libfido2 (MacPorts' `/opt/local` is root-owned), or enrols it
-on Linux or Windows (the slot then opens on the Mac). The alternative is to accept a user-owned library
-under sudo, which this brief does not do without the owner's word.
+5. **Under sudo, only a root-owned libfido2, dependencies included (owner, 2026-11-12).** tswap's safety
+   rests on the user/root split: agents and everything else run as the user and may use secrets but never
+   read them. A library the user can replace, loaded into `sudo tswap` while the vault is open, would hand
+   user-level code root and every secret. So a privileged tswap loads libfido2 only from a folder whose
+   whole tree is root's: the library **and the libraries it loads** (libcbor, libcrypto). Checking the
+   library file alone is not enough: Homebrew's libfido2 copied to `/usr/local/lib` is root-owned but
+   still loads libcbor and libcrypto from the user's `/opt/homebrew`. And checking after loading is too
+   late (a library's initialisers run when it loads), while reading its dependency list ourselves would
+   be our own Mach-O/ELF parser. Hence an allow-list of root-owned trees, not a per-file check.
+6. **Without sudo, any libfido2 the user has is fine** (owner, 2026-11-12): Homebrew, or a copy next to
+   the tswap binary. A process running as the user that swapped it gains nothing it doesn't already have.
+   This is what a user without admin rights needs: they never run sudo anyway (they can't `get`, `apply`
+   or `slot add`; they can `init --fido2`, unlock and `run`, `docs/portable.md`).
+7. **The refusal says how to fix it** (owner: "we can tell them"): under sudo with only an unusable
+   libfido2 found, the text names the root-owned way to install it (Linux: the distro package; macOS:
+   MacPorts, `sudo port install libfido2`) and the alternative (add the slot on another machine that has
+   a root-owned libfido2, or on Windows; in a shared vault folder the slot then opens here without sudo).
+   It never suggests copying a library into place.
 
 ## Item 1: the libfido2 binding and its loader
 
@@ -56,18 +65,31 @@ under sudo, which this brief does not do without the owner's word.
   clientdata hash, allow_cred, extensions, hmac_salt, up, count, hmac_secret, flags, id). Every symbol is
   resolved when the library loads. A missing symbol means "libfido2 unusable" (too old), never a crash
   later; `-v` names the missing symbol.
-- **Where it loads from** (`Libfido2Loader`, behind a seam the tests replace):
-  - Linux: by soname `libfido2.so.1` when unprivileged; when `Environment.IsPrivilegedProcess`, only from
-    absolute paths (`/usr/lib64/`, `/usr/lib/`, `/usr/lib/<multiarch triplet>/`), never a bare name, because
-    the loader's search path is the caller's environment.
-  - macOS: absolute paths only, `/opt/homebrew/lib/libfido2.1.dylib`, `/usr/local/lib/libfido2.1.dylib`,
-    `/opt/local/lib/libfido2.1.dylib`, in that order.
-  - Windows: never loaded (`webauthn.dll` already talks to every brand).
-  - **Privileged rule:** with `IsPrivilegedProcess`, a candidate is loaded only if its real path (symlinks
-    resolved) and every parent directory up to `/` are owned by uid 0 and not writable by group or others.
-    A candidate that fails is skipped, with the reason under `-v`. Reuse the ownership checks tswap already
-    has (`DirectoryOwnerMatcher`, the macOS `libtswapse.dylib` checks if any) rather than writing new ones;
-    say in the commit which one you used.
+- **Where it loads from** (`Libfido2Loader`, behind a seam the tests replace), decisions 5 and 6. Windows:
+  never loaded (`webauthn.dll` already talks to every brand). The file names are `libfido2.so.1` (Linux)
+  and `libfido2.1.dylib` (macOS).
+  - **Unprivileged**, first found wins:
+    1. next to the running tswap binary (`AppContext.BaseDirectory`, where `libtswapse.dylib` already
+       lives): for a user without admin rights, and a future bundled copy;
+    2. Linux: by soname, through the system loader; macOS: `/opt/homebrew/lib/`, `/usr/local/lib/`,
+       `/opt/local/lib/`, in that order.
+  - **Privileged** (`Environment.IsPrivilegedProcess`): only from the **allow-listed root-owned trees**,
+    never by bare name (the loader's search path is the caller's environment) and never next to the binary
+    (nothing is bundled, so nothing there was built to load its dependencies from root-owned places):
+    - Linux: `/usr/lib64/`, `/usr/lib/`, `/usr/lib/<multiarch triplet>/` (distro packages: libfido2 and
+      what it loads all live there);
+    - macOS: `/opt/local/lib/` only (MacPorts: libfido2, libcbor and libcrypto all under root's
+      `/opt/local`). **Not** `/usr/local/lib/` or `/opt/homebrew/lib/`: either can hold a library that
+      loads its dependencies from the user's `/opt/homebrew`.
+    - In addition, the candidate's real path (symlinks resolved) and every parent folder up to `/` must be
+      owned by uid 0 and not writable by group or others; checked before the load. A candidate that fails
+      is skipped, with the reason under `-v`. Reuse tswap's existing ownership checks
+      (`TswapCore/FileOwnership.cs`, `DirectoryOwnerMatcher`) rather than writing new ones; say in the
+      commit which one you used.
+    - When the only libfido2 found is outside the allow-list (Homebrew, a copy next to the binary), the
+      FIDO2 listing has no libfido2 keys and the text from decision 7 (`Fido2Texts`) says why. That text
+      appears only when it matters: a FIDO2 command or a FIDO2 slot that needs libfido2, never on other
+      commands.
 - **Absent is normal:** `Libfido2.TryLoad()` gives the library or "not installed / unusable (why)". No
   exception escapes at startup, and no command that doesn't touch FIDO2 ever loads it (load lazily, at the
   first FIDO2 listing).
@@ -75,10 +97,14 @@ under sudo, which this brief does not do without the owner's word.
   `finally` after the call, as the SDK path zeroes its PIN.
 
 Tests (unit, through the loader seam): absent library → FIDO2 listing has no libfido2 keys and nothing
-throws; a missing symbol → unusable, with the symbol named in the verbose line; privileged with a
-candidate in a user-owned folder → skipped (a temp folder you own stands in; the check compares owner uid
-to 0, so it is testable without root); unprivileged Linux → loads by soname. **Break-it-once:** drop the
-parent-directory walk from the privileged check; the user-owned-folder test must fail.
+throws; a missing symbol → unusable, with the symbol named in the verbose line; unprivileged → the copy
+next to the binary wins over the system one, then the order above; privileged → Homebrew, `/usr/local/lib`
+and next-to-binary candidates are never tried even when present, and an allow-listed candidate in a
+user-owned folder is skipped (a temp folder you own stands in; the check compares the owner uid to 0, so
+it is testable without root); privileged with only a Homebrew copy → the decision-7 text, naming MacPorts
+on macOS and the distro package on Linux. **Break-it-once:** (a) drop the parent-folder walk; the
+user-owned-folder test must fail. (b) Add `/opt/homebrew/lib/` to the privileged list; the
+privileged-Homebrew test must fail.
 
 On the Linux and macOS CI legs, install libfido2 (`libfido2-1` on Ubuntu, `brew install libfido2` on the
 macOS runner) and add one binding smoke test that loads the real library, calls `fido_init` and lists
@@ -146,7 +172,8 @@ Tests: routing (a call with an `sdk:` ref never reaches the libfido2 fake, and t
   Yubico model if known, else "the security key this slot was made with". The blob keeps its `TSYK` magic
   and version 3: no format change.
 - **libfido2 missing:** when the listing found no key and libfido2 isn't usable (Linux, macOS), the text
-  adds one line: other brands than YubiKey need libfido2 (`docs/install.md`). When `Locate` can't find a
+  adds one line: other brands than YubiKey need libfido2 (`docs/install.md`). Under sudo with only a
+  libfido2 outside the allow-list, it is decision 7's text instead. When `Locate` can't find a
   slot whose AAGUID isn't Yubico's and libfido2 isn't usable, `NotPluggedIn`'s text says the same instead
   of "plug it in".
 - Guided `init` and `slot add --fido2` offer every listed key; the macOS hint (FIDO2 preferred over OTP
@@ -161,8 +188,11 @@ restore one `IsYubico` check; the non-Yubico enrolment test must fail.
 ## Item 5: docs and the owner's checks
 
 - `docs/install.md`: libfido2 per OS (Fedora `libfido2`, usually already installed; Debian/Ubuntu
-  `libfido2-1`; macOS: MacPorts for sudo commands, Homebrew for unprivileged use, see the open question;
-  Windows: nothing). Linux device access: systemd's `fido_id` rule gives the logged-in user access to FIDO
+  `libfido2-1`; macOS: MacPorts, `sudo port install libfido2`, for everything including sudo commands,
+  or Homebrew for use without sudo only, with the reason in one paragraph (decision 5, and why a copied
+  Homebrew library doesn't help); Windows: nothing). `docs/portable.md`: without admin rights, a
+  libfido2 next to the tswap binary or from Homebrew is used; a user without admin never needs the
+  root-owned one. `docs/security-model.md`: decision 5 as a short section next to "the sudo split". Linux device access: systemd's `fido_id` rule gives the logged-in user access to FIDO
   HID devices, so no extra udev rule is needed. Check this against the udev rules on this machine
   (`/usr/lib/udev/rules.d/`) and quote the rule file.
 - `AGENTS.md` (the FIDO2 paragraph, "Prerequisites"), `docs/commands.md`, `docs/design/hardware-backends.md`,
@@ -191,6 +221,8 @@ restore one `IsYubico` check; the non-Yubico enrolment test must fail.
 ## Review
 
 Per the tswap rule: an external review of this brief before launch, and an external code review of the
-branch before merge, with the security points named for the reviewer: the privileged loading rule (item 1),
+branch before merge, with the security points named for the reviewer: the privileged loading rule (item 1:
+the allow-listed root-owned trees, dependencies included, and that no privileged path reaches a
+user-writable library),
 PIN and output zeroing, the probe never asking for a touch or PIN, and parameter parity with the SDK path
 (item 2).
