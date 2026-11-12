@@ -134,6 +134,20 @@ public static class Fido2Texts
         _ => null,
     };
 
+    /// <summary>
+    /// Brief T19, decision 7: under sudo only a root-owned libfido2 is loaded, and none usable was found (or the loader's
+    /// environment wasn't clean). Names the root-owned way to install it and the alternative; never suggests copying a
+    /// library into place.
+    /// </summary>
+    public static string Libfido2SudoRefusal(bool macOs) =>
+        "Security keys other than YubiKeys need libfido2, and under sudo tswap loads it only from a root-owned install " +
+        "(the library and everything it loads), with no LD_ or DYLD_ variable set; none was found, so those keys are left out. " +
+        (macOs
+            ? "Install it from MacPorts: `sudo port install libfido2`. "
+            : "Install your distribution's libfido2 package (Fedora: libfido2; Debian, Ubuntu: libfido2-1). ") +
+        "Or add the slot on another machine that has a root-owned libfido2, or on Windows; in a shared vault folder the " +
+        "slot then opens here without sudo.";
+
     private static string Name(Fido2KeyInfo key) => Fido2SlotBlob.DisplayName(key.Serial, key.Aaguid);
 
     private static string Tries(int left) => left == 1 ? "1 try" : $"{left} tries";

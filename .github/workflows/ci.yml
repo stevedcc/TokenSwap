@@ -93,6 +93,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libpcsclite1
 
+      # Brief T19: security keys of other brands go through libfido2, loaded at run time only if installed. The binding
+      # smoke test (Libfido2SmokeTests: load, fido_init, fido_dev_info_manifest; opens no device) skips without it, so
+      # these legs install it and set CI_REQUIRE_LIBFIDO2=1 (below): there it fails instead of skipping.
+      - name: libfido2 for the binding smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libfido2-1
+
+      - name: libfido2 for the binding smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libfido2
+
       - name: Unit tests (in-process)
         # CI_REQUIRE_BWRAP=1 on Linux: the eval and template sandbox tests fail instead of skipping when bwrap is unusable.
         # CI_REQUIRE_SE=1 on macOS only (it means "this machine must have a Secure Enclave", so never
@@ -101,6 +112,8 @@ jobs:
         env:
           CI_REQUIRE_BWRAP: ${{ runner.os == 'Linux' && '1' || '' }}
           CI_REQUIRE_SE: ${{ runner.os == 'macOS' && '1' || '' }}
+          # CI_REQUIRE_LIBFIDO2=1 on Linux and macOS (installed above): Libfido2SmokeTests fails instead of skipping.
+          CI_REQUIRE_LIBFIDO2: ${{ runner.os != 'Windows' && '1' || '' }}
         run: dotnet test TokenSwap.slnx --no-build --filter "Category!=E2E&Category!=SecureEnclave&Category!=Tpm&Category!=TpmWindows&Category!=YubiKey"
 
       - name: Remove libpcsclite again (Linux)
