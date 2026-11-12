@@ -23,7 +23,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `slot approve` | sudo | Unlocks this vault and writes a file that lets whoever holds the request's private key open it: the same risk as `export` |
 | `slot accept` | no | Finishes enrolment on the new machine. On a record-store vault, or with `--vault-dir`, it also writes the new slot into the vault folder's keyring; the human check for that slot was the earlier `sudo tswap slot approve` |
 | `slot merge` | sudo | Adds the slots of a receipt: each one is a new way to open the vault |
-| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) as a new slot: a new way to open the vault |
+| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential) as a new slot: a new way to open the vault |
 | `broker serve` | no | Runs as the vault's own user; it refuses root |
 | `broker unlock` | no | Runs as the vault user; it refuses sudo |
 | `broker lock` | no | Runs as the vault user; it refuses sudo |
@@ -37,6 +37,10 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `broker socket remove` | sudo | Changes `broker.json`, as above |
 | `broker template add` | sudo | Changes `broker.json`: a template runs host-side commands with vault secrets |
 | `broker template remove` | sudo | Changes `broker.json`, as above |
+
+A FIDO2 slot on a security key that isn't a YubiKey needs a tswap newer than 0.3.0 on every machine
+that opens it: tswap 0.3.0 doesn't see such keys on Linux and macOS and says "plug it in" even when
+the key is plugged in. Upgrade.
 
 Three commands marked without `sudo` have one case that needs it, as their descriptions below say:
 `rotate` and `ingest --rotate` need sudo unless the secret is burned, and `migrate --to-records` needs sudo.

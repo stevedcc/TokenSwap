@@ -157,3 +157,13 @@ lives; the exact texts.
 - **A spare key** for the destructive checks (slot 2 programming, busy message, no-PIN FIDO2, wrong-PIN counts, a
   FIDO2 reset): the owner is considering ordering one (a YubiKey 5 with OTP and FIDO2). The Windows check itself is
   safe on the owner's daily key (a non-discoverable credential takes no space and touches nothing else).
+
+## Addendum (brief T19, 2026-11-12): other brands
+
+Decision 5 is done: FIDO2 slots work on a security key of any brand that supports `hmac-secret` and has a FIDO2
+PIN. On Linux and macOS libfido2 is loaded at run time only if it is installed (the `libpcsclite` pattern), next to
+Yubico's SDK, which still handles every YubiKey (libfido2 skips Yubico's USB vendor id); under sudo only a
+root-owned libfido2 is loaded, from an allow-list of root-owned folders with a clean loader environment
+(security-model.md, "libfido2 under sudo"). The binding is tswap's own (57 functions, function pointers), not
+Fido2Net. On Windows `webauthn.dll` already talked to every brand, so the Windows refusal's reason (the YubiKey
+check) is gone: `Fido2Failure.NotAYubiKey` became `UnknownKey`, used only when Windows reports an all-zero AAGUID.

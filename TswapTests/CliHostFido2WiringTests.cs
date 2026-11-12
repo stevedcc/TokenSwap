@@ -55,4 +55,28 @@ public class CliHostFido2WiringTests
 
     [Fact]
     public void Fido2Keys_TestMode_IsNone() => Assert.Null(CliHost.Fido2Keys(testKey: new byte[32]));
+
+#if DEBUG
+    /// <summary>
+    /// Brief T19, owner check C5: a Debug build with <c>TSWAP_TEST_LIBFIDO2_ABSENT=1</c> plays "libfido2 isn't installed"
+    /// (the loader is never called), so the owner can see the "needs libfido2" texts with a Token2 plugged in.
+    /// </summary>
+    [Fact]
+    public void Libfido2Absent_TestSwitch_PlaysNotInstalled()
+    {
+        var absent = CliHost.Libfido2ForTests(name => name == "TSWAP_TEST_LIBFIDO2_ABSENT" ? "1" : null);
+
+        Assert.NotNull(absent);
+        Assert.Equal(new Libfido2LoadResult(Libfido2Status.NotInstalled, null), absent());
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            Assert.Equal(Libfido2Status.NotInstalled, CliHost.Fido2Keys(testKey: null, loadOther: absent)!.OtherBrands);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0")]
+    [InlineData("yes")]
+    public void Libfido2Absent_TestSwitch_OffUnlessExactlyOne(string? value) =>
+        Assert.Null(CliHost.Libfido2ForTests(name => name == "TSWAP_TEST_LIBFIDO2_ABSENT" ? value : null));
+#endif
 }

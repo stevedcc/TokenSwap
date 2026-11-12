@@ -16,7 +16,8 @@ in [hardware-backends.md](../design/hardware-backends.md#yubikey-fido2-slots-v03
 - **(B) Destructive checks** run on the **spare YubiKey 5C NFC only**: wrong-PIN counts, a key
   without a PIN, a FIDO2 reset, programming slot 2. Unplug the daily key for all of (B), except B6
   (below).
-- **(C)** The Token2 PIN+ Dual (a non-YubiKey) is refused cleanly on every OS.
+- **(C)** The Token2 PIN+ Dual (not a YubiKey) holds a FIDO2 slot through libfido2 (Linux, macOS) and
+  Windows' dialog (brief T19): C1 to C6.
 - **(D)** Optional: a Security Key or Bio, if one is to hand.
 
 ## Setup on each machine
@@ -492,22 +493,151 @@ nothing was written.`, and `tswap slots` unchanged.
 
 Paste back: both outputs, with their `Windows HRESULT` lines.
 
-## (C) The Token2 (not a YubiKey), refused on every OS
+## (C) Other brands: the Token2, through libfido2 (brief T19)
 
-Plug in only the Token2 (with its own FIDO2 PIN set, or not).
+Since brief T19 a FIDO2 slot works on a key of any brand: on Linux and macOS through libfido2
+(loaded at run time, only if installed), on Windows through Windows' own dialog. These checks use
+the Token2 PIN+ Dual Ace R3.4 (AAGUID `eabb46cc-e241-80bf-ae9e-96fa6d2975cf`) with its own FIDO2
+PIN set; only C4 uses a YubiKey instead. As everywhere here, no automated test or agent runs any of
+them: each makes a credential or asks for a PIN on a real key. Build the branch head (Release,
+except C5) on each machine and use the setup above (`$T`, `$W`, a throwaway `TSWAP_CONFIG_DIR`).
 
-- Linux and macOS: `TSWAP_CONFIG_DIR="$W/token2-config" "$T" init --fido2 --no-password --no-recovery
-  --folder "$W/vault-token2"`. Expect `No YubiKey with FIDO2 detected. Please insert YubiKey.` with
-  no PIN prompt and nothing written. The guided `init` shouldn't list it at all.
-- Windows: the same `init --fido2`. The dialog runs (PIN, touch on the Token2), then expect
-  `This security key is not a YubiKey (its FIDO2 model id is <AAGUID>): FIDO2 slots work with
-  YubiKeys only for now (other keys: issue #193). No slot was added.` and nothing written
-  (`Get-ChildItem "$W\token2-config"`). The Token2 keeps an unused non-discoverable credential.
-  If instead you see `Windows didn't report which key this is (its FIDO2 model id came back as
-  zeros) ...`, record that.
-- Windows unlock: A6 with the Token2 as the "other key" (if not done there).
+### C1. The Token2 on Linux: enrol, unlock, a wrong PIN, the silent probe
 
-Paste back: the AAGUID Windows reported (for #193), and each OS's output.
+With libfido2 installed (Fedora: `libfido2`) and only the Token2 plugged in, logged in at the
+machine (not over SSH):
+
+```bash
+export TSWAP_CONFIG_DIR="$W/token2-config"
+"$T" init --fido2 --no-password --no-recovery --folder "$W/vault-token2"   # PIN + touch, twice
+"$T" slots
+"$T" create token2-check 16                                                # PIN + touch
+"$T" names                                                                 # PIN + touch
+```
+
+Expect `Enrolling a FIDO2 credential on Token2 PIN+ Dual (its PIN and a touch, twice)...` (or the
+product name the key's USB descriptor gives; record it), `FIDO2 PIN for <that name>: `, then
+`Touch your security key when it blinks.`, and the completion box with `Backend: FIDO2 keyring (k =
+1, 1 slot: this key only)`. `slots` shows the machine row as `the security key this slot was made
+with, FIDO2: PIN + touch, no password`. `names` (an unlock that can only use that slot) lists
+`token2-check`.
+
+Then `"$T" names` once more with a **wrong** PIN. Expect `<name>: wrong FIDO2 PIN; 7 tries left
+before this key's FIDO2 is blocked (...)` (record the number shown), and type the right PIN on the
+next run. Watch the key during each unlock before the PIN prompt: the silent probe that finds the
+key must not make it blink or wait for a touch; it should blink only after the PIN.
+
+Paste back: the whole output of each command, the name tswap used, the tries shown, and whether the
+key blinked before the PIN prompt.
+
+### C2. A slot made on Linux opens on Windows (and macOS)
+
+Copy `$W/vault-token2` from C1 to Windows, join it and open it:
+
+```powershell
+$env:TSWAP_CONFIG_DIR = "$W\token2-join"
+& $T init --vault-dir "$W\vault-token2"
+& $T names                       # Windows' dialog: the Token2's PIN, a touch
+```
+
+Expect `names` to list `token2-check`. On macOS, only if you choose to install libfido2 there
+(`sudo port install libfido2`, or Homebrew for this check without sudo): the same join and `names`,
+with tswap's own PIN prompt.
+
+Paste back: each OS's output.
+
+### C3. A slot made on Windows opens on Linux
+
+On Windows, `& $T init --fido2 --no-password --no-recovery --folder "$W\vault-token2-win"` with the
+Token2, then `& $T create token2-win 16`. Copy the vault folder to Linux, `init --vault-dir` it with a
+fresh `TSWAP_CONFIG_DIR`, and run `"$T" names` there (PIN, touch). Expect `token2-win` listed.
+
+Paste back: both outputs.
+
+### C4. The salt cross-check without a Token2 (a YubiKey, both backends)
+
+The opt-in hardware test `Libfido2CrossCheckHardwareTests` makes a FIDO2 credential on a YubiKey
+through Yubico's SDK, asserts it through the SDK, then through the libfido2 backend (with Yubico
+devices included, a test-only flag), and checks both give the same hmac-secret output: the two
+backends send the key the same salt, so a slot made by one opens on the other. It asks for the
+YubiKey's FIDO2 PIN three times at the terminal (`/dev/tty`, no echo), each followed by a touch, and
+leaves one unused non-discoverable credential on the key. On Linux, with only the daily YubiKey
+plugged in and libfido2 installed:
+
+```bash
+TSWAP_HW_LIBFIDO2_CROSS=1 ./runtests.sh --yubikey
+```
+
+Without the variable the test skips; CI never sets it. Expect it to pass (the other `RealKey_*`
+tests skip without their own variables).
+
+Paste back: the test's output lines and the summary.
+
+### C5. libfido2 unavailable: the "needs libfido2" text, and YubiKeys still work
+
+Use a **Debug** build of the branch (`dotnet build TswapCli/TswapCli.csproj`, then
+`T=TswapCli/bin/Debug/net10.0/tswap`): only Debug builds honour `TSWAP_TEST_LIBFIDO2_ABSENT=1`,
+which makes tswap behave as if libfido2 weren't installed. On Linux:
+
+```bash
+export TSWAP_TEST_LIBFIDO2_ABSENT=1
+# only the Token2 plugged in:
+TSWAP_CONFIG_DIR="$W/absent-config" "$T" init --fido2 --no-password --no-recovery --folder "$W/vault-absent"
+# C1's vault, the Token2 plugged in:
+TSWAP_CONFIG_DIR="$W/token2-config" "$T" names
+# only a YubiKey plugged in, A1's vault:
+TSWAP_CONFIG_DIR="$W/linux-config" "$T" names
+unset TSWAP_TEST_LIBFIDO2_ABSENT
+```
+
+Expect, for the first, no PIN prompt, nothing written, and:
+
+```
+No FIDO2 security key detected. Please insert one.
+Security keys other than YubiKeys need libfido2, which isn't installed here or is too old (see docs/install.md).
+```
+
+For the second, no PIN prompt and `The FIDO2 slot of the security key this slot was made with
+can't be opened here. Security keys other than YubiKeys need libfido2, ...` instead of "plug it
+in". The third opens as in A1 (the YubiKey's PIN and a touch).
+
+Paste back: the three outputs.
+
+### C6. Under sudo on Linux: only a root-owned libfido2
+
+`slot add --fido2` lists the keys before it opens the vault, so for this check the vault opens with
+its recovery key and **only the Token2 is plugged in** (a plugged-in YubiKey would be listed through
+Yubico's SDK and offered instead). First make a throwaway vault on the daily YubiKey with a recovery
+key in a file, then unplug the YubiKey and plug in the Token2:
+
+```bash
+export TSWAP_CONFIG_DIR="$W/c6-config"
+"$T" init --fido2 --no-password --recovery-key-out "$W/c6-recovery.txt" --folder "$W/vault-c6"   # the daily key
+# unplug the YubiKey, plug in the Token2
+sudo --preserve-env=TSWAP_CONFIG_DIR "$T" -v slot add --fido2 --no-password --recovery-key-stdin < "$W/c6-recovery.txt"
+```
+
+Expect, under `-v`, `libfido2: loaded /usr/lib64/libfido2.so.1.16.0` (or the real path your
+`/usr/lib64/libfido2.so.1` points to), then the Token2 enrolled (its PIN and a touch, twice) and
+`✓ ... added as a FIDO2 slot`. Then, if sudoers lets the variable through:
+
+```bash
+sudo --preserve-env=TSWAP_CONFIG_DIR LD_LIBRARY_PATH=/tmp "$T" -v slot add --fido2 --no-password --recovery-key-stdin < "$W/c6-recovery.txt"
+```
+
+Expect `libfido2: RefusedUnderSudo: LD_LIBRARY_PATH is set, so under sudo no libfido2 is loaded`
+under `-v`, no PIN prompt, nothing written, and:
+
+```
+No FIDO2 security key detected. Please insert one.
+Security keys other than YubiKeys need libfido2, and under sudo tswap loads it only from a root-owned install (the library and everything it loads), with no LD_ or DYLD_ variable set; none was found, so those keys are left out. Install your distribution's libfido2 package (Fedora: libfido2; Debian, Ubuntu: libfido2-1). Or add the slot on another machine that has a root-owned libfido2, or on Windows; in a shared vault folder the slot then opens here without sudo.
+```
+
+If sudo drops the variable instead (its default `env_reset`), record that: the first result then
+repeats (the Token2 already has its slot, so expect `... this key already has a FIDO2 slot in this
+vault ...`). Remove `$W/c6-recovery.txt` afterwards (it opens the throwaway vault).
+
+Paste back: both outputs, and whether sudo passed `LD_LIBRARY_PATH` through.
 
 ## (D) Optional: a Security Key or Bio (no serial)
 

@@ -82,7 +82,11 @@ internal static class CliHost
             var store = new Lazy<IVaultStore>(() => VaultStores.Open(env.ConfigDir, owner, time, console.Error));
             var extraBackends = HardwareServices.UnlockBackends(testKey, new VaultOwnerScope(() => store.Value));
             // One FIDO2 service for enrolment (CommandContext.Fido2) and unlock (pass 4, FIDO2 plan task 7).
-            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error, isPrivileged);
+            Func<Libfido2LoadResult>? loadOther = null;
+#if DEBUG
+            loadOther = Libfido2ForTests(getEnv);
+#endif
+            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error, isPrivileged, loadOther);
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
             var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
@@ -113,8 +117,9 @@ internal static class CliHost
     /// one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, loads libfido2 or calls into
     /// <c>webauthn.dll</c> until a command calls it.
     /// </summary>
-    internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null, bool privileged = false) =>
-        Fido2Keys(testKey, verbose, notices, privileged) is { } keys ? new Fido2Service(keys, verbose) : null;
+    internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null, bool privileged = false,
+        Func<Libfido2LoadResult>? loadOther = null) =>
+        Fido2Keys(testKey, verbose, notices, privileged, loadOther) is { } keys ? new Fido2Service(keys, verbose) : null;
 
     /// <summary>
     /// The FIDO2 device layer: on Linux and macOS (brief T19, item 3) <see cref="CompositeFido2Keys"/>, Yubico's SDK
@@ -133,6 +138,15 @@ internal static class CliHost
             return null;
         return new CompositeFido2Keys(new SdkFido2Keys(notices), loadOther ?? (() => LoadLibfido2(privileged, verbose, notices)), notices);
     }
+
+#if DEBUG
+    /// <summary>
+    /// Brief T19 test seam (owner check C5; Debug builds only, so a Release binary always looks for libfido2):
+    /// <c>TSWAP_TEST_LIBFIDO2_ABSENT=1</c> plays "libfido2 isn't installed" without calling the loader. Null otherwise.
+    /// </summary>
+    internal static Func<Libfido2LoadResult>? Libfido2ForTests(Func<string, string?> getEnv) =>
+        getEnv("TSWAP_TEST_LIBFIDO2_ABSENT") == "1" ? () => new Libfido2LoadResult(Libfido2Status.NotInstalled, null) : null;
+#endif
 
     /// <summary>libfido2 for this process (item 1's loader: under sudo only a root-owned one) and its backend when loaded.</summary>
     private static Libfido2LoadResult LoadLibfido2(bool privileged, TextWriter? verbose, TextWriter? notices)
