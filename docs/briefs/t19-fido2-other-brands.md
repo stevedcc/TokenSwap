@@ -90,16 +90,19 @@ your clone.
         loads its dependencies from the user's `/opt/homebrew`.
     - **The candidate's checks, all before the load:** resolve it to its real path
       (`File.ResolveLinkTarget(path, returnFinalTarget: true)`, or the file itself when it is no link);
-      the real path must **still lie in the same allow-listed folder** (a link pointing elsewhere is
-      skipped); then the real path and every parent folder up to `/` must be owned by uid 0 and have
+      the real path must **still lie in one of the allow-listed folders** (a link to another allow-listed
+      folder, e.g. `/usr/lib/` → `/usr/lib64/`, is fine; a link pointing anywhere else is skipped); then the real path and every parent folder up to `/` must be owned by uid 0 and have
       neither group- nor other-write. The owner comes from `IUnixOwnership.GetOwner`
       (`TswapCore/FileOwnership.cs`, uid/gid only, and fakeable), the mode from `File.GetUnixFileMode`.
       Put the mode behind the same seam (extend `IUnixOwnership`, or a small `IUnixFileModes` beside it)
       so tests can fake both. `NativeLibrary.Load` then gets the **real path**.
-    - **The loader's environment must be clean:** with any of `LD_LIBRARY_PATH`, `LD_PRELOAD`,
-      `LD_AUDIT` (Linux) or `DYLD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_FALLBACK_LIBRARY_PATH`,
-      `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH` (macOS) set, a privileged tswap loads no
-      libfido2 (refused, with the variable's name under `-v`, and decision 7's text). sudo's default
+    - **The loader's environment must be clean:** with **any** variable whose name starts with `LD_`
+      (Linux) or `DYLD_` (macOS) set, a privileged tswap loads no libfido2 (refused, with the variable's
+      name under `-v`, and decision 7's text). A prefix, not a list: the known ones (`LD_LIBRARY_PATH`,
+      `LD_PRELOAD`, `LD_AUDIT`, `LD_ORIGIN_PATH`; `DYLD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`,
+      `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`,
+      `DYLD_VERSIONED_LIBRARY_PATH`, `DYLD_VERSIONED_FRAMEWORK_PATH`) are not the whole set a future
+      loader may honour, and refusing a harmless one under sudo costs only a clear message. sudo's default
       `env_reset` removes them, but a `sudo` child is not a secure-execution process (its real and
       effective uid are both 0), so if one survives (`env_keep`, `sudo -E`, a root shell) the dynamic
       loader honours it when libfido2 loads libcbor.
@@ -113,6 +116,12 @@ your clone.
   `Unusable` (missing symbol, the name kept for `-v`), `RefusedUnderSudo` (a candidate outside the
   allow-list or failing the checks, or an unclean environment; the reason kept for `-v`). No exception
   escapes. Loading is lazy: nothing loads until the first FIDO2 listing or probe (item 3).
+- **The loader's own collaborators** (what the tests fake; the loader's search logic is the code under
+  test, so the seams sit below it): the candidate folders per mode (unprivileged list, privileged
+  allow-list), so a test can stand a temp tree in as an allow-listed folder; a file probe (exists, resolve
+  link); `IUnixOwnership` plus the mode reader; an environment reader; and the native load itself (a
+  function the tests replace with a recorder, so "nothing loaded" and "this real path loaded" are
+  assertable). `CliHost` passes the real ones.
 - **PIN bytes:** the `Fido2DevicePin` delegate's bytes are UTF-8, as on the SDK path. Before any native
   call: refuse a PIN containing a `0x00` byte (libfido2 takes a C string and would silently cut it
   short) and one over 63 bytes (CTAP's maximum), each as `Fido2DeviceException(Fido2Failure.Other, …,
@@ -127,8 +136,10 @@ the verbose line; unprivileged → the copy next to the binary wins over the sys
 above; privileged → Homebrew, `/usr/local/lib` and next-to-binary candidates are never tried even when
 present; privileged, a link in an allow-listed folder pointing outside it → skipped; privileged, the real
 path's file owned by uid 0 but one parent folder not → skipped; privileged, a parent group-writable →
-skipped; privileged with `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS) set → `RefusedUnderSudo`
-and nothing loaded; privileged with only a Homebrew copy → decision 7's text, naming MacPorts on macOS and
+skipped; privileged, a link from one allow-listed folder to another → loaded (its real path);
+privileged with `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` (Linux) or `DYLD_LIBRARY_PATH`,
+`DYLD_VERSIONED_LIBRARY_PATH` (macOS) set, or an invented `LD_FUTURE_THING` → `RefusedUnderSudo` and
+nothing loaded; unprivileged with `LD_LIBRARY_PATH` set → loads as usual; privileged with only a Homebrew copy → decision 7's text, naming MacPorts on macOS and
 the distro package on Linux. **Break-it-once:** (a) drop the parent-folder walk: the
 file-root-owned-parent-not test must fail (the fake reports uid 0 for the file, so only the walk can
 reject it); (b) add `/opt/homebrew/lib/` to the privileged list: the privileged-Homebrew test must fail;
@@ -158,8 +169,10 @@ open on another:
   0)` and `UserVerified` from `fido_assert_flags(a, 0)` bit `0x04`. **The credential id:** a key may omit
   it from the answer when one credential was allowed (CTAP 2 permits it; the SDK path adds it back in
   `SdkFido2Keys.WithCredential`); when `fido_assert_id_len(a, 0)` is 0, return `allowed[0].CredentialId`.
-  Zero the managed salt in a `finally` once `fido_assert_set_hmac_salt` has copied it, and the copied
-  output once it is returned to the caller's own array; `fido_assert_free` zeroes libfido2's copy.
+  Zero the managed salt in a `finally` once `fido_assert_set_hmac_salt` has copied it, and any
+  intermediate managed copy of the output once it is in the array returned to the caller. libfido2's own
+  copies (inside `fido_assert_t`) are freed by `fido_assert_free`; whether libfido2 zeroes them is its
+  behaviour, not verified here: the commit says so, and tswap's guarantee covers its own buffers only.
 - **AAGUIDs** (here and in Find): 16 bytes as the key sends them, converted **big-endian**, as tswap stores
   them: move `SdkFido2Session.ToGuid` to one shared helper both backends call. Test: the Token2's bytes
   `ea bb 46 cc e2 41 80 bf ae 9e 96 fa 6d 29 75 cf` → `eabb46cc-e241-80bf-ae9e-96fa6d2975cf`.
@@ -169,8 +182,12 @@ open on another:
   (`fido_dev_get_retry_count`, which fails without one). A device without `hmac-secret` in its
   extensions is left out with a notice (`Fido2Texts.KeyLeftOut`, as `SdkFido2Devices` does for an
   unreadable key). Reading follows `SdkFido2Devices.ReadEach`'s rule: a device that can't be read is left
-  out with a notice; nothing readable and at least one failed → throw that failure. The key ref is the
-  device path; `Product` per item 4.
+  out with a notice; nothing readable and at least one failed → throw that failure. A device that is
+  listed but can't be opened (on Linux usually no access: no active local seat, e.g. over SSH; item 5)
+  is such a failure: `Fido2DeviceException(Fido2Failure.Other, …, "OpenFailed:<FIDO_ERR name>")`, and its
+  `KeyLeftOut` notice gets one more line on Linux, `Fido2Texts.NoDeviceAccess`: a security key is plugged
+  in but this user can't open it; access is given to the user logged in at the machine (not over SSH).
+  The key ref is the device path; `Product` per item 4.
 - **FindHolder (the silent probe):** an assertion for the credential with `up` `FIDO_OPT_FALSE`, no
   extensions and a null PIN, on each listed device, following `SdkFido2Devices.FirstHolder`'s rule (a
   device that failed to answer makes the probe fail if no other device holds it: it might have been the
@@ -202,9 +219,10 @@ the omitted-id test must fail.
 
 ## Item 3: both backends at once on Linux and macOS
 
-- **`CompositeFido2Keys(SdkFido2Keys sdk, Func<Libfido2Fido2Keys?> other)`**, always built in `CliHost`
-  for Linux and macOS. `other` loads libfido2 on its first call (item 1's `TryLoad`) and caches the
-  result; `null` when the status isn't `Loaded`. Building the service loads nothing: the wiring test
+- **`CompositeFido2Keys(SdkFido2Keys sdk, Func<Libfido2LoadResult> other)`**, always built in `CliHost`
+  for Linux and macOS, with `sealed record Libfido2LoadResult(Libfido2Status Status, Libfido2Fido2Keys?
+  Keys)` (`Keys` set exactly when `Status` is `Loaded`). `other` loads libfido2 on its first call (item 1's
+  `TryLoad`) and the composite caches the result. Building the service loads nothing: the wiring test
   asserts it. Windows wiring is unchanged.
 - **Key refs carry their backend:** `sdk:` and `libfido2:` prefixes (not `fido2:`, which reads like the
   SDK's own ids `fido2-{n}`, `SdkFido2Session.cs:105`), stripped before the backend sees them; a call goes
@@ -213,7 +231,8 @@ the omitted-id test must fail.
   keys are missing; it throws only when neither backend listed a key and at least one threw
   (`ReadEach`'s rule across both).
 - **FindHolder** asks the SDK backend, then the other. A throw from one is held while the other is asked;
-  the holder wins; with no holder, the held failure is thrown (`FirstHolder`'s rule across both).
+  the holder wins; with no holder, the held failure is thrown (`FirstHolder`'s rule across both); when
+  both threw, the SDK backend's (the first asked).
 - **The status reaches the texts:** `IFido2Keys` gains `Libfido2Status? OtherBrands { get; }` (`null` on
   Windows and in the SDK-only and fake backends unless a test sets it; the composite returns the loaded
   status, loading if needed). `Fido2Service` reads it in exactly two places, item 4's two hints.
@@ -251,31 +270,37 @@ every ref to the SDK backend: the routing test must fail.
   - when the listing found no key and the status is `NotInstalled` or `Unusable`, the "no key" text adds
     one line: security keys other than YubiKeys need libfido2 (`docs/install.md`); with
     `RefusedUnderSudo`, it is decision 7's text instead;
-  - when `Locate` can't find a slot whose AAGUID isn't Yubico's and the status isn't `Loaded`, the
-    `NotPluggedIn` text says the same instead of "plug it in".
+  - when `Locate` can't find a slot whose AAGUID isn't Yubico's and the status is `NotInstalled`,
+    `Unusable` or `RefusedUnderSudo` (never when it is `null`, as on Windows, where `webauthn.dll` talks
+    to every brand, or `Loaded`), the `NotPluggedIn` text says the same instead of "plug it in"
+    (decision 7's text for `RefusedUnderSudo`).
 - **Wording:** every user-facing "YubiKey" in the FIDO2 texts that now means any key becomes "security
   key" (go through `Fido2Texts` and the FIDO2 strings in `Fido2SlotEnrollment.cs`, `GuidedInit.cs`,
-  `SlotCommand`, `InitCommand` and `tswap slots`' FIDO2 rows; list them in the commit). YubiKey-only
+  `SlotCommand`, `InitCommand`, `VaultUnlocker` (pass 4's messages), the `--serial` help of
+  `slot add --fido2` / `init --fido2`, and `tswap slots`' FIDO2 rows; `git grep -n YubiKey` over
+  `TswapCli` and `TswapCore/Vault` finds the candidates; list each changed string in the commit). YubiKey-only
   texts (OTP slots, `yubikey setup`) stay. Guided `init` and `slot add --fido2` offer every listed key; the
   macOS hint (FIDO2 preferred over OTP there) stays.
 
 Tests: enrolment of a non-Yubico AAGUID succeeds (fake keys), with the blob holding that AAGUID; each
 remaining refusal still refuses, the Windows one as `UnknownKey`; the names in each case (a serial, a
 Yubico model, a product, nothing); `Product` built from strings with an ESC sequence and a newline (both
-gone), with the manufacturer repeated, and empty; both libfido2-missing hints for each status; one test
+gone), with the manufacturer repeated, and empty; both libfido2-missing hints for each status, `null`
+included (no hint); one test
 on the surface that prints slot names (`tswap slots`) with a non-Yubico slot. **Break-it-once:** restore
 one `IsYubico` check: the non-Yubico enrolment test must fail.
 
 ## Item 5: docs and the owner's checks
 
 - **Linux device access**, as it works (quote it; don't check this machine, it's given here): systemd's
-  `60-fido-id.rules` runs `fido_id` on every hidraw device and sets `ID_FIDO_TOKEN=1` and
-  `ID_SECURITY_TOKEN=1` on FIDO ones of any brand (`SUBSYSTEM=="hidraw", IMPORT{program}="fido_id"`);
+  `60-fido-id.rules` runs `fido_id` on every hidraw device (`SUBSYSTEM=="hidraw",
+  IMPORT{program}="fido_id"`), which marks FIDO ones of any brand with `ID_SECURITY_TOKEN=1` (and
+  `ID_FIDO_TOKEN=1`: both seen with `udevadm info` on a YubiKey's FIDO node, Fedora 44);
   `70-uaccess.rules` has `ENV{ID_SECURITY_TOKEN}=="?*", TAG+="uaccess"`; and `73-seat-late.rules`
   (`TAG=="uaccess", ENV{MAJOR}!="", RUN{builtin}+="uaccess"`) gives the user of the **active local seat**
   an ACL on the device (seen on Fedora 44: `user:<name>:rw-` on a YubiKey's FIDO hidraw node). So no extra
-  udev rule is needed on a desktop, but over SSH, or with no active seat, a normal user has no access; what
-  tswap says then (the `fido_dev_open` failure, `FIDO_ERR_RX`/`TX` or an open error) goes in the doc.
+  udev rule is needed on a desktop, but over SSH, or with no active seat, a normal user has no access; the
+  doc quotes what tswap then says (item 2's `KeyLeftOut` notice with `Fido2Texts.NoDeviceAccess`).
 - `docs/install.md`: libfido2 per OS (Fedora `libfido2`, usually already installed; Debian/Ubuntu
   `libfido2-1`; macOS: MacPorts, `sudo port install libfido2`, for everything including sudo commands,
   or Homebrew for use without sudo only, with the reason in one paragraph (decision 5, and why a copied
