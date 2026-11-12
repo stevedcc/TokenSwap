@@ -43,6 +43,9 @@ internal sealed class FakeLibfido2 : ILibfido2
 
         public byte[] Secret { get; } = RandomNumberGenerator.GetBytes(32);
 
+        /// <summary>The hmac-secret output's length the key gives (32 for a key that follows the spec).</summary>
+        public int HmacSecretLength { get; set; } = 32;
+
         /// <summary>The probe's answer: <c>FIDO_OK</c> for these credentials (hex), else <see cref="ProbeMissResult"/>.</summary>
         public HashSet<string> Holds { get; } = [];
         public int ProbeMissResult { get; set; } = Libfido2Errors.NoCredentials;
@@ -258,7 +261,8 @@ internal sealed class FakeLibfido2 : ILibfido2
         if (device.AssertResult != Libfido2Errors.Ok)
             return device.AssertResult;
         a.Count = 1;
-        a.HmacSecret = a.Salt is null ? [] : HMACSHA256.HashData(device.Secret, a.Salt);
+        var full = a.Salt is null ? [] : HMACSHA256.HashData(device.Secret, a.Salt);
+        a.HmacSecret = device.HmacSecretLength <= full.Length ? full[..device.HmacSecretLength] : [.. full, .. new byte[device.HmacSecretLength - full.Length]];
         a.Flags = device.AssertFlags;
         a.Id = device.OmitsAssertId ? [] : a.Allowed[0].ToArray();
         return Libfido2Errors.Ok;
@@ -327,7 +331,15 @@ internal sealed class FakeLibfido2 : ILibfido2
     public int AssertSetHmacSalt(nint assert, ReadOnlySpan<byte> salt) => Set(Get<Assert>(assert), salt.ToArray(), (a, s) => a.Salt = s);
     public int AssertSetUp(nint assert, FidoOpt up) => Set(() => Get<Assert>(assert).Up = (int)up);
     public nuint AssertCount(nint assert) => (nuint)Get<Assert>(assert).Count;
-    public byte[] AssertHmacSecret(nint assert, nuint index) => [.. Get<Assert>(assert).HmacSecret];
+    public byte[] AssertHmacSecret(nint assert, nuint index)
+    {
+        byte[] copy = [.. Get<Assert>(assert).HmacSecret];
+        HmacSecretsReturned.Add(copy);
+        return copy;
+    }
+
+    /// <summary>Every hmac-secret array handed out (so a test can see that a refused one was zeroed).</summary>
+    public List<byte[]> HmacSecretsReturned { get; } = [];
     public byte AssertFlags(nint assert, nuint index) => Get<Assert>(assert).Flags;
     public byte[] AssertId(nint assert, nuint index) => [.. Get<Assert>(assert).Id];
 

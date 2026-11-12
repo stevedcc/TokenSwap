@@ -100,7 +100,7 @@ internal static class GuidedInit
         // enrolment, each announced first, so a retry never makes a silent wait.
         IReadOnlyList<int> serials = [];
         string? yubiKeyProblem = null;
-        c.Out.WriteLine("Looking for YubiKeys…");
+        c.Out.WriteLine("Looking for YubiKeys and other security keys…");
         try
         {
             serials = ctx.YubiKeys.ListSerials();
@@ -153,8 +153,8 @@ internal static class GuidedInit
 
         if (devices.Count == 0)
             throw new TswapException(
-                $"Nothing here can hold a slot of a new vault. Looked for YubiKeys ({yubiKeyProblem ?? "none plugged in"}) and this " +
-                $"machine's {chipName} (not available: {chipReason}). Plug in a YubiKey and run '{ctx.Prefix} init' again. " +
+                $"Nothing here can hold a slot of a new vault. Looked for YubiKeys and other security keys ({yubiKeyProblem ?? "none plugged in"}) and this " +
+                $"machine's {chipName} (not available: {chipReason}). Plug in a YubiKey or another security key and run '{ctx.Prefix} init' again. " +
                 "No config or vault was written.");
 
         // Step 3: pick. Kept in list order (Offer's, per OS): the order typed never matters.
@@ -390,7 +390,7 @@ internal static class GuidedInit
             }
 
             if (config is null)
-                throw new TswapException($"Every picked YubiKey was left out, so there is no slot to make. No config or vault was written.{StopNote()}");
+                throw new TswapException($"Every picked key was left out, so there is no slot to make. No config or vault was written.{StopNote()}");
             if (addedSlots.Count > 0)
             {
                 keyring ??= KeyringCodec.Decode(Convert.FromBase64String(config.Keyring!));

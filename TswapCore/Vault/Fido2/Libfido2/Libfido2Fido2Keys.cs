@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using TswapCore.Keyring;
 
@@ -63,8 +64,10 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
     /// <summary>
     /// A key's name from its USB strings (brief T19, item 4), which come from the device and so are untrusted: every
     /// control character dropped (<see cref="char.IsControl(char)"/>, which removes ESC and so any terminal escape
-    /// sequence), each trimmed; the product alone when it already starts with the manufacturer, else "manufacturer
-    /// product"; at most <see cref="MaxProductLength"/> characters; null when nothing is left.
+    /// sequence) and every Unicode format character (<see cref="UnicodeCategory.Format"/>: bidi overrides such as
+    /// U+202E, isolates, zero-width characters; review F6), each trimmed; the product alone when it already starts with
+    /// the manufacturer (ignoring case), else "manufacturer product"; at most <see cref="MaxProductLength"/>
+    /// characters, never cutting a surrogate pair; null when nothing is left.
     /// </summary>
     internal static string? ProductName(string? manufacturer, string? product)
     {
@@ -75,10 +78,15 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
             : model.StartsWith(maker, StringComparison.OrdinalIgnoreCase) ? model
             : $"{maker} {model}";
         if (name.Length > MaxProductLength)
-            name = name[..MaxProductLength].TrimEnd();
+        {
+            // Never keep half of a surrogate pair (review F6): a high surrogate at the cap goes with its pair.
+            var cut = char.IsHighSurrogate(name[MaxProductLength - 1]) ? MaxProductLength - 1 : MaxProductLength;
+            name = name[..cut].TrimEnd();
+        }
         return name.Length == 0 ? null : name;
 
-        static string Clean(string? text) => text is null ? "" : string.Concat(text.Where(c => !char.IsControl(c))).Trim();
+        static string Clean(string? text) => text is null ? ""
+            : string.Concat(text.Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format)).Trim();
     }
 
     /// <summary>
@@ -161,8 +169,18 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
         return WithDevice(key.Id, operation: true, dev =>
         {
             RequirePinAndHmacSecret(key.Id, dev);
-            var assert = Allocated(_fido.AssertNew());
+            // The salt first (review F3): nothing between allocating the fido_assert_t and its try can throw.
             var salt = Fido2Prf.Salt(prfInput);
+            nint assert;
+            try
+            {
+                assert = Allocated(_fido.AssertNew());
+            }
+            catch
+            {
+                CryptographicOperations.ZeroMemory(salt);
+                throw;
+            }
             try
             {
                 Check(_fido.AssertSetRp(assert, Fido2SlotBlob.TswapRpId));
@@ -181,6 +199,12 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
 
                 // Read straight into the array the caller gets (and zeroes): no intermediate managed copy.
                 var output = _fido.AssertHmacSecret(assert, 0);
+                if (output.Length != Fido2Service.OutputSize)
+                {
+                    // Review F4: one salt gives exactly 32 bytes; anything else is refused here, zeroed.
+                    CryptographicOperations.ZeroMemory(output);
+                    throw new Fido2DeviceException(Fido2Failure.Other, null, "BadHmacSecretLength");
+                }
                 var answered = _fido.AssertId(assert, 0);
                 // CTAP 2 lets a key leave the credential out when one was allowed: it is the allowed one.
                 if (answered.Length == 0)

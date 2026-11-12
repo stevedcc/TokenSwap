@@ -476,13 +476,40 @@ public class Libfido2LoaderTests
         Assert.Empty(native.Loaded);
     }
 
-    [Fact]
-    public void NoExceptionEscapes()
+    /// <summary>A file probe that fails: a fault while looking, not an answer.</summary>
+    private sealed class BrokenFiles : ILibfido2Files
     {
-        var tree = new FakeTree().File($"/usr/lib64/{LinuxFile}");
-        var loader = new Libfido2Loader(Linux, privileged: true, () => throw new InvalidOperationException("boom"), tree, tree, tree,
-            new LoadRecorder(tree));
+        public bool Exists(string path) => throw new IOException("boom");
+        public bool IsLink(string path) => throw new IOException("boom");
+        public string? FinalTarget(string path) => throw new IOException("boom");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NoExceptionEscapes(bool privileged)
+    {
+        var tree = new FakeTree();
+        var native = new LoadRecorder(tree);
+        var loader = new Libfido2Loader(Linux, privileged, () => ["PATH"], new BrokenFiles(), tree, tree, native);
 
         Assert.Equal(Libfido2Status.Unusable, loader.TryLoad());
+        Assert.Empty(native.Loaded);
+    }
+
+    /// <summary>
+    /// Review N6 (fix round 1): under sudo, an environment that can't be read is not known to be clean, so it is the
+    /// same refusal as an LD_/DYLD_ variable (was Unusable, through the catch-all), with nothing loaded.
+    /// </summary>
+    [Fact]
+    public void Privileged_AnEnvironmentThatCantBeRead_IsRefusedUnderSudo()
+    {
+        var tree = new FakeTree().File($"/usr/lib64/{LinuxFile}");
+        var native = new LoadRecorder(tree);
+        var loader = new Libfido2Loader(Linux, privileged: true, () => throw new InvalidOperationException("boom"), tree, tree, tree, native);
+
+        Assert.Equal(Libfido2Status.RefusedUnderSudo, loader.TryLoad());
+        Assert.Empty(native.Loaded);
+        Assert.Equal(Fido2Texts.Libfido2SudoRefusal(macOs: false), loader.StatusText);
     }
 }

@@ -593,4 +593,54 @@ public class Libfido2Fido2KeysTests
         Assert.Equal(64, name!.Length);
         Assert.StartsWith("Maker xxx", name);
     }
+
+    // --- fix round 1 (review F4, F6) ---
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(16)]
+    [InlineData(31)]
+    [InlineData(64)]
+    public void GetHmacSecret_AnOutputThatIsNot32Bytes_IsRefusedAndZeroed(int length)
+    {
+        var (device, key) = Token2();
+        device.HmacSecretLength = length;
+
+        var e = Assert.Throws<Fido2DeviceException>(() => Keys().GetHmacSecret(key, [(CredentialId, PrfInput)], Pin([])));
+
+        Assert.Equal(Fido2Failure.Other, e.Kind);
+        Assert.Equal("BadHmacSecretLength", e.Detail);
+        Assert.All(Assert.Single(_fido.HmacSecretsReturned), b => Assert.Equal(0, b));
+        Assert.Equal(0, _fido.Live);
+    }
+
+    [Theory]
+    [InlineData("Token2\u202E", "PIN+ Dual", "Token2 PIN+ Dual")]   // RIGHT-TO-LEFT OVERRIDE
+    [InlineData("Evil\u200F", "Key\u2066x\u2069", "Evil Keyx")]      // RLM, isolates
+    [InlineData("\u200B\uFEFF", "\u202D", null)]                     // zero-width space, BOM, LRO: nothing left
+    public void ProductName_DropsUnicodeFormatCharacters(string? manufacturer, string? product, string? expected)
+    {
+        var name = Libfido2Fido2Keys.ProductName(manufacturer, product);
+
+        Assert.Equal(expected, name);
+        Assert.DoesNotContain(name ?? "", c => char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.Format);
+    }
+
+    [Fact]
+    public void ProductName_TheCapNeverCutsASurrogatePair()
+    {
+        // 63 characters, then an emoji (a surrogate pair) across the 64-character cap.
+        var name = Libfido2Fido2Keys.ProductName(null, new string('x', 63) + "\U0001F600" + "yy");
+
+        Assert.Equal(new string('x', 63), name);
+    }
+
+    [Fact]
+    public void ProductName_ASurrogatePairInsideTheCapIsKept()
+    {
+        var name = Libfido2Fido2Keys.ProductName(null, new string('x', 62) + "\U0001F600" + "yy");
+
+        Assert.Equal(new string('x', 62) + "\U0001F600", name);
+        Assert.Equal(64, name!.Length);
+    }
 }

@@ -189,7 +189,17 @@ public sealed class Libfido2Loader
 
     private Libfido2Status SearchPrivileged(Libfido2Places at)
     {
-        if (environmentNames().FirstOrDefault(IsLoaderVariable) is { } variable)
+        string? variable;
+        try
+        {
+            variable = environmentNames().FirstOrDefault(IsLoaderVariable);
+        }
+        catch (Exception e)
+        {
+            // Review N6: an environment that can't be read isn't known to be clean: the same refusal, nothing loaded.
+            return Done(Libfido2Status.RefusedUnderSudo, $"the environment couldn't be read ({e.GetType().Name}), so under sudo no libfido2 is loaded");
+        }
+        if (variable is not null)
             return Done(Libfido2Status.RefusedUnderSudo, $"{variable} is set, so under sudo no libfido2 is loaded");
 
         List<string> skipped = [];
