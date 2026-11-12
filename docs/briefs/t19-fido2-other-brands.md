@@ -70,7 +70,7 @@ your clone.
   which for `up` is ON), `FIDO_OPT_FALSE = 1`, `FIDO_OPT_TRUE = 2`. Passing C's `false` (0) to
   `fido_assert_set_up` leaves user presence on, and the silent probe would blink and wait for a touch.
   Define a C# enum with exactly these values and use it at every call.
-- **Where it loads from** (`Libfido2Loader`, decisions 5 and 6, behind a seam the tests replace). Windows:
+- **Where it loads from** (`Libfido2Loader`, decisions 5 and 6; other components' tests replace the whole loader, its own tests fake the collaborators below it). Windows:
   never loaded (`webauthn.dll` already talks to every brand). File names: `libfido2.so.1` (Linux),
   `libfido2.1.dylib` (macOS). `NativeLibrary.Load` is always given a full path the loader chose, except
   the unprivileged Linux soname case below.
@@ -91,13 +91,14 @@ your clone.
     - **The candidate's checks, all before the load:** resolve it to its real path
       (`File.ResolveLinkTarget(path, returnFinalTarget: true)`, or the file itself when it is no link);
       the real path must **still lie in one of the allow-listed folders** (a link to another allow-listed
-      folder, e.g. `/usr/lib/` → `/usr/lib64/`, is fine; a link pointing anywhere else is skipped); then the real path and every parent folder up to `/` must be owned by uid 0 and have
+      folder, e.g. the file `/usr/lib/libfido2.so.1` → `/usr/lib64/libfido2.so.1.16.0`, is fine; a symlinked
+      parent folder is not resolved and fails the parent walk, which is the safe side; a link pointing anywhere else is skipped); then the real path and every parent folder up to `/` must be owned by uid 0 and have
       neither group- nor other-write. The owner comes from `IUnixOwnership.GetOwner`
       (`TswapCore/FileOwnership.cs`, uid/gid only, and fakeable), the mode from `File.GetUnixFileMode`.
       Put the mode behind the same seam (extend `IUnixOwnership`, or a small `IUnixFileModes` beside it)
       so tests can fake both. `NativeLibrary.Load` then gets the **real path**.
-    - **The loader's environment must be clean:** with **any** variable whose name starts with `LD_`
-      (Linux) or `DYLD_` (macOS) set, a privileged tswap loads no libfido2 (refused, with the variable's
+    - **The loader's environment must be clean:** with **any** variable whose name starts with `LD_` or
+      `DYLD_` set (both prefixes on both OSes: simpler, and harmless), a privileged tswap loads no libfido2 (refused, with the variable's
       name under `-v`, and decision 7's text). A prefix, not a list: the known ones (`LD_LIBRARY_PATH`,
       `LD_PRELOAD`, `LD_AUDIT`, `LD_ORIGIN_PATH`; `DYLD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`,
       `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`,
@@ -130,7 +131,7 @@ your clone.
   make-credential, get-assertion and set-pin alike. Unit tests cover the delegate array's zeroing and the
   two refusals; the pinned buffer's zeroing is for code review (say so in the commit).
 
-Tests (unit, through the loader seam and a fake `IUnixOwnership`/modes): absent → `NotInstalled`, the
+Tests (unit, on the real loader with its collaborators faked: folders, file probe, `IUnixOwnership`/modes, environment, native-load recorder): absent → `NotInstalled`, the
 FIDO2 listing has no libfido2 keys and nothing throws; a missing symbol → `Unusable`, with the symbol in
 the verbose line; unprivileged → the copy next to the binary wins over the system one, then the order
 above; privileged → Homebrew, `/usr/local/lib` and next-to-binary candidates are never tried even when
@@ -139,7 +140,8 @@ path's file owned by uid 0 but one parent folder not → skipped; privileged, a 
 skipped; privileged, a link from one allow-listed folder to another → loaded (its real path);
 privileged with `LD_LIBRARY_PATH`, `LD_ORIGIN_PATH` (Linux) or `DYLD_LIBRARY_PATH`,
 `DYLD_VERSIONED_LIBRARY_PATH` (macOS) set, or an invented `LD_FUTURE_THING` → `RefusedUnderSudo` and
-nothing loaded; unprivileged with `LD_LIBRARY_PATH` set → loads as usual; privileged with only a Homebrew copy → decision 7's text, naming MacPorts on macOS and
+nothing loaded, on either OS; unprivileged with `LD_LIBRARY_PATH` or `DYLD_LIBRARY_PATH` set → loads as
+usual; privileged with only a Homebrew copy → decision 7's text, naming MacPorts on macOS and
 the distro package on Linux. **Break-it-once:** (a) drop the parent-folder walk: the
 file-root-owned-parent-not test must fail (the fake reports uid 0 for the file, so only the walk can
 reject it); (b) add `/opt/homebrew/lib/` to the privileged list: the privileged-Homebrew test must fail;
