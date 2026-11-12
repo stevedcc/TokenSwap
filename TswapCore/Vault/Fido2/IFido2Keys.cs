@@ -54,6 +54,14 @@ public interface IFido2Keys
     /// <see cref="CanList"/>.
     /// </summary>
     void SetPin(Fido2KeyRef key, Fido2DevicePin newPin);
+
+    /// <summary>
+    /// Brief T19, item 3: whether libfido2 (security keys other than YubiKeys, Linux and macOS) is available:
+    /// <see cref="Libfido2.CompositeFido2Keys"/> returns its loaded status, loading it if needed; null on Windows
+    /// (<c>webauthn.dll</c> talks to every brand) and in the SDK-only and fake backends unless a test sets it.
+    /// <see cref="Fido2Service"/> reads it only for its two "needs libfido2" hints.
+    /// </summary>
+    Libfido2.Libfido2Status? OtherBrands => null;
 }
 
 /// <summary>An opaque handle to a plugged-in key (the SDK's device path), valid for this process only.</summary>

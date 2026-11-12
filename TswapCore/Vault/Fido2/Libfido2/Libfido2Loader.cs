@@ -101,12 +101,33 @@ internal interface ILibfido2LoadApi
 /// neither group- nor other-writable. The real path is what is loaded. A candidate that fails is skipped; with none
 /// left, a libfido2 found elsewhere (or one skipped) is <see cref="Libfido2Status.RefusedUnderSudo"/>.</para>
 /// </summary>
-internal sealed class Libfido2Loader(Libfido2Places? places, bool privileged, Func<IEnumerable<string>> environmentNames,
-    ILibfido2Files files, IUnixOwnership ownership, IUnixFileModes modes, ILibfido2LoadApi native, TextWriter? verbose = null)
+public sealed class Libfido2Loader
 {
     private const UnixFileMode GroupOrOtherWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
 
+    private readonly Libfido2Places? places;
+    private readonly bool privileged;
+    private readonly Func<IEnumerable<string>> environmentNames;
+    private readonly ILibfido2Files files;
+    private readonly IUnixOwnership ownership;
+    private readonly IUnixFileModes modes;
+    private readonly ILibfido2LoadApi native;
+    private readonly TextWriter? verbose;
     private Libfido2Status? _status;
+
+    /// <summary>The loader over its collaborators (the real ones: <see cref="ForThisProcess"/>; fakes in its tests).</summary>
+    internal Libfido2Loader(Libfido2Places? places, bool privileged, Func<IEnumerable<string>> environmentNames,
+        ILibfido2Files files, IUnixOwnership ownership, IUnixFileModes modes, ILibfido2LoadApi native, TextWriter? verbose = null)
+    {
+        this.places = places;
+        this.privileged = privileged;
+        this.environmentNames = environmentNames;
+        this.files = files;
+        this.ownership = ownership;
+        this.modes = modes;
+        this.native = native;
+        this.verbose = verbose;
+    }
 
     /// <summary>The binding, once <see cref="TryLoad"/> returned <see cref="Libfido2Status.Loaded"/>.</summary>
     public ILibfido2? Library { get; private set; }
