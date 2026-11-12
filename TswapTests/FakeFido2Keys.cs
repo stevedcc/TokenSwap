@@ -76,6 +76,9 @@ internal sealed class FakeFido2Keys : IFido2Keys
 
     public bool CanList { get; set; } = true;
 
+    /// <summary>Brief T19: what the libfido2 backend's status reads as (null: none, as on Windows and the SDK path).</summary>
+    public TswapCore.Vault.Fido2.Libfido2.Libfido2Status? OtherBrands { get; set; }
+
     /// <summary>Every key the fake knows, plugged in or not, in plug order.</summary>
     public List<Key> Keys { get; } = [];
 

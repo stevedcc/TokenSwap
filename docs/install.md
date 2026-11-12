@@ -11,6 +11,8 @@ To use tswap without installing it (no admin rights), see [portable.md](portable
 You need one hardware backend:
 
 - **YubiKeys:** see [YubiKey prerequisites](#yubikey-prerequisites) below.
+- **Security keys of other brands** (FIDO2 slots only): see
+  [libfido2](#libfido2-security-keys-other-than-yubikeys) below.
 - **TPM 2.0:** Windows, or Linux with `tpm2-tools` (see
   [hardware-backends.md](design/hardware-backends.md)). On Linux your user also needs access to
   the TPM: see [portable.md](portable.md#linux-tpm).
@@ -40,6 +42,52 @@ You need the .NET 10 SDK at build time only. The compiled binary needs no .NET r
   (`60-fido-id.rules`), and Yubico's udev rule covers the device too. On Windows, through Windows'
   own WebAuthn API (no administrator needed, version 4 or later). Not yet checked on a Linux machine without
   Yubico's rule, or on a Mac with a release build.
+
+### libfido2 (security keys other than YubiKeys)
+
+A FIDO2 slot works on a security key of any brand that supports `hmac-secret` and has a FIDO2 PIN
+(Token2, Nitrokey 3, SoloKey, Feitian, Titan and others). YubiKeys need nothing more than the above.
+For the other brands, Linux and macOS use **libfido2**, which tswap loads at run time only if it is
+installed; tswap starts, runs and opens every other kind of slot without it. Windows needs nothing:
+Windows' own security key dialog talks to every brand.
+
+- **Fedora:** `libfido2` (usually installed already: `sudo dnf install libfido2`).
+- **Debian, Ubuntu:** `sudo apt install libfido2-1`.
+- **macOS:** from MacPorts, `sudo port install libfido2`, for everything, the sudo commands included.
+  Homebrew's (`brew install libfido2`) works for use without sudo only (unlocking, `run`, `init
+  --fido2`, `create`, ...), not for `sudo tswap slot add --fido2` or other sudo commands.
+- **Windows:** nothing.
+
+Why not Homebrew under sudo: tswap's safety rests on the split between you and root (agents and
+everything else run as you, and may use secrets but never read them). A library you can replace,
+loaded into `sudo tswap` while the vault is open, would hand code running as you root and every
+secret. So under sudo tswap loads libfido2 only from a folder whose whole tree is root's, the
+library and the libraries it loads (libcbor, libcrypto) alike: `/usr/lib64`, `/usr/lib` and the
+multiarch folder on Linux, `/opt/local/lib` (MacPorts) on macOS. Homebrew's libfido2 loads its
+libcbor and libcrypto from `/opt/homebrew`, which is yours, and a copy of it in `/usr/local/lib`
+still does; copying the library into a root-owned folder doesn't help. Without sudo, any libfido2
+you have is used (a copy next to the tswap binary first): a process running as you that swapped it
+gains nothing it doesn't already have. Details: [security-model.md](security-model.md#libfido2-under-sudo-root-owned-only).
+
+Under sudo with only an unusable libfido2, tswap leaves those keys out and says `Security keys other
+than YubiKeys need libfido2, and under sudo tswap loads it only from a root-owned install (the
+library and everything it loads), with no LD_ or DYLD_ variable set; ...`, with the root-owned way to
+install it, or: add the slot on another machine that has a root-owned libfido2, or on Windows; in a
+shared vault folder the slot then opens here without sudo.
+
+**Linux device access.** No extra udev rule is needed on a desktop. systemd's `60-fido-id.rules`
+runs `fido_id` on every hidraw device (`SUBSYSTEM=="hidraw", IMPORT{program}="fido_id"`), which marks
+FIDO devices of any brand with `ID_SECURITY_TOKEN=1` (and `ID_FIDO_TOKEN=1`; both seen with `udevadm
+info` on a YubiKey's FIDO node, Fedora 44); `70-uaccess.rules` has `ENV{ID_SECURITY_TOKEN}=="?*",
+TAG+="uaccess"`; and `73-seat-late.rules` (`TAG=="uaccess", ENV{MAJOR}!="", RUN{builtin}+="uaccess"`)
+gives the user of the **active local seat** an ACL on the device (seen on Fedora 44:
+`user:<name>:rw-` on a YubiKey's FIDO hidraw node). Over SSH, or with no active seat, a normal user
+has no access, and tswap says so when it lists the keys:
+
+```
+A plugged-in key's FIDO2 interface couldn't be read (OpenFailed:FIDO_ERR_...), so it is left out of the list.
+A security key is plugged in, but this user can't open it: Linux gives access to the user logged in at the machine (not over SSH).
+```
 
 ## Download a release
 

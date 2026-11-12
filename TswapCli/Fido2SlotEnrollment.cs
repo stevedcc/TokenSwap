@@ -9,7 +9,7 @@ using TswapCore.VaultPassword;
 namespace TswapCli;
 
 /// <summary>
-/// FIDO2 plan, task 6: enrols a YubiKey's FIDO2 credential as a keyring slot, shared by <c>slot add --fido2</c> and
+/// FIDO2 plan, task 6: enrols a security key's FIDO2 credential (any brand since brief T19) as a keyring slot, shared by <c>slot add --fido2</c> and
 /// <c>init --fido2</c>. Two key operations, each a PIN at the terminal and a touch: make-credential
 /// (<see cref="IFido2Service.Enrol"/>), then one assertion of the new credential (<see cref="IFido2Service.Open"/>) whose
 /// output gives <c>KEK_slot = Fido2SlotKek.Derive(output, blob.PrfInput, slotId)</c> (or <c>DeriveV2</c> with the
@@ -35,8 +35,8 @@ internal static class Fido2SlotEnrollment
 
     /// <summary>Said when the second key operation fails: the first made a credential, but nothing was written.</summary>
     public const string RetrySafeText =
-        "No slot was added and nothing was written. The key may keep an unused credential (a YubiKey stores nothing for " +
-        "it: its ID is the wrapped key), so running this again is safe.";
+        "No slot was added and nothing was written. The key may keep an unused credential (non-discoverable: most keys, " +
+        "YubiKeys included, store nothing for it), so running this again is safe.";
 
     /// <summary>The closing line of every OTP enrolment, on every OS (<see cref="YubiKeySlotEnrollment.PrintTouchPolicy"/>).</summary>
     public const string MultiOsHint =
@@ -77,7 +77,7 @@ internal static class Fido2SlotEnrollment
 
     /// <summary>
     /// The key to enrol: on Windows null (the dialog picks it; <see cref="WindowsDialogLine"/> is said). Elsewhere the
-    /// plugged-in YubiKey with <paramref name="serial"/>, the only one, or the one the person picks at the terminal; a
+    /// plugged-in key (any brand) with <paramref name="serial"/> (a YubiKey's), the only one, or the one the person picks at the terminal; a
     /// key without a FIDO2 PIN is offered one (asked twice), the one PIN write tswap makes, and "no" stops.
     /// </summary>
     public static Fido2KeyInfo? ChooseKey(CommandContext ctx, int? serial)
@@ -99,9 +99,9 @@ internal static class Fido2SlotEnrollment
             return null;
         }
 
-        var keys = fido2.ListYubiKeys();
+        var keys = fido2.ListKeys();
         if (keys.Count == 0)
-            throw new TswapException("No YubiKey with FIDO2 detected. Please insert YubiKey.");
+            throw new TswapException(fido2.NoKeyText());
         if (serial is { } wanted)
             return keys.FirstOrDefault(k => k.Serial == wanted)
                 ?? throw new TswapException($"YubiKey {wanted} is not plugged in (plugged in: {string.Join(", ", keys.Select(fido2.KeyName))}).");
@@ -135,7 +135,7 @@ internal static class Fido2SlotEnrollment
     {
         using var terminal = ctx.Terminal?.Invoke() ?? throw new Fido2Exception(Fido2Failure.NoTerminal, null, null, Fido2Texts.NoTerminal);
         var list = string.Concat(keys.Select((k, i) => $"  {i + 1}. {fido2.KeyName(k)}\n"));
-        terminal.Write($"\nSeveral YubiKeys are plugged in:\n{list}Select YubiKey (1-{keys.Count}): ");
+        terminal.Write($"\nSeveral security keys are plugged in:\n{list}Select a key (1-{keys.Count}): ");
         var input = terminal.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(input))
             return keys[0]; // blank or end of input: the first, as the OTP prompt does
@@ -156,7 +156,7 @@ internal static class Fido2SlotEnrollment
         }
         fido2.SetPin(key, Fido2PinPrompt.For(ctx));
         ctx.Console.Out.WriteLine($"✓ {name} has a FIDO2 PIN now.");
-        return fido2.ListYubiKeys().FirstOrDefault(k => k.Key == key.Key)
+        return fido2.ListKeys().FirstOrDefault(k => k.Key == key.Key)
             ?? throw new TswapException(Fido2Texts.NotPluggedIn(name));
     }
 

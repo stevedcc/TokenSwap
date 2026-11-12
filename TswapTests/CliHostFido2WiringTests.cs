@@ -1,4 +1,6 @@
 using TswapCli;
+using TswapCore.Vault.Fido2;
+using TswapCore.Vault.Fido2.Libfido2;
 using Xunit;
 
 namespace TswapTests;
@@ -14,24 +16,69 @@ public class CliHostFido2WiringTests
     public void Fido2_TestMode_IsNone() =>
         Assert.Null(CliHost.Fido2Service(testKey: new byte[32]));
 
+    /// <summary>
+    /// Brief T19, item 3 (renamed from <c>Fido2_LinuxAndMacOS_IsYubicosSdk</c>: the wiring changed on purpose): Linux
+    /// and macOS get <see cref="CompositeFido2Keys"/> (Yubico's SDK plus libfido2), and building it loads nothing;
+    /// Windows is unchanged (<c>webauthn.dll</c>, keys can't be listed).
+    /// </summary>
     [Fact]
-    public void Fido2_LinuxAndMacOS_IsYubicosSdk()
+    public void Fido2_LinuxAndMacOS_IsTheCompositeAndLoadsNothing()
     {
-        var service = CliHost.Fido2Service(testKey: null);
+        var loads = 0;
+        Func<Libfido2LoadResult> counting = () =>
+        {
+            loads++;
+            return new Libfido2LoadResult(Libfido2Status.NotInstalled, null);
+        };
+        var keys = CliHost.Fido2Keys(testKey: null, loadOther: counting);
+        // Review S2: the same counting loader through the service, so building the service is checked too.
+        var service = CliHost.Fido2Service(testKey: null, loadOther: counting);
 
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
+            Assert.IsType<CompositeFido2Keys>(keys);
+            Assert.Equal(0, loads);
             Assert.NotNull(service);
             Assert.True(service.CanList);
+            Assert.Equal(0, loads);
         }
         else if (OperatingSystem.IsWindows())
         {
+            Assert.IsType<WebAuthnFido2Keys>(keys);
             Assert.NotNull(service);
             Assert.False(service.CanList);
         }
         else
         {
+            Assert.Null(keys);
             Assert.Null(service);
         }
     }
+
+    [Fact]
+    public void Fido2Keys_TestMode_IsNone() => Assert.Null(CliHost.Fido2Keys(testKey: new byte[32]));
+
+#if DEBUG
+    /// <summary>
+    /// Brief T19, owner check C5: a Debug build with <c>TSWAP_TEST_LIBFIDO2_ABSENT=1</c> plays "libfido2 isn't installed"
+    /// (the loader is never called), so the owner can see the "needs libfido2" texts with a Token2 plugged in.
+    /// </summary>
+    [Fact]
+    public void Libfido2Absent_TestSwitch_PlaysNotInstalled()
+    {
+        var absent = CliHost.Libfido2ForTests(name => name == "TSWAP_TEST_LIBFIDO2_ABSENT" ? "1" : null);
+
+        Assert.NotNull(absent);
+        Assert.Equal(new Libfido2LoadResult(Libfido2Status.NotInstalled, null), absent());
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            Assert.Equal(Libfido2Status.NotInstalled, CliHost.Fido2Keys(testKey: null, loadOther: absent)!.OtherBrands);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0")]
+    [InlineData("yes")]
+    public void Libfido2Absent_TestSwitch_OffUnlessExactlyOne(string? value) =>
+        Assert.Null(CliHost.Libfido2ForTests(name => name == "TSWAP_TEST_LIBFIDO2_ABSENT" ? value : null));
+#endif
 }

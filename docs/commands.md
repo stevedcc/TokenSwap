@@ -23,7 +23,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `slot approve` | sudo | Unlocks this vault and writes a file that lets whoever holds the request's private key open it: the same risk as `export` |
 | `slot accept` | no | Finishes enrolment on the new machine. On a record-store vault, or with `--vault-dir`, it also writes the new slot into the vault folder's keyring; the human check for that slot was the earlier `sudo tswap slot approve` |
 | `slot merge` | sudo | Adds the slots of a receipt: each one is a new way to open the vault |
-| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) as a new slot: a new way to open the vault |
+| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential) as a new slot: a new way to open the vault |
 | `broker serve` | no | Runs as the vault's own user; it refuses root |
 | `broker unlock` | no | Runs as the vault user; it refuses sudo |
 | `broker lock` | no | Runs as the vault user; it refuses sudo |
@@ -37,6 +37,10 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `broker socket remove` | sudo | Changes `broker.json`, as above |
 | `broker template add` | sudo | Changes `broker.json`: a template runs host-side commands with vault secrets |
 | `broker template remove` | sudo | Changes `broker.json`, as above |
+
+A FIDO2 slot on a security key that isn't a YubiKey needs a tswap newer than 0.3.0 on every machine
+that opens it: tswap 0.3.0 doesn't see such keys on Linux and macOS and says "plug it in" even when
+the key is plugged in. Upgrade.
 
 Three commands marked without `sudo` have one case that needs it, as their descriptions below say:
 `rotate` and `ingest --rotate` need sudo unless the secret is burned, and `migrate --to-records` needs sudo.
@@ -116,7 +120,7 @@ reason only, never the value, its length or which whitespace, and the exit code 
 tswap init [--yubikey|--fido2 [--serial <n>]|--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--no-recovery|--recovery-key-out <file>] [--folder <dir>] | init --vault-dir <shared folder>
 ```
 
-Create a record vault (one file per secret, shareable by sync tools) in \<config dir\>/vault, or in --folder \<dir\> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery; its key is printed once, and when stdout is not a terminal init refuses unless --recovery-key-out \<file\> names a new file for it (readable by you only; never overwritten). --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares
+Create a record vault (one file per secret, shareable by sync tools) in \<config dir\>/vault, or in --folder \<dir\> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and other security keys, and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one security key's FIDO2 credential (any brand with hmac-secret and a FIDO2 PIN; on Linux and macOS other brands than YubiKeys need libfido2), its PIN typed at the terminal and a touch on every unlock (--serial picks a YubiKey by its serial on Linux and macOS). Plus a recovery slot unless --no-recovery; its key is printed once, and when stdout is not a terminal init refuses unless --recovery-key-out \<file\> names a new file for it (readable by you only; never overwritten). --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares
 
 ### slot
 
@@ -124,7 +128,7 @@ Create a record vault (one file per secret, shareable by sync tools) in \<config
 sudo tswap slot request [--tpm|--secure-enclave --with-touch|--no-touch] [--password|--no-password] [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey (approve, merge and add take --recovery-key-stdin)
 ```
 
-Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey to this machine's keyring as its own slot (--yubikey: its OTP challenge-response; --fido2: a FIDO2 credential, its PIN and a touch on every unlock, read at the terminal; --serial picks the key on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)
+Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)
 
 ### migrate
 

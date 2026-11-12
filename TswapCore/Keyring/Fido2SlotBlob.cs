@@ -95,10 +95,13 @@ public sealed record Fido2SlotBlob
     public static Fido2SlotBlob Create(int? serial, Guid aaguid, byte[] credentialId, bool requiresPassword) =>
         new(serial, aaguid, RandomNumberGenerator.GetBytes(PrfInputSize), TswapRpId, credentialId, requiresPassword);
 
-    /// <summary>"YubiKey N" when the serial is known, else the model's name, else a generic description.</summary>
+    /// <summary>
+    /// "YubiKey N" when the serial is known, else the Yubico model's name, else (any other brand, brief T19) "the
+    /// security key this slot was made with". The blob holds no product name.
+    /// </summary>
     public static string DisplayName(int? serial, Guid aaguid) =>
         serial is { } known ? $"YubiKey {known}"
-        : YubicoAaguids.ModelName(aaguid) ?? "the YubiKey this slot was made with";
+        : YubicoAaguids.ModelName(aaguid) ?? "the security key this slot was made with";
 
     /// <summary>The text for a blob this build is too old for; <paramref name="what"/> names the newer part.</summary>
     public static string NeedsNewerText(string what) => $"needs a newer tswap ({what}); upgrade tswap.";

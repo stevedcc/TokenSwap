@@ -119,7 +119,7 @@ internal sealed class SdkFido2Devices(TextWriter? notices = null) : ISdkFido2Dev
         var info = session.AuthenticatorInfo;
         var pinSet = info.GetOptionValue(AuthenticatorOptions.clientPin) == OptionValue.True;
         int? retries = pinSet ? PinRetries(session.Connection) : null;
-        return new Fido2KeyInfo(RefFor(device), device.SerialNumber, SdkFido2Session.ToGuid(info.Aaguid), pinSet, retries);
+        return new Fido2KeyInfo(RefFor(device), device.SerialNumber, Fido2Aaguid.ToGuid(info.Aaguid.Span), pinSet, retries);
     }
 
     /// <summary>The PIN tries left (ClientPin getPINRetries), a CTAPHID error frame refused as for the ceremonies.</summary>
@@ -159,7 +159,7 @@ internal sealed class SdkFido2Session(IYubiKeyDevice device, SdkPinCollector col
         var data = new MakeCredentialData(answer.Data).AuthenticatorData;
         var credentialId = data.CredentialId?.Id.ToArray()
             ?? throw new Fido2DeviceException(Fido2Failure.Other, null, "NoCredentialId");
-        var aaguid = data.Aaguid is { } bytes ? ToGuid(bytes) : Guid.Empty;
+        var aaguid = data.Aaguid is { } bytes ? Fido2Aaguid.ToGuid(bytes.Span) : Guid.Empty;
         return new Fido2Made(credentialId, aaguid, device.SerialNumber, data.UserVerification);
     }
 
@@ -204,10 +204,6 @@ internal sealed class SdkFido2Session(IYubiKeyDevice device, SdkPinCollector col
         var token = _session.AuthToken ?? throw new Fido2DeviceException(Fido2Failure.Other, null, "NoPinToken");
         return _session.AuthProtocol.AuthenticateUsingPinToken(token, clientDataHash);
     }
-
-    /// <summary>An AAGUID as the key sends it (16 bytes, big-endian), as tswap stores it; anything else is empty.</summary>
-    internal static Guid ToGuid(ReadOnlyMemory<byte> aaguid) =>
-        aaguid.Length == AuthenticatorInfo.AaguidLength ? new Guid(aaguid.Span, bigEndian: true) : Guid.Empty;
 }
 
 /// <summary>

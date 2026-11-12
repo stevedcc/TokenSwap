@@ -5,8 +5,11 @@ public enum Fido2Failure
 {
     /// <summary>The key isn't plugged in (or was unplugged during the operation).</summary>
     NotPluggedIn,
-    /// <summary>The key is not a YubiKey (its AAGUID is not in <see cref="Keyring.YubicoAaguids"/>), or didn't say which it is.</summary>
-    NotAYubiKey,
+    /// <summary>
+    /// Windows only: the key didn't say which it is (its AAGUID came back as zeros). Brief T19: renamed from
+    /// <c>NotAYubiKey</c> when the YubiKey check went; keys of every brand are accepted.
+    /// </summary>
+    UnknownKey,
     /// <summary>The key has no FIDO2 PIN set.</summary>
     NoPin,
     /// <summary>The PIN was wrong; the exception carries the tries left when the key reported them.</summary>

@@ -37,6 +37,6 @@ public sealed class InitJoinTests : IDisposable
 
         var stdout = _laptop.Ok("", "init", "--vault-dir", _shared);
 
-        Assert.Contains($"({keyring.Slots.Count} slot(s), 2 of them YubiKeys)", stdout);
+        Assert.Contains($"({keyring.Slots.Count} slot(s), 2 of them YubiKeys or other security keys)", stdout);
     }
 }

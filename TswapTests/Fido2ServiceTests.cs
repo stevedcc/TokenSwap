@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using TswapCore.Keyring;
 using TswapCore.Vault.Fido2;
+using TswapCore.Vault.Fido2.Libfido2;
 using Xunit;
 
 namespace TswapTests;
@@ -63,19 +64,6 @@ public class Fido2ServiceTests
     }
 
     [Fact]
-    public void Enrol_NonYubicoAaguid_RefusedNamingIssue193()
-    {
-        _keys.CanList = false;
-        _keys.Picked = _keys.AddKey(null, OtherBrand);
-
-        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
-
-        Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
-        Assert.Contains("#193", error.Message);
-        Assert.Contains("not a YubiKey", error.Message);
-    }
-
-    [Fact]
     public void Enrol_MadeWithoutUv_Refused()
     {
         var key = _keys.AddKey(Serial, Yubico5Nfc);
@@ -86,19 +74,6 @@ public class Fido2ServiceTests
         Assert.Equal(
             "YubiKey 33060005 made the credential without verifying the PIN (no user verification); a FIDO2 slot needs the PIN and a touch, so no slot was added.",
             error.Message);
-    }
-
-    [Fact]
-    public void Enrol_NonYubicoKey_RefusedBeforeMakeCredential()
-    {
-        var key = _keys.AddKey(Serial, OtherBrand);
-
-        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing()));
-
-        Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
-        Assert.Contains("#193", error.Message);
-        Assert.DoesNotContain(_keys.Calls, c => c.Op == FakeFido2Op.MakeCredential);
-        Assert.Empty(_requests);
     }
 
     [Fact]
@@ -137,14 +112,16 @@ public class Fido2ServiceTests
     }
 
     [Fact]
-    public void Enrol_ZeroAaguidOnWindows_Refused()
+    public void Enrol_ZeroAaguidOnWindows_RefusedAsUnknownKey()
     {
         _keys.CanList = false;
         _keys.Picked = _keys.AddKey(null, Guid.Empty);
 
         var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
 
-        Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
+        // Brief T19: NotAYubiKey became UnknownKey, used only for this Windows case.
+        Assert.Equal(Fido2Failure.UnknownKey, error.Kind);
+        Assert.Equal(Fido2Texts.WindowsNoAaguid, error.Message);
         Assert.Contains("Windows didn't report which key this is", error.Message);
     }
 
@@ -183,21 +160,6 @@ public class Fido2ServiceTests
         Assert.Equal(Fido2Failure.NoTerminal, error.Kind);
         Assert.Equal(Fido2Texts.NoTerminal, error.Message);
         Assert.Empty(_keys.Calls);
-    }
-
-    [Fact]
-    public void Enrol_MadeCredentialNotYubicos_RefusedNamingIssue193()
-    {
-        var key = _keys.AddKey(Serial, Yubico5Nfc);
-        var info = FakeFido2Keys.Info(key);
-        key.Aaguid = OtherBrand;
-
-        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(info, false, [], Typing()));
-
-        Assert.Equal(Fido2Failure.NotAYubiKey, error.Kind);
-        Assert.Equal(Fido2Texts.NotAYubiKey(OtherBrand), error.Message);
-        Assert.Contains("#193", error.Message);
-        Assert.Single(_keys.Calls, c => c.Op == FakeFido2Op.MakeCredential);
     }
 
     [Theory]
@@ -512,28 +474,6 @@ public class Fido2ServiceTests
     // ---- Listing, PIN setting, names ----
 
     [Fact]
-    public void ListYubiKeys_LeavesOutOtherBrands()
-    {
-        var yubiKey = _keys.AddKey(Serial, Yubico5Nfc);
-        _keys.AddKey(OtherSerial, OtherBrand);
-        var securityKey = _keys.AddKey(null, SecurityKeyNfc);
-
-        var listed = Service.ListYubiKeys();
-
-        Assert.Equal([yubiKey.Ref, securityKey.Ref], listed.Select(k => k.Key));
-    }
-
-    [Fact]
-    public void ListYubiKeys_Windows_EmptyWithoutAnyKeyCall()
-    {
-        _keys.CanList = false;
-        _keys.AddKey(Serial, Yubico5Nfc);
-
-        Assert.Empty(Service.ListYubiKeys());
-        Assert.Empty(_keys.Calls);
-    }
-
-    [Fact]
     public void SetPin_KeyWithoutPin_AsksForANewPinOnce()
     {
         var key = _keys.AddKey(null, SecurityKeyNfc, pin: null);
@@ -576,6 +516,180 @@ public class Fido2ServiceTests
     }
 
     /// <summary>A device that, against the contract, asks for the PIN a second time after a wrong one.</summary>
+    // ---- Brief T19, item 4: any brand ----
+
+    /// <summary>The Token2 PIN+ Dual Ace R3.4, the owner's test key.</summary>
+    private static readonly Guid Token2 = Guid.Parse("eabb46cc-e241-80bf-ae9e-96fa6d2975cf");
+
+    [Fact]
+    public void Enrol_NonYubicoKey_Succeeds_TheBlobHoldsItsAaguid()
+    {
+        var key = _keys.AddKey(null, Token2);
+
+        var blob = Service.Enrol(FakeFido2Keys.Info(key), requiresPassword: false, [], Typing());
+
+        Assert.Equal(Token2, blob.Aaguid);
+        Assert.Null(blob.Serial);
+        Assert.True(_keys.Holds(key, blob.CredentialId));
+        Assert.Equal(Fido2SlotBlob.Decode(blob.Encode()).Aaguid, Token2);
+    }
+
+    [Fact]
+    public void Enrol_NonYubicoAaguid_OnWindows_Succeeds()
+    {
+        _keys.CanList = false;
+        _keys.Picked = _keys.AddKey(null, OtherBrand);
+
+        var blob = Service.Enrol(null, false, [], Typing());
+
+        Assert.Equal(OtherBrand, blob.Aaguid);
+    }
+
+    [Fact]
+    public void Enrol_ARemainingRefusal_StillRefusesAKeyOfAnotherBrand()
+    {
+        var key = _keys.AddKey(null, Token2, pin: null);
+
+        Assert.Equal(Fido2Failure.NoPin, Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing())).Kind);
+
+        key.Pin = FakeFido2Keys.DefaultPin;
+        key.MakesWithoutUv = true;
+        Assert.Contains("without verifying the PIN", Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing())).Message);
+
+        key.MakesWithoutUv = false;
+        key.MadeCredentialIdLength = 15;
+        Assert.Contains("15 bytes", Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing())).Message);
+    }
+
+    [Fact]
+    public void ListKeys_ListsEveryBrand()
+    {
+        var yubiKey = _keys.AddKey(Serial, Yubico5Nfc);
+        var token2 = _keys.AddKey(null, Token2);
+        var securityKey = _keys.AddKey(null, SecurityKeyNfc);
+
+        Assert.Equal([yubiKey.Ref, token2.Ref, securityKey.Ref], Service.ListKeys().Select(k => k.Key));
+    }
+
+    [Fact]
+    public void ListKeys_Windows_EmptyWithoutAnyKeyCall()
+    {
+        _keys.CanList = false;
+        _keys.AddKey(Serial, Yubico5Nfc);
+
+        Assert.Empty(Service.ListKeys());
+        Assert.Empty(_keys.Calls);
+    }
+
+    [Fact]
+    public void KeyName_SerialThenYubicoModelThenProductThenSecurityKey()
+    {
+        Fido2KeyInfo Info(int? serial, Guid aaguid, string? product) => new(new Fido2KeyRef("a"), serial, aaguid, true, 8, product);
+
+        Assert.Equal("YubiKey 33060005", Service.KeyName(Info(Serial, Token2, "Token2 PIN+")));
+        Assert.Equal("Security Key NFC by Yubico", Service.KeyName(Info(null, SecurityKeyNfc, "Yubico Security Key")));
+        Assert.Equal("Token2 PIN+", Service.KeyName(Info(null, Token2, "Token2 PIN+")));
+        Assert.Equal("security key", Service.KeyName(Info(null, Token2, null)));
+    }
+
+    [Fact]
+    public void KeyName_OfASlot_SerialThenYubicoModelThenTheKeyItWasMadeWith()
+    {
+        Assert.Equal("YubiKey 33060005", Service.KeyName(Fido2SlotBlob.Create(Serial, Token2, new byte[16], false)));
+        Assert.Equal("Security Key NFC by Yubico", Service.KeyName(Fido2SlotBlob.Create(null, SecurityKeyNfc, new byte[16], false)));
+        Assert.Equal("the security key this slot was made with", Service.KeyName(Fido2SlotBlob.Create(null, Token2, new byte[16], false)));
+    }
+
+    [Theory]
+    [InlineData(null, false, null)]
+    [InlineData(Libfido2Status.Loaded, false, null)]
+    [InlineData(Libfido2Status.NotInstalled, false, "needs")]
+    [InlineData(Libfido2Status.Unusable, false, "needs")]
+    [InlineData(Libfido2Status.RefusedUnderSudo, false, "sudo-linux")]
+    [InlineData(Libfido2Status.RefusedUnderSudo, true, "sudo-mac")]
+    public void NoKeyText_AddsTheLibfido2LineWhenItIsMissing(Libfido2Status? status, bool macOs, string? hint)
+    {
+        _keys.OtherBrands = status;
+
+        var text = new Fido2Service(_keys, macOs: macOs).NoKeyText();
+
+        var expected = hint switch
+        {
+            null => Fido2Texts.NoKey,
+            "needs" => Fido2Texts.NoKey + Environment.NewLine + Fido2Texts.Libfido2Needed,
+            "sudo-linux" => Fido2Texts.NoKey + Environment.NewLine + Fido2Texts.Libfido2SudoRefusal(macOs: false),
+            _ => Fido2Texts.NoKey + Environment.NewLine + Fido2Texts.Libfido2SudoRefusal(macOs: true),
+        };
+        Assert.Equal(expected, text);
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(Libfido2Status.Loaded, false)]
+    [InlineData(Libfido2Status.NotInstalled, true)]
+    [InlineData(Libfido2Status.Unusable, true)]
+    [InlineData(Libfido2Status.RefusedUnderSudo, true)]
+    public void Locate_ASlotOfAnotherBrandNotFound_SaysLibfido2IsNeededInsteadOfPlugItIn(Libfido2Status? status, bool hint)
+    {
+        _keys.OtherBrands = status;
+        var blob = Fido2SlotBlob.Create(null, Token2, RandomNumberGenerator.GetBytes(64), false);
+
+        var text = Fido2Texts.Describe(new Fido2Service(_keys, macOs: false).Locate(blob));
+
+        const string name = "the security key this slot was made with";
+        Assert.Equal(!hint ? Fido2Texts.PlugIn(name)
+            : status == Libfido2Status.RefusedUnderSudo ? Fido2Texts.SlotNeedsLibfido2(name, Fido2Texts.Libfido2SudoRefusal(macOs: false))
+            : Fido2Texts.SlotNeedsLibfido2(name, Fido2Texts.Libfido2Needed), text);
+    }
+
+    [Fact]
+    public void Locate_AYubicoSlotNotFound_WithLibfido2Missing_StillSaysPlugItIn()
+    {
+        _keys.OtherBrands = Libfido2Status.NotInstalled;
+        var blob = Fido2SlotBlob.Create(Serial, Yubico5Nfc, RandomNumberGenerator.GetBytes(64), false);
+
+        Assert.Equal(Fido2Texts.PlugIn("YubiKey 33060005"), Fido2Texts.Describe(Service.Locate(blob)));
+    }
+
+    [Fact]
+    public void Unsupported_OnLinuxAndMacOs_NamesTheKeyNotWindows()
+    {
+        var key = _keys.AddKey(null, Token2);
+        _keys.FailNext(FakeFido2Op.MakeCredential, Fido2Failure.Unsupported, detail: "FIDO_ERR_UNSUPPORTED_EXTENSION", afterPin: true);
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(FakeFido2Keys.Info(key), false, [], Typing()));
+
+        Assert.Equal(Fido2Texts.KeyUnsupported("security key", "FIDO_ERR_UNSUPPORTED_EXTENSION"), error.Message);
+        Assert.DoesNotContain("Windows", error.Message);
+    }
+
+    /// <summary>Review N8: on Windows (keys can't be listed) Unsupported keeps its WebAuthn wording.</summary>
+    [Fact]
+    public void Unsupported_OnWindows_SaysTheWebAuthnApiIsTooOld()
+    {
+        _keys.CanList = false;
+        _keys.Picked = _keys.AddKey(null, Yubico5Nfc);
+        _keys.FailNext(FakeFido2Op.MakeCredential, Fido2Failure.Unsupported, detail: "3");
+
+        var error = Assert.Throws<Fido2Exception>(() => Service.Enrol(null, false, [], Typing()));
+
+        Assert.Equal(Fido2Texts.Unsupported("3"), error.Message);
+        Assert.Equal("Windows' WebAuthn API on this machine is too old for FIDO2 slots (version 3; needs 4).", error.Message);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OpenFailed_OnLinux_AddsTheNoAccessLine(bool linux)
+    {
+        _keys.FailNext(FakeFido2Op.Find, Fido2Failure.Other, detail: "OpenFailed:FIDO_ERR_INTERNAL");
+
+        var error = Assert.Throws<Fido2Exception>(() => new Fido2Service(_keys, linux: linux).ListKeys());
+
+        var plain = Fido2Texts.Other(Fido2Texts.AnyKey, "OpenFailed:FIDO_ERR_INTERNAL");
+        Assert.Equal(linux ? plain + " " + Fido2Texts.NoDeviceAccess : plain, error.Message);
+    }
+
     private sealed class AskingTwiceKeys : IFido2Keys
     {
         public bool CanList => true;

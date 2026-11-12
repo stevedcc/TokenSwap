@@ -48,9 +48,15 @@ jobs:
       - name: libpcsclite for the JIT test host
         run: sudo apt-get install -y libpcsclite1
 
+      # Brief T19 (review F7): as in ci.yml, the binding smoke test (Libfido2SmokeTests) needs libfido2, and fails
+      # instead of skipping under CI_REQUIRE_LIBFIDO2=1. This job is the release's only test leg (Linux).
+      - name: libfido2 for the binding smoke test
+        run: sudo apt-get install -y libfido2-1
+
       - name: Test
         env:
           CI_REQUIRE_BWRAP: '1'
+          CI_REQUIRE_LIBFIDO2: '1'
         shell: bash
         run: |
           set -o pipefail

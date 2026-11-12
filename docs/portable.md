@@ -59,6 +59,15 @@ signed: on macOS a browser download is refused until you clear its quarantine ma
 yourself (no admin needed), see [install.md](install.md#unsigned-binaries). The Windows binaries are not
 signed. Other Windows notes are in [install.md](install.md#windows-notes).
 
+## Security keys of other brands
+
+A FIDO2 slot on a key that isn't a YubiKey goes through libfido2 on Linux and macOS
+([install.md](install.md#libfido2-security-keys-other-than-yubikeys)). Without admin rights, put a
+libfido2 next to the tswap binary, or use Homebrew's (`brew install libfido2`): tswap uses either
+when it runs as you. A user without admin rights never needs the root-owned one, which only sudo
+commands require (`slot add`, `get`, `apply`, ...), and such a user doesn't run those anyway: `init
+--fido2`, unlocking and `run` work without sudo. Windows needs nothing.
+
 ## YubiKeys
 
 tswap needs no other YubiKey tool: it talks to the key through Yubico's .NET SDK, built into the

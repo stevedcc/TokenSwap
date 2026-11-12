@@ -20,7 +20,7 @@ public static class Fido2Texts
         "A FIDO2 slot needs a person at a terminal to type the key's PIN and touch the key; there is no terminal here, so the key was not used.";
 
     /// <summary>Said after the PIN is typed for each FIDO2 key operation on Linux and macOS (the device layer has no touch callback).</summary>
-    public const string TouchLine = "Touch your YubiKey when it blinks.";
+    public const string TouchLine = "Touch your security key when it blinks.";
 
     /// <summary>Said before each FIDO2 key operation on Windows.</summary>
     public const string WindowsTouchLine = "Follow Windows' security key dialog: the key's PIN, then a touch.";
@@ -46,15 +46,28 @@ public static class Fido2Texts
         : $"{name}: the key that answered doesn't open the vault (its slot didn't unwrap: config.json may be damaged; restore it from backup).";
 
     public const string WindowsNoAaguid =
-        "Windows didn't report which key this is (its FIDO2 model id came back as zeros), so tswap can't check that it is a YubiKey. No slot was added.";
+        "Windows didn't report which key this is (its FIDO2 model id came back as zeros), so tswap can't tell which security key it is. No slot was added.";
+
+    /// <summary>Linux and macOS: the listing found no FIDO2 key.</summary>
+    public const string NoKey = "No FIDO2 security key detected. Please insert one.";
+
+    /// <summary>
+    /// Brief T19, item 4: libfido2 isn't installed (or is too old), so keys other than YubiKeys can't be listed or used.
+    /// Added under <see cref="NoKey"/>, or said instead of "plug it in" for a slot of another brand.
+    /// </summary>
+    public const string Libfido2Needed =
+        "Security keys other than YubiKeys need libfido2, which isn't installed here or is too old (see docs/install.md).";
+
+    /// <summary>A slot of another brand whose key can't be reached here: <paramref name="why"/> (libfido2 missing, or refused under sudo).</summary>
+    public static string SlotNeedsLibfido2(string name, string why) => $"The FIDO2 slot of {name} can't be opened here. {why}";
+
+    /// <summary>Linux and macOS: the key refused an option or extension a FIDO2 slot needs (<paramref name="detail"/>: its status name).</summary>
+    public static string KeyUnsupported(string name, string? detail) =>
+        $"{name} doesn't support what a FIDO2 slot needs (hmac-secret and a FIDO2 PIN){(detail is null ? "" : $" ({detail})")}.";
 
     private const string AllowsEight = "a key allows 8 wrong PINs in all";
 
     private const string EnrolAgain = "enrol the key again with `tswap slot add --fido2`";
-
-    /// <summary><paramref name="aaguid"/>: the key's model id, when known.</summary>
-    public static string NotAYubiKey(Guid? aaguid) =>
-        $"This security key is not a YubiKey{(aaguid is { } id ? $" (its FIDO2 model id is {id})" : "")}: FIDO2 slots work with YubiKeys only for now (other keys: issue #193). No slot was added.";
 
     public static string NoPin(string name) => $"{name} has no FIDO2 PIN; a FIDO2 slot needs one.";
 
@@ -109,6 +122,29 @@ public static class Fido2Texts
     public static string KeyLeftOut(string problem) =>
         $"A plugged-in key's FIDO2 interface couldn't be read ({problem}), so it is left out of the list.";
 
+    /// <summary>
+    /// Brief T19, item 2: one more line under <see cref="KeyLeftOut"/> on Linux when a listed key couldn't be opened
+    /// (<c>OpenFailed:...</c>): systemd gives the user at the machine's active local seat access to security keys, so a
+    /// login over SSH (or with no active seat) has none.
+    /// </summary>
+    public const string NoDeviceAccess =
+        "A security key is plugged in, but this user can't open it: Linux gives access to the user logged in at the machine (not over SSH).";
+
+    /// <summary>The device-layer detail of a key that is listed but couldn't be opened.</summary>
+    public const string OpenFailedPrefix = "OpenFailed:";
+
+    /// <summary>
+    /// The notice for a plugged-in key left out of a listing: <see cref="KeyLeftOut"/> with its problem, and on Linux,
+    /// for a key that couldn't be opened, <see cref="NoDeviceAccess"/> on a second line.
+    /// </summary>
+    public static string LeftOut(Fido2DeviceException problem, bool linux)
+    {
+        var detail = problem.Detail ?? problem.Kind.ToString();
+        return linux && detail.StartsWith(OpenFailedPrefix, StringComparison.Ordinal)
+            ? KeyLeftOut(detail) + Environment.NewLine + NoDeviceAccess
+            : KeyLeftOut(detail);
+    }
+
     /// <summary><paramref name="detail"/>: the API version Windows reported, when the device layer knows it.</summary>
     public static string Unsupported(string? detail) => detail is null
         ? "Windows' WebAuthn API on this machine is too old for FIDO2 slots (needs version 4)."
@@ -130,11 +166,34 @@ public static class Fido2Texts
             $"{Name(reset.PluggedKey)} is plugged in but no longer holds this slot's credential: a FIDO2 reset deleted it, and the slot can't be opened again. Enrol the key again with `tswap slot add --fido2`.",
         Fido2Locate.ResetOrOtherKey reset =>
             $"{Name(reset.PluggedKey)} is plugged in but doesn't hold this slot's credential: another key of the same model, or a FIDO2 reset deleted it (then {EnrolAgain}).",
-        Fido2Locate.NotPluggedIn absent => PlugIn(absent.KeyName),
+        Fido2Locate.NotPluggedIn absent => absent.Text ?? PlugIn(absent.KeyName),
         _ => null,
     };
 
-    private static string Name(Fido2KeyInfo key) => Fido2SlotBlob.DisplayName(key.Serial, key.Aaguid);
+    /// <summary>
+    /// Brief T19, decision 7: under sudo only a root-owned libfido2 is loaded, and none usable was found (or the loader's
+    /// environment wasn't clean). Names the root-owned way to install it and the alternative; never suggests copying a
+    /// library into place.
+    /// </summary>
+    public static string Libfido2SudoRefusal(bool macOs) =>
+        "Security keys other than YubiKeys need libfido2, and under sudo tswap loads it only from a root-owned install " +
+        "(the library and everything it loads), with no LD_ or DYLD_ variable set; none was found, so those keys are left out. " +
+        (macOs
+            ? "Install it from MacPorts: `sudo port install libfido2`. "
+            : "Install your distribution's libfido2 package (Fedora: libfido2; Debian, Ubuntu: libfido2-1). ") +
+        "Or add the slot on another machine that has a root-owned libfido2, or on Windows; in a shared vault folder the " +
+        "slot then opens here without sudo.";
+
+    private static string Name(Fido2KeyInfo key) => KeyName(key);
+
+    /// <summary>
+    /// A plugged-in key's name (brief T19, item 4): <c>YubiKey {serial}</c> when the serial is known, else the Yubico
+    /// model (<see cref="YubicoAaguids.ModelName"/>), else the key's USB product (<see cref="Fido2KeyInfo.Product"/>,
+    /// libfido2 only, sanitised), else <c>security key</c>.
+    /// </summary>
+    public static string KeyName(Fido2KeyInfo key) =>
+        key.Serial is { } serial ? $"YubiKey {serial}"
+        : YubicoAaguids.ModelName(key.Aaguid) ?? key.Product ?? "security key";
 
     private static string Tries(int left) => left == 1 ? "1 try" : $"{left} tries";
 }
