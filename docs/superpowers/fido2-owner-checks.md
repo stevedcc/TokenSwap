@@ -527,8 +527,24 @@ before this key's FIDO2 is blocked (...)` (record the number shown), and type th
 next run. Watch the key during each unlock before the PIN prompt: the silent probe that finds the
 key must not make it blink or wait for a touch; it should blink only after the PIN.
 
+Then the brief's own form, `slot add --fido2`: the Token2 as a **second** slot of A1's vault (opened
+by the daily YubiKey). Plug in both keys:
+
+```bash
+export TSWAP_CONFIG_DIR="$W/linux-config"
+sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password
+```
+
+Expect `Several security keys are plugged in:` listing `YubiKey <serial>` and the Token2's name; pick
+the Token2. The vault opens with the daily key (its PIN and a touch), then the Token2 is enrolled
+(its PIN and a touch, twice) and `✓ the security key this slot was made with added as a FIDO2 slot
+...`. `"$T" slots` shows a second `machine` row, `the security key this slot was made with, FIDO2: PIN
++ touch, no password`. Then **unplug the YubiKey** and run `"$T" names`: an unlock that can only use
+the Token2's slot. Make the same two observations as above: once with a wrong PIN (the tries shown),
+then with the right one, and whether the Token2 blinks before its PIN prompt (it must not).
+
 Paste back: the whole output of each command, the name tswap used, the tries shown, and whether the
-key blinked before the PIN prompt.
+key blinked before the PIN prompt, for both the `init` vault and the `slot add` slot.
 
 ### C2. A slot made on Linux opens on Windows (and macOS)
 
