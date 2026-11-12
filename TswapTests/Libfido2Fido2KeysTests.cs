@@ -555,4 +555,42 @@ public class Libfido2Fido2KeysTests
         Assert.Equal(Fido2Failure.Other, e.Kind);
         Assert.Equal("OpenFailed:FIDO_ERR_INTERNAL", e.Detail);
     }
+
+    // --- Product (brief T19, item 4): USB strings, untrusted ---
+
+    [Fact]
+    public void Find_TheProductIsTheUsbProductString()
+    {
+        Token2();
+
+        Assert.Equal("Token2 PIN+ Dual", Assert.Single(Keys().Find()).Product);
+    }
+
+    [Theory]
+    [InlineData("Token2", "Token2 PIN+ Dual", "Token2 PIN+ Dual")]          // the product already starts with the maker
+    [InlineData("Nitrokey", "Nitrokey 3", "Nitrokey 3")]
+    [InlineData("SoloKeys", "Solo 2", "SoloKeys Solo 2")]
+    [InlineData(null, "Solo 2", "Solo 2")]
+    [InlineData("Feitian", null, "Feitian")]
+    [InlineData("  Token2 ", " PIN+ ", "Token2 PIN+")]
+    [InlineData("\u001b[31mEvil\u001b[0m", "Key\nNext line", "[31mEvil[0m KeyNext line")] // ESC and newline gone
+    [InlineData("", "", null)]
+    [InlineData(null, null, null)]
+    [InlineData("\u001b", "\r\n", null)]
+    public void ProductName_DropsControlCharactersAndAvoidsRepeatingTheMaker(string? manufacturer, string? product, string? expected)
+    {
+        var name = Libfido2Fido2Keys.ProductName(manufacturer, product);
+
+        Assert.Equal(expected, name);
+        Assert.DoesNotContain(name ?? "", c => char.IsControl(c));
+    }
+
+    [Fact]
+    public void ProductName_IsAtMost64Characters()
+    {
+        var name = Libfido2Fido2Keys.ProductName("Maker", new string('x', 100));
+
+        Assert.Equal(64, name!.Length);
+        Assert.StartsWith("Maker xxx", name);
+    }
 }

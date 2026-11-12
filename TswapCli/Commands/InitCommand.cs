@@ -30,7 +30,7 @@ public sealed class InitCommand : ICliCommand
         "--with-touch and --no-touch are for --secure-enclave: a FIDO2 slot always asks for the key's PIN and a touch.";
 
     public string HelpUsage => $"init [--yubikey|--fido2 [--serial <n>]|--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--no-recovery|--recovery-key-out <file>] [--folder <dir>] | init --vault-dir <shared folder>";
-    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one YubiKey's FIDO2 credential, its PIN typed at the terminal and a touch on every unlock (--serial picks the key on Linux and macOS). Plus a recovery slot unless --no-recovery; its key is printed once, and when stdout is not a terminal init refuses unless --recovery-key-out <file> names a new file for it (readable by you only; never overwritten). --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
+    public string Description => "Create a record vault (one file per secret, shareable by sync tools) in <config dir>/vault, or in --folder <dir> (absent or empty, e.g. a sync folder). At a terminal, plain init is a guided setup: it lists this machine's YubiKeys and TPM or Secure Enclave, makes a slot for each one you pick, and shows how to add other machines. Without a terminal, name the slot: --yubikey (one YubiKey; add keys with 'slot add --yubikey'), --tpm (Windows/Linux) or --secure-enclave (macOS; needs --with-touch, Touch ID or password on every unlock, or --no-touch: no prompt, read its warning). --fido2 names the slot too but still needs a terminal: one security key's FIDO2 credential (any brand with hmac-secret and a FIDO2 PIN; on Linux and macOS other brands than YubiKeys need libfido2), its PIN typed at the terminal and a touch on every unlock (--serial picks a YubiKey by its serial on Linux and macOS). Plus a recovery slot unless --no-recovery; its key is printed once, and when stdout is not a terminal init refuses unless --recovery-key-out <file> names a new file for it (readable by you only; never overwritten). --password gives the slot a vault password (asked for on a terminal when neither --password nor --no-password is given). --vault-dir joins a folder another machine shares";
     public bool RequiresSudo => false;
 
     /// <summary>Brief T16-S1: init runs on a classic vault's config folder only to refuse with its own message.</summary>
@@ -409,7 +409,7 @@ public sealed class InitCommand : ICliCommand
         c.Out.WriteLine("\n╔════════════════════════════════════════╗");
         c.Out.WriteLine("║  tswap - FIDO2 Keyring Initialization  ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
-        c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one YubiKey's FIDO2 slot");
+        c.Out.WriteLine("This vault's master key (K_v) is random and wrapped by one security key's FIDO2 slot");
         c.Out.WriteLine("(k = 1): every unlock asks for the key's FIDO2 PIN and a touch. Add more keys later,");
         c.Out.WriteLine($"each as its own slot that opens the vault alone: sudo {ctx.Prefix} slot add --fido2\n");
 
@@ -443,8 +443,8 @@ public sealed class InitCommand : ICliCommand
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
             c.Out.WriteLine($"FIDO2 key:      {name}");
             c.Out.WriteLine(includeRecovery
-                ? "Backend: YubiKey FIDO2 keyring (k = 1, 2 slots: this key + recovery)"
-                : "Backend: YubiKey FIDO2 keyring (k = 1, 1 slot: this key only)");
+                ? "Backend: FIDO2 keyring (k = 1, 2 slots: this key + recovery)"
+                : "Backend: FIDO2 keyring (k = 1, 1 slot: this key only)");
             PrintPasswordLine(c, password);
             Fido2SlotEnrollment.PrintResetWarning(c, name);
             c.Out.WriteLine("\nThis key alone opens the vault. To enrol a spare key as its own slot, plug it in and run:");
@@ -504,8 +504,8 @@ public sealed class InitCommand : ICliCommand
 
         // FIDO2 plan, task 2: a FIDO2 slot is a YubiKey's too.
         var yubiKeySlots = keyring.Slots.Count(s => s.Kind == SlotKind.Machine && YubiKeySlotKinds.IsYubiKey(s.HwBlob));
-        c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys).");
-        c.Out.WriteLine("It opens with any YubiKey that has a slot there, or the recovery key. To give this machine's TPM or Secure");
+        c.Out.WriteLine($"\n✓ This machine now uses the shared vault folder {vaultDir} ({keyring.Slots.Count} slot(s), {yubiKeySlots} of them YubiKeys or other security keys).");
+        c.Out.WriteLine("It opens with any YubiKey or security key that has a slot there, or the recovery key. To give this machine's TPM or Secure");
         c.Out.WriteLine($"Enclave its own slot: '{ctx.Prefix} slot request --tpm <file>' here, 'sudo {ctx.Prefix} slot approve' on an enrolled");
         c.Out.WriteLine($"machine, then '{ctx.Prefix} slot accept <approve-file>' here: the slot goes straight into the shared keyring.");
         c.Out.WriteLine($"Config saved to: {fileStore.ConfigFile} (per machine: never sync it; sync only the vault folder).");

@@ -30,7 +30,7 @@ public sealed class GuidedInitFido2Tests : IDisposable
     private const string Fido2Entry = "YubiKey 11111111, FIDO2 slot (PIN + touch)";
     private const string MacFido2Entry = "YubiKey 11111111, FIDO2 slot (PIN + touch; preferred on a Mac: no Input Monitoring needed)";
     private const string MacOtp = "YubiKey 11111111, OTP slot (no PIN; needs Input Monitoring for the terminal)";
-    private const string WindowsFido2Entry = "a YubiKey's FIDO2 slot (Windows' dialog: pick the key, PIN, touch)";
+    private const string WindowsFido2Entry = "a security key's FIDO2 slot (Windows' dialog: pick the key, PIN, touch)";
 
     private readonly List<FleetMachine> _machines = [];
 
@@ -192,7 +192,7 @@ public sealed class GuidedInitFido2Tests : IDisposable
         Assert.Equal(
             "Using a key on other machines too? An OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev " +
             "rule on Linux. A FIDO2 slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd " +
-            "distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every unlock, and a " +
+            "distributions (otherwise the key maker's udev rule); it asks for the key's FIDO2 PIN and a touch on every unlock, and a " +
             "FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to give it two slots; either " +
             "opens the vault.",
             GuidedInit.MultiOsNote);
@@ -301,6 +301,6 @@ public sealed class GuidedInitFido2Tests : IDisposable
 
     [Fact]
     public void UnusedCredentialNote_SaysItIsHarmless() =>
-        Assert.Equal("A key used in this run may keep an unused FIDO2 credential: harmless, a YubiKey stores nothing for it.",
+        Assert.Equal("A key used in this run may keep an unused FIDO2 credential: harmless (non-discoverable: most keys, YubiKeys included, store nothing for it).",
             GuidedInit.UnusedCredentialNote);
 }

@@ -90,8 +90,8 @@ Expect:
 
 1. `Enrolling a FIDO2 credential on YubiKey <serial> (its PIN and a touch, twice)...`, then twice:
    `FIDO2 PIN for YubiKey <serial>: ` (nothing echoed while you type), and only after Enter,
-   `Touch your YubiKey when it blinks.` Then the completion box with `FIDO2 key:      YubiKey
-   <serial>`, `Backend: YubiKey FIDO2 keyring (k = 1, 1 slot: this key only)`, the
+   `Touch your security key when it blinks.` Then the completion box with `FIDO2 key:      YubiKey
+   <serial>`, `Backend: FIDO2 keyring (k = 1, 1 slot: this key only)`, the
    `--no-recovery` warning, and `A FIDO2 reset of YubiKey <serial> deletes this slot's credential
    and kills the slot: ...`.
 2. One `machine` row ending `YubiKey <serial>, FIDO2: PIN + touch, no password`.
@@ -148,7 +148,7 @@ $env:TSWAP_CONFIG_DIR = "$W\join-linux-config"
 ```
 
 `init --vault-dir` doesn't unlock. Expect `✓ This machine now uses the shared vault folder ...
-(1 slot(s), 1 of them YubiKeys).` Then `names` lists `fido2-check`: on the Mac after
+(1 slot(s), 1 of them YubiKeys or other security keys).` Then `names` lists `fido2-check`: on the Mac after
 `FIDO2 PIN for YubiKey <serial>: ` and the touch line; on Windows after
 `Follow Windows' security key dialog: the key's PIN, then a touch.` and the dialog.
 
@@ -304,7 +304,7 @@ Expect the list to read, per OS:
 - macOS: `YubiKey <serial>, FIDO2 slot (PIN + touch; preferred on a Mac: no Input Monitoring
   needed)`, `YubiKey <serial>, OTP slot (no PIN; needs Input Monitoring for the terminal)`, then
   `Secure Enclave`.
-- Windows: `TPM`, `YubiKey <serial>, OTP slot (no PIN)`, `a YubiKey's FIDO2 slot (Windows' dialog:
+- Windows: `TPM`, `YubiKey <serial>, OTP slot (no PIN)`, `a security key's FIDO2 slot (Windows' dialog:
   pick the key, PIN, touch)`.
 
 Under the list, on every OS: `Using a key on other machines too? An OTP slot needs Input Monitoring

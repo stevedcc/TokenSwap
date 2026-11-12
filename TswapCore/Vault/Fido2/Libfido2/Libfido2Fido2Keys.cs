@@ -57,6 +57,30 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
 
     public bool CanList => true;
 
+    /// <summary>The longest <see cref="Fido2KeyInfo.Product"/>.</summary>
+    public const int MaxProductLength = 64;
+
+    /// <summary>
+    /// A key's name from its USB strings (brief T19, item 4), which come from the device and so are untrusted: every
+    /// control character dropped (<see cref="char.IsControl(char)"/>, which removes ESC and so any terminal escape
+    /// sequence), each trimmed; the product alone when it already starts with the manufacturer, else "manufacturer
+    /// product"; at most <see cref="MaxProductLength"/> characters; null when nothing is left.
+    /// </summary>
+    internal static string? ProductName(string? manufacturer, string? product)
+    {
+        var maker = Clean(manufacturer);
+        var model = Clean(product);
+        var name = maker.Length == 0 ? model
+            : model.Length == 0 ? maker
+            : model.StartsWith(maker, StringComparison.OrdinalIgnoreCase) ? model
+            : $"{maker} {model}";
+        if (name.Length > MaxProductLength)
+            name = name[..MaxProductLength].TrimEnd();
+        return name.Length == 0 ? null : name;
+
+        static string Clean(string? text) => text is null ? "" : string.Concat(text.Where(c => !char.IsControl(c))).Trim();
+    }
+
     /// <summary>
     /// Every listed device (Yubico's left out) whose CBOR info could be read, opened only for that: the AAGUID, whether
     /// a PIN is set, and only then the retries. One without <c>hmac-secret</c> is left out with a notice; one that can't
@@ -68,11 +92,11 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
         List<Fido2KeyInfo> keys = [];
         List<string> notes = [];
         Fido2DeviceException? first = null;
-        foreach (var path in Listed())
+        foreach (var device in Listed())
         {
             try
             {
-                var (key, hmacSecret) = WithDevice(path, operation: false, dev => Read(path, dev));
+                var (key, hmacSecret) = WithDevice(device.Path, operation: false, dev => Read(device, dev));
                 if (hmacSecret)
                     keys.Add(key);
                 else
@@ -178,13 +202,13 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
     /// <c>FIDO_OK</c> is a failure, which counts only when no device holds it (<c>SdkFido2Devices.FirstHolder</c>).
     /// </summary>
     public Fido2KeyInfo? FindHolder(byte[] credentialId) =>
-        SdkFido2Devices.FirstHolder(Listed(), path => Probe(path, credentialId),
-            path => WithDevice(path, operation: false, dev => Read(path, dev)).Key);
+        SdkFido2Devices.FirstHolder(Listed(), device => Probe(device.Path, credentialId),
+            device => WithDevice(device.Path, operation: false, dev => Read(device, dev)).Key);
 
     public void SetPin(Fido2KeyRef key, Fido2DevicePin newPin) =>
         WithDevice(key.Id, operation: true, dev =>
         {
-            if (Read(key.Id, dev).Key.PinSet)
+            if (Read(new Listing(key.Id, null), dev).Key.PinSet)
                 throw new Fido2DeviceException(Fido2Failure.Other, null, "PinAlreadySet");
             var result = Libfido2Pin.Send(newPin(null), p => _fido.DevSetPin(dev, p));
             return result == Libfido2Errors.Ok ? true : throw Error(result, dev);
@@ -212,23 +236,27 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
         }
     });
 
-    /// <summary>The listed devices' paths, Yubico's left out unless the test-only flag says otherwise.</summary>
-    private List<string> Listed()
+    /// <summary>A listed device: its path and its <see cref="ProductName"/>.</summary>
+    private sealed record Listing(string Path, string? Product);
+
+    /// <summary>The listed devices, Yubico's left out unless the test-only flag says otherwise.</summary>
+    private List<Listing> Listed()
     {
         var list = Allocated(_fido.DevInfoNew(MaxDevices));
         try
         {
             Check(_fido.DevInfoManifest(list, MaxDevices, out var found));
-            List<string> paths = [];
+            List<Listing> devices = [];
             for (nuint i = 0; i < found && i < MaxDevices; i++)
             {
                 var info = _fido.DevInfoPtr(list, i);
                 if (info == 0 || (!_includeYubico && _fido.DevInfoVendor(info) == YubicoVendorId))
                     continue;
                 if (_fido.DevInfoPath(info) is { Length: > 0 } path)
-                    paths.Add(path);
+                    devices.Add(new Listing(path,
+                        ProductName(_fido.DevInfoManufacturerString(info), _fido.DevInfoProductString(info))));
             }
-            return paths;
+            return devices;
         }
         finally
         {
@@ -274,7 +302,7 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
     {
         try
         {
-            return Listed().Contains(path);
+            return Listed().Any(d => d.Path == path);
         }
         catch (Fido2DeviceException)
         {
@@ -283,7 +311,7 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
     }
 
     /// <summary>The key's CBOR info (no PIN, no touch): its listing entry and whether it has <c>hmac-secret</c>.</summary>
-    private (Fido2KeyInfo Key, bool HmacSecret) Read(string path, nint dev)
+    private (Fido2KeyInfo Key, bool HmacSecret) Read(Listing device, nint dev)
     {
         var info = Allocated(_fido.CborInfoNew());
         Guid aaguid;
@@ -301,13 +329,13 @@ public sealed class Libfido2Fido2Keys : IFido2Keys
         }
         // fido_dev_get_retry_count fails without a PIN, so it is asked only with one.
         int? retries = pinSet && _fido.DevGetRetryCount(dev, out var left) == Libfido2Errors.Ok ? left : null;
-        return (new Fido2KeyInfo(new Fido2KeyRef(path), null, aaguid, pinSet, retries), hmacSecret);
+        return (new Fido2KeyInfo(new Fido2KeyRef(device.Path), null, aaguid, pinSet, retries, device.Product), hmacSecret);
     }
 
     /// <summary>As on the SDK path: a key without a PIN, or without <c>hmac-secret</c>, is refused before the PIN is asked.</summary>
     private void RequirePinAndHmacSecret(string path, nint dev)
     {
-        var (key, hmacSecret) = Read(path, dev);
+        var (key, hmacSecret) = Read(new Listing(path, null), dev);
         if (!key.PinSet)
             throw new Fido2DeviceException(Fido2Failure.NoPin, null, "PinNotSet");
         if (!hmacSecret)
