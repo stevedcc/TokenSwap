@@ -46,14 +46,16 @@ public class ControllingTerminalTests : IDisposable
         File.WriteAllText(_file, "123456\nsecond line\n");
         var calls = new FailingSetAttr();
 
+        int setsByReadSecret;
         using (var tty = ControllingTerminal.UnixTty.OpenPath(_file, calls))
         {
             Assert.NotNull(tty);
             Assert.Null(tty.ReadSecret());
+            setsByReadSecret = calls.Sets.Count; // ReadLine sets its own line mode since #296: counted apart
             Assert.Equal("123456", tty.ReadLine()); // not consumed: nothing was read with the echo on
         }
 
-        Assert.Equal(2, calls.Sets.Count);
+        Assert.Equal(2, setsByReadSecret);
         Assert.False(calls.Sets[0].EchoOn); // the echo-off attempt, which failed
         Assert.True(calls.Sets[1].EchoOn);  // the saved settings, put back
     }
