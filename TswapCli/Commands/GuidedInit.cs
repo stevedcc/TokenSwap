@@ -22,12 +22,13 @@ internal static class GuidedInit
         "Plug in the security keys you want to use with this vault on this machine, then press Enter. (No touch yet: tswap asks when it needs one.)";
 
     internal const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
-    internal const string TouchPrompt = "Touch ID (or your login password) on every unlock? (y/n): ";
+    // #299: (yes/no) has no default, (Y/n) and (y/N) default to the capital (YesNo).
+    internal static readonly string TouchPrompt = YesNo.Prompt("Touch ID (or your login password) on every unlock?", defaultAnswer: null);
     internal const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
-    /// <summary>The vault-password question on the guided path: no default, like every guided yes/no question that matters.</summary>
-    internal const string PasswordPrompt = "Add a vault password? (yes/no): ";
-    internal const string RecoveryPrompt = "Add a recovery slot (recommended)? (Y/n): ";
-    internal const string OtherMachinesPrompt = "Will other machines use this vault? (y/N): ";
+    /// <summary>The vault-password question on the guided path: Enter is "no" (#299); the slot choice follows a "yes".</summary>
+    internal static readonly string PasswordPrompt = YesNo.Prompt("Add a vault password?", defaultAnswer: false);
+    internal static readonly string RecoveryPrompt = YesNo.Prompt("Add a recovery slot (recommended)?", defaultAnswer: true);
+    internal static readonly string OtherMachinesPrompt = YesNo.Prompt("Will other machines use this vault?", defaultAnswer: false);
     /// <summary>What the Secure Enclave touch question decides, in the guided flow's terms (not the flags').</summary>
     internal const string TouchExplanation =
         "With touch: every unlock asks for Touch ID or your login password. Without: the Secure Enclave opens the vault " +
@@ -181,7 +182,7 @@ internal static class GuidedInit
             new VaultPasswordChoice.GuidedPasswordQuestion(
                 SeveralSlots: picked.Count > 1,
                 Kinds: [.. picked.Select(p => p.Device.Chip ?? HardwareBackend.YubiKey).Distinct()],
-                Ask: () => AskYesNo(c, PasswordPrompt, defaultAnswer: null)));
+                Ask: () => AskYesNo(c, PasswordPrompt, defaultAnswer: false)));
         var vaultKey = password?.VaultKey ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = password?.VaultId ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         byte[]? assembledKey = null;
@@ -289,7 +290,7 @@ internal static class GuidedInit
                     // configured): explain, then carry on without it or stop. Nothing is written either way;
                     // K_v, the vault id and every slot built so far stay in memory, and no key is asked again.
                     c.Out.WriteLine(ex.Message);
-                    if (!AskYesNo(c, $"Carry on without YubiKey {serial}? (y/N): ", defaultAnswer: false))
+                    if (!AskYesNo(c, YesNo.Prompt($"Carry on without YubiKey {serial}?", defaultAnswer: false), defaultAnswer: false))
                         throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
                     continue;
                 }
@@ -355,7 +356,7 @@ internal static class GuidedInit
                 catch (TswapException ex)
                 {
                     c.Out.WriteLine(ex.Message);
-                    if (!AskYesNo(c, $"Carry on without {slot.Device.Label}? (y/N): ", defaultAnswer: false))
+                    if (!AskYesNo(c, YesNo.Prompt($"Carry on without {slot.Device.Label}?", defaultAnswer: false), defaultAnswer: false))
                         throw new TswapException($"Stopped without {slot.Device.Label}. No config or vault was written.{StopNote()}");
                     continue;
                 }
@@ -413,11 +414,20 @@ internal static class GuidedInit
 
             // Step 7: other machines. After the write, so an end of input here counts as "no".
             c.Out.WriteLine();
-            c.Out.Write(OtherMachinesPrompt);
-            var others = GuidedPrompts.ReadAnswer(c);
-            if (others is null)
-                c.Out.WriteLine();
-            else if (others.Trim().ToLowerInvariant() is "y" or "yes")
+            bool? others = null;
+            while (others is null)
+            {
+                c.Out.Write(OtherMachinesPrompt);
+                var answer = GuidedPrompts.ReadAnswer(c);
+                if (answer is null)
+                {
+                    c.Out.WriteLine();
+                    others = false;
+                }
+                else
+                    others = YesNo.Parse(answer, defaultAnswer: false); // #299: anything else is asked again
+            }
+            if (others == true)
             {
                 c.Out.WriteLine();
                 OtherMachinesGuide.Print(c.Out, ctx.Prefix, fileStore.ConfigDir, vaultDir, newFolder is not null);
@@ -500,16 +510,8 @@ internal static class GuidedInit
         while (true)
         {
             c.Out.Write(prompt);
-            var answer = (GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput()).Trim().ToLowerInvariant();
-            switch (answer)
-            {
-                case "y" or "yes":
-                    return true;
-                case "n" or "no":
-                    return false;
-                case "" when defaultAnswer is { } given:
-                    return given;
-            }
+            if (YesNo.Parse(GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput(), defaultAnswer) is { } answer)
+                return answer;
         }
     }
 

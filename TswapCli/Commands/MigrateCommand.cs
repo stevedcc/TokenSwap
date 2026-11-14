@@ -147,8 +147,8 @@ public sealed class MigrateCommand : ICliCommand
 
             c.Out.WriteLine("\n⚠️  IMPORTANT: Ensure your XOR share is backed up before proceeding.");
 
-            c.Out.Write("\nShow detailed conversion instructions? (yes/no): ");
-            if ((c.ReadLine()?.ToLower() ?? "") is "yes" or "y")
+            c.Out.WriteLine();
+            if (YesNo.Ask(c.Out.Write, c.ReadLine, "Show detailed conversion instructions?", defaultAnswer: false))
             {
                 int step = 1;
                 c.Out.WriteLine("\n" + new string('═', 64));

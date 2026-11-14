@@ -238,7 +238,7 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
   deletes every FIDO2 credential on it (below).
 - **tswap never changes a PIN and never resets a key.** The one PIN it writes is a first one: on
   Linux and macOS a key without a FIDO2 PIN gets `YubiKey N has no FIDO2 PIN; a FIDO2 slot needs
-  one. Set a FIDO2 PIN on it now? (yes/no): ` at enrolment, then the new PIN twice (at least 4
+  one. Set a FIDO2 PIN on it now? (Y/n): ` (Enter is yes) at enrolment, then the new PIN twice (at least 4
   characters). On Windows the dialog asks you to create one.
 - **FIDO2 slots are tried last**, because PIN tries are limited: after every slot that needs no
   PIN, the vault-password agent and the vault-password prompt. On Linux and macOS tswap first

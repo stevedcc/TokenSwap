@@ -20,7 +20,7 @@ public sealed class GuidedInitTests : IDisposable
     private const string PlugIn =
         "Plug in the security keys you want to use with this vault on this machine, then press Enter. (No touch yet: tswap asks when it needs one.)";
     private const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
-    private const string TouchPrompt = "Touch ID (or your login password) on every unlock? (y/n): ";
+    private const string TouchPrompt = "Touch ID (or your login password) on every unlock? (yes/no): "; // #299: no default
     private const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
     private const string ChangedWhileWaiting = "config.json changed while init was waiting";
     private const string Password = "correct horse battery staple";
@@ -404,7 +404,7 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(openExit == 0, openErr);
     }
 
-    private const string GuidedPasswordQuestion = "Add a vault password? (yes/no): ";
+    private const string GuidedPasswordQuestion = "Add a vault password? (y/N): "; // #299: Enter = no
 
     [Fact]
     public void Guided_StrayOtpLine_AtThePasswordQuestion_IsSkipped()
@@ -436,6 +436,32 @@ public sealed class GuidedInitTests : IDisposable
         Assert.Contains(GuidedPasswordQuestion, stdout);
         AssertNothingWritten(m);
         Assert.Empty(m.Keys.Challenges);
+    }
+
+    // #299: the password question has a default now, "no" (y/N): Enter alone makes no password.
+    [Fact]
+    public void Guided_PasswordQuestion_Enter_IsNo()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-recovery");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(1, Count(stdout, GuidedPasswordQuestion));
+        Assert.False(File.Exists(PasswordVaultTestSupport.VaultPasswordPath(m)));
+        Assert.False(BlobOf(m, 11).RequiresPassword);
+    }
+
+    // #299: "Will other machines use this vault? (y/N)" asks again on an answer that is neither yes nor no.
+    [Fact]
+    public void Guided_OtherMachinesQuestion_UnrecognisedAnswer_AsksAgain()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\nno\nmaybe\nn\n", "init", "--no-recovery");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(2, Count(stdout, "Will other machines use this vault? (y/N): "));
     }
 
     [Fact]

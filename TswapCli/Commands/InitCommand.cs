@@ -137,8 +137,7 @@ public sealed class InitCommand : ICliCommand
         // ask, back it up. Read through GuidedPrompts so a stray Yubico OTP line is not an answer.
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            c.Out.Write("Already initialized. Reinitialize? (yes/no): ");
-            if (GuidedPrompts.ReadAnswer(c)?.ToLowerInvariant() != "yes")
+            if (!YesNo.Ask(c.Out.Write, () => GuidedPrompts.ReadAnswer(c), "Already initialized. Reinitialize?", defaultAnswer: null))
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }
@@ -490,8 +489,7 @@ public sealed class InitCommand : ICliCommand
 
         if (fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            c.Out.Write("Already initialized. Point this machine at the shared folder instead? (yes/no): ");
-            if (c.ReadLine()?.ToLowerInvariant() != "yes")
+            if (!YesNo.Ask(c.Out.Write, c.ReadLine, "Already initialized. Point this machine at the shared folder instead?", defaultAnswer: null))
                 return 0;
             c.Out.WriteLine($"Previous config backed up to: {fileStore.BackupConfig()}");
         }

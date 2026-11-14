@@ -150,8 +150,8 @@ internal static class Fido2SlotEnrollment
         var name = fido2.KeyName(key);
         using (var terminal = ctx.Terminal?.Invoke() ?? throw new Fido2Exception(Fido2Failure.NoTerminal, key.Serial, null, Fido2Texts.NoTerminal))
         {
-            terminal.Write($"{Fido2Texts.NoPin(name)} Set a FIDO2 PIN on it now? (yes/no): ");
-            if (terminal.ReadLine()?.Trim().ToLowerInvariant() is not ("yes" or "y"))
+            // #299: Enter is "yes" (Y/n); the end of input is "no".
+            if (!YesNo.Ask(terminal.Write, terminal.ReadLine, $"{Fido2Texts.NoPin(name)} Set a FIDO2 PIN on it now?", defaultAnswer: true))
                 throw new TswapException($"{Fido2Texts.NoPin(name)} No PIN was set. No slot was added.");
         }
         fido2.SetPin(key, Fido2PinPrompt.For(ctx));

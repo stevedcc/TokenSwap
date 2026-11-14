@@ -1557,6 +1557,21 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Equal("existing", File.ReadAllText(exportPath));
     }
 
+    // #299: "Overwrite? (yes/no)" takes "y" too, and asks again on anything else.
+    [Fact]
+    public void Export_Overwrite_AcceptsY_AfterAskingAgain()
+    {
+        RunTswap("init", "--yubikey");
+        var exportPath = Path.Combine(_tempDir, "backup.enc");
+        File.WriteAllText(exportPath, "existing");
+
+        var (exit, _, stderr) = RunTswapWithStdin("maybe\ny\nstrongpassphrase\nstrongpassphrase\n", "export", exportPath);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(2, stderr.Split("already exists. Overwrite? (yes/no): ").Length - 1);
+        Assert.NotEqual("existing", File.ReadAllText(exportPath));
+    }
+
     [Fact]
     public void Import_InvalidJson_GivesFriendlyError()
     {
