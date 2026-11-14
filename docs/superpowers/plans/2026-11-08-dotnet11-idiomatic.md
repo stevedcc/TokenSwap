@@ -292,6 +292,10 @@ MiMo (`tswap-wt/tools/t15-plan-r3-mimo-v.md`): both round-2 findings and the min
 
 ## Dispositions as applied (2026-11-08/09, brief/t15 on RC 3)
 
+**GA (2026-11-14):** `global.json` moved to the GA SDK `11.0.100`. The whole solution was rebuilt there
+(`--no-incremental`): every applied C# 15 form compiles unchanged, with no new warnings, and the full suite
+passes, so nothing was reverted.
+
 What the implementation did with each row, recorded after the code review of the implementation (MiMo prod/tests
 "request changes", DeepSeek prod/tests and the #216 crypto review "approve"; `tswap-wt/tools/t15/code/`). The commits
 are named by hash on `brief/t15`.

@@ -1,5 +1,10 @@
 # Brief T15: tswap on .NET 11 (RC 3 now, GA SDK on release day)
 
+**Status (2026-11-14): on .NET 11 GA.** `global.json` names the GA SDK `11.0.100` (`rollForward:
+latestFeature` unchanged); the branch builds on it with no new warnings and the full suite passes. The
+RC 3 wording below is the brief as it was written; v0.3.0 (not v0.2.0, as the GA-day checklist below
+says) ships on .NET 11 GA.
+
 Read AGENTS.md first. One commit per item, a break-it-once check where an item has a key test,
 `./runtests.sh --unit` after each item, the full `./runtests.sh` at the end. No hardware suites,
 `sudo`, real YubiKeys, a real TPM or `~/.config/tswap`. **Never download or install an SDK or a
