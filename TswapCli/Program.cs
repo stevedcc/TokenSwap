@@ -10,5 +10,10 @@
  */
 
 using TswapCli;
+using TswapCore.Agent;
+
+// #297: no core dump of this process (it holds a PIN, the vault key, secret values). Here, not in CliHost, which tests
+// run in-process.
+ProcessHardening.HardenCli();
 
 return CliHost.Run(args, new SystemConsole(), Environment.GetEnvironmentVariable, Environment.IsPrivilegedProcess, Environment.ProcessPath);
