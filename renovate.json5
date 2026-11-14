@@ -11,11 +11,15 @@
   timezone: 'Europe/Berlin',
   // Supply-chain guard: no PR until a release is 3 days old (yanked or compromised releases are usually withdrawn
   // within days). Without prCreation 'not-pending' Renovate would open the PR at once and only hold automerge back.
-  // A security fix skips the wait (vulnerabilityAlerts below). A digest move has no release date, so the age can't
-  // gate it: those are never automerged (the actions rules below).
+  // A security fix skips the wait (vulnerabilityAlerts below). An action digest move is aged by its tag's commit
+  // date as well, and on top of that is never automerged and waits for the Dependency Dashboard (the actions rules).
   minimumReleaseAge: '3 days',
   prCreation: 'not-pending',
   internalChecksFilter: 'strict',
+  // tswap's CI runs on pull_request (and pushes to main), never on a Renovate branch before its PR exists, so the
+  // passed release-age check alone must be enough to open the PR (review of PR #308); automerge still waits for CI,
+  // which main's ruleset requires too.
+  internalChecksAsSuccess: true,
   prConcurrentLimit: 5,
   prHourlyLimit: 0,
   labels: ['dependencies'],
@@ -66,9 +70,15 @@
       addLabels: ['action-digest-move'],
     },
     {
-      description: 'global.json SDK (datasource dotnet-version): patches inside the pinned feature band 11.0.1xx automerge; a new band (11.0.200) is a decision and gets no PR',
+      description: 'global.json SDK (datasource dotnet-version): a new feature band (11.0.200) or .NET 12 is a decision, shown on the Dependency Dashboard',
       matchDatasources: ['dotnet-version'],
-      allowedVersions: '/^11\\.0\\.1\\d\\d$/',
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'global.json SDK: a patch inside the pinned feature band 11.0.1xx automerges (after the catch-all rule above, so it wins)',
+      matchDatasources: ['dotnet-version'],
+      matchNewValue: '/^11\\.0\\.1\\d\\d$/',
+      dependencyDashboardApproval: false,
       automerge: true,
       automergeType: 'pr',
     },
