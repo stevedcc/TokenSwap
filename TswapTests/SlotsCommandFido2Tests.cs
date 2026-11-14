@@ -75,4 +75,18 @@ public class SlotsCommandFido2Tests
         Assert.DoesNotContain("without the vault password", text);
         Assert.DoesNotContain("open without the password", text);
     }
+
+    /// <summary>Brief T19, item 4: a slot of another brand (no serial, an AAGUID that isn't Yubico's) in <c>tswap slots</c>.</summary>
+    [Fact]
+    public void Slots_ASlotOfAnotherBrand_IsTheSecurityKeyItWasMadeWith()
+    {
+        var slots = new Fido2TestSlots();
+        var token2 = slots.AddFido2(Fido2SlotBlob.Create(null, Guid.Parse("eabb46cc-e241-80bf-ae9e-96fa6d2975cf"), new byte[48], requiresPassword: false));
+        var otp = slots.AddOtp(SimulatedYubiKeyService.WithKeys(11111111), 11111111);
+
+        var lines = SlotsCommand.Format(slots.Config(own: otp)).Split('\n');
+
+        var line = Assert.Single(lines, l => l.StartsWith(Fido2TestSlots.Id8(token2)));
+        Assert.EndsWith("  the security key this slot was made with, FIDO2: PIN + touch, no password", line);
+    }
 }

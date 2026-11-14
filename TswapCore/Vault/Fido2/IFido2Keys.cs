@@ -54,6 +54,14 @@ public interface IFido2Keys
     /// <see cref="CanList"/>.
     /// </summary>
     void SetPin(Fido2KeyRef key, Fido2DevicePin newPin);
+
+    /// <summary>
+    /// Brief T19, item 3: whether libfido2 (security keys other than YubiKeys, Linux and macOS) is available:
+    /// <see cref="Libfido2.CompositeFido2Keys"/> returns its loaded status, loading it if needed; null on Windows
+    /// (<c>webauthn.dll</c> talks to every brand) and in the SDK-only and fake backends unless a test sets it.
+    /// <see cref="Fido2Service"/> reads it only for its two "needs libfido2" hints.
+    /// </summary>
+    Libfido2.Libfido2Status? OtherBrands => null;
 }
 
 /// <summary>An opaque handle to a plugged-in key (the SDK's device path), valid for this process only.</summary>
@@ -63,7 +71,7 @@ public sealed record Fido2KeyRef(string Id);
 /// A plugged-in key as <see cref="IFido2Keys.Find"/> read it: its handle, serial (null when the key reports none),
 /// AAGUID (model), whether a FIDO2 PIN is set (what enrolment checks) and the PIN tries left (null when unknown).
 /// </summary>
-public sealed record Fido2KeyInfo(Fido2KeyRef Key, int? Serial, Guid Aaguid, bool PinSet, int? PinRetries);
+public sealed record Fido2KeyInfo(Fido2KeyRef Key, int? Serial, Guid Aaguid, bool PinSet, int? PinRetries, string? Product = null);
 
 /// <summary>
 /// A credential make-credential returned: its id, the AAGUID from the attested credential data (zero on Windows when

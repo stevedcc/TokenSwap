@@ -691,8 +691,8 @@ public sealed class GuidedInitTests : IDisposable
 
         Assert.True(exit == 0, console.ErrorText + console.OutText);
         Assert.NotNull(seenAtListing);
-        Assert.EndsWith("Looking for YubiKeys…", seenAtListing!.TrimEnd());
-        Assert.True(console.OutText.IndexOf("Looking for YubiKeys…", StringComparison.Ordinal)
+        Assert.EndsWith("Looking for YubiKeys and other security keys…", seenAtListing!.TrimEnd());
+        Assert.True(console.OutText.IndexOf("Looking for YubiKeys and other security keys…", StringComparison.Ordinal)
             < console.OutText.IndexOf("This machine has:", StringComparison.Ordinal));
     }
 

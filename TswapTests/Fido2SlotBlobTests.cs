@@ -385,6 +385,6 @@ public class Fido2SlotBlobTests
 
         Assert.Equal("YubiKey 33060005", Fido2SlotBlob.DisplayName(OwnersSerial, OwnersAaguid));
         Assert.Equal("YubiKey 5 NFC or 5C NFC", Fido2SlotBlob.DisplayName(null, OwnersAaguid));
-        Assert.Equal("the YubiKey this slot was made with", Fido2SlotBlob.DisplayName(null, unknown));
+        Assert.Equal("the security key this slot was made with", Fido2SlotBlob.DisplayName(null, unknown));
     }
 }

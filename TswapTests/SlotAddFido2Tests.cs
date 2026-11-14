@@ -306,7 +306,7 @@ public class SlotAddFido2Tests : IDisposable
         _fido2.FailNext(FakeFido2Op.GetHmacSecret, Fido2Failure.TimedOut, afterPin: true);
         _terminal = new FakeTerminal(Pin, Pin);
         var ctx = Context(new FakeConsole(""), ["slot", "add", "--fido2"]);
-        var key = Assert.Single(ctx.Fido2!.ListYubiKeys());
+        var key = Assert.Single(ctx.Fido2!.ListKeys());
 
         var e = Assert.Throws<Fido2Exception>(() =>
             Fido2SlotEnrollment.Enroll(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
@@ -328,7 +328,7 @@ public class SlotAddFido2Tests : IDisposable
         {
             Fido2 = new OpenFails(new Fido2Service(_fido2), new Fido2Exception(Fido2Failure.Busy, SerialA, null, "busy.", exitCode: 7)),
         };
-        var key = Assert.Single(ctx.Fido2!.ListYubiKeys());
+        var key = Assert.Single(ctx.Fido2!.ListKeys());
 
         var e = Assert.Throws<Fido2Exception>(() =>
             Fido2SlotEnrollment.Enroll(ctx, key, RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize), [], null));
@@ -341,7 +341,8 @@ public class SlotAddFido2Tests : IDisposable
     private sealed class OpenFails(IFido2Service inner, Fido2Exception failure) : IFido2Service
     {
         public bool CanList => inner.CanList;
-        public IReadOnlyList<Fido2KeyInfo> ListYubiKeys() => inner.ListYubiKeys();
+        public IReadOnlyList<Fido2KeyInfo> ListKeys() => inner.ListKeys();
+        public string NoKeyText() => inner.NoKeyText();
         public Fido2SlotBlob Enrol(Fido2KeyInfo? key, bool requiresPassword, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, Fido2Pin? pin) =>
             inner.Enrol(key, requiresPassword, vaultFido2Slots, pin);
         public Fido2Opened Open(IReadOnlyList<Fido2SlotBlob> blobs, Fido2KeyInfo? key, Fido2Pin? pin) => throw failure;
@@ -352,9 +353,9 @@ public class SlotAddFido2Tests : IDisposable
     }
 
     [Fact]
-    public void RetrySafeText_IsYubiKeysOwn() =>
-        Assert.Equal("No slot was added and nothing was written. The key may keep an unused credential (a YubiKey stores " +
-                     "nothing for it: its ID is the wrapped key), so running this again is safe.",
+    public void RetrySafeText_SaysTheKeyMayKeepAnUnusedCredential() =>
+        Assert.Equal("No slot was added and nothing was written. The key may keep an unused credential (non-discoverable: " +
+                     "most keys, YubiKeys included, store nothing for it), so running this again is safe.",
             Fido2SlotEnrollment.RetrySafeText);
 
     // Final review (MiMo p6a): a new PIN longer than CTAP2's 63 bytes is asked again before anything is sent.

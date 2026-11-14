@@ -30,6 +30,16 @@ public interface IUnixOwnership
 }
 
 /// <summary>
+/// A path's permission bits (brief T19: the privileged libfido2 checks), beside <see cref="IUnixOwnership"/> so tests
+/// can fake both. the loader's own reader is the real one.
+/// </summary>
+public interface IUnixFileModes
+{
+    /// <summary>The mode of <paramref name="path"/> (<see cref="File.GetUnixFileMode(string)"/>), or null when it can't be read.</summary>
+    UnixFileMode? GetMode(string path);
+}
+
+/// <summary>
 /// T12 fix round 1: acting as a folder's owner failed: the switch itself, or its setup (reading this
 /// process's groups in <see cref="IUnixOwnership.ActAs"/>; at the Secure Enclave's scope also reading
 /// the folder's owner, round 2). Nothing was done as either identity. A hard stop:

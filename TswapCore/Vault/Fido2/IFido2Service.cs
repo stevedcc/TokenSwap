@@ -17,17 +17,23 @@ public interface IFido2Service
     /// <summary>Whether keys can be listed and addressed (false on Windows: the dialog picks the key).</summary>
     bool CanList { get; }
 
-    /// <summary>The plugged-in YubiKeys (other brands left out); empty when <see cref="CanList"/> is false.</summary>
-    IReadOnlyList<Fido2KeyInfo> ListYubiKeys();
+    /// <summary>The plugged-in FIDO2 keys of every brand (brief T19); empty when <see cref="CanList"/> is false.</summary>
+    IReadOnlyList<Fido2KeyInfo> ListKeys();
+
+    /// <summary>
+    /// The text for a listing that found no key: <see cref="Fido2Texts.NoKey"/>, plus one line when libfido2 is missing
+    /// (<see cref="Fido2Texts.Libfido2Needed"/>) or refused under sudo (<see cref="Fido2Texts.Libfido2SudoRefusal"/>).
+    /// </summary>
+    string NoKeyText();
 
     /// <summary>
     /// Makes a credential and returns the new slot's blob (not yet in any keyring). <paramref name="key"/> is null
-    /// exactly when <see cref="CanList"/> is false. On Linux/macOS a key that is not a YubiKey is refused before
-    /// make-credential, a key without a PIN is refused, and a key that already holds one of
+    /// exactly when <see cref="CanList"/> is false. On Linux/macOS a key without a PIN is refused, and a key of any
+    /// brand that already holds one of
     /// <paramref name="vaultFido2Slots"/> is refused by a silent probe before any PIN. On every OS the vault's FIDO2
     /// credential ids are the exclude list (<see cref="Fido2Failure.CredentialExcluded"/>: "this key already has a
     /// FIDO2 slot in this vault"), and the made credential is refused when made without user verification, when its
-    /// AAGUID is not Yubico's (#193), or (Windows) when it is zero.
+    /// credential id is outside 16..1023 bytes, or (Windows) when its AAGUID is zero (<see cref="Fido2Failure.UnknownKey"/>).
     /// </summary>
     Fido2SlotBlob Enrol(Fido2KeyInfo? key, bool requiresPassword, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, Fido2Pin? pin);
 
@@ -53,10 +59,10 @@ public interface IFido2Service
     /// </summary>
     void SetPin(Fido2KeyInfo key, Fido2Pin? pin);
 
-    /// <summary>"YubiKey N", else the model name (<see cref="Fido2SlotBlob.DisplayName"/>).</summary>
+    /// <summary>"YubiKey N", else the Yubico model, else "the security key this slot was made with" (<see cref="Fido2SlotBlob.DisplayName"/>).</summary>
     string KeyName(Fido2SlotBlob blob);
 
-    /// <summary>"YubiKey N", else the model name (<see cref="Fido2SlotBlob.DisplayName"/>).</summary>
+    /// <summary>"YubiKey N", else the Yubico model, else the USB product, else "security key" (<see cref="Fido2Texts.KeyName"/>).</summary>
     string KeyName(Fido2KeyInfo key);
 }
 
@@ -91,8 +97,11 @@ public abstract record Fido2Locate
     /// </summary>
     public sealed record ResetOrOtherKey(Fido2KeyInfo PluggedKey, bool SerialMatched) : Fido2Locate;
 
-    /// <summary>No plugged-in key holds the credential or looks like the slot's key.</summary>
-    public sealed record NotPluggedIn(string KeyName) : Fido2Locate;
+    /// <summary>
+    /// No plugged-in key holds the credential or looks like the slot's key. <paramref name="Text"/>, when set, is said
+    /// instead of "plug it in" (brief T19: a slot of another brand where libfido2 is missing or refused).
+    /// </summary>
+    public sealed record NotPluggedIn(string KeyName, string? Text = null) : Fido2Locate;
 
     /// <summary>Keys can't be listed here (Windows): only the dialog can tell.</summary>
     public sealed record Unknown : Fido2Locate;

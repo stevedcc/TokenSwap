@@ -66,6 +66,42 @@ in [agent-integration.md](agent-integration.md).
   `sudo env TSWAP_CONFIG_DIR="$TSWAP_CONFIG_DIR" tswap ...`, as the
   [broker guide](BROKER.md#setting-up-the-broker) does.
 
+### libfido2 under sudo: root-owned only
+
+FIDO2 slots on security keys other than YubiKeys go through libfido2 on Linux and macOS, loaded at
+run time ([install.md](install.md#libfido2-security-keys-other-than-yubikeys)). The sudo split
+above rests on root's code staying root's: a library you can replace, loaded into `sudo tswap` while
+the vault is open, would hand code running as you root and every secret. So:
+
+- **Under sudo** (a privileged process) tswap loads libfido2 only from an allow-list of root-owned
+  folders: `/usr/lib64`, `/usr/lib` and the multiarch folder of the process's architecture
+  (`/usr/lib/x86_64-linux-gnu`, `/usr/lib/aarch64-linux-gnu`) on Linux, `/opt/local/lib`
+  (MacPorts) on macOS; never a bare library name, never the folder of the tswap binary, never
+  Homebrew or `/usr/local/lib` (either can hold a library that loads its dependencies from the
+  user's `/opt/homebrew`). Checking only the library file would not be enough: its dependencies
+  (libcbor, libcrypto) load from wherever it says, and a library's initialisers run when it loads,
+  so checking afterwards is too late. Hence a list of folders whose whole tree is root's.
+- **Before loading**, the candidate is resolved to its real path, which must still lie in an
+  allow-listed folder (a link from one to another is fine; a link anywhere else is skipped); then
+  the real path and every folder above it up to `/` must be no link, owned by root (uid 0) and
+  writable by neither group nor others. tswap loads the real path it checked.
+- **A clean loader environment:** with any variable whose name starts with `LD_` or `DYLD_` set (on
+  either OS: a prefix, not a list, so a variable a future loader honours is covered too), a
+  privileged tswap loads no libfido2. sudo's default `env_reset` removes them, but a `sudo` child is
+  not a secure-execution process (its real and effective uid are both 0), so one that survives
+  (`env_keep`, `sudo -E`, a root shell) would be honoured when libfido2 loads libcbor.
+- **What stays root's to govern:** a library's own RPATH/RUNPATH, `/etc/ld.so.conf*` and the
+  loader cache. All are root-owned, so a privileged tswap trusts them as it trusts its own binary
+  (which must itself be a root-owned install for sudo use to mean anything).
+- **Refused, not worked around:** with only a libfido2 outside the allow-list, or an unclean
+  environment, keys of other brands are left out under sudo and tswap names the root-owned way to
+  install libfido2 (or another machine, or Windows). It never suggests copying a library into place.
+- **Without sudo**, any libfido2 you have is used (next to the binary first): a process running as
+  you that swapped it gains nothing it doesn't already have.
+
+YubiKeys never go through libfido2 on Linux and macOS (Yubico's SDK, built into the binary, handles
+them; libfido2 skips Yubico's USB vendor id), so none of this applies to them.
+
 ## Threat model and non-goals
 
 tswap prevents **accidental leaks and casual exfiltration**. It does not attempt to confine a
@@ -326,6 +362,10 @@ cryptography expertise for subtler issues". It has not had an independent crypto
 else is open before it should be trusted as a primary vault backend.
 
 ### YubiKey FIDO2 slot: the PIN and a touch
+
+Everything in this section holds for a FIDO2 slot on a security key of any brand (brief T19): the
+key's own PIN counter, the relying party and the silent probe are CTAP2's, not Yubico's. On Linux
+and macOS a key that isn't a YubiKey goes through libfido2 ([above](#libfido2-under-sudo-root-owned-only)).
 
 A FIDO2 slot ([setup.md](setup.md#fido2-slots)) is opened by the key's hmac-secret output for the
 slot's credential, which the key gives only after it has verified its FIDO2 PIN and seen a touch.

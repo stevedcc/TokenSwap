@@ -234,12 +234,13 @@ so a later phone app can be associated with it), non-discoverable (`rk = false`:
 the key), user verification required, hmac-secret on, a small user entity (16 random bytes as the
 user id, name `tswap`, no display name). Every make-credential carries the vault's FIDO2 credential
 ids as its exclude list, so a key that already holds one of them refuses (on Windows the only
-duplicate check; on Linux and macOS a silent probe refuses earlier). Enrolment refuses an AAGUID
-outside Yubico's published list (`YubicoAaguids`); on Windows it asks for direct attestation,
-because under "none" `webauthn.dll` zeroes the AAGUID.
+duplicate check; on Linux and macOS a silent probe refuses earlier). Since brief T19 a key of any
+brand is accepted (the AAGUID is kept for naming: `YubicoAaguids` names Yubico's models); on
+Windows enrolment asks for direct attestation, because under "none" `webauthn.dll` zeroes the
+AAGUID, and an all-zero AAGUID is still refused there (`Fido2Failure.UnknownKey`).
 
 **The seam.** `IFido2Service` (`TswapCore/Vault/Fido2/`) is what commands and the unlocker use:
-list the YubiKeys, enrol, open, locate a slot's key silently, set a first PIN. `Fido2Service`
+list the keys (every brand), enrol, open, locate a slot's key silently, set a first PIN. `Fido2Service`
 implements it over the device seam `IFido2Keys`, maps every device failure to a `Fido2Exception`
 with a text from `Fido2Texts` (every FIDO2 message is there), and asks for a PIN only through the
 caller's `Fido2Pin` delegate, at most once per operation, so it never retries a wrong PIN. The
@@ -253,7 +254,22 @@ device implementations:
   timeout) are read from the raw answer, since the SDK reports them as success. A plugged-in key
   that can't be read is left out of the listing, said on stderr with its problem (the listing fails
   only when no key could be read); the probe's first holder wins over another key's failure.
-- `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later. One assertion carries every
+- `Libfido2Fido2Keys` (Linux, macOS; brief T19): every other brand, through libfido2 loaded at run
+  time (`TswapCore/Vault/Fido2/Libfido2/`). `Libfido2Native` binds Appendix A's 57 functions as
+  function pointers (`delegate* unmanaged[Cdecl]`, no `DllImport`) from the one handle
+  `Libfido2Loader` loaded; unprivileged it takes the first libfido2 found (next to the binary, then
+  the soname on Linux or Homebrew, `/usr/local/lib`, MacPorts on macOS), under sudo only a root-owned
+  one from an allow-list, with no `LD_*`/`DYLD_*` variable set
+  ([security-model.md](../security-model.md#libfido2-under-sudo-root-owned-only)). It skips Yubico
+  devices (USB vendor `0x1050`), sends the same CTAP2 parameters as the SDK path (rp id, user,
+  ES256, `rk` off, hmac-secret, the same salt: `FidoOpt.False`, never 0, where an option is off), so
+  a slot made by one backend opens on the other, and maps `FIDO_ERR_*` codes to `Fido2Failure`s with
+  the constant's name as the detail. A key's `Product` name comes from its USB strings, sanitised
+  (control characters dropped, at most 64 characters).
+- `CompositeFido2Keys` (Linux, macOS): both of the above at once; key refs carry their backend
+  (`sdk:`, `libfido2:`), and libfido2 loads on the first listing or probe. Its status
+  (`IFido2Keys.OtherBrands`) gives the "needs libfido2" texts when it is missing.
+- `WebAuthnFido2Keys` (Windows): `webauthn.dll`, API version 4 or later; it talks to every brand. One assertion carries every
   FIDO2 credential of the vault in its allow list, each with its own salt
   (`pCredWithHmacSecretSaltList`, `Fido2Prf.Salt` of its PRF input, passed raw); the credential
   that answers picks the slot. Transports USB and NFC (NFC untested). Windows' dialog asks for the

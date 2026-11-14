@@ -251,11 +251,16 @@ The `TswapCli/` project is the executable (assembly name `tswap`):
 
 YubiKey hardware access is abstracted behind `TswapCore.Vault.IYubiKeyService` (`SdkYubiKeyService` implements it over `IOtpKeys`: `YubicoOtpKeys` makes the SDK calls, and `YubicoSdk.EnsureInitialized` sets the SDK's crypto creators, the Linux `libudev.so.1` resolver and silent logging; on Linux the SDK's PC/SC calls go through tswap's own loader, `TswapCli/Native/pcsc-loader.c`, which forwards to `libpcsclite.so.1` when it is present and otherwise uses a stand-in that answers `SCARD_E_NO_SERVICE` (`PcscStrategy.Describe()`); `TestKeyYubiKeyService` simulates for tests). Vault unlock goes through `IHardwareKeyService` — `YubiKeyHardwareService` holds the challenge/XOR/PBKDF2 logic of plain vaults and legacy pair keyring slots, and `VaultUnlocker` selects the backend from `Config.Backend` (null ⇒ YubiKey), then (keyring vaults) falls back to one-key YubiKey slots (`YubiKeySlotBlob`/`YubiKeySlotKek`, one key per slot; see [docs/design/hardware-backends.md, YubiKey keyring slots](docs/design/hardware-backends.md#yubikey-keyring-slots-one-key-per-slot-brief-t4-issue-184)). The TPM (Windows/Linux) and Apple Secure Enclave (macOS) backends were added at this seam; see `docs/design/hardware-backends.md`.
 
-**FIDO2 slots (v0.3.0, issue #193):** a YubiKey's FIDO2 hmac-secret credential as a keyring slot (`Fido2SlotBlob`, the
+**FIDO2 slots (v0.3.0, issue #193; any brand since brief T19):** a security key's FIDO2 hmac-secret credential as a keyring slot (`Fido2SlotBlob`, the
 `TSYK` blob's version 3; `Fido2SlotKek`; `YubiKeySlotKinds.Classify` routes every YubiKey blob). Commands and the
 unlocker use `TswapCore.Vault.Fido2.IFido2Service` (`Fido2Service`), which works over the device seam `IFido2Keys`:
-`SdkFido2Keys` (Linux and macOS, Yubico's SDK, raw CTAP2 commands under a PIN token), `WebAuthnFido2Keys` (Windows,
-`webauthn.dll`; its dialog asks for the PIN) and `FakeFido2Keys` (tests). Every FIDO2 message lives in `Fido2Texts`;
+`CompositeFido2Keys` on Linux and macOS (key refs `sdk:`/`libfido2:`), over `SdkFido2Keys` (Yubico's SDK, raw CTAP2
+commands under a PIN token, YubiKeys) and `Libfido2Fido2Keys` (every other brand, through libfido2 loaded at run time
+only if installed: `TswapCore/Vault/Fido2/Libfido2/`, a function-pointer binding of 57 functions; it skips Yubico's
+vendor id; under sudo `Libfido2Loader` loads only a root-owned libfido2 from an allow-list, refusing with any
+`LD_*`/`DYLD_*` variable set, docs/security-model.md "libfido2 under sudo"), `WebAuthnFido2Keys` (Windows,
+`webauthn.dll`, every brand; its dialog asks for the PIN) and `FakeFido2Keys`/`FakeLibfido2` (tests). The two backends
+send the same CTAP2 parameters, so a slot made by one opens on the other. Every FIDO2 message lives in `Fido2Texts`;
 device implementations throw only `Fido2DeviceException` and carry no user text. `CliHost` builds one service (none in
 test mode) for the unlocker and `CommandContext.Fido2`; the PIN comes from `Fido2PinPrompt` over
 `CommandContext.Terminal` (`/dev/tty` on Linux and macOS, never stdin; no terminal: no FIDO2, on every OS). No
@@ -294,6 +299,10 @@ When working in this repository and tswap is initialized (YubiKey present), foll
   - Linux: Yubico's udev rule (access to the key's hidraw device)
   - macOS: Input Monitoring for the app that runs tswap (System Settings → Privacy & Security → Input Monitoring), for
     the OTP slot only; a FIDO2 slot needs none
+- Security keys of other brands (FIDO2 slots only): libfido2 on Linux (`libfido2` on Fedora, `libfido2-1` on
+  Debian/Ubuntu) and macOS (MacPorts for sudo use, or Homebrew without sudo); nothing on Windows
+  ([docs/install.md](docs/install.md#libfido2-security-keys-other-than-yubikeys)). The unit tests' binding smoke test
+  (`Libfido2SmokeTests`) skips without it unless `CI_REQUIRE_LIBFIDO2=1`.
 - YubiKeys with slot 2 configured for HMAC-SHA1 challenge-response: the commands are in
   [docs/setup.md, "Preparing a YubiKey"](docs/setup.md#preparing-a-yubikey). Prefer the touch-required
   setting; a key without touch (less secure: no button press) is for CI/automation only.

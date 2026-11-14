@@ -224,7 +224,7 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
 
 - **Linux and macOS:** tswap asks at the terminal, `FIDO2 PIN for YubiKey N: `, without echo. It
   reads the PIN from the terminal itself (`/dev/tty`), not from stdin, so `--recovery-key-stdin`
-  works alongside. Once the PIN is typed it says `Touch your YubiKey when it blinks.`
+  works alongside. Once the PIN is typed it says `Touch your security key when it blinks.`
 - **Windows:** Windows' security key dialog asks for the PIN and the touch; tswap says
   `Follow Windows' security key dialog: the key's PIN, then a touch.` The dialog owns PIN entry:
   tswap can't count the tries there, and the dialog may ask for the PIN again after a wrong one
@@ -304,15 +304,17 @@ both gives one key two slots; either opens the vault.
 - **macOS:** for each key the FIDO2 slot first, `YubiKey N, FIDO2 slot (PIN + touch; preferred on a
   Mac: no Input Monitoring needed)`, then `YubiKey N, OTP slot (no PIN; needs Input Monitoring for
   the terminal)`; then the Secure Enclave.
-- **Windows:** the TPM, the OTP slots, then one entry, `a YubiKey's FIDO2 slot (Windows' dialog:
+- **Windows:** the TPM, the OTP slots, then one entry, `a security key's FIDO2 slot (Windows' dialog:
   pick the key, PIN, touch)`. tswap can't list FIDO2 keys on Windows; the dialog picks the key,
   twice per slot (making the credential, then opening it).
-- A FIDO-only key (the Security Key series has no OTP interface) is offered as a FIDO2 slot only,
-  after the others, by its model name when it reports no serial.
+- A FIDO-only key (the Security Key series has no OTP interface, and keys of other brands have none
+  tswap uses) is offered as a FIDO2 slot only, after the others: a YubiKey by its model name when it
+  reports no serial, another brand by the product name its USB descriptor gives (for example `Token2
+  PIN+ Dual, FIDO2 slot (PIN + touch)`), or `security key` when it gives none.
 - Under the list, on every OS, when a FIDO2 slot is offered: `Using a key on other machines too? An
   OTP slot needs Input Monitoring for the terminal on a Mac and Yubico's udev rule on Linux. A FIDO2
   slot needs no Input Monitoring on a Mac and, on Linux, no extra rule on current systemd
-  distributions (otherwise Yubico's udev rule); it asks for the key's FIDO2 PIN and a touch on every
+  distributions (otherwise the key maker's udev rule); it asks for the key's FIDO2 PIN and a touch on every
   unlock, and a FIDO2 slot enrolled on one OS opens the vault on the others. Pick both for one key to
   give it two slots; either opens the vault.`
 - FIDO2 slots are made after the chip and the OTP slots. Without a terminal for the PIN, the list
@@ -355,17 +357,25 @@ FIDO2 PIN and a touch)...` and asks for the PIN and a touch.
 
 ### Which keys
 
-- **YubiKeys only, for now.** tswap checks the model id (AAGUID) in each new credential against
-  Yubico's published list: the YubiKey 5 series (with NFC, Nano, 5Ci, FIPS, CCN and Enhanced PIN
-  models), the Bio series and the Security Key series.
+- **Any brand** (since issue [#193](https://github.com/stevedcc/TokenSwap/issues/193)): a FIDO2
+  security key that supports `hmac-secret` and has a FIDO2 PIN (YubiKeys, Token2, Nitrokey 3,
+  SoloKey, Feitian, Titan and others). YubiKeys are named by serial, or by model from Yubico's
+  published list of model ids (AAGUIDs); other keys by their USB product name when listed, and in
+  `tswap slots` as `the security key this slot was made with`.
+- **Linux and macOS:** YubiKeys go through Yubico's SDK and need nothing more. Other brands go
+  through libfido2, loaded at run time only if it is installed
+  ([install.md](install.md)); without it tswap
+  says `Security keys other than YubiKeys need libfido2, which isn't installed here or is too old
+  (see docs/install.md).` Under sudo it loads only a root-owned libfido2.
+- **Windows:** Windows' own dialog talks to every brand; nothing to install.
 - **FIDO-only YubiKeys** (the Security Key series, the Bio FIDO Edition) have no OTP slot and may
   report no serial; tswap then names them by model. They are supported but not yet tested on real
   hardware. On a Bio, tswap asks for the PIN on Linux and macOS (it doesn't use the fingerprint).
-- **Other brands are refused** (issue [#193](https://github.com/stevedcc/TokenSwap/issues/193)). On
-  Linux and macOS tswap doesn't list them (`No YubiKey with FIDO2 detected. Please insert
-  YubiKey.`); on Windows the refusal comes after the dialog: `This security key is not a YubiKey
-  (its FIDO2 model id is ...): FIDO2 slots work with YubiKeys only for now (other keys: issue #193).
-  No slot was added.`
+- **Still refused:** a key without a FIDO2 PIN (tswap offers to set one on Linux and macOS), a
+  credential made without PIN verification, a credential id outside 16 to 1023 bytes, and on
+  Windows a key whose model id comes back as zeros (`Windows didn't report which key this is (its
+  FIDO2 model id came back as zeros), so tswap can't tell which security key it is. No slot was
+  added.`).
 - **Windows** needs its WebAuthn API at version 4 or later; an older one is refused before any
   dialog (`Windows' WebAuthn API on this machine is too old for FIDO2 slots (version N; needs 4).`).
 

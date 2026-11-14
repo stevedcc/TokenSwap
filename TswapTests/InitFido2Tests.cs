@@ -117,7 +117,7 @@ public class InitFido2Tests : IDisposable
         var (exit, _, stderr) = Run(Dir(), "", "init", "--fido2");
 
         Assert.True(exit == 0, stderr);
-        Assert.Contains($"\nSeveral YubiKeys are plugged in:\n  1. YubiKey {SerialA}\n  2. YubiKey {SerialB}\nSelect YubiKey (1-2): ",
+        Assert.Contains($"\nSeveral security keys are plugged in:\n  1. YubiKey {SerialA}\n  2. YubiKey {SerialB}\nSelect a key (1-2): ",
             _terminal.Reads[0].Prompt);
         Assert.Equal(SerialB, Fido2Blob(DecodeKeyring(LoadConfig(Dir())).Slots[0]).Serial);
     }

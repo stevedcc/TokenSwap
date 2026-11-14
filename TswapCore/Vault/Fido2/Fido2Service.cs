@@ -1,18 +1,23 @@
 using System.Security.Cryptography;
 using TswapCore.Keyring;
+using TswapCore.Vault.Fido2.Libfido2;
 
 namespace TswapCore.Vault.Fido2;
 
 /// <summary>
-/// The FIDO2 service (FIDO2 plan, task 3) over the device seam <see cref="IFido2Keys"/>: the YubiKey check (#193), the
-/// PIN policy (no terminal → refused before any key call; one PIN request per operation; never a retry), the silent
+/// The FIDO2 service (FIDO2 plan, task 3) over the device seam <see cref="IFido2Keys"/>, for security keys of every
+/// brand (brief T19: the YubiKey check of #193 is gone), the PIN policy (no terminal → refused before any key call; one PIN request per operation; never a retry), the silent
 /// duplicate probe, the exclude list, the Windows one-ceremony assertion, and every text (<see cref="Fido2Texts"/>).
 /// Device failures (<see cref="Fido2DeviceException"/>) become <see cref="Fido2Exception"/>s here. Outputs the service
 /// refuses are zeroed before it throws. With <paramref name="verbose"/> (<c>-v</c>), a Windows failure's HRESULT is
 /// written there as it is mapped (<c>Windows HRESULT 0x........ (NAME)</c>), whatever the caller then does with the text.
+/// <paramref name="macOs"/> and <paramref name="linux"/> (this OS when null) pick the libfido2 texts.
 /// </summary>
-public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : IFido2Service
+public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null, bool? macOs = null, bool? linux = null) : IFido2Service
 {
+    private readonly bool _macOs = macOs ?? OperatingSystem.IsMacOS();
+    private readonly bool _linux = linux ?? OperatingSystem.IsLinux();
+
     /// <summary>The size of an <c>hmac-secret</c> output for one salt.</summary>
     public const int OutputSize = 32;
 
@@ -21,12 +26,10 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
 
     public bool CanList => keys.CanList;
 
-    public IReadOnlyList<Fido2KeyInfo> ListYubiKeys()
-    {
-        if (!CanList)
-            return [];
-        return [.. Call(keys.Find, Fido2Texts.AnyKey, null).Where(k => YubicoAaguids.IsYubico(k.Aaguid))];
-    }
+    public IReadOnlyList<Fido2KeyInfo> ListKeys() => CanList ? Call(keys.Find, Fido2Texts.AnyKey, null) : [];
+
+    /// <summary>The first of the two places that read <see cref="IFido2Keys.OtherBrands"/> (brief T19, item 4).</summary>
+    public string NoKeyText() => Libfido2Missing() is { } why ? Fido2Texts.NoKey + Environment.NewLine + why : Fido2Texts.NoKey;
 
     public Fido2SlotBlob Enrol(Fido2KeyInfo? key, bool requiresPassword, IReadOnlyList<Fido2SlotBlob> vaultFido2Slots, Fido2Pin? pin)
     {
@@ -37,8 +40,6 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
 
         if (key is not null)
         {
-            if (!YubicoAaguids.IsYubico(key.Aaguid))
-                throw new Fido2Exception(Fido2Failure.NotAYubiKey, key.Serial, null, Fido2Texts.NotAYubiKey(key.Aaguid));
             if (!key.PinSet)
                 throw new Fido2Exception(Fido2Failure.NoPin, key.Serial, null, Fido2Texts.NoPin(name));
             foreach (var slot in vaultFido2Slots)
@@ -58,9 +59,7 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
         if (!made.UserVerified)
             throw new Fido2Exception(Fido2Failure.Other, serial, null, Fido2Texts.MadeWithoutUv(name));
         if (!CanList && made.Aaguid == Guid.Empty)
-            throw new Fido2Exception(Fido2Failure.NotAYubiKey, serial, null, Fido2Texts.WindowsNoAaguid);
-        if (!YubicoAaguids.IsYubico(made.Aaguid))
-            throw new Fido2Exception(Fido2Failure.NotAYubiKey, serial, null, Fido2Texts.NotAYubiKey(made.Aaguid));
+            throw new Fido2Exception(Fido2Failure.UnknownKey, serial, null, Fido2Texts.WindowsNoAaguid);
         if (made.CredentialId.Length is < Fido2SlotBlob.MinCredentialIdSize or > Fido2SlotBlob.MaxCredentialIdSize)
             throw new Fido2Exception(Fido2Failure.Other, serial, null, Fido2Texts.BadCredentialId(name, made.CredentialId.Length));
 
@@ -116,8 +115,23 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
             : plugged.FirstOrDefault(k => k.Aaguid == blob.Aaguid);
         return lookalike is not null
             ? new Fido2Locate.ResetOrOtherKey(lookalike, SerialMatched: blob.Serial is not null)
-            : new Fido2Locate.NotPluggedIn(name);
+            : new Fido2Locate.NotPluggedIn(name, NotReachableText(blob, name));
     }
+
+    /// <summary>
+    /// The second place that reads <see cref="IFido2Keys.OtherBrands"/>: a slot of another brand (its AAGUID not
+    /// Yubico's) that no plugged-in key holds, where libfido2 is missing or refused, gets that said instead of "plug it
+    /// in". Never with no status (Windows: <c>webauthn.dll</c> talks to every brand) or with libfido2 loaded.
+    /// </summary>
+    private string? NotReachableText(Fido2SlotBlob blob, string name) =>
+        !YubicoAaguids.IsYubico(blob.Aaguid) && Libfido2Missing() is { } why ? Fido2Texts.SlotNeedsLibfido2(name, why) : null;
+
+    private string? Libfido2Missing() => keys.OtherBrands switch
+    {
+        Libfido2Status.NotInstalled or Libfido2Status.Unusable => Fido2Texts.Libfido2Needed,
+        Libfido2Status.RefusedUnderSudo => Fido2Texts.Libfido2SudoRefusal(_macOs),
+        _ => null,
+    };
 
     public void SetPin(Fido2KeyInfo key, Fido2Pin? pin)
     {
@@ -134,7 +148,7 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
 
     public string KeyName(Fido2SlotBlob blob) => Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid);
 
-    public string KeyName(Fido2KeyInfo key) => Fido2SlotBlob.DisplayName(key.Serial, key.Aaguid);
+    public string KeyName(Fido2KeyInfo key) => Fido2Texts.KeyName(key);
 
     private void RequireKeyExactlyWhenListing(Fido2KeyInfo? key)
     {
@@ -196,7 +210,7 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
         var text = e.Kind switch
         {
             Fido2Failure.NotPluggedIn => Fido2Texts.NotPluggedIn(name),
-            Fido2Failure.NotAYubiKey => Fido2Texts.NotAYubiKey(null),
+            Fido2Failure.UnknownKey => Fido2Texts.WindowsNoAaguid,
             Fido2Failure.NoPin => Fido2Texts.NoPin(name),
             Fido2Failure.PinWrong => Fido2Texts.PinWrong(name, e.RetriesLeft),
             Fido2Failure.PinBlocked => Fido2Texts.PinBlocked(name),
@@ -206,8 +220,12 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null) : 
             Fido2Failure.TimedOut => Fido2Texts.TimedOut(name),
             Fido2Failure.Busy => Fido2Texts.Busy(name),
             Fido2Failure.NoTerminal => Fido2Texts.NoTerminal,
-            Fido2Failure.Unsupported => Fido2Texts.Unsupported(e.Detail),
+            // Windows: its WebAuthn API is too old. Linux and macOS (libfido2): the key refused an option or extension.
+            Fido2Failure.Unsupported => CanList ? Fido2Texts.KeyUnsupported(name, e.Detail) : Fido2Texts.Unsupported(e.Detail),
             Fido2Failure.CredentialExcluded => Fido2Texts.AlreadyHasSlot(name),
+            // Brief T19: a listed key this user can't open (Linux: no active local seat, e.g. over SSH).
+            _ when _linux && e.Detail?.StartsWith(Fido2Texts.OpenFailedPrefix, StringComparison.Ordinal) == true =>
+                Fido2Texts.Other(name, e.Detail) + " " + Fido2Texts.NoDeviceAccess,
             _ => Fido2Texts.Other(name, e.Detail),
         };
         return new Fido2Exception(e.Kind, serial, e.RetriesLeft, text);
