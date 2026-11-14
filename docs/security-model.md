@@ -582,7 +582,12 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   swapped" applies to the held stretched password only. On Linux the TPM auth text (`hex:` and the
   stretched bytes in hex) also sits in the kernel's pages of the memfd tpm2-tools reads it from,
   until that child exits; tswap can't wipe those.
-- **The tswap CLI stays dumpable** while it holds the vault key during a command, as it always has.
+- **The tswap CLI writes no core dump** (#297, v0.3.0): it starts with a soft core limit of 0 (Linux, macOS), so a
+  crash or Ctrl+\\ at the PIN prompt doesn't put the PIN, the vault key or secret values on disk (systemd-coredump
+  honours the limit). It stays dumpable otherwise: the agent and the broker check a client through its `/proc`
+  links, which a non-dumpable process closes, so another process of the same user can still read its memory, as
+  before. Windows is unchanged (Windows Error Reporting follows its own settings). A command that `run` starts gets
+  the soft core limit of 0 too (it can raise it).
 - **The agent's answers are authenticated by the vault folder.** The key check proves an answer is
   this vault's key given a `vault-password` file only the vault's machines can write: someone who
   can write your vault folder could plant a file and a fake agent of their own. Keep the folder's

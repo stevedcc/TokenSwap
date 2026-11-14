@@ -119,9 +119,11 @@ the shell prompt to see whether the echo is back.
 |---|---|---|
 | a | `"$T" names`, type the PIN, Enter | nothing echoed while typing; the shell echoes again afterwards |
 | b | `"$T" names`, type two characters, `Ctrl+C` | the command ends (exit 130); the shell echoes |
-| c | `"$T" names`, type two characters, `Ctrl+Z`; at the shell type `echo visible`; then `fg`; type the PIN, Enter | `echo visible` shows as you type (echo back while stopped); after `fg` the PIN is not echoed (echo off again), and the unlock works; the shell echoes afterwards |
-| d | `"$T" names`, `Ctrl+\` | the command ends (the shell may print `Quit`, with or without "core dumped"); the shell echoes. Remove any core file it leaves |
+| c | `"$T" names`, type two characters, `Ctrl+Z`; at the shell type `echo visible`; then `fg`; type the whole PIN, Enter | `echo visible` shows as you type (echo back while stopped); after `fg` tswap shows `(resumed: anything typed before Ctrl+Z was discarded; type it again from the start)`, the PIN is not echoed, and the unlock works with no wrong-PIN try (#295); the shell echoes afterwards |
+| d | `"$T" names`, `Ctrl+\` (on a German keyboard `Ctrl+4`) | the command ends (the shell may print `Quit`); the shell echoes; no core is kept (#297): `coredumpctl list --since -5min` shows the `tswap` crash with COREFILE `none` (systemd-coredump: "Resource limits disable core dumping"), and no `core` file appears |
 | e | `echo stdin-value \| "$T" ingest fido2-stdin` | the PIN is asked at the terminal although stdin is a pipe, then `✓ Secret 'fido2-stdin' ingested from stdin`; `"$T" names` (another PIN) lists it |
+
+Add step f: a guided `init` (plain `"$T" init` in a new config folder) picking the key's FIDO2 entry: at the PIN prompt, PIN + **Enter** carries on (#296: Enter used to do nothing after the guided init's earlier answers); then once more with a typo fixed by Backspace, which must give the right PIN.
 
 Step e is the `--recovery-key-stdin` case in small: stdin carries data and the PIN still comes from
 the terminal.
@@ -487,9 +489,14 @@ opened.
 With A3's joined Linux vault on Windows (`$env:TSWAP_CONFIG_DIR = "$W\join-linux-config"`), run
 `& $T -v names` and press **Esc** in Windows' security key dialog (don't touch the key). Expect
 `The key you picked: the FIDO2 PIN or touch was cancelled.` and a `Windows HRESULT` line; then run it
-again with `& $T -v slot add --fido2 --no-password` from an elevated prompt, give the first dialog
-the PIN and touch, and press Esc in the second. Expect the same cancel text, `No slot was added and
-nothing was written.`, and `tswap slots` unchanged.
+again with `& $T -v slot add --fido2 --no-password` from an elevated prompt. `slot add` runs three
+**operations**, each a set of Windows screens (choose the key, PIN, touch): 1 opens the vault, 2 makes
+the new credential, 3 checks it. Esc in operation 2 gives the same cancel text and `tswap slots`
+unchanged. `No slot was added and nothing was written. … running this again is safe` belongs to a
+cancel in operation **3**, after a credential exists: that needs a key with no slot in the vault for
+operation 2 (open with a key that has one, swap to the new key at "Create a passkey", cancel the next
+"Sign in"). Checked 2026-11-14: Esc in operation 2 as described; operation 3's cancel was not reached
+on Windows (the macOS M5 wrong-PIN run showed the text).
 
 Paste back: both outputs, with their `Windows HRESULT` lines.
 
