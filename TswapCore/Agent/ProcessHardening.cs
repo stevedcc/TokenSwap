@@ -77,8 +77,16 @@ public static partial class ProcessHardening
 
     internal static void HardenCli(Func<bool> zeroSoftCoreLimit, Platform platform)
     {
-        if (platform is Platform.Linux or Platform.MacOs)
+        if (platform is not (Platform.Linux or Platform.MacOs))
+            return;
+        try
+        {
             zeroSoftCoreLimit();
+        }
+        catch (Exception)
+        {
+            // Best effort (review PR #298): an unexpected interop failure must not stop the command either.
+        }
     }
 
     /// <summary>Unix: the soft <c>RLIMIT_CORE</c> to 0, the hard limit kept. True on Windows.</summary>
@@ -86,9 +94,13 @@ public static partial class ProcessHardening
     {
         if (OperatingSystem.IsWindows())
             return true;
+        // struct rlimit as two 64-bit rlim_t: true for every RID tswap ships (x64, arm64). On a 32-bit process the
+        // fields are 32-bit, and zeroing "cur" would zero the hard limit too (review PR #298), so it does nothing there.
+        if (!Environment.Is64BitProcess)
+            return false;
         try
         {
-            var limit = stackalloc ulong[2]; // struct rlimit { rlim_t cur; rlim_t max; }, 64-bit on both
+            var limit = stackalloc ulong[2];
             if (getrlimit(RlimitCore, limit) != 0)
                 return false;
             limit[0] = 0;

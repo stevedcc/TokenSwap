@@ -584,7 +584,9 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   until that child exits; tswap can't wipe those.
 - **The tswap CLI writes no core dump** (#297, v0.3.0): it starts with a soft core limit of 0 (Linux, macOS), so a
   crash or Ctrl+\\ at the PIN prompt doesn't put the PIN, the vault key or secret values on disk (systemd-coredump
-  honours the limit). It stays dumpable otherwise: the agent and the broker check a client through its `/proc`
+  honours the limit: measured on Fedora; on macOS the soft limit is already 0 by default and tswap keeps it there).
+  Best effort: if the limit can't be set, the command still runs (the agent, which holds the password for hours,
+  refuses instead). It stays dumpable otherwise: the agent and the broker check a client through its `/proc`
   links, which a non-dumpable process closes, so another process of the same user can still read its memory, as
   before. Windows is unchanged (Windows Error Reporting follows its own settings). A command that `run` starts gets
   the soft core limit of 0 too (it can raise it).

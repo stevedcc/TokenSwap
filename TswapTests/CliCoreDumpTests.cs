@@ -33,6 +33,15 @@ public class CliCoreDumpTests
 
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void HardenCli_AThrowingStep_DoesNotStopTheCommand()
+    {
+        // Review PR #298: an interop failure other than a missing library or entry point is best effort too.
+        var ex = Record.Exception(() => ProcessHardening.HardenCli(() => throw new InvalidOperationException("interop"), ProcessHardening.Platform.Linux));
+
+        Assert.Null(ex);
+    }
 }
 
 /// <summary>
@@ -87,7 +96,7 @@ public sealed class CliCoreDumpEndToEndTests(TswapBinaryFixture binary) : IClass
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(60)), "tswap didn't exit"); // review PR #298: never hang the suite
         return (process.ExitCode, stdout.Result + stderr);
     }
 }

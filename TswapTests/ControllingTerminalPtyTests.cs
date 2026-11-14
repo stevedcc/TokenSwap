@@ -16,6 +16,10 @@ namespace TswapTests;
 /// was typed before Ctrl+Z was sent with what came after <c>fg</c>. <see cref="DotNetAfterReadLine"/> sets up that
 /// state on the pty's terminal side.
 /// </para>
+/// <para>
+/// The resume test sends SIGCONT to the test process. That reaches only reads in flight, and no other class runs at the
+/// same time: the assembly runs one collection at a time (xunit.runner.json, pinned by TestRunnerConfigTests).
+/// </para>
 /// </summary>
 [SupportedOSPlatform("linux")]
 [SupportedOSPlatform("macos")]
@@ -67,6 +71,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         if (_pty is null)
             return;
         _pty.DotNetAfterReadLine();
+        _pty.EchoNewlines(); // ECHONL on beforehand: the read must switch it off too (review PR #298)
         var before = _pty.Flags();
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
@@ -77,7 +82,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         _pty.Type("1234\n");
         await read.WaitAsync(Wait);
 
-        Assert.True(during.Canonical && during.CrToNl && !during.Echo, $"during the read: {during}");
+        Assert.True(during.Canonical && during.CrToNl && !during.Echo && !during.EchoNl, $"during the read: {during}");
         Assert.Equal(before, _pty.Flags()); // .NET's console finds its own settings again
     }
 
@@ -107,6 +112,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         if (_pty is null)
             return;
         _pty.DotNetAfterReadLine();
+        var before = _pty.Flags();
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
 
@@ -117,6 +123,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
 
         Assert.Equal("yes", await read.WaitAsync(Wait)); // before #296: a TimeoutException (OfferPin's yes/no)
         Assert.True(during.Canonical && during.CrToNl && during.Echo, $"during the read: {during}");
+        Assert.Equal(before, _pty.Flags()); // review PR #298: ReadLine puts .NET's settings back too
     }
 
     private static readonly int SigCont = OperatingSystem.IsMacOS() ? 19 : 18;
@@ -146,7 +153,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         }
     }
 
-    internal readonly record struct TtyFlags(bool Canonical, bool CrToNl, bool Echo);
+    internal readonly record struct TtyFlags(bool Canonical, bool CrToNl, bool Echo, bool EchoNl);
 
     /// <summary>A pseudo-terminal pair: the test types on the controller side, tswap reads the terminal side.</summary>
     private sealed class Pty : IDisposable
@@ -159,6 +166,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
         private const ulong Echo = 0x8;
         private const ulong Icrnl = 0x100;
+        private static ulong EchoNlFlag => OperatingSystem.IsMacOS() ? 0x10UL : 0x40UL;
 
         private readonly int _controller;
         private readonly int _terminal; // kept open so the terminal side's settings stay while tswap opens and closes it
@@ -196,13 +204,22 @@ public sealed class ControllingTerminalPtyTests : IDisposable
             Assert.Equal(0, SetAttr(_terminal, TcsaNow, t));
         }
 
+        /// <summary>ECHONL on: the line end is echoed even with ECHO off.</summary>
+        public void EchoNewlines()
+        {
+            var t = new byte[256];
+            Assert.Equal(0, GetAttr(_terminal, t));
+            Update(t, LflagOffset, v => v | EchoNlFlag);
+            Assert.Equal(0, SetAttr(_terminal, TcsaNow, t));
+        }
+
         public TtyFlags Flags()
         {
             var t = new byte[256];
             Assert.Equal(0, GetAttr(_terminal, t));
             var i = Read(t, IflagOffset);
             var l = Read(t, LflagOffset);
-            return new TtyFlags((l & Icanon) != 0, (i & Icrnl) != 0, (l & Echo) != 0);
+            return new TtyFlags((l & Icanon) != 0, (i & Icrnl) != 0, (l & Echo) != 0, (l & EchoNlFlag) != 0);
         }
 
         public void Type(string text)

@@ -44,9 +44,10 @@ internal static partial class ControllingTerminal
         private const ulong Igncr = 0x80;
         private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
         private static ulong Isig => OperatingSystem.IsMacOS() ? 0x80UL : 0x1UL;
+        private static ulong EchoNl => OperatingSystem.IsMacOS() ? 0x10UL : 0x40UL;
 
         /// <summary>Shown when a read resumes after Ctrl+Z and <c>fg</c> (#295): what was typed before the stop is gone.</summary>
-        public const string ResumedText = "(resumed: anything typed before Ctrl+Z was discarded; type it again from the start) ";
+        public const string ResumedText = "(resumed: anything typed before the stop was discarded; type it again from the start) ";
 
         // struct termios: Linux tcflag_t is 32 bits (c_lflag at byte 12); macOS tcflag_t is unsigned long (c_lflag at
         // byte 24). Both structs are well under this size; only the c_iflag and c_lflag bits of LineMode change.
@@ -172,18 +173,38 @@ internal static partial class ControllingTerminal
             // the read that is pending becomes a cancel (its bytes are zeroed, never returned).
             var echoLost = 0;
             // #295: the resume also discards what was typed before the stop (TCSAFLUSH), which would otherwise be sent
-            // in front of what is typed after fg as one wrong PIN, and says so.
+            // in front of what is typed after fg as one wrong PIN, and says so. In canonical mode those bytes are still
+            // in the kernel's line buffer (read() hasn't had them: no NL yet), so the flush reaches them; the handler
+            // runs on a thread-pool thread while this one blocks in read(), and it runs as fg resumes the process,
+            // before a person can type the PIN again. Review PR #298: a SIGCONT is not proof of a Ctrl+Z (kill -CONT),
+            // so the text speaks of a resume; and a lock with a finished flag keeps a late handler from setting the
+            // quiet mode again after the settings were put back (a sync lock: two tcsetattr calls, no await).
+            var gate = new Lock();
+            var finished = false;
             using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, context =>
             {
-                if (Apply(quiet, TcsaFlush) != 0)
-                    Interlocked.Exchange(ref echoLost, 1);
-                else
-                    Write("\n" + ResumedText);
-                context.Cancel = true;
+                lock (gate)
+                {
+                    if (finished)
+                        return; // the read is over: .NET's own resume handling applies again
+                    if (Apply(quiet, TcsaFlush) != 0)
+                        Interlocked.Exchange(ref echoLost, 1);
+                    else
+                        Write("\n" + ResumedText);
+                    context.Cancel = true;
+                }
             });
+            void Finish()
+            {
+                lock (gate)
+                {
+                    finished = true;
+                    Restore();
+                }
+            }
             if (Apply(quiet, TcsaFlush) != 0)
             {
-                Restore(); // fail closed: nothing is read with the echo on, so this is a cancel
+                Finish(); // fail closed: nothing is read with the echo on, so this is a cancel
                 return null;
             }
             try
@@ -197,7 +218,7 @@ internal static partial class ControllingTerminal
             }
             finally
             {
-                Restore();
+                Finish();
                 Write("\n"); // the Enter the terminal didn't echo
             }
         }
@@ -213,7 +234,8 @@ internal static partial class ControllingTerminal
             var input = ReadFlag(mode, IflagOffset);
             WriteFlag(mode, IflagOffset, (input | Icrnl) & ~(Inlcr | Igncr));
             var local = ReadFlag(mode, LflagOffset) | Icanon | Isig;
-            WriteFlag(mode, LflagOffset, echo ? local | Echo : local & ~Echo);
+            // With the echo off, ECHONL too (review PR #298): nothing at all is echoed, not even the line end.
+            WriteFlag(mode, LflagOffset, echo ? local | Echo : local & ~(Echo | EchoNl));
             return mode;
         }
 
