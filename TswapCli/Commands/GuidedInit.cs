@@ -25,8 +25,11 @@ internal static class GuidedInit
     // #299: (yes/no) has no default, (Y/n) and (y/N) default to the capital (YesNo).
     internal static readonly YesNo.Question Touch = new("Touch ID (or your login password) on every unlock?", Default: null);
     internal const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
-    /// <summary>The vault-password question on the guided path: Enter is "no" (#299); the slot choice follows a "yes".</summary>
-    internal static readonly YesNo.Question Password = new("Add a vault password?", Default: false);
+    /// <summary>
+    /// The vault-password question on the guided path: no default (#299, owner 2026-11-14), so a vault without a
+    /// password is always a typed choice; the slot choice follows a "yes".
+    /// </summary>
+    internal static readonly YesNo.Question Password = new("Add a vault password?", Default: null);
     internal static readonly YesNo.Question Recovery = new("Add a recovery slot (recommended)?", Default: true);
     internal static readonly YesNo.Question OtherMachines = new("Will other machines use this vault?", Default: false);
     /// <summary>What the Secure Enclave touch question decides, in the guided flow's terms (not the flags').</summary>

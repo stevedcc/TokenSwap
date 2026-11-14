@@ -404,7 +404,7 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(openExit == 0, openErr);
     }
 
-    private const string GuidedPasswordQuestion = "Add a vault password? (y/N): "; // #299: Enter = no
+    private const string GuidedPasswordQuestion = "Add a vault password? (yes/no): "; // #299: no default (owner)
 
     [Fact]
     public void Guided_StrayOtpLine_AtThePasswordQuestion_IsSkipped()
@@ -438,16 +438,17 @@ public sealed class GuidedInitTests : IDisposable
         Assert.Empty(m.Keys.Challenges);
     }
 
-    // #299: the password question has a default now, "no" (y/N): Enter alone makes no password.
+    // #299, owner 2026-11-14: the password question has no default ("yes/no, no default"): Enter alone asks again, so
+    // a vault without a password is always a typed choice.
     [Fact]
-    public void Guided_PasswordQuestion_Enter_IsNo()
+    public void Guided_PasswordQuestion_Enter_AsksAgain()
     {
         var m = Machine(11);
 
-        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-recovery");
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nno\nn\n", "init", "--no-recovery");
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.Equal(1, Count(stdout, GuidedPasswordQuestion));
+        Assert.Equal(2, Count(stdout, GuidedPasswordQuestion));
         Assert.False(File.Exists(PasswordVaultTestSupport.VaultPasswordPath(m)));
         Assert.False(BlobOf(m, 11).RequiresPassword);
     }
