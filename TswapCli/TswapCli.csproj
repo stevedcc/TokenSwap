@@ -28,9 +28,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TswapCore\TswapCore.csproj" />
-    <PackageReference Include="RedactingPty" Version="1.1.0" />
+    <PackageReference Include="RedactingPty" Version="[1.1.0]" />
     <!-- GHSA-vmv3-wvjp-wqpj (CVE-2026-118747): Yubico.YubiKey 1.18.1 brings System.Formats.Cbor 10.0.14; the fixed 11.0.0 -->
-    <PackageReference Include="System.Formats.Cbor" Version="11.0.0" />
+    <PackageReference Include="System.Formats.Cbor" Version="[11.0.0]" />
   </ItemGroup>
 
   <ItemGroup>

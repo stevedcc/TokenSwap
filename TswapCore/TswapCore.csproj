@@ -37,7 +37,7 @@
     Still true on net11.0: the .NET 11 BCL added X25519 (Keyring/SlotKeyPair.cs) but no Argon2. See TswapCore/ExportCrypto.cs for parameter choices.
   -->
   <ItemGroup>
-    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="[1.3.1]" />
   </ItemGroup>
 
   <!--

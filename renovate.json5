@@ -1,30 +1,79 @@
 {
-  // Renovate for tswap (owner, 2026-11-14), modelled on Croft's. The hosted Mend Renovate GitHub App runs it;
-  // CI (ci.yml) must be green before anything automerges.
+  // Renovate for tswap (owner, 2026-11-14), modelled on Croft's, reviewed by MiMo and DeepSeek (PR #308). The hosted
+  // Mend Renovate GitHub App runs it.
   $schema: 'https://docs.renovatebot.com/renovate-schema.json',
   extends: [
     'config:recommended',
     ':dependencyDashboard',
     ':semanticCommitsDisabled',
-    'helpers:pinGitHubActionDigests', // actions stay pinned by SHA, Renovate moves the SHA + its version comment
+    'helpers:pinGitHubActionDigests', // actions and reusable workflows pinned by SHA, with a version comment
   ],
   timezone: 'Europe/Berlin',
-  // A release must be at least this old before a PR (supply-chain guard: yanked or compromised releases are usually
-  // withdrawn within days); a security fix doesn't wait (vulnerabilityAlerts below).
+  // Supply-chain guard: no PR until a release is 3 days old (yanked or compromised releases are usually withdrawn
+  // within days). Without prCreation 'not-pending' Renovate would open the PR at once and only hold automerge back.
+  // A security fix skips the wait (vulnerabilityAlerts below). A digest move has no release date, so the age can't
+  // gate it: those are never automerged (the actions rules below).
   minimumReleaseAge: '3 days',
+  prCreation: 'not-pending',
+  internalChecksFilter: 'strict',
   prConcurrentLimit: 5,
   prHourlyLimit: 0,
   labels: ['dependencies'],
-  // Exact versions stay exact ([1.18.1] and plain 1.2.3 alike): every update is a visible PR.
-  rangeStrategy: 'pin',
+  // main has no branch protection requiring CI, so GitHub's own auto-merge (platformAutomerge) could merge a PR
+  // whose CI hasn't finished or failed. Renovate's own automerge merges only when every check on the branch is green.
+  platformAutomerge: false,
+  // tswap releases are manual tags, so Croft's automergeStrategy 'rebase' (kept for its auto-release workflow) isn't
+  // needed here.
   packageRules: [
+    {
+      description: 'NuGet: an update always comes as a PR and keeps an exact version exact. NuGet reads a plain 1.2.3 as a minimum; [1.2.3] is exact, which is how tswap pins.',
+      matchDatasources: ['nuget'],
+      rangeStrategy: 'pin',
+    },
     {
       description: 'Majors are planned work (a .NET version, xunit v3): no PR until ticked on the Dependency Dashboard',
       matchUpdateTypes: ['major'],
       dependencyDashboardApproval: true,
     },
     {
-      description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key).',
+      description: 'Test packages, one PR; patches separate from minors, so an automerged patch never carries a minor along',
+      matchDatasources: ['nuget'],
+      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
+      groupName: 'test packages',
+      separateMinorPatch: true,
+    },
+    {
+      description: 'Automerge what CI can judge: test package patches',
+      matchDatasources: ['nuget'],
+      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+      automergeType: 'pr',
+    },
+    {
+      description: 'GitHub Actions: only the first pin (recording the SHA the tag points to today) automerges',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['pinDigest'],
+      automerge: true,
+      automergeType: 'pr',
+    },
+    {
+      description: 'GitHub Actions: a digest change means a version tag moved (how the wfx-loot campaign and similar attacks arrive). Never automerged, and no PR until ticked on the Dependency Dashboard. A new action version is an ordinary PR.',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['digest'],
+      automerge: false,
+      dependencyDashboardApproval: true,
+      addLabels: ['action-digest-move'],
+    },
+    {
+      description: 'global.json SDK (datasource dotnet-version): patches inside the pinned feature band 11.0.1xx automerge; a new band (11.0.200) is a decision and gets no PR',
+      matchDatasources: ['dotnet-version'],
+      allowedVersions: '/^11\\.0\\.1\\d\\d$/',
+      automerge: true,
+      automergeType: 'pr',
+    },
+    {
+      description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key). KEEP THIS RULE LAST: later packageRules win, so nothing after it may set automerge for these packages.',
       matchDatasources: ['nuget'],
       matchPackageNames: [
         'Yubico.YubiKey',
@@ -36,42 +85,11 @@
       groupName: 'security-critical packages',
       groupSlug: 'security-critical',
       automerge: false,
-      labels: ['dependencies', 'security-critical'],
-    },
-    {
-      description: 'Test packages, one PR',
-      matchDatasources: ['nuget'],
-      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
-      groupName: 'test packages',
-    },
-    {
-      description: 'Automerge what CI can judge: test package patches, action digests and pins',
-      matchDatasources: ['nuget'],
-      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
-      matchUpdateTypes: ['patch'],
-      automerge: true,
-      automergeType: 'pr',
-      platformAutomerge: true,
-    },
-    {
-      description: 'GitHub Actions: digest and pin updates automerge; a new action version is a PR',
-      matchManagers: ['github-actions'],
-      matchUpdateTypes: ['digest', 'pin', 'pinDigest'],
-      automerge: true,
-      automergeType: 'pr',
-      platformAutomerge: true,
-    },
-    {
-      description: 'global.json: follow the SDK feature band the repo is pinned to (11.0.1xx); a new band is a decision',
-      matchManagers: ['dotnet-version'],
-      matchUpdateTypes: ['patch'],
-      automerge: true,
-      automergeType: 'pr',
-      platformAutomerge: true,
+      addLabels: ['security-critical'],
     },
   ],
-  // A fix for a known vulnerability never waits for the release age, and is never automerged for the
-  // security-critical group (the rule above still applies).
-  vulnerabilityAlerts: { enabled: true, labels: ['security'], minimumReleaseAge: null },
+  // A fix for a known vulnerability doesn't wait for the release age. It sets no automerge, so the security-critical
+  // rule still holds for those packages; addLabels keeps their security-critical label.
+  vulnerabilityAlerts: { enabled: true, addLabels: ['security'], minimumReleaseAge: null, prCreation: 'immediate' },
   osvVulnerabilityAlerts: true,
 }
