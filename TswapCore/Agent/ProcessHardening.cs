@@ -65,6 +65,53 @@ public static partial class ProcessHardening
         }
     }
 
+    /// <summary>
+    /// #297: the CLI itself (Program.cs, first thing): it holds a FIDO2 PIN, the vault key and secret values in memory,
+    /// so a crash or Ctrl+\\ must not write them into a core file (systemd-coredump keeps one for days). Linux and
+    /// macOS: a soft core limit of 0, which systemd-coredump honours. Not non-dumpable: the agent and the broker read
+    /// a client's <c>/proc/&lt;pid&gt;</c> links (its user namespace) to check it, which a non-dumpable client closes.
+    /// Only the soft limit, so a command that <c>run</c> starts may raise it again. Best effort: a failed step leaves
+    /// the command running.
+    /// </summary>
+    public static void HardenCli() => HardenCli(ZeroSoftCoreLimit, Current);
+
+    internal static void HardenCli(Func<bool> zeroSoftCoreLimit, Platform platform)
+    {
+        if (platform is not (Platform.Linux or Platform.MacOs))
+            return;
+        try
+        {
+            zeroSoftCoreLimit();
+        }
+        catch (Exception)
+        {
+            // Best effort (review PR #298): an unexpected interop failure must not stop the command either.
+        }
+    }
+
+    /// <summary>Unix: the soft <c>RLIMIT_CORE</c> to 0, the hard limit kept. True on Windows.</summary>
+    public static unsafe bool ZeroSoftCoreLimit()
+    {
+        if (OperatingSystem.IsWindows())
+            return true;
+        // struct rlimit as two 64-bit rlim_t: true for every RID tswap ships (x64, arm64). On a 32-bit process the
+        // fields are 32-bit, and zeroing "cur" would zero the hard limit too (review PR #298), so it does nothing there.
+        if (!Environment.Is64BitProcess)
+            return false;
+        try
+        {
+            var limit = stackalloc ulong[2];
+            if (getrlimit(RlimitCore, limit) != 0)
+                return false;
+            limit[0] = 0;
+            return setrlimit(RlimitCore, limit) == 0;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
     // ------------------------------------------------------------------ macOS
 
     private const int PtDenyAttach = 31;
@@ -108,6 +155,9 @@ public static partial class ProcessHardening
 
     [LibraryImport("libc", SetLastError = true)]
     private static unsafe partial int setrlimit(int resource, ulong* limit);
+
+    [LibraryImport("libc", SetLastError = true)]
+    private static unsafe partial int getrlimit(int resource, ulong* limit);
 
     // ------------------------------------------------------------------ Windows
 

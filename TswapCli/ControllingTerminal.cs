@@ -36,8 +36,21 @@ internal static partial class ControllingTerminal
         private const int TcsaFlush = 2;
         private const ulong Echo = 0x8;
 
+        // c_iflag (byte 0 on both): ICRNL, INLCR, IGNCR have the same values on Linux and macOS. c_lflag: ICANON and
+        // ISIG differ (Linux 0x2 and 0x1, macOS 0x100 and 0x80).
+        private const int IflagOffset = 0;
+        private const ulong Icrnl = 0x100;
+        private const ulong Inlcr = 0x40;
+        private const ulong Igncr = 0x80;
+        private static ulong Icanon => OperatingSystem.IsMacOS() ? 0x100UL : 0x2UL;
+        private static ulong Isig => OperatingSystem.IsMacOS() ? 0x80UL : 0x1UL;
+        private static ulong EchoNl => OperatingSystem.IsMacOS() ? 0x10UL : 0x40UL;
+
+        /// <summary>Shown when a read resumes after Ctrl+Z and <c>fg</c> (#295): what was typed before the stop is gone.</summary>
+        public const string ResumedText = "(resumed: anything typed before the stop was discarded; type it again from the start) ";
+
         // struct termios: Linux tcflag_t is 32 bits (c_lflag at byte 12); macOS tcflag_t is unsigned long (c_lflag at
-        // byte 24). Both structs are well under this size; only c_lflag's ECHO bit is changed.
+        // byte 24). Both structs are well under this size; only the c_iflag and c_lflag bits of LineMode change.
         private const int TermiosBufferSize = 256;
 
         /// <summary>Where c_lflag sits in struct termios on this OS.</summary>
@@ -96,9 +109,27 @@ internal static partial class ControllingTerminal
             }
         }
 
+        /// <summary>
+        /// One answer (yes/no, a key's number), echoed. #296: the line is read in the terminal's line mode
+        /// (<see cref="LineMode"/>), whatever .NET's console left behind, and the settings are put back afterwards;
+        /// anything typed before the prompt is discarded. A file or a terminal whose settings can't be changed is read
+        /// as it is.
+        /// </summary>
         public string? ReadLine()
         {
-            var bytes = ReadBytesLine();
+            var saved = new byte[TermiosBufferSize];
+            var lineMode = _termios.Get(_fd, saved) == 0 ? LineMode(saved, echo: true) : null;
+            var changed = lineMode is not null && _termios.Set(_fd, TcsaFlush, lineMode) == 0;
+            byte[]? bytes;
+            try
+            {
+                bytes = ReadBytesLine();
+            }
+            finally
+            {
+                if (changed)
+                    _termios.Set(_fd, TcsaNow, saved);
+            }
             if (bytes is null)
                 return null;
             try
@@ -117,8 +148,10 @@ internal static partial class ControllingTerminal
             // Fail closed: echo that can't be switched off would show the secret, so nothing is read (a cancel).
             if (_termios.Get(_fd, saved) != 0)
                 return null;
-            var quiet = (byte[])saved.Clone();
-            ClearEcho(quiet);
+            // #296: the terminal's line mode with the echo off. .NET's console leaves the terminal non-canonical and
+            // without CR-to-NL once it has read a line (the guided init's answers): read as it is, Enter (CR) never
+            // ended the line and Backspace went into the PIN.
+            var quiet = LineMode(saved, echo: false);
 
             int Apply(byte[] termios, int when) => _termios.Set(_fd, when, termios);
 
@@ -139,15 +172,39 @@ internal static partial class ControllingTerminal
             // Fail closed after a resume too: when the echo can't be switched off again, what is typed next shows, so
             // the read that is pending becomes a cancel (its bytes are zeroed, never returned).
             var echoLost = 0;
+            // #295: the resume also discards what was typed before the stop (TCSAFLUSH), which would otherwise be sent
+            // in front of what is typed after fg as one wrong PIN, and says so. In canonical mode those bytes are still
+            // in the kernel's line buffer (read() hasn't had them: no NL yet), so the flush reaches them; the handler
+            // runs on a thread-pool thread while this one blocks in read(), and it runs as fg resumes the process,
+            // before a person can type the PIN again. Review PR #298: a SIGCONT is not proof of a Ctrl+Z (kill -CONT),
+            // so the text speaks of a resume; and a lock with a finished flag keeps a late handler from setting the
+            // quiet mode again after the settings were put back (a sync lock: two tcsetattr calls, no await).
+            var gate = new Lock();
+            var finished = false;
             using var resume = PosixSignalRegistration.Create(PosixSignal.SIGCONT, context =>
             {
-                if (Apply(quiet, TcsaNow) != 0)
-                    Interlocked.Exchange(ref echoLost, 1);
-                context.Cancel = true;
+                lock (gate)
+                {
+                    if (finished)
+                        return; // the read is over: .NET's own resume handling applies again
+                    if (Apply(quiet, TcsaFlush) != 0)
+                        Interlocked.Exchange(ref echoLost, 1);
+                    else
+                        Write("\n" + ResumedText);
+                    context.Cancel = true;
+                }
             });
+            void Finish()
+            {
+                lock (gate)
+                {
+                    finished = true;
+                    Restore();
+                }
+            }
             if (Apply(quiet, TcsaFlush) != 0)
             {
-                Restore(); // fail closed: nothing is read with the echo on, so this is a cancel
+                Finish(); // fail closed: nothing is read with the echo on, so this is a cancel
                 return null;
             }
             try
@@ -161,17 +218,36 @@ internal static partial class ControllingTerminal
             }
             finally
             {
-                Restore();
+                Finish();
                 Write("\n"); // the Enter the terminal didn't echo
             }
         }
 
-        private static void ClearEcho(byte[] termios)
+        /// <summary>
+        /// <paramref name="termios"/> in the terminal's line mode: canonical (the kernel edits the line: Backspace
+        /// erases, the line ends at NL), CR mapped to NL (Enter ends it), signals on (Ctrl+C, Ctrl+Z, Ctrl+\\), the echo
+        /// as <paramref name="echo"/> says. A copy; the other settings are kept.
+        /// </summary>
+        internal static byte[] LineMode(byte[] termios, bool echo)
+        {
+            var mode = (byte[])termios.Clone();
+            var input = ReadFlag(mode, IflagOffset);
+            WriteFlag(mode, IflagOffset, (input | Icrnl) & ~(Inlcr | Igncr));
+            var local = ReadFlag(mode, LflagOffset) | Icanon | Isig;
+            // With the echo off, ECHONL too (review PR #298): nothing at all is echoed, not even the line end.
+            WriteFlag(mode, LflagOffset, echo ? local | Echo : local & ~(Echo | EchoNl));
+            return mode;
+        }
+
+        private static ulong ReadFlag(byte[] termios, int offset) =>
+            OperatingSystem.IsMacOS() ? BitConverter.ToUInt64(termios, offset) : BitConverter.ToUInt32(termios, offset);
+
+        private static void WriteFlag(byte[] termios, int offset, ulong value)
         {
             if (OperatingSystem.IsMacOS())
-                BitConverter.TryWriteBytes(termios.AsSpan(LflagOffset), BitConverter.ToUInt64(termios, LflagOffset) & ~Echo);
+                BitConverter.TryWriteBytes(termios.AsSpan(offset), value);
             else
-                BitConverter.TryWriteBytes(termios.AsSpan(LflagOffset), BitConverter.ToUInt32(termios, LflagOffset) & ~(uint)Echo);
+                BitConverter.TryWriteBytes(termios.AsSpan(offset), (uint)value);
         }
 
         /// <summary>One line (without its line ending) as bytes; null at the end of input with nothing typed.</summary>
