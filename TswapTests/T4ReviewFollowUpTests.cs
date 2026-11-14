@@ -125,7 +125,7 @@ public class T4ReviewFollowUpTests : IDisposable
         var keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB);
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
-        var slots = new List<Slot>();
+        List<Slot> slots = [];
         foreach (var serial in new[] { SerialB, SerialA }) // B's slot first, so it is met first
         {
             var blob = YubiKeySlotBlob.Create(serial, requiresTouch: true);
@@ -137,7 +137,7 @@ public class T4ReviewFollowUpTests : IDisposable
         // Corrupt B's blob: right magic, one trailing byte, so it fails strict decoding.
         slots[0] = slots[0] with { HwBlob = [.. slots[0].HwBlob!, 0] };
         keys.Challenges.Clear();
-        var config = new Config([], "", DateTime.UtcNow, RequiresTouch: true,
+        var config = new Config([], "", TestTime.Fixed, RequiresTouch: true,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, 1, slots))));
         return (keys, vaultKey, config, slots[0].SlotId);
     }

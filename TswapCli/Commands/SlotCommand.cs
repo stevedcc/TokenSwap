@@ -142,8 +142,7 @@ public sealed class SlotCommand : ICliCommand
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
                 return 0;
         }
 
@@ -239,8 +238,7 @@ public sealed class SlotCommand : ICliCommand
         var fileStore = ctx.Storage as IFileVaultStore;
         if (fileStore is not null && fileStore.Owner.FileExists(fileStore.ConfigFile))
         {
-            c.Out.Write("This machine already has a config. Overwrite and start a new slot request? (yes/no): ");
-            if (c.ReadLine()?.ToLower() != "yes")
+            if (!YesNo.Ask(c.Out.Write, c.ReadLine, "This machine already has a config. Overwrite and start a new slot request?", defaultAnswer: null))
                 return 0;
         }
 
@@ -1380,8 +1378,7 @@ public sealed class SlotCommand : ICliCommand
             else
             {
                 c.Out.WriteLine($"\nThis machine did not approve: {DescribeSlot(slot)}");
-                c.Out.Write("Add it to this vault? Compare the fingerprint first. (yes/no): ");
-                if (c.ReadLine()?.Trim().ToLowerInvariant() == "yes")
+                if (YesNo.Ask(c.Out.Write, c.ReadLine, "Add it to this vault? Compare the fingerprint first.", defaultAnswer: null))
                     toAdd.Add(slot);
                 else
                     c.Out.WriteLine("Skipped.");

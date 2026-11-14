@@ -35,6 +35,12 @@ namespace TswapCore.Keyring;
 /// </summary>
 public static class SlotPayloadWrap
 {
+    /// <summary>The one error every failed slot unwrap reports, whatever the cause (see
+    /// <see cref="RecoverySlotWrap.Unwrap"/>, which reuses it to stay indistinguishable).</summary>
+    internal const string AuthenticationFailedMessage =
+        "Slot unwrap failed: authentication check failed (wrong kekSlot, tampered ciphertext, " +
+        "or a formatVersion/vaultId/k/slotId mismatch)";
+
     /// <summary>Required length of <c>KEK_slot</c>, the AES-256 key this layer wraps under.</summary>
     public const int KekSlotSize = 32;
 
@@ -108,9 +114,7 @@ public static class SlotPayloadWrap
         catch (CryptographicException)
         {
             CryptographicOperations.ZeroMemory(payload); // T13: whatever a failed tag check left in it
-            throw new TswapException(
-                "Slot unwrap failed: authentication check failed (wrong kekSlot, tampered ciphertext, " +
-                "or a formatVersion/vaultId/k/slotId mismatch)");
+            throw new TswapException(AuthenticationFailedMessage);
         }
 
         return payload;

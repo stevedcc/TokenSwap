@@ -302,7 +302,7 @@ public static class BrokerTemplateValidator
             throw Ex($"argv is refused as inline code or a blocked command (#105): {blocked.Reason}");
 
         // Arguments: every placeholder declared, every declared argument used.
-        var args = new Dictionary<string, BrokerTemplateArg>(StringComparer.Ordinal);
+        Dictionary<string, BrokerTemplateArg> args = [with(StringComparer.Ordinal)];
         foreach (var (argName, arg) in t.Args ?? [])
         {
             if (!ArgNameRegex.IsMatch(argName))
@@ -314,8 +314,8 @@ public static class BrokerTemplateValidator
                 throw Ex($"argument '{argName}': max_length must be 1 to {MaxArgMaxLength}.");
             args[argName] = new BrokerTemplateArg(argName, CompileArgPattern(name, argName, arg.Pattern!), maxLength, arg.AllowLeadingDash ?? false);
         }
-        var used = new HashSet<string>(StringComparer.Ordinal);
-        var parts = new List<IReadOnlyList<(string Text, bool IsArg)>> { new[] { (program, false) } };
+        HashSet<string> used = [with(StringComparer.Ordinal)];
+        List<IReadOnlyList<(string Text, bool IsArg)>> parts = [new[] { (program, false) }];
         for (var i = 1; i < t.Argv.Count; i++)
         {
             var entry = t.Argv[i];
@@ -650,8 +650,7 @@ public static class BrokerTemplateValidator
         // Protected paths by st_dev:st_ino: the bind may not be one, contain one (be an ancestor of
         // it) or be inside one (have it as an ancestor).
         static bool Same(BrokerNative.FileIdentity a, BrokerNative.FileIdentity b) => a.Dev == b.Dev && a.Ino == b.Ino;
-        var full = new List<string>(host.Protected);
-        full.AddRange(BrokerHostContext.SudoPaths);
+        List<string> full = [.. host.Protected, .. BrokerHostContext.SudoPaths];
         if (!string.IsNullOrEmpty(socketDir))
             full.Add(socketDir);
         foreach (var protectedPath in full)

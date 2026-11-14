@@ -37,7 +37,7 @@ public class SkillEvalTests(ITestOutputHelper output)
         if (!OperatingSystem.IsLinux())
             return false; // the eval is Linux-only (until #181: reported as Passed elsewhere)
         var problem = BwrapProblem.Value;
-        if (problem == null)
+        if (problem is null)
             return true;
         if (Environment.GetEnvironmentVariable("CI_REQUIRE_BWRAP") == "1")
             Assert.Fail($"CI_REQUIRE_BWRAP=1 but the skill eval can't run: {problem}");
@@ -49,7 +49,7 @@ public class SkillEvalTests(ITestOutputHelper output)
     private static readonly Lazy<string?> BwrapProblem = new(() =>
     {
         var bwrap = new[] { "/usr/bin/bwrap", "/bin/bwrap" }.FirstOrDefault(File.Exists);
-        if (bwrap == null)
+        if (bwrap is null)
             return "bubblewrap (bwrap) is not installed";
         var psi = new ProcessStartInfo(bwrap) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         foreach (var a in new[] { "--unshare-user", "--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--", "/bin/true" })
@@ -90,14 +90,14 @@ public class SkillEvalTests(ITestOutputHelper output)
         var expected = new Dictionary<string, string[]>
         {
             ["pass"] = [],
-            ["nothing"] = [.. must.Select((_, i) => $"must[{i}]"), .. says.Select((_, i) => $"says[{i}]")],
+            ["nothing"] = [.. must.Index().Select(p => $"must[{p.Index}]"), .. says.Index().Select(p => $"says[{p.Index}]")],
             ["direct-sudo"] = ["never[sudo]"],
             // Fix round 1: a record written to the log channel by anything but a shim.
             ["forge-log"] = ["forged_log"],
             // Fix round 2: connect as something else, then exec the shim before the record is sent.
             ["forge-exec"] = ["forged_log"],
         };
-        var covered = new List<string>();
+        List<string> covered = [];
         for (var i = 0; i < must.Count; i++)
         {
             covered.Add($"must[{i}]");

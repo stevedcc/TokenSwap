@@ -368,7 +368,7 @@ public class PasswordSlotBlobTests
             KeyringFormat.KeyringFormatVersion, vaultId, 1) with { HwBlob = stripped.Encode() };
         Assert.Equal(SlotPasswordKind.None, SlotPassword.Classify(slot)); // the flag really is gone
         var config = new Config(
-            [], "", DateTime.UtcNow, RequiresTouch: true, RngMode: RngMode.System,
+            [], "", TestTime.Fixed, RequiresTouch: true, RngMode: RngMode.System,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, 1, [slot]))),
             KeyringSlotId: Convert.ToBase64String(SlotId));
 

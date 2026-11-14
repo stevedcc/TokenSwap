@@ -110,7 +110,7 @@ public sealed class VaultBrokerSecretSource(RecordVaultStore store, VaultUnlocke
         {
             throw new BrokerUnlockException($"vault unlock failed: {ex.Message}", ex);
         }
-        var result = new Dictionary<string, BrokerSecret>(StringComparer.Ordinal);
+        Dictionary<string, BrokerSecret> result = [with(StringComparer.Ordinal)];
         try
         {
             foreach (var name in secretNames)

@@ -34,7 +34,7 @@ public class Fido2SlotBlobTests
     {
         rpId ??= TswapRpIdBytes;
         credentialId ??= FixedCredentialId;
-        var bytes = new List<byte>();
+        List<byte> bytes = [];
         bytes.AddRange("TSYK"u8.ToArray());
         bytes.Add(version);
         bytes.Add(flags);

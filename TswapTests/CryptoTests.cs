@@ -22,7 +22,7 @@ public class CryptoTests
     [Fact]
     public void XorBytes_SelfIsZero()
     {
-        var a = new byte[] { 0xAA, 0xBB, 0xCC };
+        byte[] a = [0xAA, 0xBB, 0xCC];
         var result = Crypto.XorBytes(a, a);
 
         Assert.All(result, b => Assert.Equal(0, b));
@@ -38,9 +38,9 @@ public class CryptoTests
     [Fact]
     public void XorBytes_KnownValues()
     {
-        var a = new byte[] { 0xFF, 0x00, 0xAA };
-        var b = new byte[] { 0x0F, 0xF0, 0x55 };
-        var expected = new byte[] { 0xF0, 0xF0, 0xFF };
+        byte[] a = [0xFF, 0x00, 0xAA];
+        byte[] b = [0x0F, 0xF0, 0x55];
+        byte[] expected = [0xF0, 0xF0, 0xFF];
 
         Assert.Equal(expected, Crypto.XorBytes(a, b));
     }
@@ -176,7 +176,7 @@ public class CryptoTests
     public void EncryptDecrypt_EmptyPlaintext()
     {
         var key = RandomNumberGenerator.GetBytes(32);
-        var plaintext = Array.Empty<byte>();
+        byte[] plaintext = [];
 
         var encrypted = Crypto.Encrypt(plaintext, key);
         var decrypted = Crypto.Decrypt(encrypted, key);

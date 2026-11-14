@@ -338,7 +338,7 @@ public class BrokerConfigTests : IDisposable
         BrokerConfigFile.Save(DirectoryOwnerMatcher.Default, _dir, BrokerPolicy.Deserialize(ValidJson));
         var holder = new BrokerPolicyHolder(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir));
         var original = holder.Current;
-        var log = new List<string>();
+        List<string> log = [];
         BrokerPolicy Load() => BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir);
 
         File.WriteAllText(path, ValidJson.Replace("\"version\": 1", "\"version\": 1, \"bogus\": 1"));
@@ -414,5 +414,71 @@ public class BrokerConfigTests : IDisposable
         Assert.Contains("owned by uid 1001", ex.Message);
 
         Assert.NotNull(BrokerConfigFile.Load(DirectoryOwnerMatcher.Default, _dir, new PathOwnership(dirUid: 1000, fileUid: 1000)));
+    }
+
+    // ---- The comparers of the policy's sets that an input can observe: route methods are ordinal (case-sensitive),
+    // Connection tokens are case-insensitive. Pinned before the sets moved to collection expressions with with(comparer)
+    // (idiomatic .NET 11 plan, row 1a). The name allow-lists (routes, templates, ssh keys, template args) are ordinal
+    // too, but no input can tell: names are validated to [a-z0-9-] and every lookup goes through an ordinal dictionary
+    // first. ----
+
+    [Fact]
+    public void RouteMethods_AreCaseSensitive()
+    {
+        var route = BrokerPolicy.Parse(WithRoute(Route(extra: """, "methods": ["GET"]"""))).Routes["r"];
+
+        Assert.True(route.Methods.Contains("GET"));
+        Assert.False(route.Methods.Contains("get"));
+    }
+
+    [Fact]
+    public void ConnectionTokens_AreCaseInsensitive()
+    {
+        var tokens = BrokerHeaderSniffer.ParseConnectionTokens("GET / HTTP/1.1\r\nConnection: X-Secret-Header\r\n\r\n"u8.ToArray());
+
+        Assert.True(tokens.Contains("x-secret-header"));
+        Assert.True(tokens.Contains("X-SECRET-HEADER"));
+    }
+
+    // ---- Row 1b's pins: the policy's dictionaries are ordinal. A request names its route, template, socket or ssh key
+    // in its own spelling, so a case-insensitive dictionary would resolve "GITHUB" to the route "github". ----
+
+    private const string TwoKeysJson = """
+        {
+          "version": 1,
+          "socket_dir": "/run/tswap-broker",
+          "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["100999"], "routes": ["github"], "ssh_keys": ["a", "b"] } ],
+          "routes": [ { "name": "github", "upstream": "https://github.com/stevedcc", "auth": { "type": "bearer", "secret": "{{gh}}" }, "path": "" } ],
+          "ssh_keys": [
+            { "name": "a", "secret": "deploy", "allowed_host_keys": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] },
+            { "name": "b", "secret": "DEPLOY", "allowed_host_keys": ["SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"] }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void PolicyLookups_ByRouteSocketAndSshKeyName_AreCaseSensitive()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
+        var policy = BrokerPolicy.Parse(TwoKeysJson);
+
+        Assert.True(policy.Routes.ContainsKey("github"));
+        Assert.False(policy.Routes.ContainsKey("GITHUB"));
+        Assert.True(policy.Sockets.ContainsKey("lane1"));
+        Assert.False(policy.Sockets.ContainsKey("LANE1"));
+        Assert.True(policy.SshKeys.ContainsKey("a"));
+        Assert.False(policy.SshKeys.ContainsKey("A"));
+    }
+
+    /// <summary>Secret names are case-sensitive vault names: two keys on "deploy" and "DEPLOY" use two secrets.</summary>
+    [Fact]
+    public void SshKeysOnSecretsDifferingOnlyInCase_DoNotShareASecret()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
+        var policy = BrokerPolicy.Parse(TwoKeysJson);
+
+        TswapCore.Broker.SshAgent.SshAgentKeyLoader.Validate(policy);
     }
 }

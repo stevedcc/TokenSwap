@@ -185,8 +185,8 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         if (SshTestSkip.OnWindows(_output))
             return;
         var names = Enumerable.Range(0, 65).Select(i => $"k{i:D2}").ToList();
-        var keys = names.Select((n, i) => (n, $"s{i}", new[] { SshAgentHarness.SomeHostFingerprint })).ToList();
-        var loaded = names.Select((n, i) => new SshAgentKey(n, $"s{i}", SshAgentMessages.Ed25519Blob((byte)i))).ToDictionary(k => k.Name);
+        var keys = names.Index().Select(p => (n: p.Item, $"s{p.Index}", new[] { SshAgentHarness.SomeHostFingerprint })).ToList();
+        var loaded = names.Index().Select(p => new SshAgentKey(p.Item, $"s{p.Index}", SshAgentMessages.Ed25519Blob((byte)p.Index))).ToDictionary(k => k.Name);
         var options = (BrokerPolicy _) => new SshAgentOptions { Keys = loaded, KeySource = new FakeSshKeySource(_ => null) };
         var server = await _h.StartAsync(_h.Config(keys: keys, lane1Keys: ["k00"], otherKeys: ["k01"]), options);
 

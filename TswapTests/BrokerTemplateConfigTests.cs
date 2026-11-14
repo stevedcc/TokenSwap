@@ -236,6 +236,22 @@ public class BrokerTemplateConfigTests : IDisposable
         Refused(WithTemplate(Template(args: """{ "branch": { "pattern": "x" }, "extra": { "pattern": "y" } }""")), "'extra' is declared but not used");
     }
 
+    /// <summary>Row 1b's pins: templates and their arguments are looked up ordinally (a caller's "DEPLOY" or "Branch" is not "deploy" or "branch").</summary>
+    [Fact]
+    public void TemplateAndArgumentLookups_AreCaseSensitive()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // templates are Linux only (bwrap)
+        var policy = Parse(WithTemplate(Template()));
+
+        Assert.True(policy.Templates.ContainsKey("deploy"));
+        Assert.False(policy.Templates.ContainsKey("DEPLOY"));
+        var template = policy.Templates["deploy"];
+        Assert.Null(BrokerRequestHandler.CheckTemplateArgs(template, new Dictionary<string, string> { ["branch"] = "brief/x" }));
+        Assert.Equal("argument 'Branch' is not declared by this template",
+            BrokerRequestHandler.CheckTemplateArgs(template, new Dictionary<string, string> { ["Branch"] = "brief/x" }));
+    }
+
     [Theory]
     [InlineData("""["git", "push"]""")]
     [InlineData("""["usr/bin/git", "push"]""")]

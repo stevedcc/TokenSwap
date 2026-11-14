@@ -298,7 +298,7 @@ public sealed class WebAuthnFido2Keys : IFido2Keys
     private static unsafe bool? HmacSecretCreated(WebAuthnExtensions extensions)
     {
         var list = (WebAuthnExtension*)extensions.pExtensions;
-        for (var i = 0; list != null && i < extensions.cExtensions; i++)
+        for (var i = 0; list is not null && i < extensions.cExtensions; i++)
         {
             if (Marshal.PtrToStringUni(list[i].pwszExtensionIdentifier) != WebAuthn.ExtensionHmacSecret)
                 continue;

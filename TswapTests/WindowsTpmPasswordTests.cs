@@ -25,7 +25,7 @@ public class WindowsTpmPasswordTests
         StretchedPassword.FromBytes(Enumerable.Repeat(fill, StretchedPassword.Size).ToArray());
 
     private static Config ConfigWith(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
     [Fact]
     public void WrapUnwrap_WithPassword_RoundTrips()

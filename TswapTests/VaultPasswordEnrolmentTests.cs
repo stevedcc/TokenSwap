@@ -432,7 +432,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
         Assert.DoesNotContain("open without the password", stdout);
     }
 
-    private static Config ConfigWithMachineBlobs(params byte[][] hwBlobs)
+    private static Config ConfigWithMachineBlobs(params ReadOnlySpan<byte[]> hwBlobs)
     {
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var vaultId = RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
@@ -444,7 +444,7 @@ public class VaultPasswordEnrolmentTests : IDisposable
                 RandomNumberGenerator.GetBytes(32), KeyringFormat.KeyringFormatVersion, vaultId, 1) with { HwBlob = hwBlob });
         }
         var keyring = new Keyring(KeyringFormat.KeyringFormatVersion, vaultId, 1, slots);
-        return new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System, Backend: HardwareBackend.Tpm,
+        return new Config([], "", TestTime.Fixed, RequiresTouch: false, RngMode: RngMode.System, Backend: HardwareBackend.Tpm,
             Keyring: Convert.ToBase64String(KeyringCodec.Encode(keyring)), KeyringSlotId: Convert.ToBase64String(slots[0].SlotId));
     }
 

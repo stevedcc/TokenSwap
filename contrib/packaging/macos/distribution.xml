@@ -11,7 +11,7 @@
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
     <volume-check>
         <allowed-os-versions>
-            <os-version min="12.0"/>
+            <os-version min="14.0"/>
         </allowed-os-versions>
     </volume-check>
     <conclusion file="conclusion.html" mime-type="text/html"/>

@@ -382,7 +382,7 @@ public sealed class MigrateToRecordsTests : IDisposable
         }
         finally
         {
-            if (locked != null)
+            if (locked is not null)
                 File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }

@@ -72,7 +72,7 @@ public sealed class WriteCommandDecryptionTests : IDisposable
     }
 
     /// <summary>Every record file except <paramref name="except"/>'s is byte-identical to <paramref name="before"/>.</summary>
-    private void AssertOthersUnchanged(Dictionary<string, string> before, params string[] except)
+    private void AssertOthersUnchanged(Dictionary<string, string> before, params IEnumerable<string> except)
     {
         var after = Snapshot();
         var skip = except.Select(FileOf).Append("config.json").ToHashSet();

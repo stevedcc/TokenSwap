@@ -306,6 +306,49 @@ public class SlotCommandTests : IDisposable
         Assert.Contains("different slot id", stderr);
     }
 
+    // A low-order X25519 point (u = 0) in a hand-carried file: the X25519 callers that see a key from outside
+    // (slot approve's requester key, slot accept's ephemeral key) fail as a TswapException and write nothing
+    // (code review of #216, F7).
+    private static readonly string LowOrderPoint = Convert.ToBase64String(new byte[32]);
+
+    [Fact]
+    public void Approve_RequestWithALowOrderPublicKey_FailsCleanlyAndWritesNoApproveFile()
+    {
+        var dirA = NewTempDir();
+        var dirB = NewTempDir();
+        Run(dirA, _keyA, "", "init", "--yubikey");
+        var reqFile = Path.Combine(dirB, "request.json");
+        Run(dirB, _keyB, "", "slot", "request", reqFile);
+        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(reqFile));
+        File.WriteAllText(reqFile, SlotEnrollmentFileCodec.SerializeRequest(request with { PublicKey = LowOrderPoint }));
+        var apprFile = Path.Combine(dirA, "approve.json");
+
+        var (exit, _, stderr) = Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("X25519 key agreement with it failed", stderr);
+        Assert.False(File.Exists(apprFile));
+    }
+
+    [Fact]
+    public void Accept_ApproveFileWithALowOrderEphemeralKey_FailsCleanlyWithTswapException()
+    {
+        var dirA = NewTempDir();
+        var dirB = NewTempDir();
+        Run(dirA, _keyA, "", "init", "--yubikey");
+        var reqFile = Path.Combine(dirB, "request.json");
+        Run(dirB, _keyB, "", "slot", "request", reqFile);
+        var apprFile = Path.Combine(dirA, "approve.json");
+        Run(dirA, _keyA, "", "slot", "approve", reqFile, apprFile);
+        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(apprFile));
+        File.WriteAllText(apprFile, SlotEnrollmentFileCodec.SerializeApprove(approve with { NewSlotEphemeralPublicKey = LowOrderPoint }));
+
+        var (exit, _, stderr) = Run(dirB, _keyB, "", "slot", "accept", apprFile);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(SlotPayloadWrap.AuthenticationFailedMessage, stderr);
+    }
+
     [Fact]
     public void Accept_CorruptedJsonApproveFile_FailsCleanlyNotACrash()
     {

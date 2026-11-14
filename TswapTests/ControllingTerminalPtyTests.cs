@@ -235,7 +235,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
             var buffer = new byte[4096];
             while (!_shown.ToString().Contains(expected) && DateTime.UtcNow < until)
             {
-                var fds = new PollFd[] { new() { Fd = _controller, Events = 1 } }; // POLLIN
+                PollFd[] fds = [new() { Fd = _controller, Events = 1 }]; // POLLIN
                 if (poll(fds, 1, 200) <= 0)
                     continue;
                 var n = (int)read(_controller, buffer, (nuint)buffer.Length);

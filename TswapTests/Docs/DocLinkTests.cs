@@ -40,7 +40,7 @@ public partial class DocLinkTests
     [Fact]
     public void NoSetextHeadings()
     {
-        var offenders = new List<string>();
+        List<string> offenders = [];
         foreach (var file in MarkdownLinks.CheckedMarkdown())
             foreach (var line in MarkdownLinks.SetextHeadingLines(Read(file)))
                 offenders.Add($"{file}:{line}");
@@ -208,7 +208,7 @@ public partial class DocLinkTests
         IReadOnlyList<string> AnchorsCached(string file) =>
             anchorCache.TryGetValue(file, out var a) ? a : anchorCache[file] = AnchorsOf(file);
 
-        var broken = new List<string>();
+        List<string> broken = [];
         foreach (var file in MarkdownLinks.CheckedMarkdown())
         {
             foreach (var (line, target) in MarkdownLinks.Links(Read(file)))
@@ -226,7 +226,7 @@ public partial class DocLinkTests
                 else
                 {
                     var r = MarkdownLinks.ResolveExisting(Root, file, pathPart);
-                    if (r == null) { broken.Add($"{file}:{line} → {target}"); continue; }
+                    if (r is null) { broken.Add($"{file}:{line} → {target}"); continue; }
                     (resolved, isDirectory) = r.Value;
                 }
 
@@ -273,7 +273,7 @@ public partial class DocLinkTests
     [Fact]
     public void NoInRepoLinkToRedirectAnchor()
     {
-        var offenders = new List<string>();
+        List<string> offenders = [];
         var cache = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         HashSet<string> RedirectOnly(string file)
         {
@@ -298,7 +298,7 @@ public partial class DocLinkTests
                 if (pathPart.Length > 0)
                 {
                     var r = MarkdownLinks.ResolveExisting(Root, file, pathPart);
-                    if (r == null || r.Value.IsDirectory || !r.Value.Path.EndsWith(".md", StringComparison.Ordinal)) continue;
+                    if (r is null || r.Value.IsDirectory || !r.Value.Path.EndsWith(".md", StringComparison.Ordinal)) continue;
                     resolved = r.Value.Path;
                 }
                 if (RedirectOnly(resolved).Contains(Uri.UnescapeDataString(target[(hash + 1)..]), StringComparer.Ordinal))
@@ -312,7 +312,7 @@ public partial class DocLinkTests
     internal static IReadOnlyList<string> DuplicateIds(string markdown)
     {
         var anchors = MarkdownLinks.AnchorsDetailed(markdown);
-        var dups = new List<string>();
+        List<string> dups = [];
         foreach (var e in anchors.Where(a => a.Kind == AnchorKind.Explicit))
         {
             var others = anchors.Count(a => a.Id == e.Id);
@@ -324,7 +324,7 @@ public partial class DocLinkTests
     [Fact]
     public void NoDuplicateIds()
     {
-        var offenders = new List<string>();
+        List<string> offenders = [];
         foreach (var file in MarkdownLinks.CheckedMarkdown())
             offenders.AddRange(DuplicateIds(Read(file)).Select(d => $"{file}: {d}"));
         Assert.True(offenders.Count == 0, "explicit ids that collide:\n" + string.Join('\n', offenders));
@@ -404,7 +404,7 @@ public partial class DocLinkTests
     [Fact]
     public void ProgramText_DocPathsExist()
     {
-        var offenders = new List<string>();
+        List<string> offenders = [];
         var references = 0;
         foreach (var (file, line, literal) in ProgramStringLiterals())
             foreach (System.Text.RegularExpressions.Match m in DocReference().Matches(literal))

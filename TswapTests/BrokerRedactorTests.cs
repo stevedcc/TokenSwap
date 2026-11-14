@@ -9,7 +9,7 @@ public class BrokerRedactorTests
 {
     private const string Secret = "s3cr3t-Value_+/=é";
 
-    private static string Run(BrokerRedactor redactor, params string[] chunks)
+    private static string Run(BrokerRedactor redactor, params ReadOnlySpan<string> chunks)
     {
         var output = new MemoryStream();
         foreach (var chunk in chunks)

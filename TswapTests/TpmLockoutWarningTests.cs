@@ -194,7 +194,7 @@ public class TpmLockoutWarningTests : IDisposable
         var m = Machine("test-mode");
         // Review T17 p4 MiMo M1: record every tpm2-tools call, so the test fails if the real probe runs at all,
         // not only when this machine's real TPM happens to have an empty lockout auth.
-        var calls = new List<string>();
+        List<string> calls = [];
         // CA1416: UseRunner only swaps a delegate; the test runs on every OS to prove the real probe never runs.
 #pragma warning disable CA1416
         using var _ = TswapCore.Vault.Interop.Tpm2ToolsInterop.UseRunner((command, _, _, _) =>

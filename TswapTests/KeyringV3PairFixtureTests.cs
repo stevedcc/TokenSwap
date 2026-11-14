@@ -71,7 +71,7 @@ public class KeyringV3PairFixtureTests : IDisposable
     internal static Config FixtureConfig() =>
         JsonSerializer.Deserialize(FixtureConfigJson, TswapJsonContext.Default.Config)!;
 
-    private static SimulatedYubiKeyService Keys(params int[] pluggedIn)
+    private static SimulatedYubiKeyService Keys(params ReadOnlySpan<int> pluggedIn)
     {
         var keys = SimulatedYubiKeyService.WithKeys(SerialA, SerialB);
         keys.PluggedIn = [.. pluggedIn];

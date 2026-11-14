@@ -42,7 +42,7 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     private const string EccTemplateHex = "0023000b00030072000000060080004300100003001000000000";
 
     private static Config ConfigWith(byte[] hwBlob) =>
-        new([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
+        new([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(hwBlob));
 
     private static StretchedPassword Password(byte first) =>
         StretchedPassword.FromBytes(Enumerable.Range(0, 32).Select(i => i == 0 ? first : (byte)RandomNumberGenerator.GetInt32(256)).ToArray());

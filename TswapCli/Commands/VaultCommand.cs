@@ -107,8 +107,7 @@ public sealed class VaultCommand : ICliCommand
                     continue;
                 }
                 c.Out.WriteLine($"\nThis machine did not approve: {SlotCommand.DescribeSlot(slot)}");
-                c.Out.Write("Add it to this vault? Compare the fingerprint first. (yes/no): ");
-                if (c.ReadLine()?.Trim().ToLowerInvariant() == "yes")
+                if (YesNo.Ask(c.Out.Write, c.ReadLine, "Add it to this vault? Compare the fingerprint first.", defaultAnswer: null))
                     toAdd.Add(slot);
                 else
                     throw new TswapException("Slot not confirmed. Nothing was merged.");

@@ -59,7 +59,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         return psi;
     }
 
-    private (int exitCode, string stdout, string stderr) RunTswap(params string[] args)
+    private (int exitCode, string stdout, string stderr) RunTswap(params ReadOnlySpan<string> args)
     {
         var psi = MakePsi();
         foreach (var arg in args)
@@ -73,7 +73,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         return (process.ExitCode, stdout, stderr);
     }
 
-    private (int exitCode, string stdout, string stderr) RunTswapWithStdin(string stdin, params string[] args)
+    private (int exitCode, string stdout, string stderr) RunTswapWithStdin(string stdin, params ReadOnlySpan<string> args)
     {
         var psi = MakePsi(redirectStdin: true);
         foreach (var arg in args)
@@ -112,7 +112,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         foreach (var d in new[] { home, initFolder, otherFolder })
             Directory.CreateDirectory(d);
 
-        (int exit, string stdout, string stderr) RunIn(string folder, params string[] args)
+        (int exit, string stdout, string stderr) RunIn(string folder, params ReadOnlySpan<string> args)
         {
             var psi = MakePsi();
             psi.Environment.Remove("TSWAP_CONFIG_DIR");
@@ -140,6 +140,55 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         var names = RunIn(otherFolder, "names");
         Assert.True(names.exit == 0, $"names from another folder failed: {names.stdout}{names.stderr}");
         Assert.DoesNotContain("Not initialized", names.stdout + names.stderr);
+    }
+
+    /// <summary>
+    /// X25519 (SlotKeyPair, the .NET 11 BCL's X25519DiffieHellman) inside the published binary,
+    /// which CI runs as NativeAOT: <c>init</c> wraps the vault key to a fresh recovery keypair
+    /// (generate, import, derive), and <c>recover --yubikey</c> unwraps it again with the recovery
+    /// key init wrote to <c>--recovery-key-out</c>.
+    /// </summary>
+    [Fact]
+    public void InitKeyring_ThenRecoverWithTheRecoveryKey_TheSecretReadsBack()
+    {
+        // init --keyring is gone on main (every vault is a keyring now), and since #253 an init whose stdout is not a
+        // terminal writes the recovery key to --recovery-key-out instead of printing it.
+        // The key file must be outside the config folder (init refuses one inside it).
+        var keyFile = _tempDir + "-recovery.key";
+        string recoveryKey;
+        try
+        {
+            var init = RunTswapWithStdin("", "init", "--yubikey", "--no-password", "--recovery-key-out", keyFile);
+            Assert.True(init.exitCode == 0, $"init --yubikey --recovery-key-out failed: {init.stdout}{init.stderr}");
+            Assert.True(File.Exists(keyFile), $"init wrote no recovery key file: {init.stdout}{init.stderr}");
+            recoveryKey = File.ReadAllText(keyFile).TrimEnd('\n', '\r');
+        }
+        finally
+        {
+            File.Delete(keyFile);
+        }
+        var recoveryKeyBytes = Convert.FromBase64String(recoveryKey);
+        Assert.Equal(32, recoveryKeyBytes.Length);
+        // Stored in RFC 7748 §5-clamped form, as v0.1.0 stored it (SlotKeyPair.Generate). Checked
+        // here too because this runs on every CI OS; the unit test cannot fail on Linux, where
+        // OpenSSL already clamps at key generation.
+        Assert.Equal(0, recoveryKeyBytes[0] & 0x07);
+        Assert.Equal(0, recoveryKeyBytes[31] & 0x80);
+        Assert.Equal(0x40, recoveryKeyBytes[31] & 0x40);
+
+        var ingest = RunTswapWithStdin("e2e-recovered-value", "ingest", "e2e-secret");
+        Assert.True(ingest.exitCode == 0, $"ingest failed: {ingest.stdout}{ingest.stderr}");
+
+        var recover = RunTswapWithStdin(recoveryKey + "\n\n\n", "recover", "--yubikey");
+        Assert.True(recover.exitCode == 0, $"recover failed: {recover.stdout}{recover.stderr}");
+        // ASCII part of "✓ Recovered: ... now opens this vault as its own slot": redirected stdout
+        // on Windows is not UTF-8, so the check mark itself does not survive there (CI, #216).
+        Assert.True(recover.stdout.Contains("now opens this vault as its own slot", StringComparison.Ordinal),
+            $"recover did not report the new slot: {recover.stdout}{recover.stderr}");
+
+        var get = RunTswap("get", "e2e-secret");
+        Assert.True(get.exitCode == 0, $"get failed: {get.stdout}{get.stderr}");
+        Assert.Contains("e2e-recovered-value", get.stdout);
     }
 
     // --- Create ---
@@ -714,7 +763,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // output arrives, resetting the quiescent timer for another attempt.
     // Returns (exitCode, output, loopEnd); (-2, "", "") if openpty is unavailable on this platform.
     // loopEnd says why the read loop ended (for failure messages; macOS flake, #210).
-    private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params string[] args)
+    private (int exitCode, string output, string loopEnd) RunTswapWithPtyCtrlC(string waitForPrompt, params IEnumerable<string> args)
     {
         var nameBuf = new byte[256];
         int masterFd = -1, slaveFd = -1;
@@ -757,7 +806,7 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         {
             if (DateTime.UtcNow - lastCtrlCAt < TimeSpan.FromMilliseconds(1000)) return;
             // Retry on EINTR/EAGAIN so Ctrl+C is always delivered.
-            var ctrlC = new byte[] { 0x03 };
+            byte[] ctrlC = [0x03];
             nint written;
             do { written = PtyWrite(masterFd, ctrlC, 1); }
             while (written < 0 && Marshal.GetLastPInvokeError() is int e && (e == EINTR || e == eagain));

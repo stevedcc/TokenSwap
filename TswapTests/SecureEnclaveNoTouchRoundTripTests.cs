@@ -103,7 +103,7 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
     {
         var service = new SecureEnclaveHardwareService(requirePresence: false);
         var (kek, hwBlob) = service.Enroll(password: null);
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(hwBlob), RequiresTouch: false);
 
         Assert.Equal(kek, Bounded(() => service.Unlock(config, _ => 0, password: null)));

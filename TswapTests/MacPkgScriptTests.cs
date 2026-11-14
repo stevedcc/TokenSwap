@@ -612,7 +612,7 @@ public sealed partial class MacPkgScriptTests : IDisposable
         Assert.Contains("/usr/local/bin/libtswapse.dylib is runner:staff 755, expected root:wheel 755", output);
         Assert.Equal(2, _fake.Log("stat").Count(line => line.StartsWith("-f %Su:%Sg %Lp ", StringComparison.Ordinal)));
     }
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     private static string Csproj => File.ReadAllText(RepoFile("TswapCore", "TswapCore.csproj"));

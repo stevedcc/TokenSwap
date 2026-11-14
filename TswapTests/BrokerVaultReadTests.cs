@@ -35,7 +35,7 @@ public class BrokerVaultReadTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
         var store = RecordVault(50);
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
         var source = new VaultBrokerSecretSource(store, Unlocker());
 
@@ -54,7 +54,7 @@ public class BrokerVaultReadTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
         var store = RecordVault(3);
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
 
         Assert.Throws<BrokerSecretException>(() => new VaultBrokerSecretSource(store, Unlocker()).Read("missing"));
@@ -73,7 +73,7 @@ public class BrokerVaultReadTests : IDisposable
         var bytes = File.ReadAllBytes(target);
         bytes[^1] ^= 0xFF; // tampered: fails authentication
         File.WriteAllBytes(target, bytes);
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
 
         var ex = Assert.Throws<BrokerSecretException>(() => new VaultBrokerSecretSource(store, Unlocker()).Read("s2"));

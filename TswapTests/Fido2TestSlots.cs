@@ -66,7 +66,7 @@ internal sealed class Fido2TestSlots
 
     /// <summary>A keyring config of <paramref name="backend"/> whose own slot is <paramref name="own"/>.</summary>
     public Config Config(HardwareBackend? backend = HardwareBackend.YubiKey, Slot? own = null) => new(
-        [], "", DateTime.UtcNow, RngMode: RngMode.System, Backend: backend,
+        [], "", TestTime.Fixed, RngMode: RngMode.System, Backend: backend,
         Keyring: Convert.ToBase64String(KeyringCodec.Encode(Keyring)),
         KeyringSlotId: own is null ? null : Convert.ToBase64String(own.SlotId));
 

@@ -24,10 +24,9 @@ public sealed class ExportCommand : ICliCommand
 
         if (File.Exists(path))
         {
-            ctx.Console.Error.Write($"File '{path}' already exists. Overwrite? (yes/no): ");
-            var overwriteResponse = ctx.Console.ReadLine();
+            var overwrite = YesNo.Ask(ctx.Console.Error.Write, ctx.Console.ReadLine, $"File '{path}' already exists. Overwrite?", defaultAnswer: null);
             if (ctx.Console.IsInputRedirected) ctx.Console.Error.WriteLine();
-            if (overwriteResponse?.ToLower() != "yes")
+            if (!overwrite)
                 throw new TswapException("Export cancelled.");
         }
 

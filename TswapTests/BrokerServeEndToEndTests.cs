@@ -112,7 +112,7 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         var p = new Process { StartInfo = Psi(withVault, args) };
         p.ErrorDataReceived += (_, e) =>
         {
-            if (e.Data != null)
+            if (e.Data is not null)
                 lines.Writer.TryWrite(e.Data);
         };
         p.Start();

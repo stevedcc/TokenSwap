@@ -50,7 +50,7 @@ public class LinuxTpmHardwareServiceTests
         IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
         var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(hwBlob));
         var recovered = new LinuxTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"), password: null);
@@ -67,7 +67,7 @@ public class LinuxTpmHardwareServiceTests
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new LinuxTpmHardwareService();
         var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
-        var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var backendConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 
         var unlocker = new VaultUnlocker(new TestKeyYubiKeyService(new byte[32]), additionalBackends: [service]);
@@ -84,7 +84,7 @@ public class LinuxTpmHardwareServiceTests
         // Issue #261: the public Seal seals under the ECC primary, so the blob carries the TSTP ECC bit.
         var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(vaultKey), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(sealedKey));
 
@@ -97,7 +97,7 @@ public class LinuxTpmHardwareServiceTests
     public void Unlock_MissingSealedKey_ThrowsClearError()
     {
         var svc = new LinuxTpmHardwareService();
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm);
 
         var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("tpm", ex.Message);
@@ -107,7 +107,7 @@ public class LinuxTpmHardwareServiceTests
     public void Unlock_InvalidBase64_ThrowsClearError()
     {
         var svc = new LinuxTpmHardwareService();
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: "not valid base64!!");
 
@@ -124,7 +124,7 @@ public class LinuxTpmHardwareServiceTests
         var svc = new LinuxTpmHardwareService();
         // Issue #261: an ECC package, so the blob carries the TSTP ECC bit.
         var sealedKey = TswapCore.Keyring.TpmSlotBlob.Wrap(svc.Seal(RandomNumberGenerator.GetBytes(16)), TswapCore.Keyring.TpmSlotBlob.EccPrimary);
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(sealedKey));
 

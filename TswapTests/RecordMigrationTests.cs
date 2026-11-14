@@ -27,7 +27,7 @@ public sealed class RecordMigrationTests : IDisposable
         slots.AddFido2(Fido2TestSlots.Blob(serial: null));
         slots.AddRecovery();
         File.WriteAllBytes(Path.Combine(_dir, RecordVaultStore.KeyringFileName), KeyringCodec.Encode(slots.Keyring));
-        var classic = new Config([SerialB, SerialA], "xor", DateTime.UtcNow);
+        var classic = new Config([SerialB, SerialA], "xor", TestTime.Fixed);
 
         var copy = RecordMigration.LooksLikeOwnConvertedCopy(DirectoryOwnerMatcher.Default, _dir, classic);
 

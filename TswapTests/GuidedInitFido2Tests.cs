@@ -235,8 +235,22 @@ public sealed class GuidedInitFido2Tests : IDisposable
 
         Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(Pin, key.Pin);
-        Assert.Contains($"YubiKey {Serial} has no FIDO2 PIN; a FIDO2 slot needs one. Set a FIDO2 PIN on it now? (yes/no): ", m.Terminal.Text);
+        Assert.Contains($"YubiKey {Serial} has no FIDO2 PIN; a FIDO2 slot needs one. Set a FIDO2 PIN on it now? (Y/n): ", m.Terminal.Text); // #299: Enter = yes
         Assert.IsType<YubiKeySlotKind.Fido2>(YubiKeySlotKinds.Classify(m.Keyring.Slots[0].HwBlob));
+    }
+
+    // #299: the offer to set a PIN defaults to yes (Y/n): Enter alone sets one.
+    [Fact]
+    public void GuidedInit_Fido2KeyWithoutPin_EnterAcceptsTheOffer()
+    {
+        var m = Machine(OSPlatform.Linux);
+        var key = m.Fido2Keys!.AddKey(Serial, Fido2TestSlots.Aaguid, pin: null);
+        m.Terminal!.Enqueue("", Pin, Pin, Pin, Pin);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(Pin, key.Pin);
     }
 
     [Fact]

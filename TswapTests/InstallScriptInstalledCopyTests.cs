@@ -15,7 +15,7 @@ public sealed class InstallScriptInstalledCopyTests
     private static readonly byte[] Dylib = [1, 2, 3, 4, 5];
     private const string Download = "/tmp/tswap-download/tswap";
 
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     private static string PerUser() => InstallScript.GetMacOSScript(InstalledCopy.MacOSInstallPath, Dylib, binaryInstalled: true);

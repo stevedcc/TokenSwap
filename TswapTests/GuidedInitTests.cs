@@ -20,7 +20,7 @@ public sealed class GuidedInitTests : IDisposable
     private const string PlugIn =
         "Plug in the security keys you want to use with this vault on this machine, then press Enter. (No touch yet: tswap asks when it needs one.)";
     private const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
-    private const string TouchPrompt = "Touch ID (or your login password) on every unlock? (y/n): ";
+    private const string TouchPrompt = "Touch ID (or your login password) on every unlock? (yes/no): "; // #299: no default
     private const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
     private const string ChangedWhileWaiting = "config.json changed while init was waiting";
     private const string Password = "correct horse battery staple";
@@ -78,7 +78,7 @@ public sealed class GuidedInitTests : IDisposable
     private static string ThisOsChip => OperatingSystem.IsMacOS() ? "Secure Enclave" : "TPM";
 
     /// <summary>Runs <c>names</c> with only <paramref name="serials"/> plugged in (and the chip as set), unattended.</summary>
-    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params int[] serials)
+    private static (int Exit, string Out, string Err) NamesWith(FleetMachine m, string stdin = "", bool terminal = false, params ReadOnlySpan<int> serials)
     {
         var plugged = m.Keys.PluggedIn;
         m.Keys.PluggedIn = [.. serials];
@@ -276,7 +276,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2 3\n\ny\nn\n", "init", "--no-password");
 
         Assert.True(exit == 0, stderr + stdout);
-        var perSerial = m.Keys.Challenges.GroupBy(c => c.Serial).ToDictionary(g => g.Key, g => g.Count());
+        var perSerial = m.Keys.Challenges.CountBy(c => c.Serial).ToDictionary();
         Assert.Equal(new Dictionary<int, int> { [11] = 2, [13] = 2 }, perSerial);
         Assert.Equal([11, 13], YubiKeySerials(m));
         AssertOpensWithKeyAlone(m, 11);
@@ -404,7 +404,7 @@ public sealed class GuidedInitTests : IDisposable
         Assert.True(openExit == 0, openErr);
     }
 
-    private const string GuidedPasswordQuestion = "Add a vault password? (yes/no): ";
+    private const string GuidedPasswordQuestion = "Add a vault password? (yes/no): "; // #299: no default (owner)
 
     [Fact]
     public void Guided_StrayOtpLine_AtThePasswordQuestion_IsSkipped()
@@ -436,6 +436,33 @@ public sealed class GuidedInitTests : IDisposable
         Assert.Contains(GuidedPasswordQuestion, stdout);
         AssertNothingWritten(m);
         Assert.Empty(m.Keys.Challenges);
+    }
+
+    // #299, owner 2026-11-14: the password question has no default ("yes/no, no default"): Enter alone asks again, so
+    // a vault without a password is always a typed choice.
+    [Fact]
+    public void Guided_PasswordQuestion_Enter_AsksAgain()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nno\nn\n", "init", "--no-recovery");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(2, Count(stdout, GuidedPasswordQuestion));
+        Assert.False(File.Exists(PasswordVaultTestSupport.VaultPasswordPath(m)));
+        Assert.False(BlobOf(m, 11).RequiresPassword);
+    }
+
+    // #299: "Will other machines use this vault? (y/N)" asks again on an answer that is neither yes nor no.
+    [Fact]
+    public void Guided_OtherMachinesQuestion_UnrecognisedAnswer_AsksAgain()
+    {
+        var m = Machine(11);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\nno\nmaybe\nn\n", "init", "--no-recovery");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(2, Count(stdout, "Will other machines use this vault? (y/N): "));
     }
 
     [Fact]
@@ -571,7 +598,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\nn\n", "init", "--no-password", "--recovery-key-out", keyFile);
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.RecoveryPrompt, stdout);
+        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.Recovery.Prompt, stdout);
         Assert.Equal(32, Convert.FromBase64String(File.ReadAllText(keyFile).TrimEnd('\n')).Length);
         Assert.Contains(SlotKind.Recovery, m.Keyring.Slots.Select(s => s.Kind));
     }

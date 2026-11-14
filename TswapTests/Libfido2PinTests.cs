@@ -44,7 +44,7 @@ public class Libfido2PinTests
     [Fact]
     public void Send_APinWithANulByte_IsRefusedWithNothingSent()
     {
-        var pin = new byte[] { 0x31, 0x32, 0x00, 0x34 };
+        byte[] pin = [0x31, 0x32, 0x00, 0x34];
         var called = false;
 
         var e = Assert.Throws<Fido2DeviceException>(() => Libfido2Pin.Send(pin, _ => called = true));

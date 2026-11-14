@@ -10,7 +10,7 @@ public class SecurityWarningsTests
     public void WarnIfNoTouch_YubiKeyWithoutTouch_Warns()
     {
         var console = new FakeConsole();
-        var config = new Config([1, 2], "aabb", DateTime.UtcNow, RequiresTouch: false);
+        var config = new Config([1, 2], "aabb", TestTime.Fixed, RequiresTouch: false);
 
         SecurityWarnings.WarnIfNoTouch(console, config);
 
@@ -24,7 +24,7 @@ public class SecurityWarningsTests
         // ("your YubiKeys", "tswap migrate") would be actively misleading for them, and
         // each backend already prints its own presence caveats at init time.
         var console = new FakeConsole();
-        var tpmConfig = new Config([], "", DateTime.UtcNow, RequiresTouch: false, Backend: HardwareBackend.Tpm);
+        var tpmConfig = new Config([], "", TestTime.Fixed, RequiresTouch: false, Backend: HardwareBackend.Tpm);
 
         SecurityWarnings.WarnIfNoTouch(console, tpmConfig);
 

@@ -72,7 +72,7 @@ public class WindowsTpmHardwareServiceTests
         IHardwareEnrollmentService enrollment = new WindowsTpmHardwareService();
         var (kekSlot, hwBlob) = enrollment.Enroll(password: null);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(hwBlob));
         var recovered = new WindowsTpmHardwareService().Unlock(config, _ => throw new InvalidOperationException("chooseSerial should not be called for TPM"), password: null);
@@ -89,7 +89,7 @@ public class WindowsTpmHardwareServiceTests
         // version 3 keyring; the real backend finds it there and VaultUnlocker unwraps K_v.
         var service = new WindowsTpmHardwareService();
         var (kekSlot, hwBlob) = ((IHardwareEnrollmentService)service).Enroll(password: null);
-        var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var backendConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm);
         var (config, vaultKey, _) = TswapCli.Commands.InitCommand.AssembleKeyring(kekSlot, backendConfig, includeRecovery: true, hwBlob);
 
         var unlocker = new VaultUnlocker(new TestKeyYubiKeyService(new byte[32]), additionalBackends: [service]);
@@ -105,7 +105,7 @@ public class WindowsTpmHardwareServiceTests
         var vaultKey = RandomNumberGenerator.GetBytes(32);
         var wrapped = svc.Wrap(vaultKey);
 
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(wrapped));
 
@@ -118,7 +118,7 @@ public class WindowsTpmHardwareServiceTests
     public void Unlock_MissingSealedKey_ThrowsClearError()
     {
         var svc = new WindowsTpmHardwareService();
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm);
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm);
 
         var ex = Assert.Throws<TswapException>(() => svc.Unlock(config, _ => 0, password: null));
         Assert.Contains("tpm", ex.Message);
@@ -128,7 +128,7 @@ public class WindowsTpmHardwareServiceTests
     public void Unlock_InvalidBase64_ThrowsClearError()
     {
         var svc = new WindowsTpmHardwareService();
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: "not valid base64!!");
 
@@ -144,7 +144,7 @@ public class WindowsTpmHardwareServiceTests
         // Unlock specifically promises a 32-byte vault key, so it must reject this.
         var svc = new WindowsTpmHardwareService();
         var wrapped = svc.Wrap(RandomNumberGenerator.GetBytes(16));
-        var config = new Config([], "", DateTime.UtcNow,
+        var config = new Config([], "", TestTime.Fixed,
             Backend: HardwareBackend.Tpm,
             TpmSealedKey: Convert.ToBase64String(wrapped));
 

@@ -599,7 +599,7 @@ Paste back: the test's output lines and the summary.
 ### C5. libfido2 unavailable: the "needs libfido2" text, and YubiKeys still work
 
 Use a **Debug** build of the branch (`dotnet build TswapCli/TswapCli.csproj`, then
-`T=TswapCli/bin/Debug/net10.0/tswap`): only Debug builds honour `TSWAP_TEST_LIBFIDO2_ABSENT=1`,
+`T=TswapCli/bin/Debug/net11.0/tswap`): only Debug builds honour `TSWAP_TEST_LIBFIDO2_ABSENT=1`,
 which makes tswap behave as if libfido2 weren't installed. On Linux:
 
 ```bash

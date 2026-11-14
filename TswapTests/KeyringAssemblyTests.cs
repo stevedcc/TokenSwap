@@ -115,7 +115,7 @@ public class KeyringAssemblyTests
     [Fact]
     public void AssembleKeyring_NoRecovery_HasOnlyTheMachineSlot()
     {
-        var backendConfig = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave, SecureEnclaveWrappedKey: "d3JhcHBlZA==");
+        var backendConfig = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave, SecureEnclaveWrappedKey: "d3JhcHBlZA==");
 
         var (config, _, recoveryPrivateKey) = InitCommand.AssembleKeyring(RandomNumberGenerator.GetBytes(32), backendConfig, includeRecovery: false);
 
@@ -128,7 +128,7 @@ public class KeyringAssemblyTests
     public void AssembleKeyring_RejectsAConfigThatAlreadyHasAKeyring()
     {
         var existing = InitCommand.AssembleKeyring(RandomNumberGenerator.GetBytes(32),
-            new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm, TpmSealedKey: "eA=="), includeRecovery: false).Config;
+            new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm, TpmSealedKey: "eA=="), includeRecovery: false).Config;
 
         Assert.Throws<ArgumentException>(() => InitCommand.AssembleKeyring(RandomNumberGenerator.GetBytes(32), existing, includeRecovery: false));
     }

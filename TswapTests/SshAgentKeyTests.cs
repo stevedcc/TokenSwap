@@ -18,13 +18,13 @@ public sealed class SshTestKeys : IDisposable
 
     public SshTestKeys() => Directory.CreateDirectory(Dir);
 
-    public static bool HaveTools => !OperatingSystem.IsWindows() && Which("ssh-keygen") != null && Which("openssl") != null;
+    public static bool HaveTools => !OperatingSystem.IsWindows() && Which("ssh-keygen") is not null && Which("openssl") is not null;
 
     public static string? Which(string tool) =>
         new[] { "/usr/bin", "/bin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin" }
             .Select(d => Path.Combine(d, tool)).FirstOrDefault(File.Exists);
 
-    public static (int Exit, string Out, string Err) Run(string tool, params string[] args)
+    public static (int Exit, string Out, string Err) Run(string tool, params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo(Which(tool) ?? tool)
         {
@@ -599,7 +599,7 @@ public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) 
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
         _m.Ok(File.ReadAllText(path), "ingest", "deploy-key"); // ingest trims the trailing newline
         var store = Assert.IsType<TswapCore.RecordVaultStore>(TswapCore.VaultStores.Open(_m.Dir));
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
         var unlocker = new TswapCore.Vault.VaultUnlocker(_m.Keys, overrideKey: null,
             additionalBackends: [new TswapCore.Vault.SimulatedHardwareService(TswapCore.HardwareBackend.Tpm, _m.Tpm!)]);

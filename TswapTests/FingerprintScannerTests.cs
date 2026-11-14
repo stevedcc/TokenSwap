@@ -291,8 +291,8 @@ public class FingerprintScannerTests
         {
             using var keysA = NewKeys();
             using var keysB = NewKeys();
-            var a = FingerprintScanner.Build(templates.Select((t, i) => ($"n{i}", false, Set(t, keysA))), keysA);
-            var b = FingerprintScanner.Build(templates.Select((t, i) => ($"m{i}", false, Set(Like(t), keysB))), keysB);
+            var a = FingerprintScanner.Build(templates.Index().Select(p => ($"n{p.Index}", false, Set(p.Item, keysA))), keysA);
+            var b = FingerprintScanner.Build(templates.Index().Select(p => ($"m{p.Index}", false, Set(Like(p.Item), keysB))), keysB);
 
             for (var i = 0; i < 250; i++)
             {

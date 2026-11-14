@@ -424,12 +424,14 @@ public sealed class BrokerCommand : ICliCommand
     internal static string FormatTime(DateTimeOffset at) =>
         at.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "Z";
 
-    private static TswapException Failure(BrokerControlAnswer answer, string path) => answer switch
+    private static TswapException Failure(BrokerControlAnswer? answer, string path) => answer switch
     {
         BrokerControlAnswer.Refused refused => new TswapException(refused.Message),
         BrokerControlAnswer.NotRunning => new TswapException($"No 'tswap broker serve' answers at {path}; is it running?"),
         BrokerControlAnswer.OtherVault => new TswapException($"Another vault's broker answers at {path}."),
-        _ => new TswapException($"The broker at {path} gave an answer tswap can't read."),
+        // Not a failure answer where one is expected, an unreadable one, or none at all.
+        BrokerControlAnswer.Done or BrokerControlAnswer.State or BrokerControlAnswer.Malformed or null =>
+            new TswapException($"The broker at {path} gave an answer tswap can't read."),
     };
 
     // ------------------------------------------------------------------ forward
@@ -476,7 +478,7 @@ public sealed class BrokerCommand : ICliCommand
     {
         string? socket = null;
         string? template = null;
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, string> values = [with(StringComparer.Ordinal)];
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--socket" && i + 1 < args.Length && socket is null)
@@ -839,7 +841,7 @@ public sealed class BrokerCommand : ICliCommand
     private static (List<string> Positional, Dictionary<string, string> Options) ParseOptions(string[] args, string[] known, string[]? flags = null)
     {
         List<string> positional = [];
-        var options = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, string> options = [with(StringComparer.Ordinal)];
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];

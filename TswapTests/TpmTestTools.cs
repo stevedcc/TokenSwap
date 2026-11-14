@@ -15,7 +15,7 @@ namespace TswapTests;
 internal static class TpmTestTools
 {
     /// <summary>Runs a tpm2-tools command directly, returning exit code, stdout bytes and stderr.</summary>
-    public static (int Exit, byte[] Stdout, string Stderr) Run(string command, byte[]? stdin, params string[] args)
+    public static (int Exit, byte[] Stdout, string Stderr) Run(string command, byte[]? stdin, params ReadOnlySpan<string> args)
     {
         var psi = new ProcessStartInfo(command)
         {

@@ -12,14 +12,14 @@ namespace TswapTests;
 /// </summary>
 public class BrokerContribTests(ITestOutputHelper output)
 {
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     /// <summary>A minimal CIL reader: S-expressions, ';' comments, "strings".</summary>
     internal static List<object> ParseCil(string text)
     {
         var stack = new Stack<List<object>>();
-        var top = new List<object>();
+        List<object> top = [];
         var current = top;
         var i = 0;
         while (i < text.Length)
@@ -35,7 +35,7 @@ public class BrokerContribTests(ITestOutputHelper output)
             }
             else if (c == '(')
             {
-                var list = new List<object>();
+                List<object> list = [];
                 current.Add(list);
                 stack.Push(current);
                 current = list;

@@ -13,7 +13,7 @@ namespace TswapTests;
 /// </summary>
 public sealed class WriteCommandsWholeVaultScanTests
 {
-    private static string RepoFile(params string[] parts) =>
+    private static string RepoFile(params ReadOnlySpan<string> parts) =>
         Path.GetFullPath(Path.Combine([AppContext.BaseDirectory, "..", "..", "..", "..", .. parts]));
 
     private static readonly string[] WriteCommandFiles =

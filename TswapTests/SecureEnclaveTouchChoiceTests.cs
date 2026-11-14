@@ -404,7 +404,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
         var (kekSlot, blob) = service.Enroll(password: null);
         if (!withFlag)
             blob = blob[..^1]; // a blob made before the flag byte existed
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
         Assert.Equal(kekSlot, new SimulatedHardwareService(HardwareBackend.SecureEnclave, key).Unlock(config, _ => 0, password: null));
@@ -417,7 +417,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key);
         var blob = service.Enroll(password: null).HwBlob;
         blob[^1] = 2;
-        var config = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.SecureEnclave,
+        var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));
 
         Assert.Throws<TswapException>(() => service.Unlock(config, _ => 0, password: null));

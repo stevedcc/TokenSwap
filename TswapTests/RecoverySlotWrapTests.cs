@@ -129,6 +129,100 @@ public class RecoverySlotWrapTests
     }
 
     [Fact]
+    public void Unwrap_LowOrderEphemeralPublicKey_FailsLikeAnyOtherTampering()
+    {
+        // A low-order point makes X25519 itself fail (SlotKeyPair.ComputeSharedSecret throws
+        // CryptographicException). Unwrap must still fail with the same TswapException as a
+        // wrong key or a tampered ciphertext, so the failure stays indistinguishable.
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+
+        var (_, wrapped) = RecoverySlotWrap.Wrap(
+            vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, new byte[SlotKeyPair.KeySize], recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Fact]
+    public void Wrap_LowOrderRecoveryPublicKey_FailsWithTswapException()
+    {
+        // Wrapping K_v to a low-order recovery key would derive the KEK from an all-zero secret
+        // and a salt stored in the clear: a known KEK. It must refuse with a clear error.
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Wrap(
+            vaultKey, new byte[SlotKeyPair.KeySize], FormatVersion, VaultId, K, SlotId));
+        Assert.Contains("recovery public key", ex.Message);
+    }
+
+    // X25519 keys are 32 bytes. A wrong-length key (e.g. a mistyped or truncated recovery key, or a damaged slot) must
+    // fail as the TswapException these methods promise, never as a raw exception from the platform provider
+    // (code review of #216, F1).
+    public static TheoryData<int> WrongKeyLengths => [0, 31, 33, 64];
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Unwrap_WrongLengthRecoveryPrivateKey_FailsLikeAnyOtherWrongKey(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, ephemeralPublicKey, RandomNumberGenerator.GetBytes(length), FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Unwrap_WrongLengthEphemeralPublicKey_FailsLikeAnyOtherTampering(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        var (_, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(
+            wrapped, RandomNumberGenerator.GetBytes(length), recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(SlotPayloadWrap.AuthenticationFailedMessage, ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(WrongKeyLengths))]
+    public void Wrap_WrongLengthRecoveryPublicKey_FailsWithTswapException(int length)
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+
+        var ex = Assert.Throws<TswapException>(() => RecoverySlotWrap.Wrap(
+            vaultKey, RandomNumberGenerator.GetBytes(length), FormatVersion, VaultId, K, SlotId));
+
+        Assert.Contains("Invalid recovery public key", ex.Message);
+    }
+
+    // The X25519 shared secret and the KEK derived from it are zeroed once a wrap or unwrap is done with them, also
+    // when the unwrap fails (code review of #216, F3).
+    [Fact]
+    public void WrapAndUnwrap_ZeroTheSharedSecretAndTheKek()
+    {
+        var vaultKey = RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
+        var recoveryKeyPair = SlotKeyPair.Generate();
+        List<byte[]> released = [];
+        using var _ = RecoverySlotWrap.ObserveReleasedSecrets(released.Add);
+
+        var (ephemeralPublicKey, wrapped) = RecoverySlotWrap.Wrap(vaultKey, recoveryKeyPair.PublicKey, FormatVersion, VaultId, K, SlotId);
+        Assert.Equal(vaultKey, RecoverySlotWrap.Unwrap(wrapped, ephemeralPublicKey, recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+        var tampered = (byte[])wrapped.Clone();
+        tampered[^1] ^= 1;
+        Assert.Throws<TswapException>(() => RecoverySlotWrap.Unwrap(tampered, ephemeralPublicKey, recoveryKeyPair.PrivateKey, FormatVersion, VaultId, K, SlotId));
+
+        Assert.Equal(6, released.Count); // a shared secret and a KEK for each of the three calls
+        Assert.All(released, secret => Assert.Equal(new byte[32], secret));
+    }
+
+    [Fact]
     public void Wrap_WrongVaultKeyLength_ThrowsArgumentException()
     {
         var recoveryKeyPair = SlotKeyPair.Generate();

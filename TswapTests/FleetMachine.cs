@@ -162,9 +162,9 @@ public sealed class FleetMachine : IDisposable
             Prefix = "tswap", ConfigDir = Dir, Verbose = false, CommandArgs = args, YubiKeySerialVariable = YubiKeySerialVariable,
             AgentSocketVariable = AgentSocket,
         };
-        var backends = new List<IHardwareKeyService>();
-        if (Tpm != null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
-        if (SecureEnclave != null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
+        List<IHardwareKeyService> backends = [];
+        if (Tpm is not null) backends.Add(new SimulatedHardwareService(HardwareBackend.Tpm, Tpm));
+        if (SecureEnclave is not null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var fido2 = Fido2Keys is null ? null : new TswapCore.Vault.Fido2.Fido2Service(Fido2Keys);
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends, fido2: fido2);
         // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).

@@ -106,9 +106,9 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
 
     private static FingerprintStreamMatcher Matcher(IEnumerable<string> values, FingerprintKeys keys)
     {
-        var records = values.Select((v, i) => new TswapCore.Keyring.RecordMetadata(
+        var records = values.Index().Select(p => new TswapCore.Keyring.RecordMetadata(
             RandomNumberGenerator.GetBytes(32), TswapCore.Keyring.Stamp.Zero, TswapCore.Keyring.RecordType.Value,
-            TswapCore.Keyring.Stamp.Zero, $"secret-{i:0000}", 0, [], Fingerprinter.Compute(Encoding.UTF8.GetBytes(v), keys),
+            TswapCore.Keyring.Stamp.Zero, $"secret-{p.Index:0000}", 0, [], Fingerprinter.Compute(Encoding.UTF8.GetBytes(p.Item), keys),
             null, null, [])).ToList();
         return FingerprintStreamMatcher.For(new VaultMetadata(records, 0, 0, []), keys);
     }
@@ -159,7 +159,7 @@ public sealed class RunRedactionThroughputTests(ITestOutputHelper output)
         var rng = new Random(2000);
         var now = DateTime.UtcNow;
         var values = Values(rng, 2000, 16, 128, 20);
-        Store(m).SaveSecrets(new SecretsDb(values.Select((v, i) => (v, i)).ToDictionary(x => $"secret-{x.i:0000}", x => new Secret(x.v, now, now))), key);
+        Store(m).SaveSecrets(new SecretsDb(values.Index().ToDictionary(x => $"secret-{x.Index:0000}", x => new Secret(x.Item, now, now))), key);
 
         var full = Stopwatch.StartNew();
         var db = Store(m).LoadSecrets(key, TextWriter.Null);

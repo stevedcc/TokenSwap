@@ -79,7 +79,7 @@ public sealed class BrokerTestUpstream : IAsyncDisposable
         {
             var raw = http.Features.Get<IHttpRequestFeature>()!.RawTarget;
             var headers = http.Request.Headers.SelectMany(h => h.Value.Select(v => new KeyValuePair<string, string>(h.Key, v ?? ""))).ToList();
-            var body = Array.Empty<byte>();
+            byte[] body = [];
             if (self!.ReadBodyFirst)
             {
                 using var ms = new MemoryStream();
@@ -155,7 +155,7 @@ public sealed class RawTlsUpstream : IAsyncDisposable
                 {
                     await using var tls = new System.Net.Security.SslStream(client.GetStream());
                     await tls.AuthenticateAsServerAsync(_certificate);
-                    var seen = new List<byte>();
+                    List<byte> seen = [];
                     var one = new byte[1];
                     while (!(seen.Count >= 4 && seen[^4] == '\r' && seen[^3] == '\n' && seen[^2] == '\r' && seen[^1] == '\n'))
                     {

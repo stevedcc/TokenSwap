@@ -243,6 +243,28 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
         Assert.NotEmpty(err2);
     }
 
+    /// <summary>
+    /// Row 1b's pin for <c>broker call</c>'s own argument parsing: names are ordinal, so "who" and "Who" are two
+    /// arguments (the broker refuses the undeclared one), while the same name twice is refused locally.
+    /// </summary>
+    [Fact]
+    public void TheCallCommand_TakesArgumentNamesDifferingOnlyInCase_AsTwoArguments()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the broker is Unix only
+        using var m = new FleetMachine("tplcase");
+        var missing = Path.Combine(m.Dir, "missing.sock");
+
+        var (twice, _, twiceErr) = m.Run("", "broker", "call", "t", "who=a", "who=b", "--socket", missing);
+        Assert.Equal(125, twice);
+        Assert.Contains("is not name=value (or is given twice)", twiceErr);
+
+        var (caseVariants, _, caseErr) = m.Run("", "broker", "call", "t", "who=a", "Who=b", "--socket", missing);
+        Assert.Equal(125, caseVariants);
+        Assert.DoesNotContain("given twice", caseErr);
+        Assert.NotEmpty(caseErr);
+    }
+
     [Fact]
     public async Task ATimeout_Reports124()
     {
@@ -260,6 +282,26 @@ public class BrokerTemplateCallTests(ITestOutputHelper output) : IAsyncLifetime
 
     private string ArgTemplate => TemplateJson("""echo "$1" """,
         args: """{ "branch": { "pattern": "brief/[a-z0-9-]+", "max_length": 16 } }""", argvExtra: ", \"{branch}\"");
+
+    /// <summary>
+    /// A call's argument names are ordinal (the request body's dictionary, BrokerTemplateCalls' args): "branch" and
+    /// "Branch" are two arguments, so the undeclared "Branch" is refused as undeclared, not as "given twice".
+    /// </summary>
+    [Fact]
+    public async Task ACallWithArgumentsDifferingOnlyInCase_RefusesTheUndeclaredOne()
+    {
+        if (!SandboxBed.CanRun(output))
+            return;
+        await StartAsync(Config(ArgTemplate));
+
+        var response = await PostAsync("lane1", "/_template/t", """{"args": {"branch": "brief/x", "Branch": "brief/y"}}""");
+
+        Assert.Equal(400, BrokerHarness.StatusOf(response));
+        Assert.Contains("'Branch' is not declared", response);
+        Assert.DoesNotContain("given twice", response);
+        Assert.False(File.Exists(Ran));
+        Assert.Equal(0, _h.Secrets.Unlocks);
+    }
 
     [Theory]
     [InlineData("{}", "'branch' is required")]
@@ -406,7 +448,7 @@ public class BrokerTemplateVaultReadTests : IDisposable
         for (var i = 0; i < 50; i++)
             _m.Ok($"value-{i}\n", "ingest", "s" + i);
         var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
-        var decrypted = new List<string>();
+        List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
         var unlocks = 0;
         var hardware = new CountingHardware(new SimulatedHardwareService(HardwareBackend.Tpm, _m.Tpm!), () => unlocks++);
@@ -419,6 +461,28 @@ public class BrokerTemplateVaultReadTests : IDisposable
         Assert.Equal(2, decrypted.Count);
         Assert.Equal(2, decrypted.Distinct().Count());
         Assert.Equal(1, unlocks);
+        foreach (var v in values.Values)
+            v.Dispose();
+    }
+
+    /// <summary>Row 1b's pin: secrets whose names differ only in case are two secrets, each read as its own.</summary>
+    [Fact]
+    public void SecretsDifferingOnlyInCase_AreReadAsTwoSecrets()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        _m.Ok("", "init", "--tpm", "--no-recovery");
+        _m.Ok("lower-value\n", "ingest", "tok");
+        _m.Ok("upper-value\n", "ingest", "TOK");
+        var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
+        var source = new VaultBrokerSecretSource(store,
+            new VaultUnlocker(_m.Keys, overrideKey: null, additionalBackends: [new SimulatedHardwareService(HardwareBackend.Tpm, _m.Tpm!)]));
+
+        var values = source.ReadMany(["tok", "TOK"]);
+
+        Assert.Equal(2, values.Count);
+        Assert.Equal("lower-value", Encoding.UTF8.GetString(values["tok"].Value));
+        Assert.Equal("upper-value", Encoding.UTF8.GetString(values["TOK"].Value));
         foreach (var v in values.Values)
             v.Dispose();
     }

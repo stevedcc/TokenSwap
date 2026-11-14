@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -15,6 +15,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
     <PackageReference Include="xunit" Version="2.*" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.*" />
+    <!-- GHSA-vmv3-wvjp-wqpj (CVE-2026-118747): Yubico.YubiKey 1.18.1 brings System.Formats.Cbor 10.0.14; the fixed 11.0.0 -->
+    <PackageReference Include="System.Formats.Cbor" Version="11.0.0" />
   </ItemGroup>
 
   <ItemGroup>

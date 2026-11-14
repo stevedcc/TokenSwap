@@ -333,7 +333,7 @@ namespace TswapCore.Broker
                 if (buffer.Length > MaxTemplateBody)
                     throw new BrokerTemplateCallException("the request body is larger than 64 KiB");
             }
-            var args = new Dictionary<string, string>(StringComparer.Ordinal);
+            Dictionary<string, string> args = [with(StringComparer.Ordinal)];
             if (buffer.Length == 0)
                 return args;
             try

@@ -123,7 +123,7 @@ public sealed class BrokerHeaderSniffer : PipeReader
     /// <summary>The header names listed by raw <c>Connection</c> header lines in <paramref name="headerBlock"/> (lower case).</summary>
     public static IReadOnlySet<string> ParseConnectionTokens(byte[] headerBlock)
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> names = [with(StringComparer.OrdinalIgnoreCase)];
         var end = HeaderEnd(headerBlock);
         var text = Encoding.Latin1.GetString(headerBlock, 0, end < 0 ? headerBlock.Length : end);
         var lines = text.Split("\r\n");

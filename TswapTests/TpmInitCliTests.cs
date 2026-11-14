@@ -248,7 +248,7 @@ public class TpmInitCliTests : IDisposable
         var dir = NewTempDir();
         var (vaultKey, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, KeyA).Enroll(password: null);
         var storage = new Storage(dir);
-        storage.SaveConfig(new Config([], "", DateTime.UtcNow, RequiresTouch: false, RngMode: RngMode.System,
+        storage.SaveConfig(new Config([], "", TestTime.Fixed, RequiresTouch: false, RngMode: RngMode.System,
             Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(blob)));
         storage.SaveSecrets(new SecretsDb(new Dictionary<string, Secret>
         {

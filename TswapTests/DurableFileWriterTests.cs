@@ -15,7 +15,7 @@ public class DurableFileWriterTests
     public void WriteAtomic_WritesBytesReadableAfterward()
     {
         using var tempDir = new TempDirectory();
-        var bytes = new byte[] { 1, 2, 3, 4, 5, 250, 251, 252 };
+        byte[] bytes = [1, 2, 3, 4, 5, 250, 251, 252];
 
         DurableFileWriter.WriteAtomic(tempDir.Info, "target-file", bytes);
 

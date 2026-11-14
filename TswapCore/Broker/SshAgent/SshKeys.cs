@@ -126,7 +126,7 @@ public static class SshAgentKeyLoader
         foreach (var socket in policy.Sockets.Values.OrderBy(s => s.Name, StringComparer.Ordinal))
             if (socket.SshKeys.Count > SshAgentProtocol.MaxIdentities)
                 throw new TswapException($"Socket '{socket.Name}' lists {socket.SshKeys.Count} ssh keys; at most {SshAgentProtocol.MaxIdentities} are allowed.");
-        var bySecret = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, string> bySecret = [with(StringComparer.Ordinal)];
         foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
             if (!bySecret.TryAdd(config.SecretName, config.Name))
                 throw new TswapException($"Ssh keys '{bySecret[config.SecretName]}' and '{config.Name}' use the same secret '{config.SecretName}'; each key needs its own.");
@@ -138,7 +138,7 @@ public static class SshAgentKeyLoader
     /// </summary>
     internal static Dictionary<string, SshAgentKey> LoadValidated(BrokerPolicy policy, ISshKeySource source)
     {
-        var keys = new Dictionary<string, SshAgentKey>(StringComparer.Ordinal);
+        Dictionary<string, SshAgentKey> keys = [with(StringComparer.Ordinal)];
         foreach (var config in policy.SshKeys.Values.OrderBy(k => k.Name, StringComparer.Ordinal))
         {
             var what = $"Ssh key '{config.Name}' (secret '{config.SecretName}')";

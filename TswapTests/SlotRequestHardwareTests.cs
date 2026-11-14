@@ -45,7 +45,7 @@ public class SlotRequestHardwareTests : IDisposable
     }
 
     /// <summary>request (joiner, with <paramref name="flags"/>) → approve (router) → accept (joiner) → merge (router).</summary>
-    private void Join(FleetMachine joiner, params string[] flags)
+    private void Join(FleetMachine joiner, params ReadOnlySpan<string> flags)
     {
         var request = joiner.PathOf("request.json");
         var approve = joiner.PathOf("approve.json");
@@ -179,7 +179,7 @@ public class SlotRequestHardwareTests : IDisposable
     public void APendingSlotWithoutItsBlob_LocatorGivesATswapException()
     {
         // Review minor: a PendingSlotId with a null blob is a TswapException, never ArgumentNullException.
-        var pending = new Config([], "", DateTime.UtcNow, Backend: HardwareBackend.Tpm,
+        var pending = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.Tpm,
             PendingSlotId: Convert.ToBase64String(new byte[16]));
 
         var ex = Assert.Throws<TswapException>(() => TswapCore.Vault.HardwareBlobLocator.Read(pending, HardwareBackend.Tpm));
