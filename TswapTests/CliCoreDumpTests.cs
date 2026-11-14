@@ -95,8 +95,10 @@ public sealed class CliCoreDumpEndToEndTests(TswapBinaryFixture binary) : IClass
         psi.Environment["TSWAP_CONFIG_DIR"] = _configDir;
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(60)), "tswap didn't exit"); // review PR #298: never hang the suite
-        return (process.ExitCode, stdout.Result + stderr);
+        var stderr = process.StandardError.ReadToEndAsync();
+        // Review PR #298 (rounds 1 and 2): never hang the suite, also not on a child that keeps its pipes open.
+        Assert.True(process.WaitForExit(TimeSpan.FromSeconds(60)), "tswap didn't exit");
+        Assert.True(Task.WaitAll([stdout, stderr], TimeSpan.FromSeconds(10)), "tswap's output didn't end");
+        return (process.ExitCode, stdout.Result + stderr.Result);
     }
 }
