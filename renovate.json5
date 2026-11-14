@@ -1,0 +1,77 @@
+{
+  // Renovate for tswap (owner, 2026-11-14), modelled on Croft's. The hosted Mend Renovate GitHub App runs it;
+  // CI (ci.yml) must be green before anything automerges.
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':dependencyDashboard',
+    ':semanticCommitsDisabled',
+    'helpers:pinGitHubActionDigests', // actions stay pinned by SHA, Renovate moves the SHA + its version comment
+  ],
+  timezone: 'Europe/Berlin',
+  // A release must be at least this old before a PR (supply-chain guard: yanked or compromised releases are usually
+  // withdrawn within days); a security fix doesn't wait (vulnerabilityAlerts below).
+  minimumReleaseAge: '3 days',
+  prConcurrentLimit: 5,
+  prHourlyLimit: 0,
+  labels: ['dependencies'],
+  // Exact versions stay exact ([1.18.1] and plain 1.2.3 alike): every update is a visible PR.
+  rangeStrategy: 'pin',
+  packageRules: [
+    {
+      description: 'Majors are planned work (a .NET version, xunit v3): no PR until ticked on the Dependency Dashboard',
+      matchUpdateTypes: ['major'],
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'Security-critical packages: keys, crypto, the PTY, CBOR (FIDO2 messages). Never automerged: CI cannot run the hardware tests, so the owner decides (a Yubico SDK bump wants the B6 suite on the spare key).',
+      matchDatasources: ['nuget'],
+      matchPackageNames: [
+        'Yubico.YubiKey',
+        'BouncyCastle.Cryptography',
+        'Konscious.Security.Cryptography.Argon2',
+        'RedactingPty',
+        'System.Formats.Cbor',
+      ],
+      groupName: 'security-critical packages',
+      groupSlug: 'security-critical',
+      automerge: false,
+      labels: ['dependencies', 'security-critical'],
+    },
+    {
+      description: 'Test packages, one PR',
+      matchDatasources: ['nuget'],
+      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
+      groupName: 'test packages',
+    },
+    {
+      description: 'Automerge what CI can judge: test package patches, action digests and pins',
+      matchDatasources: ['nuget'],
+      matchPackageNames: ['Microsoft.NET.Test.Sdk', '/^xunit/'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+      automergeType: 'pr',
+      platformAutomerge: true,
+    },
+    {
+      description: 'GitHub Actions: digest and pin updates automerge; a new action version is a PR',
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['digest', 'pin', 'pinDigest'],
+      automerge: true,
+      automergeType: 'pr',
+      platformAutomerge: true,
+    },
+    {
+      description: 'global.json: follow the SDK feature band the repo is pinned to (11.0.1xx); a new band is a decision',
+      matchManagers: ['dotnet-version'],
+      matchUpdateTypes: ['patch'],
+      automerge: true,
+      automergeType: 'pr',
+      platformAutomerge: true,
+    },
+  ],
+  // A fix for a known vulnerability never waits for the release age, and is never automerged for the
+  // security-critical group (the rule above still applies).
+  vulnerabilityAlerts: { enabled: true, labels: ['security'], minimumReleaseAge: null },
+  osvVulnerabilityAlerts: true,
+}
