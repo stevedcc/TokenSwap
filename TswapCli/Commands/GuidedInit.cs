@@ -23,12 +23,12 @@ internal static class GuidedInit
 
     internal const string PickPrompt = "Pick one or more, separated by spaces (e.g. 1 3): ";
     // #299: (yes/no) has no default, (Y/n) and (y/N) default to the capital (YesNo).
-    internal static readonly string TouchPrompt = YesNo.Prompt("Touch ID (or your login password) on every unlock?", defaultAnswer: null);
+    internal static readonly YesNo.Question Touch = new("Touch ID (or your login password) on every unlock?", Default: null);
     internal const string WhichSlotsPrompt = "Which slots need the password? (e.g. 1 3; Enter = all): ";
     /// <summary>The vault-password question on the guided path: Enter is "no" (#299); the slot choice follows a "yes".</summary>
-    internal static readonly string PasswordPrompt = YesNo.Prompt("Add a vault password?", defaultAnswer: false);
-    internal static readonly string RecoveryPrompt = YesNo.Prompt("Add a recovery slot (recommended)?", defaultAnswer: true);
-    internal static readonly string OtherMachinesPrompt = YesNo.Prompt("Will other machines use this vault?", defaultAnswer: false);
+    internal static readonly YesNo.Question Password = new("Add a vault password?", Default: false);
+    internal static readonly YesNo.Question Recovery = new("Add a recovery slot (recommended)?", Default: true);
+    internal static readonly YesNo.Question OtherMachines = new("Will other machines use this vault?", Default: false);
     /// <summary>What the Secure Enclave touch question decides, in the guided flow's terms (not the flags').</summary>
     internal const string TouchExplanation =
         "With touch: every unlock asks for Touch ID or your login password. Without: the Secure Enclave opens the vault " +
@@ -170,7 +170,7 @@ internal static class GuidedInit
         {
             c.Out.WriteLine();
             c.Out.WriteLine(TouchExplanation);
-            requirePresence = AskYesNo(c, TouchPrompt, defaultAnswer: null);
+            requirePresence = AskYesNo(c, Touch);
             SecureEnclaveTouchChoice.WarnIfNoTouch(c, requirePresence);
         }
 
@@ -182,7 +182,7 @@ internal static class GuidedInit
             new VaultPasswordChoice.GuidedPasswordQuestion(
                 SeveralSlots: picked.Count > 1,
                 Kinds: [.. picked.Select(p => p.Device.Chip ?? HardwareBackend.YubiKey).Distinct()],
-                Ask: () => AskYesNo(c, PasswordPrompt, defaultAnswer: false)));
+                Ask: () => AskYesNo(c, Password)));
         var vaultKey = password?.VaultKey ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultKeySize);
         var vaultId = password?.VaultId ?? RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize);
         byte[]? assembledKey = null;
@@ -216,7 +216,7 @@ internal static class GuidedInit
 
             // Step 5: the recovery slot, recommended (the recovery slot never involves the password).
             // --recovery-key-out asks for one, so the question is skipped (review M7: never a silently unused flag).
-            var includeRecovery = !noRecovery && (keyFile is not null || AskYesNo(c, RecoveryPrompt, defaultAnswer: true));
+            var includeRecovery = !noRecovery && (keyFile is not null || AskYesNo(c, Recovery));
 
             // Step 6: create, in memory. The chip first, then the YubiKeys' OTP slots in ListSerials order, then the
             // FIDO2 slots (PIN tries are limited, so last); the first slot built is the machine slot (the config's
@@ -290,7 +290,7 @@ internal static class GuidedInit
                     // configured): explain, then carry on without it or stop. Nothing is written either way;
                     // K_v, the vault id and every slot built so far stay in memory, and no key is asked again.
                     c.Out.WriteLine(ex.Message);
-                    if (!AskYesNo(c, YesNo.Prompt($"Carry on without YubiKey {serial}?", defaultAnswer: false), defaultAnswer: false))
+                    if (!AskYesNo(c, new($"Carry on without YubiKey {serial}?", Default: false)))
                         throw new TswapException($"Stopped without YubiKey {serial}. No config or vault was written.");
                     continue;
                 }
@@ -356,7 +356,7 @@ internal static class GuidedInit
                 catch (TswapException ex)
                 {
                     c.Out.WriteLine(ex.Message);
-                    if (!AskYesNo(c, YesNo.Prompt($"Carry on without {slot.Device.Label}?", defaultAnswer: false), defaultAnswer: false))
+                    if (!AskYesNo(c, new($"Carry on without {slot.Device.Label}?", Default: false)))
                         throw new TswapException($"Stopped without {slot.Device.Label}. No config or vault was written.{StopNote()}");
                     continue;
                 }
@@ -417,7 +417,7 @@ internal static class GuidedInit
             bool? others = null;
             while (others is null)
             {
-                c.Out.Write(OtherMachinesPrompt);
+                c.Out.Write(OtherMachines.Prompt);
                 var answer = GuidedPrompts.ReadAnswer(c);
                 if (answer is null)
                 {
@@ -425,7 +425,7 @@ internal static class GuidedInit
                     others = false;
                 }
                 else
-                    others = YesNo.Parse(answer, defaultAnswer: false); // #299: anything else is asked again
+                    others = OtherMachines.Parse(answer); // #299: anything else is asked again
             }
             if (others == true)
             {
@@ -505,12 +505,12 @@ internal static class GuidedInit
     }
 
     /// <summary>A y/n question; <paramref name="defaultAnswer"/> answers an empty line, or null to ask again. Any other answer asks again.</summary>
-    private static bool AskYesNo(IConsole c, string prompt, bool? defaultAnswer)
+    private static bool AskYesNo(IConsole c, YesNo.Question question)
     {
         while (true)
         {
-            c.Out.Write(prompt);
-            if (YesNo.Parse(GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput(), defaultAnswer) is { } answer)
+            c.Out.Write(question.Prompt);
+            if (question.Parse(GuidedPrompts.ReadAnswer(c) ?? throw EndOfInput()) is { } answer)
                 return answer;
         }
     }

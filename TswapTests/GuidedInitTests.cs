@@ -597,7 +597,7 @@ public sealed class GuidedInitTests : IDisposable
         var (exit, stdout, stderr) = m.RunOnTerminal("\n1 2\nn\n", "init", "--no-password", "--recovery-key-out", keyFile);
 
         Assert.True(exit == 0, stderr + stdout);
-        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.RecoveryPrompt, stdout);
+        Assert.DoesNotContain(TswapCli.Commands.GuidedInit.Recovery.Prompt, stdout);
         Assert.Equal(32, Convert.FromBase64String(File.ReadAllText(keyFile).TrimEnd('\n')).Length);
         Assert.Contains(SlotKind.Recovery, m.Keyring.Slots.Select(s => s.Kind));
     }

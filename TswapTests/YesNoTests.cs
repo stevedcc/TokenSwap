@@ -50,6 +50,33 @@ public class YesNoTests
         Assert.Equal(["Overwrite? (yes/no): ", "Overwrite? (yes/no): ", "Overwrite? (yes/no): "], prompts);
     }
 
+    // Review of PR #214: endless answers that are neither yes nor no (redirected garbage) still end, with the
+    // end-of-input answer, after MaxUnrecognisedAnswers prompts.
+    [Fact]
+    public void Ask_EndlessUnrecognisedAnswers_GiveUpWithTheEndOfInputAnswer()
+    {
+        var prompts = 0;
+
+        var result = YesNo.Ask(_ => prompts++, () => "maybe", "Overwrite?", defaultAnswer: null);
+
+        Assert.False(result);
+        Assert.Equal(YesNo.MaxUnrecognisedAnswers, prompts);
+    }
+
+    // The FIDO2 PIN offer's shape: Enter is yes, but the end of input is no (review of PR #214, nit 5).
+    [Fact]
+    public void Ask_DefaultYes_EndOfInput_IsNo() =>
+        Assert.False(YesNo.Ask(_ => { }, () => null, "Set a FIDO2 PIN on it now?", defaultAnswer: true));
+
+    [Fact]
+    public void Question_HintAndParseShareOneDefault()
+    {
+        var question = new YesNo.Question("Add a recovery slot?", Default: true);
+
+        Assert.Equal("Add a recovery slot? (Y/n): ", question.Prompt);
+        Assert.True(question.Parse(""));
+    }
+
     [Fact]
     public void Ask_EndOfInput_IsTheGivenAnswer_NoByDefault()
     {
