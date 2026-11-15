@@ -20,6 +20,36 @@ public static class Validation
                     $"Unknown token '{{{{{m.Groups[1].Value}}}}}': the only suffix is ':previous' (the value the last rotation replaced).");
     }
 
+    // Any '{{…}}' without braces inside and with a dot, other than a '{{@file}}' token (a file name may have dots).
+    private static readonly Regex DottedTokenRegex = new(@"\{\{(?!@)([^{}]*\.[^{}]*)\}\}");
+
+    /// <summary>
+    /// #311 (owner decision A): commands never substitute fields. Throws for a dotted <c>{{…}}</c> token:
+    /// <c>{{NAME.FIELD}}</c> (a valid secret name, a valid field name) with the field message, any other
+    /// dotted shape (<c>{{a.b.c}}</c>, <c>{{.x}}</c>, <c>{{x.}}</c>, <c>{{a.B}}</c>) as not a valid token.
+    /// </summary>
+    public static void ThrowIfFieldOrMalformedToken(string command)
+    {
+        foreach (Match m in DottedTokenRegex.Matches(command))
+        {
+            var inner = m.Groups[1].Value;
+            var shown = Regex.Replace(m.Value, @"[^\x20-\x7E]", "?");
+            var dot = inner.IndexOf('.');
+            var name = inner[..dot];
+            var field = inner[(dot + 1)..];
+            if (inner.Count(ch => ch == '.') == 1 && ValidNameRegex.IsMatch(name) && TswapCore.Fields.FieldRules.ValidateName(field) is null)
+                throw new TswapException(FieldTokenMessage(shown, name));
+            throw new TswapException(
+                $"'{shown}' is not a valid token: a token is {{{{NAME}}}} or {{{{NAME:previous}}}}, " +
+                "and fields aren't substituted into commands.");
+        }
+    }
+
+    /// <summary>The refusal for a field named where a command (token or marker) would substitute it.</summary>
+    public static string FieldTokenMessage(string shown, string name) =>
+        $"'{shown}' is a field: fields aren't substituted into commands. " +
+        $"Read it with 'tswap field show {name}' and write the value into the command.";
+
     private static readonly Regex ValidNameRegex = new(@"^[a-zA-Z0-9_-]+$");
     private const int MaxNameLength = 64;
     private const int MaxGeneratedLength = 4096;

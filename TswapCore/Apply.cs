@@ -10,6 +10,7 @@ public static class Apply
     // Fix round 3/4: every marker on a line must be 'name' or 'name:previous'; any other
     // ':suffix' is a typo, refused (naming it) instead of applying 'name'.
     private static readonly Regex AnyMarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::[^\s#]*)*)");
+    private static readonly Regex FieldMarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+)\.[a-z0-9_-]{1,64}(?![a-zA-Z0-9_.-])");
     private static readonly Regex ValidMarkerTail = new(@"^[a-zA-Z0-9_-]+(?::previous)?$");
     
     // Match empty string patterns with quotes: key: "" or key: ''
@@ -61,6 +62,11 @@ public static class Apply
 
             if (!markerMatch.Success)
                 continue;
+
+            // #311 (owner decision A): '# tswap: NAME.FIELD' would silently fill NAME's value; refuse it.
+            if (FieldMarkerRegex.Match(line) is { Success: true } fieldMarker)
+                throw new TswapException(
+                    Validation.FieldTokenMessage(fieldMarker.Value.TrimEnd(), fieldMarker.Groups[1].Value) + $" (line {i + 1})");
 
             foreach (Match marker in AnyMarkerRegex.Matches(line))
                 if (!ValidMarkerTail.IsMatch(marker.Groups[1].Value))

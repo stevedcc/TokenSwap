@@ -29,6 +29,8 @@ public sealed class RunCommand : ICliCommand
 
         // Find {{tokens}} (an unknown '{{name:suffix}}' is an error, never literal text) and {{@file}} tokens.
         Validation.ThrowIfUnknownTokenSuffix(commandJoined);
+        // #311 (owner decision A): fields never reach a command; a dotted token is refused before unlock.
+        Validation.ThrowIfFieldOrMalformedToken(commandJoined);
         var tokens = Validation.ExtractTokens(commandJoined);
         var fileTokens = commandArgs.SelectMany(Validation.ExtractFileTokens).Distinct(StringComparer.Ordinal).ToList();
 
