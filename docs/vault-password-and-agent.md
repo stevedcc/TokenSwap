@@ -27,6 +27,7 @@ tswap init --tpm --password                  # asks for the password twice and c
 tswap init --secure-enclave --with-touch --password
 tswap init --yubikey --password              # a YubiKey slot
 sudo tswap slot add --yubikey --password     # a later password slot: asks once, checked against the vault
+sudo tswap slot add --tpm --password         # a TPM password slot; on a vault without a password, the first one
 tswap slot request --tpm --password [--vault-dir <shared folder>] request.json
 # recover --password: the recovery key on the first line, the vault password on the next
 printf '%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" | sudo tswap recover --tpm --password
@@ -37,7 +38,7 @@ printf '%s\n%s\n%s\n' "$RECOVERY_KEY" "$PASSWORD" "$PASSWORD" | sudo tswap recov
 `$RECOVERY_KEY` and `$PASSWORD` stand for your own values. Don't type them into a command line,
 where shell history keeps them; read them without echo instead (bash: `read -rs PASSWORD`).
 
-- **The choice.** `init`, `slot add --yubikey`, `slot request` and `recover` take `--password` or
+- **The choice.** `init`, `slot add` (every backend), `slot request` and `recover` take `--password` or
   `--no-password`.
   - With neither, on a terminal, tswap explains the choice and asks
     (`Add a vault password? (yes/no, default no)`).

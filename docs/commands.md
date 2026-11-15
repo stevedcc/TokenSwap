@@ -23,7 +23,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `slot approve` | sudo | Unlocks this vault and writes a file that lets whoever holds the request's private key open it: the same risk as `export` |
 | `slot accept` | no | Finishes enrolment on the new machine. On a record-store vault, or with `--vault-dir`, it also writes the new slot into the vault folder's keyring; the human check for that slot was the earlier `sudo tswap slot approve` |
 | `slot merge` | sudo | Adds the slots of a receipt: each one is a new way to open the vault |
-| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential) as a new slot: a new way to open the vault |
+| `slot add` | sudo | Adds a plugged-in YubiKey (its OTP challenge-response, or a FIDO2 credential) or another brand's security key (a FIDO2 credential), or this machine's TPM or Secure Enclave, as a new slot: a new way to open the vault |
 | `broker serve` | no | Runs as the vault's own user; it refuses root |
 | `broker unlock` | no | Runs as the vault user; it refuses sudo |
 | `broker lock` | no | Runs as the vault user; it refuses sudo |
