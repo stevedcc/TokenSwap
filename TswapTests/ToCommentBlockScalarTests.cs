@@ -323,6 +323,23 @@ public sealed class ToCommentBlockScalarTests
     }
 
     [Fact]
+    public void ContinuationRun_StopsAtTheKeptLine_LaterLinesSurvive()
+    {
+        // The removal of continuation lines stops at the kept line (a break, not a continue): the
+        // base64-looking line after it is block text too, and stays. Only the kept line is reported.
+        const string looksLikeBase64 = "    YWJjZGVmZ2hpamtsbW5vcA==";
+        var content = "script: |\n  export A=" + Tok + "\n    " + B64(Other) + "\n" + looksLikeBase64 + "\n";
+
+        var (result, changes, unreplaced) = Redact.ToCommentReporting(content, Db(("tok", Tok), ("other", Other)));
+
+        Assert.Equal("script: |\n  export A=\"\"  # tswap: tok\n    " + B64(Other) + "\n" + looksLikeBase64 + "\n", result);
+        LineDiff[] expected = [new(2, "  export A=" + Tok, "  export A=\"\"  # tswap: tok")];
+        Assert.Equal(expected, changes);
+        UnreplacedLine[] left = [new(3, "other")];
+        Assert.Equal(left, unreplaced);
+    }
+
+    [Fact]
     public void SameValueTwiceOnALine_OneRecord()
     {
         AssertLeft("k: |\n  " + B64(Tok) + " " + B64(Tok) + "\n", Db(("tok", Tok)), new UnreplacedLine(2, "tok"));
@@ -354,6 +371,10 @@ public sealed class ToCommentBlockScalarTests
     [InlineData("k: |++\n a\n", "000")]                         // one chomping indicator only
     [InlineData("k: | x\n a\n", "000")]                         // text after the indicator
     [InlineData("k: v\n a\n", "000")]
+    [InlineData("k:|\n a\n", "010")]                           // accepted over-mark: YAML reads 'k:|' as a plain scalar
+    [InlineData("- - key: |\n      a\n    sib: x\n", "0100")]  // nested entry: the inner key's column (4), so 'sib' is not content
+    [InlineData("  - - key: |\n        a\n      sib: x\n", "0100")]
+    [InlineData("? key: |\n    a\n  c\n", "0100")]             // explicit key: the key's column (2), so 'c' is not content
     public void BlockScalarContent_MarksContentLines(string content, string expected)
     {
         var marks = ToCommentProcessor.BlockScalarContent(content.Split('\n'));
@@ -528,7 +549,7 @@ public sealed class ToCommentBlockScalarCommandTests : IDisposable
 
         Assert.True(exit == 0, stderr);
         Assert.Contains(Warning(2, "pem"), stderr);
-        foreach (var text in (string[])[B64(Pem), IssueLine.Trim(), .. Pem.Split('\n'), "plain-Secret-value-9"])
+        foreach (var text in (string[])[B64(Pem), IssueLine, IssueLine.Trim(), .. Pem.Split('\n'), "plain-Secret-value-9"])
         {
             Assert.DoesNotContain(text, stdout);
             Assert.DoesNotContain(text, stderr);

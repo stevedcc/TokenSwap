@@ -125,7 +125,8 @@ public static class ToCommentProcessor
     // sequence entry '- ' optionally followed by such a key; then node properties (an anchor '&name' and/or
     // a tag '!…', each followed by whitespace); then '|' or '>' with at most one chomping indicator and one
     // indentation digit in either order; then an optional ' # comment'. The node column is the key's
-    // column, or the dash's for a bare '- |'.
+    // column, or the dash's for a bare '- |'. The key shape also takes a nested entry or an explicit key
+    // ('- - key: |', '? key: |'); those count too, with the column of the key itself (KeyColumn).
     private static readonly Regex BlockStart = new(
         @"^\s*(?:(?<dash>-)[ ]+(?<key>[^#\s][^#]*?:)?|(?<key>[^#\s][^#]*?:))\s*(?:[&!]\S*\s+){0,2}[|>](?:[+-][1-9]?|[1-9][+-]?)?(?:\s+#.*)?\s*$");
 
@@ -145,13 +146,29 @@ public static class ToCommentProcessor
             var start = BlockStart.Match(lines[i]);
             if (!start.Success)
                 continue;
-            var column = start.Groups["key"].Success ? start.Groups["key"].Index : start.Groups["dash"].Index;
+            var column = start.Groups["key"].Success ? KeyColumn(lines[i], start.Groups["key"].Index) : start.Groups["dash"].Index;
             var j = i + 1;
             for (; j < limit && (IsBlank(lines[j]) || Indentation.LeadingWhitespace(lines[j]) > column); j++)
                 content[j] = true;
             i = j - 1;
         }
         return content;
+    }
+
+    /// <summary>
+    /// Brief T22 (code review): the column of the key that starts at <paramref name="at"/>, past any nested
+    /// sequence-entry dashes and explicit-key marks before it (<c>- - key:</c>, <c>? key:</c>), each a
+    /// <c>-</c> or <c>?</c> followed by spaces. A dash with no space after it (<c>-key:</c>) is the key's own.
+    /// </summary>
+    private static int KeyColumn(string line, int at)
+    {
+        while (at + 1 < line.Length && line[at] is '-' or '?' && line[at + 1] == ' ')
+        {
+            at++;
+            while (at < line.Length && line[at] == ' ')
+                at++;
+        }
+        return at;
     }
 
     /// <summary>YAML chomping: <c>-</c> strips every trailing LF, none (clip) keeps exactly one, <c>+</c> keeps them all.</summary>
