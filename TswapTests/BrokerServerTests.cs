@@ -18,11 +18,9 @@ public class BrokerServerTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _h.DisposeAsync();
 
-    [Fact]
+    [UnixFact]
     public async Task AllowedUid_GetsAnAnswer_FromTheSocketItArrivedOn()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
 
         var response = await _h.GetAsync("lane1", "/echo/a/b");
@@ -33,11 +31,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Contains($"socket=lane1 uid={BrokerHarness.MyUid} pid={Environment.ProcessId} route=echo method=GET path=\"a/b\" status=200", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task PeerCredentials_AreTheConnectingProcesses_ReadFromTheAcceptedSocket()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
 
         // Another process connects: the logged pid is that client's, not this (listening) process's,
@@ -56,11 +52,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.DoesNotContain($"pid={Environment.ProcessId} ", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task UidNotOnTheList_IsClosedWithNothingReturned_AndLogged()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var otherUid = BrokerHarness.MyUid == 0 ? 1u : BrokerHarness.MyUid - 1;
         await _h.StartAsync(_h.Config(lane1Uids: $"\"{otherUid}\", \"{BrokerHarness.MyUid + 1}-{BrokerHarness.MyUid + 100}\""));
 
@@ -73,11 +67,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.DoesNotContain("request socket=", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task OneRequestPerConnection_SoAReloadThatDropsTheUid_RefusesTheNextRequest()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         using var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await client.ConnectAsync(new UnixDomainSocketEndPoint(_h.SocketPath("lane1")));
@@ -100,11 +92,10 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(1, _h.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task SocketDir_GroupWritable_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.SetUnixFileMode(_h.SocketDir, (UnixFileMode)0b111_111_000);
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync());
@@ -113,22 +104,19 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Empty(Directory.GetFileSystemEntries(_h.SocketDir));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task SocketDir_WorldWritable_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.SetUnixFileMode(_h.SocketDir, (UnixFileMode)0b111_101_011);
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync());
         Assert.Contains("writable by group or others", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task SocketDir_WrongOwner_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var someoneElse = new FileOwnershipTests.FakeOwnership(privileged: false, euid: BrokerHarness.MyUid, dirUid: BrokerHarness.MyUid + 1);
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync(ownership: someoneElse));
@@ -137,11 +125,10 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Empty(Directory.GetFileSystemEntries(_h.SocketDir));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task SocketDir_Symlink_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var real = Path.Combine(_h.Root, "real");
         Directory.CreateDirectory(real);
         File.SetUnixFileMode(real, (UnixFileMode)0b111_000_000);
@@ -154,22 +141,18 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Empty(Directory.GetFileSystemEntries(real));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task RunningAsRoot_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var root = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0, dirUid: 0);
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync(ownership: root));
         Assert.Contains("never as root", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task SecondServe_OnTheSameSocketDir_Refuses_AndTheFirstKeepsServing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => BrokerServer.StartAsync(_h.Options()));
@@ -178,11 +161,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task StaleSocket_FromAKilledServe_IsCleanedUpUnderTheLock()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A socket file left behind (bound, never unlinked), as a killed serve leaves it. .NET unlinks
         // a bound socket's file on dispose, so the file is renamed into place first.
         var bound = Path.Combine(_h.SocketDir, "bound.sock");
@@ -199,11 +180,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Contains("started", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task NonSocketAtTheSocketPath_IsNotRemoved_AndStopsTheStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.WriteAllText(_h.SocketPath("lane1"), "not a socket");
 
         var ex = await Assert.ThrowsAsync<TswapException>(() => _h.StartAsync());
@@ -215,11 +194,9 @@ public class BrokerServerTests : IAsyncLifetime
         await _h.StartAsync();
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Sockets_Are0666_AndGoneAfterAStop_AndTheLockIsReleased()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         Assert.Equal([_h.SocketPath("lane1"), _h.SocketPath("other")], server.SocketPaths);
         foreach (var path in server.SocketPaths)
@@ -234,11 +211,9 @@ public class BrokerServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ limits
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task Limiter_PerSocketAndTotalSlots_Defaults()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var limits = new BrokerLimits();
         Assert.Equal(4, limits.PerSocketInFlight);
         Assert.Equal(8, limits.TotalInFlight);
@@ -274,11 +249,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(0, limiter.Queued);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task Limiter_BoundedQueue_17thWaiterGetsNoSlotAtOnce()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var limiter = new BrokerLimiter(new BrokerLimits(), new BrokerManualClock());
         for (var i = 0; i < 8; i++)
             Assert.NotNull(await limiter.TryAcquireAsync("s" + (i % 2), default));
@@ -291,11 +264,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(16, limiter.Queued);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task Limiter_WaitsAtMost30Seconds_OnTheInjectedClock()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var clock = new BrokerManualClock();
         var limiter = new BrokerLimiter(new BrokerLimits(), clock);
         for (var i = 0; i < 4; i++)
@@ -310,11 +281,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(0, limiter.Queued);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Server_NoSlotWithin30Seconds_Gives503()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _h.FakeForwarder.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var inFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.FakeForwarder.Entered += n => { if (n == 4) inFlight.TrySetResult(); };
@@ -355,11 +324,9 @@ public class BrokerServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ unlock failures
 
-    [Fact]
+    [UnixFact]
     public async Task ThreeUnlockFailures_LockOutThatSocket_ForFiveMinutes_OtherSocketsStillWork()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _h.Secrets.Fail = true;
         await _h.StartAsync();
 
@@ -386,11 +353,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ASuccessfulUnlock_EndsTheRunOfFailures()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         _h.Secrets.Fail = true;
         for (var i = 0; i < 2; i++)
@@ -405,11 +370,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(503, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void GlobalUnlockLimit_30UnlockAttemptsAMinute_SuccessfulOrNot_ThenRefused_RefusalsDontCount()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var clock = new BrokerManualClock();
         var guard = new BrokerUnlockGuard(new BrokerLimits(), clock);
         for (var i = 0; i < 30; i++)
@@ -431,11 +394,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Null(guard.Refusal("fresh"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Server_31stUnlockInAMinute_Gets503_EvenWhenEveryUnlockSucceeded()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         for (var i = 0; i < 30; i++)
             Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync(i % 2 == 0 ? "lane1" : "other", i % 2 == 0 ? "/echo/a" : "/second/a")));
@@ -480,11 +441,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ConnectionCaps_Defaults()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var limits = new BrokerLimits();
         Assert.Equal(16, limits.MaxConnectionsPerSocket);
         Assert.Equal(64, limits.MaxConnections);
@@ -492,11 +451,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(64, _h.Server!.KestrelOptions.Limits.MaxConcurrentConnections);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task MoreIdleConnectionsThanTheSocketCap_AreRefused_AnotherSocketStillAnswers()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync();
         var idle = await OpenIdleAsync("lane1", 16);
         try
@@ -518,11 +475,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task MoreConnectionsThanTheTotalCap_AreRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync(limits: new BrokerLimits { MaxConnectionsPerSocket = 4, MaxConnections = 6 });
         var idle = await OpenIdleAsync("lane1", 4);
         try
@@ -545,20 +500,67 @@ public class BrokerServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ bounded unlock
 
-    private Task WaitForUnlocksStartedAsync(int count)
+    /// <summary>
+    /// Waits until <paramref name="count"/> unlocks have started and the unlock timeout of this request is armed, so
+    /// an <see cref="BrokerManualClock.Advance"/> reaches it (#288: the read starts on the pool before the handler
+    /// arms the timeout, and an advance in between was lost). <paramref name="armedBefore"/> is
+    /// <see cref="BrokerManualClock.UnlockTimersArmed"/> read before the send: every earlier timer was armed before
+    /// its response was read, so the next one is this request's. Needs a gated read (<see cref="FakeBrokerSecrets.Gate"/>):
+    /// an ungated one may complete before <c>WaitAsync</c>, which then arms no timer, and this would never return.
+    /// </summary>
+    private Task WaitForUnlockArmedAsync(int count, int armedBefore)
     {
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _h.Secrets.UnlockStarted += n => { if (n >= count) started.TrySetResult(); };
-        if (_h.Secrets.Unlocks >= count) // subscribed first, so a start in between is not missed
-            started.TrySetResult();
-        return started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Check()
+        {
+            if (_h.Secrets.Unlocks >= count && _h.Clock.UnlockTimersArmed > armedBefore)
+                ready.TrySetResult();
+        }
+        _h.Secrets.UnlockStarted += _ => Check();
+        _h.Clock.UnlockTimerArmed += Check;
+        Check(); // subscribed to both first, so neither signal in between is missed
+        return ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
-    [Fact]
+    [UnixFact]
+    public async Task WaitForUnlockArmed_WaitsForTheTimeoutToBeArmed_NotOnlyForTheReadToStart()
+    {
+        // #288: the fake's read starts on the pool before the handler arms the unlock timeout; an Advance in between
+        // was lost and the request hung until the harness's guard. Here the arming is held, with the read started.
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _h.Secrets.Gate = hang;
+        _h.Secrets.UnlockStarted += _ => started.TrySetResult();
+        _h.Clock.HoldUnlockTimerCreation = hold;
+        _h.Clock.UnlockTimerCreationHeld += () => held.TrySetResult();
+        await _h.StartAsync();
+        try
+        {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
+            var request = _h.GetAsync("lane1", "/echo/a");
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await held.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var wait = WaitForUnlockArmedAsync(1, armedBefore);
+            Assert.False(wait.IsCompleted);
+
+            hold.TrySetResult();
+            await wait;
+            _h.Clock.Advance(TimeSpan.FromSeconds(30));
+            Assert.Equal(503, BrokerHarness.StatusOf(await request));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            hang.TrySetResult();
+        }
+    }
+
+    [UnixFact]
     public async Task UnlockThatHangs_IsAbandonedAfter30Seconds_With503_AndLogged()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(TimeSpan.FromSeconds(30), new BrokerLimits().UnlockTimeout);
         Assert.Equal(3, new BrokerLimits().UnlockTimeoutsBeforeExit);
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -566,8 +568,9 @@ public class BrokerServerTests : IAsyncLifetime
         await _h.StartAsync();
         try
         {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var request = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(1);
+            await WaitForUnlockArmedAsync(1, armedBefore);
             _h.Clock.Advance(TimeSpan.FromSeconds(29));
             Assert.False(request.IsCompleted);
             _h.Clock.Advance(TimeSpan.FromSeconds(1));
@@ -584,11 +587,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ThreeUnlockTimeoutsInARow_FailTheServer_SoServeExitsNonZero()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.Secrets.Gate = hang;
         await _h.StartAsync();
@@ -596,8 +597,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 3; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
                 Assert.Equal(i == 3, _h.Server!.Fatal.IsCompleted);
@@ -611,11 +613,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ACompletedUnlock_EndsTheRunOfTimeouts()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.Secrets.Gate = hang;
         await _h.StartAsync();
@@ -623,8 +623,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 2; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -632,8 +633,9 @@ public class BrokerServerTests : IAsyncLifetime
             _h.Secrets.Gate = null;
             Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
             _h.Secrets.Gate = hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var armedBeforeAgain = _h.Clock.UnlockTimersArmed;
             var again = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBeforeAgain);
             _h.Clock.Advance(TimeSpan.FromSeconds(30));
             Assert.Equal(503, BrokerHarness.StatusOf(await again));
             Assert.False(_h.Server!.Fatal.IsCompleted);
@@ -644,11 +646,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AFailedUnlock_AlsoEndsTheRunOfTimeouts()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.Secrets.Gate = hang;
         await _h.StartAsync();
@@ -656,8 +656,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 2; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -667,8 +668,9 @@ public class BrokerServerTests : IAsyncLifetime
             Assert.Equal(502, BrokerHarness.StatusOf(await _h.GetAsync("other", "/second/a")));
             _h.Secrets.Fail = false;
             _h.Secrets.Gate = hang;
+            var armedBeforeAgain = _h.Clock.UnlockTimersArmed;
             var again = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBeforeAgain);
             _h.Clock.Advance(TimeSpan.FromSeconds(30));
             Assert.Equal(503, BrokerHarness.StatusOf(await again));
             Assert.False(_h.Server!.Fatal.IsCompleted);
@@ -679,11 +681,9 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task CancelledUnlocksAndClientAborts_DontEndTheRunOfTimeouts_AWedgedUnlockStillReachesTheFatalExit()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.Secrets.Gate = hang;
         await _h.StartAsync();
@@ -691,8 +691,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             async Task TimeoutAsync(int startedCount)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(startedCount);
+                await WaitForUnlockArmedAsync(startedCount, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -707,8 +708,9 @@ public class BrokerServerTests : IAsyncLifetime
             await TimeoutAsync(3);
 
             // A client that gives up while queued behind the wedged unlock.
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var stuck = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBefore);
             var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
             var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -729,18 +731,17 @@ public class BrokerServerTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ClientAbortWhileQueuedForTheUnlock_IsLogged()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _h.Secrets.Gate = hang;
         await _h.StartAsync();
         try
         {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var first = _h.GetAsync("lane1", "/echo/first");
-            await WaitForUnlocksStartedAsync(1);
+            await WaitForUnlockArmedAsync(1, armedBefore);
             var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
             var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -764,13 +765,11 @@ public class BrokerServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ fix round 1, minors
 
-    [Theory]
+    [UnixTheory]
     [InlineData("cancel")]
     [InlineData("other")]
     public async Task AnyOtherExceptionFromTheSecretSource_IsTheUniform502_AndLogged(string kind)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _h.Secrets.Throw = kind == "cancel" ? new OperationCanceledException() : new InvalidOperationException("boom");
         await _h.StartAsync();
 
@@ -785,11 +784,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a"))); // the unlock lock was released
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ConnectionOnASocketRemovedByReload_IsLoggedAsSocketRemoved()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var server = await _h.StartAsync();
         var config = BrokerPolicy.Deserialize(_h.Config());
         Assert.True(server.Reload(() => BrokerPolicy.Validate(config with { Sockets = [.. config.Sockets.Where(x => x.Name != "lane1")] })));
@@ -800,11 +797,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.DoesNotContain("uid-not-allowed", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task HeaderSniffer_ZeroesItsCapture_AfterUse()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var pipe = new System.IO.Pipelines.Pipe();
         var sniffer = new BrokerHeaderSniffer(pipe.Reader);
         await pipe.Writer.WriteAsync("GET / HTTP/1.1\r\nConnection: x-a\r\nAuthorization: Bearer client\r\n\r\n"u8.ToArray());
@@ -832,11 +827,10 @@ public class BrokerServerTests : IAsyncLifetime
         return path;
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task SocketDir_UnderAGroupOrWorldWritableParent_RefusesToStart()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var parent = Path.Combine(_h.Root, "open");
         Directory.CreateDirectory(parent);
         File.SetUnixFileMode(parent, (UnixFileMode)0b111_111_111); // 0777, no sticky bit
@@ -849,11 +843,10 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Empty(Directory.GetFileSystemEntries(socketDir));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task SocketDir_UnderASymlinkedParent_IsResolved_AndItsRealParentsChecked()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A symlinked parent pointing into a world-writable folder: the real chain is checked.
         var open = Path.Combine(_h.Root, "open");
         Directory.CreateDirectory(open);
@@ -878,22 +871,19 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(BrokerNative.EntryType.Socket, BrokerNative.LStat(Path.Combine(realSocketDir, "lane1.sock"))!.Value.Type);
     }
 
-    [Fact]
+    [LinuxFact]
     public void ParentChain_AcceptsARootOwnedStickyFolderLikeTmp()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tmp = BrokerNative.LStat("/tmp")!.Value;
         if (tmp.Uid != 0 || (tmp.Mode & UnixFileMode.StickyBit) == 0)
             return; // not the usual /tmp
         Assert.Equal(_h.SocketDir, BrokerServer.CheckSocketDir(_h.SocketDir, new UnixOwnership()));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task LockFile_IsTightenedTo0600()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var lockPath = Path.Combine(_h.SocketDir, BrokerServer.LockFileName);
         File.WriteAllText(lockPath, "");
         File.SetUnixFileMode(lockPath, (UnixFileMode)0b110_110_110);
@@ -903,10 +893,10 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(lockPath));
     }
 
-    [Fact]
+    [LinuxFact]
     public void BrokerLog_WriteFailure_DegradesToStderrOnce_AndKeepsGoing()
     {
-        if (!OperatingSystem.IsLinux() || !File.Exists("/dev/full"))
+        if (!File.Exists("/dev/full"))
             return;
         var stderr = new StringWriter();
         using var log = new BrokerLog(stderr, "/dev/full", _h.Clock); // every write fails (ENOSPC)
@@ -920,10 +910,10 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Contains(lines, l => l.EndsWith("event two"));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ALogFileThatFailsWrites_DoesNotBreakRequests()
     {
-        if (!OperatingSystem.IsLinux() || !File.Exists("/dev/full"))
+        if (!File.Exists("/dev/full"))
             return;
         await _h.StartAsync();
         await _h.Server!.StopAsync();
@@ -935,11 +925,9 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Contains("route=echo", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task ServeLock_HeldByAnotherProcess_IsAnotherServe()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var lockPath = Path.Combine(_h.SocketDir, BrokerServer.LockFileName);
         File.WriteAllText(lockPath, "");
         using var held = await BrokerHarness.HoldLockInAnotherProcessAsync(lockPath);
@@ -952,10 +940,11 @@ public class BrokerServerTests : IAsyncLifetime
         Assert.Empty(Directory.GetFiles(_h.SocketDir, "*.sock"));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task ServeLock_ThatCantBeCreated_EACCES_IsAnErrorNamingTheFile()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // root creates the file anyway
         File.SetUnixFileMode(_h.SocketDir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // 0500
         try

@@ -275,11 +275,10 @@ public sealed class VaultReindexTests : IDisposable
         Assert.Empty(_m.RecordFiles);
     }
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Reindex_UnderSudo_KeepsTheVaultOwnerAndModes()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         V2Vault();
         var fake = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0);
         _m.Ownership = new DirectoryOwnerMatcher(fake);

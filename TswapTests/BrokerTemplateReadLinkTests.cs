@@ -53,11 +53,9 @@ public sealed class BrokerTemplateReadLinkTests : IDisposable
     private static string Refused(string json) =>
         Assert.Throws<BrokerConfigException>(() => BrokerPolicy.Parse(json, new BrokerHostContext(BrokerHarness.MyUid, [], [], []))).Message;
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void AnUnreadableLink_OnTheProgramOrBwrapPath_IsRefusedWithItsOwnReason()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var link = Path.Combine(_root, "link");
         File.CreateSymbolicLink(link, Path.Combine(Work, "v2")); // dangling, so the resolver must readlink it
         BrokerTemplateValidator.ReadLink = _ => null; // as readlink failing (EACCES, EIO) on a link lstat sees

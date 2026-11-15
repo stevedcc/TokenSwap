@@ -102,10 +102,10 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
-    [Fact]
+    [LinuxFact("the end-to-end serve test is Linux-only (the binary's serve tests use prctl and /proc)")]
     public async Task Serve_ListsTheKeyOnItsAgentSocket_AsSshAddPrintsIt()
     {
-        if (SshTestSkip.OffLinux(_output) || SshTestSkip.WithoutKeyTools(_output))
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         if (SshTestKeys.Which("ssh-add") is null)
         {
@@ -143,12 +143,12 @@ public class SshAgentServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDi
         Assert.Equal(SshTestKeys.Fingerprint(key + ".pub"), SshTestKeys.Fingerprint(listedFile));
     }
 
-    [Theory]
+    [LinuxTheory("the end-to-end serve test is Linux-only (the binary's serve tests use prctl and /proc)")]
     [InlineData("encrypted")]
     [InlineData("rsa-2048")]
     public void Serve_WithAKeyItCantUse_RefusesToStart_NamingTheKey(string problem)
     {
-        if (SshTestSkip.OffLinux(_output) || SshTestSkip.WithoutKeyTools(_output))
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var key = problem == "encrypted"
             ? _keys.Generate("id", "ed25519", passphrase: "pw")

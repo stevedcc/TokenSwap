@@ -29,11 +29,9 @@ public class BrokerVaultReadTests : IDisposable
         return Assert.IsType<RecordVaultStore>(VaultStores.Open(_m.Dir));
     }
 
-    [Fact]
+    [UnixFact]
     public void ARequest_DecryptsExactlyOneRecord_OfFifty()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var store = RecordVault(50);
         List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
@@ -48,11 +46,9 @@ public class BrokerVaultReadTests : IDisposable
         Assert.NotEqual(decrypted[0], decrypted[1]);
     }
 
-    [Fact]
+    [UnixFact]
     public void AMissingSecret_DecryptsNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var store = RecordVault(3);
         List<string> decrypted = [];
         store.RecordDecrypted = decrypted.Add;
@@ -61,11 +57,9 @@ public class BrokerVaultReadTests : IDisposable
         Assert.Empty(decrypted);
     }
 
-    [Fact]
+    [UnixFact]
     public void AnUnreadableTargetRecord_FailsClosed_AndNoOtherRecordIsRead()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var store = RecordVault(5);
         var key = Unlocker().Unlock(store.LoadConfig(), _ => 0);
         var target = Path.Combine(store.RecordsDir, TswapCore.Keyring.FilenameHasher.ComputeFilename(
@@ -82,20 +76,16 @@ public class BrokerVaultReadTests : IDisposable
         Assert.Equal([Path.GetFileName(target)], decrypted);
     }
 
-    [Fact]
+    [UnixFact]
     public void AnUnlockThatFails_IsAnUnlockFailure()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var store = RecordVault(1);
         Assert.Throws<BrokerUnlockException>(() => new VaultBrokerSecretSource(store, Unlocker(new byte[32])).Read("s0"));
     }
 
-    [Fact]
+    [UnixFact]
     public void Serve_OnAClassicVault_RefusesToStart_NamingTheMigration()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // Brief T16-S1: a classic vault as 0.1's init --tpm made it (init makes record vaults now); the
         // route is added first, since broker route add opens the vault too.
         var initOutput = _m.Ok("", "init", "--tpm");
@@ -108,11 +98,9 @@ public class BrokerVaultReadTests : IDisposable
         Assert.Contains("sudo tswap migrate --to-records", err);
     }
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
     public void BrokerSetup_MigrateAsRootIntoTheVaultUsersFolder_WritesEverythingAsThatUser()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         // BROKER.md's setup step: `sudo TSWAP_CONFIG_DIR=/home/vault/.config/tswap tswap migrate
         // --to-records`, run as root on the vault user's folder (T5's DirectoryOwnerMatcher).
         // Brief T16-S1: a classic TPM keyring vault as 0.1's init made it (init makes record vaults now).

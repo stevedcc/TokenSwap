@@ -59,11 +59,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         return (client, SshBindMessages.SignRequest(BlobA, SshBindMessages.Userauth(sid, "ssh-ed25519", BlobA)));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task UnlockFailuresOnTheHttpSocket_LockOutTheAgentSocketOfTheSameClient()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var source = await StartSharedAsync();
         var loads = source.Reads;
         _h.Broker.Secrets.Fail = true;
@@ -79,11 +77,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         await _h.Broker.WaitForLogAsync("reason=locked-out");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task UnlockFailuresOnTheAgentSocket_LockOutTheHttpSocketOfTheSameClient()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var source = await StartSharedAsync();
         var loads = source.Reads;
         var (client, request) = await BoundSignRequestAsync();
@@ -114,11 +110,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         KeySource = new FakeSshKeySource(_ => null),
     };
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AReloadThatRemovesTheClientSocket_RemovesItsAgentSocket()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var server = await _h.StartAsync(_h.Config(), Agent);
         var without = _h.Config().Replace(
             $$"""{ "name": "other", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["k2"] },""", "");
@@ -131,11 +125,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.Contains("agent socket 'other.ssh' removed", _h.Broker.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AReloadThatRemovesASocketsLastKey_RemovesItsAgentSocket()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var server = await _h.StartAsync(_h.Config(), Agent);
 
         Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(lane1Keys: []))));
@@ -150,11 +142,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.Contains("restart serve", _h.Broker.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AReloadAfterTheAgentSocketFileWentMissing_SaysSo_InsteadOfRemoved()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var server = await _h.StartAsync(_h.Config(), Agent);
         File.Delete(_h.AgentSocket("lane1"));
 
@@ -164,11 +154,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.DoesNotContain("agent socket 'lane1.ssh' removed", _h.Broker.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task TheRestartNeededNotice_IsLoggedOnce_NotOnEveryReload()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var server = await _h.StartAsync(_h.Config(), Agent);
         Assert.True(server.Reload(() => BrokerPolicy.Parse(_h.Config(lane1Keys: []))));
 
@@ -179,11 +167,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.Equal(1, notices);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AReloadListingMoreThan64Keys_IsWarnedOnce_AndOffersTheFirst64ByName()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var names = Enumerable.Range(0, 65).Select(i => $"k{i:D2}").ToList();
         var keys = names.Index().Select(p => (n: p.Item, $"s{p.Index}", new[] { SshAgentHarness.SomeHostFingerprint })).ToList();
         var loaded = names.Index().Select(p => new SshAgentKey(p.Item, $"s{p.Index}", SshAgentMessages.Ed25519Blob((byte)p.Index))).ToDictionary(k => k.Name);
@@ -199,11 +185,9 @@ public class SshAgentHardeningTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.Equal(1, _h.Broker.LogText.ToString().Split('\n').Count(l => l.Contains("socket 'lane1' lists 65 ssh keys after the reload")));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AKeyNamedTwiceOnOneSocket_IsOneIdentity()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         // T9's config model keeps a socket's ssh_keys as a set, so a name listed twice can't be listed
         // or matched twice (MiMo N3): nothing for the agent to refuse.
         await _h.StartAsync(_h.Config(lane1Keys: ["k1", "k1"]), Agent);

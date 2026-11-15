@@ -26,11 +26,9 @@ public class BrokerRedactorTests
         return data;
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Forms_CoverEveryEncodingTheBriefLists()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var bytes = Encoding.UTF8.GetBytes(Secret);
         var forms = BrokerRedactor.ForSecret(bytes, "x-access-token").Forms.Select(f => Encoding.Latin1.GetString(f)).ToHashSet();
 
@@ -47,12 +45,10 @@ public class BrokerRedactorTests
         Assert.Contains(forms, f => f.Contains("\\/") && f.StartsWith("s3cr3t-Value_", StringComparison.Ordinal)); // '/' escaped as \/
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix only")]
     [MemberData(nameof(Forms))]
     public void EveryForm_IsRedacted_WholeAndSplitAcrossChunks(string form)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), "x-access-token");
         var whole = Run(redactor, "before " + form + " after");
         Assert.Equal("before [REDACTED] after", whole);
@@ -68,11 +64,9 @@ public class BrokerRedactorTests
         }
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Base64AtAnyAlignment_InsideALongerBase64Stream_IsRedacted()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var secret = Encoding.UTF8.GetBytes("a-long-enough-secret-value-123");
         foreach (var prefix in new[] { "", "x", "xy" })
         {
@@ -85,11 +79,9 @@ public class BrokerRedactorTests
         }
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void OneByteChunks_AreRedacted_AndOtherBytesPassUnchanged()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         var text = "x" + Secret + "y" + Secret + Secret + "z\u0000ÿ";
         var output = new MemoryStream();
@@ -100,11 +92,9 @@ public class BrokerRedactorTests
         Assert.Equal("x[REDACTED]y[REDACTED][REDACTED]z\u0000ÿ", Encoding.UTF8.GetString(output.ToArray()));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Window_IsLongestFormMinusOne_AndProcessNeverHoldsMore()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), "x-access-token");
         Assert.Equal(redactor.Forms.Max(f => f.Length) - 1, redactor.Window);
 
@@ -117,21 +107,17 @@ public class BrokerRedactorTests
         Assert.Equal(chunk.Length, output.Length);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Contains_FindsAFormInAHeaderValue()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         Assert.True(redactor.Contains("token=" + Convert.ToHexString(Encoding.UTF8.GetBytes(Secret)).ToLowerInvariant()));
         Assert.False(redactor.Contains("nothing here"));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Clear_ZeroesTheForms()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var redactor = BrokerRedactor.ForSecret(Encoding.UTF8.GetBytes(Secret), null);
         var forms = redactor.Forms.ToList();
         redactor.Clear();

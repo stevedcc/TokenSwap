@@ -26,11 +26,9 @@ public class CommandReferenceTests
     /// The refusal quoted in "Fingerprints, format 2 records and vault reindex" is the text redact
     /// prints (Linux/macOS form), whitespace aside: the block is wrapped for reading.
     /// </summary>
-    [Fact]
+    [UnixFact("the page quotes the sudo form; Windows prints the elevated-prompt form")]
     public void QuotedRedactRefusal_IsTheCommandsText()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the page quotes the sudo form; Windows prints the elevated-prompt form
         var page = Page().Replace("\r\n", "\n");
         var start = page.IndexOf("The message (one line on stderr", StringComparison.Ordinal);
         Assert.True(start >= 0, "the quoted refusal is gone from docs/commands.md");
@@ -211,11 +209,9 @@ public class CommandReferenceTests
 
     private const string SudoRefusal = "command requires"; // "The '<name>' command requires sudo" (Windows: "an administrator prompt")
 
-    [Fact]
+    [UnixFact("the broker is Unix only, and Windows CI runs elevated")]
     public async Task SudoTableMatchesBehaviour()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only, and Windows CI runs elevated
         if (Environment.IsPrivilegedProcess)
             return; // the refusal can't happen in a privileged process (AGENTS.md, sudo-refusal tests)
 

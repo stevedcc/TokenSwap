@@ -32,7 +32,10 @@ tswap <command>
 
 Tests live in `TswapTests/`. On Linux/macOS use
 `./runtests.sh` (`--unit` for in-process tests, ~5 s; `--e2e` for the end-to-end smoke
-tests that spawn the built binary; no flag runs both). Or run directly:
+tests that spawn the built binary; no flag runs both). `--perf` runs `Category=Perf`, the wall-clock
+budgets (the Argon2 KDFs; the redaction throughput also needs `TSWAP_PERF=1`), which every default
+and CI run leaves out (#300): run it on the owner's machines before a release and after any change
+to `VaultPasswordParams` or the KDFs. Or run directly:
 ```shell
 # Linux/macOS:
 TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj

@@ -48,11 +48,9 @@ public class TouchNoticeTests : IDisposable
     private string SlotIdOf(int serial) => Convert.ToBase64String(_m.Keyring.Slots
         .Single(s => YubiKeySlotBlob.IsYubiKeyBlob(s.HwBlob) && YubiKeySlotBlob.Decode(s.HwBlob!).Serial == serial).SlotId);
 
-    [Fact]
+    [UnixFact("run's child is a POSIX sh script")]
     public void EverydayCommands_OnAnAcknowledgedNoTouchVault_PrintNothingOnStderr()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // run's child is a POSIX sh script (until #181: reported as Passed on Windows)
         Init(SerialA, touch: false);
         var script = _m.PathOf("exit7.sh");
         File.WriteAllText(script, "test -n \"$1\" && exit 7\n");

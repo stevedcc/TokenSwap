@@ -89,15 +89,14 @@ public class TpmLockoutWarningTests : IDisposable
         Assert.Equal(1, _probes);
     }
 
-    [Theory]
+    [LinuxTheory]
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     [InlineData("io")]
     [InlineData("tswap")]
     [InlineData("other")]
     public void Probe_AnyFailure_IsSilentNull(string kind)
     {
         // Ruling 17, review T17 p1 GLM M1 / MiMo I3: a failed probe is silent, whatever failed.
-        if (!OperatingSystem.IsLinux())
-            return;
         using var _ = Tpm2ToolsInterop.UseRunner((_, _, _, _) => throw (kind switch
         {
             "io" => new IOException("pipe broke"),

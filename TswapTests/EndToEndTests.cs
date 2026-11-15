@@ -96,15 +96,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// unset) must get the vault under ~/.config/tswap — not in a "tswap" folder relative to
     /// wherever init happened to run — and find it again from any other folder.
     /// </summary>
-    [Fact]
+    [LinuxFact("the XDG rule is the Linux path; macOS resolves ApplicationData through the OS, not from $HOME, so a temp HOME isolates nothing and init would touch the real profile; Windows resolves it through the known-folder API, so the fresh-user case can't be set up from the environment there")]
     public void FreshUserWithoutDotConfig_VaultIsUnderHome_AndFoundFromAnotherFolder()
     {
         // Linux only. The XDG rule ($XDG_CONFIG_HOME, else $HOME/.config) is the Linux path:
         // on macOS .NET resolves ApplicationData to ~/Library/Application Support through the
         // OS (NSApplicationSupportDirectory), not from $HOME, so a temp HOME isolates nothing
         // there and init would touch the real profile's vault folder. Windows uses %APPDATA%.
-        // (Reported as Passed elsewhere until #181 turns these into real skips.)
-        if (!OperatingSystem.IsLinux()) return;
 
         var home = Path.Combine(_tempDir, "home");
         var initFolder = Path.Combine(_tempDir, "init-here");
@@ -344,12 +342,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.Contains("[REDACTED: my-pass]", stdout);
     }
 
-    [Fact]
+    [UnixFact("POSIX sh/echo only")]
     public void Run_FirstLineOfStdoutNotDropped()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX sh/echo only
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
@@ -407,12 +402,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// tswap now execs argv[0] directly (issue #75 fix), so the compound command string
     /// is passed as a literal argument to sh -c with no intermediate shell re-parsing.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void Run_FirstLineOfStdoutNotDropped_UnixPty()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
@@ -544,12 +536,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// default-interface dispatch of RedactingPty's options overload are exercised), a vault secret the
     /// command never named is masked by its fingerprints.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void EndToEnd_Run_OtherSecretMasked_RealPty()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
         RunTswapWithStdin("other-vault-value-42", "ingest", "other");
@@ -571,12 +560,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// for terminal input. The answer is typed only after the prompt has shown; without the release the
     /// child waits forever and the harness's deadline ends the test without the answer.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void EndToEnd_Run_PromptVisible_WithPemInVault()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("token-value-7", "ingest", "token");
         RunTswapWithStdin("-----BEGIN KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END KEY-----", "ingest", "pem");
@@ -594,12 +580,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// exist, on JIT hosts with W^X on (stevedcc/RedactingPty#3, fixed in 1.0.2). tswap's test
     /// binary is a JIT host and its tests used to set DOTNET_EnableWriteXorExecute=0, which hid it.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void Run_CommandNotFound_UnixPty_Exits127WithDiagnostic()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswapWithStdin("s3cr3t", "ingest", "my-secret");
 
@@ -895,11 +878,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     // After the fix, TreatControlCAsInput intercepts it, the finally block resets the flag,
     // OperationCanceledException propagates to the top-level handler, and "Cancelled" is printed.
 
-    [Fact]
+    [UnixFact]
     public void Add_CtrlC_DuringPasswordPrompt_PrintsCancelledAndExits130()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
 
         var (exitCode, output, loopEnd) = RunTswapWithPtyCtrlC("Secret value for", "add", "ctrlc-secret");
@@ -910,11 +891,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.True(output.Contains("Cancelled"), $"Expected 'Cancelled' in PTY output: [{output}]. Read loop: {loopEnd}");
     }
 
-    [Fact]
+    [UnixFact]
     public void Export_CtrlC_DuringPassphrasePrompt_PrintsCancelledAndExits130()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswap("create", "a-secret");
         var exportPath = Path.Combine(_tempDir, "ctrlc-export.enc");
@@ -928,11 +907,9 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
         Assert.False(File.Exists(exportPath), $"export file must not be created on cancellation. Read loop: {loopEnd}");
     }
 
-    [Fact]
+    [UnixFact]
     public void Import_CtrlC_DuringPassphrasePrompt_PrintsCancelledAndExits130()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
-
         RunTswap("init", "--yubikey", "--no-recovery");
         RunTswap("create", "a-secret");
         var exportPath = Path.Combine(_tempDir, "ctrlc-import.enc");

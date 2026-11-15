@@ -191,15 +191,13 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
 
     // ------------------------------------------------------------------ allowed
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [InlineData("a", "publickey")]
     [InlineData("a", "publickey-hostbound-v00@openssh.com")]
     [InlineData("b", "publickey")]
     [InlineData("r", "publickey")]
     public async Task BoundToAnAllowedHost_ASignedUserauthRequest_Verifies(string keyName, string method)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (blob, host, algorithm) = keyName switch
         {
@@ -221,11 +219,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.DoesNotContain(Convert.ToBase64String(data), log);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task RsaSha256_IsSignedWithSha256()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var _ = client;
@@ -239,13 +235,11 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
 
     // ------------------------------------------------------------------ the bind
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [InlineData(SshAgentProtocol.RsaSha2_256)]
     [InlineData(SshAgentProtocol.RsaSha2_512)]
     public async Task RsaHostKey_BindsWithASha2Signature(uint hostFlags)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(Z, hostFlags: hostFlags);
         using var c = client;
@@ -263,11 +257,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.Equal(0, SignUnlocks);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task ForgedBindSignature_IsRefused_AndClosesTheConnection()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var sid = NewSessionId();
@@ -275,11 +267,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(X.Blob, sid, X.Sign(NewSessionId())), "bad-signature");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task BindSignedByAnotherKey_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var sid = NewSessionId();
@@ -288,11 +278,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(X.Blob, sid, impostor.Sign(sid)), "bad-signature");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task SecondBind_IsRefused_EvenAValidOne()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, _) = await BoundAsync(X);
         using var c = client;
@@ -301,11 +289,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(X.Blob, sid, X.Sign(sid)), "second-bind");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task ForwardingBind_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var sid = NewSessionId();
@@ -313,11 +299,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(X.Blob, sid, X.Sign(sid), forwarding: 1), "forwarding");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task BindToAHostNoKeyOfThisSocketAllows_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var elsewhere = TestHostKey.NewEd25519();
@@ -326,11 +310,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(elsewhere.Blob, sid, elsewhere.Sign(sid)), "host-not-allowed");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task Sha1RsaHostSignature_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         using var rsa = RSA.Create(3072);
@@ -344,14 +326,12 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.Contains("reason=bad-signature detail=sha1", _h.Broker.LogText.ToString());
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [InlineData("ssh-dss")]
     [InlineData("ssh-ed25519-cert-v01@openssh.com")]
     [InlineData("sk-ssh-ed25519@openssh.com")]
     public async Task UnsupportedHostKeyType_IsRefused(string type)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var blob = new SshWriter().String(type).String(new byte[32]).ToArray();
@@ -360,13 +340,11 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(blob, sid, X.Sign(sid)), "host-key-type");
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [InlineData(0)]
     [InlineData(129)]
     public async Task BindWithAnEmptyOrOversizeSessionId_IsRefused(int length)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var sid = new byte[length];
@@ -374,11 +352,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertBindRefusedAndClosedAsync(client, SshBindMessages.Bind(X.Blob, sid, X.Sign(sid)), "malformed");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task BindWithTrailingBytes_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
         var sid = NewSessionId();
@@ -398,22 +374,18 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.Equal(3, SshAgentMessages.ParseIdentities((await client.RequestAsync(SshAgentMessages.RequestIdentities))!).Count);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task SignWithoutABind_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         using var client = await _h.ConnectAsync("lane1");
 
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(A, SshBindMessages.Userauth(NewSessionId(), "ssh-ed25519", A)), "no-session-bind");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task ABindIsPerConnection_NotSharedWithAnother()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (bound, sid) = await BoundAsync(X);
         using var _ = bound;
@@ -422,11 +394,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(other, SshBindMessages.SignRequest(A, SshBindMessages.Userauth(sid, "ssh-ed25519", A)), "no-session-bind");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task SignForAnotherSession_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, _) = await BoundAsync(X);
         using var c = client;
@@ -434,11 +404,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(A, SshBindMessages.Userauth(NewSessionId(), "ssh-ed25519", A)), "session-id");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task CrossProduct_ABindAllowedForKeyA_NeverLetsKeyBSign()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X); // X is allowed for a (and r), not for b (Y only)
         using var c = client;
@@ -446,11 +414,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(B, SshBindMessages.Userauth(sid, "ecdsa-sha2-nistp256", B)), "host-not-allowed");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AKeyOnAnotherSocketsList_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X); // c allows X, but c is on socket other's list only
         using var c = client;
@@ -458,11 +424,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(C, SshBindMessages.Userauth(sid, "ssh-ed25519", C)), "key-not-allowed");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AnUnknownKey_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -471,14 +435,12 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(stranger, SshBindMessages.Userauth(sid, "ssh-ed25519", stranger)), "key-not-allowed");
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [InlineData(0u, "rsa-sha2-256")]
     [InlineData(6u, "rsa-sha2-256")]
     [InlineData(1u, "rsa-sha2-256")]
     public async Task RsaWithoutExactlyOneSha2Flag_IsRefused(uint flags, string algorithm)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -486,11 +448,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         await AssertSignRefusedAsync(client, SshBindMessages.SignRequest(R, SshBindMessages.Userauth(sid, algorithm, R), flags), flags == 0 ? "rsa-sha1" : "flags");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task Ed25519WithAFlag_IsRefused()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -500,12 +460,10 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
 
     public static TheoryData<string> NotUserauth => ["trailing", "sshsig", "other-blob", "other-algorithm", "service", "method", "no-signature", "message-type", "hostbound-other-host", "hostbound-missing-host", "empty", "garbage"];
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [MemberData(nameof(NotUserauth))]
     public async Task NotAnOracle_AnythingButThisSessionsUserauthRequest_IsRefused(string shape)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -533,11 +491,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.Contains("key=a", _h.Broker.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task MalformedSignRequest_IsRefused_WithNoUnlock()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -547,11 +503,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
 
     // ------------------------------------------------------------------ limits
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task SignRateLimit_RefusesBeyondIt_WithNoUnlock_UntilAMinutePasses()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync(signsPerMinute: 2);
         var (client, sid) = await BoundAsync(X);
         using var c = client;
@@ -568,11 +522,9 @@ public class SshAgentBindTests(Xunit.Abstractions.ITestOutputHelper output) : IA
         Assert.Equal(3, SignUnlocks);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task UnlockFailures_AreAnsweredWithFailure_AndLockTheSocketOut()
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         await StartAsync();
         var (client, sid) = await BoundAsync(X);
         using var c = client;

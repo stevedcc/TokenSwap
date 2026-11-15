@@ -349,13 +349,11 @@ public sealed class MigrateToRecordsTests : IDisposable
         Assert.Equal(secrets["secret-09"].Value, ValueOf("secret-09"));
     }
 
-    [Fact]
+    [UnixFact("Unix modes make the temp folder undeletable here")]
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ATempFolderThatCantBeRemovedAfterAFailedRename_StillRefusesCleanly_NamingIt()
     {
         // Fix round 4, item 7.
-        if (OperatingSystem.IsWindows())
-            return; // Unix modes make the temp folder undeletable here
         PlainVaultWithFiftySecrets();
         var planted = Path.Combine(DefaultVaultDir, "someone-elses-file");
         string? locked = null;

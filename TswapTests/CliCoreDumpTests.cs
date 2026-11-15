@@ -59,11 +59,10 @@ public sealed class CliCoreDumpEndToEndTests(TswapBinaryFixture binary) : IClass
             Directory.Delete(_configDir, true);
     }
 
-    [Fact]
+    [LinuxFact("/proc; macOS's part (the core limit) is the same setrlimit call, covered by the unit test")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void RunningTswap_HasASoftCoreLimitOfZero_AndStaysReadableForPeerChecks()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // /proc; macOS's part (the core limit) is the same setrlimit call, covered by the unit test
         Directory.CreateDirectory(_configDir);
         Assert.Equal(0, Run("init", "--yubikey", "--no-recovery").Exit);
         Assert.Equal(0, Run("create", "probe", "16").Exit); // run needs a token; the script ignores its $1

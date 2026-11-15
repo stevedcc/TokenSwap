@@ -255,7 +255,7 @@ public class BrokerTemplateFixRound1Tests(ITestOutputHelper output) : IDisposabl
 
     // ------------------------------------------------------------------ GLM 6 / MiMo M7, M6: config refusals
 
-    [Theory]
+    [LinuxTheory("templates are Linux only")]
     [InlineData("BASH_ENV")]
     [InlineData("ENV")]
     [InlineData("PS4")]
@@ -268,18 +268,14 @@ public class BrokerTemplateFixRound1Tests(ITestOutputHelper output) : IDisposabl
     [InlineData("PWD")]
     public void CodeRunningEnvNames_AreRefused(string name)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only
         var ex = Assert.Throws<BrokerConfigException>(() => _bed.Template(_bed.Script("true"), extra: $", \"env\": {{ {J(name)}: \"x\" }}"));
         Assert.Contains(name, ex.Message);
         _bed.Template(_bed.Script("true"), extra: ", \"env\": { \"PGHOST\": \"x\" }"); // the positive: an ordinary name
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only")]
     public void AnArgvThatCanOutgrowExecve_IsRefusedAtLoad()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only
         var names = Enumerable.Range(0, 12).Select(i => "a" + i).ToList();
         var args = "{" + string.Join(", ", names.Select(n => $"\"{n}\": {{ \"pattern\": \"x+\", \"max_length\": 4096 }}")) + "}";
         var oneEntry = $"[\"/bin/bash\", {J(_bed.Script("true"))}, \"{string.Concat(names.Select(n => "{" + n + "}"))}\"]";
@@ -291,11 +287,9 @@ public class BrokerTemplateFixRound1Tests(ITestOutputHelper output) : IDisposabl
         _bed.Template("", argv: separate, args: args);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only")]
     public void TemplateAdd_WithADuplicateKeyInEnvOrArgs_IsACleanRefusal()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only
         using var m = new FleetMachine("tplfix");
         var file = Path.Combine(_bed.Root, "dup.json");
         File.WriteAllText(file, $$"""{ "name": "t", "argv": ["/usr/bin/true"], "env": { "A": "1", "A": "2" } }""");
@@ -309,11 +303,9 @@ public class BrokerTemplateFixRound1Tests(ITestOutputHelper output) : IDisposabl
 
     // ------------------------------------------------------------------ GLM 4 / MiMo M10: the vault folder found without a store
 
-    [Fact]
+    [LinuxFact("templates are Linux only")]
     public void ForVault_FindsTheRecordStoresVaultFolder_FromTheConfigFolderAlone()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only
         using var m = new FleetMachine("tplvault") { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };
         m.Ok("", "init", "--tpm", "--no-recovery");
 

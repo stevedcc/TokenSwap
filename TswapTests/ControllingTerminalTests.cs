@@ -19,11 +19,10 @@ public class ControllingTerminalTests : IDisposable
             File.Delete(_file);
     }
 
-    [Fact]
+    [UnixFact("no /dev/tty reader on Windows")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void UnixTty_NotATerminal_ReadSecretFailsClosed()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no /dev/tty reader on Windows
         File.WriteAllText(_file, "123456\nsecond line\n");
 
         // A file descriptor whose echo can't be switched off (tcgetattr fails): the secret is not read, it's a cancel.
@@ -38,11 +37,10 @@ public class ControllingTerminalTests : IDisposable
 
     // Final review (GLM p6a I1): tcgetattr succeeds but switching the echo off fails: nothing is read with the echo
     // on; the saved settings are put back and the read is a cancel.
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void UnixTty_EchoOffFails_RestoresAndCancels()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.WriteAllText(_file, "123456\nsecond line\n");
         var calls = new FailingSetAttr();
 
@@ -62,11 +60,10 @@ public class ControllingTerminalTests : IDisposable
 
     // Follow-up review: after a resume (SIGCONT, fg) the echo-off is applied again; when that fails, what is typed
     // next was typed with the echo on, so the pending read is a cancel. A real SIGCONT reaches a read blocked on a FIFO.
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task UnixTty_EchoOffFailsAfterResume_ReadIsCancelled()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(0, mkfifo(_file, 0x180)); // 0600
         var calls = new FailingAfterResume();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_file, calls);
@@ -146,11 +143,10 @@ public class ControllingTerminalTests : IDisposable
         }
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void UnixTty_MissingDevice_IsNoTerminal()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Null(ControllingTerminal.UnixTty.OpenPath(_file + "-absent"));
     }
 

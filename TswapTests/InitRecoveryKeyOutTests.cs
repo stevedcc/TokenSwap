@@ -150,11 +150,9 @@ public sealed class InitRecoveryKeyOutTests : IDisposable
         Assert.Contains(Serial, m.Keys.Challenges.Select(c => c.Serial));
     }
 
-    [Fact]
+    [UnixFact("the folder-owner rule is Unix's (sudo)")]
     public void RecoveryKeyOut_UnderSudo_FileOwnedByFolderOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the folder-owner rule is Unix's (sudo)
         var m = Machine();
         var root = new RecordingRoot();
         m.Ownership = new DirectoryOwnerMatcher(root);
@@ -249,10 +247,11 @@ public sealed class InitRecoveryKeyOutTests : IDisposable
         AssertNothingWritten(m);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void RecoveryKeyOut_VaultWriteFails_FileDeleted()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // needs a folder this process can't write into: Unix mode bits, and not root (root writes anyway)
         var m = Machine();
         var locked = Path.Combine(Outside(), "locked");
@@ -273,10 +272,11 @@ public sealed class InitRecoveryKeyOutTests : IDisposable
     /// A failure after it (here config.json, in a config folder this process can't write) keeps the key file, since
     /// the key opens what was written, and says where both are.
     /// </summary>
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void RecoveryKeyOut_FailureAfterTheKeyringIsWritten_KeyFileKept()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // needs a folder this process can't write into: Unix mode bits, and not root (root writes anyway)
         var m = Machine();
         var vaultDir = Path.Combine(Outside(), "vault");
@@ -365,11 +365,10 @@ public sealed class InitRecoveryKeyOutTests : IDisposable
         Assert.Contains("tswap never stores it anywhere", stdout.Replace("\n", " "));
     }
 
-    [Fact]
+    [WindowsFact("the file's ACL (Unix: its mode, in RecoveryKeyOut_KeyOnlyInTheFile)")]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public void RecoveryKeyOut_WindowsAclIsCurrentUserOnly()
     {
-        if (!OperatingSystem.IsWindows())
-            return; // Windows only: the file's ACL (Unix: its mode, in RecoveryKeyOut_KeyOnlyInTheFile)
         var m = Machine();
         var keyFile = Path.Combine(Outside(), "recovery-key");
 

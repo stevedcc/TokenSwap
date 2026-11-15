@@ -97,11 +97,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
 
     // ------------------------------------------------------------------ routes
 
-    [Fact]
+    [UnixFact]
     public async Task ARoute_WithA15ByteSecret_LogsTheWarningOnce_ASecondRequestLogsNothingNew()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartFakeForwarderAsync(_h, Short15);
 
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
@@ -113,11 +111,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
         Assert.Equal(2, _h.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ARoute_WithA16ByteSecret_LogsNoWarning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartFakeForwarderAsync(_h, Long16);
 
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
@@ -126,11 +122,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
         Assert.Equal(0, Warnings(_h));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TwoRoutesSharingOneShortSecret_LogOneWarningInTotal()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartFakeForwarderAsync(_h, Short15);
 
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
@@ -142,11 +136,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
         Assert.Equal(1, Warnings(_h));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AShortSecret_AndALongOne_GetTheSameStatus_RedactedBody_AndHeaders()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await using var shortH = new BrokerHarness();
         await using var longH = new BrokerHarness();
         await StartEchoingAsync(shortH, Short15);
@@ -168,11 +160,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
         Assert.DoesNotContain(Short15, shortResponse);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TheFirstRequest_WhoseUpstreamAnswers500_StillLogsTheWarning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartEchoingAsync(_h, Short15, status: 500);
 
         var response = await _h.GetAsync("lane1", "/echo/a");
@@ -181,11 +171,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
         Assert.Equal(1, Count(_h.LogText.ToString(), EventLine("tok")));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TheWarningMessage_HoldsNeitherTheSecretNorItsLength()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartFakeForwarderAsync(_h, Short15);
 
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
@@ -240,11 +228,9 @@ public class BrokerShortSecretWarningTests(ITestOutputHelper output) : IAsyncLif
     private static readonly byte[] KeyA = SshTestKeyMaker.Ed25519Pem(RandomNumberGenerator.GetBytes(32));
     private static readonly byte[] BlobA = SshTestKeyMaker.PublicBlob(KeyA);
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public async Task AnSshAgentSign_LogsNoWarning()
     {
-        if (SshTestSkip.OnWindows(output))
-            return;
         await using var ssh = new SshAgentHarness();
         var config = $$"""
             {

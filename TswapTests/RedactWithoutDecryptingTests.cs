@@ -207,10 +207,11 @@ public sealed class RedactWithoutDecryptingTests : IDisposable
         Assert.Empty(_values);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Redact_Refusal_DoesNotOpenTheInput()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // mode 000 can't stop an administrator from opening it
         InitFormatTwo();
         _m.Ok("legacy-value-1", "ingest", "legacy");

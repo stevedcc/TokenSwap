@@ -153,11 +153,10 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         return BrokerHarness.StatusOf(System.Text.Encoding.ASCII.GetString(ms.ToArray()));
     }
 
-    [Fact]
+    [LinuxFact("prctl and /proc are Linux; serve on macOS is covered by the in-process tests")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Serve_IsNonDumpable_UnlocksPerRequest_KeepsItsConfigOnABadSighup_AndCleansUpOnSigterm()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // prctl and /proc are Linux; serve on macOS is covered by the in-process tests
         Ok("", "init", "--tpm", "--no-recovery");
         Ok("tok-value\ntok-value\n", "add", "tok");
         // An upstream nothing listens on: the request unlocks, then fails upstream (502).
@@ -221,11 +220,9 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
     /// is unlocked by 'broker unlock' (non-dumpable from then on, so a second unlock can't read its link),
     /// serves, and after 'broker lock' is locked and dumpable again.
     /// </summary>
-    [Fact]
+    [LinuxFact("prctl and /proc are Linux; the macOS side is covered in process")]
     public async Task Unlock_ThenLock_ThenLockedAgain()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // prctl and /proc are Linux; the macOS side is covered in process
         const string password = "correct horse battery staple";
         Ok(password + "\n" + password + "\n", "init", "--tpm", "--password", "--no-recovery");
         var (added, _, addErr) = RunOnTerminal("tok-value\ntok-value\n" + password + "\n", "add", "tok");
@@ -282,11 +279,9 @@ public class BrokerServeEndToEndTests : IClassFixture<TswapBinaryFixture>, IDisp
         Assert.DoesNotContain("tok-value", File.ReadAllText(Path.Combine(ConfigDir, BrokerLog.FileName)));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Forward_RefusesANonLoopbackListenAddress()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var p = Process.Start(Psi(false, "broker", "forward", "--listen", "0.0.0.0:18080"))!;
         p.StandardInput.Close();
         var stderr = await p.StandardError.ReadToEndAsync();

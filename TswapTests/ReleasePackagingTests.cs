@@ -207,24 +207,18 @@ public class ReleasePackagingTests : IDisposable
         return [.. output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Order()];
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsArchive_HoldsTheSecureEnclaveDylibNextToTheBinary()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("osx-arm64", Publish("tswap", "libtswapse.dylib"));
 
         Assert.True(exitCode == 0, output);
         Assert.Equal(["libtswapse.dylib", "tswap"], ArchiveEntries("osx-arm64"));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsArchive_WithoutTheDylib_FailsInsteadOfShipping()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("osx-arm64", Publish("tswap"));
 
         Assert.NotEqual(0, exitCode);
@@ -232,12 +226,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_dir, "dist", "tswap-osx-arm64.tar.gz")), "no archive may be left behind");
     }
 
-    [Fact]
+    [UnixFact]
     public void LinuxArchive_HoldsOnlyTheBinary()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("linux-x64", Publish("tswap"));
 
         Assert.True(exitCode == 0, output);
@@ -248,12 +239,9 @@ public class ReleasePackagingTests : IDisposable
     /// Review of #239: CI derives the rid from a folder name, so a wrong folder (say <c>net10.0/publish</c>) must fail
     /// the packaging, not pack a Linux-style archive for a macOS job and smoke-test nothing about the dylib.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void UnknownRid_FailsWithoutAnArchive()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("net10.0", Publish("tswap", "libtswapse.dylib"));
 
         Assert.NotEqual(0, exitCode);
@@ -263,12 +251,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>--smoke runs the binary unpacked from the archive (not the one in the publish folder), with prompt-hash.</summary>
-    [Fact]
+    [UnixFact]
     public void Smoke_RunsTheBinaryUnpackedFromTheArchive()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var publish = PublishFakeBinary(exitCode: 0);
         var (exitCode, output) = Package("linux-x64", publish, "--smoke");
 
@@ -283,12 +268,9 @@ public class ReleasePackagingTests : IDisposable
     /// The macOS smoke's commands, pinned here so a flag typo fails in the suite, not after a timeout on the macOS CI
     /// leg: a no-prompt Secure Enclave init and an unlock, both in a throwaway config folder inside the unpacked archive.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_MakesAndUnlocksASecureEnclaveVaultInAThrowawayConfig()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var publish = PublishFakeBinary(exitCode: 0, "libtswapse.dylib");
         var (exitCode, output) = Package("osx-arm64", publish, "--smoke");
 
@@ -306,12 +288,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>A binary that fails its smoke run fails the packaging.</summary>
-    [Fact]
+    [UnixFact]
     public void Smoke_WithABinaryThatFails_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 3), "--smoke");
 
         Assert.NotEqual(0, exitCode);
@@ -320,12 +299,9 @@ public class ReleasePackagingTests : IDisposable
 
     // ---- Brief T18: every smoke checks `tswap --version` against TSWAP_EXPECT_VERSION. ----
 
-    [Fact]
+    [UnixFact]
     public void Smoke_ChecksTheUnpackedBinarysVersion()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var publish = PublishFakeBinary(exitCode: 0);
         var (exitCode, output) = Package("linux-x64", publish, "--smoke");
 
@@ -336,19 +312,16 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains($"tswap --version: tswap {FakeVersion}", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ChecksTheVersionToo()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = MacOsSmoke();
 
         Assert.True(exitCode == 0, output);
         Assert.EndsWith(" with: --version", Assert.Single(VersionRuns()));
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("tswap 9.8.6\n")]
     [InlineData("tswap 9.8.7\n")]
     [InlineData("tswap 9.8.7-rc.1+cae3bf0\n")]
@@ -359,8 +332,6 @@ public class ReleasePackagingTests : IDisposable
     [InlineData("")]
     public void Smoke_VersionOtherThanExpected_FailsThePackaging(string printed)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         VersionOutput = printed;
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -372,11 +343,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>A Windows line ending (a git-bash capture keeps the <c>\r</c>) is trimmed, not a mismatch.</summary>
-    [Fact]
+    [UnixFact]
     public void Smoke_VersionWithACarriageReturn_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         VersionOutput = $"tswap {FakeVersion}\r\n";
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -384,13 +353,11 @@ public class ReleasePackagingTests : IDisposable
         Assert.True(exitCode == 0, output);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(null)]
     [InlineData("")]
     public void Smoke_WithoutAnExpectedVersion_FailsBeforePacking(string? expected)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Env["TSWAP_EXPECT_VERSION"] = expected;
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -401,11 +368,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Packing without --smoke needs no expected version.</summary>
-    [Fact]
+    [UnixFact]
     public void PackingWithoutSmoke_NeedsNoExpectedVersion()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Env["TSWAP_EXPECT_VERSION"] = null;
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0));
@@ -417,11 +382,9 @@ public class ReleasePackagingTests : IDisposable
     // ---- The Linux smoke (YubiKey SDK stage 1, task 1): libpcsclite is used when present, never required. ----
 
     /// <summary>A tswap with a NEEDED entry for libpcsclite would not start without pcsc-lite: no archive ships.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_BinaryNeedingPcsclite_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ReadelfOutput += " 0x0000000000000001 (NEEDED)             Shared library: [libpcsclite.so.1]\n";
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -431,11 +394,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>readelf failing (not an ELF file, no readelf) fails the smoke: the check never passes by default.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_ReadelfFails_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         WriteTool("readelf", "#!/bin/sh\necho 'readelf: Error: Not an ELF file' >&2\nexit 1\n");
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -449,11 +410,9 @@ public class ReleasePackagingTests : IDisposable
     /// lists for libpcsclite.so.1 is /dev/null (the loader's stand-in), after a check inside the sandbox that each
     /// one reads as empty.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_RunsPromptHashAgainWithEveryListedPcscliteHidden()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         LdconfigOutput =
             "3 libs found in cache `/etc/ld.so.cache'\n" +
             "\tlibpcsclite_real.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite_real.so.1\n" +
@@ -485,11 +444,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>bwrap present but unable to make its sandbox (nested user namespaces): a loud SKIP, not a failure.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_BwrapCannotSandbox_SaysSkip()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         LdconfigOutput = "\tlibpcsclite.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite.so.1\n";
         BwrapFails = true;
 
@@ -501,12 +458,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Without libpcsclite the first run already was the stand-in run: SKIP, saying why.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_NoPcscliteInstalled_SaysSkip()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
 
         Assert.True(exitCode == 0, output);
@@ -515,11 +469,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>The Linux checks are the Linux archive's only: a macOS smoke runs no readelf.</summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_RunsNoLinuxChecks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         WriteTool("readelf", "#!/bin/sh\necho 'readelf ran' >&2\nexit 1\n");
 
         var (exitCode, output) = Package("osx-arm64", PublishFakeBinary(exitCode: 0, "libtswapse.dylib"), "--smoke");
@@ -531,11 +483,9 @@ public class ReleasePackagingTests : IDisposable
     // ---- Task 4: the yubikey setup smoke (never --replace; a serial no YubiKey has). ----
 
     /// <summary>The smoke expects the refusal: a yubikey setup run that exits 0 fails the packaging.</summary>
-    [Fact]
+    [UnixFact]
     public void YubiKeySmoke_SetupSucceeding_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         YubiKeyExit = 0;
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -545,11 +495,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Another refusal than "not plugged in" (the --serial path not consulted) fails the packaging too.</summary>
-    [Fact]
+    [UnixFact]
     public void YubiKeySmoke_OtherRefusal_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         YubiKeyOutput = "Error: No YubiKey detected. Please insert YubiKey.\n";
 
         var (exitCode, output) = Package("osx-arm64", PublishFakeBinary(exitCode: 0, "libtswapse.dylib"), "--smoke");
@@ -559,11 +507,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>The refusal may be followed by a per-OS explanation (a hidden key whose serial can't be read).</summary>
-    [Fact]
+    [UnixFact]
     public void YubiKeySmoke_RefusalWithPerOsText_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         YubiKeyOutput = $"Error: {NotPluggedIn}.\nA YubiKey: its OTP interface can't be reached.\n";
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -572,11 +518,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Linux, library listed: the -v run outside the sandbox must say the system library was chosen.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_WrongStrategyOutsideTheSandbox_FailsThePackaging()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         LdconfigOutput = "\tlibpcsclite.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite.so.1\n";
         StrategyOutput = "not chosen yet (no PC/SC call made)";
 
@@ -587,11 +531,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Linux, no library listed: the -v run must say the stand-in was chosen.</summary>
-    [Fact]
+    [UnixFact]
     public void LinuxSmoke_NoLibrary_StrategyMustBeTheStandIn()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         StrategyOutput = "system library (libpcsclite.so.1)";
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -601,11 +543,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>The smoke never passes --replace (that, not only --serial, keeps it from overwriting a configured slot).</summary>
-    [Fact]
+    [UnixFact]
     public void YubiKeySmoke_NeverPassesReplace()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         LdconfigOutput = "\tlibpcsclite.so.1 (libc6,x86-64) => /nonexistent/a/libpcsclite.so.1\n";
 
         var (exitCode, output) = Package("linux-x64", PublishFakeBinary(exitCode: 0), "--smoke");
@@ -668,23 +608,18 @@ public class ReleasePackagingTests : IDisposable
     private List<string> NotarisationChecks(string fileName) =>
         [.. _mac.Log("codesign").Where(line => line.Contains("--check-notarization") && line.EndsWith("/" + fileName, StringComparison.Ordinal))];
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_EmbeddedDylibMatches_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = MacOsSmoke();
 
         Assert.True(exitCode == 0, output);
         Assert.Contains("the dylib installscript writes is the archive's", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_EmbeddedDylibDiffers_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _mac.Write("embedded.dylib", "an unsigned build of the dylib");
 
         var (exitCode, output) = MacOsSmoke();
@@ -693,11 +628,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("the dylib installscript writes is not the archive's (was the shim signed after it was embedded?)", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_DifferentMinOs_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _mac.Write("minos-libtswapse.dylib", "26.0");
 
         var (exitCode, output) = MacOsSmoke();
@@ -707,11 +640,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Both files agree with each other but not with the csproj's property: still a failure.</summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_MinOsOtherThanTheCsproj_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _mac.Write("minos-libtswapse.dylib", "11.0");
         _mac.Write("minos-tswap", "11.0");
 
@@ -722,11 +653,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>package.sh reads the minimum from TswapCore.csproj itself (one source), and a missing property fails.</summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ReadsShimMinOsFromTheCsproj()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A copy of the packaging scripts in a tree whose csproj lacks the property.
         var repo = Path.Combine(_dir, "repo");
         var packaging = Path.Combine(repo, "contrib", "packaging");
@@ -743,12 +672,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains($"no <SecureEnclaveShimMinOS> in {Path.Combine(repo, "TswapCore", "TswapCore.csproj")}", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_WithoutExpectTeam_RunsNoSigningChecks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = MacOsSmoke();
 
         Assert.True(exitCode == 0, output);
@@ -757,11 +683,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Empty(_mac.Log("spctl"));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ExpectTeam_ChecksEachFile()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
 
         var (exitCode, output) = MacOsSmoke();
@@ -781,11 +705,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("the unnotarised control: exit 3", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ExpectTeam_DylibOfAnotherTeam_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("details-libtswapse.dylib", MacFakeTools.Details("dev.crawford.tswap.libtswapse", team: "OTHERTEAM1"));
 
@@ -795,11 +717,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("libtswapse.dylib: TeamIdentifier is OTHERTEAM1, expected TEAMID1234", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ExpectTeam_NoRuntimeOnTswap_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam(gated: false);
         _mac.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", flags: "0x0(none)"));
 
@@ -809,11 +729,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("tswap: flags= does not name runtime", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_NotarisationCheck_ExactArgumentSpelling()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
 
         var (exitCode, output) = MacOsSmoke();
@@ -825,11 +743,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(_mac.Log("codesign"), line => line.Split(' ').Contains("-R") || line.Contains("-R="));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_NotarisationVisibleAfterRetries_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("notarization-tswap", "3\n3\n0\n");
 
@@ -840,11 +756,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("isn't visible yet", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_NotarisationNeverVisible_FailsAfterRetries()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
         _mac.Write("notarization-tswap", "3\n");
@@ -857,11 +771,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("code failed to satisfy specified code requirement(s)", output); // the last answer
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_NotarisationNeverVisible_ReportOnly_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam(gated: false);
         Env["TSWAP_NOTARY_CHECK_TRIES"] = "4";
         _mac.Write("notarization-tswap", "3\n");
@@ -874,11 +786,9 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>Exit 1 is a bad signature, not a ticket still on its way: no retries.</summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_NotarisationBadSignature_FailsAtOnce()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("notarization-libtswapse.dylib", "1\n");
 
@@ -889,11 +799,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("libtswapse.dylib: codesign --check-notarization exit 1 after 1 attempts", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ControlPasses_Gated_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("notarization-control", "0\n");
 
@@ -903,11 +811,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("::error::notarisation-control: the check passed an unnotarised binary: it proves nothing", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_ControlPasses_ReportOnly_SaysItProvesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam(gated: false);
         _mac.Write("notarization-control", "0\n");
 
@@ -920,11 +826,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains(_mac.Log("codesign"), line => line.StartsWith("--force --sign - ", StringComparison.Ordinal) && line.EndsWith(control.Split(' ')[^1], StringComparison.Ordinal));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_QuarantineNotPropagated_MarksTheFilesItself()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
 
         var (exitCode, output) = MacOsSmoke();
@@ -941,11 +845,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain("SKIP: quarantine", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_GatekeeperDisabled_SaysSkip()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("quarantine.propagates", "");
         _mac.Write("spctl-status", "assessments disabled\n");
@@ -958,11 +860,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.DoesNotContain(LoggedRuns(), run => run.Contains("/quarantined "));
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_GatekeeperEnabled_RunsTheQuarantinedCopy()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         ExpectTeam();
         _mac.Write("quarantine.propagates", "");
 
@@ -1277,7 +1177,7 @@ public class ReleasePackagingTests : IDisposable
     /// GITHUB_ENV): a tag push expects the tag's version; a dispatch on a tag ref, a PR and a push to main expect the
     /// csproj's <c>&lt;Version&gt;-pre-&lt;HEAD's first 7&gt;</c>; <c>TSWAP_VERSION</c> is always the plain version.
     /// </summary>
-    [Theory]
+    [UnixTheory("the script is bash; the Windows legs run it under git-bash, which this test doesn't have")]
     [InlineData("push", "tag", "v0.3.0-rc.1", "0.3.0-rc.1", "0.3.0-rc.1")]
     [InlineData("push", "tag", "v0.3.0", "0.3.0", "0.3.0")]
     [InlineData("workflow_dispatch", "tag", "v0.3.0", null, null)]
@@ -1286,8 +1186,6 @@ public class ReleasePackagingTests : IDisposable
     [InlineData("push", "branch", "main", null, null)]
     public void Workflows_ExpectedVersionStep_SetsTheVersionsForEachKindOfRun(string eventName, string refType, string refName, string? version, string? expect)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the script is bash; the Windows legs run it under git-bash, which this test doesn't have
         var csproj = VersionCommandTests.CsprojVersion();
         var head = Run("git", "-C", RepoFile(), "rev-parse", "HEAD").Output.Trim();
         version ??= csproj;
@@ -1387,16 +1285,13 @@ public class ReleasePackagingTests : IDisposable
         return (bash.ExitCode, stdout.Result, stderr.Result);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("0.3.0", "0.3.1")]
     [InlineData("0.9.9", "0.9.10")]
     [InlineData("1.2.10", "1.2.11")]
     [InlineData("10.0.0", "10.0.1")]
     public void NextVersion_IsTheNextPatch(string released, string next)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = NextVersion(released);
 
         Assert.True(exitCode == 0, stderr);
@@ -1404,14 +1299,11 @@ public class ReleasePackagingTests : IDisposable
     }
 
     /// <summary>A prerelease tag bumps nothing: its final release is still to come. Exit 0, nothing on stdout, a notice.</summary>
-    [Theory]
+    [UnixTheory]
     [InlineData("0.3.0-rc.1")]
     [InlineData("1.0.0-beta")]
     public void NextVersion_OfAPrerelease_IsNothing(string released)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = NextVersion(released);
 
         Assert.Equal(0, exitCode);
@@ -1419,7 +1311,7 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains($"{released} is a prerelease", stderr);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("0.3")]
     [InlineData("v0.3.0")]
     [InlineData("0.3.0.1")]
@@ -1430,9 +1322,6 @@ public class ReleasePackagingTests : IDisposable
     [InlineData("")]
     public void NextVersion_OfAMalformedVersion_Fails(string released)
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, stdout, stderr) = NextVersion(released);
 
         Assert.Equal(2, exitCode);
@@ -1440,12 +1329,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("not a version", stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void NextVersion_WithoutExactlyOneArgument_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         Assert.Equal(2, NextVersion().ExitCode);
         Assert.Equal(2, NextVersion("0.3.0", "0.3.1").ExitCode);
     }
@@ -1525,12 +1411,10 @@ public class ReleasePackagingTests : IDisposable
     /// dispatches ci.yml on the branch, and main is untouched; a second run finds the branch and the open PR and does
     /// nothing more; a prerelease tag and a main that has moved on bump nothing.
     /// </summary>
-    [Fact]
+    [UnixFact("a bash script on an ubuntu runner")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Workflows_BumpVersion_Script_OpensOnePr_AndIsIdempotent()
     {
-        if (OperatingSystem.IsWindows())
-            return; // a bash script on an ubuntu runner
-
         var root = Path.Combine(_dir, "bump");
         var origin = Path.Combine(root, "origin.git");
         Directory.CreateDirectory(root);
@@ -1680,11 +1564,9 @@ public class ReleasePackagingTests : IDisposable
     /// The smoke's decode of the dylib step against the real generator's text, not the fake's: a rewording of
     /// InstallScript's dylib step must fail here, not on the macOS leg.
     /// </summary>
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_DecodesTheRealInstallScript()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var publish = PublishFakeBinary(exitCode: 0, "libtswapse.dylib");
         _mac.Write("installscript.out", TswapCore.InstallScript.GetMacOSScript("/tmp/download/tswap", File.ReadAllBytes(Path.Combine(publish, "libtswapse.dylib"))));
 
@@ -1694,11 +1576,9 @@ public class ReleasePackagingTests : IDisposable
         Assert.Contains("the dylib installscript writes is the archive's", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void MacOsSmoke_RealInstallScriptOfOtherBytes_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _mac.Write("installscript.out", TswapCore.InstallScript.GetMacOSScript("/tmp/download/tswap", [9, 9, 9]));
 
         var (exitCode, output) = MacOsSmoke();

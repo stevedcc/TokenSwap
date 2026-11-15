@@ -43,11 +43,9 @@ public class CliEnvironmentTests
         Assert.Equal("/custom/dir", dir);
     }
 
-    [Fact]
+    [UnixFact("SUDO_USER handling is Unix-only")]
     public void SudoUser_ResolvesToInvokingUsersHome()
     {
-        if (OperatingSystem.IsWindows()) return; // SUDO_USER handling is Unix-only
-
         // isPrivileged: true is the input #176 adds (sudo to root, as `sudo tswap get` runs).
         // Brief T7 item 1 (rule change): the home now comes from the passwd entry, checked against
         // SUDO_UID, so the input gains SUDO_UID and a passwd entry with the conventional home.
@@ -66,12 +64,11 @@ public class CliEnvironmentTests
     // platform (macOS simulated through the isMacOS seam, so this runs on Linux too), for the default
     // config base: on Linux that is <home>/.config, i.e. XDG_CONFIG_HOME unset (fix round 2, MiMo F3:
     // the claim is only that; see the next test for a custom XDG_CONFIG_HOME).
-    [Theory]
+    [UnixTheory]
     [InlineData(false, "/home/alice", "/home/alice/.config")]
     [InlineData(true, "/Users/alice", "/Users/alice/Library/Application Support")]
     public void PrivilegedAndUnprivileged_ResolveTheSameFolder_ForTheDefaultConfigBase(bool macOS, string home, string appData)
     {
-        if (OperatingSystem.IsWindows()) return;
         var files = new HashSet<string>();
 
         var own = CliEnvironment.ResolveConfigDir(name => name == "HOME" ? home : null, _ => false, (_, _) => { },
@@ -87,10 +84,9 @@ public class CliEnvironmentTests
 
     // Fix round 2 (MiMo F3), a documented limit: sudo can't know the invoking user's XDG_CONFIG_HOME,
     // so with a custom one the two differ (docs/security-model.md, "Which vault a command under sudo uses": set TSWAP_CONFIG_DIR for both).
-    [Fact]
+    [LinuxFact]
     public void Linux_ACustomXdgConfigHome_IsNotSeenUnderSudo()
     {
-        if (!OperatingSystem.IsLinux()) return;
         Func<string, string?> own = name => name switch { "HOME" => "/home/alice", "XDG_CONFIG_HOME" => "/data/alice-cfg", _ => null };
         Func<string, string?> sudo = name => name switch { "SUDO_USER" => "alice", "SUDO_UID" => "1000", "HOME" => "/root", _ => null };
 
@@ -115,12 +111,11 @@ public class CliEnvironmentTests
     private const string MacLibraryConfig = "/Users/alice/Library/Application Support/tswap/config.json";
     private const string MacLegacyConfig = "/Users/alice/.config/tswap/config.json";
 
-    [Theory]
+    [UnixTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void MacOS_VaultOnlyInTheLegacyFolder_StopsNamingBothPathsAndTheFix(bool privileged)
     {
-        if (OperatingSystem.IsWindows()) return;
         var files = new HashSet<string> { MacLegacyConfig };
 
         var ex = Assert.Throws<TswapException>(() => ResolveMac(files, privileged));
@@ -131,12 +126,11 @@ public class CliEnvironmentTests
         Assert.Contains("Move", ex.Message);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void MacOS_VaultInBothFolders_Refuses_NamingBoth(bool privileged)
     {
-        if (OperatingSystem.IsWindows()) return;
         var files = new HashSet<string> { MacLegacyConfig, MacLibraryConfig };
 
         var ex = Assert.Throws<TswapException>(() => ResolveMac(files, privileged));
@@ -146,20 +140,18 @@ public class CliEnvironmentTests
         Assert.Contains("both", ex.Message);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void MacOS_VaultInTheLibraryFolderOnly_IsUsed(bool privileged)
     {
-        if (OperatingSystem.IsWindows()) return;
         Assert.Equal("/Users/alice/Library/Application Support/tswap", ResolveMac([MacLibraryConfig], privileged));
         Assert.Equal("/Users/alice/Library/Application Support/tswap", ResolveMac([], privileged)); // a fresh account
     }
 
-    [Fact]
+    [UnixFact]
     public void Linux_TheLegacyMacFolderIsNotConsulted()
     {
-        if (OperatingSystem.IsWindows()) return;
         var files = new HashSet<string> { "/home/alice/.config/tswap/config.json" };
 
         var dir = CliEnvironment.ResolveConfigDir(name => name == "HOME" ? "/home/alice" : null, _ => false, (_, _) => { },
@@ -169,11 +161,9 @@ public class CliEnvironmentTests
     }
 
     // Brief T7 item 1 (#178): the home is the passwd entry's, not /home/<name>.
-    [Fact]
+    [UnixFact]
     public void SudoUser_HomeOutsideHome_IsTakenFromPasswd()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var dir = Resolve(new() { ["SUDO_USER"] = "svc", ["SUDO_UID"] = "990" }, isPrivileged: true,
             lookupUser: Passwd(("svc", 990, "/var/lib/svc")));
 
@@ -183,11 +173,9 @@ public class CliEnvironmentTests
     }
 
     // Brief T7 item 1 (#107): SUDO_USER is only trusted when SUDO_UID matches its passwd uid.
-    [Fact]
+    [UnixFact]
     public void SudoUser_UidMismatch_Refuses_NamingBothValues()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
             new() { ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1001" }, isPrivileged: true,
             lookupUser: Passwd(("alice", 1000, "/home/alice"))));
@@ -197,11 +185,9 @@ public class CliEnvironmentTests
         Assert.Contains("alice", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public void SudoUser_UidMissing_Refuses()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
             new() { ["SUDO_USER"] = "alice" }, isPrivileged: true,
             lookupUser: Passwd(("alice", 1000, "/home/alice"))));
@@ -210,11 +196,9 @@ public class CliEnvironmentTests
         Assert.Contains("not set", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public void SudoUser_UidNotNumeric_Refuses()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
             new() { ["SUDO_USER"] = "alice", ["SUDO_UID"] = "1000x" }, isPrivileged: true,
             lookupUser: Passwd(("alice", 1000, "/home/alice"))));
@@ -224,11 +208,9 @@ public class CliEnvironmentTests
         Assert.Contains("not a number", ex.Message);
     }
 
-    [Fact]
+    [UnixFact]
     public void SudoUser_UnknownUser_Refuses()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var ex = Assert.Throws<TswapCore.TswapException>(() => Resolve(
             new() { ["SUDO_USER"] = "mallory", ["SUDO_UID"] = "1000" }, isPrivileged: true,
             lookupUser: Passwd(("alice", 1000, "/home/alice"))));
@@ -238,11 +220,9 @@ public class CliEnvironmentTests
     }
 
     // #178: root running `sudo tswap ...` has SUDO_USER=root: root's own folder, not /home/root.
-    [Fact]
+    [UnixFact]
     public void SudoUser_Root_UsesRootsOwnFolder()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var looked = false;
         var dir = Resolve(new() { ["SUDO_USER"] = "root", ["SUDO_UID"] = "0" }, isPrivileged: true,
             lookupUser: _ => { looked = true; return new UnixPasswdEntry(0, "/root"); });
@@ -251,11 +231,9 @@ public class CliEnvironmentTests
         Assert.False(looked);
     }
 
-    [Fact]
+    [UnixFact]
     public void SudoUid_Zero_UsesRootsOwnFolder()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var dir = Resolve(new() { ["SUDO_USER"] = "toor", ["SUDO_UID"] = "0" }, isPrivileged: true,
             lookupUser: Passwd(("toor", 0, "/home/toor")));
 
@@ -280,12 +258,11 @@ public class CliEnvironmentTests
 
     // Fix round 1 (MiMo): privileged without SUDO_USER (a root service, `su`) uses HOME's folder, not
     // a fixed root folder: with plain `su` the caller's HOME survives, and that folder is used.
-    [Theory]
+    [LinuxTheory("the XDG rules (macOS and Windows take .NET's folder)")]
     [InlineData("/root", "/root/.config/tswap")]
     [InlineData("/home/alice", "/home/alice/.config/tswap")]
     public void Privileged_WithoutSudoUser_UsesHomesFolder(string home, string expected)
     {
-        if (!OperatingSystem.IsLinux()) return; // the XDG rules (macOS and Windows take .NET's folder)
         Func<string, string?> env = name => name == "HOME" ? home : null;
 
         var dir = CliEnvironment.ResolveConfigDir(env, _ => false, (_, _) => { }, TextWriter.Null, isPrivileged: true,
@@ -295,11 +272,9 @@ public class CliEnvironmentTests
     }
 
     // The real lookup (no seam): this test process's own user resolves to its uid and an absolute home.
-    [Fact]
+    [UnixFact]
     public void UnixPasswd_LooksUpTheCurrentUser()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         var entry = UnixPasswd.Lookup(Environment.UserName);
 
         Assert.NotNull(entry);
@@ -382,11 +357,9 @@ public class CliEnvironmentTests
     // Read-only: it resolves a path and creates or writes nothing, so it is safe on a
     // developer's machine (unlike the Linux-only end-to-end test, which runs init).
 
-    [Fact]
+    [MacFact("the macOS folder (.NET resolves it through the OS)")]
     public void DefaultApplicationDataDir_OnMacOS_IsLibraryApplicationSupport()
     {
-        if (!OperatingSystem.IsMacOS()) return; // until #181: reported as Passed elsewhere
-
         // .NET resolves it through the OS (NSApplicationSupportDirectory), which always exists
         // for a real user, so the "fresh user without the folder" case of #175 can't occur here.
         var dir = CliEnvironment.DefaultApplicationDataDir();
@@ -395,11 +368,9 @@ public class CliEnvironmentTests
         Assert.EndsWith(Path.Combine("Library", "Application Support"), dir.TrimEnd('/'));
     }
 
-    [Fact]
+    [LinuxFact("the XDG rules")]
     public void DefaultApplicationDataDir_OnLinux_IsXdgConfigHomeOrHomeDotConfig()
     {
-        if (!OperatingSystem.IsLinux()) return; // until #181: reported as Passed elsewhere
-
         var dir = CliEnvironment.DefaultApplicationDataDir();
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         var expected = !string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg)
@@ -410,11 +381,9 @@ public class CliEnvironmentTests
         Assert.Equal(expected.TrimEnd('/'), dir.TrimEnd('/'));
     }
 
-    [Fact]
+    [WindowsFact("%APPDATA%")]
     public void DefaultApplicationDataDir_OnWindows_IsAppData()
     {
-        if (!OperatingSystem.IsWindows()) return; // until #181: reported as Passed elsewhere
-
         var dir = CliEnvironment.DefaultApplicationDataDir();
 
         Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");
