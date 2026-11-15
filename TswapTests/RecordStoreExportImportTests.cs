@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using TswapCore;
 using TswapCore.Fields;
+using TswapCore.Keyring;
 using Xunit;
 using static TswapTests.RecordVaultTestSupport;
 
@@ -37,6 +38,33 @@ public sealed class RecordStoreExportImportTests : IDisposable
         var file = JsonSerializer.Deserialize(File.ReadAllText(path), TswapJsonContext.Default.ExportFile)!;
         var key = ExportCrypto.DeriveKey(passphrase, Convert.FromBase64String(file.Salt), file);
         return Encoding.UTF8.GetString(Crypto.Decrypt(Convert.FromBase64String(file.Ciphertext), key));
+    }
+
+    /// <summary>Writes a v3 export at <paramref name="path"/> whose decrypted payload is <paramref name="payloadJson"/> (a crafted file).</summary>
+    private static void WriteExport(string path, string passphrase, string payloadJson)
+    {
+        var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        var kdf = ExportCrypto.DefaultArgon2idParams;
+        var ciphertext = Crypto.Encrypt(Encoding.UTF8.GetBytes(payloadJson), ExportCrypto.DeriveArgon2id(passphrase, salt, kdf));
+        var file = new ExportFile(ExportFile.V3, TestTime.Fixed, Convert.ToBase64String(salt), Convert.ToBase64String(ciphertext), kdf);
+        File.WriteAllText(path, JsonSerializer.Serialize(file, TswapJsonContext.Default.ExportFile));
+    }
+
+    /// <summary>A v3 payload of one secret per entry: name to its <c>Fields</c> member as raw JSON (null: no member).</summary>
+    private static string PayloadOf(params (string Name, string? FieldsJson)[] secrets) =>
+        "{ \"Secrets\": { " + string.Join(", ", secrets.Select(s =>
+            $"\"{s.Name}\": {{ \"Value\": \"{s.Name}-value-0042\", \"Created\": \"2026-01-02T03:04:05Z\", " +
+            $"\"Modified\": \"2026-01-02T03:04:05Z\"{(s.FieldsJson is null ? "" : ", \"Fields\": " + s.FieldsJson)} }}")) + " } }";
+
+    /// <summary>Replaces <paramref name="name"/>'s Fields extension on disk with bytes no build decodes (a damaged record).</summary>
+    private static void PlantMalformedFields(FleetMachine m, byte[] key, string name)
+    {
+        var path = RecordFile(m, key, name);
+        var record = SecretRecordCodec.Decode(File.ReadAllBytes(path), key);
+        File.WriteAllBytes(path, SecretRecordCodec.Encode(record with
+        {
+            Extensions = [.. record.Extensions.Where(e => e.Type != FieldsExtension.Type), new RecordExtension(FieldsExtension.Type, [0xFF, 0xFF, 0xFF])],
+        }, key));
     }
 
     private static FieldSet FieldsOf(FleetMachine m, byte[] key, string name) =>
@@ -151,5 +179,92 @@ public sealed class RecordStoreExportImportTests : IDisposable
 
         Assert.Equal(new Dictionary<string, string> { ["url"] = "https://db.example", ["host"] = "db1" }, Live(_m, _vaultKey, "db"));
         Assert.Equal("db-value-0042", _m.Get("db"));
+    }
+
+    // ------------------------------------------------------------------ review fixes: damaged records, crafted files
+
+    /// <summary>Review I1: a record whose Fields extension can't be decoded is unreadable on its own; export names its file.</summary>
+    [Fact]
+    public void Export_MalformedFieldsExtension_RefusedNamingTheRecord()
+    {
+        _m.Ok("db-value-0042", "ingest", "db", "--field", "url=https://db.example");
+        _m.Ok("other-value-0042", "ingest", "other");
+        PlantMalformedFields(_m, _vaultKey, "db");
+        var file = Path.GetFileName(RecordFile(_m, _vaultKey, "db"));
+        var export = _m.PathOf("backup.json");
+
+        var (exit, _, stderr) = _m.Run("pass\npass\n", "export", export);
+
+        Assert.Equal(1, exit);
+        Assert.Contains($"'export' covers every secret, but 1 record(s) can't be read: {file}.", stderr);
+        Assert.False(File.Exists(export));
+    }
+
+    /// <summary>Review I1: <c>vault merge</c> reports the damaged record and merges every other one.</summary>
+    [Fact]
+    public void VaultMerge_MalformedFieldsExtension_ThatRecordReported_OthersMerged()
+    {
+        _m.Ok("db-value-0042", "ingest", "db", "--field", "url=https://db.example");
+        using var laptop = new FleetMachine("export-records-merge", SimulatedYubiKeyService.WithKeys(SerialA)) { Clock = Tick };
+        _m.CopyVaultTo(laptop);
+        laptop.Ok("new-value-0042", "ingest", "from-laptop");
+        laptop.Ok("", "field", "set", "db", "host=db1");
+        PlantMalformedFields(_m, _vaultKey, "db");
+        var file = Path.GetFileName(RecordFile(_m, _vaultKey, "db"));
+
+        var (exit, _, stderr) = _m.Run("", "vault", "merge", laptop.VaultDir!, "--yes");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains($"Warning: record {file} can't be read", stderr);
+        Assert.Equal("new-value-0042", _m.Get("from-laptop"));
+        // The damaged record is left as it is: still the planted extension, not the laptop's fields.
+        var kept = ReadRecord(_m, _vaultKey, "db").Extensions.Single(e => e.Type == FieldsExtension.Type);
+        Assert.Equal([0xFF, 0xFF, 0xFF], kept.Data);
+    }
+
+    /// <summary>Review m1: a crafted <c>"Fields": {"x": null}</c> is treated as a null <c>Value</c> is: that secret is skipped, nothing written for it.</summary>
+    [Fact]
+    public void Import_NullFieldValue_SecretSkipped()
+    {
+        var export = _m.PathOf("crafted.json");
+        WriteExport(export, "pass", PayloadOf(("crafted", """{ "url": null }"""), ("good", """{ "url": "https://good.example" }""")));
+
+        var stdout = _m.Ok("pass\n", "import", export);
+
+        Assert.Contains("Skipped 'crafted' (field 'url' is null", stdout);
+        Assert.False(File.Exists(RecordFile(_m, _vaultKey, "crafted")));
+        Assert.Equal(new Dictionary<string, string> { ["url"] = "https://good.example" }, Live(_m, _vaultKey, "good"));
+    }
+
+    /// <summary>Review m1: a non-string field value makes the payload unreadable: the import is refused, nothing written.</summary>
+    [Fact]
+    public void Import_NonStringFieldValue_Refused()
+    {
+        var export = _m.PathOf("crafted.json");
+        WriteExport(export, "pass", PayloadOf(("good", null), ("crafted", """{ "port": 5432 }""")));
+
+        var (exit, _, stderr) = _m.Run("pass\n", "import", export);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Export data is corrupted", stderr);
+        Assert.False(File.Exists(RecordFile(_m, _vaultKey, "good")));
+        Assert.False(File.Exists(RecordFile(_m, _vaultKey, "crafted")));
+    }
+
+    /// <summary>Review m3: a field the rules refuse (a bad name, a control character) refuses the whole import; nothing is written.</summary>
+    [Theory]
+    [InlineData("""{ "Bad Name": "x" }""", "Refused field name 'Bad Name'")]
+    [InlineData("""{ "note": "a\u0007b" }""", "Refused field 'note': The value contains U+0007")]
+    public void Import_FieldRefusedByRules_WholeImportRefused(string fieldsJson, string refusal)
+    {
+        var export = _m.PathOf("crafted.json");
+        WriteExport(export, "pass", PayloadOf(("good", """{ "url": "https://good.example" }"""), ("crafted", fieldsJson)));
+        var before = _m.RecordFiles;
+
+        var (exit, _, stderr) = _m.Run("pass\n", "import", export);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Secret 'crafted': " + refusal, stderr);
+        Assert.Equal(before, _m.RecordFiles);
     }
 }

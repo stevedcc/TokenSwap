@@ -97,6 +97,13 @@ public sealed class ImportCommand : ICliCommand
                     skippedNul++;
                     continue;
                 }
+                if (secret.Fields?.FirstOrDefault(f => f.Value is null) is { Key: { } nullField })
+                {
+                    // As for a null Value above: a JSON null for a field value is a tampered file, never an unset.
+                    ctx.Console.Out.WriteLine($"  ⚠ Skipped '{name}' (field '{FieldRules.Escape(nullField)}' is null — the export file was altered)");
+                    skippedNul++;
+                    continue;
+                }
                 // A v1/v2 file has no fields; a v3 file's fields are written with the value, in one write.
                 var fields = secret.Fields?.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => new FieldEdit(f.Key, f.Value)).ToList();
                 writer.SetValue(name, secret.Value, secret.Created, importedBurnAt: secret.BurnedAt, importedBurnReason: secret.BurnReason,
@@ -108,7 +115,7 @@ public sealed class ImportCommand : ICliCommand
             ctx.Console.Out.WriteLine($"\n✓ Imported {imported} secret(s)");
             if (skippedBurned > 0)   ctx.Console.Out.WriteLine($"  Skipped {skippedBurned} burned secret(s)");
             if (skippedExisting > 0) ctx.Console.Out.WriteLine($"  Skipped {skippedExisting} already-existing secret(s)");
-            if (skippedNul > 0)      ctx.Console.Out.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values (re-export from source after fixing values)");
+            if (skippedNul > 0)      ctx.Console.Out.WriteLine($"  Skipped {skippedNul} secret(s) with null or NUL-byte values, or null fields (re-export from source after fixing values)");
             return 0;
         }
         finally

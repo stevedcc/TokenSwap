@@ -491,13 +491,23 @@ public sealed class RecordVaultStore : IFileVaultStore
         _warnings = warnings;
         var loaded = LoadRecords(key, warnings);
         Dictionary<string, Secret> secrets = [];
+        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
         foreach (var record in loaded.Values)
         {
             if (record.State is not { Type: not RecordType.Tombstone } state)
                 continue;
-            secrets[state.Name] = ToSecret(state);
+            try
+            {
+                secrets[state.Name] = ToSecret(state);
+            }
+            catch (RecordConflictException ex)
+            {
+                // Issue #311 ruling: a damaged Fields extension makes this record unreadable, on its own.
+                // Loading's merge rejects one first today (RecordMerge.MergeExtensions); this keeps the rule if it doesn't.
+                warnings?.WriteLine(UnreadableText(record.FileName, ex.Message));
+                unreadable.Add(record.FileName);
+            }
         }
-        var unreadable = loaded.Values.Where(r => r.UnreadableReason is not null).Select(r => r.FileName).ToHashSet(StringComparer.Ordinal);
         var namesKey = RecordKeyDerivation.DeriveNamesKey(key);
         return new SecretsDb(secrets)
         {
@@ -1086,11 +1096,20 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>. Issue #311: with its
     /// live fields (no history, no delete markers; null for none), which <c>export</c> carries.
     /// </summary>
+    /// <exception cref="RecordConflictException">The Fields extension can't be decoded (the record is unreadable).</exception>
     internal static Secret ToSecret(SecretRecord state)
     {
         var info = SecretInfo.From(MetadataOf(state))
             ?? throw new InvalidOperationException("A tombstone is no secret.");
-        var fields = FieldsCodec.TryGet(state.Extensions)?.Live.ToDictionary(e => e.Name, e => e.Value!, StringComparer.Ordinal);
+        Dictionary<string, string>? fields;
+        try
+        {
+            fields = FieldsCodec.TryGet(state.Extensions)?.Live.ToDictionary(e => e.Name, e => e.Value!, StringComparer.Ordinal);
+        }
+        catch (TswapException ex) when (ex is not RecordConflictException)
+        {
+            throw new RecordConflictException($"its fields extension can't be read ({ex.Message})");
+        }
         return new Secret(Encoding.UTF8.GetString(state.Value), info.Created, info.Modified, info.BurnedAt, info.BurnReason)
         {
             History = info.History.Count == 0 ? null : info.History,

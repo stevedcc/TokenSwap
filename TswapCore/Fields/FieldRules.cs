@@ -172,7 +172,7 @@ public static partial class FieldRules
     }
 
     /// <summary>A name or value for a message: anything outside printable ASCII as <c>U+XXXX</c>.</summary>
-    private static string Escape(string text)
+    public static string Escape(string text)
     {
         var builder = new StringBuilder(text.Length);
         foreach (var c in text)
