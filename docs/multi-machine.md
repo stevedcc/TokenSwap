@@ -163,7 +163,9 @@ tswap vault move ~/Sync/tswap-vault    # no sudo; copies the folder, checks the 
 The old folder is kept, renamed `<old folder>.moved-<UTC timestamp>`, until you delete it (once
 `tswap names` and a `tswap run` work). Stop other tswap commands on this machine while it runs, and
 restart `tswap broker serve` afterwards if it runs here: it keeps serving, but its template sandbox
-protects the folders it saw at startup.
+protects the folders it saw at startup. A known limit on Windows: a junction or symlink in a folder
+above the new folder is not resolved when tswap checks that the new folder isn't inside the vault
+folder or the config folder, so don't give it a path that goes through one.
 
 ### Three ways to share
 

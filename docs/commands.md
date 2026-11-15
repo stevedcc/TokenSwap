@@ -40,7 +40,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `broker template remove` | sudo | Changes `broker.json`, as above |
 | `vault merge` | sudo | Decrypts every record of both copies, and may add the other copy's slots: each one a new way to open the vault |
 | `vault reindex` | sudo | Decrypts every value once to rewrite each record with fingerprints |
-| `vault move` | no | Moves this machine's encrypted files and edits only its own config; it refuses sudo |
+| `vault move` | no | Moves this machine's encrypted files and edits only its own config; it refuses sudo on Unix (an elevated Windows prompt is fine) |
 
 A FIDO2 slot on a security key that isn't a YubiKey needs a tswap newer than 0.3.0 on every machine
 that opens it: tswap 0.3.0 doesn't see such keys on Linux and macOS and says "plug it in" even when

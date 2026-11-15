@@ -26,6 +26,9 @@ public sealed partial class VaultCommand
 
         /// <summary>After <c>config.json</c> was backed up, before it is written; the path is the backup.</summary>
         ConfigBackedUp,
+
+        /// <summary>At the start of the step-6 re-check; the path is the old folder (renamed, or in place).</summary>
+        Rechecking,
     }
 
     /// <summary>Test seam (brief T25): called at each <see cref="MoveSeamPoint"/> (commands are registry singletons).</summary>
@@ -94,7 +97,8 @@ public sealed partial class VaultCommand
         var vaultId = store.ReadKeyring().VaultId;
 
         var c = ctx.Console;
-        var created = MissingFolders(target);
+        // Every file and folder this command creates, oldest first: a failure removes exactly these (review round 1).
+        List<(string Path, bool IsFolder)> created = [.. MissingFolders(target).AsEnumerable().Reverse().Select(d => (d, true))];
         var step = 2;
         string? backup = null;
         string? failedAt = null;
@@ -108,10 +112,15 @@ public sealed partial class VaultCommand
                 var to = Path.Combine(target, entry.RelativePath);
                 if (entry.IsFolder)
                 {
+                    if (!Directory.Exists(to))
+                        created.Add((to, true));
                     store.Owner.CreateDirectory(to);
                     continue;
                 }
+                var existed = File.Exists(to);
                 store.Owner.WriteDurable(to, store.Owner.ReadAllBytes(Path.Combine(vaultDir, entry.RelativePath)));
+                if (!existed)
+                    created.Add((to, false));
                 MoveSeam?.Invoke(MoveSeamPoint.FileCopied, to);
             }
 
@@ -136,9 +145,10 @@ public sealed partial class VaultCommand
             store.Owner.WriteAtomic(store.ConfigFile, Encoding.UTF8.GetBytes(
                 JsonSerializer.Serialize(config with { Keyring = null, VaultDir = target }, TswapJsonContext.Default.Config)));
         }
-        catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            var cleanup = RemoveCreated(store.Owner, target, targetExisted, created);
+            // Every exception type (review round 1): nothing is left half-made, and the message names the step.
+            var cleanup = RemoveCreated(store.Owner, target, created);
             var where = failedAt is null ? "" : $" at {Describe(failedAt)}";
             var what = step switch { 2 => "copying the vault folder", 3 => "checking the copy", _ => "switching this machine's config" };
             var message = $"Step {step} ({what}) failed{where}: {HideRecordNames(ex.Message).TrimEnd('.')}.";
@@ -163,13 +173,33 @@ public sealed partial class VaultCommand
                 $"happened: this machine now uses {target}. Check the old folder, then rename or delete it by hand.");
         }
 
-        // ---- step 6: compare once more (a sync tool or another tswap command may have written the old folder)
+        // ---- step 6: compare once more (a sync tool or another tswap command may have written the old folder). The move
+        // is done: nothing here turns it into a failure (review round 1); what can't be compared is a warning.
         var old = renamed ? moved : vaultDir;
-        var changed = Differences(old, target, Snapshot(old, refuseLinks: false));
+        List<string>? changed = null;
+        try
+        {
+            MoveSeam?.Invoke(MoveSeamPoint.Rechecking, old);
+            if (Directory.Exists(old))
+                changed = Differences(old, target, Snapshot(old, refuseLinks: false));
+            else
+                c.Error.WriteLine($"Warning: the old folder {old} is gone, so it could not be compared with the new one once more.");
+        }
+        catch (Exception ex)
+        {
+            c.Error.WriteLine(
+                $"Warning: could not compare the old folder {old} with the new one once more ({HideRecordNames(ex.Message).TrimEnd('.')}). " +
+                $"Check it, and if it holds anything newer, fold it back with 'sudo {ctx.Prefix} vault merge {old}' before you delete it.");
+        }
 
         // ---- step 7
         c.Out.WriteLine($"\n✓ Moved the vault to {target}. This machine's config points there now.");
-        if (changed.Count > 0)
+        if (changed is null)
+        {
+            if (renamed && Directory.Exists(moved))
+                c.Out.WriteLine($"The old folder is kept as {moved}.");
+        }
+        else if (changed.Count > 0)
         {
             if (renamed)
                 c.Out.WriteLine($"The old folder is kept as {moved}.");
@@ -261,34 +291,40 @@ public sealed partial class VaultCommand
     }
 
     /// <summary>
-    /// Removes what the move created: the target's contents (an empty folder before) or the target itself, then the
-    /// parent folders it made, each only if empty. Returns null, or the message part for a cleanup that failed.
+    /// Removes exactly what the move created, newest first: its files, then its folders (the target and the parents it
+    /// made among them) only when empty. Anything else (a folder that was there before, a file a sync tool put there
+    /// meanwhile) is kept. Returns null when everything the move made is gone, or the message part saying what was kept.
     /// </summary>
-    private static string? RemoveCreated(DirectoryOwnerMatcher owner, string target, bool targetExisted, List<string> created)
+    private static string? RemoveCreated(DirectoryOwnerMatcher owner, string target, List<(string Path, bool IsFolder)> created)
     {
+        List<string> kept = [];
         try
         {
-            if (targetExisted)
+            for (var i = created.Count - 1; i >= 0; i--)
             {
-                foreach (var entry in Snapshot(target, refuseLinks: false).Where(e => Path.GetDirectoryName(e.RelativePath) is ""))
+                var (path, isFolder) = created[i];
+                if (!isFolder)
                 {
-                    var path = Path.Combine(target, entry.RelativePath);
-                    if (entry.IsFolder)
-                        owner.DeleteDirectory(path);
-                    else
-                        owner.Delete(path);
+                    owner.Delete(path);
+                    continue;
                 }
-                return null;
+                if (!Directory.Exists(path))
+                    continue;
+                if (Directory.EnumerateFileSystemEntries(path).Any())
+                    kept.Add(path);
+                else
+                    owner.DeleteEmptyDirectory(path);
             }
-            owner.DeleteDirectory(target);
-            foreach (var parent in created.Skip(1))
-                owner.DeleteEmptyDirectory(parent);
-            return null;
         }
-        catch (Exception ex) when (ex is TswapException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            return $" Removing the half-made copy failed too ({HideRecordNames(ex.Message)}): {target} may be deleted by hand.";
+            return $" Removing the half-made copy failed too ({HideRecordNames(ex.Message).TrimEnd('.')}): {target} may be deleted by hand.";
         }
+        if (kept.Count == 0)
+            return null;
+        // The target when it is kept (the parents it made are kept only because they hold it), else the outermost one.
+        var named = kept.Contains(target) ? target : kept[^1];
+        return $" The copy's files were removed; {named} was kept because it holds files this command didn't write.";
     }
 
     /// <summary>A relative path for a message: a record's file name (64 hex characters) is never printed.</summary>

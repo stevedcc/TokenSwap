@@ -118,9 +118,11 @@ public sealed class VaultMoveTests : IDisposable
     {
         var source = Tree(DefaultFolder);
 
-        _m.Ok("", "vault", "move", Target);
+        var (exit, stdout, stderr) = _m.Run("", "vault", "move", Target);
 
+        Assert.True(exit == 0, stderr + stdout);
         Assert.Equal(source, Tree(MovedName(DefaultFolder)));
+        NoKeyMaterial(stdout, stderr);
     }
 
     [Fact]
@@ -128,8 +130,10 @@ public sealed class VaultMoveTests : IDisposable
     {
         var before = File.ReadAllBytes(_m.ConfigPath);
 
-        var stdout = _m.Ok("", "vault", "move", Target);
+        var (exit, stdout, stderr) = _m.Run("", "vault", "move", Target);
 
+        Assert.True(exit == 0, stderr + stdout);
+        NoKeyMaterial(stdout, stderr);
         var backup = Assert.Single(_m.Backups);
         Assert.Equal(Path.Combine(_m.Dir, "config.json.bak-" + Stamp), backup);
         Assert.Equal(before, File.ReadAllBytes(backup));
@@ -142,8 +146,10 @@ public sealed class VaultMoveTests : IDisposable
         Directory.CreateDirectory(Target);
         var source = Tree(DefaultFolder);
 
-        _m.Ok("", "vault", "move", Target);
+        var (exit, stdout, stderr) = _m.Run("", "vault", "move", Target);
 
+        Assert.True(exit == 0, stderr + stdout);
+        NoKeyMaterial(stdout, stderr);
         Assert.Equal(source, Tree(Target));
         Assert.Equal(Path.GetFullPath(Target), _m.Config.VaultDir);
     }
@@ -329,6 +335,7 @@ public sealed class VaultMoveTests : IDisposable
         Assert.Equal(source, Tree(MovedName(shared)));
         Assert.False(Directory.Exists(shared));
         Assert.DoesNotContain("If a sync tool syncs", stdout); // the default folder's line only
+        NoKeyMaterial(stdout, stderr);
         Assert.Equal("beta-value", _m.Get("beta"));
     }
 
@@ -407,6 +414,7 @@ public sealed class VaultMoveTests : IDisposable
         Assert.Contains($"Warning: could not rename the old vault folder {DefaultFolder} to {MovedName(DefaultFolder)}", stderr);
         Assert.Contains($"The move has happened: this machine now uses {Path.GetFullPath(Target)}. Check the old folder, then rename or delete it by hand.", stderr);
         Assert.DoesNotContain("delete it when you're happy", stdout);
+        NoKeyMaterial(stdout, stderr);
         Assert.Equal("alpha-value", _m.Get("alpha"));
     }
 
@@ -427,6 +435,115 @@ public sealed class VaultMoveTests : IDisposable
         Assert.Contains("The old folder changed after the copy was checked; these differ from the new folder: late-file", stdout);
         Assert.Contains($"Fold it back with 'sudo tswap vault merge {MovedName(DefaultFolder)}' before you delete it.", stdout);
         Assert.DoesNotContain("delete it when you're happy", stdout);
+        NoKeyMaterial(stdout, stderr);
+    }
+
+    // ------------------------------------------------------------------ review round 1: the re-check never fails a done move
+
+    [Fact]
+    public void Move_RecheckFails_MoveStaysDone_WarnsAndExitsZero()
+    {
+        VaultCommand.MoveSeam = (point, _) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.Rechecking)
+                throw new UnauthorizedAccessException("a sync tool holds a file");
+        };
+
+        var (exit, stdout, stderr) = _m.Run("", "vault", "move", Target);
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(Path.GetFullPath(Target), _m.Config.VaultDir);
+        Assert.True(Directory.Exists(MovedName(DefaultFolder)));
+        Assert.Contains($"Warning: could not compare the old folder {MovedName(DefaultFolder)} with the new one once more " +
+                        "(a sync tool holds a file). Check it, and if it holds anything newer, fold it back with " +
+                        $"'sudo tswap vault merge {MovedName(DefaultFolder)}' before you delete it.", stderr);
+        Assert.DoesNotContain("delete it when you're happy", stdout);
+        Assert.Contains("Share only the new folder with a sync tool, never the config folder.", stdout);
+        NoKeyMaterial(stdout, stderr);
+        Assert.Equal("alpha-value", _m.Get("alpha"));
+    }
+
+    [Fact]
+    public void Move_OldFolderVanishesBeforeTheRecheck_WarnsAndExitsZero()
+    {
+        VaultCommand.MoveSeam = (point, path) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.Rechecking)
+                Directory.Delete(path, recursive: true); // a sync tool propagated the rename as a deletion
+        };
+
+        var (exit, stdout, stderr) = _m.Run("", "vault", "move", Target);
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal(Path.GetFullPath(Target), _m.Config.VaultDir);
+        Assert.Contains($"Warning: the old folder {MovedName(DefaultFolder)} is gone, so it could not be compared with the new " +
+                        "one once more.", stderr);
+        Assert.DoesNotContain("these differ", stdout);
+        Assert.DoesNotContain("vault merge", stdout + stderr);
+        Assert.DoesNotContain("delete it when you're happy", stdout);
+        NoKeyMaterial(stdout, stderr);
+        Assert.Equal("beta-value", _m.Get("beta"));
+    }
+
+    // ------------------------------------------------------------------ review round 1: cleanup removes only what the move made
+
+    [Fact]
+    public void Move_VerifyFails_PreExistingEmptyTarget_KeptEmpty()
+    {
+        Directory.CreateDirectory(Target);
+        VaultCommand.MoveSeam = (point, path) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.FileCopied && Path.GetFileName(path) == "keyring")
+                File.AppendAllText(path, "x");
+        };
+        var config = File.ReadAllBytes(_m.ConfigPath);
+
+        var (exit, _, stderr) = _m.Run("", "vault", "move", Target);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Step 3 (checking the copy) failed at keyring", stderr);
+        Assert.True(Directory.Exists(Target), "the folder that was there before was removed");
+        Assert.Empty(Directory.GetFileSystemEntries(Target));
+        Assert.Equal(config, File.ReadAllBytes(_m.ConfigPath));
+        KeyMaterial.AssertNone(stderr);
+    }
+
+    [Fact]
+    public void Move_VerifyFails_AStrangerFileInTheTarget_IsKept()
+    {
+        var stranger = Path.Combine(Target, "from-the-sync-tool");
+        VaultCommand.MoveSeam = (point, _) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.FileCopied && !File.Exists(stranger))
+                File.WriteAllText(stranger, "not tswap's");
+        };
+        var config = File.ReadAllBytes(_m.ConfigPath);
+        var vault = Tree(DefaultFolder);
+
+        var (exit, _, stderr) = _m.Run("", "vault", "move", Target);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Step 3 (checking the copy) failed at from-the-sync-tool", stderr);
+        Assert.Equal(["from-the-sync-tool"], Tree(Target).Keys); // only the stranger's file is left
+        Assert.Equal("not tswap's", File.ReadAllText(stranger));
+        Assert.Contains($"The copy's files were removed; {Target} was kept because it holds files this command didn't write.", stderr);
+        Assert.Equal(config, File.ReadAllBytes(_m.ConfigPath));
+        Assert.Equal(vault, Tree(DefaultFolder));
+        KeyMaterial.AssertNone(stderr);
+    }
+
+    [Fact]
+    public void Move_AnUnexpectedErrorInTheCopy_IsCleanedUpAndNamesTheStep()
+    {
+        VaultCommand.MoveSeam = (point, path) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.FileCopied && Path.GetFileName(path) == "keyring")
+                throw new InvalidOperationException("something unexpected");
+        };
+        var before = Before();
+
+        AssertNothingChanged(before, _m.Run("", "vault", "move", Target),
+            "Step 2 (copying the vault folder) failed at keyring: something unexpected. config.json is unchanged.");
     }
 
     [Fact]
@@ -438,6 +555,14 @@ public sealed class VaultMoveTests : IDisposable
             Assert.Equal(1, exit);
             Assert.Contains("Usage: tswap vault move <new-folder> [--yes]", stderr);
         }
+    }
+
+    private static void NoKeyMaterial(string stdout, string stderr)
+    {
+        KeyMaterial.AssertNone(stdout);
+        KeyMaterial.AssertNone(stderr);
+        Assert.DoesNotContain("alpha-value", stdout + stderr);
+        Assert.DoesNotContain("beta-value", stdout + stderr);
     }
 
     private static string RealPath(string path) =>
