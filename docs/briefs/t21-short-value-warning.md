@@ -19,7 +19,8 @@ Review history: round 1 by MiMo and DeepSeek (`~/RiderProjects/tswap-wt/tools/t2
 `ToCommentProcessor.cs`, `SecretMatcher.cs`, `ToCommentCommand.cs`, `Check.cs`, `CheckCommand.cs` and their tests.
 T21 edits none of them. Shared docs, by section: in `docs/commands.md` T21 adds one paragraph after line 113 (the
 whitespace paragraph) and nothing else; in `docs/security-model.md` T21 edits only "What `run` masks" (from line 209
-to the end of its "Limits" list), T20 only "Files with secrets" (from line 265).
+to the end of its "Limits" list), T20 only "Files with secrets" (from line 265); in `TswapCore/Prompt.cs` T21 only
+appends a rule at the end of "Key rules", T20 only edits lines 39 and 41 (the `check` and `tocomment` one-liners).
 
 ## Why
 
