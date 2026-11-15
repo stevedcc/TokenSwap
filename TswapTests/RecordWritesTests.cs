@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TswapCore;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 using Xunit;
@@ -362,7 +363,7 @@ public sealed class RecordWritesTests
     public void MergeAllMetadata_MatchesMergeAll_OrRefuses_OnRandomCopySets()
     {
         var random = new Random(2_017);
-        int merged = 0, refused = 0, bothRefused = 0;
+        int merged = 0, refused = 0, bothRefused = 0, fieldMerges = 0;
         for (var round = 0; round < 400; round++)
         {
             var name = "s";
@@ -410,12 +411,16 @@ public sealed class RecordWritesTests
             }
             Assert.True(fullConflict is null, $"round {round}: the plaintext merge refused ({fullConflict?.Message}) but the metadata merge merged");
             AssertSame(Meta(fullMerged!), metaMerged!.Value.Metadata, $"round {round}");
+            // Issue #311: copies with diverging fields, merged per field on both paths.
+            if (fullMerged!.Type != RecordType.Tombstone && full.Count(r => FieldsCodec.TryGet(r.Extensions) is { Entries.Count: > 0 }) >= 2)
+                fieldMerges++;
             Assert.Equal(fullMerged!.Sealed?.Count ?? 0, metaMerged.Value.Sealed.Count);
             foreach (var (stamp, section) in metaMerged.Value.Sealed)
                 Assert.Equal(fullMerged.Sealed![stamp], section);
             merged++;
         }
         Assert.True(merged > 100 && refused > 50 && bothRefused > 10, $"merged {merged}, refused {refused} (both {bothRefused})");
+        Assert.True(fieldMerges > 20, $"only {fieldMerges} merges of diverging fields");
 
         byte[] Encode(SecretRecord record, bool withSets, Stamp write)
         {
@@ -425,8 +430,19 @@ public sealed class RecordWritesTests
                 Fingerprints = withSets && record.Type != RecordType.Tombstone ? Fp(record.Value) : null,
                 Previous = record.Previous is { } p ? p with { Fingerprints = withSets ? Fp(p.Value) : null } : null,
                 Sealed = null,
+                // Issue #311: random valid Fields extensions (some beside another type), on a third of
+                // the copies the record's own list.
+                Extensions = random.Next(3) == 0 ? record.Extensions : RandomExtensions(),
             };
             return SecretRecordCodec.Encode(prepared, Key, 3);
         }
+
+        IReadOnlyList<RecordExtension> RandomExtensions() => random.Next(5) switch
+        {
+            0 => [],
+            1 => [new RecordExtension(0x7777, [(byte)random.Next(3)])],
+            2 => [new RecordExtension(0x7777, [(byte)random.Next(3)]), new RecordExtension(FieldsExtension.Type, FieldsCodec.Encode(FieldMergeTests.RandomSet(random)))],
+            _ => [new RecordExtension(FieldsExtension.Type, FieldsCodec.Encode(FieldMergeTests.RandomSet(random)))],
+        };
     }
 }

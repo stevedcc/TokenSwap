@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TswapCore;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 using Xunit;
@@ -377,5 +378,116 @@ public class RecordMergeV3Tests
         // The generator must exercise both outcomes.
         Assert.True(conflicts > 20, $"only {conflicts} conflicts");
         Assert.True(merges > 100, $"only {merges} merges");
+    }
+
+    // Issue #311, task 2: the Fields extension merges per field; every other extension type keeps the whole-list rule.
+
+    private static readonly FieldWho WhoA = new("0a0a0a0a", "u", Elevated: false, Terminal: false, By: null);
+
+    private static RecordExtension FieldsExt(Stamp since, params FieldEntry[] entries) =>
+        new(FieldsExtension.Type, FieldsCodec.Encode(new FieldSet(since, entries)));
+
+    private static FieldEntry Field(string name, string value, Stamp changed, params FieldChange[] history) =>
+        new(name, value, Deleted: false, changed, WhoA, history);
+
+    [Fact]
+    public void MergeAll_Tombstone_DropsFields_KeepsOtherExtensions()
+    {
+        var live = Rec(S(1000), "v", write: S(5000)) with
+        {
+            Extensions = [new RecordExtension(0x7777, [1]), FieldsExt(S(1000), Field("host", "db", S(4900)))],
+        };
+        // An older-format tombstone that kept a Fields extension: it doesn't survive either.
+        var deleted = Tombstone(S(3000), write: S(3000)) with { Extensions = [FieldsExt(S(1000), Field("host", "db", S(1500)))] };
+
+        var merged = MergeEveryOrder([live, deleted])!;
+
+        Assert.Equal(RecordType.Tombstone, merged.Type);
+        Assert.Equal([new RecordExtension(0x7777, [1])], merged.Extensions);
+        Assert.Null(FieldsCodec.TryGet(merged.Extensions));
+    }
+
+    [Fact]
+    public void MergeAll_LiveWithEmptyFields_KeepsSince()
+    {
+        // The copy with the newer write predates fields (no extension); the other has no fields left.
+        var withFields = Rec(S(1000), "v", write: S(5000)) with { Extensions = [FieldsExt(S(1000))] };
+        var withoutFields = Rec(S(1000), "v", write: S(6000)) with { Extensions = [new RecordExtension(0x7777, [2])] };
+
+        var merged = MergeEveryOrder([withFields, withoutFields])!;
+
+        var fields = FieldsCodec.TryGet(merged.Extensions);
+        Assert.NotNull(fields); // rule 6: the empty extension stays, with its lineage stamp
+        Assert.Equal(S(1000), fields.Since);
+        Assert.Empty(fields.Entries);
+        Assert.Equal([new RecordExtension(0x7777, [2]), FieldsExt(S(1000))], merged.Extensions);
+    }
+
+    /// <summary>
+    /// MiMo r2 N1: the secret had a field, was deleted and re-created without fields (an empty
+    /// extension anchoring the new life). Two stale copies of the first life, one with a newer write
+    /// stamp than the re-creation (a burn on a machine that hadn't synced), must not bring the field back.
+    /// </summary>
+    [Fact]
+    public void MergeAll_RecreatedWithoutFields_ThenTwoStaleCopies_NoOldFields()
+    {
+        var recreated = Rec(S(3000), "new", write: S(3000)) with { Extensions = [FieldsExt(S(3000))] };
+        var stale = Rec(S(1000), "old", write: S(1200)) with { Extensions = [FieldsExt(S(1000), Field("host", "old-db", S(1100)))] };
+        var staleBurned = RecordMerge.Normalize(Rec(S(1000), "old", write: S(3500)) with
+        {
+            Burns = [new BurnEntry(S(1000), S(3500), "seen")],
+            Extensions = [FieldsExt(S(1000), Field("host", "old-db", S(1100)), Field("port", "5432", S(2000)))],
+        });
+
+        var merged = MergeEveryOrder([recreated, stale, staleBurned])!;
+
+        Assert.Equal("new"u8.ToArray(), merged.Value);
+        var fields = FieldsCodec.TryGet(merged.Extensions);
+        Assert.NotNull(fields); // rule 6: the empty extension stays, with its lineage stamp
+        Assert.Equal(S(3000), fields.Since);
+        Assert.Empty(fields.Entries);
+        Assert.Equal([FieldsExt(S(3000))], merged.Extensions);
+    }
+
+    [Fact]
+    public void MergeAll_TwoIdenticalCopies_WritesNothing()
+    {
+        var x = Rec(S(2000), "v", write: S(2500)) with
+        {
+            Extensions =
+            [
+                new RecordExtension(0x7777, [7]),
+                FieldsExt(S(2000), Field("host", "db", S(2400), new FieldChange("db0", S(2100), WhoA)),
+                    new FieldEntry("port", null, Deleted: true, S(2300), WhoA, [])),
+            ],
+        };
+        var copy = SecretRecordCodec.Decode(SecretRecordCodec.Encode(x, VaultKey, 3), VaultKey);
+
+        var merged = RecordMerge.MergeAll([x, copy]);
+
+        Assert.True(merged.SameState(x));
+        Assert.True(merged.SameState(copy));
+    }
+
+    [Fact]
+    public void MergeAll_OverCap_StaysReadable()
+    {
+        // Two legal copies, each with 40 fields of other names: 80 after the merge, over the 64-field cap.
+        var onA = Rec(S(1000), "v", write: S(5000)) with
+        {
+            Extensions = [FieldsExt(S(1000), [.. Enumerable.Range(0, 40).Select(i => Field($"a{i:d2}", "x", S(4000)))])],
+        };
+        var onB = Rec(S(1000), "v", write: S(5000, OriginB)) with
+        {
+            Extensions = [FieldsExt(S(1000), [.. Enumerable.Range(0, 40).Select(i => Field($"b{i:d2}", "y", S(4000, OriginB)))])],
+        };
+
+        var merged = MergeEveryOrder([onA, onB])!;
+
+        Assert.Equal(80, FieldsCodec.TryGet(merged.Extensions)!.Live.Count());
+        Assert.True(80 > FieldRules.MaxLiveFields);
+        var written = SecretRecordCodec.Decode(SecretRecordCodec.Encode(merged with { Write = S(6000) }, VaultKey, 3), VaultKey);
+        Assert.Equal(80, FieldsCodec.TryGet(written.Extensions)!.Live.Count());
+        Assert.True(RecordMerge.MergeAll([written, onA, onB]).SameState(merged));
     }
 }

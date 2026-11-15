@@ -152,12 +152,21 @@ public static class FieldsCodec
             writer.Write(bytes);
     }
 
-    private static byte[] EncodeChange(FieldChange change)
+    /// <summary>One history entry as <see cref="Encode"/> writes it (the order of equal-identity changes).</summary>
+    internal static byte[] EncodeChange(FieldChange change)
     {
         var writer = new ArrayBufferWriter<byte>();
         WriteNullableString(writer, change.OldValue);
         WriteStamp(writer, change.Changed);
         WriteWho(writer, change.Who);
+        return writer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>A <see cref="FieldWho"/> as <see cref="Encode"/> writes it.</summary>
+    internal static byte[] EncodeWho(FieldWho who)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        WriteWho(writer, who);
         return writer.WrittenSpan.ToArray();
     }
 

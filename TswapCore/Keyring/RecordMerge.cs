@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 
 namespace TswapCore.Keyring;
@@ -97,7 +98,9 @@ public static class RecordMerge
     /// <item><b>Fingerprints:</b> per retained version, the set with the highest variant-set version
     /// (null is bottom); two different sets at one variant-set version conflict.</item>
     /// <item><b>Extensions:</b> the whole list of the input with the largest write stamp; ties by the
-    /// ordinal order of the encoded list.</item>
+    /// ordinal order of the encoded list. The <c>Fields</c> extension (issue #311) is the exception:
+    /// merged per field from every input (<see cref="FieldMerge"/>), dropped on a tombstone
+    /// (<see cref="MergeExtensions"/>).</item>
     /// <item><b>Burns:</b> the union, then <see cref="CanonicalBurns"/>. <b>Write stamp:</b> the largest.</item>
     /// </list>
     /// A conflict is a <see cref="RecordConflictException"/>: the caller marks that record unreadable
@@ -167,11 +170,7 @@ public static class RecordMerge
         }
 
         var write = inputs.Select(r => r.Write).Aggregate(Stamp.Max);
-        var extensions = inputs
-            .Where(r => r.Write.Equals(write))
-            .Select(r => (r.Extensions, Encoded: EncodeExtensions(r.Extensions)))
-            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
-            .Extensions;
+        var extensions = MergeExtensions([.. inputs.Select(r => (r.Write, r.Extensions))], write, isTombstone);
         var burns = CanonicalBurns(inputs.SelectMany(r => r.Burns), version, isTombstone);
         return winner with
         {
@@ -269,11 +268,7 @@ public static class RecordMerge
         }
 
         var write = inputs.Select(r => r.Metadata.Write).Aggregate(Stamp.Max);
-        var extensions = inputs
-            .Where(r => r.Metadata.Write.Equals(write))
-            .Select(r => (r.Metadata.Extensions, Encoded: EncodeExtensions(r.Metadata.Extensions)))
-            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
-            .Extensions;
+        var extensions = MergeExtensions([.. inputs.Select(r => (r.Metadata.Write, r.Metadata.Extensions))], write, isTombstone);
         var burns = CanonicalBurns(inputs.SelectMany(r => r.Metadata.Burns), version, isTombstone);
         return (winner with
         {
@@ -306,6 +301,29 @@ public static class RecordMerge
             || (a.Previous is null) != (b.Previous is null)
             || (a.Previous is { } pa && (!pa.Version.Equals(b.Previous!.Version) || !pa.Value.AsSpan().SequenceEqual(b.Previous.Value))))
             throw new RecordConflictException($"two copies share the version {a.Version} but differ in content");
+    }
+
+    /// <summary>
+    /// The merged extension list, the same rule in both merge paths. Every type but
+    /// <see cref="FieldsExtension"/>: the whole list of the input with the largest write stamp
+    /// (<paramref name="write"/>), its <c>Fields</c> entry left out; ties by the ordinal order of that
+    /// encoded list. Then the <c>Fields</c> extension (issue #311), merged per field from every input
+    /// that has one (<see cref="FieldMerge"/>) and added at the end: never on a tombstone (spec Merge
+    /// rule 1), always on a live record when any input had one, even with no entries (rule 6).
+    /// </summary>
+    private static IReadOnlyList<RecordExtension> MergeExtensions(
+        IReadOnlyList<(Stamp Write, IReadOnlyList<RecordExtension> Extensions)> inputs, Stamp write, bool isTombstone)
+    {
+        var others = inputs
+            .Where(r => r.Write.Equals(write))
+            .Select(r => FieldsCodec.With(r.Extensions, null))
+            .Select(list => (List: list, Encoded: EncodeExtensions(list)))
+            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
+            .List;
+        if (isTombstone)
+            return others;
+        List<FieldSet> fields = [.. inputs.Select(r => FieldsCodec.TryGet(r.Extensions)).OfType<FieldSet>()];
+        return fields.Count == 0 ? others : FieldsCodec.With(others, FieldMerge.Merge(fields));
     }
 
     /// <summary>The extension list as format 3 stores it (count, then type, length, data), for the tie order.</summary>
