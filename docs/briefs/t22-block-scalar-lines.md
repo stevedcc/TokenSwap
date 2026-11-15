@@ -1,26 +1,35 @@
-# Brief T22: `tocomment` never rewrites a line inside a YAML block scalar
+# Brief T22: `tocomment` never puts a marker for an encoded value inside a YAML block scalar
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/319. Base: `origin/main` at f75be2b (T20 and T21 merged).
-Read AGENTS.md and CLAUDE.md first, then `TswapCore/SecretMatcher.cs` (`ToComment`, :43-79, and `SelectToComment`),
-`TswapCore/ToCommentProcessor.cs` (`LiteralBlockAt`, :64-123), `TswapCli/Commands/ToCommentCommand.cs` (all of it),
-`TswapTests/ToCommentBlockScalarTests.cs` and `docs/commands.md:90-94`.
+Read AGENTS.md and CLAUDE.md first, then `TswapCore/SecretMatcher.cs` (`ToComment`, :43-79, `SelectToComment` and
+`Entries`, which carry each hit's `VariantKind`), `TswapCore/ToCommentProcessor.cs` (`LiteralBlockAt`, :64-123),
+`TswapCli/Commands/ToCommentCommand.cs` (all of it), `TswapTests/ToCommentBlockScalarTests.cs` (both classes),
+`TswapTests/RedactTests.cs:368-393` (`ToComment_ShortSecretValue_DoesNotMatchInsideShellEmbeddedInYaml`),
+`TswapTests/RedactEngineTests.cs:95-150` and `docs/commands.md:90-94`.
 
 One commit per task, test first, a break-it-once check per key test (name in the commit message which line you
 reverted and which test failed), `./runtests.sh --unit` after each task, the full `./runtests.sh` at the end. No
 hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`: simulated services, `TSWAP_CONFIG_DIR` and temp
 folders only. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no
 push, merge or rebase; stop and report when the brief can't be built as written. Never change an existing test's
-assertion.
+assertion; no existing test should need it under this brief (see "Existing tests").
 
 **Parallel work:** the #311 fields branch runs at the same time. It does not touch any file named here except
 `docs/commands.md`, where it edits the sudo table and the generated command reference; T22 edits only the
-`tocomment` paragraph at :90-94 and the `### tocomment` section.
+hand-written paragraph at :90-94.
+
+**Review history:** round 1 (MiMo, GLM-5.3: `~/RiderProjects/tswap-wt/tools/t22-brief-r1-*.md`) said "no". The
+round-1 design left **every** line inside a block scalar alone; both reviewers found it would break
+`ToComment_ShortSecretValue_DoesNotMatchInsideShellEmbeddedInYaml`, which pins a working case (a shell script
+inside a Butane/Ignition `inline: |` block, where the marker's `#` is a shell comment and `run` fills the value back
+correctly). The design is narrowed to #319's actual fault (below); MiMo's sequence-entry finding, both reviewers'
+oracle, docs and class-name findings and the minors are folded in.
 
 ## Why
 
-Found in the T20 code review. `tocomment` adopts a literal block scalar whose content is exactly one stored value
-(T20). Every other line still goes through the line-by-line path, also when it lies **inside** a block scalar. Inside
-a block scalar a `#` is not a comment, it is text, so the rewrite changes the content:
+Found in the T20 code review. A `# tswap:` marker is always filled with the stored value's **plain** form. Inside a
+YAML block scalar, `tocomment`'s line-by-line path still replaces a stored value's **encoded** form (base64,
+base64url, or the whitespace-stripped form) with a marker:
 
 ```yaml
 key: |
@@ -34,17 +43,23 @@ key: |
     ""  # tswap: pem
 ```
 
-The block's text is now literally `""  # tswap: pem`. A later `run … {{@file}}` fills that marker with pem's
-**plain** value where the file held its base64: a wrong value, silently. The same happens to any secret on a line of
-a script or config held in a block (`script: |` with `export TOKEN=…` in it): the block's text changes.
+A later `run … {{@file}}` fills that marker with pem's **plain** value where the file held its base64: a wrong value,
+silently. Outside a block, the same replacement is visible to `check` (T20 warns about `data:` in a Secret); inside a
+block nothing notices.
 
-Reproduce first: on the base, tighten nothing, but add the Task 1 test and watch it fail with the rewritten line.
+A **plain** value on a line inside a block keeps today's behaviour: the line becomes `… ""  # tswap: NAME`, and `run`
+fills the plain value back, which is right for the shell scripts and configs people keep in blocks (the pinned Butane
+case). Whether a `#` comment is valid in the block's language (JSON is the case where it isn't) is a known limit,
+documented in Task 3, not changed here.
 
-**Owner rule (warnings over hard blocks):** `tocomment` does not refuse the file. It leaves such lines exactly as they
-are, replaces everything else as today, and warns about each line it left, naming the line number and the secret,
+**Owner rule (warnings over hard blocks):** `tocomment` does not refuse the file. It leaves each such line exactly as
+it is, replaces everything else as today, and warns about each line it left, naming the line number and the secret,
 never the line's text or the value.
 
-## Task 1: detect block-scalar content and leave it alone
+Reproduce first: on the base, add `BaseSixtyFourInABlock_LeftUnchanged_Reported` (Task 1) and watch it fail with the
+rewritten line.
+
+## Task 1: find block-scalar content; leave encoded matches there alone
 
 In `TswapCore/ToCommentProcessor.cs`, one function that says which lines of a file are block-scalar content:
 
@@ -52,82 +67,120 @@ In `TswapCore/ToCommentProcessor.cs`, one function that says which lines of a fi
 internal static bool[] BlockScalarContent(string[] lines)
 ```
 
-- A **block start** is a line whose content after its indentation is a mapping key (`key:`, the same key shape as
-  `LiteralBlockKey`) **or** a sequence entry (`- `, optionally followed by a key), followed by `|` or `>` with optional
-  indicators (`|-`, `|+`, `>-`, `>+`, `|2`, `|2-`, `>1+`, …: one chomping indicator and/or one indentation digit 1-9,
-  either order), then optional spaces and an optional `# comment`, then the end of the line.
-- Its **content** is every following line that is blank or indented deeper than the block start's own indentation,
-  up to the first non-blank line indented the same or less. (This is wider than `LiteralBlockAt`'s rule on purpose:
-  for *leaving lines alone*, erring on the side of "inside" is safe; for *adopting*, T20's stricter walk stays.)
-- A `#` inside the start line's key or after the indicator is handled as YAML does (`key: | # note` is a block start;
-  `key: "|"` is not).
-- Lines of a block that `LiteralBlockAt` adopts are removed as today (T20); this function only matters for the lines
-  the line path would otherwise rewrite.
+- **A block start** is a line whose content, after its indentation, is
+  - a mapping key (the `LiteralBlockKey` key shape), or
+  - a sequence entry `- ` (one or more spaces after the dash), optionally followed by such a key,
 
-In `SecretMatcher.ToComment`, a line marked as block-scalar content is never rewritten by the line path, and no
-continuation-line removal (`ContinuationLines`) reaches into one. When such a line holds a stored value (any variant
-`SelectToComment` would have taken), record it as an **unreplaced** line instead:
+  then optional node properties (an anchor `&name` and/or a tag `!…`, e.g. `key: !!binary |`, `key: &a >-`), then `|`
+  or `>` with optional indicators (one chomping indicator `-`/`+` and/or one indentation digit 1-9, either order:
+  `|-`, `|+`, `>2`, `|2-`, `>-1`), then optional spaces and an optional ` # comment`, then the end of the line.
+  `key: "|"` is not a block start (quoted).
+- **The node column** of a block start is the column of its key (for `key: |` and `- key: |`: skip the indentation,
+  and for a sequence entry the dash and its spaces) or, for a bare `- |`, the dash's column.
+- **Its content** is every following line that is blank, or whose indentation is **greater than the node column**, up
+  to (not including) the first non-blank line indented at or less than the node column. (Example, MiMo round 1: in
+  `- command: |` at indent 8 with `command` at column 10, a following `env:` at indent 10 is **not** content.)
+- The result is the **union** of all blocks' content. A block start found inside content is content too, and neither
+  ends the outer block nor starts a new region (one pass, outer block first).
+- `lines` is the file split on LF (CRLF already normalised); a trailing empty element after the final LF is not a line
+  of the file and is never content.
 
-```csharp
-public sealed record UnreplacedLine(int LineNumber, string Token);
-```
+In `SecretMatcher.ToComment`, for a line marked as content:
 
-Return it beside the changes. Pick the least invasive shape that keeps every existing caller and test compiling and
-their assertions unchanged, for example a third tuple element on `SecretMatcher.ToComment`/`Redact.ToComment`
-(`(string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced)`) with the existing
-two-element overloads kept for the tests, or a separate method. **Do not** make it a `LineDiff` subtype: the
-command's dry-run printer treats every `LineDiff` with a non-empty `After` as a line to print, and this line's text
-holds a secret.
+- **Plain** hits keep today's behaviour exactly (the line path and `ContinuationLines` as now).
+- **Encoded** hits (`VariantKind` other than `Plain`) are never replaced. If a line holds any encoded hit, the whole
+  line is left unchanged (no partial rewrite) and each encoded hit is recorded as an **unreplaced** line:
 
-Tests (in `ToCommentBlockScalarTests.cs`, new tests only; `BaseSixtyFourOfTheValue_NotAdopted` stays as it is):
+  ```csharp
+  public sealed record UnreplacedLine(int LineNumber, string Token);
+  ```
 
-- `BaseSixtyFourInABlock_LeftUnchanged_Reported`: the #319 file; result equals the input (`AssertUnchanged`-style:
-  content equal, no changes) and one unreplaced line (line 2, token `pem`).
-- `ScriptBlockWithASecret_LeftUnchanged_Reported`: `script: |` then `  export TOKEN=<value>` then `next: 1`; the
-  block unchanged, one unreplaced line; a `token: <value>` line **after** the block (outside it) is still replaced as
-  today, in the same run.
-- `FoldedBlock_LeftUnchanged` (`>` and `>-`), `SequenceEntryBlock_LeftUnchanged` (`- |`), `IndentationIndicator_
-  LeftUnchanged` (`|2`), `BlockStartWithComment_LeftUnchanged` (`key: | # note`).
-- `QuotedPipe_NotABlock`: `key: "|"` then an indented `<value>` line is not block content (YAML: that indented line
-  is a continuation of nothing, so today's behaviour applies; pin today's output exactly).
-- `BlockEndsAtLessIndentedLine`: a secret on the first line after the block (indented as the key) is replaced.
-- `AdoptedBlock_StillAdopted`: T20's PEM case is unaffected (same result as `Clip_PemBlockFollowedByABlankLine_Adopted`).
-- A theory over `BlockScalarContent` itself with small inputs: blank lines inside count as content; the block ends
-  at the first non-blank line indented the same or less; a line indented less but blank does not end it.
+  One record per `(LineNumber, Token)` (deduplicated), ordered by line number, then by token ordinally. `Token` is the
+  token `tocomment` would have written (`name` or `name:previous`).
+- `ContinuationLines` never removes a content line that holds an encoded hit.
+- **Adoption (T20)** is unchanged, also for a block start nested inside another block's content: T20 adopts only a
+  block whose whole content is a value's **plain** form, which `run` fills back correctly. (MiMo round 1 I1 asked to
+  fence adoption inside content; with the narrowed rule a nested adoption is a plain fill, the case that works, so it
+  stays. Say so in the commit message.)
 
-Break-it-once: (1) skip the block-content check in `ToComment`; `BaseSixtyFourInABlock_…` and `ScriptBlock…` fail.
-(2) Treat only `|` as a block start; `FoldedBlock_LeftUnchanged` fails.
+**API shape (GLM round 1 M1):** keep every existing signature (`SecretMatcher.ToComment(string)`,
+`Redact.ToComment(string, SecretMatcher)`, `Redact.ToComment(string, SecretsDb)`, all returning
+`(string Content, IReadOnlyList<LineDiff> Changes)`) so no existing caller or test changes. Add one new method on each
+of those three, `ToCommentReporting`, returning `(string Content, IReadOnlyList<LineDiff> Changes,
+IReadOnlyList<UnreplacedLine> Unreplaced)`; the old ones call it and drop the third element. `UnreplacedLine` is
+**not** a `LineDiff` subtype (the command's dry-run printer would print its text).
+
+Tests (in `ToCommentBlockScalarTests`, the unit class, new tests only; `BaseSixtyFourOfTheValue_NotAdopted` stays as it
+is). In every fixture the value sits **on a content line**, not as the whole block:
+
+- `BaseSixtyFourInABlock_LeftUnchanged_Reported`: the #319 file; content equals the input, no changes, one unreplaced
+  line (line 2, token `pem`).
+- `PlainValueInAScriptBlock_StillReplaced`: `script: |` then `  export TOKEN=<value>` then `next: 1`: the line is
+  rewritten exactly as today (`  export TOKEN=""  # tswap: tok`), no unreplaced line. (The Butane test in
+  `RedactTests` pins the same; this one names the rule.)
+- `Base64InAScriptBlock_LineLeftUnchanged`: `script: |` then `  echo <base64 of value> | base64 -d` then a top-level
+  `token: <value>` line: the script line unchanged and reported, the top-level line replaced as today, in the same run.
+- `MixedLine_PlainAndEncoded_LeftWhole`: one content line holding a plain value and another value's base64: unchanged,
+  one unreplaced record (the encoded one).
+- `FoldedBlock_Encoded_LeftUnchanged` (`>` and `>-`), `SequenceEntryBlock_Encoded_LeftUnchanged` (`- |`),
+  `IndentationIndicator_Encoded_LeftUnchanged` (`|2`), `BlockStartWithComment_Encoded_LeftUnchanged`
+  (`key: | # note`), `TaggedBlock_Encoded_LeftUnchanged` (`key: !!binary |`, the base64 case that matters most).
+- `CompactSequenceEntry_SiblingKeyNotContent`: `- command: |` + a content line + a sibling `env:`/`token: <base64 of
+  value>` at the key's column: the sibling's value is **replaced** as today (it is not block content).
+- `QuotedPipe_NotABlock`: `key: "|"` then an indented `<base64>` line: today's output exactly (not content; don't
+  add multi-line quoted-scalar handling).
+- `BlockEndsAtNodeColumn`: an encoded value on the first line after the block, indented as the key: replaced.
+- `TwoValuesOnOneContentLine_TwoRecords` and `SameValueTwiceOnALine_OneRecord`.
+- A theory over `BlockScalarContent`: blank lines inside count as content; the block ends at the first non-blank line
+  at or below the node column; a blank line indented less does not end it; a nested block start is content; the
+  trailing empty element is not content.
+
+Break-it-once: (1) skip the content check; `BaseSixtyFourInABlock_…` and `Base64InAScriptBlock_…` fail. (2) Use the
+line's indentation instead of the node column; `CompactSequenceEntry_SiblingKeyNotContent` fails. (3) Treat only `|`
+as a block start; `FoldedBlock_Encoded_LeftUnchanged` fails.
+
+**Existing tests (verify, don't edit):** `RedactTests.ToComment_ShortSecretValue_DoesNotMatchInsideShellEmbeddedInYaml`
+stays green unchanged (a plain hit in a block). `RedactEngineTests.Engine_MatchesOracle_OnRandomCorpus` compares the
+engine with the frozen `PlaintextRedactOracle`, which is never edited: the corpus can in principle generate a
+`key: |+` line followed by a deeper line holding an encoded form. Expected: the fixed seed produces none, and the test
+stays green (check it in the Task 1 `--unit` run). If it fails, stop and report the round and the lines; do not edit
+the oracle, the corpus or the seed.
 
 ## Task 2: say so in `tocomment`'s output
 
-In `ToCommentCommand`, for each unreplaced line, on stderr, after the change listing and before the summary line:
+`ToCommentCommand` switches to `ToCommentReporting`. For each unreplaced line, on stderr, after the change listing and
+before the summary line, in the order above:
 
-`Warning: line N holds the value of 'NAME' inside a YAML block scalar (key: | or key: >), where a '# tswap:' comment would become part of the text. Not replaced: move the value out of the block by hand, or put the whole block in its own secret.`
+`Warning: line N holds an encoded form (base64 or similar) of the value of 'NAME' inside a YAML block scalar. A '# tswap:' marker is filled with the plain value, so it was not replaced: move the value out of the block by hand, or keep the block as a whole secret.`
 
-- `NAME` is the token as `tocomment` would have written it (`name` or `name:previous`).
-- Never the line's text, never the value, in dry run or real run, on either stream.
-- With unreplaced lines and no changes, don't print "No secrets found. File unchanged.": print the warnings, then
-  `File unchanged.`; exit 0 (a warning, not a refusal; owner rule). With both, the summary counts only changed lines,
-  as today.
+- Never the line's text, never the value or its encoded form, in dry run or real run, on either stream.
+- Only unreplaced lines, no changes: print the warnings, then `File unchanged.` (not "No secrets found."); exit 0 (a
+  warning, not a refusal). Both: the summary counts only changed lines, as today. Neither: today's
+  `No secrets found. File unchanged.`, exactly (pin it in a test: nothing pins it today).
 - `--dry-run` prints the same warnings.
 
-Tests (command level, `FleetMachine`, a new test class `ToCommentBlockScalarCommandTests` or the existing command test
-class for `tocomment`): the #319 file with `--dry-run` and without: exact warning line on stderr, exit 0, file
-unchanged on disk; no leak: the value, its base64 form and the original line's text appear in neither stdout nor
-stderr; a file with one unreplaced and one replaced line: the replaced one is written, the summary says 1 line, the
-warning is printed.
+Tests: add them to the **existing** `ToCommentBlockScalarCommandTests` class (in `ToCommentBlockScalarTests.cs`; a new
+class of that name would not compile): the #319 file with and without `--dry-run`: the exact warning on stderr, exit
+0, the file on disk byte for byte unchanged; no leak: the value, its base64 form and the original line's text appear in
+neither stdout nor stderr, for both modes; one unreplaced and one replaced line in one file: the replaced one written,
+the summary says 1 line, the warning printed; a file with no secrets: `No secrets found. File unchanged.`
 
-Break-it-once: (1) add the line's text to the warning; the no-leak test fails. (2) Return 1; the exit-0 test fails.
+Break-it-once: (1) add the line's text to the warning; the no-leak test fails. (2) Return 1 when a line was left; the
+exit-0 test fails.
 
 ## Task 3: docs
 
-- `docs/commands.md`, the paragraph at :90-94: one sentence after the adoption sentence: lines inside any other
-  block scalar (`|` or `>`) are left as they are, with a warning naming the line and the secret, because a comment
-  there would become part of the text.
-- The `### tocomment` section: the same, in its own words, with the warning's first sentence.
-- No command `Description` changes, so the generated command reference is untouched.
+- `docs/commands.md`, the hand-written paragraph at :90-94 only (the `### tocomment` heading at :237 is inside the
+  generated command reference, which `CommandReferenceIsCurrent` pins; don't touch it): after the adoption sentence,
+  add that inside a block scalar a line holding an **encoded** form of a value (base64 and similar) is left as it is,
+  with a warning naming the line and the secret, because a marker is filled with the plain value; and that a plain
+  value inside a block is still replaced by a marker whose `#` becomes part of the block's text, which suits shell
+  scripts and YAML but not JSON.
+- No command `Description` changes, no `Prompt.cs` change (the agent sees the warning). Release notes are written at
+  release time.
 
 ## Out of scope
 
-Base64-variant markers (a marker that fills a value's base64 form), the `check` `data:` warning (T20), adopting a block
-whose content is a value's base64, `redact` (it only masks output and is unaffected), JSON or TOML multi-line strings.
+Encoded matches outside block scalars (`check`'s `data:` warning covers the common case), markers that fill an encoded
+form, adopting a block whose content is a value's base64, keys containing `#` or explicit `? key` entries as block
+starts (known gaps: they keep today's behaviour), `redact` (unaffected), JSON or TOML multi-line strings.
