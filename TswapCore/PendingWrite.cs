@@ -1,3 +1,6 @@
+using TswapCore.Fields;
+using TswapCore.Keyring;
+
 namespace TswapCore;
 
 /// <summary>
@@ -17,10 +20,17 @@ internal abstract record PendingWrite(string Name, SecretEntry? Entry);
 /// <param name="Created">The creation time of a secret that has no live record.</param>
 /// <param name="ImportedBurnAt">An imported burn, kept on the new version with its own time.</param>
 internal sealed record ValueWrite(string Name, SecretEntry? Entry, byte[] Value, bool Always, bool Restored, DateTime Created,
-    DateTime? ImportedBurnAt = null, string? ImportedBurnReason = null) : PendingWrite(Name, Entry);
+    DateTime? ImportedBurnAt = null, string? ImportedBurnReason = null, IReadOnlyList<FieldEdit>? Fields = null, FieldWho? Who = null)
+    : PendingWrite(Name, Entry);
 
 /// <summary>A burn of the current version (nothing is written when it is burned already).</summary>
 internal sealed record BurnWrite(string Name, SecretEntry Entry, string? Reason) : PendingWrite(Name, Entry);
 
 /// <summary>A delete: a tombstone over the live record.</summary>
 internal sealed record DeleteWrite(string Name, SecretEntry Entry) : PendingWrite(Name, Entry);
+
+/// <summary>
+/// Issue #311: a metadata-only field write on a live record (<see cref="RecordWrites.SetFields"/>):
+/// the value, its version and its sections stay as they are; nothing is written when no edit changes anything.
+/// </summary>
+internal sealed record FieldsWrite(string Name, SecretEntry Entry, IReadOnlyList<FieldEdit> Edits, FieldWho Who) : PendingWrite(Name, Entry);

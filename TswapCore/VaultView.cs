@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 
@@ -74,6 +75,25 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
                 return null;
         }
         return Open(name).Entry?.Info;
+    }
+
+    /// <summary>
+    /// Issue #311: <paramref name="name"/>'s fields (delete markers included), or null when there is no
+    /// live secret (no record, a tombstone, or a record that can't be read). From metadata, as
+    /// <see cref="Find"/>; decrypts no value. A record written before fields existed has none: an empty
+    /// set with <c>Since</c> = <see cref="Stamp.Zero"/>.
+    /// </summary>
+    public FieldSet? Fields(string name)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_byName is not null)
+        {
+            if (_byName.TryGetValue(name, out var metadata))
+                return metadata.Type == RecordType.Tombstone ? null : VaultWriter.FieldsOf(metadata);
+            if (_loadedWith == FormatTwoRecords.Decode || _unreadable!.Contains(FileOf(name)))
+                return null;
+        }
+        return Open(name).Entry is { Info: not null } entry ? VaultWriter.FieldsOf(entry.Metadata) : null;
     }
 
     /// <summary>

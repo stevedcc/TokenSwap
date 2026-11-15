@@ -191,7 +191,79 @@ public sealed class RecordWritesTests
         Assert.Equal([extension], RecordWrites.Tombstone(Meta(state), At(4_000)).Extensions);
     }
 
+    private static readonly FieldWho Claude = new("a1a1a1a1", "steve", Elevated: false, Terminal: false, By: "claude");
+
+    private static RecordExtension FieldsExtensionOf(FieldSet set) => new(FieldsExtension.Type, FieldsCodec.Encode(set));
+
+    private static FieldSet FieldsIn(IReadOnlyList<RecordExtension> extensions) => Assert.IsType<FieldSet>(FieldsCodec.TryGet(extensions));
+
+    /// <summary>Issue #311: a field-less create anchors the lineage (spec "Writes": always a <c>Fields</c> extension).</summary>
+    [Fact]
+    public void Create_WithoutFields_WritesEmptyExtension()
+    {
+        var (metadata, _) = RecordWrites.NewVersion(null, new Dictionary<Stamp, byte[]>(), IdOf("s"), "s", At(5_000), Section(),
+            Fp("v"u8.ToArray()), restored: false, Created, null, null, OriginA);
+        var plain = RecordVaultStore.NextRecord(null, IdOf("s"), "s", "v"u8.ToArray(), rotated: false, restored: false, Created, null, null,
+            OriginA, () => At(5_000))!;
+
+        foreach (var extensions in new[] { metadata.Extensions, plain.Extensions })
+        {
+            var extension = Assert.Single(extensions);
+            Assert.Equal(FieldsExtension.Type, extension.Type);
+            Assert.Equal(new FieldSet(At(5_000), []), FieldsCodec.Decode(extension.Data));
+        }
+    }
+
+    /// <summary>
+    /// Issue #311: a re-creation over a tombstone that still carries an earlier life's fields (a 0.3.x
+    /// tombstone keeps every extension) starts a new lineage: <c>Since</c> = the new version, no old
+    /// field, the other extension types kept in place.
+    /// </summary>
+    [Fact]
+    public void Create_AfterDelete_NewSinceNoOldFields()
+    {
+        var oldLife = new FieldSet(At(2_000), [new FieldEntry("owner", "old-team", false, At(2_100), Claude, [])]);
+        var other = new RecordExtension(0x7777, [1, 2, 3]);
+        var tombstone = RecordVaultStore.Tombstone(Live(), At(3_000)) with { Extensions = [FieldsExtensionOf(oldLife), other] };
+
+        var (metadata, _) = NewVersionOf(tombstone, "v2");
+        var plain = RecordVaultStore.NextRecord(tombstone, tombstone.RecordId, "s", "v2"u8.ToArray(), rotated: false, restored: false, Created,
+            null, null, OriginA, () => At(5_000))!;
+        var withEdits = RecordWrites.NewVersion(Meta(tombstone), new Dictionary<Stamp, byte[]>(), tombstone.RecordId, "s", At(5_000), Section(),
+            Fp("v2"u8.ToArray()), restored: false, Created, null, null, OriginA, [new FieldEdit("kind", "token")], Claude, () => At(5_001)).Metadata;
+
+        foreach (var extensions in new[] { metadata.Extensions, plain.Extensions })
+        {
+            Assert.Equal([FieldsExtensionOf(new FieldSet(At(5_000), [])), other], extensions);
+        }
+        var fields = FieldsIn(withEdits.Extensions);
+        Assert.Equal(At(5_000), fields.Since);
+        Assert.Null(fields.Get("owner"));
+        var kind = Assert.Single(fields.Entries);
+        Assert.Equal(("kind", "token", At(5_001)), (kind.Name, kind.Value, kind.Changed));
+        Assert.Empty(kind.History);
+    }
+
+    /// <summary>
+    /// Issue #311, spec "Writes": a tombstone drops <c>Fields</c> (a deliberate change from 0.3.0) and
+    /// keeps every other extension type, in its order (<see cref="Extensions_SurviveEveryWrite"/> pins
+    /// the unknown type alone).
+    /// </summary>
+    [Fact]
+    public void Tombstone_DropsFields_KeepsOtherExtensions()
+    {
+        var a = new RecordExtension(0x7000, [1]);
+        var b = new RecordExtension(0x7777, [2, 3]);
+        var fields = FieldsExtensionOf(new FieldSet(At(2_000), [new FieldEntry("owner", "x", false, At(2_100), Claude, [])]));
+        var state = Live() with { Extensions = [a, fields, b] };
+
+        Assert.Equal([a, b], RecordWrites.Tombstone(Meta(state), At(4_000)).Extensions);
+        Assert.Equal([a, b], RecordVaultStore.Tombstone(state, At(4_000)).Extensions);
+    }
+
     // ------------------------------------------------------------------ against the plaintext rules
+
+    private static readonly string[] FieldNames = ["a", "b", "c"];
 
     private static string RandomValue(Random random) => $"value-{random.Next(1_000_000)}";
 
@@ -203,7 +275,7 @@ public sealed class RecordWritesTests
     };
 
     /// <summary>A random merged record of one secret, as a full load gives it (every retained version with a section).</summary>
-    private static SecretRecord? RandomState(Random random, string name)
+    private static SecretRecord? RandomState(Random random, Random fields, string name)
     {
         if (random.Next(6) == 0)
             return null;
@@ -214,6 +286,10 @@ public sealed class RecordWritesTests
             .Select(_ => new BurnEntry(stamps[random.Next(stamps.Count)], At(random.Next(1_000, 9_000), 0, OriginB), random.Next(3) == 0 ? null : "r"))
             .ToList();
         List<RecordExtension> extensions = random.Next(3) == 0 ? [new RecordExtension(0x7000, [(byte)random.Next(256)])] : [];
+        // Issue #311: a random valid Fields extension on most states, before or after the other type
+        // (drawn from its own generator, so the draws above stay those this test always made).
+        if (fields.Next(4) != 0)
+            extensions.Insert(fields.Next(extensions.Count + 1), FieldsExtensionOf(FieldMergeTests.RandomSet(fields)));
         if (random.Next(5) == 0)
             return RecordMerge.Normalize(new SecretRecord(IdOf(name), At(9_500), RecordType.Tombstone, version, name, 500, [], burns)
             {
@@ -240,7 +316,8 @@ public sealed class RecordWritesTests
     /// <summary>
     /// Seeded: random merged states (absent, tombstone, live with and without a previous value,
     /// burns of any version, sets of this build's, a later build's or none, extensions) and every
-    /// operation (new version, restore, imported burn, burn, delete). The metadata rules give
+    /// operation (new version, restore, imported burn, burn, delete; issue #311: valid <c>Fields</c>
+    /// extensions, value writes with field edits and metadata-only field writes). The metadata rules give
     /// <see cref="RecordVaultStore.NextRecord"/>'s record converted to metadata (after
     /// <see cref="RecordVaultStore.PrepareV3"/>, which fingerprints a copied version that has no
     /// set; the writer does that by decrypting the section, the test from the plaintext it knows),
@@ -250,12 +327,14 @@ public sealed class RecordWritesTests
     public void RecordWrites_MatchNextRecord_OnRandomStates()
     {
         var random = new Random(2_016);
+        var fields = new Random(3_11);
         using var keys = FingerprintKeys.Derive(Key);
         int compared = 0, burns = 0, restores = 0, tombstones = 0, imports = 0, sameValueBurns = 0, unchanged = 0;
+        int fieldWrites = 0, fieldsUnchanged = 0, valueWritesWithEdits = 0, fieldsOnlyValueWrites = 0;
         for (var round = 0; round < 600; round++)
         {
             var name = $"s{round % 7}";
-            var state = RandomState(random, name);
+            var state = RandomState(random, fields, name);
             var live = state is { Type: not RecordType.Tombstone };
             var meta = state is null ? null : Meta(state);
             var held = state?.Sealed ?? new Dictionary<Stamp, byte[]>();
@@ -266,6 +345,29 @@ public sealed class RecordWritesTests
                 plaintexts[state!.Version] = state.Value;
                 if (state.Previous is { } p)
                     plaintexts[p.Version] = p.Value;
+            }
+
+            // One stamp source per path, the same sequence: the version (or burn) first, then the change stamps.
+            Func<Stamp> Stamps()
+            {
+                var k = 0;
+                return () => k++ == 0 ? stamp : At(10_000 + round, (uint)(100 + k));
+            }
+            IReadOnlyList<FieldEdit> RandomEdits() =>
+                [.. Enumerable.Range(0, fields.Next(1, 4)).Select(_ => new FieldEdit(FieldNames[fields.Next(FieldNames.Length)],
+                    fields.Next(4) == 0 ? null : $"x{fields.Next(3)}"))];
+
+            // Issue #311: a metadata-only field write on every live state, besides the operation below.
+            if (live)
+            {
+                var edits = RandomEdits();
+                var expected = RecordVaultStore.SetFieldsRecord(state!, edits, Claude, Stamps());
+                var actual = RecordWrites.SetFields(meta!, edits, Claude, Stamps());
+                AssertSame(Meta(expected), actual, $"round {round}: field write");
+                Assert.Equal(state!.Version, actual.Version);
+                if (actual.Extensions.SequenceEqual(meta!.Extensions))
+                    fieldsUnchanged++;
+                fieldWrites++;
             }
 
             switch (live ? random.Next(4) : 0)
@@ -279,15 +381,18 @@ public sealed class RecordWritesTests
                     var rotated = restored || random.Next(sameValue ? 6 : 2) == 0;
                     var value = restored ? state!.Previous!.Value : sameValue ? state!.Value : Encoding.UTF8.GetBytes(RandomValue(random));
                     DateTime? importedAt = random.Next(sameValue ? 2 : 3) == 0 ? new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(round) : null;
+                    var edits = fields.Next(3) == 0 ? RandomEdits() : null;
                     var expected = RecordVaultStore.NextRecord(state, IdOf(name), name, value, rotated, restored, Created, importedAt, "imp",
-                        OriginA, () => stamp);
+                        OriginA, Stamps(), edits, edits is null ? null : Claude);
                     byte[]? section = null;
                     var actual = RecordWrites.Next(meta, held, IdOf(name), name, () => value.AsSpan().SequenceEqual(state!.Value), rotated, restored,
-                        Created, importedAt, "imp", OriginA, () => stamp, version =>
+                        Created, importedAt, "imp", OriginA, Stamps(), version =>
                         {
                             section = Section();
                             return (section, Fp(value));
-                        });
+                        }, edits, edits is null ? null : Claude);
+                    valueWritesWithEdits += edits is null ? 0 : 1;
+                    fieldsOnlyValueWrites += edits is not null && expected is not null && expected.Version.Equals(state?.Version) ? 1 : 0;
                     Assert.Equal(expected is null, actual is null);
                     if (expected is not null)
                     {
@@ -295,9 +400,11 @@ public sealed class RecordWritesTests
                             plaintexts[stamp] = value;
                         Compare(expected, actual!.Value.Metadata, actual.Value.Sections, state, section);
                     }
-                    if (expected is not null && section is null)
+                    // The value part: a burn of the same value, or nothing (field edits may still be written).
+                    var burnAdded = expected is not null && section is null && expected.OutstandingBurn is not null && state!.OutstandingBurn is null;
+                    if (burnAdded)
                         sameValueBurns++;
-                    if (expected is null)
+                    if (expected is null || (section is null && !burnAdded))
                         unchanged++;
                     restores += restored ? 1 : 0;
                     imports += importedAt is null ? 0 : 1;
@@ -349,6 +456,9 @@ public sealed class RecordWritesTests
         Assert.True(compared == 600 && burns > 50 && restores > 10 && tombstones > 50 && imports > 20 && sameValueBurns > 10 && unchanged > 10,
             $"compared {compared}, burns {burns}, restores {restores}, tombstones {tombstones}, imports {imports}, " +
             $"same-value burns {sameValueBurns}, unchanged {unchanged}");
+        Assert.True(fieldWrites > 50 && fieldsUnchanged > 3 && valueWritesWithEdits > 30 && fieldsOnlyValueWrites > 5,
+            $"field writes {fieldWrites} (unchanged {fieldsUnchanged}), value writes with edits {valueWritesWithEdits} " +
+            $"(fields only {fieldsOnlyValueWrites})");
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using TswapCore;
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 using TswapCore.Keyring;
 using Xunit;
@@ -79,6 +80,26 @@ public sealed class RecordStoreV3Tests : IDisposable
         var store = Store(_m);
         store.LoadSecrets(_key, TextWriter.Null);
         Assert.True(store.WritesV3);
+    }
+
+    /// <summary>
+    /// Issue #311: the unmarked folder that already read a format 3 record writes a new record in
+    /// format 3, so its creation carries the lineage anchor (an empty <c>Fields</c>, <c>Since</c> = its version).
+    /// </summary>
+    [Fact]
+    public void AnyV3RecordRead_CreateWithoutFields_WritesAnchor()
+    {
+        WriteMarker(_m);
+        _m.Ok("a-value", "ingest", "a");
+        System.IO.File.Delete(Path.Combine(_m.VaultDir!, RecordVaultStore.RecordFormatMarkerFileName));
+
+        _m.Ok("b-value", "ingest", "b");
+
+        Assert.Equal((byte?)3, SecretRecordCodec.FormatVersionOf(Bytes("b")));
+        var record = Read("b");
+        var extension = Assert.Single(record.Extensions);
+        Assert.Equal(FieldsExtension.Type, extension.Type);
+        Assert.Equal(new FieldSet(record.Version, []), FieldsCodec.Decode(extension.Data));
     }
 
     [Theory]

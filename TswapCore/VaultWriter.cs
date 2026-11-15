@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using TswapCore.Fields;
 using TswapCore.Keyring;
 
 namespace TswapCore;
@@ -71,17 +72,55 @@ public sealed class VaultWriter : IDisposable
     /// when the value differs from the current one (<c>add</c>, decided at <see cref="Commit"/> from
     /// the stored fingerprints where they can tell). <paramref name="created"/> is used only when
     /// there is no live record; an imported burn is kept on the new version with its own time.
+    /// Issue #311: <paramref name="fields"/> (made by <paramref name="who"/>) are written in the same
+    /// record write; when the value is the same they are still written, as a metadata-only field write.
+    /// A write with fields is written in format 3.
     /// </summary>
     public void SetValue(string name, string value, DateTime created, bool always = false,
-        DateTime? importedBurnAt = null, string? importedBurnReason = null)
+        DateTime? importedBurnAt = null, string? importedBurnReason = null, IReadOnlyList<FieldEdit>? fields = null, FieldWho? who = null)
     {
         ArgumentNullException.ThrowIfNull(value);
+        if (fields is { Count: > 0 })
+            ArgumentNullException.ThrowIfNull(who);
         if (Stageable(name) is not { } opened)
             return;
         var bytes = Encoding.UTF8.GetBytes(value);
         _values.Add(bytes);
-        Stage(new ValueWrite(name, opened.Entry, bytes, always, Restored: false, created, importedBurnAt, importedBurnReason));
+        Stage(new ValueWrite(name, opened.Entry, bytes, always, Restored: false, created, importedBurnAt, importedBurnReason, fields, who));
     }
+
+    /// <summary>
+    /// Issue #311: stages a metadata-only field write (<c>field set</c>/<c>unset</c>) on
+    /// <paramref name="name"/>: the edits change its <c>Fields</c> extension and its write stamp only,
+    /// never its value version. Nothing is written when no edit changes anything. Applied (and refused
+    /// over a cap) at <see cref="Commit"/>. A record that can't be read stages nothing (as
+    /// <see cref="SetValue"/>); a format 2 record is written in format 3.
+    /// </summary>
+    /// <exception cref="TswapException">No live secret <paramref name="name"/>: <c>No secret 'NAME'.</c></exception>
+    public void SetFields(string name, IReadOnlyList<FieldEdit> edits, FieldWho who)
+    {
+        ArgumentNullException.ThrowIfNull(edits);
+        ArgumentNullException.ThrowIfNull(who);
+        if (Stageable(name) is not { } opened)
+            return;
+        if (opened.Entry is not { Info: not null } entry)
+            throw new TswapException($"No secret '{name}'.");
+        Stage(new FieldsWrite(name, entry, edits, who));
+    }
+
+    /// <summary>
+    /// Issue #311: <paramref name="name"/>'s fields as stored (delete markers included), or null when
+    /// there is no live secret (no record, a tombstone, or a record that can't be read). A record
+    /// written before fields existed has none: an empty set with <c>Since</c> = <see cref="Stamp.Zero"/>.
+    /// </summary>
+    public FieldSet? Fields(string name)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Open(name).Entry is { Info: not null } entry ? FieldsOf(entry.Metadata) : null;
+    }
+
+    /// <summary>The fields of a live record's metadata (<see cref="Fields"/>, <see cref="VaultView.Fields"/>).</summary>
+    internal static FieldSet FieldsOf(RecordMetadata metadata) => FieldsCodec.TryGet(metadata.Extensions) ?? new FieldSet(Stamp.Zero, []);
 
     /// <summary>Stages a burn of <paramref name="name"/>'s current value (nothing is written when it is burned already).</summary>
     public void Burn(string name, string? reason)

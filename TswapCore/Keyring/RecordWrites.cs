@@ -1,3 +1,4 @@
+using TswapCore.Fields;
 using TswapCore.Fingerprints;
 
 namespace TswapCore.Keyring;
@@ -20,12 +21,14 @@ internal static class RecordWrites
     /// record, when <paramref name="rotated"/>, or when <paramref name="sameValue"/> says the value
     /// differs; otherwise, with <paramref name="burnedAt"/> set, a burn of the current version
     /// (<see cref="Burn"/>, stamped by <paramref name="nextStamp"/>, not at <paramref name="burnedAt"/>);
-    /// otherwise null (nothing to write). Stamps are taken only for what is written.
+    /// otherwise null (nothing to write). Stamps are taken only for what is written. Issue #311:
+    /// <paramref name="edits"/> are written with the new version, or, when the value is the same, as a
+    /// metadata-only field write (<see cref="SetFields"/>; the version stays).
     /// </summary>
     public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections)? Next(
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Func<bool> sameValue,
         bool rotated, bool restored, DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
-        Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal)
+        Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null)
     {
         // NextRecord's order: a new version when there is no live record, when rotated, or when the
         // value differs (asked last, so add's comparison runs only when it decides something).
@@ -33,12 +36,19 @@ internal static class RecordWrites
         {
             var version = nextStamp();
             var (section, fingerprints) = seal(version);
-            return NewVersion(state, heldSections, recordId, name, version, section, fingerprints, restored, created, burnedAt, burnReason, origin);
+            return NewVersion(state, heldSections, recordId, name, version, section, fingerprints, restored, created, burnedAt, burnReason, origin,
+                edits, who, nextStamp);
         }
-        // The same value with a burn: a burn of the current version, stamped now, when it has none.
+        // The same value: a burn of the current version, stamped now, when it has none; then the
+        // field edits (issue #311), as a metadata-only write; null when neither changes anything.
+        var next = live;
         if (burnedAt is not null && live.Burns.All(b => !b.Version.Equals(live.Version)))
-            return (Burn(live, nextStamp(), burnReason)!, heldSections);
-        return null;
+            next = Burn(live, nextStamp(), burnReason)!;
+        if (edits is { Count: > 0 })
+            next = SetFields(next, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp);
+        return ReferenceEquals(next, live) || (next.Burns.SequenceEqual(live.Burns) && next.Extensions.SequenceEqual(live.Extensions))
+            ? null
+            : (next, heldSections);
     }
 
     /// <summary>
@@ -54,10 +64,15 @@ internal static class RecordWrites
     /// <param name="created">The creation time when there is no live record (a live record keeps its own).</param>
     /// <param name="importedBurnAt">An imported burn's time, on the new version.</param>
     /// <param name="origin">This machine's origin id (an imported burn's stamp).</param>
+    /// <param name="edits">
+    /// Issue #311: field edits written with the value (<see cref="FieldEdits.Apply"/>), stamped by
+    /// <paramref name="nextStamp"/> after <paramref name="version"/>. A new life of the name (no live
+    /// <paramref name="state"/>) always gets a fresh <c>Fields</c> extension, <c>Since</c> = <paramref name="version"/>.
+    /// </param>
     public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections) NewVersion(
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Stamp version,
         byte[] newSection, FingerprintSet newFingerprints, bool restored, DateTime created, DateTime? importedBurnAt,
-        string? importedBurnReason, byte[] origin)
+        string? importedBurnReason, byte[] origin, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, Func<Stamp>? nextStamp = null)
     {
         var live = state is { Type: not RecordType.Tombstone };
         List<BurnEntry> burns = [.. state?.Burns ?? []];
@@ -73,8 +88,9 @@ internal static class RecordWrites
         if (importedBurnAt is { } at)
             burns.Add(new BurnEntry(version, new Stamp(new Hlc(new DateTimeOffset(UtcOf(at)).ToUnixTimeMilliseconds(), 0), origin), importedBurnReason));
         var createdMs = live ? state!.CreatedMs : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+        var extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name);
         var metadata = new RecordMetadata(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, burns, newFingerprints,
-            live ? state!.Version : null, live ? state!.Fingerprints : null, state?.Extensions ?? []);
+            live ? state!.Version : null, live ? state!.Fingerprints : null, extensions);
         return (RecordMerge.Normalize(metadata), sections);
     }
 
@@ -89,11 +105,31 @@ internal static class RecordWrites
         return RecordMerge.Normalize(state with { Burns = [.. state.Burns, new BurnEntry(state.Version, burn, reason)] });
     }
 
-    /// <summary>The tombstone a delete writes: no value versions, sections or sets; the burns kept as history.</summary>
+    /// <summary>
+    /// The tombstone a delete writes: no value versions, sections or sets; the burns kept as history;
+    /// no <c>Fields</c> extension (issue #311), every other extension kept.
+    /// </summary>
     public static RecordMetadata Tombstone(RecordMetadata state, Stamp version) => RecordMerge.Normalize(state with
     {
         Type = RecordType.Tombstone, Version = version, Fingerprints = null, PreviousVersion = null, PreviousFingerprints = null,
+        Extensions = FieldEdits.ForTombstone(state.Extensions),
     });
+
+    /// <summary>
+    /// Issue #311: the metadata-only field write (<c>field set</c>/<c>unset</c>) on the live record
+    /// <paramref name="state"/>: <paramref name="edits"/> applied to its <c>Fields</c> extension
+    /// (<see cref="FieldEdits.Apply"/>; one written before fields existed gets one, <c>Since</c> =
+    /// <see cref="Stamp.Zero"/>). Version, value sections, sets and burns stay as they are; the
+    /// write stamp is the commit's. When no edit changes anything the extensions are unchanged
+    /// (the caller writes nothing).
+    /// </summary>
+    /// <exception cref="TswapException"><paramref name="state"/> is a tombstone (<c>No secret 'NAME'.</c>), or a refusal of <see cref="FieldEdits.Apply"/>.</exception>
+    public static RecordMetadata SetFields(RecordMetadata state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp)
+    {
+        if (state.Type == RecordType.Tombstone)
+            throw new TswapException($"No secret '{state.Name}'.");
+        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name) };
+    }
 
     // RecordVaultStore.UnixMs's rule: an unspecified time is UTC, a local one is converted.
     private static DateTime UtcOf(DateTime time) =>
