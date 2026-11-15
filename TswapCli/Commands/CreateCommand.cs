@@ -62,6 +62,7 @@ public sealed class CreateCommand : ICliCommand
 
             ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' created ({length} chars)");
             ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+            ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally

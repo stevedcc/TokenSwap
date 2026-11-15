@@ -43,6 +43,8 @@ public sealed class AddCommand : ICliCommand
                     $"Warning: the value of '{name}' ends in whitespace (or is only whitespace). That is usually a paste mistake, and " +
                     $"'run' can't always mask such a value in a command's output. If it wasn't meant, run " +
                     $"{ElevatedCommand.For(ctx.Prefix, $"add {name}")} again.");
+            // Brief T21 (#314): after the whitespace warning, also when the value was already stored.
+            ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally

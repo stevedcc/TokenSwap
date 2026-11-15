@@ -38,6 +38,7 @@ public sealed class RotateCommand : ICliCommand
             var value = CreateCommand.GenerateValue(ctx, config, length);
             SecretRotation.Write(ctx, writer, name, value);
             SecretRotation.Report(ctx, name, existing, $"new {length}-char random value");
+            ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally
