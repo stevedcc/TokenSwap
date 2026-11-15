@@ -69,6 +69,10 @@ public sealed class CheckCommand : ICliCommand
                         ctx.Console.Out.WriteLine($"  ⚠ {result.Marker.SecretName} (line {result.Marker.LineNumber}) — BURNED, needs rotation");
                         warnCount++;
                         break;
+                    case Check.SecretStatus.DataNotBase64:
+                        ctx.Console.Out.WriteLine($"  ⚠ {result.Marker.SecretName} (line {result.Marker.LineNumber}) — under data: in a Secret, which expects base64; use stringData:");
+                        warnCount++;
+                        break;
                     case Check.SecretStatus.Missing:
                         ctx.Console.Out.WriteLine($"  ✗ {result.Marker.SecretName} (line {result.Marker.LineNumber}) — NOT FOUND");
                         missingCount++;
@@ -79,7 +83,8 @@ public sealed class CheckCommand : ICliCommand
 
         ctx.Console.Out.WriteLine($"\nSummary: {okCount} ok, {warnCount} warning(s), {missingCount} missing");
 
-        // Exit-code precedence: missing secrets (1) take priority over burned/warn secrets (2)
+        // Exit-code precedence: missing secrets (1) take priority over warnings (2: burned, or under
+        // data: in a Secret)
         if (missingCount > 0)
             return 1;
         if (warnCount > 0)
@@ -100,12 +105,13 @@ public sealed class CheckCommand : ICliCommand
             {
                 Check.SecretStatus.Ok => "ok",
                 Check.SecretStatus.Burned => "burned",
+                Check.SecretStatus.DataNotBase64 => "data-not-base64",
                 _ => "missing",
             };
             switch (r.Status)
             {
                 case Check.SecretStatus.Ok: ok++; break;
-                case Check.SecretStatus.Burned: warning++; break;
+                case Check.SecretStatus.Burned or Check.SecretStatus.DataNotBase64: warning++; break;
                 default: missing++; break;
             }
             entries.Add(new CheckEntry(r.Marker.FilePath, r.Marker.LineNumber, r.Marker.SecretName, status));

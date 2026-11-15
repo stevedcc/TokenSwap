@@ -7,7 +7,12 @@ public static class Check
     // Fix round 3: '# tswap: name:previous' markers are checked against the previous value.
     private static readonly Regex MarkerRegex = new(@"#\s*tswap\s*:\s*([a-zA-Z0-9_-]+(?::previous)?)");
 
-    public record MarkerRef(string FilePath, int LineNumber, string SecretName);
+    /// <summary>
+    /// One marker. Brief T20 (#315): <paramref name="UnderSecretData"/> when the marker line is inside a
+    /// <c>data:</c> mapping of a document with <c>kind: Secret</c> (base64 expected; the marker writes the
+    /// raw value).
+    /// </summary>
+    public record MarkerRef(string FilePath, int LineNumber, string SecretName, bool UnderSecretData = false);
 
     /// <summary>
     /// Scan a single file for <c># tswap: &lt;name&gt;</c> markers.
@@ -30,14 +35,76 @@ public static class Check
             return results;
         }
 
+        var secretDocuments = SecretDocumentStarts(lines);
         for (int i = 0; i < lines.Length; i++)
         {
             var matches = MarkerRegex.Matches(lines[i]);
+            if (matches.Count == 0)
+                continue;
+            var underSecretData = IsUnderSecretData(lines, i, secretDocuments);
             foreach (Match match in matches)
-                results.Add(new MarkerRef(filePath, i + 1, match.Groups[1].Value));
+                results.Add(new MarkerRef(filePath, i + 1, match.Groups[1].Value, underSecretData));
         }
 
         return results;
+    }
+
+    // Brief T20 (#315): a document split, a Secret's kind line, a 'data:' key line, a comment-only line.
+    private static readonly Regex DocumentSplit = new(@"^---\s*(#.*)?$");
+    private static readonly Regex SecretKind = new(@"^kind:\s*Secret\s*(#.*)?$");
+    private static readonly Regex DataKey = new(@"^\s*data:\s*(#.*)?$");
+    private static readonly Regex CommentOnly = new(@"^\s*#");
+
+    /// <summary>
+    /// For each line, the index of the first line of its document (documents split on <c>---</c>) when
+    /// that document has a <c>kind: Secret</c> line, else -1.
+    /// </summary>
+    private static int[] SecretDocumentStarts(string[] lines)
+    {
+        var starts = new int[lines.Length];
+        var start = 0;
+        while (start < lines.Length)
+        {
+            var end = start;
+            while (end < lines.Length && (end == start || !DocumentSplit.IsMatch(lines[end])))
+                end++;
+            var isSecret = false;
+            for (var j = start; j < end && !isSecret; j++)
+                isSecret = SecretKind.IsMatch(lines[j]);
+            for (var j = start; j < end; j++)
+                starts[j] = isSecret ? start : -1;
+            start = end;
+        }
+        return starts;
+    }
+
+    /// <summary>
+    /// Brief T20: true when line <paramref name="index"/> is in a Secret document and, walking back over
+    /// blank and comment-only lines, the nearest preceding line indented less is <c>data:</c>.
+    /// </summary>
+    private static bool IsUnderSecretData(string[] lines, int index, int[] secretDocuments)
+    {
+        var documentStart = secretDocuments[index];
+        if (documentStart < 0)
+            return false;
+        var indent = LeadingWhitespace(lines[index]);
+        for (var j = index - 1; j >= documentStart; j--)
+        {
+            var line = lines[j];
+            if (string.IsNullOrWhiteSpace(line) || CommentOnly.IsMatch(line))
+                continue;
+            if (LeadingWhitespace(line) < indent)
+                return DataKey.IsMatch(line);
+        }
+        return false;
+    }
+
+    private static int LeadingWhitespace(string line)
+    {
+        var count = 0;
+        while (count < line.Length && char.IsWhiteSpace(line[count]))
+            count++;
+        return count;
     }
 
     private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -78,7 +145,8 @@ public static class Check
         }
     }
 
-    public enum SecretStatus { Ok, Burned, Missing }
+    /// <summary>A marker's status. Brief T20: <see cref="DataNotBase64"/> is a marker under <c>data:</c> in a Secret (a warning).</summary>
+    public enum SecretStatus { Ok, Burned, Missing, DataNotBase64 }
 
     public record CheckResult(MarkerRef Marker, SecretStatus Status);
 
@@ -97,8 +165,13 @@ public static class Check
                 db.ThrowIfUnreadable(name);
                 return new CheckResult(marker, SecretStatus.Missing);
             }
+            if (previous && !db.HasPreviousValue(name))
+                return new CheckResult(marker, SecretStatus.Missing);
+            // Brief T20 (#315): missing > data-not-base64 > burned > ok.
+            if (marker.UnderSecretData)
+                return new CheckResult(marker, SecretStatus.DataNotBase64);
             if (previous)
-                return new CheckResult(marker, db.HasPreviousValue(name) ? SecretStatus.Ok : SecretStatus.Missing);
+                return new CheckResult(marker, SecretStatus.Ok);
             return new CheckResult(marker, db.IsBurnedToken(name) ? SecretStatus.Burned : SecretStatus.Ok);
         }).ToList();
     }
