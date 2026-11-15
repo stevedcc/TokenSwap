@@ -321,11 +321,38 @@ public sealed class SlotCommand : ICliCommand
     internal const string RequestNeedsFolderText =
         "slot request --password needs the shared vault folder (its vault-password file). Enrol without the password and re-enrol this slot later, or pass --vault-dir.";
 
+    /// <summary>Brief T24 (b): <c>--vault-dir</c> names no folder.</summary>
+    internal static string RequestFolderMissingText(string given, string full) =>
+        $"slot request --vault-dir {given}: there is no folder {full}. Nothing was changed. Check the path; the shared vault " +
+        "folder holds the vault's 'keyring' file.";
+
+    /// <summary>Brief T24 (c): the folder holds no keyring (accept's A6 wording).</summary>
+    internal static string RequestNotAVaultFolderText(string folder) =>
+        $"{folder} has no keyring, so it is not a shared vault folder. Nothing was changed. Point --vault-dir at the folder " +
+        "the enrolled machines share (its 'keyring' file must be there).";
+
+    /// <summary>
+    /// Brief T24 (d): password slots, but no <c>vault-password</c> file. Not "no password yet": a first password here would
+    /// be a second, conflicting one.
+    /// </summary>
+    internal static string RequestPasswordFileMissingText(string folder) =>
+        $"The vault in {folder} has slots that need the vault password, but the folder has no vault-password file. If it is " +
+        "synced, wait for the sync; otherwise restore it from a backup of the folder. Nothing was changed.";
+
+    /// <summary>Brief T24 (e, issue #309 comments 2 and 3): the vault has no password yet, so there is none to join.</summary>
+    internal static string RequestNoPasswordYetText(string folder, string prefix) =>
+        $"The vault in {folder} has no vault password yet (no slot needs one, and the folder has no vault-password file), so " +
+        $"there is none to join. The first one is created on a machine that already opens the vault, with sudo {prefix} slot " +
+        "add --tpm --password (or --secure-enclave, --yubikey or --fido2, with --password). If this machine already opens it, " +
+        "run that here instead of slot request. Otherwise enrol without --password.";
+
     /// <summary>
     /// Brief T17 ruling 16: the <c>vault-password</c> file a password request records, read from
     /// <paramref name="folder"/> (<c>--vault-dir</c>) or else from the vault folder of this machine's existing
-    /// config, and decoded strictly for that folder's keyring. Refuses with <see cref="RequestNeedsFolderText"/>
-    /// when there is no such folder or file, and with ruling 2's message on conflict copies.
+    /// config, and decoded strictly for that folder's keyring. Brief T24 tells the failures apart, in this order:
+    /// no folder known (<see cref="RequestNeedsFolderText"/>), no such folder, no keyring there, password slots but no
+    /// <c>vault-password</c> file, no vault password yet. Conflict copies keep ruling 2's message (they are refused
+    /// while the file is read, before the last two).
     /// </summary>
     private static (byte[] Bytes, VaultPasswordFile File) ReadRequestVaultPassword(CommandContext ctx, string? folder)
     {
@@ -333,12 +360,19 @@ public sealed class SlotCommand : ICliCommand
         var vaultDir = folder is not null ? Path.GetFullPath(folder) : (ctx.Storage as RecordVaultStore)?.VaultDir;
         if (vaultDir is null)
             throw new TswapException(RequestNeedsFolderText);
+        if (folder is not null && !Directory.Exists(vaultDir))
+            throw new TswapException(RequestFolderMissingText(folder, vaultDir));
         var owner = fileStore?.Owner ?? DirectoryOwnerMatcher.Default;
         var folderStore = FolderStore(ctx, vaultDir, owner);
         if (!owner.FileExists(folderStore.KeyringFile))
-            throw new TswapException(RequestNeedsFolderText);
-        var bytes = folderStore.ReadVaultPasswordBytes() ?? throw new TswapException(RequestNeedsFolderText);
-        return (bytes, VaultPasswordFile.Decode(bytes, folderStore.ReadKeyring().VaultId));
+            throw new TswapException(RequestNotAVaultFolderText(vaultDir));
+        var bytes = folderStore.ReadVaultPasswordBytes();
+        var keyring = folderStore.ReadKeyring();
+        if (bytes is null)
+            throw new TswapException(keyring.Slots.Any(s => s.Kind == SlotKind.Machine && SlotPassword.Requires(s))
+                ? RequestPasswordFileMissingText(vaultDir)
+                : RequestNoPasswordYetText(vaultDir, ctx.Prefix));
+        return (bytes, VaultPasswordFile.Decode(bytes, keyring.VaultId));
     }
 
     /// <summary>A record store for the shared vault folder <paramref name="vaultDir"/>, for reading and writing its files.</summary>
@@ -786,6 +820,14 @@ public sealed class SlotCommand : ICliCommand
 
         c.Out.WriteLine("\n✓ Slot accepted — this machine is now enrolled in the vault's keyring.");
         c.Out.WriteLine($"Slots in this machine's local keyring copy: {finalKeyring.Slots.Count}");
+        // Brief T24: keyed on where the keyring was written. A vault folder's keyring already has the new slot, for
+        // every machine that shares it (true whether or not the folder is synced, which tswap can't know).
+        if ((vaultDir ?? (ctx.Storage as RecordVaultStore)?.VaultDir) is { } folder)
+        {
+            c.Out.WriteLine($"\nThe new slot is in the keyring of the vault folder {folder}: every machine that shares that folder has it, with no merge.");
+            c.Out.WriteLine($"Receipt written to: {receiptPath} (only for a machine with its own copy of the vault, not this folder: there, run sudo {ctx.Prefix} slot merge <receipt-file>).");
+            return 0;
+        }
         c.Out.WriteLine($"\nReceipt written to: {receiptPath}");
         c.Out.WriteLine("Carry it back to the approving machine yourself (scp/USB/paste) and run there:");
         c.Out.WriteLine($"  sudo {ctx.Prefix} slot merge <receipt-file>");

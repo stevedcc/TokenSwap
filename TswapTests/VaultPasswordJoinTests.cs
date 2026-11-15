@@ -108,7 +108,8 @@ public class VaultPasswordJoinTests : IDisposable
         var (exit, _, err) = _joiner.Run(Password + "\n", "slot", "request", "--tpm", "--password", "--vault-dir", plain.VaultDir!, RequestPath);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(NoFolderText, err);
+        // Brief T24 (sanctioned): this scenario is task 3's case (e), which issue #309 comments 2 and 3 ask for.
+        Assert.Contains(TswapCli.Commands.SlotCommand.RequestNoPasswordYetText(Path.GetFullPath(plain.VaultDir!), "tswap"), err);
         Assert.False(File.Exists(RequestPath));
     }
 
