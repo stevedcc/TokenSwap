@@ -15,6 +15,8 @@ public sealed class FieldTokenRefusalTests : IDisposable
 
     public void Dispose() => _bare.Dispose();
 
+    private string NoVaultError => _bare.Run("", "list").Err.Trim().Replace("\n❌ Error: ", "");
+
     private static string FieldMessage(string token, string name) =>
         $"'{token}' is a field: fields aren't substituted into commands. " +
         $"Read it with 'tswap field show {name}' and write the value into the command.";
@@ -26,11 +28,21 @@ public sealed class FieldTokenRefusalTests : IDisposable
     [Fact]
     public void Run_FieldToken_Refused_BeforeUnlock()
     {
-        var (exit, stdout, stderr) = _bare.Run("", "run", "curl", "--user", "{{db.username}}");
+        // A real vault and a key that answers challenges: an unlock would show up as a challenge, and a
+        // started child would leave its marker file behind.
+        using var m = new FleetMachine("field-token-unlock", SimulatedYubiKeyService.WithKeys(SerialA));
+        InitRecordVault(m);
+        m.Ok("pw", "ingest", "db");
+        m.Keys.Challenges.Clear();
+        var started = m.PathOf("child-started");
+
+        var (exit, stdout, stderr) = m.Run("", "run", "touch", started, "--user", "{{db.username}}");
 
         Assert.Equal(1, exit);
         Assert.Equal("", stdout);
         Assert.Contains(FieldMessage("{{db.username}}", "db"), stderr);
+        Assert.Empty(m.Keys.Challenges);
+        Assert.False(File.Exists(started));
     }
 
     public static TheoryData<string, string> MalformedTokens => new()
@@ -41,6 +53,7 @@ public sealed class FieldTokenRefusalTests : IDisposable
         { "{{.x}}", MalformedMessage("{{.x}}") },
         { "{{x.}}", MalformedMessage("{{x.}}") },
         { "{{a.B}}", MalformedMessage("{{a.B}}") },
+        { "{{a.b:previous}}", MalformedMessage("{{a.b:previous}}") },
     };
 
     [Theory]
@@ -54,22 +67,27 @@ public sealed class FieldTokenRefusalTests : IDisposable
         Assert.Contains(message, stderr);
     }
 
-    [Fact]
-    public void Run_ValidTokens_StillWork()
+    [Theory]
+    [InlineData("{{name}}")]
+    [InlineData("{{name:previous}}")]
+    [InlineData("{{a-b_c}}")]
+    public void Run_ValidTokens_StillWork(string token)
     {
-        // Valid shapes pass the new check and reach the vault: with no vault, the error is not a token refusal.
-        foreach (var token in new[] { "{{name}}", "{{name:previous}}", "{{@file.yaml}}", "{{a-b_c}}" })
-        {
-            var (_, _, stderr) = _bare.Run("", "run", "tool", token);
-            Assert.DoesNotContain("is not a valid token", stderr);
-            Assert.DoesNotContain("is a field", stderr);
-        }
+        // Valid shapes pass the new check and reach the vault: with no vault, the error is the vault's.
+        var (exit, _, stderr) = _bare.Run("", "run", "tool", token);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(NoVaultError, stderr);
     }
 
     private static SecretsDb Db() => new(new Dictionary<string, Secret>
     {
         ["db"] = new Secret("secret123", TestTime.Fixed, TestTime.Fixed, null, null),
     });
+
+    private static string MarkerMessage(string marker) =>
+        $"'{marker}' is not a valid marker: a marker is # tswap: NAME or # tswap: NAME:previous, " +
+        "and fields aren't substituted into commands.";
 
     [Fact]
     public void Apply_FieldMarker_Refused()
@@ -78,6 +96,35 @@ public sealed class FieldTokenRefusalTests : IDisposable
             () => Apply.ApplySecrets("a: 1\npassword: \"\"  # tswap: db.username\n", Db()));
 
         Assert.Equal(FieldMessage("# tswap: db.username", "db") + " (line 2)", ex.Message);
+    }
+
+    public static TheoryData<string, string> MalformedMarkers => new()
+    {
+        { "# tswap: db.", MarkerMessage("# tswap: db.") },
+        { "# tswap: db.Upper", MarkerMessage("# tswap: db.Upper") },
+        { "# tswap: db.a.b", MarkerMessage("# tswap: db.a.b") },
+        { "# tswap: db.x:previous", MarkerMessage("# tswap: db.x:previous") },
+        { "# tswap: db # tswap: db.username", FieldMessage("# tswap: db.username", "db") },
+        { "# tswap: db.username # tswap: db", FieldMessage("# tswap: db.username", "db") },
+    };
+
+    [Theory]
+    [MemberData(nameof(MalformedMarkers))]
+    public void Apply_MalformedMarkers_Refused_NothingFilled(string markers, string message)
+    {
+        var ex = Assert.Throws<TswapException>(
+            () => Apply.ApplySecrets($"ok: \"\"  # tswap: db\npassword: \"\"  {markers}\n", Db()));
+
+        Assert.Equal(message + " (line 2)", ex.Message);
+    }
+
+    [Fact]
+    public void Apply_FieldMarker_EchoIsSanitised()
+    {
+        var ex = Assert.Throws<TswapException>(
+            () => Apply.ApplySecrets("p: \"\"  # tswap: db.\u001b[31m\n", Db()));
+
+        Assert.DoesNotContain('\u001b', ex.Message);
     }
 
     [Fact]

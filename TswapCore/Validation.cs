@@ -33,17 +33,23 @@ public static class Validation
         foreach (Match m in DottedTokenRegex.Matches(command))
         {
             var inner = m.Groups[1].Value;
-            var shown = Regex.Replace(m.Value, @"[^\x20-\x7E]", "?");
+            var shown = Printable(m.Value);
             var dot = inner.IndexOf('.');
             var name = inner[..dot];
             var field = inner[(dot + 1)..];
-            if (inner.Count(ch => ch == '.') == 1 && ValidNameRegex.IsMatch(name) && TswapCore.Fields.FieldRules.ValidateName(field) is null)
+            if (inner.Count(ch => ch == '.') == 1 && ValidNameRegex.IsMatch(name) && IsFieldName(field))
                 throw new TswapException(FieldTokenMessage(shown, name));
             throw new TswapException(
                 $"'{shown}' is not a valid token: a token is {{{{NAME}}}} or {{{{NAME:previous}}}}, " +
                 "and fields aren't substituted into commands.");
         }
     }
+
+    /// <summary>Text echoed in a message: anything outside printable ASCII becomes '?' (no terminal or log injection).</summary>
+    public static string Printable(string text) => Regex.Replace(text, @"[^\x20-\x7E]", "?");
+
+    /// <summary>True when <paramref name="text"/> is a valid field name.</summary>
+    public static bool IsFieldName(string text) => TswapCore.Fields.FieldRules.ValidateName(text) is null;
 
     /// <summary>The refusal for a field named where a command (token or marker) would substitute it.</summary>
     public static string FieldTokenMessage(string shown, string name) =>
