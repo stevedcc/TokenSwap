@@ -42,6 +42,7 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `field set` | no | Fields are plain, visible data, never secret; every value is checked against the stored secrets' fingerprints first |
 | `field unset` | no | Removes plain fields; no secret value is read or changed |
 | `field show` | no | Prints plain fields only; no secret value is decrypted |
+| `field adopt` | sudo | Decrypts a secret's value and turns it into a visible field (deleting that secret): the one deliberate path from secret to visible, so the owner approves each |
 
 A FIDO2 slot on a security key that isn't a YubiKey needs a tswap newer than 0.3.0 on every machine
 that opens it: tswap 0.3.0 doesn't see such keys on Linux and macOS and says "plug it in" even when
@@ -274,10 +275,10 @@ List all burned secrets
 ### field
 
 ```
-tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json]
+tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET
 ```
 
-Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands
+Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt
 
 ### prompt
 

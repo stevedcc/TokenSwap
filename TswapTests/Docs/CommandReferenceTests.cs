@@ -402,7 +402,7 @@ internal static class SudoTableDrive
         var fwd = Bounded(() => c.Run("", "broker", "forward", "--listen", "192.0.2.1:8080"), "broker forward");
         results["broker forward"] = R(fwd, fwd.Exit != 0 && fwd.Err.Contains("loopback", StringComparison.Ordinal));
 
-        // ---- field set|unset|show: each driven to its job without sudo, on a vault with one secret.
+        // ---- field set|unset|show: each driven to its job without sudo, on a vault with one secret; adopt to its refusal.
         using var f = new FleetMachine("sudo-f", SimulatedYubiKeyService.WithKeys(33333333));
         f.Ok("", "init", "--yubikey");
         f.Ok("sudo-table-value-0123", "ingest", "s");
@@ -413,6 +413,11 @@ internal static class SudoTableDrive
         results["field show"] = R(show, show.Exit == 0 && show.Out.Contains("url = \"https://set.example\"", StringComparison.Ordinal));
         var unset = f.Run("", "field", "unset", "s", "url");
         results["field unset"] = R(unset, unset.Exit == 0 && f.Run("", "field", "show", "s").Out == "'s' has no fields.\n");
+        // field adopt turns a secret value into a visible field: driven to its sudo refusal with a secret to adopt.
+        f.Sudo = true;
+        f.Ok("sudo-table-user", "ingest", "s-user");
+        f.Sudo = false;
+        results["field adopt"] = R(f.Run("", "field", "adopt", "s", "username", "--from", "s-user"));
 
         // ---- broker unlock|lock|status: a password broker's control socket, the real password proof.
         using var d = new FleetMachine("sudo-d") { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };

@@ -10,7 +10,7 @@ namespace TswapCli.Commands;
 
 /// <summary>
 /// <c>tswap field</c> (issue #311, spec "Commands", "Setting fields", guard rails 1 and 3): plain, visible fields
-/// on a secret, without sudo.
+/// on a secret, without sudo (except <c>adopt</c>).
 /// <list type="bullet">
 /// <item><b><c>set NAME &lt;FIELD=VALUE…|JSON|@FILE&gt; [--by LABEL]</c></b>: sets the fields listed, like an object
 /// initializer (every other field keeps its value; JSON <c>null</c> removes one). Every value is checked
@@ -20,6 +20,10 @@ namespace TswapCli.Commands;
 /// <item><b><c>show NAME [--history] [--json]</c></b>: the live fields, each value as a JSON string; with
 /// <c>--history</c> each field's current and replaced states, in UTC, removed fields included (marked
 /// <c>(removed)</c>; in JSON under <c>history</c> only). Every name and value is escaped for display.</item>
+/// <item><b><c>adopt NAME FIELD --from SECRET</c></b> (sudo; spec "Commands"): SECRET's current value (burned or not)
+/// becomes NAME's field FIELD and SECRET is deleted, in one commit. The one deliberate path from secret to visible:
+/// the owner approves each, so the value gets no random-looking warning. Guard rail 1 skips SECRET itself but refuses
+/// a value that another live secret holds.</item>
 /// </list>
 /// A write is metadata only (<see cref="VaultWriter.SetFields"/>): the value version never changes. On a vault
 /// with records that have no fingerprints (format 2), guard rail 1 can't see every value, so a write is refused
@@ -29,14 +33,14 @@ public sealed class FieldCommand : ICliCommand
 {
     public string Name => "field";
     public string HelpUsage =>
-        "field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json]";
+        "field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json] | field adopt NAME FIELD --from SECRET";
     public string Description =>
-        "Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands";
+        "Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands; sudo for adopt";
     public bool RequiresSudo => false;
 
     private static string Usage(CommandContext ctx) =>
         $"{ctx.Prefix} field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | {ctx.Prefix} field unset NAME FIELD… [--by LABEL] | " +
-        $"{ctx.Prefix} field show NAME [--history] [--json]";
+        $"{ctx.Prefix} field show NAME [--history] [--json] | {ctx.Prefix} field adopt NAME FIELD --from SECRET";
 
     /// <summary>The damage warning of <c>field show</c> (spec Merge rule 4).</summary>
     public static string EqualStampWarning(string field) =>
@@ -53,6 +57,8 @@ public sealed class FieldCommand : ICliCommand
         ["set", var name, .. var rest] when !name.StartsWith('-') => Set(ctx, name, rest),
         ["unset", var name, .. var rest] when !name.StartsWith('-') => Unset(ctx, name, rest),
         ["show", var name, .. var rest] when !name.StartsWith('-') => Show(ctx, name, rest),
+        ["adopt", var name, var field, "--from", var secret] when !name.StartsWith('-') && !field.StartsWith('-') && !secret.StartsWith('-')
+            => Adopt(ctx, name, field, secret),
         _ => throw new UsageException(Usage(ctx)),
     };
 
@@ -170,6 +176,82 @@ public sealed class FieldCommand : ICliCommand
             by = args[++i];
         }
         return ([.. rest], by);
+    }
+
+    // ------------------------------------------------------------------ adopt
+
+    private static int Adopt(CommandContext ctx, string name, string field, string secret)
+    {
+        Validation.ValidateName(name);
+        Validation.ValidateName(secret);
+        if (FieldRules.ValidateName(field) is { } nameRefusal)
+            throw new TswapException(nameRefusal);
+        if (secret == name)
+            throw new TswapException($"'field adopt' needs two different secrets: '{name}' can't adopt its own value.");
+        ctx.RequireSudo("field adopt");
+
+        var who = FieldWhoSource.Current(ctx, by: null);
+        var config = ctx.Storage.LoadConfig();
+        var key = ctx.Unlock(config);
+        using var view = ctx.OpenVault(key);
+        using var writer = ctx.OpenVaultForWrite(key);
+        try
+        {
+            var metadata = view.LoadAll(FormatTwoRecords.Skip);
+            view.ThrowIfAnyUnreadable("field adopt");
+            if (metadata.NotFingerprinted > 0)
+                throw new TswapException(NotFingerprintedRefusal(ctx.Prefix, "field adopt", metadata.NotFingerprinted));
+            FingerprintTexts.NoteOlderVariants(ctx.Console.Error, ctx.Prefix, metadata.OlderVariantSet);
+
+            if (writer.Fields(name) is not { } fields)
+            {
+                writer.ThrowIfUnreadable(name);
+                throw new TswapException($"No secret '{name}'.");
+            }
+            if (fields.Get(field) is { Deleted: false })
+                throw new TswapException($"'{name}.{field}' has a value already; unset it first ({ctx.Prefix} field unset {name} {field}).");
+            if (writer.Fields(secret) is not { } secretFields)
+            {
+                writer.ThrowIfUnreadable(secret);
+                throw new TswapException($"No secret '{secret}'.");
+            }
+            var own = secretFields.Live.Select(e => e.Name).Order(StringComparer.Ordinal).ToList();
+            if (own.Count > 0)
+                throw new TswapException(
+                    $"'{secret}' has fields of its own ({string.Join(", ", own.Select(n => Escaped(n)))}); move them first.");
+
+            // The one value decrypted: SECRET's current one (burned or not), as restore decrypts the one it puts back.
+            var value = view.ResolveToken(secret);
+            if (FieldRules.Validate(field, value) is { } refusal)
+                throw new TswapException($"Secret '{name}': {refusal}");
+
+            // Guard rail 1 without SECRET itself (it is deleted in this commit), so the same value in another live
+            // secret is refused. VaultView.BuildIndex's query, less SECRET's versions.
+            using (var keys = FingerprintKeys.Derive(key))
+            {
+                var others = FingerprintIndex.Build(
+                    from record in metadata.Records
+                    where record.Name != secret
+                    from version in record.RetainedVersions()
+                    where version.Fingerprints is not null
+                    select (record.Name, version.IsPrevious, version.Fingerprints!),
+                    keys);
+                if (FieldSecretCheck.Refusal(others, null, name, field, value) is { } secretRefusal)
+                    throw new TswapException(secretRefusal);
+            }
+
+            // One commit: the field write and the delete, staged on one writer.
+            writer.SetFields(name, [new FieldEdit(field, value)], who);
+            writer.Delete(secret);
+            writer.Commit();
+
+            ctx.Console.Out.WriteLine($"✓ The value of '{secret}' is now the field '{name}.{field}' (visible; {ctx.Prefix} field show {name}); secret '{secret}' deleted.");
+            return 0;
+        }
+        finally
+        {
+            FingerprintTexts.WarnFormatTwo(ctx.Console.Error, ctx.Prefix, view.FormatTwoDecoded + writer.FormatTwoDecoded, FormatTwoUse.Write);
+        }
     }
 
     // ------------------------------------------------------------------ show
