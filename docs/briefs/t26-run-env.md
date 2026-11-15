@@ -56,6 +56,27 @@ What it does **not** fix (the docs say so): the agent runs as the same user as t
 job of output masking and of running work under another user (the broker). `--env` protects against other local users
 and command-line logging.
 
+## Round 2 clarifications (MiMo and GLM-5.3 both "Ready to implement: yes"; these close their minors)
+
+- **Usage error (MiMo N1):** orchestrator ruling: the bare-`run` usage error shows the same usage as `HelpUsage`
+  (`run [--env NAME={{name}}]... [--] <cmd> [args...]`), so the message matches the option just typed. That makes
+  `CommandArgumentErrorTests` :30 a third sanctioned assertion change (same reason as `HelpTests` :153/:171: the brief
+  changes `run`'s usage); name it in the commit message.
+- **Who can read argv elsewhere (MiMo N2):** RedactingPty's README covers Linux only. In the docs: Linux and macOS,
+  other local users can read a running process's arguments (`/proc/<pid>/cmdline`; `ps` on macOS); Windows: state only
+  what you verify in Microsoft's documentation, otherwise leave the Windows argv cell out. The environment cells stay
+  as the README says.
+- **Two more refusal rows (MiMo N3):** `ComSpec` and `PSModulePath`, and `X=pre-{{k}}` (a literal around a token).
+- **Prompt wording (MiMo N4):** preference #1 says "a config file that can carry the secret on a `# tswap:` line (YAML,
+  INI, TOML, JSONC; not strict JSON)".
+- **Help scan (MiMo N5):** the sentence says `--help`/`-h` among `run`'s leading options prints usage, "except in an
+  `--env` value slot" (there the `--env` shape refusal wins); add a row for `run --env -h cmd`.
+- **`docs/agent-integration.md` (MiMo N6):** its `run <cmd>` row (:25) gains one `--env` mention.
+- **`XDG_*` (MiMo N7):** in `docs/commands.md` write the prefix as `XDG_*`, never a concrete `XDG_…`/`TSWAP_…` name the
+  code doesn't read (`CommandReferenceTests.EnvironmentVariablesDocumented`).
+- GLM's round-2 minors, if any, are in `~/RiderProjects/tswap-wt/tools/t26-brief-r2-glm.md`: read and fold them the same
+  way (verify, fold or say why not, in the commit message).
+
 ## Task 1: `run --env`
 
 Syntax: `tswap run [--env NAME={{name}}]... [--] <cmd> [args...]`.
