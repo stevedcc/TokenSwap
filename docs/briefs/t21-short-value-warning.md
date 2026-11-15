@@ -13,7 +13,8 @@ folders only. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthrop
 push, merge or rebase; stop and report when the brief can't be built as written.
 
 Review history: round 1 by MiMo and DeepSeek (`~/RiderProjects/tswap-wt/tools/t21-brief-r1-{mimo,deepseek}.md`), both
-"no" on the same Critical (existing whitespace-warning tests break); this version folds in every finding.
+"no" on the same Critical (existing whitespace-warning tests break); round 2 (`t21-brief-r2-*.md`), both "no" on one
+new point (two round-trip assertions repeat the input), fixed with their wording; every finding is folded in.
 
 **Parallel brief T20** (#315) runs at the same time in another worktree. T20 owns `Apply.cs`,
 `ToCommentProcessor.cs`, `SecretMatcher.cs`, `ToCommentCommand.cs`, `Check.cs`, `CheckCommand.cs` and their tests.
@@ -44,8 +45,8 @@ public static bool IsShortValue(string value) => value.Length < ShortValueLength
 ```
 
 `Length` is in UTF-16 code units, the same unit `create`'s length uses. The threshold lives only here, and **every
-command checks the value it stores with `IsShortValue`** (for `create` and `rotate`, the generated value), never a
-separate comparison on a length argument.
+warned command (the table in Task 2) checks the value it stores with `IsShortValue`** (for `create` and `rotate`, the
+generated value), never a separate comparison on a length argument.
 
 A helper in the CLI (next to the trailing-whitespace text, or a small `ValueWarnings` class in `TswapCli`) writes
 exactly this line to stderr:
@@ -72,13 +73,15 @@ prints one), when the stored value is short:
 | `ingest`, `ingest --rotate` | the value after `ReadBoundedStdin`'s trimming |
 | `create NAME [LEN]`, `rotate NAME [LEN]` | the generated value (exactly `LEN` long; `LEN` defaults to 32) |
 
-Not warned (they write values that were already stored, and warned about, when they were first stored):
-`restore`, `import`, `vault merge`, `migrate`.
+Not warned (they write values that were already stored): `restore`, `import`, `vault merge`, `migrate`.
 
-**Existing tests that change (inputs only, the assertions stay exact).** `AddWhitespaceWarningTests` asserts exact
-stderr with values shorter than 8, which would now also get the short warning. Change only their **inputs** to 8 or
-more characters, keeping what each test is about, and keep every `Assert.Equal` as it is (they pin the whitespace
-warning's one-line shape, owner decision 5):
+**Existing tests that change (input literals only, every assertion stays exact).** `AddWhitespaceWarningTests`
+asserts exact stderr with values shorter than 8, which would now also get the short warning. Change their input
+literals to 8 or more characters **wherever they appear**: in the `Add(...)` call and, where a round-trip assertion
+repeats the value (`Add_TrailingSpace_Warns_StoresAsTyped` line 42, `Add_TrailingTab_Warns` line 61), in that
+literal too. Every assertion keeps its exact-equality form: the `Assert.Equal(Warning(...) + NewLine, err)` and
+`Assert.Equal("", err)` lines pin the whitespace warning's one-line shape (owner decision 5), the round trips pin
+stores-as-typed:
 
 | Test | Input now | Input after |
 |---|---|---|
@@ -88,8 +91,8 @@ warning's one-line shape, owner decision 5):
 | `Add_SameValueAgain_StillWarns` | `"value "` | `"value123 "` |
 | `Add_NoTrailingWhitespace_NoWarning` | `"value"`, `"in ner"` | `"value123"`, `"in ner12"` (`" leading"` is already 8) |
 
-Say in the commit message that these inputs changed because the new rule warns on short values, and that no
-assertion changed. No other existing test asserts the stderr of these commands exactly (checked in review:
+Say in the commit message that only input literals changed (including the two a round-trip assertion repeats),
+because the new rule warns on short values, and that no assertion was loosened. No other existing test asserts the stderr of these commands exactly (checked in review:
 `WriteCommandDecryptionTests` filters stderr by record file name; `MetadataCommandTests` covers read commands only).
 
 New tests (command level, `FleetMachine`/simulated services, one new test class):
@@ -108,6 +111,8 @@ Break-it-once, per key test:
 - Swap the order of the two warning writes in `add`: the order test fails.
 - Put the value into the warning text: the no-leak tests fail.
 - Warn whenever `LEN <= 32` in place of `IsShortValue`: the default-32 test fails.
+- Return 1 and skip the write for a short value: the 7-value tests' exit-0 and round-trip assertions fail (it is a
+  warning, never a refusal).
 
 ## Task 3: docs and the agent prompt
 
