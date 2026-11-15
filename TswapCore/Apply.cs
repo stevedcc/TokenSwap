@@ -108,6 +108,11 @@ public static class Apply
 
                 // Escape the secret value for the appropriate quote style
                 var value = Value();
+                RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
+                // Brief T20 (#315): a single-quoted scalar can't carry a line break or a control
+                // character, so such a value is written double-quoted, escaped.
+                if (quote == "'" && HasControlCharacter(value))
+                    quote = "\"";
                 var escapedValue = EscapeForQuote(value, quote);
                 if (burned)
                     warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
@@ -127,6 +132,7 @@ public static class Apply
                     var prefix = unquotedMatch.Groups[1].Value;
                     // Default to double quotes for safety
                     var value = Value();
+                    RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
                     var escapedValue = EscapeForQuote(value, "\"");
                     if (burned)
                         warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
@@ -145,14 +151,60 @@ public static class Apply
             applied.Select(r => (r.Name, r.Raw, (IReadOnlyList<string>)r.WrittenForms)).ToList());
     }
 
+    /// <summary>
+    /// Brief T20 (#315): a line whose separator (the last non-space character of the prefix) is
+    /// <c>=</c> is .env-style, where parsers disagree on escapes (Docker's <c>--env-file</c> reads quotes
+    /// literally), so a value with a control character can't be written correctly there. The refusal
+    /// names the line and the marker, never the value.
+    /// </summary>
+    private static void RefuseControlCharactersOnEnvLine(string prefix, string value, string marker, int line)
+    {
+        if (prefix.TrimEnd() is [.., '='] && HasControlCharacter(value))
+            throw new TswapException(
+                $"Line {line}: '# tswap: {marker}' is on a KEY= line, which can't carry a value with line breaks or control characters. Use a YAML file, or pass the value with a {{{{{marker}}}}} token.");
+    }
+
     private static string EscapeForQuote(string value, string quoteChar) => quoteChar switch
     {
-        // Escape backslashes first, then double quotes
-        // This prevents double-escaping: \ -> \\ and " -> \"
-        "\"" => value.Replace("\\", "\\\\").Replace("\"", "\\\""),
+        "\"" => EscapeForDoubleQuotes(value),
         // Escape single quotes for YAML: ' becomes ''
         // Backslashes don't need escaping in YAML single quotes
         "'" => value.Replace("'", "''"),
         _ => value,
     };
+
+    /// <summary>
+    /// Brief T20 (#315): a character a quoted scalar can't carry raw — below U+0020, U+007F, the
+    /// three YAML also folds as line breaks inside double quotes (U+0085, U+2028, U+2029), and the rest
+    /// of YAML's non-printables (the C1 controls U+0080–U+009F, U+FFFE, U+FFFF; GLM code review).
+    /// </summary>
+    private static bool IsControlCharacter(char c) =>
+        c < ' ' || c is >= '\u007F' and <= '\u009F' or '\u2028' or '\u2029' or '\uFFFE' or '\uFFFF';
+
+    private static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
+
+    /// <summary>
+    /// The value as the inside of a double-quoted string, which YAML double quotes and JSON strings
+    /// both decode back byte for byte: <c>\</c> and <c>"</c> escaped, LF, CR and TAB as <c>\n</c>,
+    /// <c>\r</c>, <c>\t</c>, every other control character as <c>\uXXXX</c>. A value without a control
+    /// character is escaped as before (backslash first, then the quote).
+    /// </summary>
+    private static string EscapeForDoubleQuotes(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length + 8);
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\\': sb.Append(@"\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append(@"\n"); break;
+                case '\r': sb.Append(@"\r"); break;
+                case '\t': sb.Append(@"\t"); break;
+                case var _ when IsControlCharacter(c): sb.Append($@"\u{(int)c:X4}"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
+    }
 }

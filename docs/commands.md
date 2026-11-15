@@ -87,6 +87,11 @@ masked there too; `get` and `apply` no longer report records they don't read; `c
 on an unreadable format 2 record that no marker names; and conflicted copies that only their
 plaintext could show equal make `list` and `check` refuse that record
 ([details](security-model.md#what-each-command-decrypts)).
+`tocomment` also adopts a YAML literal block scalar (`key: |`, `|-` or `|+`) whose content is exactly
+one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>` and the block's lines
+go (`--dry-run` shows them as `[removed block line]`, never their text). `check` warns (exit 2) about a
+marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
+the raw value: use `stringData:` (JSON status `data-not-base64`).
 
 `run` (since 0.3) decrypts only the value versions it substitutes and masks every other value in the
 vault that has fingerprints, in its stored forms (verbatim, whitespace-stripped, base64, base64url),

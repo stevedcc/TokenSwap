@@ -46,7 +46,14 @@ public sealed class ToCommentCommand : ICliCommand
         foreach (var diff in changes)
         {
             ctx.Console.Error.WriteLine($"  line {diff.LineNumber}:");
-            if (diff.After == "")
+            if (diff is BlockLineDiff)
+            {
+                // Brief T20 (#315): a removed line of an adopted block scalar is a fragment of the
+                // secret, which the redactor (complete occurrences only) can't mask: never printed.
+                ctx.Console.Error.WriteLine($"  - [removed block line]");
+                ctx.Console.Error.WriteLine($"  + (removed)");
+            }
+            else if (diff.After == "")
             {
                 // Continuation line being removed. Its content is a raw base64 fragment that
                 // cannot be fully redacted (it is only part of the secret's full base64 value),

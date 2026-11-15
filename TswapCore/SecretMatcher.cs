@@ -50,6 +50,19 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             if (linesToRemove.Contains(i))
                 continue;
             var original = lines[i];
+            // Brief T20 (#315): a literal block scalar holding exactly one stored value is adopted whole.
+            if (ToCommentProcessor.LiteralBlockAt(lines, i) is { } block && WholeValueToken(block.Candidate) is { } token)
+            {
+                var keyLine = $"{block.Indent}{block.Key} {ToCommentProcessor.Replacement(token)}";
+                diffs.Add(new LineDiff(i + 1, original, keyLine));
+                lines[i] = keyLine;
+                for (var j = block.FirstLine; j < block.EndLine; j++)
+                {
+                    linesToRemove.Add(j);
+                    diffs.Add(new BlockLineDiff(j + 1, lines[j]));
+                }
+                continue;
+            }
             var taken = SelectToComment(original);
             if (taken.Count == 0)
                 continue;
@@ -63,6 +76,32 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             }
         }
         return (string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs);
+    }
+
+    /// <summary>
+    /// Brief T20 (#315): the token (<c>name</c> or <c>name:previous</c>) of the stored value whose
+    /// <b>plain</b> variant is the whole of <paramref name="candidate"/>, or the whole of it minus its
+    /// single trailing LF (a value ingested without one); null when none is. Any retained version
+    /// counts, burned ones too; never a base64, base64url or whitespace-stripped variant. The longest
+    /// match wins, then a live value over a burned one, then the token ordinally.
+    /// </summary>
+    private string? WholeValueToken(string candidate)
+    {
+        var shorter = candidate.EndsWith('\n') ? candidate.Length - 1 : -1;
+        (int Length, bool Burned, string Token)? best = null;
+        foreach (var hit in index.Scan(candidate))
+        {
+            if (hit.Kind != VariantKind.Plain || hit.Start != 0 || (hit.Length != candidate.Length && hit.Length != shorter))
+                continue;
+            var found = (hit.Length, Burned: !hit.IsPrevious && burned.Contains(hit.Name),
+                Token: hit.IsPrevious ? hit.Name + SecretsDb.PreviousSuffix : hit.Name);
+            if (best is not { } b
+                || found.Length > b.Length
+                || (found.Length == b.Length && (found.Burned, b.Burned) is (false, true))
+                || (found.Length == b.Length && found.Burned == b.Burned && string.CompareOrdinal(found.Token, b.Token) < 0))
+                best = found;
+        }
+        return best?.Token;
     }
 
     /// <summary>The hits of <paramref name="text"/> grouped into entries, in priority order, each with its starts left to right.</summary>

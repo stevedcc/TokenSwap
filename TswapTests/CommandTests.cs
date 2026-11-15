@@ -1250,6 +1250,81 @@ password2: """"  # tswap: missing-mixed-secret");
         Assert.Equal(0, exit);
     }
 
+    // Brief T20 (#315): a marker under data: in a Secret gets the raw value where base64 is expected.
+    private const string SecretDataManifest =
+        "apiVersion: v1\nkind: Secret\nmetadata:\n  name: step-ca-root-bundle\n  namespace: paperless-ngx\n" +
+        "type: Opaque\ndata:\n  root_ca.crt: \"\"  # tswap: step-ca-root-bundle\n";
+
+    [Fact]
+    public void Check_MarkerUnderSecretData_WarnsAndExits2()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "step-ca-root-bundle");
+        var yamlFile = Path.Combine(_tempDir, "secret.yaml");
+        File.WriteAllText(yamlFile, SecretDataManifest);
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("\n  ⚠ step-ca-root-bundle (line 8) — under data: in a Secret, which expects base64; use stringData:\n", stdout.Replace("\r\n", "\n"));
+        Assert.Contains("Summary: 0 ok, 1 warning(s), 0 missing", stdout);
+    }
+
+    [Fact]
+    public void Check_MarkerUnderSecretStringData_Exits0()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "step-ca-root-bundle");
+        var yamlFile = Path.Combine(_tempDir, "secret.yaml");
+        File.WriteAllText(yamlFile, SecretDataManifest.Replace("data:", "stringData:"));
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("  ✓ step-ca-root-bundle (line 8)", stdout);
+    }
+
+    [Fact]
+    public void Check_Json_MarkerUnderSecretData_IsTheOnlyWarning_Exits2()
+    {
+        RunTswap("init", "--yubikey");
+        RunTswap("create", "step-ca-root-bundle");
+        RunTswap("create", "other");
+        var yamlFile = Path.Combine(_tempDir, "secret.yaml");
+        File.WriteAllText(yamlFile, SecretDataManifest + "stringData:\n  other: \"\"  # tswap: other\n");
+
+        var (exit, stdout, _) = RunTswap("check", yamlFile, "--json");
+
+        Assert.Equal(2, exit);
+        using var doc = JsonDocument.Parse(stdout);
+        Assert.Equal(1, doc.RootElement.GetProperty("ok").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("warning").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("missing").GetInt32());
+        var byName = doc.RootElement.GetProperty("results").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("name").GetString()!, e => e.GetProperty("status").GetString());
+        Assert.Equal("data-not-base64", byName["step-ca-root-bundle"]);
+        Assert.Equal("ok", byName["other"]);
+    }
+
+    [Fact]
+    public void Check_MarkerUnderSecretData_MissingSecret_IsMissingAndExits1()
+    {
+        RunTswap("init", "--yubikey");
+        var yamlFile = Path.Combine(_tempDir, "secret.yaml");
+        File.WriteAllText(yamlFile, SecretDataManifest);
+
+        var (textExit, stdout, _) = RunTswap("check", yamlFile);
+        var (jsonExit, json, _) = RunTswap("check", yamlFile, "--json");
+
+        Assert.Equal(1, textExit);
+        Assert.Contains("  ✗ step-ca-root-bundle (line 8) — NOT FOUND", stdout);
+        Assert.Equal(1, jsonExit);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("missing", Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray()).GetProperty("status").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("warning").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("missing").GetInt32());
+    }
+
     // --- Init: new config fields ---
 
 

@@ -36,9 +36,9 @@ automated/silent unlocking by malicious processes.
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution; `{{@path}}` hands the command a private copy of a file whose `# tswap:` markers are filled in
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value
 - `%CMD% burned` — List all burned secrets that need rotation
-- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned
+- `%CMD% check <path>` — Scan a file or directory for `# tswap:` markers; exits 1 if any secret is missing; otherwise exits 2 if any secret is burned or a marker is under `data:` in a Kubernetes Secret (base64 expected; use `stringData:`)
 - `%CMD% redact <file>` — Print file to stdout with all known secret values replaced by [REDACTED] labels (it recognises them by fingerprints and decrypts no value)
-- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers (fingerprints too)
+- `%CMD% tocomment <file> [--dry-run]` — Replace inline secret values with empty values plus `# tswap: <name>` markers (fingerprints too); also adopts a YAML literal block scalar (`key: |`) holding a stored multi-line value
 - `%CMD% prompt` — Display these instructions
 - `%CMD% prompt-hash` — Get hash of current instructions (to check if your cached copy is current)
 
