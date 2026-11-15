@@ -222,21 +222,15 @@ public sealed class FieldCommand : ICliCommand
 
             // The one value decrypted: SECRET's current one (burned or not), as restore decrypts the one it puts back.
             var value = view.ResolveToken(secret);
-            if (FieldRules.Validate(field, value) is { } refusal)
+            // The refusal never shows the value: SECRET stays a secret when nothing is written.
+            if (FieldRules.Validate(field, value, valueOf: secret) is { } refusal)
                 throw new TswapException($"Secret '{name}': {refusal}");
 
             // Guard rail 1 without SECRET itself (it is deleted in this commit), so the same value in another live
-            // secret is refused. VaultView.BuildIndex's query, less SECRET's versions.
+            // secret is refused.
             using (var keys = FingerprintKeys.Derive(key))
             {
-                var others = FingerprintIndex.Build(
-                    from record in metadata.Records
-                    where record.Name != secret
-                    from version in record.RetainedVersions()
-                    where version.Fingerprints is not null
-                    select (record.Name, version.IsPrevious, version.Fingerprints!),
-                    keys);
-                if (FieldSecretCheck.Refusal(others, null, name, field, value) is { } secretRefusal)
+                if (FieldSecretCheck.Refusal(view.BuildIndex(keys, except: secret), null, name, field, value) is { } secretRefusal)
                     throw new TswapException(secretRefusal);
             }
 

@@ -47,7 +47,7 @@ public sealed class FieldAdoptTests : IDisposable
     }
 
     /// <summary>Runs <paramref name="adopt"/> and checks it was refused with <paramref name="message"/>, writing nothing.</summary>
-    private void AssertRefusedNothingWritten(string message, string name, string field, string secret)
+    private string AssertRefusedNothingWritten(string message, string name, string field, string secret)
     {
         var names = new[] { name, secret }.Where(n => File.Exists(RecordFile(_m, _key, n))).Distinct().ToList();
         var before = names.ToDictionary(n => n, Bytes);
@@ -60,6 +60,7 @@ public sealed class FieldAdoptTests : IDisposable
         foreach (var n in names)
             Assert.Equal(before[n], Bytes(n));
         Assert.False(File.Exists(RecordFile(_m, _key, name)) && !before.ContainsKey(name), $"a record '{name}' was created");
+        return stdout + stderr;
     }
 
     // ------------------------------------------------------------------ the adopt
@@ -107,7 +108,9 @@ public sealed class FieldAdoptTests : IDisposable
         Assert.Equal(1, Math.Abs((long)after.Write.Hlc.Logical - tombstone.Write.Hlc.Logical));
         Assert.Equal(Password, _m.Get("db"));
         Assert.Equal("username = \"svc-backup\"\n", _m.Ok("", "field", "show", "db"));
-        Assert.Contains("db-user", _m.Run("", "get", "db-user").Err); // not found
+        var (getExit, _, getErr) = _m.Run("", "get", "db-user");
+        Assert.Equal(1, getExit);
+        Assert.Contains("Secret 'db-user' not found", getErr);
     }
 
     [Fact]
@@ -244,7 +247,40 @@ public sealed class FieldAdoptTests : IDisposable
     {
         PlantBurnedUsername(value: "line one\u0007");
 
-        AssertRefusedNothingWritten("Refused field 'username':", "db", "username", "db-user");
+        var shown = AssertRefusedNothingWritten("Refused field 'username':", "db", "username", "db-user");
+
+        Assert.DoesNotContain("line one", shown);
+    }
+
+    // Review fix 1: a refused adopt leaves SECRET a secret, so its value must not reach either stream.
+    [Theory]
+    [InlineData("kind", "Refused field 'kind': the value of 'db-user' is not a known kind (use one of password,")]
+    [InlineData("expires", "Refused field 'expires': the value of 'db-user' is not a date; use YYYY-MM-DD")]
+    public void FieldAdopt_FormatRefusal_DoesNotShowValue(string field, string message)
+    {
+        PlantBurnedUsername();
+
+        var shown = AssertRefusedNothingWritten(message, "db", field, "db-user");
+
+        Assert.DoesNotContain(Username, shown);
+        _m.Sudo = true;
+        Assert.Equal(Username, _m.Get("db-user"));
+    }
+
+    // Review fix 3: the cap refusal comes at Commit, after both writes are staged: neither is written.
+    [Fact]
+    public void FieldAdopt_OverCap_RefusedAtCommit_NothingWritten()
+    {
+        PlantBurnedUsername();
+        _m.Ok("", "field", "set", "db",
+            "{" + string.Join(", ", Enumerable.Range(0, FieldRules.MaxLiveFields).Select(i => $"\"f{i}\": \"v {i}\"")) + "}");
+
+        var shown = AssertRefusedNothingWritten("Refused: the fields of 'db' are over a cap.", "db", "username", "db-user");
+
+        Assert.DoesNotContain(Username, shown);
+        Assert.Equal(FieldRules.MaxLiveFields, FieldsOf("db").Live.Count());
+        Assert.Equal(Username, _m.Get("db-user"));
+        Assert.NotEqual(RecordType.Tombstone, ReadRecord(_m, _key, "db-user").Type);
     }
 
     [Fact]

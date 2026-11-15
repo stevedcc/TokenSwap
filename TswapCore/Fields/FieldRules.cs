@@ -70,9 +70,12 @@ public static partial class FieldRules
 
     /// <summary>
     /// The name rules, then <see cref="ValidateValue"/>, then the format of a well-known field
-    /// (<c>kind</c>, <c>expires</c>); the message names the field.
+    /// (<c>kind</c>, <c>expires</c>); the message names the field. A format refusal shows the value
+    /// (escaped), or with <paramref name="valueOf"/> says "the value of 'valueOf'" instead: <c>field adopt</c>
+    /// passes the secret it adopts from, whose value a refusal must not show (the secret stays a secret).
+    /// The character and length refusals never show the value, only a code point or a count.
     /// </summary>
-    public static string? Validate(string name, string value)
+    public static string? Validate(string name, string value, string? valueOf = null)
     {
         if (ValidateName(name) is { } nameRefusal)
             return nameRefusal;
@@ -80,12 +83,13 @@ public static partial class FieldRules
             return $"Refused field '{name}': {refusal}";
 
         var normalised = NormaliseValue(value);
+        var shown = valueOf is null ? $"'{Escape(normalised)}'" : $"the value of '{valueOf}'";
         return name switch
         {
             "kind" when !KnownKinds.Contains(normalised, StringComparer.Ordinal) =>
-                $"Refused field 'kind': '{Escape(normalised)}' is not a known kind (use one of {string.Join(", ", KnownKinds)}).",
+                $"Refused field 'kind': {shown} is not a known kind (use one of {string.Join(", ", KnownKinds)}).",
             "expires" when !IsExpires(normalised) =>
-                $"Refused field 'expires': '{Escape(normalised)}' is not a date; use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC).",
+                $"Refused field 'expires': {shown} is not a date; use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC).",
             _ => null,
         };
     }

@@ -115,12 +115,15 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
     /// (<see cref="VaultMetadata.NotFingerprinted"/>). From <see cref="LoadAll"/>'s metadata
     /// (loaded with <see cref="FormatTwoRecords.Skip"/> when nothing is loaded yet); decrypts nothing.
     /// The index refers to <paramref name="keys"/>, which the caller keeps undisposed while it is used.
+    /// Issue #311: <paramref name="except"/> leaves that one secret's versions out (<c>field adopt</c>, whose
+    /// source secret is deleted in the same commit).
     /// </summary>
-    public FingerprintIndex BuildIndex(FingerprintKeys keys)
+    public FingerprintIndex BuildIndex(FingerprintKeys keys, string? except = null)
     {
         var metadata = LoadedMetadata();
         return FingerprintIndex.Build(
             from record in metadata.Records
+            where !string.Equals(record.Name, except, StringComparison.Ordinal)
             from version in record.RetainedVersions()
             where version.Fingerprints is not null
             select (record.Name, version.IsPrevious, version.Fingerprints!),
