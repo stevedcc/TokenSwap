@@ -95,7 +95,11 @@ seals; the wrap is `slot accept`'s, so `recover` is the closer model.)
    (keeps the literals the tests above pin, MiMo M3). `--yubikey` and `--fido2` then run exactly as today.
 2. `LoadKeyringForAdd` (keyring, format version 3, then `ctx.RequireSudo("slot add")`), as `--yubikey` does. Make its
    no-keyring text backend-neutral ("…so it has no slots to add one to…" instead of "…to add a YubiKey to…", MiMo M11;
-   no test pins those words). The format-version-2 refusal keeps its text: its tests assert "format version 2" only.
+   no test pins those words). Reword `RequireKeyringThatTakesYubiKeySlots`' format-version-2 refusal the same way (r2
+   MiMo N4; it also serves `recover` and `slot merge`), keeping "format version {n}", which is all its tests assert:
+   "This vault's keyring is format version {n}, made before keyring slots could carry their hardware's own
+   parameters, so it cannot take a new YubiKey, FIDO2, TPM or Secure Enclave slot. It keeps working with its existing
+   slots; to give it new slots, create a new vault with 'tswap init' and move the secrets across."
 3. `HardwareServices.Enrollment(Tpm, …)`. On macOS it throws "--tpm is only supported on Windows and Linux." as
    `slot request --tpm` and `recover --tpm` do.
 4. **A legacy pair own slot is refused** (MiMo I3). The condition: `(config.Backend ?? YubiKey) == YubiKey`, the
@@ -103,10 +107,14 @@ seals; the wrap is `slot accept`'s, so `recover` is the closer model.)
    `VaultUnlocker.FindOwnMachineSlot` is a machine slot with no `HwBlob`. Making the TPM this machine's own slot would
    make `Classify` skip the pair slot (`case YubiKeySlotKind.None: continue`), so the pair would stop opening the vault
    on this machine. (Only here: `Backend` and `KeyringSlotId` are machine-local config fields, so other machines' copies
-   are not affected; MiMo's "on every copy" is not so.) `LegacyPairOwnSlotText`: "This machine's own slot is a legacy
-   YubiKey pair slot, which opens only through this machine's config. Making the TPM this machine's slot would stop the
-   pair opening the vault here, so nothing was changed. Give each YubiKey its own slot first (sudo tswap slot add
-   --yubikey, once per key)."
+   are not affected; MiMo's "on every copy" is not so.) The condition stays as it is (orchestrator ruling, r2 GLM I1):
+   `slot add --yubikey` never changes `KeyringSlotId` or the pair fields, so the refusal keeps protecting the pair here,
+   and the text names the route that really unblocks it, `recover`, which does set `Backend` and `KeyringSlotId`.
+   `LegacyPairOwnSlotText("TPM", "--tpm")`: "This machine's own slot is a legacy YubiKey pair slot, which opens only
+   through this machine's config. Making the TPM this machine's slot would stop the pair opening the vault here, so
+   nothing was changed. Give each YubiKey its own slot first (sudo tswap slot add --yubikey, once per key), then make
+   the TPM this machine's own slot with the recovery key: sudo tswap recover --tpm --recovery-key-stdin." (Task 2:
+   "Secure Enclave" and `--secure-enclave --with-touch|--no-touch`.)
 5. **The working-slot check** (owner decision; GLM I5, MiMo I4). Only **this machine's own slot** is checked: when
    `config.Backend == Tpm` and `FindOwnMachineSlot(config, keyring)` finds it. Other TPM or Secure Enclave slots in the
    keyring belong to other machines (a shared folder holds them) and are never tried, as `OwnBackend`'s comment
@@ -118,10 +126,21 @@ seals; the wrap is `slot accept`'s, so `recover` is the closer model.)
      (as `slot accept` calls it; `HardwareBlobLocator` reads the own slot's blob), then `UnwrapSlot` of the own slot,
      and zeroes the vault key at once. True: it opens. False: the hardware answered and the unwrap failed. A hardware or
      password failure is thrown as it is.
+   - **"The object no longer loads" needs its own signal** (r2 GLM m2 ruling): today `Tpm2ToolsInterop.UnlockFailed`
+     returns one generic `TswapException` for a cleared TPM, another machine's blob, a corrupted config and other
+     failures. Add `HardwareSlotGoneException : TswapException` in `TswapCore` (same message, so every existing catch
+     and text is unchanged), thrown only for a definite answer: by `Tpm2ToolsInterop` when `tpm2_load` fails without a
+     lockout or auth code after `tpm2_createprimary` succeeded (the TPM answered: the integrity check failed, as after
+     `tpm2_clear`), and by `SimulatedHardwareService` when a password-free blob doesn't decrypt under its machine key
+     (its "made on a different machine" text). Windows TPM and the real Secure Enclave throw it only where an existing
+     error code already says the key is gone; if none does, they always refuse, and the commit message says so.
+     Simulator limit: a password blob under another machine key reads as a wrong password (the key is derived from
+     both), so a dead *password* own slot is tested through the unwrap path instead (see the tests).
    - **A password own slot** (`SlotPassword.Classify(own) == Password`) needs the vault password for the check. Follow
      `Reenrol`'s steps 2 to 4. First decide the new slot's password (`VaultPasswordChoice.Decide(ctx, passwordFlag,
      HardwareBackend.Tpm)`). No `vault-password` file: refuse with `VaultPasswordMessages.MissingFile`. With
-     `--recovery-key-stdin`, read the key from the first line and the password from the next. No terminal and no
+     `--recovery-key-stdin`, read the key here, before the check, as `Reenrol` does (`ReadRecoveryKey(ctx, keyring,
+     keyOnFirstLine: true)`), then the password from the next line. No terminal and no
      `--recovery-key-stdin`: refuse with `OwnSlotNeedsPasswordText`, "This machine's TPM slot {shortId} needs the vault
      password to check whether it still works. It is read at a terminal (or, with --recovery-key-stdin, on the line
      after the recovery key), and stdin is not a terminal here. Run this at a terminal. Nothing was changed."
@@ -135,17 +154,22 @@ seals; the wrap is `slot accept`'s, so `recover` is the closer model.)
      - `VaultPasswordRefusedException` with `WrongPassword`: refuse with `VaultPasswordChoice.WrongPasswordText`.
      - `VaultPasswordUnavailableException`, `VaultPasswordCancelledException`, `OwnerSwitchException`: refusals, as
        thrown.
-     - **Any other failure, or false** (the TPM was cleared or replaced; the object no longer loads): the slot is dead.
-       Print one line on stderr, "This machine's TPM slot {shortId} no longer opens this vault ({reason}); adding a new
-       one. The old slot is kept.", and go on. The owner decision covers only a working slot; this treats a dead one
-       the way `slot add --yubikey` treats a reprogrammed key (see the open points). If the TPM is merely unavailable,
-       the enrolment in step 8 fails too and nothing is written.
-6. **Unlock** through `UnlockForKeyringChange` (another slot, the agent, or `--recovery-key-stdin`; a key already read
-   in step 5 is used, not read twice). A password typed in step 5 must pass `file.Verifies(vaultKey, typed)`, else
-   refuse with "This machine's TPM slot isn't added: the vault password didn't match this vault's (checked against the
-   vault's password verifier). Nothing was changed." Accepted limit: with a dead password own slot and no
-   password-free way in, the unlock's pass 3 asks for the password once more (handing it over would need a
-   `CommandContext` seam).
+     - **Dead, a definite answer only** (orchestrator ruling on r2 GLM m2): false (the hardware answered and the
+       unwrap failed) or `HardwareSlotGoneException` (the object no longer loads). Print one line on stderr, "This
+       machine's TPM slot {shortId} no longer opens this vault ({reason}); adding a new one. The old slot is kept.",
+       and go on, the way `slot add --yubikey` treats a reprogrammed key.
+     - **Any other hardware error** (busy, unreachable, a corrupted blob, anything not definite): refuse with
+       `OwnSlotUncheckedText`, "{error} This machine's TPM slot {shortId} couldn't be checked, so no new slot is added.
+       Nothing was changed.", as `Reenrol` refuses a key that gives no answer. A transient failure must not add a
+       second slot while the first still works.
+6. **Unlock** as `Reenrol` unlocks (r2 MiMo N1, r2 GLM m4): when step 5 read the recovery key,
+   `RecoveryKeyUnlock.Unlock(keyring, recoveryKey)` with that key (zeroed in a `finally`); **stdin is never read
+   again**. `UnlockForKeyringChange` would re-read it and take the password line for the key. Otherwise (no own-slot
+   check ran, or it read nothing) `UnlockForKeyringChange` as `--yubikey` does, with `keyOnFirstLine: passwordFlag ==
+   true`. A password typed in step 5 must pass `file.Verifies(vaultKey, typed)`, else refuse with "This machine's TPM
+   slot isn't added: the vault password didn't match this vault's (checked against the vault's password verifier).
+   Nothing was changed." Accepted limit: with a dead password own slot, no `--recovery-key-stdin` and no password-free
+   way in, the unlock's pass 3 asks for the password once more (handing it over would need a `CommandContext` seam).
 7. **The new slot's password** when step 5 typed none. Do what `Resolve` does: `Decide` with `HardwareBackend.Tpm`
    (so the TPM lockout notice prints; `ExecuteAddFido2` passes `YubiKey`, GLM's note), then `AskExisting` when the
    folder has a `vault-password` file, else `CreateNew`. Compose these yourself rather than calling `Resolve`, to add
@@ -178,13 +202,16 @@ writes.
 **Under sudo** (issue #309 "Running under sudo"): every file goes through the store's `DirectoryOwnerMatcher` layer, so
 `config.json`, its backup, the `keyring` and `vault-password` keep the vault folder owner's ownership and mode, as for
 `slot add --yubikey` and `recover --tpm` today. The TPM object is sealed into the slot's blob in the keyring, and
-`Tpm2ToolsInterop`'s temporary folders are removed, as under `recover --tpm`, which already enrols a TPM under sudo
+`Tpm2ToolsInterop`'s temporary folders are removed (`DeleteBestEffort` in its `finally`), as under `recover --tpm`,
+which already enrols a TPM under sudo
 (so GLM I6's "the first sudo TPM enrolment path" is not so; its owner check is still added below).
 
 **Success output:** "✓ This machine's TPM added as its own slot — it now opens this vault alone.", the password line
-as `--yubikey` prints it, the fingerprint, then `recover`'s two record-vault lines ("Machines that share this vault
-folder get the new slot with it." and the `vault merge` line), not `PrintAddedSlotFooter`'s "no sync in v0" line,
-which is false for a shared folder (GLM m6; `--yubikey`/`--fido2` keep theirs, out of scope).
+as `--yubikey` prints it, then the rest exactly as `recover` prints it after its password line (r2 MiMo N2, r2 GLM
+m4): `PrintFingerprint`, "Slots in this machine's keyring: {n}", "Machines that share this vault folder get the new
+slot with it.", "A machine with its own copy of the vault gets it once you copy {folder} there and run, on that
+machine:" and the `sudo tswap vault merge <the copied folder>` line. Not `PrintAddedSlotFooter`'s "no sync in v0"
+line, which is false for a shared folder (GLM m6; `--yubikey`/`--fido2` keep theirs, out of scope).
 
 Update `SlotCommand.Forms` (`… | slot add --tpm {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot
 add --yubikey`) and `Description`, and regenerate the reference **in the same commit**
@@ -214,9 +241,20 @@ TPM call is named, `SimulatedHardwareService.ObserveCalls` shows it, as
   --no-password` with stdin not a terminal: `OwnSlotNeedsPasswordText`; no TPM call at all; nothing written.
 - `SlotAddTpm_DeadOwnTpmSlot_AddsANewOne`: an `init --tpm` vault with a recovery key, then `Tpm` replaced by other
   bytes; `slot add --tpm --no-password --recovery-key-stdin` succeeds, prints the "no longer opens" line, points
-  `KeyringSlotId` at the new slot and keeps the old one; `names` then works with the new `Tpm`.
-- `SlotAddTpm_LegacyPairOwnSlot_Refused`: the `KeyringV3PairFixtureTests` fixture: `LegacyPairOwnSlotText`; nothing
-  written.
+  `KeyringSlotId` at the new slot and keeps the old one; `names` then works with the new `Tpm` (the simulator's
+  `HardwareSlotGoneException` path).
+- `SlotAddTpm_DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce` (r2 MiMo N1): an `init --tpm --password` vault
+  with a recovery key; make the own slot dead by the unwrap path (decode the folder's `keyring` with `KeyringCodec`,
+  flip one byte of the own slot's `Wrapped`, write it back), since the simulator can't make a password blob "gone";
+  `slot add --tpm --password --recovery-key-stdin` with stdin "{recovery key}\n{password}\n" adds the slot (the "no
+  longer opens" line, `KeyringSlotId` = the new slot), `LastConsole.In.ReadToEnd()` is empty afterwards and nothing
+  asked twice; with only the TPM and that password, `names` works.
+- `SlotAddTpm_OwnSlotCheck_HardwareError_Refused_NothingWritten` (r2 GLM m2): an `init --tpm` vault whose own slot's
+  `HwBlob` is truncated (a plain `TswapException`, not a definite answer): `OwnSlotUncheckedText` with that error; no
+  `Tpm:Enroll`; nothing written.
+- `SlotAddTpm_LegacyPairOwnSlot_Refused`: the `KeyringV3PairFixtureTests` fixture, converted first with `migrate
+  --to-records` (key A plugged in) as that class's private `ConvertFixture` does, or the classic-vault refusal comes
+  first (r2 MiMo N3); then the exact `LegacyPairOwnSlotText("TPM", "--tpm")`; nothing written.
 - `SlotAddTpm_NoWayIn_Refused_NothingWritten`: no key plugged in, no agent, no recovery key.
 - `SlotAddTpm_ClassicVault_Refused`: built as `SlotAddYubiKeyTests.PlainVault_IsRefused` builds it.
 - `SlotAddTpm_WithoutSudo_Refused`: as `SlotAddYubiKeyTests.WithoutSudo_IsRefusedBeforeAnyUnlockOrWrite` (return early
@@ -230,7 +268,9 @@ TPM call is named, `SimulatedHardwareService.ObserveCalls` shows it, as
 **Break-it-once:** skip the config write: `SlotAddTpm_ThenTheTpmAloneOpensTheVault` fails. Leave out `Backend = Tpm`:
 the same test fails. Drop the working-slot check: `SlotAddTpm_WorkingTpmSlotAlready_Refused_NothingWritten` fails.
 Treat a missing password as a dead slot: `SlotAddTpm_WorkingPasswordTpmSlot_NoPasswordAtHand_Refused` fails. Drop the
-first-password guard: `SlotAddTpm_FirstPassword_WhilePasswordSlotsExistWithoutTheFile_Refused` fails.
+first-password guard: `SlotAddTpm_FirstPassword_WhilePasswordSlotsExistWithoutTheFile_Refused` fails. Unlock through
+`UnlockForKeyringChange` after the pre-read: `SlotAddTpm_DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce`
+fails. Count any hardware error as dead: `SlotAddTpm_OwnSlotCheck_HardwareError_Refused_NothingWritten` fails.
 
 **Owner check on a real TPM** (MiMo M10, GLM I6; say it in the commit message, the owner runs it): on Linux, with a
 FIDO2 or YubiKey vault, `sudo tswap slot add --tpm`; then as the user, unprivileged and with the key unplugged, `tswap
@@ -258,9 +298,10 @@ flag without `--secure-enclave`). The differences:
   regenerate the reference in the same commit.
 
 Tests (`SlotAddSecureEnclaveTests`, `FleetMachine` with `SecureEnclave` set; the simulated Secure Enclave runs on Linux
-CI, as `SlotRequestHardwareTests` shows): Task 1's set where it applies (the headline test with the three fields, the
-existing slot still opening, first password, wrong password, working slot refused, a password own slot with no
-password at hand, no way in, without sudo), plus:
+CI, as `SlotRequestHardwareTests` shows): Task 1's set in full, for the Secure Enclave, except the TPM-only lockout
+notice and the macOS-only case (r2 GLM m1): that includes the dead own slot (both the gone and the unwrap paths, with
+the recovery-key stdin test), the hardware-error refusal and the legacy pair refusal with the Secure Enclave text,
+plus:
 - `SlotAddSecureEnclave_NeitherTouchFlag_IsAUsageError`: exit 1, the usage and `Split`'s text naming both flags,
   nothing read from stdin, no hardware call, nothing written (MiMo M1, GLM I7: the previous brief's break-it-once named
   this test without asking for it);
@@ -295,9 +336,10 @@ record vault's `VaultDir`).
   second, conflicting one (MiMo I1).
 - (e) A `keyring`, no `vault-password` file, no password slot: `RequestNoPasswordYetText(folder)`, "The vault in
   {folder} has no vault password yet (no slot needs one, and the folder has no vault-password file), so there is none
-  to join. A machine that already opens the vault creates the first one: sudo {prefix} slot add --tpm --password there
-  (or --secure-enclave, --yubikey or --fido2, with --password). If this machine already opens it, run that here instead
-  of slot request. Otherwise enrol without --password." It names every `slot add` backend (MiMo M8).
+  to join. The first one is created on a machine that already opens the vault, with sudo {prefix} slot add --tpm
+  --password (or --secure-enclave, --yubikey or --fido2, with --password). If this machine already opens it, run that
+  here instead of slot request. Otherwise enrol without --password." It names every `slot add` backend (MiMo M8; the
+  dangling "there" is gone, r2 GLM m4).
 - Conflict copies keep ruling 2's text (they throw before any of these).
 
 **`slot accept`'s receipt text** (MiMo I2, GLM I1). The new text is keyed on **where the keyring was written**, not on
@@ -323,8 +365,10 @@ fails. Drop (c): its test fails. Key the accept text on `vaultDir` only: the rec
 
 ## Task 4: docs and the printed guide
 
-- The sudo table's `slot add` row (`docs/commands.md:26`): add "or this machine's TPM or Secure Enclave". (The
-  generated reference was regenerated in Tasks 1 and 2.)
+- The sudo table's `slot add` row (`docs/commands.md:26`): add "or this machine's TPM or Secure Enclave" **in the Why
+  cell** only. The first cell stays exactly `slot add`: `SudoTableMatchesBehaviour` looks its drivers up by it and
+  `SudoTableCoversSubcommands` needs it (r2 GLM m3; the row is at :26 at f75be2b, not :24). (The generated reference
+  was regenerated in Tasks 1 and 2.)
 - `TswapCli/OtherMachinesGuide.cs`, folder variant (MiMo M7, GLM I3): before the request/approve/accept lines, add the
   route for a machine that has joined and has a way in there: `(There, $"sudo {prefix} slot add --tpm")` and
   `(There, $"(on a Mac: sudo {prefix} slot add --secure-enclave --with-touch)")`, under a title such as "Optional: give
