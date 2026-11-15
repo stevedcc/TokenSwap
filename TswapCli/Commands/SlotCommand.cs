@@ -45,8 +45,8 @@ public sealed class SlotCommand : ICliCommand
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --tpm {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add this machine's TPM (--tpm, which then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -896,6 +896,10 @@ public sealed class SlotCommand : ICliCommand
                 return ExecuteAddFido2(ctx, serial, passwordFlag, withRecoveryKey);
             case ["--tpm"] when serial is null:
                 return ExecuteAddHardware(ctx, HardwareBackend.Tpm, requirePresence: true, passwordFlag, withRecoveryKey);
+            case ["--secure-enclave"] when serial is null:
+                // Brief T11 decision 7: the --no-touch warning right after the argument checks, before any prompt or write.
+                SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
+                return ExecuteAddHardware(ctx, HardwareBackend.SecureEnclave, requirePresence!.Value, passwordFlag, withRecoveryKey);
             case ["--yubikey"] when serial is null:
                 break;
             default:
@@ -1068,6 +1072,9 @@ public sealed class SlotCommand : ICliCommand
                         throw new VaultPasswordUnavailableException(OwnSlotNeedsPasswordText(name, shortId));
                     typed = VaultPasswordChoice.AskUnverified(ctx, file);
                 }
+                // A with-touch Secure Enclave slot costs one Touch ID prompt for the check.
+                if (hardware == HardwareBackend.SecureEnclave && config.RequiresTouch != false)
+                    c.Out.WriteLine($"Checking whether this Mac's Secure Enclave slot {shortId} still opens the vault (Touch ID or password).");
                 CheckOwnHardwareSlot(ctx, config, hardware, name, flags, shortId, typed);
             }
 
