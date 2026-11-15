@@ -24,7 +24,8 @@ public static partial class FieldRules
     public static IReadOnlyList<string> KnownKinds { get; } =
         ["password", "token", "api-key", "private-key", "certificate", "connection-string", "other"];
 
-    [GeneratedRegex("^[a-z0-9_-]{1,64}$")]
+    // \z, not $: $ also matches before a final line feed, which would let "url\n" through.
+    [GeneratedRegex("^[a-z0-9_-]{1,64}\\z")]
     private static partial Regex NamePattern();
 
     // ASCII digits only: \d would accept other scripts' digits.
@@ -61,14 +62,20 @@ public static partial class FieldRules
         $"The value contains {refused.CodePoint} ({refused.Kind}); a field holds no control, format, " +
         "surrogate or private-use characters other than a line feed.";
 
+    /// <summary>The name rules alone (for a removal, which has no value): null when allowed, otherwise the refusal.</summary>
+    public static string? ValidateName(string name) =>
+        NamePattern().IsMatch(name)
+            ? null
+            : $"Refused field name '{Escape(name)}': a field name is 1-64 characters of a-z, 0-9, '_' and '-'.";
+
     /// <summary>
     /// The name rules, then <see cref="ValidateValue"/>, then the format of a well-known field
     /// (<c>kind</c>, <c>expires</c>); the message names the field.
     /// </summary>
     public static string? Validate(string name, string value)
     {
-        if (!NamePattern().IsMatch(name))
-            return $"Refused field name '{Escape(name)}': a field name is 1-64 characters of a-z, 0-9, '_' and '-'.";
+        if (ValidateName(name) is { } nameRefusal)
+            return nameRefusal;
         if (ValidateValue(value) is { } refusal)
             return $"Refused field '{name}': {refusal}";
 

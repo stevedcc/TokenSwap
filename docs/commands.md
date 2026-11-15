@@ -10,10 +10,12 @@ environment variables against the code; the Files section is not checked.
 
 ## Which commands need sudo
 
-A command whose usage line below starts with `sudo` needs sudo. Two commands mix the two:
+A command whose usage line below starts with `sudo` needs sudo. Three commands mix the two:
 
 - `slot` is marked `sudo` as a whole, but only some of its subcommands check for it.
 - `broker` is marked without `sudo`, but the subcommands that change `broker.json` need it.
+- `field` is marked without `sudo`: setting, removing and showing fields needs none; only `field adopt`, which turns
+  a secret value into a visible field, needs it.
 
 This table lists each of their subcommands. "sudo" means it refuses to run without sudo.
 
@@ -37,6 +39,9 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `broker socket remove` | sudo | Changes `broker.json`, as above |
 | `broker template add` | sudo | Changes `broker.json`: a template runs host-side commands with vault secrets |
 | `broker template remove` | sudo | Changes `broker.json`, as above |
+| `field set` | no | Fields are plain, visible data, never secret; every value is checked against the stored secrets' fingerprints first |
+| `field unset` | no | Removes plain fields; no secret value is read or changed |
+| `field show` | no | Prints plain fields only; no secret value is decrypted |
 
 A FIDO2 slot on a security key that isn't a YubiKey needs a tswap newer than 0.3.0 on every machine
 that opens it: tswap 0.3.0 doesn't see such keys on Linux and macOS and says "plug it in" even when
@@ -265,6 +270,14 @@ tswap burned [--json]
 ```
 
 List all burned secrets
+
+### field
+
+```
+tswap field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json]
+```
+
+Plain, visible fields on a secret (username, url, consumers, source, kind, expires, rotate, ...): never secret, never substituted into commands
 
 ### prompt
 
