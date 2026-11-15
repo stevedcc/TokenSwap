@@ -88,6 +88,9 @@ automated/silent unlocking by malicious processes.
    prints a warning about the old record format 2, stop and ask the user to run `sudo %CMD% vault reindex`
    once in their own terminal, then retry. You never run it yourself (it needs sudo), and you
    never work around the refusal (by reading or printing the file another way)
+12. NEVER store usernames, ports, hostnames or other non-secret settings as secrets: tswap hides a value
+   wherever it appears, also inside longer words and numbers, so they get hidden in unrelated output and
+   get burned for no reason
 
 ## Keeping secrets out of config files:
 - In Helm values.yaml and similar config files, replace plaintext secrets with empty

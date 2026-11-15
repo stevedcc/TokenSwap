@@ -268,4 +268,21 @@ public sealed class ShortValueWarningTests : IDisposable
         Assert.DoesNotContain(value, err);
         Assert.Equal(WarningLine("s"), err);
     }
+
+    // --- the agent prompt ---
+
+    /// <summary>The new rule is appended as the last key rule (rules 1 to 11 keep their numbers).</summary>
+    [Fact]
+    public void Prompt_LastKeyRule_NeverStoreNonSecretSettings()
+    {
+        var text = TswapCore.Prompt.GetText("tswap");
+        var start = text.IndexOf("## Key rules", StringComparison.Ordinal);
+        var rules = text[start..text.IndexOf("## Keeping secrets out of config files", start, StringComparison.Ordinal)].ReplaceLineEndings("\n");
+        var numbered = System.Text.RegularExpressions.Regex.Matches(rules, @"^(\d+)\. ", System.Text.RegularExpressions.RegexOptions.Multiline);
+
+        Assert.Equal(Enumerable.Range(1, 12).Select(n => n.ToString()), numbered.Select(m => m.Groups[1].Value));
+        var last = rules[numbered[^1].Index..].Trim();
+        Assert.StartsWith("12. NEVER store usernames, ports, hostnames or other non-secret settings as secrets", last);
+        Assert.EndsWith("get burned for no reason", last);
+    }
 }
