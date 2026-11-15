@@ -69,6 +69,11 @@ public class PeerIdentityLivenessTests(ITestOutputHelper output)
             using var peer = new PeerProcess(pid, new SafeFileHandle(fd, ownsHandle: true), null);
             Assert.True(PeerIdentity.DefaultPidfdAlive(peer));
 
+            // Kill only after the exec (#262): until then the parent is still the shell, which reaps the child, and
+            // the zombie never appears.
+            Assert.True(SpinWait.SpinUntil(() => ProcessComm(parent.Id) == "sleep", TimeSpan.FromSeconds(10)),
+                $"parent {parent.Id} never exec'd into sleep (comm {ProcessComm(parent.Id)})");
+
             using (var grandchild = Process.GetProcessById(pid))
                 grandchild.Kill();
             Assert.True(SpinWait.SpinUntil(() => ProcessState(pid) == 'Z', TimeSpan.FromSeconds(10)),
@@ -87,6 +92,19 @@ public class PeerIdentityLivenessTests(ITestOutputHelper output)
     {
         var line = File.ReadLines(path).FirstOrDefault(l => l.StartsWith("Uid:", StringComparison.Ordinal));
         return line?.Split('\t', StringSplitOptions.RemoveEmptyEntries) is [_, var real, ..] && uint.TryParse(real, out var uid) ? uid : null;
+    }
+
+    /// <summary>The command name in <c>/proc/&lt;pid&gt;/comm</c>, trimmed, or "?".</summary>
+    private static string ProcessComm(int pid)
+    {
+        try
+        {
+            return File.ReadAllText($"/proc/{pid}/comm").Trim();
+        }
+        catch (IOException)
+        {
+            return "?";
+        }
     }
 
     /// <summary>The state letter in <c>/proc/&lt;pid&gt;/stat</c> (after the parenthesised command), or '?'.</summary>
