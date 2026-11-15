@@ -107,6 +107,21 @@ file: tswap fills the markers into a private copy, passes the copy's path, hides
 output and deletes the copy when the command ends (Option 1 below). `sudo tswap apply values.yaml`
 prints the filled file to stdout for a person; an agent never runs it.
 
+A multi-line value such as a PEM key works through the same marker: it is filled in as one escaped
+double-quoted line, which YAML reads back unchanged (a `KEY=` line in an `.env` file refuses it).
+
+```yaml
+tls:
+  key: ""  # tswap: app-tls-key
+```
+
+becomes, in the filled copy:
+
+```yaml
+tls:
+  key: "-----BEGIN PRIVATE KEY-----\nMIIEv…\n-----END PRIVATE KEY-----"  # tswap: app-tls-key
+```
+
 ### Helm deployment patterns
 
 For Helm deployments, there are three approaches.

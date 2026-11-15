@@ -279,6 +279,13 @@ or as the command of `find -exec`, `-execdir`, `-ok` or `-okdir`), so `helm inst
 word. A refusal can be a false one, for a file named like a refused word: rename the file, or pass
 the secret with a plain `{{name}}` token.
 
+A multi-line value (a PEM key, a JSON document) or one with another control character is written as
+an escaped double-quoted string (`\n`, `\r`, `\t`, `\uXXXX`, besides `\\` and `\"`), which YAML and
+JSON both read back byte for byte; a `''` marker line is written with double quotes for such a value.
+A `KEY=` line (`.env` style: `KEY=""`, `KEY=''`, `KEY=`) refuses it, naming the line and the marker,
+before anything is written: `.env` parsers disagree on escapes (Docker's `--env-file` reads the quotes
+literally), so pass such a value with a `{{name}}` token or use a YAML file.
+
 This replaces `apply` for agents, which now needs sudo. What it does not do:
 
 - **A process running as the same user can read the copy while the child runs.** An agent that
