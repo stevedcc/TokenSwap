@@ -147,12 +147,43 @@ public static class Apply
 
     private static string EscapeForQuote(string value, string quoteChar) => quoteChar switch
     {
-        // Escape backslashes first, then double quotes
-        // This prevents double-escaping: \ -> \\ and " -> \"
-        "\"" => value.Replace("\\", "\\\\").Replace("\"", "\\\""),
+        "\"" => EscapeForDoubleQuotes(value),
         // Escape single quotes for YAML: ' becomes ''
         // Backslashes don't need escaping in YAML single quotes
         "'" => value.Replace("'", "''"),
         _ => value,
     };
+
+    /// <summary>
+    /// Brief T20 (#315): a character a quoted scalar can't carry raw — below U+0020, U+007F, and the
+    /// three YAML also folds as line breaks inside double quotes (U+0085, U+2028, U+2029).
+    /// </summary>
+    internal static bool IsControlCharacter(char c) => c < ' ' || c is '\u007F' or '\u0085' or '\u2028' or '\u2029';
+
+    internal static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
+
+    /// <summary>
+    /// The value as the inside of a double-quoted string, which YAML double quotes and JSON strings
+    /// both decode back byte for byte: <c>\</c> and <c>"</c> escaped, LF, CR and TAB as <c>\n</c>,
+    /// <c>\r</c>, <c>\t</c>, every other control character as <c>\uXXXX</c>. A value without a control
+    /// character is escaped as before (backslash first, then the quote).
+    /// </summary>
+    private static string EscapeForDoubleQuotes(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length + 8);
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\\': sb.Append(@"\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append(@"\n"); break;
+                case '\r': sb.Append(@"\r"); break;
+                case '\t': sb.Append(@"\t"); break;
+                case var _ when IsControlCharacter(c): sb.Append($@"\u{(int)c:X4}"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        return sb.ToString();
+    }
 }
