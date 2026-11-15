@@ -162,6 +162,12 @@ public sealed record CommandContext(
     /// </summary>
     public Func<string?>? UserLookup { get; init; }
 
+    /// <summary>
+    /// #311: whether the process runs elevated (sudo or Administrator) for the who-record (null: the real
+    /// <see cref="Environment.IsPrivilegedProcess"/>; tests set it, so they never read the real privilege).
+    /// </summary>
+    public Func<bool>? ElevationLookup { get; init; }
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 

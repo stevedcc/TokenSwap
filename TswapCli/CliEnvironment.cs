@@ -132,25 +132,51 @@ public sealed class CliEnvironment
     /// </summary>
     private static string? InvokingUserHome(string sudoUser, string? sudoUid, Func<string, UnixPasswdEntry?> lookupUser)
     {
-        if (sudoUser == "root" || sudoUid == "0")
+        var entry = CheckInvokingUser(sudoUser, sudoUid, lookupUser, out var refusal);
+        if (refusal is not null)
+            throw new TswapException(refusal);
+        if (entry is null)
             return null;
-        if (sudoUid is null)
-            throw new TswapException(
-                $"SUDO_USER is '{sudoUser}' but SUDO_UID is not set, so tswap can't check whose vault to use. " +
-                "Run tswap through sudo itself, or set TSWAP_CONFIG_DIR to the folder to use.");
-        if (!uint.TryParse(sudoUid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var uid))
-            throw new TswapException(
-                $"SUDO_UID '{sudoUid}' is not a number (SUDO_USER is '{sudoUser}'), so tswap can't check whose vault to use.");
-        var entry = lookupUser(sudoUser)
-            ?? throw new TswapException(
-                $"SUDO_USER '{sudoUser}': no such user in the system's user database, so tswap can't find their vault.");
-        if (entry.Uid != uid)
-            throw new TswapException(
-                $"SUDO_UID {uid} doesn't match the uid of SUDO_USER '{sudoUser}' ({entry.Uid}), so tswap won't use that user's vault.");
         if (!Path.IsPathRooted(entry.Home))
             throw new TswapException(
                 $"The home folder of SUDO_USER '{sudoUser}' ('{entry.Home}') is not an absolute path. Set TSWAP_CONFIG_DIR to the folder to use.");
         return entry.Home;
+    }
+
+    /// <summary>
+    /// The one rule for trusting SUDO_USER (also the who-record's, #311): the passwd entry of
+    /// <paramref name="sudoUser"/>, trusted only when <paramref name="sudoUid"/> is that entry's uid. Null with a null
+    /// <paramref name="refusal"/> for root (SUDO_USER=root or SUDO_UID=0); null with the refusal's message when it
+    /// doesn't add up. Never throws: callers decide whether a refusal is fatal.
+    /// </summary>
+    internal static UnixPasswdEntry? CheckInvokingUser(string sudoUser, string? sudoUid, Func<string, UnixPasswdEntry?> lookupUser, out string? refusal)
+    {
+        refusal = null;
+        if (sudoUser == "root" || sudoUid == "0")
+            return null;
+        if (sudoUid is null)
+        {
+            refusal = $"SUDO_USER is '{sudoUser}' but SUDO_UID is not set, so tswap can't check whose vault to use. " +
+                "Run tswap through sudo itself, or set TSWAP_CONFIG_DIR to the folder to use.";
+            return null;
+        }
+        if (!uint.TryParse(sudoUid, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var uid))
+        {
+            refusal = $"SUDO_UID '{sudoUid}' is not a number (SUDO_USER is '{sudoUser}'), so tswap can't check whose vault to use.";
+            return null;
+        }
+        var entry = lookupUser(sudoUser);
+        if (entry is null)
+        {
+            refusal = $"SUDO_USER '{sudoUser}': no such user in the system's user database, so tswap can't find their vault.";
+            return null;
+        }
+        if (entry.Uid != uid)
+        {
+            refusal = $"SUDO_UID {uid} doesn't match the uid of SUDO_USER '{sudoUser}' ({entry.Uid}), so tswap won't use that user's vault.";
+            return null;
+        }
+        return entry;
     }
 
     /// <summary>

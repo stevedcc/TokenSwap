@@ -19,9 +19,10 @@ public sealed class FieldWhoTests : IDisposable
         var keys = new TestKeyYubiKeyService(Key);
         var env = new CliEnvironment { Prefix = "tswap", ConfigDir = _vault.Dir, Verbose = false, CommandArgs = [] };
         return new CommandContext(new FakeConsole { IsInputRedirected = !terminal }, env, VaultStores.Open(_vault.Dir), keys,
-            new VaultUnlocker(keys, Key), Key, SudoBypass: elevated)
+            new VaultUnlocker(keys, Key), Key, SudoBypass: false)
         {
             UserLookup = () => user,
+            ElevationLookup = () => elevated,
         };
     }
 
@@ -72,6 +73,22 @@ public sealed class FieldWhoTests : IDisposable
         Assert.Equal("root", user);
     }
 
+    [Theory]
+    [InlineData("root", "1000")]      // SUDO_USER=root
+    [InlineData("alice", "0")]        // SUDO_UID=0
+    [InlineData("alice", null)]       // SUDO_UID missing
+    [InlineData("alice", "abc")]      // SUDO_UID not a number
+    [InlineData("mallory", "1000")]   // unknown user
+    [InlineData("", "1000")]          // empty SUDO_USER
+    public void Who_FailedSudoCrossCheck_FallsBackToEffectiveUser_AndNeverThrows(string sudoUser, string? sudoUid)
+    {
+        string? GetEnv(string name) => name switch { "SUDO_USER" => sudoUser, "SUDO_UID" => sudoUid, _ => null };
+
+        var user = FieldWhoSource.ResolveUser(GetEnv, elevated: true, effectiveUid: 0, Passwd, uid => uid == 0 ? "root" : null, windowsName: null);
+
+        Assert.Equal("root", user);
+    }
+
     [Fact]
     public void Who_Windows_UsesAccountName()
     {
@@ -113,6 +130,32 @@ public sealed class FieldWhoTests : IDisposable
 
         Assert.Contains("--by", ex.Message);
         Assert.Contains("U+001B", ex.Message);
+    }
+
+    [Fact]
+    public void Who_ByLabel_LineFeed_Refused()
+    {
+        var ex = Assert.Throws<TswapException>(() => FieldWhoSource.Current(Context(terminal: false, user: "alice"), by: "two\nlines"));
+
+        Assert.Contains("--by", ex.Message);
+        Assert.Contains("one line", ex.Message);
+    }
+
+    [Fact]
+    public void Who_ByLabel_StoredNormalisedToNfc()
+    {
+        var who = FieldWhoSource.Current(Context(terminal: false, user: "alice"), by: "cafe\u0301");
+
+        Assert.Equal("caf\u00e9", who.By);
+    }
+
+    [Fact]
+    public void Who_ByLabel_RefusalNamesTheLabel_NotAField()
+    {
+        var ex = Assert.Throws<TswapException>(() => FieldWhoSource.Current(Context(terminal: false, user: "alice"), by: "a\u001bb"));
+
+        Assert.DoesNotContain("field", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("label", ex.Message);
     }
 
     [Fact]
