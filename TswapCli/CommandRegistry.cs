@@ -66,13 +66,15 @@ public static class CommandRegistry
             ?? throw new TswapException($"Unknown command: {name}");
 
         var commandArgs = args.Skip(1).ToArray();
-        if (AsksForHelp(commandArgs))
+        // Brief T26: run's leading options are scanned past an '--env' value and up to '--' (RunCommand.LeadingOptions).
+        var leading = command is RunCommand ? RunCommand.LeadingOptions(commandArgs) : commandArgs;
+        if (AsksForHelp(leading))
         {
             PrintCommandHelp(ctx, command);
             return 0;
         }
 
-        if (HasGlobalFlagAmongOptions(commandArgs))
+        if (HasGlobalFlagAmongOptions(leading))
             throw new TswapException(
                 $"'-v'/'--verbose' is a global flag: global flags go before the command, e.g. '{ctx.Prefix} -v {command.Name} ...'. " +
                 $"(After the command's first argument, -v belongs to the command: '{ctx.Prefix} run grep -v ...'.)");

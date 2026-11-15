@@ -373,6 +373,31 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     }
 
     /// <summary>
+    /// Brief T26: <c>run --env X={{name}}</c> hands the value to a real child in its environment, not in
+    /// its argv. The script checks its own <c>/proc/$$/cmdline</c> for <c>$X</c> and prints only
+    /// value-free markers: a value in argv would show up masked in the output, not raw.
+    /// </summary>
+    [Fact]
+    public void RunEnv_ValueNotInArgv()
+    {
+        if (!OperatingSystem.IsLinux())
+            return; // /proc/<pid>/cmdline is Linux's
+        RunTswap("init", "--yubikey", "--no-recovery");
+        RunTswapWithStdin("s3cr3t-env-value", "ingest", "my-secret");
+        var script = Path.Combine(_tempDir, "argv-check.sh");
+        File.WriteAllText(script,
+            "if tr '\\0' '\\n' < /proc/$$/cmdline | grep -qF -- \"$X\"; then echo IN-ARGV; else echo NOT-IN-ARGV; fi\n" +
+            "echo \"env:${X:+set}\"\n");
+
+        var (exit, stdout, stderr) = RunTswap("run", "--env", "X={{my-secret}}", "--", "sh", script);
+
+        Assert.True(exit == 0, $"exit {exit}: {stdout}{stderr}");
+        Assert.Contains("NOT-IN-ARGV", stdout);
+        Assert.Contains("env:set", stdout);
+        Assert.DoesNotContain("s3cr3t-env-value", stdout + stderr);
+    }
+
+    /// <summary>
     /// Issue #105 (owner decision, 2026-10-29): inline shell code is refused, reversing the
     /// compound-command support of #75. The exact #75 scenario,
     ///   tswap run sh -c 'echo before; echo {{my-secret}}; echo after'
