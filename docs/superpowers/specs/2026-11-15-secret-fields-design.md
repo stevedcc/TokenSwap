@@ -258,6 +258,12 @@ write the value into the command.` The broker's templates are unchanged. A test 
 
 ### Agent rules (the skill text, `Prompt.cs`)
 
+The skill text introduces fields first as what they are (owner, 2026-11-15): **bundled storage for convenience**,
+so everything about a credential is kept in one place next to its secret: the username, the URL, where it is used,
+where its master copy lives, how to rotate it. Fields are plain, visible data, not a second kind of secret and not
+a way to pass values into commands. The same framing opens the fields section in `docs/commands.md`,
+`docs/agent-integration.md` and the README line. Then the rules:
+
 - Never store usernames, hosts, ports, database names or other settings as secrets: use fields.
 - After creating, rotating or deploying a secret, update `consumers`, `source` and `expires` if known; give `--by`.
 - To use a field's value in a command, read it (`tswap field show NAME --json`) and write the value into the
