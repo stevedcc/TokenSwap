@@ -2108,6 +2108,12 @@ public sealed class RecordVaultStore : IFileVaultStore
         }
     }
 
+    /// <summary>
+    /// This machine's origin id in the short form <see cref="Stamp.ToString"/> shows (its first 8 hex digits), read from
+    /// the machine config alone (no keyring), for the who-record of a field change.
+    /// </summary>
+    public string ShortOriginId() => Convert.ToHexStringLower(OriginId())[..8];
+
     private byte[] OriginId()
     {
         try
