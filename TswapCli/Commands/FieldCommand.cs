@@ -154,7 +154,7 @@ public sealed class FieldCommand : ICliCommand
     }
 
     /// <summary>The refusal of a field write on a vault where <paramref name="count"/> records have no fingerprints.</summary>
-    private static string NotFingerprintedRefusal(string prefix, string command, int count) =>
+    internal static string NotFingerprintedRefusal(string prefix, string command, int count) =>
         $"'{command}' checks each value against the stored secrets by their fingerprints, and {count} record(s) in this vault " +
         $"have none yet (written by an older tswap, or the vault was never reindexed). Ask the user to run " +
         $"{ElevatedCommand.For(prefix, "vault reindex")}. Nothing was written.";

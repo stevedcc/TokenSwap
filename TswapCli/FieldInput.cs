@@ -36,7 +36,7 @@ public static class FieldInput
     }
 
     /// <summary>JSON (it starts with <c>{</c>, or <c>[</c> for the refusal) or <c>@FILE</c>; anything else is a <c>FIELD=VALUE</c> pair.</summary>
-    private static bool IsJsonForm(string arg)
+    internal static bool IsJsonForm(string arg)
     {
         var text = arg.TrimStart('\ufeff').TrimStart();
         return text.StartsWith('{') || text.StartsWith('[') || arg.StartsWith('@');
