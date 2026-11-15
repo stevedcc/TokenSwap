@@ -150,7 +150,7 @@ public class HelpTests : IDisposable
         var (exit, stdout, _) = Run(sudoBypass: true, "run", "--help");
 
         Assert.Equal(0, exit);
-        Assert.Contains("run <cmd> [args...]", stdout);
+        Assert.Contains("run [--env NAME={{name}}]... [--] <cmd> [args...]", stdout);
     }
 
     [Fact]
@@ -168,6 +168,6 @@ public class HelpTests : IDisposable
         var (exit, stdout, stderr) = Run(sudoBypass: true, "run", "sh", script, "--help", "{{child-token}}");
 
         Assert.True(exit == 7, $"exit {exit}: {stdout}{stderr}");
-        Assert.DoesNotContain("run <cmd> [args...]", stdout);
+        Assert.DoesNotContain("run [--env NAME={{name}}]... [--] <cmd> [args...]", stdout);
     }
 }

@@ -27,7 +27,7 @@ public sealed class CommandArgumentErrorTests : IDisposable
     [InlineData("Usage: sudo tswap export <file>", "export")]
     [InlineData("Usage: tswap get <name>", "get")]
     [InlineData("Usage: tswap redact <file>", "redact")]
-    [InlineData("Usage: tswap run <command> [args...]", "run")]
+    [InlineData("Usage: tswap run [--env NAME={{name}}]... [--] <cmd> [args...]", "run")]
     [InlineData("Usage: tswap tocomment <file> [--dry-run]", "tocomment")]
     [InlineData("Usage: <source> | tswap ingest [--rotate] <name>", "ingest")]
     [InlineData("Usage: <source> | tswap ingest [--rotate] <name>", "ingest", "--rotate")]

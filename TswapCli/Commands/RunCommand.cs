@@ -7,12 +7,15 @@ namespace TswapCli.Commands;
 public sealed class RunCommand : ICliCommand
 {
     public string Name => "run";
-    public string HelpUsage => "run <cmd> [args...]";
-    public string Description => "Execute with {{token}} and {{@file}} substitution";
+    public string HelpUsage => Usage;
+    public string Description => "Execute with {{token}} and {{@file}} substitution; --env sets a secret in the command's environment instead of its arguments";
     public bool RequiresSudo => false;
 
-    /// <summary>The usage the bare-<c>run</c> error shows, also when the <c>--env</c> options are followed by no command.</summary>
-    private const string Usage = "run <command> [args...]";
+    /// <summary>
+    /// The usage: the help's, and the bare-<c>run</c> error's, also when the <c>--env</c> options are followed
+    /// by no command (brief T26 round 2: one usage, so the error matches the option just typed).
+    /// </summary>
+    private const string Usage = "run [--env NAME={{name}}]... [--] <cmd> [args...]";
 
     /// <summary>The broker's cap on a template's env entries, also <c>run</c>'s on <c>--env</c> pairs.</summary>
     private const int MaxEnvPairs = 64;
