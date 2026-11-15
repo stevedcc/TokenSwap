@@ -18,7 +18,8 @@ namespace TswapCli.Commands;
 /// is staged, so one refusal writes nothing. A random-looking value is written with a warning.</item>
 /// <item><b><c>unset NAME FIELD… [--by LABEL]</c></b>: removes fields.</item>
 /// <item><b><c>show NAME [--history] [--json]</c></b>: the live fields, each value as a JSON string; with
-/// <c>--history</c> each field's current and replaced states, in UTC.</item>
+/// <c>--history</c> each field's current and replaced states, in UTC, removed fields included (marked
+/// <c>(removed)</c>; in JSON under <c>history</c> only). Every name and value is escaped for display.</item>
 /// </list>
 /// A write is metadata only (<see cref="VaultWriter.SetFields"/>): the value version never changes. On a vault
 /// with records that have no fingerprints (format 2), guard rail 1 can't see every value, so a write is refused
@@ -107,7 +108,7 @@ public sealed class FieldCommand : ICliCommand
                 throw new TswapException(NotFingerprintedRefusal(ctx.Prefix, command, metadata.NotFingerprinted));
             FingerprintTexts.NoteOlderVariants(ctx.Console.Error, ctx.Prefix, metadata.OlderVariantSet);
 
-            if (writer.Fields(name) is null)
+            if (writer.Fields(name) is not { } before)
             {
                 writer.ThrowIfUnreadable(name);
                 throw new TswapException($"No secret '{name}'.");
@@ -123,6 +124,10 @@ public sealed class FieldCommand : ICliCommand
                 }
             }
 
+            // The edits that change something (FieldEdits.Apply skips the others), for the message.
+            var changed = edits.Where(e => (before.Get(e.Name) is { Deleted: false } old ? old.Value : null)
+                                           != (e.Value is null ? null : FieldRules.NormaliseValue(e.Value)))
+                .Select(e => e.Name).ToList();
             writer.SetFields(name, edits, who);
             var written = writer.Commit();
 
@@ -131,8 +136,8 @@ public sealed class FieldCommand : ICliCommand
                 if (edit.Value is not null && FieldSecretCheck.LooksRandom(FieldRules.NormaliseValue(edit.Value)))
                     ctx.Console.Error.WriteLine(FieldSecretCheck.RandomLookingWarning(name, edit.Name));
             }
-            ctx.Console.Out.WriteLine(written.ContainsKey(name)
-                ? $"✓ Fields of '{name}' updated ({string.Join(", ", edits.Select(e => e.Name))})."
+            ctx.Console.Out.WriteLine(written.ContainsKey(name) && changed.Count > 0
+                ? $"✓ Fields of '{name}' updated ({string.Join(", ", changed)})."
                 : $"Fields of '{name}' unchanged: they already are as given.");
             return 0;
         }
@@ -194,9 +199,11 @@ public sealed class FieldCommand : ICliCommand
                 view.ThrowIfUnreadable(name);
                 throw new TswapException($"No secret '{name}'.");
             }
-            var live = set.Live.OrderBy(e => e.Name, StringComparer.Ordinal).ToList();
-            foreach (var entry in live.Where(HasEqualStampDamage))
-                ctx.Console.Error.WriteLine(EqualStampWarning(entry.Name));
+            // Names are escaped on every display path: a merged or damaged copy can carry one no write accepts.
+            var all = set.Entries.OrderBy(e => e.Name, StringComparer.Ordinal).ToList();
+            var live = all.Where(e => !e.Deleted).ToList();
+            foreach (var entry in all.Where(HasEqualStampDamage))
+                ctx.Console.Error.WriteLine(EqualStampWarning(Escaped(entry.Name)));
 
             var o = ctx.Console.Out;
             if (json)
@@ -204,18 +211,20 @@ public sealed class FieldCommand : ICliCommand
                 var fields = live.ToDictionary(e => e.Name, e => e.Value!, StringComparer.Ordinal);
                 o.WriteLine(history
                     ? JsonSerializer.Serialize(new FieldHistoryReport(fields,
-                        live.ToDictionary(e => e.Name, e => States(e).Select(ToJson).ToList(), StringComparer.Ordinal)), Json.FieldHistoryReport)
+                        all.ToDictionary(e => e.Name, e => States(e).Select(ToJson).ToList(), StringComparer.Ordinal)), Json.FieldHistoryReport)
                     : JsonSerializer.Serialize(fields, Json.DictionaryStringString));
                 return 0;
             }
-            if (live.Count == 0)
+            var shown = history ? all : live;
+            if (shown.Count == 0)
             {
                 o.WriteLine($"'{name}' has no fields.");
                 return 0;
             }
-            foreach (var entry in live)
+            foreach (var entry in shown)
             {
-                o.WriteLine($"{entry.Name} = {Quoted(entry.Value!)}");
+                // --history lists a removed field too (guard rail 3: who removed it, when, and what it held).
+                o.WriteLine(entry.Deleted ? $"{Escaped(entry.Name)} (removed)" : $"{Escaped(entry.Name)} = {Quoted(entry.Value!)}");
                 if (!history)
                     continue;
                 foreach (var state in States(entry))

@@ -28,8 +28,8 @@ public static partial class FieldRules
     [GeneratedRegex("^[a-z0-9_-]{1,64}\\z")]
     private static partial Regex NamePattern();
 
-    // ASCII digits only: \d would accept other scripts' digits.
-    [GeneratedRegex("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")]
+    // ASCII digits only: \d would accept other scripts' digits. \z, not $, as for names.
+    [GeneratedRegex("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?\\z")]
     private static partial Regex ExpiresPattern();
 
     /// <summary>

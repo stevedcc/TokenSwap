@@ -100,7 +100,7 @@ public static class FieldInput
                     case JsonValueKind.String:
                         var value = property.Value.GetString()!;
                         if (value.Length == 0)
-                            throw new TswapException($"Refused field '{name}': the value is empty; use null or {UnsetHint}.");
+                            throw new TswapException($"Refused field '{name}': the value is empty; use null, or 'tswap field unset NAME FIELD', to remove a field.");
                         edits.Add(new FieldEdit(name, value));
                         break;
                     default:
@@ -126,6 +126,10 @@ public static class FieldInput
         catch (DecoderFallbackException)
         {
             throw new TswapException($"{path} is not UTF-8 text.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new TswapException($"{path} can't be read: {ex.Message}");
         }
     }
 

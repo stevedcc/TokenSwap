@@ -331,6 +331,126 @@ public sealed class FieldCommandTests : IDisposable
     }
 
     [Fact]
+    public void FieldShow_PlantedName_Escaped()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        var record = ReadRecord(_m, _key, "s");
+        var who = new FieldWho("a1a1a1a1", "eve", Elevated: false, Terminal: false, By: null);
+        var changed = new Stamp(new Hlc(record.Version.Hlc.PhysicalMs + 1, 0), record.Version.Origin);
+        // A name no write accepts, as a damaged or foreign copy could carry it; its history holds the same
+        // identity with other content, so the damage warning names it too.
+        const string name = "a‮\nkind = \"x\"";
+        var set = new FieldSet(record.Version,
+            [new FieldEntry(name, "v", false, changed, who, [new FieldChange("w", changed, who)])]);
+        Plant("s", r => r with { Extensions = FieldsCodec.With(r.Extensions, set) });
+
+        var (exit, text, stderr) = Field("show", "s");
+        var history = FieldOk("show", "s", "--history");
+        var json = FieldOk("show", "s", "--history", "--json");
+
+        Assert.Equal(0, exit);
+        Assert.Equal("a\\u202E\\nkind = \"x\" = \"v\"\n", text);
+        Assert.StartsWith("a\\u202E\\nkind = \"x\" = \"v\"\n", history);
+        Assert.Contains("Warning: field 'a\\u202E\\nkind = \"x\"' has two different values with the same change stamp", stderr);
+        foreach (var output in new[] { text, history, json, stderr })
+            Assert.False(output.Contains('‮') || output.Contains("\nkind", StringComparison.Ordinal),
+                "a raw name character reached the output: " + output);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("v", doc.RootElement.GetProperty("fields").GetProperty(name).GetString());
+    }
+
+    [Fact]
+    public void FieldShow_History_ListsRemovedFields()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        var origin = Store(_m).ShortOriginId();
+        _now = new DateTimeOffset(2026, 11, 15, 16, 42, 6, TimeSpan.Zero);
+        FieldOk("set", "s", "url=https://a.example", "host=db1");
+        _now = new DateTimeOffset(2026, 11, 15, 17, 0, 0, TimeSpan.Zero);
+        FieldOk("unset", "s", "url", "--by", "claude");
+
+        Assert.Equal("host = \"db1\"\n", FieldOk("show", "s"));
+        Assert.Equal(new Dictionary<string, string> { ["host"] = "db1" }, ShowJson("s"));
+        var lines = FieldOk("show", "s", "--history").Split('\n');
+
+        Assert.Equal("host = \"db1\"", lines[0]);
+        Assert.Matches($"^  2026-11-15T16:42:07Z by .+ on {origin}: \"db1\"$", lines[1]);
+        Assert.Equal("url (removed)", lines[2]);
+        Assert.Matches($"^  2026-11-15T17:00:01Z by .+ \\(elevated, by claude\\) on {origin}: removed$", lines[3]);
+        Assert.Matches($"^  2026-11-15T16:42:07Z by .+ on {origin}: \"https://a\\.example\"$", lines[4]);
+        Assert.Equal([""], lines[5..]);
+
+        using var json = JsonDocument.Parse(FieldOk("show", "s", "--history", "--json"));
+        Assert.False(json.RootElement.GetProperty("fields").TryGetProperty("url", out _));
+        var url = json.RootElement.GetProperty("history").GetProperty("url").EnumerateArray().ToList();
+        Assert.Equal(2, url.Count);
+        Assert.True(url[0].GetProperty("removed").GetBoolean());
+        Assert.Equal("claude", url[0].GetProperty("by").GetString());
+        Assert.Equal("2026-11-15T17:00:01Z", url[0].GetProperty("time").GetString());
+        Assert.Equal("https://a.example", url[1].GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public void FieldShow_OnlyRemovedFields_NoFieldsWithoutHistory()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        FieldOk("set", "s", "url=https://a.example");
+        FieldOk("unset", "s", "url");
+
+        Assert.Equal("'s' has no fields.\n", FieldOk("show", "s"));
+        Assert.StartsWith("url (removed)\n", FieldOk("show", "s", "--history"));
+    }
+
+    [Fact]
+    public void FieldSet_KeepsVersion_ChangesWriteStamp()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        var before = ReadRecord(_m, _key, "s");
+
+        FieldOk("set", "s", "url=https://a.example");
+        FieldOk("unset", "s", "url");
+
+        var after = ReadRecord(_m, _key, "s");
+        Assert.Equal(before.Version, after.Version);
+        Assert.True(after.Write.CompareTo(before.Write) > 0, $"write stamp {after.Write} not after {before.Write}");
+        Assert.Equal(StoredValue, _m.Get("s"));
+    }
+
+    [Fact]
+    public void FieldSet_OverCaps_RefusedNothingWritten()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        var before = Bytes("s");
+        var tooMany = "{" + string.Join(", ", Enumerable.Range(0, FieldRules.MaxLiveFields + 1).Select(i => $"\"f{i}\": \"v {i}\"")) + "}";
+
+        var (exit, stdout, stderr) = Field("set", "s", tooMany);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Refused: the fields of 's' are over a cap.", stderr);
+        Assert.Contains($"a secret holds at most {FieldRules.MaxLiveFields}", stderr);
+        Assert.Equal("", stdout);
+        Assert.Equal(before, Bytes("s"));
+
+        // 17 values of 4096 characters (about 68 KiB) pass the field count but not the encoded size.
+        var big = "{" + string.Join(", ", Enumerable.Range(0, 17).Select(i => $"\"b{i}\": \"{new string((char)('a' + i), 1) + new string(' ', FieldRules.MaxValueLength - 1)}\"")) + "}";
+        var (bigExit, _, bigErr) = Field("set", "s", big);
+        Assert.Equal(1, bigExit);
+        Assert.Contains("(64 KiB)", bigErr);
+        Assert.Equal(before, Bytes("s"));
+    }
+
+    [Fact]
+    public void FieldSet_SuccessMessage_ListsOnlyChangedFields()
+    {
+        _m.Ok(StoredValue, "ingest", "s");
+        FieldOk("set", "s", "url=https://a.example", "host=db1");
+
+        Assert.Equal("✓ Fields of 's' updated (host).\n", FieldOk("set", "s", "url=https://a.example", "host=db2"));
+        Assert.Equal("✓ Fields of 's' updated (url).\n", FieldOk("unset", "s", "url", "port"));
+        Assert.Equal("Fields of 's' unchanged: they already are as given.\n", FieldOk("set", "s", "host=db2"));
+    }
+
+    [Fact]
     public void FieldShow_Json_RoundTripsThroughSet()
     {
         _m.Ok(StoredValue, "ingest", "one");
@@ -476,5 +596,38 @@ public sealed class FieldCommandTests : IDisposable
     {
         var error = Assert.Throws<TswapException>(() => FieldInput.Parse(["@" + _m.PathOf("absent.json")]));
         Assert.Contains("File not found", error.Message);
+    }
+
+    [Fact]
+    public void Parse_Json_EmptyValue_Wording()
+    {
+        var error = Assert.Throws<TswapException>(() => FieldInput.Parse(["""{"url": ""}"""]));
+        Assert.Equal("Refused field 'url': the value is empty; use null, or 'tswap field unset NAME FIELD', to remove a field.", error.Message);
+    }
+
+    [Fact]
+    public void Parse_FileIsADirectory_RefusedNamingIt()
+    {
+        var dir = _m.PathOf("fields-dir");
+        Directory.CreateDirectory(dir);
+
+        var error = Assert.Throws<TswapException>(() => FieldInput.Parse(["@" + dir]));
+
+        Assert.Contains(dir, error.Message);
+    }
+
+    [Fact]
+    public void Parse_UnreadableFile_RefusedNamingIt()
+    {
+        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+            return; // file modes are Unix only, and root reads any file
+        var file = _m.PathOf("locked.json");
+        File.WriteAllText(file, """{"url": "x"}""");
+        File.SetUnixFileMode(file, UnixFileMode.None);
+
+        var error = Assert.Throws<TswapException>(() => FieldInput.Parse(["@" + file]));
+
+        Assert.Contains(file, error.Message);
+        Assert.Contains("can't be read", error.Message);
     }
 }
