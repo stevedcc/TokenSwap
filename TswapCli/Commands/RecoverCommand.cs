@@ -85,38 +85,18 @@ public sealed class RecoverCommand : ICliCommand
             // Brief T17 ruling 15: the vault's password (checked with K_v), or the first one (asked twice).
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, hardware ?? HardwareBackend.YubiKey,
                 ctx.Storage as RecordVaultStore, vaultKey, keyring.VaultId, "recover");
-            byte[] kekSlot, hwBlob;
             if (enrollment is null)
             {
                 c.Out.WriteLine("Recovery key accepted. Enrolling a YubiKey as a new slot.");
-                (yubiKey, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
-                hwBlob = yubiKey.Encode();
+                (yubiKey, var kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId, password: password?.Stretched);
                 deviceName = $"YubiKey {yubiKey.Serial}";
+                newSlot = NewSlotWrite.Wrap(vaultKey, keyring, slotId, kekSlot, yubiKey.Encode());
             }
             else
             {
                 deviceName = hardware == HardwareBackend.Tpm ? "this machine's TPM" : "this machine's Secure Enclave";
                 c.Out.WriteLine($"Recovery key accepted. Enrolling {deviceName} as a new slot.");
-                (kekSlot, hwBlob) = enrollment.Enroll(password?.Stretched);
-            }
-            try
-            {
-                var slotKeyPair = SlotKeyPair.Generate();
-                try
-                {
-                    newSlot = MachineSlotWrap.Wrap(
-                        vaultKey, slotKeyPair.PrivateKey, slotKeyPair.PublicKey, slotId, kekSlot,
-                        keyring.FormatVersion, keyring.VaultId, keyring.K) with { HwBlob = hwBlob };
-                }
-                finally
-                {
-                    // Review minor: the slot's private key now lives only inside the wrap.
-                    CryptographicOperations.ZeroMemory(slotKeyPair.PrivateKey);
-                }
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(kekSlot);
+                newSlot = NewSlotWrite.EnrolOwnSlot(enrollment, vaultKey, keyring, slotId, password?.Stretched);
             }
         }
         finally
@@ -128,13 +108,8 @@ public sealed class RecoverCommand : ICliCommand
         var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
         var newConfig = config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) };
         if (hardware is not null)
-            newConfig = newConfig with
-            {
-                Backend = hardware,
-                KeyringSlotId = Convert.ToBase64String(slotId),
-                // Brief T11 decision 6: false only for a --no-touch Secure Enclave slot.
-                RequiresTouch = hardware == HardwareBackend.SecureEnclave && requirePresence != false,
-            };
+            // Brief T11 decision 6: RequiresTouch is false only for a --no-touch Secure Enclave slot.
+            newConfig = NewSlotWrite.AsOwnSlot(newConfig, hardware.Value, slotId, requirePresence != false);
         if (yubiKey is not null)
         {
             // Brief T7 item 5 / fix round 1: explained first, then acknowledged with the config write.
@@ -142,28 +117,15 @@ public sealed class RecoverCommand : ICliCommand
             newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
         }
 
-        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
-        {
-            var backup = fileStore.BackupConfig();
-            c.Out.WriteLine($"\nPrevious config backed up to: {backup}");
-        }
         // Brief T17: a first password slot's vault-password file goes in before the keyring that needs it.
-        if (password is not null && ctx.Storage is RecordVaultStore recordStore)
-            password.WriteNewFile(recordStore);
-        ctx.Storage.SaveConfig(newConfig);
+        NewSlotWrite.Save(ctx, newConfig, password?.NewFile);
 
         c.Out.WriteLine($"\n✓ Recovered: {deviceName} now opens this vault as its own slot. The recovery slot stays.");
         if (hardware == HardwareBackend.SecureEnclave)
             c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence != false));
         if (password is not null)
             c.Out.WriteLine("The new slot needs the vault password (or a running 'tswap agent') for every unlock.");
-        SlotCommand.PrintFingerprint(c, "New slot", newSlot.PublicKey);
-        c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
-        // A record vault keeps its keyring in the vault folder: sharers read it there, own copies take it by 'vault merge'.
-        var folder = (ctx.Storage as RecordVaultStore)?.VaultDir ?? "this vault's folder";
-        c.Out.WriteLine("Machines that share this vault folder get the new slot with it.");
-        c.Out.WriteLine($"A machine with its own copy of the vault gets it once you copy {folder} there and run, on that machine:");
-        c.Out.WriteLine($"  sudo {ctx.Prefix} vault merge <the copied folder>   (it asks you to confirm the new slot, or pass --yes)");
+        NewSlotWrite.PrintSharingFooter(ctx, newSlot, extended);
         return 0;
     }
 }

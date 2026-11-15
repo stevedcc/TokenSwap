@@ -45,8 +45,8 @@ public sealed class SlotCommand : ICliCommand
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --fido2 [--serial <n>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot add --tpm {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
+    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or add this machine's TPM (--tpm, which then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave needs --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning)";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -881,20 +881,26 @@ public sealed class SlotCommand : ICliCommand
     private static int ExecuteAdd(CommandContext ctx, string[] args)
     {
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
-        // Brief T11: slot add creates no Secure Enclave key; a touch choice here is refused with
-        // where it belongs, never ignored.
-        var addUsage = $"{ctx.Prefix} slot add --yubikey|--fido2 [{Fido2SlotEnrollment.SerialFlag} <n>] {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}] " +
+        var addUsage = $"{ctx.Prefix} slot add --yubikey|--fido2|--tpm|{SecureEnclaveTouchChoice.Flags} [{Fido2SlotEnrollment.SerialFlag} <n>] {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}] " +
                        $"({Fido2SlotEnrollment.SerialFlag} only with --fido2)";
-        if (positional.Any(SecureEnclaveTouchChoice.IsSecureEnclaveFlag))
-            throw new UsageException($"{addUsage}\n{SecureEnclaveTouchChoice.NotForSlotAdd}");
+        // Brief T24: the touch choice first (Split refuses a touch flag without --secure-enclave, or neither, or both).
+        (positional, var requirePresence) = SecureEnclaveTouchChoice.Split(positional, addUsage);
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
         (positional, var passwordFlag) = VaultPasswordChoice.Split(positional, addUsage);
         // FIDO2 plan, task 6: --serial picks the FIDO2 key (Linux, macOS).
         (positional, var serial) = Fido2SlotEnrollment.SplitSerial(positional, addUsage);
-        if (positional is ["--fido2"])
-            return ExecuteAddFido2(ctx, serial, passwordFlag, withRecoveryKey);
-        if (positional is not ["--yubikey"] || serial is not null)
-            throw new UsageException(addUsage);
+        // Exactly one device, before any read, prompt, hardware call or write.
+        switch (positional)
+        {
+            case ["--fido2"]:
+                return ExecuteAddFido2(ctx, serial, passwordFlag, withRecoveryKey);
+            case ["--tpm"] when serial is null:
+                return ExecuteAddHardware(ctx, HardwareBackend.Tpm, requirePresence: true, passwordFlag, withRecoveryKey);
+            case ["--yubikey"] when serial is null:
+                break;
+            default:
+                throw new UsageException(addUsage);
+        }
         var c = ctx.Console;
 
         var (config, keyring) = LoadKeyringForAdd(ctx);
@@ -994,6 +1000,157 @@ public sealed class SlotCommand : ICliCommand
     }
 
     /// <summary>
+    /// Brief T24 (issue #309): <c>slot add --tpm</c> / <c>--secure-enclave</c> makes this machine's own TPM or Secure
+    /// Enclave a slot of the vault it already opens, and this machine's own slot, as <c>recover</c> does but through any
+    /// way in. In order, every refusal before the first write:
+    /// <list type="number">
+    /// <item>The arguments (<see cref="ExecuteAdd"/>), then the keyring and sudo (<see cref="LoadKeyringForAdd"/>), then the
+    /// hardware for this OS (<see cref="HardwareServices.Enrollment"/>).</item>
+    /// <item>A legacy pair own slot is refused: the chip as the own slot would make the unlock skip the pair here.</item>
+    /// <item>The new slot's password is decided; a first password while password slots exist without the folder's
+    /// <c>vault-password</c> file is refused (a freshly salted file would strand them).</item>
+    /// <item>The working-slot check (owner decision 2026-11-15), only for this machine's own slot of this backend
+    /// (<see cref="VaultUnlocker.HardwareSlotOpens"/>): it opens, refused; the hardware answered and it didn't unwrap,
+    /// dead, a new slot is added and the old one kept; anything thrown, refused (orchestrator ruling: never "dead").
+    /// A password own slot needs the vault password for the check (a missing one is never "dead"); with
+    /// <c>--recovery-key-stdin</c> the key is read first and the password from the next line, each once.</item>
+    /// <item>The unlock (the recovery key already read, else any way in), the typed password against the verifier,
+    /// the new slot's password, then one enrolment and one write (<see cref="NewSlotWrite.Save"/>).</item>
+    /// </list>
+    /// </summary>
+    private static int ExecuteAddHardware(CommandContext ctx, HardwareBackend hardware, bool requirePresence, bool? passwordFlag,
+        bool withRecoveryKey)
+    {
+        var c = ctx.Console;
+        var name = VaultPasswordChoice.HardwareName(hardware);
+        var flags = hardware == HardwareBackend.Tpm ? "--tpm" : SecureEnclaveTouchChoice.Flags;
+
+        var (config, keyring) = LoadKeyringForAdd(ctx);
+        // Throws a clear TswapException on an OS without this hardware, as slot request and recover do.
+        var enrollment = HardwareServices.Enrollment(hardware, ctx.TestKey, ctx.OwnerScope, requirePresence);
+
+        // A legacy pair own slot opens only through this machine's config: the chip as the own slot would make the
+        // unlock skip it (Classify's "None" case), so the pair would stop opening the vault here.
+        var own = VaultUnlocker.FindOwnMachineSlot(config, keyring);
+        if ((config.Backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey
+            && config.YubiKeySerials is { Count: > 0 } && !string.IsNullOrEmpty(config.RedundancyXor)
+            && own is { HwBlob: null or [] })
+            throw new TswapException(LegacyPairOwnSlotText(name, flags));
+
+        var store = ctx.Storage as RecordVaultStore;
+        if (passwordFlag == true && store is null)
+            throw new TswapException(VaultPasswordChoice.NeedsRecordVaultText);
+        // Decide with this backend, so a TPM password slot gets the lockout notice.
+        var newSlotPassword = store is not null && VaultPasswordChoice.Decide(ctx, passwordFlag, hardware);
+        var file = store?.ReadVaultPassword(keyring.VaultId);
+        if (newSlotPassword && file is null && keyring.Slots.Any(SlotPassword.Requires))
+            throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+
+        StretchedPassword? typed = null;
+        StretchedPassword? asked = null;
+        byte[]? recoveryKey = null;
+        byte[]? vaultKey = null;
+        VaultPasswordFile? newFile = null;
+        Slot newSlot;
+        var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
+        try
+        {
+            if (config.Backend == hardware && own is not null)
+            {
+                var shortId = ShortId(own.SlotId);
+                if (SlotPassword.Classify(own) == SlotPasswordKind.Password)
+                {
+                    if (file is null)
+                        throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+                    if (withRecoveryKey)
+                        recoveryKey = ReadRecoveryKey(ctx, keyring, keyOnFirstLine: true);
+                    else if (c.IsInputRedirected)
+                        throw new VaultPasswordUnavailableException(OwnSlotNeedsPasswordText(name, shortId));
+                    typed = VaultPasswordChoice.AskUnverified(ctx, file);
+                }
+                CheckOwnHardwareSlot(ctx, config, hardware, name, flags, shortId, typed);
+            }
+
+            // Stdin is never read again once the recovery key is in hand (UnlockForKeyringChange would read it again).
+            vaultKey = recoveryKey is not null
+                ? RecoveryKeyUnlock.Unlock(keyring, recoveryKey)
+                : UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
+            if (typed is not null && !file!.Verifies(vaultKey, typed))
+                throw new TswapException(
+                    $"This machine's {name} slot isn't added: the vault password didn't match this vault's (checked against the " +
+                    "vault's password verifier). Nothing was changed.");
+
+            // The new slot's password: the one typed for the check, else the vault's (checked with K_v), else the first.
+            var slotPassword = newSlotPassword ? typed : null;
+            if (newSlotPassword && slotPassword is null)
+            {
+                if (file is not null)
+                    slotPassword = asked = VaultPasswordChoice.AskExisting(ctx, file, vaultKey);
+                else
+                {
+                    (asked, newFile) = VaultPasswordChoice.CreateNew(ctx, vaultKey, keyring.VaultId, $"slot add {flags}");
+                    slotPassword = asked;
+                }
+            }
+
+            newSlot = NewSlotWrite.EnrolOwnSlot(enrollment, vaultKey, keyring, slotId, slotPassword);
+        }
+        finally
+        {
+            typed?.Dispose();
+            asked?.Dispose();
+            if (recoveryKey is not null)
+                CryptographicOperations.ZeroMemory(recoveryKey);
+            if (vaultKey is not null)
+                CryptographicOperations.ZeroMemory(vaultKey);
+        }
+
+        var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
+        var newConfig = NewSlotWrite.AsOwnSlot(config with { Keyring = Convert.ToBase64String(KeyringCodec.Encode(extended)) },
+            hardware, slotId, requirePresence);
+        newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(slotId)]);
+        NewSlotWrite.Save(ctx, newConfig, newFile);
+
+        c.Out.WriteLine($"\n✓ This machine's {name} added as its own slot — it now opens this vault alone.");
+        if (hardware == HardwareBackend.SecureEnclave)
+            c.Out.WriteLine(SecureEnclaveTouchChoice.Summary(requirePresence));
+        if (newSlotPassword)
+            c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
+        NewSlotWrite.PrintSharingFooter(ctx, newSlot, extended);
+        return 0;
+    }
+
+    /// <summary>
+    /// Brief T24's working-slot check of this machine's own <paramref name="hardware"/> slot. Opens: refused. The hardware
+    /// answered and the slot didn't unwrap: one stderr line, and the caller adds a new slot. Anything the hardware throws
+    /// is refused with <see cref="OwnSlotUncheckedText"/> (orchestrator ruling: a lockout, a stripped header, an object
+    /// that no longer loads are not a definite "dead"), except a wrong typed password (<see cref="VaultPasswordChoice.WrongPasswordText"/>)
+    /// and the refusals that are no hardware answer (no password, a
+    /// cancelled prompt, a failed owner switch), which pass as thrown.
+    /// </summary>
+    private static void CheckOwnHardwareSlot(CommandContext ctx, Config config, HardwareBackend hardware, string name, string flags,
+        string shortId, StretchedPassword? typed)
+    {
+        bool opens;
+        try
+        {
+            opens = ctx.Unlocker.HardwareSlotOpens(config, typed is null ? null : typed.Clone);
+        }
+        catch (VaultPasswordRefusedException e) when (e.Reason == VaultPasswordRefusal.WrongPassword)
+        {
+            // The password typed for the check (and the new slot) is wrong: its own refusal, as the brief says.
+            throw new TswapException(VaultPasswordChoice.WrongPasswordText, e.ExitCode);
+        }
+        catch (TswapException e) when (e is not (VaultPasswordUnavailableException or VaultPasswordCancelledException or OwnerSwitchException))
+        {
+            throw new TswapException(OwnSlotUncheckedText(e.Message, name, shortId, flags), e.ExitCode);
+        }
+        if (opens)
+            throw new TswapException(WorkingHardwareSlotText(name, shortId));
+        ctx.Console.Error.WriteLine(OwnSlotDeadLine(name, shortId));
+    }
+
+    /// <summary>
     /// <c>slot add</c>'s checks before any unlock: the vault has a keyring that takes YubiKey slots (readable from
     /// config.json without K_v, so refused before sudo, any unlock or touch: security review of T4), then sudo.
     /// </summary>
@@ -1002,7 +1159,7 @@ public sealed class SlotCommand : ICliCommand
         var config = ctx.Storage.LoadConfig();
         if (config.Keyring is null)
             throw new TswapException(
-                "This vault has no keyring, so it has no slots to add a YubiKey to. Only keyring vaults " +
+                "This vault has no keyring, so it has no slots to add one to. Only keyring vaults " +
                 "('tswap init', or 'tswap init --yubikey', 'tswap init --fido2', '--tpm' or '--secure-enclave') take extra slots.");
         byte[] keyringBytes;
         try
@@ -1035,16 +1192,8 @@ public sealed class SlotCommand : ICliCommand
         // other slots keep what was acknowledged before.
         newConfig = SecurityWarnings.Acknowledge(newConfig, [Convert.ToBase64String(newSlot.SlotId)]);
 
-        // Back up config.json before writing, the way init backs up a vault it replaces.
-        if (ctx.Storage is IFileVaultStore fileStore && fileStore.Owner.FileExists(fileStore.ConfigFile))
-        {
-            var backup = fileStore.BackupConfig();
-            ctx.Console.Out.WriteLine($"\nPrevious config backed up to: {backup}");
-        }
-        // Brief T17: a first password slot's vault-password file goes in before the keyring that needs it.
-        if (password is not null && ctx.Storage is RecordVaultStore recordStore)
-            password.WriteNewFile(recordStore);
-        ctx.Storage.SaveConfig(newConfig);
+        // Backed up first, the way init backs up a vault it replaces; a first password's file before the keyring.
+        NewSlotWrite.Save(ctx, newConfig, password?.NewFile);
         return extended;
     }
 
@@ -1072,6 +1221,39 @@ public sealed class SlotCommand : ICliCommand
         }
         return bySerial;
     }
+
+    /// <summary>Brief T24: this machine's own TPM / Secure Enclave slot still opens the vault (owner decision 2026-11-15).</summary>
+    internal static string WorkingHardwareSlotText(string hardware, string shortId) =>
+        $"This machine's {hardware} already has a working slot in this vault (slot {shortId} still opens it), so there is " +
+        $"nothing to add. Each machine needs only one {hardware} slot.";
+
+    /// <summary>Brief T24: making the chip this machine's own slot would stop a legacy pair own slot opening here.</summary>
+    internal static string LegacyPairOwnSlotText(string hardware, string flags) =>
+        "This machine's own slot is a legacy YubiKey pair slot, which opens only through this machine's config. Making " +
+        $"the {hardware} this machine's slot would stop the pair opening the vault here, so nothing was changed. Give each " +
+        "YubiKey its own slot first (sudo tswap slot add --yubikey, once per key), then make the " +
+        $"{hardware} this machine's own slot with the recovery key: sudo tswap recover {flags} --recovery-key-stdin.";
+
+    /// <summary>Brief T24: the own password slot can't be checked without the vault password, and there is no way to read it.</summary>
+    internal static string OwnSlotNeedsPasswordText(string hardware, string shortId) =>
+        $"This machine's {hardware} slot {shortId} needs the vault password to check whether it still works. It is read " +
+        "at a terminal (or, with --recovery-key-stdin, on the line after the recovery key), and stdin is not a terminal " +
+        "here. Run this at a terminal. Nothing was changed.";
+
+    /// <summary>
+    /// Brief T24 (orchestrator ruling): the own slot's check threw (busy, unreachable, a damaged blob, a lockout, a chip
+    /// that was cleared or replaced): no definite answer, so nothing is added. <paramref name="recoverFlags"/> are the
+    /// chip's flags for <c>recover</c>.
+    /// </summary>
+    internal static string OwnSlotUncheckedText(string error, string hardware, string shortId, string recoverFlags) =>
+        $"{error} This machine's {hardware} slot {shortId} couldn't be checked, so no new slot is added. If this machine's " +
+        $"{hardware} was cleared or replaced, sudo tswap recover {recoverFlags} --recovery-key-stdin makes it this machine's " +
+        "own slot again. Nothing was changed.";
+
+    /// <summary>Brief T24: the one stderr line for a dead own slot (the hardware answered, the slot didn't unwrap).</summary>
+    internal static string OwnSlotDeadLine(string hardware, string shortId) =>
+        $"This machine's {hardware} slot {shortId} no longer opens this vault (the {hardware} answered, but its key no " +
+        "longer unwraps the slot); adding a new one. The old slot is kept.";
 
     /// <summary>The refusal for a key one of whose slots still opens the vault (task 4b: checked, not assumed).</summary>
     internal static string WorkingSlotText(int serial) =>
@@ -1522,7 +1704,7 @@ public sealed class SlotCommand : ICliCommand
 
     private static bool SameSlot(Slot a, Slot b) => KeyringUnion.SameSlot(a, b);
 
-    private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
+    internal static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
     /// <summary>
     /// One line naming a slot for a merge: kind, device, fingerprint. A FIDO2 slot is "YubiKey N, FIDO2" (its model when
@@ -1630,9 +1812,9 @@ public sealed class SlotCommand : ICliCommand
         if (keyring.FormatVersion < KeyringFormat.KeyringFormatVersion)
             throw new TswapException(
                 $"This vault's keyring is format version {keyring.FormatVersion}, made before keyring slots could carry " +
-                "a YubiKey's own parameters, so it cannot take a one-key YubiKey slot. It keeps working with its " +
-                "existing slots; to give each YubiKey its own slot, create a new vault with 'tswap init' " +
-                "and move the secrets across.");
+                "their hardware's own parameters, so it cannot take a new YubiKey, FIDO2, TPM or Secure Enclave slot. It " +
+                "keeps working with its existing slots; to give it new slots, create a new vault with 'tswap init' and move " +
+                "the secrets across.");
     }
 
     /// <summary>

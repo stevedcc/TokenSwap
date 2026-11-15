@@ -1171,6 +1171,39 @@ public sealed class VaultUnlocker
     }
 
     /// <summary>
+    /// Brief T24 (<c>slot add --tpm|--secure-enclave</c>), the twin of <see cref="YubiKeySlotOpens"/>: whether this
+    /// machine's own TPM / Secure Enclave slot (<see cref="FindOwnMachineSlot"/>, through <see cref="Config.Backend"/>)
+    /// opens the vault now. Only that slot: other machines' hardware slots are never tried (see
+    /// <see cref="OwnBackend"/>). The hardware recovers <c>KEK_slot</c> (<paramref name="password"/> is called for a
+    /// password slot) and the slot is unwrapped; the vault key is zeroed at once, never returned. False: the hardware
+    /// answered and the unwrap failed, the one definite "no longer opens". Anything the hardware throws (busy,
+    /// unreachable, a damaged blob, a lockout, a wrong password, an object that no longer loads) is thrown as it is:
+    /// a thrown error never says the slot is dead (orchestrator ruling on brief T24: a failed load doesn't reliably
+    /// mean a cleared chip).
+    /// </summary>
+    public bool HardwareSlotOpens(Config config, VaultPasswordProvider? password)
+    {
+        var keyring = DecodeKeyring(config);
+        var own = FindOwnMachineSlot(config, keyring) ?? throw new TswapException(
+            "Config is corrupted: keyring has no machine slot matching this machine. Restore config.json from backup or re-run 'tswap init'.");
+        var kekSlot = UnlockHardware(config, YubiKeySelection.FromChooser(serials => serials[0]), password);
+        try
+        {
+            var vaultKey = UnwrapSlot(keyring, own, kekSlot);
+            CryptographicOperations.ZeroMemory(vaultKey);
+            return true;
+        }
+        catch (TswapException)
+        {
+            return false;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kekSlot);
+        }
+    }
+
+    /// <summary>
     /// FIDO2 plan, task 8 (<c>yubikey setup --replace</c>): whether one of <paramref name="slots"/> (the vault's FIDO2
     /// slots) opens the vault now, as pass 4 opens them: the key's PIN and a touch (<see cref="UnlockSources.Fido2Pin"/>;
     /// null, no terminal: no key call), the vault password from <see cref="UnlockSources.Prompt"/> for a password slot,
