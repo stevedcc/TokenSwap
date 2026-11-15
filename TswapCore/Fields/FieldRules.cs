@@ -36,7 +36,7 @@ public static partial class FieldRules
     /// lone surrogate can't be normalised; it comes back unchanged, for <see cref="ValidateValue"/> to refuse.
     /// </summary>
     public static string NormaliseValue(string value) =>
-        FindRefused(value) is { IsSurrogate: true } ? value : value.Normalize(NormalizationForm.FormC);
+        FindLoneSurrogate(value) is null ? value.Normalize(NormalizationForm.FormC) : value;
 
     /// <summary>
     /// The character rules and the length cap for a value (also a <c>--by</c> label), after
@@ -45,15 +45,21 @@ public static partial class FieldRules
     /// </summary>
     public static string? ValidateValue(string value)
     {
+        // A lone surrogate anywhere is named first: such a value can't be normalised.
+        if (FindLoneSurrogate(value) is { } lone)
+            return Refusal(new Refused(CodePoint(lone), "a lone surrogate"));
         var normalised = NormaliseValue(value);
         if (FindRefused(normalised) is { } refused)
-            return $"The value contains {refused.CodePoint} ({refused.Kind}); a field holds no control, format, " +
-                "surrogate or private-use characters other than a line feed.";
+            return Refusal(refused);
         var length = CountScalars(normalised);
         if (length > MaxValueLength)
             return $"The value has {length} characters; a field holds at most {MaxValueLength}.";
         return null;
     }
+
+    private static string Refusal(Refused refused) =>
+        $"The value contains {refused.CodePoint} ({refused.Kind}); a field holds no control, format, " +
+        "surrogate or private-use characters other than a line feed.";
 
     /// <summary>
     /// The name rules, then <see cref="ValidateValue"/>, then the format of a well-known field
@@ -98,7 +104,7 @@ public static partial class FieldRules
         && DateTime.TryParseExact(value, ["yyyy-MM-dd", "yyyy-MM-dd'T'HH:mm:ss'Z'"], CultureInfo.InvariantCulture,
             DateTimeStyles.None, out _);
 
-    private readonly record struct Refused(string CodePoint, string Kind, bool IsSurrogate);
+    private readonly record struct Refused(string CodePoint, string Kind);
 
     /// <summary>The first character the value rules refuse, or null.</summary>
     private static Refused? FindRefused(string value)
@@ -111,13 +117,26 @@ public static partial class FieldRules
                 var scalar = char.ConvertToUtf32(c, value[i + 1]);
                 i++;
                 if (KindOf(CharUnicodeInfo.GetUnicodeCategory(scalar)) is { } pairKind)
-                    return new Refused(CodePoint(scalar), pairKind, false);
+                    return new Refused(CodePoint(scalar), pairKind);
                 continue;
             }
             if (char.IsSurrogate(c))
-                return new Refused(CodePoint(c), "a lone surrogate", true);
+                return new Refused(CodePoint(c), "a lone surrogate");
             if (c != '\n' && KindOf(CharUnicodeInfo.GetUnicodeCategory(c)) is { } kind)
-                return new Refused(CodePoint(c), kind, false);
+                return new Refused(CodePoint(c), kind);
+        }
+        return null;
+    }
+
+    /// <summary>The first surrogate without its partner, anywhere in the value, or null.</summary>
+    private static int? FindLoneSurrogate(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                i++;
+            else if (char.IsSurrogate(value[i]))
+                return value[i];
         }
         return null;
     }

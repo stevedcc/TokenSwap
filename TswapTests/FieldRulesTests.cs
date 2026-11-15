@@ -73,7 +73,14 @@ public sealed class FieldRulesTests
     public void ValidateValue_LoneSurrogates_Refused()
     {
         // Built in code: xUnit's attribute data turns a lone surrogate into U+FFFD before the test sees it.
-        foreach (var (value, codePoint) in new[] { ("a" + '\uD800' + "b", "U+D800"), ("a" + '\uDC00', "U+DC00") })
+        foreach (var (value, codePoint) in new[]
+        {
+            ("a" + '\uD800' + "b", "U+D800"),
+            ("a" + '\uDC00', "U+DC00"),
+            // A lone surrogate after another refused character: still a refusal naming it, never an exception.
+            ("a\u0000" + '\uD800', "U+D800"),
+            ("text \u202E more " + '\uDC00' + " end", "U+DC00"),
+        })
         {
             Assert.Contains(codePoint, FieldRules.ValidateValue(value));
             Assert.Contains(codePoint, FieldRules.Validate("note", value));
@@ -91,6 +98,7 @@ public sealed class FieldRulesTests
     public void NormaliseValue_LoneSurrogate_IsLeftForValidateToRefuse()
     {
         Assert.Equal("a\uD800", FieldRules.NormaliseValue("a\uD800"));
+        Assert.Equal("a\u0000\uD800", FieldRules.NormaliseValue("a\u0000\uD800"));
         Assert.Contains("U+D800", FieldRules.ValidateValue("a\uD800"));
     }
 
