@@ -38,6 +38,7 @@ public sealed class IngestCommand : ICliCommand
                 var existing = SecretRotation.Check(ctx, writer, name, "ingest --rotate");
                 SecretRotation.Write(ctx, writer, name, value);
                 SecretRotation.Report(ctx, name, existing, "new value from stdin");
+                ValueWarnings.WarnIfShort(ctx, name, value);
                 return 0;
             }
 
@@ -51,6 +52,7 @@ public sealed class IngestCommand : ICliCommand
 
             ctx.Console.Out.WriteLine($"\n✓ Secret '{name}' ingested from stdin");
             ctx.Console.Out.WriteLine("  Value was NOT displayed. Use 'run' to substitute it into commands.");
+            ValueWarnings.WarnIfShort(ctx, name, value);
             return 0;
         }
         finally

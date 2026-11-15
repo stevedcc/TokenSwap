@@ -117,6 +117,17 @@ mask it ([what `run` masks](security-model.md#what-run-masks)). The line names t
 reason only, never the value, its length or which whitespace, and the exit code doesn't change.
 (`ingest` trims trailing whitespace, and refuses an input of whitespace only.)
 
+`add`, `ingest`, `ingest --rotate`, `create` and `rotate` also print one warning line on stderr after
+their success line (in `add`, after the whitespace warning) when the value they store is shorter than
+8 characters: for `add` the typed or piped value (also when it was already stored), for `ingest` the
+value after trimming, for `create` and `rotate` the generated value (exactly the length asked for; the
+default 32 never warns). `run`, `redact` and `tocomment` match a value wherever it appears, also inside
+longer words and numbers, so a short value gets hidden in unrelated output and gives itself away
+([what `run` masks](security-model.md#what-run-masks)); a username, a port or a setting doesn't belong
+in tswap. The line names the secret and the reason only, never the value or its length; the command
+still succeeds and its exit code doesn't change. `restore`, `import`, `vault merge` and `migrate` write
+values that were already stored and don't warn.
+
 <!-- BEGIN GENERATED: commands (TswapTests/Docs/CommandReference.cs) -->
 
 ### init

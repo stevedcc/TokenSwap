@@ -5,6 +5,25 @@ namespace TswapTests;
 
 public class ValidationTests
 {
+    // --- IsShortValue (brief T21, #314) ---
+
+    /// <summary>
+    /// A value under <see cref="Validation.ShortValueLength"/> UTF-16 code units is short: four emoji are
+    /// eight code units (surrogate pairs), so they are not short.
+    /// </summary>
+    [Theory]
+    [InlineData("a", true)]
+    [InlineData("1234567", true)]
+    [InlineData("12345678", false)]
+    [InlineData("abcdefghijklmnopqrstuvwxyz012345", false)]
+    [InlineData("\U0001F511\U0001F511\U0001F511\U0001F511", false)]
+    public void IsShortValue(string value, bool expected) => Assert.Equal(expected, Validation.IsShortValue(value));
+
+    /// <summary>Like <see cref="Validation.EndsInWhitespace"/>: a null value is a caller bug, reported as such.</summary>
+    [Fact]
+    public void IsShortValue_Null_ThrowsArgumentNull() =>
+        Assert.Equal("value", Assert.Throws<ArgumentNullException>(() => Validation.IsShortValue(null!)).ParamName);
+
     // --- ValidateName ---
 
     [Fact]

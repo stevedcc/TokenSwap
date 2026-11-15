@@ -35,17 +35,17 @@ public sealed class AddWhitespaceWarningTests : IDisposable
     [Fact]
     public void Add_TrailingSpace_Warns_StoresAsTyped()
     {
-        var (exit, _, err) = Add("s", "value ");
+        var (exit, _, err) = Add("s", "value123 ");
 
         Assert.Equal(0, exit);
         Assert.Equal(Warning("s") + Environment.NewLine, err);
-        Assert.Equal("value ", StoredValue("s"));
+        Assert.Equal("value123 ", StoredValue("s"));
     }
 
     [Fact]
     public void Add_WhitespaceOnly_Warns()
     {
-        var (exit, _, err) = Add("s", "   ");
+        var (exit, _, err) = Add("s", "        ");
 
         Assert.Equal(0, exit);
         Assert.Equal(Warning("s") + Environment.NewLine, err);
@@ -54,29 +54,29 @@ public sealed class AddWhitespaceWarningTests : IDisposable
     [Fact]
     public void Add_TrailingTab_Warns()
     {
-        var (exit, _, err) = Add("s", "v\t");
+        var (exit, _, err) = Add("s", "value123\t");
 
         Assert.Equal(0, exit);
         Assert.Equal(Warning("s") + Environment.NewLine, err);
-        Assert.Equal("v\t", StoredValue("s"));
+        Assert.Equal("value123\t", StoredValue("s"));
     }
 
     /// <summary>The same value again writes nothing, and still warns.</summary>
     [Fact]
     public void Add_SameValueAgain_StillWarns()
     {
-        Add("s", "value ");
+        Add("s", "value123 ");
 
-        var (exit, _, err) = Add("s", "value ");
+        var (exit, _, err) = Add("s", "value123 ");
 
         Assert.Equal(0, exit);
         Assert.Equal(Warning("s") + Environment.NewLine, err);
     }
 
     [Theory]
-    [InlineData("value")]
+    [InlineData("value123")]
     [InlineData(" leading")]
-    [InlineData("in ner")]
+    [InlineData("in ner12")]
     public void Add_NoTrailingWhitespace_NoWarning(string value)
     {
         var (exit, _, err) = Add("s", value);
