@@ -4,7 +4,7 @@ namespace TswapCli;
 
 /// <summary>
 /// Brief T11 decision 1: every command that creates a Secure Enclave key (<c>init</c>,
-/// <c>slot request</c>, <c>recover</c>) needs exactly one of <c>--with-touch</c> or
+/// <c>slot request</c>, <c>recover</c>, <c>slot add</c> since brief T24) needs exactly one of <c>--with-touch</c> or
 /// <c>--no-touch</c> next to <c>--secure-enclave</c>, in any order. The flag is the owner's
 /// decision: no default, no config setting, no prompt. Parsed before anything is read, prompted
 /// for or written, and before the sudo check.
@@ -22,14 +22,6 @@ internal static class SecureEnclaveTouchChoice
         $"{SecureEnclave} needs exactly one of {WithTouch} (every unlock asks for Touch ID or the login password) " +
         $"or {NoTouch} (unlocks with no prompt at all; read the warning it prints). " +
         $"Neither goes without {SecureEnclave}.";
-
-    /// <summary>For <c>slot add</c>, which creates no Secure Enclave key: where these flags belong.</summary>
-    public const string NotForSlotAdd =
-        $"slot add --yubikey creates no Secure Enclave key: {SecureEnclave} and its {WithTouch} / {NoTouch} choice " +
-        "go with init, slot request and recover.";
-
-    /// <summary><c>--secure-enclave</c>, <c>--with-touch</c> or <c>--no-touch</c>.</summary>
-    public static bool IsSecureEnclaveFlag(string arg) => arg is SecureEnclave or WithTouch or NoTouch;
 
     /// <summary>
     /// Takes the touch flags out of <paramref name="args"/>. Returns the rest and the choice:

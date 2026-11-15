@@ -100,7 +100,7 @@ public class VaultPasswordJoinTests : IDisposable
     }
 
     [Fact]
-    public void RequestWithPassword_FolderWithoutVaultPasswordFile_RefusesWithRuling16Text()
+    public void RequestWithPassword_FolderWithoutVaultPasswordFile_SaysHowToCreateTheFirstPassword()
     {
         using var plain = new FleetMachine("plain") { Tpm = RandomNumberGenerator.GetBytes(32) };
         plain.Ok("", "init", "--tpm", "--no-password", "--no-recovery");
@@ -108,7 +108,8 @@ public class VaultPasswordJoinTests : IDisposable
         var (exit, _, err) = _joiner.Run(Password + "\n", "slot", "request", "--tpm", "--password", "--vault-dir", plain.VaultDir!, RequestPath);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(NoFolderText, err);
+        // Brief T24 (sanctioned): this scenario is task 3's case (e), which issue #309 comments 2 and 3 ask for.
+        Assert.Contains(TswapCli.Commands.SlotCommand.RequestNoPasswordYetText(Path.GetFullPath(plain.VaultDir!), "tswap"), err);
         Assert.False(File.Exists(RequestPath));
     }
 

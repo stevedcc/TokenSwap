@@ -244,7 +244,7 @@ public class SlotAddYubiKeyTests : IDisposable
 
     [Theory]
     [InlineData("slot", "add")]
-    [InlineData("slot", "add", "--tpm")]
+    [InlineData("slot", "add", "--tpm", "--yubikey")] // brief T24: --tpm alone is a command now (input changed, assertion kept)
     [InlineData("slot", "add", "--yubikey", "extra")]
     public void WrongArguments_AreAUsageError(params string[] args)
     {
