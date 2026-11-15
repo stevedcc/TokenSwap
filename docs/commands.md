@@ -89,7 +89,12 @@ plaintext could show equal make `list` and `check` refuse that record
 ([details](security-model.md#what-each-command-decrypts)).
 `tocomment` also adopts a YAML literal block scalar (`key: |`, `|-` or `|+`) whose content is exactly
 one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>` and the block's lines
-go (`--dry-run` shows them as `[removed block line]`, never their text). `check` warns (exit 2) about a
+go (`--dry-run` shows them as `[removed block line]`, never their text). Inside a block scalar (`|` or
+`>`, with any indicators or tag), a line holding an **encoded** form of a value (base64, base64url or
+the value without its whitespace) is left as it is, with a warning naming the line number and the
+secret, because a marker is always filled with the plain value. A plain value inside a block is still
+replaced by a marker, whose `#` then becomes part of the block's text: right for shell scripts and
+YAML kept in a block, not for JSON. `check` warns (exit 2) about a
 marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
 the raw value: use `stringData:` (JSON status `data-not-base64`).
 
