@@ -476,4 +476,120 @@ public sealed class ToCommentBlockScalarCommandTests : IDisposable
         Assert.True(exit == 0, stderr);
         Assert.Equal("tls:\n  key: \"\"  # tswap: pem\nother: x\n", File.ReadAllText(file));
     }
+
+    // ------------------------------------------------------------------ T22 (#319): the warning
+
+    private static string B64(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
+
+    private static string Warning(int line, string token) =>
+        $"Warning: line {line} holds an encoded form (base64 or similar) of the value of '{token}' inside a YAML block scalar. " +
+        "A '# tswap:' marker is filled with the plain value, so it was not replaced: move the value out of the block by hand, or keep the block as a whole secret.";
+
+    private static readonly string IssueLine = "    " + B64(Pem);
+
+    /// <summary>The #319 file: a block whose content line is the base64 of pem's value.</summary>
+    private string WriteIssueFile(string extra = "", bool crlf = false)
+    {
+        var file = _m.PathOf("issue.yaml");
+        var text = "key: |\n" + IssueLine + "\nnext: 1\n" + extra;
+        File.WriteAllBytes(file, System.Text.Encoding.UTF8.GetBytes(crlf ? text.Replace("\n", "\r\n") : text));
+        return file;
+    }
+
+    private static string[] Mode(bool dryRun) => dryRun ? ["--dry-run"] : [];
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void OnlyAnUnreplacedLine_WarnsAndLeavesTheFile(bool dryRun, bool crlf)
+    {
+        var file = WriteIssueFile(crlf: crlf);
+        var before = File.ReadAllBytes(file);
+
+        var (exit, _, stderr) = _m.Run("", ["tocomment", file, .. Mode(dryRun)]);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(Warning(2, "pem") + "\nFile unchanged.\n", stderr.Replace("\r\n", "\n"));
+        Assert.DoesNotContain("No secrets found", stderr);
+        Assert.Equal(before, File.ReadAllBytes(file)); // not written at all: CRLF line ends stay too
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnreplacedLine_NothingOfItIsPrinted(bool dryRun)
+    {
+        _m.Ok("plain-Secret-value-9", "ingest", "tok");
+        var file = WriteIssueFile("token: plain-Secret-value-9\n");
+
+        var (exit, stdout, stderr) = _m.Run("", ["tocomment", file, .. Mode(dryRun)]);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains(Warning(2, "pem"), stderr);
+        foreach (var text in (string[])[B64(Pem), IssueLine.Trim(), .. Pem.Split('\n'), "plain-Secret-value-9"])
+        {
+            Assert.DoesNotContain(text, stdout);
+            Assert.DoesNotContain(text, stderr);
+        }
+    }
+
+    [Fact]
+    public void ReplacedAndUnreplacedLines_WritesTheReplacedOne_Warns_CountsOne()
+    {
+        _m.Ok("plain-Secret-value-9", "ingest", "tok");
+        var file = WriteIssueFile("token: plain-Secret-value-9\n");
+
+        var (exit, _, stderr) = _m.Run("", "tocomment", file);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("key: |\n" + IssueLine + "\nnext: 1\ntoken: \"\"  # tswap: tok\n", File.ReadAllText(file));
+        // The listing, then the warning, then the summary counting only the changed line.
+        Assert.EndsWith(
+            "  line 4:\n  - token: [REDACTED: tok]\n  + token: \"\"  # tswap: tok\n" + Warning(2, "pem") + "\n\n✓ 1 line(s) updated in " + file + "\n",
+            stderr.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void ReplacedAndUnreplacedLines_DryRun_SameWarning()
+    {
+        _m.Ok("plain-Secret-value-9", "ingest", "tok");
+        var file = WriteIssueFile("token: plain-Secret-value-9\n");
+        var before = File.ReadAllBytes(file);
+
+        var (exit, _, stderr) = _m.Run("", "tocomment", file, "--dry-run");
+
+        Assert.True(exit == 0, stderr);
+        Assert.EndsWith(Warning(2, "pem") + "\n\n(dry run) 1 line(s) would be modified.\n", stderr.Replace("\r\n", "\n"));
+        Assert.Equal(before, File.ReadAllBytes(file));
+    }
+
+    [Fact]
+    public void PreviousVersion_WarningNamesNamePrevious()
+    {
+        const string old = "old-Rotated-value-77";
+        _m.Ok(old, "ingest", "svc");
+        _m.Ok("", "burn", "svc", "test");
+        _m.Ok("", "rotate", "svc");
+        var file = _m.PathOf("prev.yaml");
+        File.WriteAllText(file, "script: |\n  echo " + B64(old) + " | base64 -d\n");
+
+        var (exit, _, stderr) = _m.Run("", "tocomment", file);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal(Warning(2, "svc:previous") + "\nFile unchanged.\n", stderr.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void NoSecrets_SaysSoExactly()
+    {
+        var file = _m.PathOf("none.yaml");
+        File.WriteAllText(file, "key: |\n  nothing here\n");
+
+        var (exit, _, stderr) = _m.Run("", "tocomment", file);
+
+        Assert.True(exit == 0, stderr);
+        Assert.Equal("No secrets found. File unchanged.\n", stderr.Replace("\r\n", "\n"));
+    }
 }
