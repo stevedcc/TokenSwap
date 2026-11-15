@@ -43,11 +43,9 @@ public class CliEnvironmentTests
         Assert.Equal("/custom/dir", dir);
     }
 
-    [Fact]
+    [UnixFact("SUDO_USER handling is Unix-only")]
     public void SudoUser_ResolvesToInvokingUsersHome()
     {
-        if (OperatingSystem.IsWindows()) return; // SUDO_USER handling is Unix-only
-
         // isPrivileged: true is the input #176 adds (sudo to root, as `sudo tswap get` runs).
         // Brief T7 item 1 (rule change): the home now comes from the passwd entry, checked against
         // SUDO_UID, so the input gains SUDO_UID and a passwd entry with the conventional home.
@@ -382,11 +380,9 @@ public class CliEnvironmentTests
     // Read-only: it resolves a path and creates or writes nothing, so it is safe on a
     // developer's machine (unlike the Linux-only end-to-end test, which runs init).
 
-    [Fact]
+    [MacFact("the macOS folder (.NET resolves it through the OS)")]
     public void DefaultApplicationDataDir_OnMacOS_IsLibraryApplicationSupport()
     {
-        if (!OperatingSystem.IsMacOS()) return; // until #181: reported as Passed elsewhere
-
         // .NET resolves it through the OS (NSApplicationSupportDirectory), which always exists
         // for a real user, so the "fresh user without the folder" case of #175 can't occur here.
         var dir = CliEnvironment.DefaultApplicationDataDir();
@@ -395,11 +391,9 @@ public class CliEnvironmentTests
         Assert.EndsWith(Path.Combine("Library", "Application Support"), dir.TrimEnd('/'));
     }
 
-    [Fact]
+    [LinuxFact("the XDG rules")]
     public void DefaultApplicationDataDir_OnLinux_IsXdgConfigHomeOrHomeDotConfig()
     {
-        if (!OperatingSystem.IsLinux()) return; // until #181: reported as Passed elsewhere
-
         var dir = CliEnvironment.DefaultApplicationDataDir();
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         var expected = !string.IsNullOrEmpty(xdg) && Path.IsPathRooted(xdg)
@@ -410,11 +404,9 @@ public class CliEnvironmentTests
         Assert.Equal(expected.TrimEnd('/'), dir.TrimEnd('/'));
     }
 
-    [Fact]
+    [WindowsFact("%APPDATA%")]
     public void DefaultApplicationDataDir_OnWindows_IsAppData()
     {
-        if (!OperatingSystem.IsWindows()) return; // until #181: reported as Passed elsewhere
-
         var dir = CliEnvironment.DefaultApplicationDataDir();
 
         Assert.True(Path.IsPathRooted(dir), $"not absolute: '{dir}'");

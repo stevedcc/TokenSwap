@@ -96,15 +96,13 @@ public class EndToEndTests : IClassFixture<TswapBinaryFixture>, IDisposable
     /// unset) must get the vault under ~/.config/tswap — not in a "tswap" folder relative to
     /// wherever init happened to run — and find it again from any other folder.
     /// </summary>
-    [Fact]
+    [LinuxFact("the XDG rule is the Linux path; macOS resolves ApplicationData through the OS, not from $HOME, so a temp HOME isolates nothing and init would touch the real profile; Windows resolves it through the known-folder API, so the fresh-user case can't be set up from the environment there")]
     public void FreshUserWithoutDotConfig_VaultIsUnderHome_AndFoundFromAnotherFolder()
     {
         // Linux only. The XDG rule ($XDG_CONFIG_HOME, else $HOME/.config) is the Linux path:
         // on macOS .NET resolves ApplicationData to ~/Library/Application Support through the
         // OS (NSApplicationSupportDirectory), not from $HOME, so a temp HOME isolates nothing
         // there and init would touch the real profile's vault folder. Windows uses %APPDATA%.
-        // (Reported as Passed elsewhere until #181 turns these into real skips.)
-        if (!OperatingSystem.IsLinux()) return;
 
         var home = Path.Combine(_tempDir, "home");
         var initFolder = Path.Combine(_tempDir, "init-here");
