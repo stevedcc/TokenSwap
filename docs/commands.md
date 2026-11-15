@@ -10,10 +10,11 @@ environment variables against the code; the Files section is not checked.
 
 ## Which commands need sudo
 
-A command whose usage line below starts with `sudo` needs sudo. Three commands mix the two:
+A command whose usage line below starts with `sudo` needs sudo. Four commands mix the two:
 
 - `slot` is marked `sudo` as a whole, but only some of its subcommands check for it.
 - `broker` is marked without `sudo`, but the subcommands that change `broker.json` need it.
+- `vault` is marked `sudo` as a whole, but `vault move` needs none.
 - `field` is marked without `sudo`: setting, removing and showing fields needs none; only `field adopt`, which turns
   a secret value into a visible field, needs it.
 
@@ -39,6 +40,9 @@ This table lists each of their subcommands. "sudo" means it refuses to run witho
 | `broker socket remove` | sudo | Changes `broker.json`, as above |
 | `broker template add` | sudo | Changes `broker.json`: a template runs host-side commands with vault secrets |
 | `broker template remove` | sudo | Changes `broker.json`, as above |
+| `vault merge` | sudo | Decrypts every record of both copies, and may add the other copy's slots: each one a new way to open the vault |
+| `vault reindex` | sudo | Decrypts every value once to rewrite each record with fingerprints |
+| `vault move` | no | Moves this machine's encrypted files and edits only its own config; it refuses sudo on Unix (an elevated Windows prompt is fine) |
 | `field set` | no | Fields are plain, visible data, never secret; every value is checked against the stored secrets' fingerprints first |
 | `field unset` | no | Removes plain fields; no secret value is read or changed |
 | `field show` | no | Prints plain fields only; no secret value is decrypted |
@@ -95,7 +99,14 @@ plaintext could show equal make `list` and `check` refuse that record
 ([details](security-model.md#what-each-command-decrypts)).
 `tocomment` also adopts a YAML literal block scalar (`key: |`, `|-` or `|+`) whose content is exactly
 one stored value, a PEM key say: the key line becomes `key: ""  # tswap: <name>` and the block's lines
-go (`--dry-run` shows them as `[removed block line]`, never their text). `check` warns (exit 2) about a
+go (`--dry-run` shows them as `[removed block line]`, never their text). Inside a block scalar (`|` or
+`>`, with any indicators, anchor or tag), a line holding an **encoded** form of a value (base64, base64url or
+the value without its whitespace) is left as it is, with a warning naming the line number and the
+secret, because a marker is always filled with the plain value. A plain value inside a block is still
+replaced by a marker, whose `#` then becomes part of the block's text: right for shell scripts and
+YAML kept in a block, not for JSON. Known gaps, handled as any other line: a document-root block
+(`--- |`, `--- >`), a bare nested entry (`- - |`), an empty key (`: |`) and keys containing `#`
+(`- - key: |` and `? key: |` are recognised). `check` warns (exit 2) about a
 marker under `data:` in a `kind: Secret` manifest, where Kubernetes expects base64 but the marker gets
 the raw value: use `stringData:` (JSON status `data-not-base64`).
 
@@ -453,10 +464,10 @@ Import secrets from an encrypted backup (burned secrets skipped by default)
 ### vault
 
 ```
-sudo tswap vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex
+sudo tswap vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex | vault move <new-folder> [--yes]
 ```
 
-Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules; reindex: rewrite every record in record format 3 with fingerprints
+Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules; reindex: rewrite every record in record format 3 with fingerprints; move (no sudo): move this machine's vault folder (copied, checked, the old one kept renamed), e.g. out of the config folder before sharing it
 
 ### recover
 

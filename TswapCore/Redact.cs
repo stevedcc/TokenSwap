@@ -30,6 +30,14 @@ public static class Redact
         matcher.ToComment(content);
 
     /// <summary>
+    /// Brief T22 (#319): <see cref="ToComment(string, SecretMatcher)"/> plus the lines left unchanged
+    /// because they are block-scalar content holding an encoded form of a value.
+    /// </summary>
+    public static (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(
+        string content, SecretMatcher matcher) =>
+        matcher.ToCommentReporting(content);
+
+    /// <summary>
     /// Brief T16-S2: <see cref="RedactContent(string, SecretMatcher)"/> over a loaded database, by
     /// fingerprinting its values under a random key. No command uses it (they never decrypt the
     /// values for this); it keeps the engine's tests written against plain values.
@@ -39,6 +47,11 @@ public static class Redact
     /// <summary>Brief T16-S2: <see cref="ToComment(string, SecretMatcher)"/> over a loaded database (see <see cref="RedactContent(string, SecretsDb)"/>).</summary>
     internal static (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content, SecretsDb db) =>
         WithMatcher(db, m => m.ToComment(content));
+
+    /// <summary>Brief T22: <see cref="ToCommentReporting(string, SecretMatcher)"/> over a loaded database.</summary>
+    internal static (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(
+        string content, SecretsDb db) =>
+        WithMatcher(db, m => m.ToCommentReporting(content));
 
     private static T WithMatcher<T>(SecretsDb db, Func<SecretMatcher, T> use)
     {
