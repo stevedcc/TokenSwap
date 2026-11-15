@@ -189,10 +189,20 @@ public record Secret(string Value, DateTime Created, DateTime Modified, DateTime
     /// <summary>
     /// Brief T6 decision 4 (record store only): past burns of this secret, i.e. burns of a value
     /// version a newer value superseded (a rotation). Never serialized: the classic file and the
-    /// export format carry the current value and burn state only (decision 9).
+    /// export format carry the current value and burn state only (decision 9), and since export
+    /// format 3 the live <see cref="Fields"/>.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<PastBurn>? History { get; init; }
+
+    /// <summary>
+    /// Issue #311 (record store only): the secret's live fields, name to value (no history, no delete
+    /// markers), or null for none. Set for <c>export</c> (format <see cref="ExportFile.V3"/>), read by
+    /// <c>import</c>. Not written when null, so a secret without fields serializes as before, in an
+    /// export and in the classic vault file alike.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? Fields { get; init; }
 
     /// <summary>
     /// Fix round 1 (A7): set by <c>rotate</c> / <c>ingest --rotate</c>, so the record store writes a
@@ -369,13 +379,20 @@ public record ExportFile(string Version, DateTime Created, string Salt, string C
     public const string V1 = "tswap-export-v1";
 
     /// <summary>
-    /// Current export format (#30 + #108): adds explicit <see cref="Kdf"/> parameters and moves
-    /// the passphrase KDF to Argon2id. See ExportCrypto for the parameter choices/rationale.
+    /// Export format 2 (#30 + #108): adds explicit <see cref="Kdf"/> parameters and moves the
+    /// passphrase KDF to Argon2id. See ExportCrypto for the parameter choices/rationale.
     /// </summary>
     public const string V2 = "tswap-export-v2";
 
+    /// <summary>
+    /// Current export format (issue #311): <see cref="V2"/>'s key derivation, and each exported
+    /// secret carries its live fields (<see cref="Secret.Fields"/>). An older tswap refuses it with
+    /// its unknown-version error; a <see cref="V1"/> or <see cref="V2"/> file imports without fields.
+    /// </summary>
+    public const string V3 = "tswap-export-v3";
+
     /// <summary>The version <c>export</c> now produces. Import accepts this and all older versions.</summary>
-    public const string CurrentVersion = V2;
+    public const string CurrentVersion = V3;
 }
 
 [JsonSerializable(typeof(Config))]

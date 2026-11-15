@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TswapCore;
+using TswapCore.Fields;
 
 namespace TswapCli.Commands;
 
@@ -67,6 +68,9 @@ public sealed class ImportCommand : ICliCommand
         // vault value is decrypted, and every write is staged and committed at once: a refusal
         // (an unreadable record, one changed on disk) writes nothing.
         using var writer = ctx.OpenVaultForWrite(key);
+        // Issue #311: imported fields are a change made here, now: stamped fresh, by this machine
+        // (spec "Export and import"; guard rail 1 does not check them).
+        var who = FieldWhoSource.Current(ctx, by: null);
         try
         {
             int imported = 0, skippedExisting = 0, skippedBurned = 0, skippedNul = 0;
@@ -93,7 +97,10 @@ public sealed class ImportCommand : ICliCommand
                     skippedNul++;
                     continue;
                 }
-                writer.SetValue(name, secret.Value, secret.Created, importedBurnAt: secret.BurnedAt, importedBurnReason: secret.BurnReason);
+                // A v1/v2 file has no fields; a v3 file's fields are written with the value, in one write.
+                var fields = secret.Fields?.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => new FieldEdit(f.Key, f.Value)).ToList();
+                writer.SetValue(name, secret.Value, secret.Created, importedBurnAt: secret.BurnedAt, importedBurnReason: secret.BurnReason,
+                    fields: fields, who: who);
                 imported++;
             }
 

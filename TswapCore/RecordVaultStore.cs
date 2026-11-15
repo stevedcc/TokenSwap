@@ -1082,14 +1082,19 @@ public sealed class RecordVaultStore : IFileVaultStore
         new(state.RecordId, state.Write, state.Type, state.Version, state.Name, state.CreatedMs, state.Burns,
             Fingerprints: null, state.Previous?.Version, PreviousFingerprints: null, state.Extensions);
 
-    /// <summary>A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>.</summary>
+    /// <summary>
+    /// A record's secret for <see cref="SecretsDb"/>, built on <see cref="SecretInfo.From"/>. Issue #311: with its
+    /// live fields (no history, no delete markers; null for none), which <c>export</c> carries.
+    /// </summary>
     internal static Secret ToSecret(SecretRecord state)
     {
         var info = SecretInfo.From(MetadataOf(state))
             ?? throw new InvalidOperationException("A tombstone is no secret.");
+        var fields = FieldsCodec.TryGet(state.Extensions)?.Live.ToDictionary(e => e.Name, e => e.Value!, StringComparer.Ordinal);
         return new Secret(Encoding.UTF8.GetString(state.Value), info.Created, info.Modified, info.BurnedAt, info.BurnReason)
         {
             History = info.History.Count == 0 ? null : info.History,
+            Fields = fields is { Count: > 0 } ? fields : null,
             PreviousValue = state.Previous is null ? null : Encoding.UTF8.GetString(state.Previous.Value),
             PreviousBurned = info.PreviousBurned,
         };
