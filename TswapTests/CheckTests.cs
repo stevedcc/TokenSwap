@@ -204,6 +204,7 @@ public class CheckTests : IDisposable
         Assert.Equal(Check.SecretStatus.Burned, results.First(r => r.Marker.SecretName == "burned-secret").Status);
         Assert.Equal(Check.SecretStatus.Missing, results.First(r => r.Marker.SecretName == "missing-secret").Status);
     }
+
     // --- Brief T20 (#315): markers under data: in a Secret manifest ---
 
     private const string IssueSecret =

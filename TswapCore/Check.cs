@@ -35,12 +35,15 @@ public static class Check
             return results;
         }
 
-        var secretDocuments = SecretDocumentStarts(lines);
+        // GLM code review: the Secret-document map is built only once a line has a marker (most
+        // files a recursive check scans have none).
+        int[]? secretDocuments = null;
         for (int i = 0; i < lines.Length; i++)
         {
             var matches = MarkerRegex.Matches(lines[i]);
             if (matches.Count == 0)
                 continue;
+            secretDocuments ??= SecretDocumentStarts(lines);
             var underSecretData = IsUnderSecretData(lines, i, secretDocuments);
             foreach (Match match in matches)
                 results.Add(new MarkerRef(filePath, i + 1, match.Groups[1].Value, underSecretData));
@@ -87,24 +90,16 @@ public static class Check
         var documentStart = secretDocuments[index];
         if (documentStart < 0)
             return false;
-        var indent = LeadingWhitespace(lines[index]);
+        var indent = Indentation.LeadingWhitespace(lines[index]);
         for (var j = index - 1; j >= documentStart; j--)
         {
             var line = lines[j];
             if (string.IsNullOrWhiteSpace(line) || CommentOnly.IsMatch(line))
                 continue;
-            if (LeadingWhitespace(line) < indent)
+            if (Indentation.LeadingWhitespace(line) < indent)
                 return DataKey.IsMatch(line);
         }
         return false;
-    }
-
-    private static int LeadingWhitespace(string line)
-    {
-        var count = 0;
-        while (count < line.Length && char.IsWhiteSpace(line[count]))
-            count++;
-        return count;
     }
 
     private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)

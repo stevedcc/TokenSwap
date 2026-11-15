@@ -49,11 +49,11 @@ public static class ToCommentProcessor
     /// </summary>
     internal static IEnumerable<int> ContinuationLines(string[] lines, int index, string original)
     {
-        var baseIndent = LeadingWhitespace(original);
+        var baseIndent = Indentation.LeadingWhitespace(original);
         for (var j = index + 1; j < lines.Length; j++)
         {
             var next = lines[j];
-            if (string.IsNullOrWhiteSpace(next) || LeadingWhitespace(next) <= baseIndent || !IsLikelyBase64(next.Trim()))
+            if (string.IsNullOrWhiteSpace(next) || Indentation.LeadingWhitespace(next) <= baseIndent || !IsLikelyBase64(next.Trim()))
                 yield break;
             yield return j;
         }
@@ -83,7 +83,7 @@ public static class ToCommentProcessor
         if (!key.Success)
             return null;
         var limit = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
-        var keyIndent = LeadingWhitespace(lines[index]);
+        var keyIndent = Indentation.LeadingWhitespace(lines[index]);
 
         // The content indentation: the leading whitespace of the first non-blank line after the key.
         var first = index + 1;
@@ -91,7 +91,7 @@ public static class ToCommentProcessor
             first++;
         if (first >= limit)
             return null;
-        var contentIndent = LeadingWhitespace(lines[first]);
+        var contentIndent = Indentation.LeadingWhitespace(lines[first]);
         if (contentIndent <= keyIndent)
             return null;
 
@@ -103,7 +103,7 @@ public static class ToCommentProcessor
             var line = lines[end];
             if (IsBlank(line))
                 continue;
-            var indent = LeadingWhitespace(line);
+            var indent = Indentation.LeadingWhitespace(line);
             if (indent >= contentIndent)
                 continue;
             if (indent > keyIndent)
@@ -138,14 +138,6 @@ public static class ToCommentProcessor
             return false;
         var valid = value.Count(c => char.IsLetterOrDigit(c) || c is '+' or '/' or '=');
         return (double)valid / value.Length >= 0.95;
-    }
-
-    private static int LeadingWhitespace(string line)
-    {
-        var count = 0;
-        while (count < line.Length && char.IsWhiteSpace(line[count]))
-            count++;
-        return count;
     }
 }
 

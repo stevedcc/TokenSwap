@@ -174,12 +174,14 @@ public static class Apply
     };
 
     /// <summary>
-    /// Brief T20 (#315): a character a quoted scalar can't carry raw — below U+0020, U+007F, and the
-    /// three YAML also folds as line breaks inside double quotes (U+0085, U+2028, U+2029).
+    /// Brief T20 (#315): a character a quoted scalar can't carry raw — below U+0020, U+007F, the
+    /// three YAML also folds as line breaks inside double quotes (U+0085, U+2028, U+2029), and the rest
+    /// of YAML's non-printables (the C1 controls U+0080–U+009F, U+FFFE, U+FFFF; GLM code review).
     /// </summary>
-    internal static bool IsControlCharacter(char c) => c < ' ' || c is '\u007F' or '\u0085' or '\u2028' or '\u2029';
+    private static bool IsControlCharacter(char c) =>
+        c < ' ' || c is >= '\u007F' and <= '\u009F' or '\u2028' or '\u2029' or '\uFFFE' or '\uFFFF';
 
-    internal static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
+    private static bool HasControlCharacter(string value) => value.Any(IsControlCharacter);
 
     /// <summary>
     /// The value as the inside of a double-quoted string, which YAML double quotes and JSON strings

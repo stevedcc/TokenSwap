@@ -30,6 +30,10 @@ public sealed class ApplyMultiLineTests
         ["json"] = ("{\n  \"a\": \"b\",\n  \"c\": 1\n}", @"{\n  \""a\"": \""b\"",\n  \""c\"": 1\n}"),
         ["u0001-u007f"] = ("x\u0001y\u007Fz", @"x\u0001y\u007Fz"),
         ["u2028"] = ("a\u2028b", @"a\u2028b"),
+        // GLM review: YAML's other non-printables (C1 controls but U+0085, U+FFFE, U+FFFF); U+00A0 and U+FFFD are printable.
+        ["u0080-u009f"] = ("a\u0080b\u009Fc", @"a\u0080b\u009Fc"),
+        ["c1-boundaries"] = ("\u0084\u0086|\u00A0", @"\u0084\u0086|" + "\u00A0"),
+        ["ufffe-uffff"] = ("x\uFFFEy\uFFFFz\uFFFD", @"x\uFFFEy\uFFFFz" + "\uFFFD"),
     };
 
     public static TheoryData<string> CaseNames => [.. Cases.Keys];
@@ -126,6 +130,18 @@ public sealed class ApplyMultiLineTests
         Assert.Equal("key: \"a\\tb\" # tswap: x\nother: \"a\\tb\"\t# tswap: x", result);
     }
 
+    [Theory]
+    [InlineData("a\u0080b", @"a\u0080b")]
+    [InlineData("a\u009Fb", @"a\u009Fb")]
+    [InlineData("a\uFFFFb", @"a\uFFFFb")]
+    public void SingleQuoted_YamlNonPrintableBecomesDoubleQuotedAndEscaped(string value, string escaped)
+    {
+        var result = Apply.ApplySecrets("key: ''  # tswap: x", Db(value));
+
+        Assert.Equal($"key: \"{escaped}\"  # tswap: x", result);
+        Assert.Equal(value, DoubleQuotedTestDecoder.Decode(QuotedPart(result, "key: \"")));
+    }
+
     [Fact]
     public void SingleQuoted_PlainValueStaysSingleQuoted()
     {
@@ -161,6 +177,17 @@ public sealed class ApplyMultiLineTests
     public void EnvLine_TabValue_Refused(string shape)
     {
         var ex = Assert.Throws<TswapException>(() => Apply.ApplySecrets($"{shape}  # tswap: x", Db("left\tright")));
+
+        Assert.Equal(EnvRefusal(1, "x"), ex.Message);
+        Assert.DoesNotContain("left", ex.Message);
+        Assert.DoesNotContain("right", ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(EnvShapes))]
+    public void EnvLine_YamlNonPrintable_Refused(string shape)
+    {
+        var ex = Assert.Throws<TswapException>(() => Apply.ApplySecrets($"{shape}  # tswap: x", Db("left\uFFFEright")));
 
         Assert.Equal(EnvRefusal(1, "x"), ex.Message);
         Assert.DoesNotContain("left", ex.Message);
@@ -208,7 +235,7 @@ internal static class DoubleQuotedTestDecoder
         for (var i = 0; i < quoted.Length; i++)
         {
             var c = quoted[i];
-            Assert.False(c < ' ' || c == '\u007F' || c is '\u0085' or '\u2028' or '\u2029',
+            Assert.False(c < ' ' || c is >= '\u007F' and <= '\u009F' or '\u2028' or '\u2029' or '\uFFFE' or '\uFFFF',
                 $"raw control character U+{(int)c:X4} at {i} in the quoted part");
             Assert.False(c == '"', $"unescaped quote at {i} in the quoted part");
             if (c != '\\')
@@ -351,8 +378,8 @@ public sealed class ApplyMultiLineRunTests : IDisposable
     private string CopyPath(string[] argv) =>
         argv.Single(a => a.StartsWith(_xdg, StringComparison.Ordinal) || a.StartsWith(_tmpRoot, StringComparison.Ordinal));
 
-    private IEnumerable<string> FilesUnderRunRoots() =>
-        new[] { _xdg, _tmpRoot }.SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
+    private IEnumerable<string> EntriesUnderRunRoots() =>
+        new[] { _xdg, _tmpRoot }.SelectMany(root => Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories));
 
     [Theory]
     [MemberData(nameof(ApplyMultiLineTests.EnvShapes), MemberType = typeof(ApplyMultiLineTests))]
@@ -364,7 +391,7 @@ public sealed class ApplyMultiLineRunTests : IDisposable
 
         Assert.Equal(0, _pty.Starts); // no child started
         Assert.NotEqual(0, exit);
-        Assert.Empty(FilesUnderRunRoots()); // no copy written
+        Assert.Empty(EntriesUnderRunRoots()); // no copy written, no private folder made
         Assert.Contains(ApplyMultiLineTests.EnvRefusal(2, "pem"), stderr);
         foreach (var part in Pem.Split('\n'))
         {
