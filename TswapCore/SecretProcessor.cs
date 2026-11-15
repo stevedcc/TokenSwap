@@ -7,6 +7,15 @@ public enum MatchType { Plaintext, Base64, Base64Url }
 public record LineDiff(int LineNumber, string Before, string After);
 
 /// <summary>
+/// Brief T22 (#319): a line <c>tocomment</c> left as it was because it is YAML block-scalar content
+/// holding an encoded form (base64, base64url, whitespace-stripped) of the value of <see cref="Token"/>
+/// (<c>name</c> or <c>name:previous</c>): a marker is filled with the plain value, so replacing it would
+/// change the value. It carries no text of the line; it is not a <see cref="LineDiff"/>, so nothing that
+/// prints changes prints it.
+/// </summary>
+public sealed record UnreplacedLine(int LineNumber, string Token);
+
+/// <summary>
 /// The plaintext match list. Brief T16-S2: matching itself is <see cref="SecretMatcher"/>'s, from
 /// fingerprints, with the labels of <see cref="RedactProcessor"/> and the replacement of
 /// <see cref="ToCommentProcessor"/>; <see cref="BuildMatchList"/> stays as the definition of the
