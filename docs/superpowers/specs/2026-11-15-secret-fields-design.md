@@ -298,8 +298,7 @@ a way to pass values into commands. The same framing opens the fields section in
 ### Older stores (my call)
 
 - A **classic vault** (the JSON store): the field commands refuse and point to `tswap migrate --to-records`.
-  Importing an export with fields into a classic vault drops the fields with one warning line naming how many
-  secrets had fields.
+  (`import` already refuses a classic vault, `ClassicVaultRefusalTests`, so there is no classic import case.)
 - A **format 2 record** is converted to format 3 when a field command writes it, the way the non-sudo `burn`
   already does (`FingerprintTexts.WarnFormatTwo(..., FormatTwoUse.Write)`).
 
