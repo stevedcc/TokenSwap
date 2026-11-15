@@ -1,7 +1,7 @@
 # Design: non-secret fields on a secret
 
 Issue: https://github.com/stevedcc/TokenSwap/issues/311 (draft in comment 6896762774). Date: 2026-11-15.
-Status: draft for the owner's approval (builder check done 2026-11-15; its questions answered or decided, marked "my call").
+Status: **approved by the owner 2026-11-15** (builder check done; its questions answered or decided, marked "my call"). External review (MiMo, DeepSeek) next.
 
 ## Intent and why
 
@@ -133,15 +133,48 @@ and a field says where the master is.
 All without sudo unless noted; all refuse on a vault that can't be opened, like `names` (fields are inside the
 encrypted metadata, so reading them needs the vault unlocked, as `names` does).
 
-- `tswap field set NAME FIELD=VALUE [FIELD=VALUE…] [--by LABEL]`: sets one or more fields in one write. A value can
-  come from stdin instead (`tswap field set NAME FIELD=- < file`) for multi-line values.
+- `tswap field set NAME FIELD=VALUE [FIELD=VALUE…] [--by LABEL]` or `tswap field set NAME JSON|@FILE [--by LABEL]`:
+  sets one or more fields in one write (see "Setting fields").
 - `tswap field unset NAME FIELD [FIELD…] [--by LABEL]`
+- `create`, `ingest`, `add` (and `rotate`, `ingest --rotate`) take `--field FIELD=VALUE` (repeatable) or
+  `--fields JSON|@FILE`, so a secret gets its fields in the same write as its value (see "Setting fields").
 - `tswap field show NAME [--history] [--json]`: the fields, and with `--history` each field's last changes with UTC
   times, who, and the machine (origin id short form).
 - `sudo tswap field adopt NAME FIELD --from SECRET`: copies SECRET's current value into NAME's field FIELD, then
   deletes SECRET (a normal delete, with its tombstone). Sudo because it turns a secret value into a visible one; the
   owner approves each. It refuses when SECRET is the same as NAME, when NAME doesn't exist, or when FIELD already
   has a value (unset it first).
+
+### Setting fields (owner, 2026-11-15)
+
+Fields of **one** secret are set several at a time, like a C# object initializer, in two equivalent forms:
+
+```
+# key=value, repeatable: for people, quick changes and voice through an agent
+tswap create grafana-admin 32 --field username=admin --field source=generated:tswap
+tswap field set opnsense-root url=https://192.168.1.1 kind=password
+tswap field unset opnsense-root url
+
+# JSON: for agents, files and longer or multi-line values
+tswap create grafana-admin 32 --fields '{"username": "admin", "source": "generated:tswap"}'
+printf '%s' "$TOKEN" | tswap ingest cloudflare-ddns --fields '{"kind": "api-key", "source": "external:cloudflare"}'
+tswap field set opnsense-root @fields.json
+```
+
+- **Initializer semantics:** only the listed fields are set; every other field keeps its value. In JSON, `null`
+  removes a field (`{"url": null}`); in the key=value form, removal is `field unset` only. An empty `FIELD=` is
+  refused (`… use 'tswap field unset NAME FIELD' to remove a field`), since it is too easy to type by mistake.
+- **key=value** splits at the **first** `=`, so values may contain `=` (`url=https://x/?a=b`). A value that needs a
+  line break uses the JSON form.
+- **JSON** is one flat object whose values are strings or `null`; anything else (numbers, booleans, arrays, nested
+  objects, duplicate keys) is refused naming the key. `@FILE` reads the object from a file. For `ingest`, which reads
+  the secret's value from stdin, fields come from the argument or `@FILE`, never from stdin.
+- **One form per call:** mixing `--field` and `--fields` (or key=value and JSON in `field set`) is refused.
+- **All or nothing:** the whole set is checked first (names, formats of well-known fields, every guard rail); if any
+  field is refused, nothing is written, the value included when it comes with `create`/`ingest`/`add`.
+- **One write:** with `create`/`ingest`/`add`, the value and the fields land in the same record write, so the secret
+  never exists without its fields.
+- JSON output (`field show --json`) has the same shape, so show, edit and set round-trip.
 
 ### The guard rails
 
