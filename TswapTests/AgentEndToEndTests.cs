@@ -87,11 +87,9 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
     /// </summary>
     private const string SafetyTimeout = "30m";
 
-    [Fact]
+    [UnixFact]
     public void Start_Get_Get_Stop()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         InitAndCreate();
 
         var start = Run(Password + "\n", terminal: true, "agent", "start", "--timeout", SafetyTimeout);
@@ -117,11 +115,9 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
         Assert.Contains(VaultPasswordMessages.NoTerminal, after.Err);
     }
 
-    [Fact]
+    [UnixFact]
     public void Start_ParentGone_AgentStillAnswers()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         InitAndCreate();
 
         // Run returns only after 'agent start' exited and both its pipes reached their end: the child holds
@@ -134,11 +130,9 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
         Assert.Contains("refused peers: 0", status.Out);
     }
 
-    [Fact]
+    [LinuxFact]
     public void AgentServe_IsNotDumpable()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         InitAndCreate();
         var start = Run(Password + "\n", terminal: true, "agent", "start", "--timeout", SafetyTimeout);
         Assert.True(start.Exit == 0, start.Err);
@@ -154,11 +148,9 @@ public sealed class AgentEndToEndTests(TswapBinaryFixture binary) : IClassFixtur
         Assert.Equal(pid.ToString(), fields[3]); // field 6, session id
     }
 
-    [Fact]
+    [UnixFact]
     public void Start_WrongPassword_ExitsOne_NoAgentLeft()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         InitAndCreate();
 
         var start = Run("not the password\n", terminal: true, "agent", "start");

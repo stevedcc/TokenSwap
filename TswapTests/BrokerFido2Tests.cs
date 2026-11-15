@@ -45,12 +45,10 @@ public sealed class BrokerFido2Tests : IDisposable
 
     public static TheoryData<string> OwnFido2Shapes => ["only FIDO2", "FIDO2 with the password", "plus a password-free OTP slot", "plus a password OTP slot"];
 
-    [Theory]
+    [UnixTheory("broker serve is Unix-only")]
     [MemberData(nameof(OwnFido2Shapes))]
     public void BrokerServe_Fido2OnlyMachine_RefusedAtStart(string shape)
     {
-        if (OperatingSystem.IsWindows())
-            return; // broker serve is Unix-only
         // Whatever other slots the vault has: this machine's own slot is FIDO2, so the broker has none of its own.
         Fido2.AddKey(Serial, Fido2TestSlots.Aaguid);
         _m.Terminal!.Enqueue(Pin, Pin);

@@ -81,45 +81,40 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Assert.Contains("(a template could delete or use the control socket)", ex.Message);
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     [InlineData(true)]
     [InlineData(false)]
     public void ABindContainingAnExistingRunFolder_IsRefused(bool rw)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         MakeRunFolder();
 
         Refused(Cache, rw, "contains");
     }
 
-    [Theory]
+    [LinuxTheory("templates are Linux only (bwrap)")]
     [InlineData(true)]
     [InlineData(false)]
     public void ABindContainingARunFolderThatDoesNotExistYet_IsRefused(bool rw)
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         Assert.False(Path.Exists(Path.Combine(Cache, "tswap"))); // nothing of the run folder exists yet
 
         Refused(Cache, rw, "contains");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheRunFolderItself_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         MakeRunFolder();
 
         Refused(RunFolder, rw: false, "is");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ABindInsideTheRunFolder_IsRefused()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         MakeRunFolder();
         var inside = Path.Combine(RunFolder, "x");
         MakeFolder(inside);
@@ -127,11 +122,10 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Refused(inside, rw: true, "is inside");
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ASiblingFolderOfTheRunFoldersParent_IsAccepted()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var other = Path.Combine(Cache, "other");
         MakeFolder(other);
 
@@ -142,11 +136,10 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Assert.Equal(other, Assert.Single(existing.Binds).Path);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ARunFolderBelowASymlink_IsComparedAtItsResolvedPlace()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // ~/.cache is a symlink to a folder elsewhere; the run folder doesn't exist yet, so only the
         // nearest existing ancestor (the symlink) can be resolved. A bind of the link's target is the
         // run folder's resolved parent and must be refused, though no name of it matches the run folder's.
@@ -160,11 +153,9 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Assert.Contains("(a template could delete or use the control socket)", ex.Message);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void TheRunFolder_IsReCheckedBeforeEveryRun()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // Valid at load against a host whose run folder is elsewhere; the same template against the
         // real host context is refused by the per-run re-check.
         var template = BrokerPolicy.Parse(Config(Cache, rw: true), Host(Path.Combine(_root, "not-here", "run"))).Templates["t"];
@@ -174,11 +165,10 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Assert.Contains($"contains the broker's run folder {RunFolder}", problem);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void TheRunFolderCandidates_AreTheFoldersAgentSocketPathPicks()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         // I224 fix round 1 (MiMo p2 I2, GLM p2 F3): the expected folders come from AgentSocketPath.Folder
         // itself, with synthetic inputs, so the two builders can't drift apart.
         var uid = BrokerHarness.MyUid;
@@ -197,11 +187,9 @@ public class BrokerTemplateRunFolderTests : IDisposable
         Assert.Contains(runCandidate, host.RunFolders);
     }
 
-    [Fact]
+    [LinuxFact("templates are Linux only (bwrap)")]
     public void ForVault_ProtectsBothCandidateRunFolders()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // templates are Linux only (bwrap)
         var uid = BrokerHarness.MyUid;
         var home = BrokerNative.HomeOf(uid);
         Assert.False(string.IsNullOrEmpty(home)); // the test user has a home folder

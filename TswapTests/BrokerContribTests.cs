@@ -90,11 +90,9 @@ public class BrokerContribTests(ITestOutputHelper output)
         "storage_unconfined_type", "ubacproc", "x_domain", "xserver_unconfined_type",
     ];
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void SelinuxModule_Parses_AndDeclaresTheDomainTheTransitionsAndOneContainerRule()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var path = RepoFile("contrib", "selinux", "tswap-broker.cil");
         var statements = ParseCil(File.ReadAllText(path)).Select(s => Assert.IsType<List<object>>(s)).ToList();
         var rendered = statements.Select(Render).ToList();
@@ -140,20 +138,16 @@ public class BrokerContribTests(ITestOutputHelper output)
             output.WriteLine("secilc is not installed: the module was checked for structure only; `sudo semodule -i` on the target host compiles it against the real policy.");
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void CilReader_RefusesUnbalancedParentheses()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         Assert.ThrowsAny<Exception>(() => ParseCil("(type a"));
         Assert.ThrowsAny<Exception>(() => ParseCil("(type a))"));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void SystemdUnit_RunsTheLabelledLibexecCopy_NotThePlainTswap()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var lines = File.ReadAllLines(RepoFile("contrib", "systemd", "tswap-broker.service"));
         var execStart = Assert.Single(lines, l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
 

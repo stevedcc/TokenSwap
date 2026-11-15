@@ -137,11 +137,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
 
     // ------------------------------------------------------------------ socket bind, each option
 
-    [Fact]
+    [UnixFact]
     public void Bind_Pid_WritesTheDerivedUnit_AndWarnsAboutAPerInstanceBinding()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         _proc["/proc/4242/cgroup"] = "0::" + Fedora + "\n";
@@ -159,11 +157,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(FedoraUnit, Load().Sockets["lane1"].Container!.Cgroup);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_Pid_OfAQuadletPayload_GivesTheService_WithoutTheWarning()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         _proc["/proc/77/cgroup"] = "0::" + Quadlet + "/libpod-payload-x\n";
@@ -176,11 +172,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(Quadlet, RawSocket("lane1").Container!.Cgroup);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_PidWithLabel_RecordsTheProcessesLabel_AndSaysWhatItMeans()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         _proc["/proc/77/cgroup"] = "0::" + Quadlet + "/libpod-payload-x\n";
@@ -196,11 +190,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(Label, Load().Sockets["lane1"].Container!.SelinuxLabel);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_PidWithLabel_ThatIsNotAWholeLabel_IsRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         var before = File.ReadAllBytes(BrokerJson);
@@ -214,11 +206,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_Cgroup_WritesItAsGiven()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
 
@@ -230,11 +220,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Null(RawSocket("lane1").UidOnly);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_Cgroup_ThatIsNotAContainer_IsRefused_WithTheD1Message_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         var before = File.ReadAllBytes(BrokerJson);
@@ -246,11 +234,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_UidOnly_RemovesTheContainer()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--cgroup", Quadlet);
         Assert.NotNull(RawSocket("lane1").Container);
@@ -266,7 +252,7 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
 
     // ------------------------------------------------------------------ --pid refusals show the path read
 
-    [Theory]
+    [UnixTheory]
     [InlineData("0::/user.slice/user-1001.slice/user@1001.service/init.scope\n",
         "socket lane1: can't bind to process 9: /user.slice/user-1001.slice/user@1001.service/init.scope is not a container (the user manager itself); its cgroup is /user.slice/user-1001.slice/user@1001.service/init.scope")]
     [InlineData("0::/user.slice/user-1001.slice\n",
@@ -280,8 +266,6 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         "socket lane1: can't bind to process 9: /proc/9/cgroup is not one cgroup v2 line (0::/...): 1:name=systemd:/a.service\\n0::/a.service\\n")]
     public void Bind_Pid_Refusals_NameThePathRead(string content, string message)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         _proc["/proc/9/cgroup"] = content;
@@ -293,11 +277,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(true, RawSocket("lane1").UidOnly);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_Pid_ThatCantBeRead_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         var (exit, _, stderr) = _m.Run("", "broker", "socket", "bind", "lane1", "--pid", "31337");
@@ -305,14 +287,12 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Contains("socket lane1: can't bind to process 31337: /proc/31337/cgroup can't be read (is the process running?)", stderr);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("0")]
     [InlineData("-1")]
     [InlineData("abc")]
     public void Bind_Pid_ThatIsNotAPid_IsRefused(string pid)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         var (exit, _, stderr) = _m.Run("", "broker", "socket", "bind", "lane1", "--pid", pid);
@@ -370,11 +350,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Contains("--with-label goes with --pid only", stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void SocketAdd_WithEachOption_WritesTheBinding()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         _proc["/proc/77/cgroup"] = "0::" + Quadlet + "/libpod-payload-x\n";
         AddSocket("a", "--pid", "77");
@@ -387,21 +365,19 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(true, RawSocket("c").UidOnly);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_AnUnknownSocket_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         var (exit, _, stderr) = _m.Run("", "broker", "socket", "bind", "nope", "--uid-only");
         Assert.NotEqual(0, exit);
         Assert.Contains("No socket named 'nope'", stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_WithoutSudo_IsRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
@@ -435,11 +411,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.NotNull(Load().Sockets["lane1"]);
     }
 
-    [Fact]
+    [UnixFact]
     public void Bind_OneOfTwoV01Sockets_Writes_AndNamesTheOther()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         WriteV01("lane1", "lane2");
 
         var (exit, _, stderr) = _m.Run("", "broker", "socket", "bind", "lane1", "--uid-only");
@@ -480,11 +454,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void OffLinux_UidOnly_Works()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         BrokerCommand.IsLinux = () => false;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
@@ -494,11 +466,9 @@ public sealed class BrokerSocketBindCommandTests : IDisposable
 
     // ------------------------------------------------------------------ the write path
 
-    [Fact]
+    [UnixFact]
     public void SimulatedSudo_Bind_WritesAsTheFolderOwner_Mode0600_Atomically()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddRoute);
         AddSocket("lane1", "--uid-only");
         var fake = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0);
