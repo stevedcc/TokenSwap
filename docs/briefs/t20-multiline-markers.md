@@ -12,14 +12,16 @@ hardware suites, `ykman`, `sudo`, real YubiKeys or `~/.config/tswap`: simulated 
 folders only. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, explicit-path commits, no
 push, merge or rebase; stop and report when the brief can't be built as written.
 
-Review history: round 1 by MiMo ("no") and DeepSeek ("yes") (`~/RiderProjects/tswap-wt/tools/t20-brief-r1-{mimo,deepseek}.md`);
+Review history: round 1 by MiMo ("no") and DeepSeek ("yes") (`~/RiderProjects/tswap-wt/tools/t20-brief-r1-{mimo,deepseek}.md`); round 2 (`t20-brief-r2-*.md`) DeepSeek "yes", MiMo "no" on stale T21 references (fixed) and minors;
 this version folds in every finding.
 
 **Parallel brief T21** (#314, a short-value warning only) runs at the same time in another worktree. It owns
 `TswapCore/Validation.cs`, `AddCommand.cs`, `CreateCommand.cs`, `IngestCommand.cs`, `RotateCommand.cs`,
 `SecretRotation.cs`, `AddWhitespaceWarningTests.cs` and a new test class of its own. **T20 edits none of those.** T20
 owns `Apply.cs`, `ToCommentProcessor.cs`, `SecretMatcher.cs`, `ToCommentCommand.cs`, `Redact.cs`, `Check.cs`,
-`CheckCommand.cs`, `CliJson.cs` (the check report) and its own new test classes (below). Shared files, by hunk: in
+`CheckCommand.cs`, `TswapCli/CliJson.cs` (the check report), the existing test files `ApplyTests.cs`, `CheckTests.cs`
+and `CommandTests.cs` (the `Check_*` region), and its own new test classes `ApplyMultiLineTests.cs` (Tasks 1-3)
+and `ToCommentBlockScalarTests.cs` (Task 4). T21 does no matching change: it adds a warning only (MiMo r2 N1, N2). Shared files, by hunk: in
 `docs/commands.md` T21 adds one paragraph after line 113, T20 edits only the redact/tocomment paragraph (83-89) and
 nothing in the generated block unless a `Description` changes; in `docs/security-model.md` T20 edits only "Files
 with secrets" (from line 265), T21 only "What `run` masks"; in `TswapCore/Prompt.cs` T20 edits only lines 39 and 41
@@ -59,20 +61,20 @@ them explicitly after this task.
 
 The written forms `ApplySecretsReporting` returns are the escaped strings, as now; `run` already redacts written
 forms (`RunCommand.cs:99-104`), so the escaped form of a multi-line value in a command's output is masked through
-that path. Do not touch `Redaction.cs` (T21).
+that path. Do not touch `Redaction.cs` (redaction matching is later work for #314, not part of T21 or T20).
 
 Tests (`ApplyTests`, new): for each of these values, fill `key: ""  # tswap: x`, nested `a:\n  key: ""  # tswap: x`,
 and `"k": ""  # tswap: x` (JSON-ish), then parse the result **without a YAML library** (there is none and none is
 added): assert the exact output line, and assert that a small test-only decoder for the double-quoted escapes above
 (`\\ \" \n \r \t \uXXXX`) turns the quoted part back into the stored value byte for byte. Values: a 4-line PEM with a
-trailing LF, the same without it, a CRLF PEM, `a\tb`, `quote " and back \ slash`, a literal backslash before a
+trailing LF, the same without it, a CRLF PEM, `a<TAB>b` (a real TAB character), `quote " and back \ slash`, a literal backslash before a
 letter (`C:\new\table`, which catches escaping the backslash after introducing `\n`), a multi-line JSON document
 with quotes, a value with U+0001 and U+007F, and one with U+2028.
 One more test parses the JSON-ish line's quoted part with `System.Text.Json` (`JsonSerializer.Deserialize<string>`
 on the quoted literal) and compares. Break-it-once: drop the LF replacement; the PEM test must fail.
 
-`RunFileTokenTests.RunFileToken_MultiLineValueRedacted` (`:317`) must still pass unchanged. In T20's own new test
-class (not in `RunFileTokenTests.cs`), add a `run … {{@file}}` test whose child captures the copy it received (as
+`RunFileTokenTests.RunFileToken_MultiLineValueRedacted` (`:317`) must still pass unchanged. In `ApplyMultiLineTests.cs`
+(not in `RunFileTokenTests.cs`), add a `run … {{@file}}` test whose child captures the copy it received (as
 `RunFileTokenTests.cs:263` does) and assert the filled line is a single line holding the escaped form.
 
 ## Task 2: single quotes become double quotes for values with control characters
@@ -125,30 +127,34 @@ becomes `  key: ""  # tswap: NAME` (the key line's indentation and key kept, the
 Rules, exactly:
 - The key line matches `^(\s*)([^#\s][^#]*?:)\s*\|([+-]?)\s*$` (a mapping key ending in `:`, then `|`, `|-` or `|+`,
   nothing else on the line; an indentation indicator such as `|2` is out of scope and left alone).
-- The block is the following lines that are empty or indented deeper than the key line. It ends before the first
-  non-empty line that isn't. The content indentation is the leading whitespace of the first non-empty block line.
-- The candidate value is the block lines with that indentation removed, joined with `\n`, then chomped: `|` → exactly
-  one trailing `\n`, `|-` → none, `|+` → all trailing line breaks kept.
-- Building the candidate, exactly: split the file into lines (CRLF already normalised to LF); a final empty element
-  from the file's last newline is not a block line. Each block line contributes its text with the content
-  indentation removed, plus one `\n`. Then chomp: `|-` removes every trailing `\n`; `|` removes trailing `\n` until
-  exactly one remains; `|+` keeps them all (blank block lines at the end each contributed one `\n`).
-- The block ends at the first non-empty line indented **less than the content indentation**. If a non-empty line is
-  indented deeper than the key but less than the content indentation, the block is not adopted and the file is left
-  unchanged at that key (YAML would end the block there).
+- **One walk** (MiMo r2 N4, N5): split the file into lines (CRLF already normalised to LF; a final empty element from
+  the file's last newline is not a line). After the key line, the **content indentation** is the leading whitespace
+  of the first line that is not blank (blank = empty or whitespace only). If there is no such line, or it is not
+  indented deeper than the key, there is no block: no match. Then walk on from the key line: a blank line belongs to
+  the block; a non-blank line indented at least the content indentation belongs to it; the first non-blank line
+  indented less than the content indentation ends the block; if that line is indented deeper than the key (between
+  the key and the content indentation), the block is **not adopted** and the file is left unchanged at that key
+  (YAML would end the block there).
+- **Building the candidate:** each block line contributes its text with the content indentation removed, plus one
+  `\n`; a blank line contributes only `\n` (spaces on it are dropped). Then chomp: `|-` removes every trailing `\n`;
+  `|` removes trailing `\n` until exactly one remains; `|+` keeps them all.
 - It matches when one stored value's **plain** variant (any retained version, burned ones included as tocomment does
-  today; never the base64 or whitespace-stripped variants) equals the candidate in full, or equals the candidate with
+  today; never the base64, base64url or whitespace-stripped variants) equals the candidate in full, or equals the candidate with
   its single trailing `\n` removed (a value ingested with `printf '%s'` has none): a hit counts only if its span is
   the whole candidate, or the whole candidate minus that trailing `\n`. Implement it as a self-contained helper in
   `SecretMatcher` that calls the index's `Scan` on the candidate directly (not `Entries`, `Select` or `Compare`).
-  Nothing is decrypted.
+  Nothing is decrypted. A hit on a **previous** version writes `# tswap: NAME:previous`, as tocomment does today
+  (`SecretMatcher.cs:74`), so a later fill writes the same value the block held (MiMo r2 N3).
 - `--dry-run` (in `ToCommentCommand.cs`, owned by T20): the key line is shown as replaced (its "before" redacted as
-  today), and every removed block line is shown **with its content suppressed**, exactly like a removed continuation
-  line today (`- [removed block line]` / `+ (removed)`), never printed: a block line is a fragment of the secret and
-  the redactor only masks complete occurrences.
+  today), and every removed block line is shown **with its content suppressed**, like a removed continuation line
+  today, never printed: a block line is a fragment of the secret and the redactor only masks complete occurrences.
+  Give the diff row a kind so it prints `- [removed block line]` (continuation rows keep
+  `- [removed continuation line]`); `+ (removed)` for both (MiMo r2 N6).
 
 Tests in a new `ToCommentBlockScalarTests.cs` (not in `RedactTests.cs`): the PEM under `|`, `|-` and `|+` (stored with
-and without a trailing LF where the chomping allows a match); a `|+` block with two blank lines at its end; a block
+and without a trailing LF where the chomping allows a match); a `|+` block with two blank lines at its end, once empty
+and once holding spaces (same result); a `key: |` with no non-blank line after it (no match); a block whose value is
+a **previous** version (writes `NAME:previous`); a block
 with a line indented between the key and the content indentation (left unchanged); a `--dry-run` whose output
 contains no line of the PEM (assert every PEM body line is absent from stdout and stderr); a block whose content is a stored value plus one extra line (no
 match, file unchanged); a block at the end of the file without a final newline; two blocks in one file; a folded
@@ -164,8 +170,9 @@ scalar.
 A Kubernetes Secret's `data:` holds base64; a marker there gets the raw value. `check` adds a warning when a marker
 line is inside a `data:` mapping of a document that has `kind: Secret`:
 
-- Documents are split on lines that are exactly `---`. Within one document, `kind: Secret` is a line matching
-  `^kind:\s*Secret\s*$`.
+- Documents are split on document markers (below). Within one document, `kind: Secret` is a line matching
+  `^kind:\s*Secret\s*(#.*)?$` (a trailing comment allowed); a document split is a line matching `^---\s*(#.*)?$`
+  (MiMo r2 N8).
 - A marker line is under `data:` when, walking back and skipping blank lines and comment-only lines, the nearest
   preceding line with less indentation is `data:` (only whitespace before it; nothing after it but whitespace or a
   `#` comment).
@@ -196,4 +203,5 @@ counts, exit 2 when this is the only warning; a missing secret under `data:` (st
 ## Out of scope
 
 YAML block-scalar output, a YAML or JSON parser dependency, a `:base64` marker suffix, a JSON placeholder form, any
-change to redaction matching (T21), folded `>` scalars and indentation indicators in `tocomment`.
+change to redaction matching (later work for #314, after the fields design #311), folded `>` scalars and indentation
+indicators in `tocomment`.
