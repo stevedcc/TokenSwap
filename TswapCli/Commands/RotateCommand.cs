@@ -11,8 +11,8 @@ namespace TswapCli.Commands;
 public sealed class RotateCommand : ICliCommand
 {
     public string Name => "rotate";
-    public string HelpUsage => "rotate <name> [len]";
-    public string Description => "Replace a secret with a new random value (no display); sudo unless it is burned";
+    public string HelpUsage => "rotate <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Replace a secret with a new random value (no display); sudo unless it is burned; --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)

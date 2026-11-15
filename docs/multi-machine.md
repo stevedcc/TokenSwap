@@ -206,6 +206,31 @@ sudo tswap vault merge /mnt/usb/tswap-vault
 - **A burn marks the value it was issued against.** While that value is current the secret is
   burned. A newer value (a rotation) supersedes it, and the burn becomes history.
 - Two burns of the same value keep the earliest.
+- **Fields merge per field**, not per secret ([what fields are](commands.md#fields-plain-data-next-to-a-secret)).
+  For each field the newest change wins, a removal over an older value and a value over an older removal (a later
+  edit brings a removed field back; an older copy can't). Two machines changing different fields of one secret
+  both keep their change. A concurrent change that loses is not lost silently: it goes into the winner's history
+  (`tswap field show NAME --history`, the last 5 changes per field). Merging the same copies again, or in another
+  order, gives the same result.
+- **A delete wins over a concurrent field change**: a deleted secret has no fields, and a field write never
+  brings a deleted secret back (it doesn't touch the value version that decides that).
+- **Lineage.** Each life of a name (created, or created again after a delete) has a lineage stamp, and field
+  changes stamped before it belong to an earlier life and are dropped in a merge, so a stale copy can't bring
+  the old secret's fields to the new one. A change a stale machine made after the re-creation (it kept editing
+  its old copy) does land on the new secret.
+- **Caps after a merge.** A merge never trims fields, so a merged secret may hold more than 64 fields or 64 KiB
+  of them (two copies, each within the caps, with different fields). It stays readable; a write that would leave
+  it over a cap is refused, one that shrinks it (`field unset`, shorter values) is accepted.
+- **Two copies with the same change stamp but different content** (only damage or a bug makes them): one is
+  chosen the same way on every machine, and `field show` warns naming the field. The secret stays readable.
+- **Mixed versions.** A tswap 0.3.x machine keeps the fields' bytes but merges them by its own rule: the whole
+  list of the newest write. In a folder shared with 0.3.x machines, field state is decided per record, not per
+  field: a 0.3.x merge can drop a newer field change or bring back a removed field, and copies may not converge
+  until every machine runs this version. An earlier life's fields can come back in two ways: a 0.3.x merge that
+  takes a stale copy's list, and a 0.3.x machine re-creating a name over this version's tombstone (its new record
+  has no lineage stamp, so a later merge with an old copy keeps the old life's fields). A delete and re-creation
+  done wholly on a 0.3.x machine carries them straight over, since a 0.3.x tombstone keeps them. Nothing breaks
+  and no value is affected; unset such fields again.
 
 ## Sync transports
 

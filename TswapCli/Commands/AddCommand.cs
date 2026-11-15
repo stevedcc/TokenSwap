@@ -5,8 +5,8 @@ namespace TswapCli.Commands;
 public sealed class AddCommand : ICliCommand
 {
     public string Name => "add";
-    public string HelpUsage => "add <name>";
-    public string Description => "Add a secret (user-provided value)";
+    public string HelpUsage => "add <name> [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Add a secret (user-provided value); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)

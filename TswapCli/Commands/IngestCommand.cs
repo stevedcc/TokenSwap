@@ -5,8 +5,8 @@ namespace TswapCli.Commands;
 public sealed class IngestCommand : ICliCommand
 {
     public string Name => "ingest";
-    public string HelpUsage => "ingest [--rotate] <name>";
-    public string Description => "Pipe secret from stdin (no display); --rotate replaces an existing one (sudo unless it is burned)";
+    public string HelpUsage => "ingest [--rotate] <name> [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Pipe secret from stdin (no display); --rotate replaces an existing one (sudo unless it is burned); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)

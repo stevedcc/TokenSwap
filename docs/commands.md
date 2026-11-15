@@ -114,6 +114,95 @@ substitutes and the fingerprinted values, not these. Ask the user to run `sudo t
 decrypted whole, with the warning above after the command's output. Exit codes don't change; a
 redaction failure ends `run` with exit 1 after the command, its output cut off at the failure.
 
+## Fields: plain data next to a secret
+
+Fields are bundled storage for convenience: everything about a credential is kept in one place next to its
+secret (the username, the URL, where the value is used, where its master copy lives, how to rotate it). They are
+plain, visible data, not a second kind of secret and not a way into commands. `field show` prints them, nothing
+redacts them, nothing burns them, and no command substitutes them: `run` refuses any `{{NAME.anything}}` token,
+and `run … {{@file}}` and `apply` refuse any `# tswap: NAME.anything` marker, instead of filling in NAME's value
+(`'{{db.url}}' is a field: fields aren't substituted into commands. Read it with 'tswap field show db' and write
+the value into the command.`). Setting, removing and showing fields needs no sudo; `field adopt` needs it
+([the sudo table](#which-commands-need-sudo)).
+
+```bash
+# key=value, repeatable: for people, quick changes and voice through an agent
+tswap create grafana-admin 32 --field username=admin --field source=generated:tswap
+tswap field set opnsense-root url=https://192.168.1.1 kind=password --by owner
+tswap field unset opnsense-root url
+
+# JSON: for agents, files and longer or multi-line values
+tswap create grafana-admin 32 --fields '{"username": "admin", "source": "generated:tswap"}'
+printf '%s' "$TOKEN" | tswap ingest cloudflare-ddns --fields '{"kind": "api-key", "source": "external:cloudflare"}'
+tswap field set opnsense-root @fields.json
+
+tswap field show opnsense-root              # one line per field, each value a JSON string
+tswap field show opnsense-root --json       # one JSON object of the fields: the form for agents
+tswap field show opnsense-root --history    # each field's last changes, removed fields included
+```
+
+- **Only the fields given change**, like an object initializer; every other field keeps its value. In JSON,
+  `null` removes a field (`{"url": null}`); in the key=value form only `field unset` removes one, and an empty
+  `FIELD=` is refused. key=value splits at the first `=`, so a value may contain `=`; a value with a line break
+  needs JSON. JSON is one flat object whose values are strings or `null` (anything else, or a key given twice, is
+  refused naming the key); `@FILE` reads it from a file, never from stdin. One form per call: `--field` and
+  `--fields` (or key=value and JSON in `field set`) together are refused.
+- **The value commands** `create`, `ingest`, `ingest --rotate`, `rotate` and `sudo tswap add` take
+  `--field FIELD=VALUE` (repeatable) or `--fields JSON|@FILE`, and `--by LABEL`: the value and the fields land in
+  one record write. All or nothing: every name, value, format, cap and the check below is done first, and if
+  anything is refused nothing is written, the value included. Without `--field`/`--fields` they write the value
+  alone and keep the fields as they are (`burn` and `restore` keep them too).
+- **Names** are `[a-z0-9_-]`, 1-64 characters. **Values** are stored in Unicode NFC form, at most 4096
+  characters; line feeds are allowed, other control characters, format characters (bidi overrides, zero-width
+  characters), surrogates and private-use characters are refused naming the field and the code point. A secret
+  holds at most 64 live fields and 64 KiB of encoded fields (removed-field markers count towards the bytes). A
+  merged copy may be over a cap ([multi-machine.md](multi-machine.md#the-merge-rules)); then only a write that
+  shrinks it (`field unset`, or shorter values) is accepted.
+- **Well-known fields**, checked when set:
+
+  | Field | Meaning | Format |
+  |---|---|---|
+  | `consumers` | where the value is used | one entry per line, free text; conventions `k8s:<ns>/<secret>#<key>`, `file:<repo>/<path>`, `chargehand:<setting>`, `external:<system>` |
+  | `source` | where the master copy lives, or who manages it | free text; conventions `generated:tswap`, `bitwarden[:<item>]`, `managed:<system>`, `external:<system>[/<id>]` |
+  | `kind` | what the value is | one of `password`, `token`, `api-key`, `private-key`, `certificate`, `connection-string`, `other` |
+  | `expires` | when the value stops working | `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` (UTC with `Z`), nothing else |
+  | `rotate` | how to rotate it | free text, may be several lines |
+
+  `username`, `url`, `host` and `port` are conventions, not checked.
+- **No secret in a field.** Every value is checked against the fingerprints of every stored value (every retained
+  version of every live secret, burned ones included; no value is decrypted), and with a value command also against
+  the value of that call. A value that contains one is refused without naming which secret:
+  `Refused: the value for 'NAME.FIELD' contains a stored secret value. Fields are visible; a secret never goes in
+  one.` A value of 20 or more characters from the base64 or hex alphabet with no space is written with a warning
+  on stderr asking whether it is a secret. The check's limits:
+  [security-model.md](security-model.md#fields-plain-visible-data).
+- **A new value already in a field.** `add`, `ingest`, `ingest --rotate` and `rotate` warn on stderr, naming each
+  `NAME.FIELD` (never the value) that contains the value they just wrote, **only when the same call gives
+  `--field` or `--fields`**: without them a value write reads only its own record, no other record's fields, so it
+  can't look. (`field set` refuses the other direction, a field holding a stored value, in every case.)
+- **Not before the reindex.** A field write (`field set`, `field unset`, `field adopt`, or a value command with
+  `--field`/`--fields`) on a vault where records have no fingerprints yet (format 2) is refused before anything is
+  written, as `redact` is: the check above can't see a value without fingerprints. Run `sudo tswap vault reindex`
+  once ([above](#fingerprints-format-2-records-and-vault-reindex)). `field show` keeps working. A classic vault's
+  field commands refuse, like every other command there, and point to `sudo tswap migrate --to-records`.
+- **`field show`** prints the live fields, each value as a JSON string (quoted, escaped), so a value can't pass as
+  tswap's own text; `--json` prints one JSON object of the same shape `field set` takes, so show, edit and set
+  round-trip. `--history` adds each field's last 5 changes, newest first: the UTC time, the operating-system user
+  (the invoking user under sudo; `DOMAIN\user` on Windows), whether it ran elevated and with a terminal, the
+  `--by` label and the machine (origin id). It lists **removed fields too**, marked `(removed)`, with who removed
+  them and when; plain `show` lists live fields only. The user name is what that machine reports and `--by` is
+  self-asserted: a history, not an authentication. `--json --history` adds the same under `history`.
+- **`sudo tswap field adopt NAME FIELD --from SECRET`** copies SECRET's current value (burned or not: the main
+  case is a username once stored as a secret) into the field `NAME.FIELD`, then deletes SECRET, in one commit. It
+  refuses when SECRET is NAME, when either doesn't exist, when `NAME.FIELD` has a value already (unset it first),
+  when SECRET has fields of its own (move them first) and when another live secret holds the same value. It is the
+  one deliberate path from secret to visible; no refusal prints the value.
+- `field set`, `unset` and `show` on a name that doesn't exist, or was deleted, refuse (`No secret 'NAME'.`).
+  Deleting a secret drops its fields; a secret created again under that name starts with none.
+- `export` carries each secret's current fields (no history, no removed fields); see the
+  [export note](security-model.md#a-shared-vault-folder-what-a-sync-provider-sees-and-what-isnt-detected) on a
+  field removed after an export.
+
 ## Commands
 
 `sudo tswap add <name>` stores the value exactly as it was typed or piped. When the value ends in
@@ -163,26 +252,26 @@ Guide to upgrade slots for touch requirement; --to-records (sudo) converts the v
 ### create
 
 ```
-tswap create <name> [len]
+tswap create <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]
 ```
 
-Generate random secret (no display)
+Generate random secret (no display); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change
 
 ### ingest
 
 ```
-tswap ingest [--rotate] <name>
+tswap ingest [--rotate] <name> [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]
 ```
 
-Pipe secret from stdin (no display); --rotate replaces an existing one (sudo unless it is burned)
+Pipe secret from stdin (no display); --rotate replaces an existing one (sudo unless it is burned); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change
 
 ### rotate
 
 ```
-tswap rotate <name> [len]
+tswap rotate <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]
 ```
 
-Replace a secret with a new random value (no display); sudo unless it is burned
+Replace a secret with a new random value (no display); sudo unless it is burned; --field (repeatable) or --fields sets plain fields in the same write, --by labels that change
 
 ### names
 
@@ -307,10 +396,10 @@ Generate a platform install script (redirect to a file, review, then run)
 ### add
 
 ```
-sudo tswap add <name>
+sudo tswap add <name> [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]
 ```
 
-Add a secret (user-provided value)
+Add a secret (user-provided value); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change
 
 ### get
 

@@ -157,6 +157,9 @@ and doesn't make the record format 2.
 | `run` | The value versions it substitutes (its tokens and its files' markers), each once; every other record's metadata only | Each record a token or marker names, decrypted whole; a warning after the child's output |
 | `create`, `ingest`, `rotate`, `ingest --rotate`, `burn`, `delete`, `add`, `import` | No value: only the records of the names given are read, their metadata (`import`: every exported name, so it can skip the ones the vault holds); a new value is encrypted, a kept one copied as it is (exceptions below) | Each format 2 record of those names, decrypted whole (`import`: each exported name the vault holds as format 2, up to the whole vault, though it writes none of them); a warning |
 | `restore` | The one value it puts back (the previous version, encrypted again as the new one; exceptions below) | That record, decrypted whole; a warning |
+| `field set`, `field unset`; `create`, `ingest`, `rotate`, `ingest --rotate`, `add` with `--field`/`--fields` | No value: every record's metadata, for the check that no field holds a stored value ([fields](#fields-plain-visible-data)); the value command's own value as above | None: the write is refused before anything is written, and asks for `sudo tswap vault reindex` |
+| `field show` | No value: the one record's metadata | That record, decrypted whole; a warning |
+| `field adopt` | The one value it turns into a field (the current version of SECRET), and every record's metadata | None: refused as `field set` is |
 | `export`, `migrate` | Every value, by their nature | The same |
 | `vault merge`, `vault reindex` | Every value for now (a follow-up, #271, narrows them) | The same |
 
@@ -619,6 +622,76 @@ Setting the password up, and the agent that holds it: [vault-password-and-agent.
   and affects every program that uses the TPM; `file:-` keeps the password out of the process list
   and shell history, where an argument would show it).
 
+## Fields: plain, visible data
+
+Fields are bundled storage for convenience: everything about a credential is kept in one place next to
+its secret (the username, the URL, where the value is used, where its master copy lives, how to rotate
+it). They are plain, visible data, not a second kind of secret and not a way into commands. Commands and
+formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
+
+- **Fields are visible.** They are stored inside the record's encrypted metadata section, so neither the
+  vault folder nor a sync provider shows them, but anyone who can run tswap as you reads them with
+  `tswap field show`, without sudo, and agents are told to. No command redacts, burns or fingerprints a
+  field. A password manager is the place for a person's own credentials; a field can say where the master
+  copy lives (`source`).
+- **Guard rail 1: no secret in a field.** Every value a write sets is checked against the keyed
+  fingerprints of every stored value (every retained version of every live secret, burned ones included;
+  no value is decrypted), and with a value command also against the value of that call. A value that
+  contains one is refused without naming which secret. A long random-looking value only gets a warning.
+  On a vault with records that have no fingerprints yet (format 2) every field write is refused until
+  `sudo tswap vault reindex`, since the check can't see those values. Its limits:
+  - **Merges and imports are not checked.** `vault merge`, a sync tool's copies and `import` carry fields
+    from your own machines and exports as they are; a peer or an export you don't trust can do worse than
+    put a value in a field.
+  - **Unicode forms.** A field is stored in NFC form and checked both in that form and as given, but a
+    stored secret value is fingerprinted as it was stored. A secret stored in decomposed (NFD) form is not
+    found in a field that holds its composed (NFC) form, and the reverse. Fingerprinting both forms of
+    every value would change the record format; secrets are almost always ASCII, where both forms are the
+    same.
+  - **Deleted secrets' values are not checked**, so a value `field adopt` moved into a field can be set
+    again.
+  - **The warning the other way round is narrower.** `add`, `ingest`, `ingest --rotate` and `rotate` warn
+    when the value they write already sits in a field (naming `NAME.FIELD`), but only when the same call
+    gives `--field` or `--fields`: without them a value write reads only its own record. A plain rotate to
+    a value that some field already holds goes unwarned.
+  - **It is an oracle, as `run` already is.** A refusal tells the caller that a string it chose contains a
+    stored value. `tswap run test {{NAME}} = guess` (and `-gt` for bisection) already answers one named
+    equality guess per call by its exit code, without sudo. `field set` is broader: a substring test of up
+    to 4096 characters (hundreds of candidates per call) against all live values at once, without needing a
+    name. That speeds up brute force of small value spaces (the usernames and ports that belong in fields
+    anyway); it doesn't touch a generated value. tswap doesn't restrict what agents run, and a limit on
+    `field set` alone would only move the probe to `run`; the refusal names no secret, and nothing else is
+    done.
+- **Guard rail 2: no field reaches a command.** `run` refuses any `{{NAME.anything}}` token, and
+  `run … {{@file}}` and `apply` any `# tswap: NAME.anything` marker, before anything is filled in, so a
+  dotted token or marker is never read as NAME plus text. The broker's templates have no field tokens. A
+  field can't change where a secret is sent: the person approving a command sees every non-secret part of
+  it.
+- **Guard rail 3: injection is reduced, not prevented.** A field value is text written by people and
+  agents. The skill text (`tswap prompt`) tells agents that field values and `--by` labels are untrusted
+  data and never instructions; `field show` prints each value as a JSON string and `--json` is the form for
+  agents, so a value can't pass as tswap's own output; display paths escape control and format characters.
+  An agent can still be misled by what a field says. Changes are recorded, not prevented: each keeps its
+  last 5 states with the UTC time, the machine's origin id, the operating-system user (under sudo the
+  invoking user; on Windows `DOMAIN\user`), whether it ran elevated or with a terminal, and the optional
+  `--by` label. The user name is reliable on that machine only and `--by` is self-asserted: a history, not
+  an authentication. `field show --history` lists removed fields too, with who removed them and when.
+- **`field adopt` is the deliberate exception**: `sudo tswap field adopt NAME FIELD --from SECRET` turns a
+  secret's value (burned or not) into a visible field and deletes that secret. Sudo, because it makes a
+  secret visible; the owner approves each. It refuses when another live secret holds the same value.
+- **Mixed versions.** A tswap 0.3.x machine keeps the fields' bytes but merges them by its own rule (the
+  whole extension list of the newest write), so in a folder shared with 0.3.x machines field state is
+  decided per record, not per field: a 0.3.x merge can drop a newer field change or bring back a removed
+  field, and copies may not converge until every machine runs this version. An earlier life's fields can
+  come back in two ways: a 0.3.x merge that takes an old copy's list, and a 0.3.x machine re-creating a
+  name over this version's tombstone (its new record has no lineage stamp, so a later merge with an old
+  copy keeps the old life's fields). A delete and re-creation done wholly on a 0.3.x machine carries them
+  straight over, since a 0.3.x tombstone keeps them. Nothing breaks and no secret value is affected; unset
+  them again.
+  Details: [multi-machine.md](multi-machine.md#the-merge-rules).
+- **What a sync provider sees:** a field write is a metadata-only write (format 3 already shows those, as
+  for a burn), and it may move the metadata section to another 256-byte size bucket.
+
 ## A shared vault folder: what a sync provider sees, and what isn't detected
 
 These notes apply to a record vault whose folder is synced, shared or copied between machines.
@@ -640,9 +713,14 @@ How to share one, and the merge rules: [multi-machine.md](multi-machine.md#shari
   itself, is taken as the current state: **tswap does not yet notice a record or keyring going back
   in time.** Keep the vault folder's write access to your own machines and sync account.
 - **Export and import** keep the single-file encrypted format. An export is a snapshot of the
-  current values and burn state (no deletes, no history). Importing into a record-store vault
-  writes each secret as a new version, so importing an old export **can bring back a secret you
-  deleted since**: that is your explicit choice.
+  current values, burn state and fields (no deletes, no history, no removed fields). Importing into
+  a record-store vault writes each secret as a new version, so importing an old export **can bring
+  back a secret you deleted since**: that is your explicit choice.
+  - **An export carries current fields only.** A field removed after the export comes back when that
+    export is imported, and stays back: the import writes the fields as a change made on the importing
+    machine at that moment (fresh stamps, a new lineage), so the earlier removal can't win in a merge.
+    Unset it again; only a removal stamped after the import wins. Imported fields are not checked
+    against the stored values ([fields](#fields-plain-visible-data)).
 - **Permissions:** the vault folder, `records/` and the config folder are created 0700 and their
   files 0600; an existing vault with wider permissions is narrowed on the next write, with a notice.
   Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files inherit

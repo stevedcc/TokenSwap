@@ -22,8 +22,8 @@ public sealed class CreateCommand : ICliCommand
     private const int MaxHkdfOutputBytes = 255 * 32;
 
     public string Name => "create";
-    public string HelpUsage => "create <name> [len]";
-    public string Description => "Generate random secret (no display)";
+    public string HelpUsage => "create <name> [len] [--field FIELD=VALUE]… [--fields JSON|@FILE] [--by LABEL]";
+    public string Description => "Generate random secret (no display); --field (repeatable) or --fields sets plain fields in the same write, --by labels that change";
     public bool RequiresSudo => false;
 
     public int Execute(CommandContext ctx, string[] args)
