@@ -14,8 +14,9 @@ entries with their histories; `RecordMerge` gets a per-field rule for that exten
 generation (`CliJsonContext`).
 
 **Spec:** `docs/superpowers/specs/2026-11-15-secret-fields-design.md` in this branch (`design/secret-fields`; merge
-rule 5 amended in plan review round 1). Read it whole before Task 1; this plan names the decisions, the spec gives
-the reasons.
+rule 5 amended in plan review rounds 1 and 2). The implementation worktree carries this plan and the spec at that
+path (bring both over when the worktree is cut from the real base below). Read the spec whole before Task 1; this
+plan names the decisions, the spec gives the reasons.
 
 **Base:** `origin/main` **after T20 (#315) and T21 (#314) are merged**: T21 edits `CreateCommand`, `IngestCommand`,
 `AddCommand`, `RotateCommand`, `SecretRotation` and `Validation.cs`; T20 edits `Apply.cs`. Line numbers below are
@@ -64,8 +65,9 @@ Inputs the spec implies that are most likely to bite; each has its test in the n
 **Interfaces:**
 - Produces:
   - `public static class FieldsExtension { public const ushort Type = 0x0100; }` in `FieldSet.cs` (first registered
-    extension type; add a comment listing it as the registry; tests already use 0x0001, 0x0002, 0x0005 and 0x7777 as
-    unknown types, so the number must stay clear of them).
+    extension type; add a comment listing it as the registry; tests already use 0x0001, 0x0002, 0x0005, 0x0102, 0x7000,
+    0x7777 and 0xFFFF as unknown types, so the number must stay clear of them, and the comment lists them as taken by
+    tests).
   - `public sealed record FieldWho(string Origin, string? User, bool Elevated, bool Terminal, string? By);`
   - `public sealed record FieldChange(string? OldValue, Stamp Changed, FieldWho Who);`: a **replaced state** of the
     field: the value it had (null = it was a delete marker), the stamp that value was set at and who set it. Its
@@ -119,30 +121,41 @@ Inputs the spec implies that are most likely to bite; each has its test in the n
 Rules (spec "Merge" 1-7, rule 5 as amended in plan review round 1): tombstone result → no `Fields` extension; live → `Since` = max input `Since`; drop entries
 and markers with `Changed < Since`; per name the newest `Changed` wins (marker vs value by stamp); equal stamps with
 different content → ordinally smallest encoding of (name, stamp, deleted, value bytes); histories = union by
-(Changed, Who.Origin), equal identity → smallest encoding, newest first, trim 5; every input's **non-winning** current
-entry for the name (with `Changed ≥ Since`) is added to the history as a replaced state (its value or null, its stamp,
-its who): that is how the losing value of a concurrent change lands in the winner's history, and re-merging adds an
-identical entry, so it stays idempotent; a rule-4 loser (same stamp and origin as the winner) is added the same way,
-and that history entry with the current entry's identity is what `field show` detects as damage (Task 6); a live result carries the extension if any input had one; caps never
+(Changed, Who.Origin), equal identity → smallest encoding, newest first, trim 5; an input's current entry for
+the name (with `Changed ≥ Since`) **whose content differs from the winner's** is added to the history as a replaced
+state (its value or null, its stamp, its who): that is how the value of a concurrent change lands in the winner's
+history; an input entry **identical** to the winner (same identity and content: the everyday case of two synced
+copies) is the same entry, not a loser, and adds nothing; re-merging adds only entries already there, so it stays
+idempotent; a rule-4 loser (same stamp and origin as the winner, other content) is added the same way, and that
+history entry with the current entry's identity is what `field show` detects as damage (Task 6); a live result carries the extension if any input had one; caps never
 applied in a merge. Other extension types keep today's rule (whole list of the largest write stamp), computed with the
 `Fields` entry removed, then `FieldsCodec.With` adds the merged set.
 
 - [ ] **Step 1: Write the failing tests** in `FieldMergeTests`: `FieldMerge_Commutative_Idempotent_ThreeOrders`
-  (seeded random sets, 400 rounds, every permutation gives identical bytes; assert minimum case counts),
+  (seeded random sets, 400 rounds, every permutation gives identical bytes; assert minimum case counts; also,
+  byte for byte, `Merge([x, x]) == x` and `Merge([Merge([x, y]), y]) == Merge([x, y])`, the convention of
+  `RecordMergeV3Tests.MergeAll_IsIdempotent`), `FieldMerge_IdenticalCopies_NoHistoryAdded`,
   `FieldMerge_DeleteMarkerNewer_Wins`, `FieldMerge_LaterEdit_RestoresDeleted`,
   `FieldMerge_SameFieldConcurrent_NewerWinsLoserInHistory` (Review Focus 4), `FieldMerge_EqualStamps_Converge`,
   `FieldMerge_HistoryTrimmedToFive`, `FieldMerge_OlderThanSince_Dropped`,
   `FieldMerge_EqualIdentityHistory_SmallestEncodingWins` (two history entries, same stamp and origin, different old
   value: both orders keep the same one); in `RecordMergeV3Tests`:
   `MergeAll_Tombstone_DropsFields_KeepsOtherExtensions`, `MergeAll_LiveWithEmptyFields_KeepsSince`,
-  `MergeAll_RecreatedWithoutFields_ThenTwoStaleCopies_NoOldFields` (the r2 N1 trace, both orders),
+  `MergeAll_RecreatedWithoutFields_ThenTwoStaleCopies_NoOldFields` (the r2 N1 trace, both orders; asserts the
+  merged record still carries an empty `Fields` extension with the re-creation's `Since`, not only that no old field
+  landed), `MergeAll_TwoIdenticalCopies_WritesNothing` (`SameState` true for the merge of two byte-identical copies
+  with fields: no rewrite),
   `MergeAll_OverCap_StaysReadable`; in `RecordWritesTests` (where it lives today) extend
-  `MergeAllMetadata_MatchesMergeAll_OrRefuses_OnRandomCopySets` so its random copies include `Fields` extensions.
+  `MergeAllMetadata_MatchesMergeAll_OrRefuses_OnRandomCopySets` so its random copies include `Fields` extensions:
+  random **valid** `FieldSet`s encoded with `FieldsCodec` (arbitrary bytes would make `Decode` throw in both paths,
+  which the test does not accept).
   The existing `MergeAll_ExtensionsFollowTheLargestWriteStamp` (types 0x7777 and 1) must stay green unchanged.
 - [ ] **Step 2: Run** `dotnet test TswapTests --filter "FullyQualifiedName~FieldMerge|FullyQualifiedName~RecordMergeV3|FullyQualifiedName~RecordWritesTests"` — FAIL.
 - [ ] **Step 3: Implement** `FieldMerge.Merge` and call it from both paths of `RecordMerge`.
 - [ ] **Step 4: Run** — PASS. **Break-it-once:** in `MergeAllMetadata` only, keep today's whole-list rule; the parity
-  test fails. Second: drop the "keep an empty extension" rule; `RecreatedWithoutFields_…` fails.
+  test fails. Second: drop the "keep an empty extension" rule; `RecreatedWithoutFields_…` fails (its `Since`
+  assertion). Third: push identical entries too; `FieldMerge_IdenticalCopies_NoHistoryAdded` and the `Merge([x, x])`
+  assertion fail.
 - [ ] **Step 5: Commit.**
 
 ### Task 3: Writes — lineage, tombstone, metadata-only field write
@@ -150,9 +163,11 @@ applied in a merge. Other extension types keep today's rule (whole list of the l
 **Files:**
 - Create: `TswapCore/Fields/FieldEdits.cs`
 - Modify: `TswapCore/Keyring/RecordWrites.cs` (`NewVersion` :57-77, `Tombstone` :93-96), `TswapCore/RecordVaultStore.cs`
-  (`NextRecord` :1477-1510, `Tombstone` :1521, `CommitWrites` :815-892, `SaveSecrets`' `NextStamp` :1436),
+  (`NextRecord` :1477-1510, `Tombstone` :1521, `CommitWrites` :815-892, `SaveSecrets`' `NextStamp` :1436,
+  `WriteSnapshot` :1532-1557),
   `TswapCore/PendingWrite.cs`, `TswapCore/VaultWriter.cs`, `TswapCore/VaultView.cs`
-- Test: `TswapTests/RecordWritesTests.cs`, `TswapTests/FieldWriteTests.cs`; regenerated fixture
+- Test: `TswapTests/RecordWritesTests.cs`, `TswapTests/FieldWriteTests.cs`, `TswapTests/MigrateToRecordsTests.cs`,
+  `TswapTests/RecordStoreV3Tests.cs`; regenerated fixture
   `TswapTests/Fixtures/save-secrets-golden.json` (Step 4b)
 
 **Interfaces:**
@@ -196,9 +211,19 @@ A value write that carries edits but leaves the value as it is (`add` with the s
 and `RecordWrites.Next` skips today) still writes the edits as a metadata-only field write (`Version` unchanged). A
 live record with **no** `Fields` extension (written before this version, or a format 2 record) gets one on its first
 field write with `Since = Stamp.Zero` (planner's call, flagged to the orchestrator: the spec is silent; `Zero` never
-drops a concurrent field write made on another machine of the same life, and no earlier life of such a record can
-carry fields except through 0.3.x merges, the documented mixed-version caveat). A write with edits is written in
-format 3 also when it creates the record in an unmarked folder. A format 2 record is converted to format 3 when a field write touches it, as the non-sudo
+drops a concurrent field write made on another machine of the same life; an earlier life with fields can only reach
+such a record through mixed versions: a 0.3.x merge, or a 0.3.x machine re-creating the name over this version's
+tombstone, which dropped `Fields`; Task 10 documents both). A write with edits is written in format 3 also when it
+creates the record in an unmarked folder. Why a field-less create in an unmarked folder may stay format 2 without an
+anchor (a deviation from the spec's "always", accepted because format 2 cannot carry extensions): such a folder is
+pristine (no format 3 record has been read, `RecordStoreV3Tests.NoMarker_WritesV2` :47), so no name in it can have had
+fields in an earlier life; once any format 3 record exists the folder writes format 3
+(`AnyV3RecordRead_WritesV3EvenWithoutMarker` :70), and there creation always anchors.
+
+`migrate --to-records` (`RecordVaultStore.WriteSnapshot`, :1532-1557) builds its records directly, not through
+`NextRecord`: it gets the same anchor, a `Fields` extension with `Since` = the version stamp it mints for each
+secret (:1542) and no entries. Its target is always format 3 (`RecordMigration.cs:162` writes the marker into the temp
+folder before the snapshot), so the anchor is always stored. A format 2 record is converted to format 3 when a field write touches it, as the non-sudo
 `burn` does, and the field commands print `FingerprintTexts.WarnFormatTwo(..., FormatTwoUse.Write)` in their
 `finally` like every write command (test: `SetFields_FormatTwoRecord_ConvertedToV3`).
 
@@ -213,14 +238,21 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
   stamp and who, its history the five replaced states before it, newest first, each with its own old value, stamp
   and who; every change stamp distinct and greater than `Since`), `SetFields_UnchangedValue_WritesNothing`,
   `ValueWrite_SameValue_WithEdits_WritesFieldsOnly` (`Version` unchanged, field set), `SetFields_LegacyRecord_SinceZero`;
-  extend `RecordWrites_MatchNextRecord_OnRandomStates` with random `SetFields` and random `Fields` extensions (both
-  paths must agree).
+  `SetFields_OverZeroThreeShapedRecord_KeepsUnknownExtension` (the spec's "0.3.0-shaped record round trip": a record
+  carrying only 0x7777, field write, merge with its old copy: 0x7777 byte for byte, in its position; the keep-greens
+  `Extensions_SurviveEveryWrite` and `NewerExtension_SurvivesBurnAndMerge` cover the value writes);
+  `Migrate_WritesFieldsAnchor_SinceIsVersion` (in `MigrateToRecordsTests`: every migrated record has an empty `Fields`
+  extension with `Since` = its `Version`); `AnyV3RecordRead_CreateWithoutFields_WritesAnchor` (in `RecordStoreV3Tests`,
+  beside :70: the unmarked folder that already read a format 3 record writes the new record in format 3 with the
+  anchor); extend `RecordWrites_MatchNextRecord_OnRandomStates` with random `SetFields` and random **valid** `Fields`
+  extensions encoded with `FieldsCodec` (both paths must agree).
 - [ ] **Step 2: Run** the filter for `RecordWritesTests|FieldWriteTests|VaultWriterTests` — FAIL.
 - [ ] **Step 3: Implement.** `NewVersion`/`NextRecord` currently copy `state?.Extensions` (:76-77, :1510): replace the
   `Fields` entry on (re)creation as above.
 - [ ] **Step 4: Run** — PASS; also `VaultWriterTests.PerRecordWrites_MatchSaveSecrets_OnRandomHistories`.
   **Break-it-once:** let `SetFields` bump `Version`; `SetFields_KeepsVersionAndValue_ChangesWriteOnly` fails. Second:
-  skip the trim in `FieldEdits.Apply`; `SetFields_WritesHistory_…_OldChangesTrimmed` fails.
+  skip the trim in `FieldEdits.Apply`; `SetFields_WritesHistory_…_OldChangesTrimmed` fails. Third: leave
+  `WriteSnapshot` as it is; `Migrate_WritesFieldsAnchor_SinceIsVersion` fails.
 - [ ] **Step 4b: Regenerate the `SaveSecrets` golden (deliberate rule change).** `SaveSecretsGoldenTests.SaveSecrets_MatchesItsGolden`
   now fails: every format 3 record a step creates (alpha, beta, the import's gamma/delta, ext) carries the new empty
   `Fields` extension, and `delete` drops it. The test writes this run's records to
@@ -251,7 +283,8 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
 **Interfaces:**
 - Consumes: `VaultView.BuildIndex(FingerprintKeys)` (live, retained versions only: tombstones yield nothing),
   `Fingerprinter.Compute(byte[], FingerprintKeys)`, `FingerprintIndex.Build/Scan`.
-- Produces: `FieldSecretCheck.Refusal(FingerprintIndex stored, FingerprintIndex? sameWrite, string name, string value) -> string?`
+- Produces: `FieldSecretCheck.Refusal(FingerprintIndex stored, FingerprintIndex? sameWrite, string name, string field, string value) -> string?`
+  (`name` the secret, `field` the field, as in `RandomLookingWarning`; the message names `NAME.FIELD`)
   (normalises `value` itself with `FieldRules.NormaliseValue` before scanning, so no caller can forget, and callers
   pass the value as given; message `Refused: the value for 'NAME.FIELD' contains a stored secret value. Fields are visible; a secret never goes in one.`,
   never naming the secret); `FieldSecretCheck.LooksRandom(string) -> bool` (≥ 20 chars, all `[A-Za-z0-9+/=_-]` or
@@ -295,7 +328,10 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
 - Create: `TswapCli/Commands/FieldCommand.cs`, `TswapCli/FieldInput.cs`
 - Modify: `TswapCli/CommandRegistry.cs`, `TswapCli/CliJson.cs`, `TswapTests/Docs/CommandReferenceTests.cs` (`MixedCommands` += `"field"`),
   `TswapTests/WriteCommandsWholeVaultScanTests.cs` (`WriteCommandFiles` += `"Field"`: a new write command joins the
-  scan's input list; its assertion is unchanged)
+  scan's input list; its assertion is unchanged), `TswapTests/ClassicVaultRefusalTests.cs` (`ArgsFor` :48 gains
+  `"field" => [command, "show", "db"]`: the theory enumerates `CommandRegistry.All`, so `field` gets a row the moment
+  it is registered, and a bare `tswap field` stops at the usage error before the store opens), the `SudoTableDrive`
+  class in `TswapTests/Docs/CommandReferenceTests.cs` (:343, one driver per new row), `docs/commands.md`
 - Test: `TswapTests/FieldCommandTests.cs`
 
 **Interfaces:**
@@ -306,9 +342,14 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
     invalid name refused) or exactly one JSON argument / `@FILE` (flat object, string or null values, duplicate keys
     refused via `JsonDocumentOptions` and an explicit duplicate check; BOM and CRLF tolerated); mixing forms refused.
     Also used by Task 7 for `--field`/`--fields`.
-  - `FieldCommand`: `Name "field"`, `RequiresSudo false` (mixed: `adopt`, Task 6b, calls `ctx.RequireSudo`), usage
-    `tswap field set NAME FIELD=VALUE…|JSON|@FILE [--by LABEL] | tswap field unset NAME FIELD… [--by LABEL] | tswap field show NAME [--history] [--json]`
-    (Task 6b appends `| sudo tswap field adopt NAME FIELD --from SECRET`). Dispatch like `AgentCommand.cs:79-86`.
+  - `FieldCommand`: `Name "field"`, `RequiresSudo false` (mixed: `adopt`, Task 6b, calls `ctx.RequireSudo`).
+    `HelpUsage` in the shape `CommandReference.Subcommands` (`TswapTests/Docs/CommandReference.cs:103-124`) reads:
+    top-level alternatives that each start with the bare command name, no `sudo`/`tswap` prefix, inner choices in a
+    `<…>` group (removed before the split on `|`):
+    `field set NAME <FIELD=VALUE…|JSON|@FILE> [--by LABEL] | field unset NAME FIELD… [--by LABEL] | field show NAME [--history] [--json]`
+    (Task 6b appends ` | field adopt NAME FIELD --from SECRET`). The sudo requirement goes in the `Description`
+    (broker's pattern: "… sudo for adopt") and in the sudo table, never in the usage. Dispatch like
+    `AgentCommand.cs:79-86`.
     Classic vault: refused pointing to `migrate --to-records` (`WorksOnClassicVault => false`).
   - `set`/`unset`: every value is checked with `FieldRules.Validate`, then `FieldSecretCheck.Refusal`, all before
     staging (all or nothing); a value passing `FieldSecretCheck.LooksRandom` prints
@@ -337,8 +378,12 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
   `FieldCommands_OnTombstone_Refused` and `FieldCommands_OnMissingName_Refused` (`set`, `unset`, `show`); classic-vault
   refusal.
 - [ ] **Step 2-4:** run, implement, run. Regenerate the command reference
-  (`TSWAP_REGENERATE_DOCS=1 dotnet test TswapTests --filter CommandReferenceIsCurrent`) and add `field` rows to the sudo
-  table in `docs/commands.md`. **Break-it-once:** make `field set` merge-replace instead of initialise (drop unlisted
+  (`TSWAP_REGENERATE_DOCS=1 dotnet test TswapTests --filter CommandReferenceIsCurrent`) and add the `field set`,
+  `field unset`, `field show` rows (all "no") to the sudo table in `docs/commands.md`; change its intro "Two commands
+  mix the two" (:13) to three, with a `field` bullet (marked without `sudo`; only `adopt` needs it). Add three
+  `SudoTableDrive` drivers, each driven to its job without sudo (`set` exits 0 and `show` then prints the field;
+  `unset` exits 0 and the field is gone; `show` exits 0 with the field), so `SudoTableCoversSubcommands` and
+  `SudoTableMatchesBehaviour` pass. **Break-it-once:** make `field set` merge-replace instead of initialise (drop unlisted
   fields); the initializer test fails. Second: turn the random-looking warning into a refusal;
   `FieldSet_RandomLookingValue_WarnsAndWrites` fails.
 - [ ] **Step 5: Commit.**
@@ -346,8 +391,10 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
 ### Task 6b: `field adopt`
 
 **Files:**
-- Modify: `TswapCli/Commands/FieldCommand.cs` (the `adopt` subcommand and its usage), `docs/commands.md` (the sudo
-  table's `field adopt` row; regenerate the command reference as in Task 6)
+- Modify: `TswapCli/Commands/FieldCommand.cs` (the `adopt` subcommand, its usage alternative and the Description's
+  sudo note), `docs/commands.md` (the sudo table's `field adopt` row, "sudo"; regenerate the command reference as in
+  Task 6), `TswapTests/Docs/CommandReferenceTests.cs` (a fourth `SudoTableDrive` driver: `field adopt` without sudo,
+  driven to the sudo refusal)
 - Test: `TswapTests/FieldAdoptTests.cs`
 
 **Interfaces:**
@@ -371,7 +418,9 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
 
 **Files:**
 - Create: `TswapCli/ValueCommandFields.cs` (the one shared path for the five commands: parse, check, warn, stage)
-- Modify: `TswapCli/Commands/CreateCommand.cs`, `IngestCommand.cs`, `AddCommand.cs`, `RotateCommand.cs`, `TswapCli/SecretRotation.cs`
+- Modify: `TswapCli/Commands/CreateCommand.cs`, `IngestCommand.cs`, `AddCommand.cs`, `RotateCommand.cs`, `TswapCli/SecretRotation.cs`,
+  `TswapTests/WriteCommandsWholeVaultScanTests.cs` (`WriteCommandFiles` += `RepoFile("TswapCli", "ValueCommandFields.cs")`:
+  it stages writes; `FieldInput.cs` only parses arguments and touches no store, so it stays out)
 - Test: `TswapTests/ValueCommandFieldsTests.cs`
 
 **Interfaces:**
@@ -384,8 +433,8 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
   A random-looking field value warns on stderr and is written (as in Task 6). The value-in-a-field warning
   (`FieldSecretCheck.FieldsContaining`) runs in `ValueCommandFields` for `add`, `ingest`, `ingest --rotate` and
   `rotate` alike. The fingerprint index comes from a `VaultView` (`BuildIndex`, metadata only):
-  `WriteCommandsWholeVaultScanTests.WriteCommands_DontUseTheWholeVaultApi` scans these files and `SecretRotation.cs`
-  and fails on `LoadSecrets(`, `SaveSecrets(`, `LoadRecordStates(`, `MergeRecords(`, `WriteSnapshot(` or `Reindex(`.
+  `WriteCommandsWholeVaultScanTests.WriteCommands_DontUseTheWholeVaultApi` scans these files, `SecretRotation.cs` and
+  (from this task) `ValueCommandFields.cs`, and fails on `LoadSecrets(`, `SaveSecrets(`, `LoadRecordStates(`, `MergeRecords(`, `WriteSnapshot(` or `Reindex(`.
 
 - [ ] **Step 1: Failing tests:** each command with `--field` writes value and field in one commit (one write stamp);
   `--fields` JSON; `IngestRotate_FieldWithSameWriteValue_Refused` (spec N6) and the same for `create`/`add`/`rotate`,
@@ -396,8 +445,9 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
   (`burn`, `restore`, `rotate`, `ingest --rotate`: fields byte for byte unchanged);
   `ValueInAField_Warns` theory over `add`, `ingest`, `ingest --rotate`, `rotate` (names `NAME.FIELD`, not the value);
   `Ingest_FieldsNeverFromStdin`.
-- [ ] Steps 2-5. **Break-it-once:** skip the same-write check on `ingest --rotate`; its test fails. Second: stage the
-  value before the field checks; `Create_BadField_NothingWritten` fails.
+- [ ] Steps 2-5. **Break-it-once:** skip the same-write check on `ingest --rotate`; its test fails. Second: commit the
+  value write (`writer.Commit()`) before the field checks run (staging alone writes nothing: `VaultWriter.Commit`
+  :139 is the only write, `Dispose` doesn't commit); `Create_BadField_NothingWritten` fails.
 
 ### Task 8: Commands never substitute fields
 
@@ -409,8 +459,12 @@ format 3 also when it creates the record in an unmarked folder. A format 2 recor
 **Interfaces:**
 - Produces: `Validation.ThrowIfFieldOrMalformedToken(string command)`: any `{{…}}` that is not a valid secret token,
   `name:previous`, or `@file` and contains a `.` or is otherwise malformed (`{{a.b}}`, `{{a.b.c}}`, `{{.x}}`, `{{x.}}`)
-  throws `TswapException("'{{NAME.FIELD}}' is a field: fields aren't substituted into commands. Read it with 'tswap field show NAME' and write the value into the command.")`
-  (malformed shapes: "… is not a valid token"). Called at `RunCommand.cs:31`, before unlock. In `Apply`, a marker
+  throws. Messages, pinned per row in `Run_MalformedTokens_Refused`: a `{{NAME.FIELD}}` whose two parts are a valid
+  secret name and a valid field name (`{{a.b}}`, `{{db.username}}`) →
+  `'{{NAME.FIELD}}' is a field: fields aren't substituted into commands. Read it with 'tswap field show NAME' and write the value into the command.`
+  (with the token's own text); every other dotted or malformed shape (`{{a.b.c}}`, `{{.x}}`, `{{x.}}`, `{{a.B}}`: field names are lower case) →
+  `'{{…}}' is not a valid token: a token is {{NAME}} or {{NAME:previous}}, and fields aren't substituted into commands.`
+  (the spec's "refused the same way": both refuse before unlock, only the wording differs). Called at `RunCommand.cs:31`, before unlock. In `Apply`, a marker
   `# tswap: NAME.FIELD` (today it fills NAME's value: `AnyMarkerRegex` stops at the dot) throws the same field message
   with the line number.
 
@@ -471,9 +525,12 @@ oracles side by side: `run test` = one named equality guess, `field set` = subst
 name); injection reduced not prevented; `adopt` as the deliberate exception; mixed versions; and in its "Export and import" bullet (:630) the
 spec's export note: an export carries current fields only, and a field removed after the export comes back when that
 export is imported and stays back (the import stamps it fresh), so it has to be unset again. `multi-machine.md`
-"The merge rules": per field, lineage, mixed versions. `agent-integration.md`: the agent role table gains `field
-set/unset/show`. README: one line with the same framing. The release notes (`docs/release-notes/`) are release-time
-work for the version that ships this, not part of this plan.
+"The merge rules": per field, lineage, mixed versions (naming both mixed-version ways an earlier life's fields come
+back: a 0.3.x merge, and a 0.3.x machine re-creating a name over this version's tombstone; the same sentence goes in
+`security-model.md`'s mixed-versions note). `agent-integration.md`: the agent role table gains `field
+set/unset/show`. README: one line with the same framing. Release notes: **orchestrator's ruling (plan review round 2,
+2026-11-15): release notes are written at release time, outside this plan** (the spec's Docs list names them; this
+plan does not write `docs/release-notes/`).
 
 - [ ] **Step 1:** add `PromptTests.Prompt_FieldsSection_StartsWithFraming` (asserts the section exists and its first
   sentence contains "in one place"); run — FAIL. **Step 2:** write the docs. **Step 3:** full `./runtests.sh` — PASS.
