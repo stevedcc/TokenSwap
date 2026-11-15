@@ -59,6 +59,30 @@ never the line's text or the value.
 Reproduce first: on the base, add `BaseSixtyFourInABlock_LeftUnchanged_Reported` (Task 1) and watch it fail with the
 rewritten line.
 
+## Round 2 clarifications (MiMo and GLM-5.3 both "Ready to implement: yes"; these close their minors)
+
+- **Which hits count (MiMo N6):** "a line holds an encoded hit" means an encoded hit the line path **would have
+  replaced** (selection level, after `SelectToComment`'s boundary rules), not any scan hit. A content line whose only
+  encoded occurrence is boundary-blocked is treated as today.
+- **Node properties (GLM 1):** an anchor or tag is followed by whitespace before `|`/`>`; `key: &a|` and
+  `key: !!binary|` are not block starts (YAML reads `a|` and `!!binary|` as the property).
+- **The warning's NAME (MiMo N2)** is the `Token`, so `name:previous` for a previous version (a keyword, not a value).
+  Pin one `name:previous` case in the command tests.
+- **Output when only unreplaced lines exist (MiMo N3, GLM 3):** the warnings, then `File unchanged.`, in both the real
+  run and `--dry-run` (no "(dry run) 0 line(s)…" line). The #319 command test asserts `File unchanged.` and that
+  "No secrets found" does not appear.
+- **No write without changes (MiMo N4):** when nothing was replaced the file is not written at all (as today's early
+  return), so a CRLF file keeps its line ends. Add the #319 case with CRLF line ends to the command test: bytes on
+  disk unchanged.
+- **`RedactEngineTests` doc comment (MiMo N1):** update the class and corpus doc comments to name the engine-only
+  differences now (T20's block adoption and T22's encoded lines in block content left alone); a comment only, the
+  oracle and the corpus stay as they are.
+- **More known gaps (MiMo N5, GLM 2), added to Out of scope:** `- - |` and `- - key: |` (nested sequence entries),
+  `: |` (empty key); the rule over-marks a few YAML-valid non-block lines (a plain scalar `key:|`, a comment line
+  between the node column and the content indent; safe: warned, not rewritten) and under-marks the gap between a
+  sequence entry's dash and its key (broken YAML only; today's behaviour).
+- `UnreplacedLine` lives beside `LineDiff` (implementer's choice of file).
+
 ## Task 1: find block-scalar content; leave encoded matches there alone
 
 In `TswapCore/ToCommentProcessor.cs`, one function that says which lines of a file are block-scalar content:
