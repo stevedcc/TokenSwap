@@ -23,7 +23,7 @@ namespace TswapCli.Commands;
 /// (<see cref="RecordVaultStore.Reindex"/>). It prints counts only, never names or values.
 /// </para>
 /// </summary>
-public sealed class VaultCommand : ICliCommand
+public sealed partial class VaultCommand : ICliCommand
 {
     public string Name => "vault";
     public string HelpUsage => "vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex";
@@ -35,6 +35,8 @@ public sealed class VaultCommand : ICliCommand
         var usage = $"sudo {ctx.Prefix} vault merge <other-vault-dir> [--yes] [{SlotCommand.RecoveryKeyFlag}] | sudo {ctx.Prefix} vault reindex";
         if (args is ["reindex"])
             return Reindex(ctx);
+        if (args is ["move", ..])
+            return Move(ctx, args);
         var (rest, withRecoveryKey) = SlotCommand.SplitRecoveryKeyFlag(args);
         var yes = rest.Contains("--yes");
         var positional = rest.Where(a => a != "--yes").ToArray();
