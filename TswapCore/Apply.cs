@@ -108,6 +108,10 @@ public static class Apply
 
                 // Escape the secret value for the appropriate quote style
                 var value = Value();
+                // Brief T20 (#315): a single-quoted scalar can't carry a line break or a control
+                // character, so such a value is written double-quoted, escaped.
+                if (quote == "'" && HasControlCharacter(value))
+                    quote = "\"";
                 var escapedValue = EscapeForQuote(value, quote);
                 if (burned)
                     warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");

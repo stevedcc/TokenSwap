@@ -103,6 +103,38 @@ public sealed class ApplyMultiLineTests
         Assert.Equal([escaped], row.WrittenForms);
     }
 
+    // ------------------------------------------------------------------ task 2: single quotes
+
+    [Fact]
+    public void SingleQuoted_PemBecomesDoubleQuotedAndEscaped()
+    {
+        var (value, escaped) = Cases["pem"];
+
+        var (content, applied) = Apply.ApplySecretsReporting("tls:\n  key: ''  # tswap: x", Db(value), null);
+
+        Assert.Equal($"tls:\n  key: \"{escaped}\"  # tswap: x", content);
+        Assert.Equal(value, DoubleQuotedTestDecoder.Decode(QuotedPart(content.Split('\n')[1], "  key: \"")));
+        var row = Assert.Single(applied);
+        Assert.Equal([escaped], row.WrittenForms);
+    }
+
+    [Fact]
+    public void SingleQuoted_ControlCharacterKeepsTheSeparatorWhitespace()
+    {
+        var result = Apply.ApplySecrets("key: ''# tswap: x\nother: ''\t# tswap: x", Db("a\tb"));
+
+        Assert.Equal("key: \"a\\tb\" # tswap: x\nother: \"a\\tb\"\t# tswap: x", result);
+    }
+
+    [Fact]
+    public void SingleQuoted_PlainValueStaysSingleQuoted()
+    {
+        var (content, applied) = Apply.ApplySecretsReporting("key: ''  # tswap: x", Db("it's plain"), null);
+
+        Assert.Equal("key: 'it''s plain'  # tswap: x", content);
+        Assert.Equal(["it''s plain"], Assert.Single(applied).WrittenForms);
+    }
+
     /// <summary>The text between <paramref name="start"/> and the closing quote before the marker.</summary>
     internal static string QuotedPart(string line, string start)
     {
