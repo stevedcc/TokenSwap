@@ -18,6 +18,12 @@ public sealed partial class VaultCommand
     /// <summary>Where <see cref="MoveSeam"/> is called during <c>vault move</c>.</summary>
     internal enum MoveSeamPoint
     {
+        /// <summary>
+        /// Right after a file's durable write returned, the copy visible at its path: a write that fails once its bytes
+        /// are visible (a failed flush) throws here. The path is the copy.
+        /// </summary>
+        FileWritten,
+
         /// <summary>After a file was copied; the path is the copy.</summary>
         FileCopied,
 
@@ -117,10 +123,12 @@ public sealed partial class VaultCommand
                     store.Owner.CreateDirectory(to);
                     continue;
                 }
-                var existed = File.Exists(to);
-                store.Owner.WriteDurable(to, store.Owner.ReadAllBytes(Path.Combine(vaultDir, entry.RelativePath)));
-                if (!existed)
+                // Tracked before the write (review round 2, N-1): a write that fails once its bytes are visible leaves
+                // nothing behind.
+                if (!File.Exists(to))
                     created.Add((to, false));
+                store.Owner.WriteDurable(to, store.Owner.ReadAllBytes(Path.Combine(vaultDir, entry.RelativePath)));
+                MoveSeam?.Invoke(MoveSeamPoint.FileWritten, to);
                 MoveSeam?.Invoke(MoveSeamPoint.FileCopied, to);
             }
 
@@ -305,7 +313,9 @@ public sealed partial class VaultCommand
                 var (path, isFolder) = created[i];
                 if (!isFolder)
                 {
-                    owner.Delete(path);
+                    // Never written, or already gone (a sync tool): skipped, the rest is still removed (N-2).
+                    if (File.Exists(path) || new FileInfo(path).LinkTarget is not null)
+                        owner.Delete(path);
                     continue;
                 }
                 if (!Directory.Exists(path))
@@ -322,7 +332,8 @@ public sealed partial class VaultCommand
         }
         if (kept.Count == 0)
             return null;
-        // The target when it is kept (the parents it made are kept only because they hold it), else the outermost one.
+        // The target when this command made it and kept it (the parents it made are kept only because they hold it).
+        // A target that was there before is never in the list: then the outermost kept folder the copy made is named.
         var named = kept.Contains(target) ? target : kept[^1];
         return $" The copy's files were removed; {named} was kept because it holds files this command didn't write.";
     }

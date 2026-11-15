@@ -533,6 +533,28 @@ public sealed class VaultMoveTests : IDisposable
     }
 
     [Fact]
+    public void Move_AWriteThatFailsOnceItsBytesAreVisible_LeavesNoDebris()
+    {
+        VaultCommand.MoveSeam = (point, path) =>
+        {
+            if (point == VaultCommand.MoveSeamPoint.FileWritten && Path.GetFileName(path) == "keyring")
+            {
+                Assert.True(File.Exists(path)); // the bytes are there, as after a rename whose flush then fails
+                throw new IOException("I/O error while flushing");
+            }
+        };
+        var before = Before();
+
+        var run = _m.Run("", "vault", "move", Target);
+
+        AssertNothingChanged(before, run,
+            $"Step 2 (copying the vault folder) failed at keyring: I/O error while flushing. config.json is unchanged. The copy in " +
+            $"{Path.GetFullPath(Target)} was removed; nothing was moved.");
+        Assert.DoesNotContain("didn't write", run.Err);
+        KeyMaterial.AssertNone(run.Err);
+    }
+
+    [Fact]
     public void Move_AnUnexpectedErrorInTheCopy_IsCleanedUpAndNamesTheStep()
     {
         VaultCommand.MoveSeam = (point, path) =>
