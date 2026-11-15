@@ -148,7 +148,10 @@ test like the existing one (my call, DeepSeek I3, MiMo M3). Other extension type
 5. **Histories** are merged separately: the union of the inputs' history entries, identified by (change stamp,
    origin), sorted newest first, trimmed to 5. Two history entries with the same identity but different content
    (damage only) are decided like rule 4: the ordinally smallest encoding wins (MiMo r2 N3b, DeepSeek r2 N2). Merging the same inputs twice, or in a different order, gives the
-   same bytes (tested with three copies merged in different orders).
+   same bytes (tested with three copies merged in different orders). The losing value of a concurrent change to
+   the same field is added to the winner's history as an entry with the loser's change stamp and who, so a
+   concurrent edit is never lost silently (consistent with the owner's #312 wish for values) (orchestrator's call
+   during planning, 2026-11-15).
 6. A **live** merged record carries a `Fields` extension whenever any input carried one, even with no entries left,
    so `since` is never lost (MiMo r2 N1). It is omitted only when no input had one (a record written by a version
    before this one). A tombstone carries none (rule 1).
