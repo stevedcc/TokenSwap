@@ -25,7 +25,8 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
 {
     private readonly record struct Entry(int Length, string Text, bool Burned, string Token, MatchType Type, VariantKind Kind);
 
-    private sealed record Span(int Start, int End, string Replacement);
+    /// <summary>A taken occurrence; <see cref="Token"/> and <see cref="Kind"/> are its entry's (brief T22).</summary>
+    private sealed record Span(int Start, int End, string Replacement, string Token, VariantKind Kind);
 
     /// <summary><c>redact</c>: every recognised value in <paramref name="content"/> replaced by its label (CRLF becomes LF).</summary>
     public string Redact(string content)
@@ -42,8 +43,25 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
     /// </summary>
     public (string Content, IReadOnlyList<LineDiff> Changes) ToComment(string content)
     {
+        var (result, changes, _) = ToCommentReporting(content);
+        return (result, changes);
+    }
+
+    /// <summary>
+    /// Brief T22 (#319): <see cref="ToComment"/> plus the lines it left unchanged. A marker is filled with
+    /// a value's plain form, so on a line of YAML block-scalar content
+    /// (<see cref="ToCommentProcessor.BlockScalarContent"/>) an encoded occurrence (base64, base64url,
+    /// whitespace-stripped) that the line path would replace is never replaced: the whole line stays as
+    /// it is, plain occurrences on it too, and each encoded token is reported once per line (by line,
+    /// then token ordinally). Plain occurrences on other content lines are replaced as before, and the
+    /// adoption of a whole block (T20) is unchanged.
+    /// </summary>
+    public (string Content, IReadOnlyList<LineDiff> Changes, IReadOnlyList<UnreplacedLine> Unreplaced) ToCommentReporting(string content)
+    {
         var lines = content.Replace("\r\n", "\n").Split('\n');
+        var blockContent = ToCommentProcessor.BlockScalarContent(lines);
         List<LineDiff> diffs = [];
+        List<UnreplacedLine> unreplaced = [];
         HashSet<int> linesToRemove = [];
         for (var i = 0; i < lines.Length; i++)
         {
@@ -66,17 +84,29 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
             var taken = SelectToComment(original);
             if (taken.Count == 0)
                 continue;
+            if (blockContent[i] && EncodedTokens(taken) is [_, ..] encoded)
+            {
+                unreplaced.AddRange(encoded.Select(t => new UnreplacedLine(i + 1, t)));
+                continue;
+            }
             var current = Replace(original, taken);
             diffs.Add(new LineDiff(i + 1, original, current));
             lines[i] = current;
             foreach (var j in ToCommentProcessor.ContinuationLines(lines, i, original))
             {
+                // Brief T22: a content line holding an encoded occurrence stays (and is reported in its turn).
+                if (blockContent[j] && EncodedTokens(SelectToComment(lines[j])) is [_, ..])
+                    break;
                 linesToRemove.Add(j);
                 diffs.Add(new LineDiff(j + 1, lines[j], ""));
             }
         }
-        return (string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs);
+        return (string.Join('\n', lines.Where((_, i) => !linesToRemove.Contains(i))), diffs, unreplaced);
     }
+
+    /// <summary>Brief T22: the distinct tokens of the encoded (not plain) spans in <paramref name="taken"/>, ordinally.</summary>
+    private static List<string> EncodedTokens(SortedList<int, Span> taken) =>
+        [.. taken.Values.Where(static s => s.Kind != VariantKind.Plain).Select(static s => s.Token).Distinct().Order(StringComparer.Ordinal)];
 
     /// <summary>
     /// Brief T20 (#315): the token (<c>name</c> or <c>name:previous</c>) of the stored value whose
@@ -153,7 +183,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 var (s, e, replacement) = span(entry, start);
                 if (Overlaps(taken, s, e))
                     continue;
-                taken.Add(s, new Span(s, e, replacement));
+                taken.Add(s, new Span(s, e, replacement, entry.Token, entry.Kind));
                 position = e;
             }
         }
@@ -191,7 +221,7 @@ public sealed class SecretMatcher(FingerprintIndex index, IReadOnlySet<string> b
                 var end = at + match.Length;
                 if (Overlaps(taken, at, end))
                     continue;
-                taken.Add(at, new Span(at, end, replacement));
+                taken.Add(at, new Span(at, end, replacement, entry.Token, entry.Kind));
                 position = end;
             }
         }

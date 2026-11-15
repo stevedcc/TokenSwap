@@ -147,7 +147,7 @@ public class CommandReferenceTests
 
     // ------------------------------------------------------------------ the sudo table
 
-    private static readonly string[] MixedCommands = ["slot", "broker"];
+    private static readonly string[] MixedCommands = ["slot", "broker", "vault"];
 
     /// <summary>The rows of the "Which commands need sudo" table: the subcommand (backticks dropped) and its Sudo cell.</summary>
     internal static List<(string Row, string Sudo)> SudoTable(string page)
@@ -379,6 +379,28 @@ internal static class SudoTableDrive
         results["slot approve"] = R(a.Run("", "slot", "approve", a.PathOf("other-request.json"), a.PathOf("other-approve.json")));
         results["slot add"] = R(a.Run("", "slot", "add", "--yubikey"));
         results["slot merge"] = R(a.Run("", "slot", "merge", b.ConfigPath));
+
+        // ---- vault (brief T25): merge and reindex refuse on a record vault without sudo; move really moves it.
+        results["vault merge"] = R(a.Run("", "vault", "merge", b.Dir));
+        results["vault reindex"] = R(a.Run("", "vault", "reindex"));
+        using (var e = new FleetMachine("sudo-e", SimulatedYubiKeyService.WithKeys(33333333)))
+        {
+            e.Ok("", "init", "--yubikey");
+            e.Sudo = false;
+            var oldFolder = e.VaultDir!;
+            var scratch = Directory.CreateTempSubdirectory("tswap-sudo-move-");
+            try
+            {
+                var target = Path.Combine(scratch.FullName, "vault");
+                var move = e.Run("", "vault", "move", target);
+                results["vault move"] = R(move, move.Exit == 0 && e.VaultDir == Path.GetFullPath(target) && !Directory.Exists(oldFolder)
+                    && Directory.GetDirectories(e.Dir, "vault.moved-*").Length == 1);
+            }
+            finally
+            {
+                scratch.Delete(recursive: true);
+            }
+        }
 
         // ---- broker config changes: each refuses before it parses anything.
         using var c = new FleetMachine("sudo-c") { Sudo = false };

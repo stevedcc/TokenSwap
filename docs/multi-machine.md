@@ -161,6 +161,20 @@ see [upgrading-from-0.1.md](upgrading-from-0.1.md#what-the-conversion-does).
 must never be synced. The default vault folder sits inside the config folder, so if you sync the
 config folder you sync `config.json` too: give `--vault-dir` a folder of its own and sync that.
 
+A vault made with plain `init` or `migrate --to-records` is in that default folder. Move it out of
+the config folder first, then share the new folder:
+
+```bash
+tswap vault move ~/Sync/tswap-vault    # no sudo; copies the folder, checks the copy, points this machine at it
+```
+
+The old folder is kept, renamed `<old folder>.moved-<UTC timestamp>`, until you delete it (once
+`tswap names` and a `tswap run` work). Stop other tswap commands on this machine while it runs, and
+restart `tswap broker serve` afterwards if it runs here: it keeps serving, but its template sandbox
+protects the folders it saw at startup. A known limit on Windows: a junction or symlink in a folder
+above the new folder is not resolved when tswap checks that the new folder isn't inside the vault
+folder or the config folder, so don't give it a path that goes through one.
+
 ### Three ways to share
 
 #### A sync folder
