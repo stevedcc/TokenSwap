@@ -191,6 +191,8 @@ public class PromptTests
     {
         var text = Prompt.GetText("tswap");
         string Flat(string s) => System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ");
+        foreach (var heading in new[] { "## Key rules", "## Fields", "## Commands you must NEVER use", "Rules for fields:" })
+            Assert.True(text.Contains(heading, StringComparison.Ordinal), $"the prompt has no '{heading}'");
         var keyRules = Flat(text[text.IndexOf("## Key rules", StringComparison.Ordinal)..]);
         var fields = Flat(text[text.IndexOf("## Fields", StringComparison.Ordinal)..text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)]);
         var never = text[text.IndexOf("## Commands you must NEVER use", StringComparison.Ordinal)..text.IndexOf("## Key rules", StringComparison.Ordinal)];

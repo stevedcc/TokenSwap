@@ -210,7 +210,7 @@ sudo tswap vault merge /mnt/usb/tswap-vault
   For each field the newest change wins, a removal over an older value and a value over an older removal (a later
   edit brings a removed field back; an older copy can't). Two machines changing different fields of one secret
   both keep their change. A concurrent change that loses is not lost silently: it goes into the winner's history
-  (`tswap field show NAME --history`, the last 5 changes per field). Merging the same copies again, or in another
+  (`tswap field show NAME --history`, the current state and the 5 states before it, per field). Merging the same copies again, or in another
   order, gives the same result.
 - **A delete wins over a concurrent field change**: a deleted secret has no fields, and a field write never
   brings a deleted secret back (it doesn't touch the value version that decides that).

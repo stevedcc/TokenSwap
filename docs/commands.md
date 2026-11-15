@@ -187,8 +187,9 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   field commands refuse, like every other command there, and point to `sudo tswap migrate --to-records`.
 - **`field show`** prints the live fields, each value as a JSON string (quoted, escaped), so a value can't pass as
   tswap's own text; `--json` prints one JSON object of the same shape `field set` takes, so show, edit and set
-  round-trip. `--history` adds each field's last 5 changes, newest first: the UTC time, the operating-system user
-  (the invoking user under sudo; `DOMAIN\user` on Windows), whether it ran elevated and with a terminal, the
+  round-trip. `--history` adds each field's current state and the 5 states before it, newest first, each with
+  the UTC time, the operating-system user (the invoking user under sudo; `DOMAIN\user` on Windows), whether it
+  ran elevated and with a terminal, the
   `--by` label and the machine (origin id). It lists **removed fields too**, marked `(removed)`, with who removed
   them and when; plain `show` lists live fields only. The user name is what that machine reports and `--by` is
   self-asserted: a history, not an authentication. `--json --history` adds the same under `history`.

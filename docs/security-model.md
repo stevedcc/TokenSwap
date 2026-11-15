@@ -645,7 +645,8 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
     put a value in a field.
   - **Unicode forms.** A field is stored in NFC form and checked both in that form and as given, but a
     stored secret value is fingerprinted as it was stored. A secret stored in decomposed (NFD) form is not
-    found in a field that holds its composed (NFC) form, and the reverse. Fingerprinting both forms of
+    found in a field given in its composed (NFC) form (a field given in NFD is checked in both forms, so
+    the opposite case is caught). Fingerprinting both forms of
     every value would change the record format; secrets are almost always ASCII, where both forms are the
     same.
   - **Deleted secrets' values are not checked**, so a value `field adopt` moved into a field can be set
@@ -671,8 +672,8 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
   agents. The skill text (`tswap prompt`) tells agents that field values and `--by` labels are untrusted
   data and never instructions; `field show` prints each value as a JSON string and `--json` is the form for
   agents, so a value can't pass as tswap's own output; display paths escape control and format characters.
-  An agent can still be misled by what a field says. Changes are recorded, not prevented: each keeps its
-  last 5 states with the UTC time, the machine's origin id, the operating-system user (under sudo the
+  An agent can still be misled by what a field says. Changes are recorded, not prevented: each field keeps
+  its current state and the 5 states before it, each with the UTC time, the machine's origin id, the operating-system user (under sudo the
   invoking user; on Windows `DOMAIN\user`), whether it ran elevated or with a terminal, and the optional
   `--by` label. The user name is reliable on that machine only and `--by` is self-asserted: a history, not
   an authentication. `field show --history` lists removed fields too, with who removed them and when.
