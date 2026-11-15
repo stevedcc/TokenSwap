@@ -330,7 +330,7 @@ public sealed class RecordWritesTests
         var fields = new Random(3_11);
         using var keys = FingerprintKeys.Derive(Key);
         int compared = 0, burns = 0, restores = 0, tombstones = 0, imports = 0, sameValueBurns = 0, unchanged = 0;
-        int fieldWrites = 0, fieldsUnchanged = 0, valueWritesWithEdits = 0, fieldsOnlyValueWrites = 0;
+        int fieldWrites = 0, fieldsUnchanged = 0, valueWritesWithEdits = 0, fieldsOnlyValueWrites = 0, nothingWritten = 0;
         for (var round = 0; round < 600; round++)
         {
             var name = $"s{round % 7}";
@@ -392,7 +392,6 @@ public sealed class RecordWritesTests
                             return (section, Fp(value));
                         }, edits, edits is null ? null : Claude);
                     valueWritesWithEdits += edits is null ? 0 : 1;
-                    fieldsOnlyValueWrites += edits is not null && expected is not null && expected.Version.Equals(state?.Version) ? 1 : 0;
                     Assert.Equal(expected is null, actual is null);
                     if (expected is not null)
                     {
@@ -406,6 +405,12 @@ public sealed class RecordWritesTests
                         sameValueBurns++;
                     if (expected is null || (section is null && !burnAdded))
                         unchanged++;
+                    if (expected is null)
+                        nothingWritten++; // both paths write nothing (task 3 review, Minor 1)
+                    // A same-value write that wrote its fields and nothing else (task 3 review, Minor 2).
+                    if (expected is not null && section is null && !burnAdded && expected.Version.Equals(state!.Version)
+                        && !expected.Extensions.SequenceEqual(state.Extensions))
+                        fieldsOnlyValueWrites++;
                     restores += restored ? 1 : 0;
                     imports += importedAt is null ? 0 : 1;
                     break;
@@ -459,6 +464,7 @@ public sealed class RecordWritesTests
         Assert.True(fieldWrites > 50 && fieldsUnchanged > 3 && valueWritesWithEdits > 30 && fieldsOnlyValueWrites > 5,
             $"field writes {fieldWrites} (unchanged {fieldsUnchanged}), value writes with edits {valueWritesWithEdits} " +
             $"(fields only {fieldsOnlyValueWrites})");
+        Assert.True(nothingWritten > 10, $"only {nothingWritten} rounds where both paths wrote nothing");
     }
 
     /// <summary>
