@@ -135,6 +135,56 @@ public sealed class ApplyMultiLineTests
         Assert.Equal(["it''s plain"], Assert.Single(applied).WrittenForms);
     }
 
+    // ------------------------------------------------------------------ task 3: KEY= lines refuse
+
+    public static TheoryData<string> EnvShapes => ["KEY=\"\"", "KEY=''", "KEY="];
+
+    internal static string EnvRefusal(int line, string name) =>
+        $"Line {line}: '# tswap: {name}' is on a KEY= line, which can't carry a value with line breaks or control characters. Use a YAML file, or pass the value with a {{{{{name}}}}} token.";
+
+    [Theory]
+    [MemberData(nameof(EnvShapes))]
+    public void EnvLine_ControlCharacter_Refused(string shape)
+    {
+        var (value, _) = Cases["pem-trailing-lf"];
+
+        var ex = Assert.Throws<TswapException>(() =>
+            Apply.ApplySecretsReporting($"# env\n{shape}  # tswap: x\n", Db(value), null));
+
+        Assert.Equal(EnvRefusal(2, "x"), ex.Message);
+        foreach (var part in value.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            Assert.DoesNotContain(part, ex.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(EnvShapes))]
+    public void EnvLine_TabValue_Refused(string shape)
+    {
+        var ex = Assert.Throws<TswapException>(() => Apply.ApplySecrets($"{shape}  # tswap: x", Db("left\tright")));
+
+        Assert.Equal(EnvRefusal(1, "x"), ex.Message);
+        Assert.DoesNotContain("left", ex.Message);
+        Assert.DoesNotContain("right", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("KEY=\"\"  # tswap: x", "KEY=\"plain-value\"  # tswap: x")]
+    [InlineData("KEY=''  # tswap: x", "KEY='plain-value'  # tswap: x")]
+    [InlineData("KEY=  # tswap: x", "KEY=  \"plain-value\"  # tswap: x")]
+    public void EnvLine_PlainValue_FilledAsBefore(string input, string expected)
+    {
+        Assert.Equal(expected, Apply.ApplySecrets(input, Db("plain-value")));
+    }
+
+    [Fact]
+    public void ColonLine_WithEqualsInTheKey_IsNotAnEnvLine()
+    {
+        // The separator is the prefix's last non-space character, not any '=' in it.
+        var result = Apply.ApplySecrets("a=b: \"\"  # tswap: x", Db("l1\nl2"));
+
+        Assert.Equal("a=b: \"l1\\nl2\"  # tswap: x", result);
+    }
+
     /// <summary>The text between <paramref name="start"/> and the closing quote before the marker.</summary>
     internal static string QuotedPart(string line, string start)
     {
@@ -304,6 +354,25 @@ public sealed class ApplyMultiLineRunTests : IDisposable
     private IEnumerable<string> FilesUnderRunRoots() =>
         new[] { _xdg, _tmpRoot }.SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
 
+    [Theory]
+    [MemberData(nameof(ApplyMultiLineTests.EnvShapes), MemberType = typeof(ApplyMultiLineTests))]
+    public void RunFileToken_EnvLineWithMultiLineValue_RefusedBeforeAnythingIsWritten(string shape)
+    {
+        WriteFile("app.env", $"OTHER=1\n{shape}  # tswap: pem\n");
+
+        var (exit, stdout, stderr) = Run("run", "docker", "run", "--env-file", "{{@app.env}}", "image");
+
+        Assert.Equal(0, _pty.Starts); // no child started
+        Assert.NotEqual(0, exit);
+        Assert.Empty(FilesUnderRunRoots()); // no copy written
+        Assert.Contains(ApplyMultiLineTests.EnvRefusal(2, "pem"), stderr);
+        foreach (var part in Pem.Split('\n'))
+        {
+            Assert.DoesNotContain(part, stdout);
+            Assert.DoesNotContain(part, stderr);
+        }
+    }
+
     [Fact]
     public void RunFileToken_MultiLineValue_FilledLineIsOneLineWithTheEscapedForm()
     {
@@ -318,5 +387,48 @@ public sealed class ApplyMultiLineRunTests : IDisposable
         Assert.Equal($"tls:\n  key: \"{PemEscaped}\"  # tswap: pem\n  name: app\n", copy);
         var line = copy!.Split('\n')[1];
         Assert.Equal(Pem, DoubleQuotedTestDecoder.Decode(ApplyMultiLineTests.QuotedPart(line, "  key: \"")));
+    }
+}
+
+/// <summary>Brief T20, task 3: <c>sudo tswap apply</c> refuses a <c>KEY=</c> line with a multi-line value, printing nothing.</summary>
+public sealed class ApplyMultiLineSudoTests : IDisposable
+{
+    private readonly FleetMachine _m = new("apply-ml", SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA));
+
+    public ApplyMultiLineSudoTests()
+    {
+        RecordVaultTestSupport.InitRecordVault(_m);
+        _m.Ok(ApplyMultiLineRunTests.Pem, "ingest", "pem");
+    }
+
+    public void Dispose() => _m.Dispose();
+
+    [Theory]
+    [MemberData(nameof(ApplyMultiLineTests.EnvShapes), MemberType = typeof(ApplyMultiLineTests))]
+    public void Apply_EnvLineWithMultiLineValue_RefusedPrintingNothing(string shape)
+    {
+        var file = _m.PathOf("app.env");
+        File.WriteAllText(file, $"{shape}  # tswap: pem\n");
+        _m.Sudo = true;
+
+        var (exit, stdout, stderr) = _m.Run("", "apply", file);
+
+        Assert.NotEqual(0, exit);
+        Assert.Equal("", stdout);
+        Assert.Contains(ApplyMultiLineTests.EnvRefusal(1, "pem"), stderr);
+        foreach (var part in ApplyMultiLineRunTests.Pem.Split('\n'))
+            Assert.DoesNotContain(part, stderr);
+    }
+
+    [Fact]
+    public void Apply_YamlLineWithMultiLineValue_PrintsTheEscapedForm()
+    {
+        var file = _m.PathOf("values.yaml");
+        File.WriteAllText(file, "key: ''  # tswap: pem\n");
+        _m.Sudo = true;
+
+        var stdout = _m.Ok("", "apply", file);
+
+        Assert.Equal($"key: \"{ApplyMultiLineRunTests.PemEscaped}\"  # tswap: pem\n", stdout);
     }
 }

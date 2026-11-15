@@ -108,6 +108,7 @@ public static class Apply
 
                 // Escape the secret value for the appropriate quote style
                 var value = Value();
+                RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
                 // Brief T20 (#315): a single-quoted scalar can't carry a line break or a control
                 // character, so such a value is written double-quoted, escaped.
                 if (quote == "'" && HasControlCharacter(value))
@@ -131,6 +132,7 @@ public static class Apply
                     var prefix = unquotedMatch.Groups[1].Value;
                     // Default to double quotes for safety
                     var value = Value();
+                    RefuseControlCharactersOnEnvLine(prefix, value, secretName, i + 1);
                     var escapedValue = EscapeForQuote(value, "\"");
                     if (burned)
                         warnings.WriteLine($"Warning: Secret '{secretName}' is burned (line {i + 1}) — applying anyway; rotate this secret after use");
@@ -147,6 +149,19 @@ public static class Apply
 
         return (string.Join('\n', lines),
             applied.Select(r => (r.Name, r.Raw, (IReadOnlyList<string>)r.WrittenForms)).ToList());
+    }
+
+    /// <summary>
+    /// Brief T20 (#315): a line whose separator (the last non-space character of the prefix) is
+    /// <c>=</c> is .env-style, where parsers disagree on escapes (Docker's <c>--env-file</c> reads quotes
+    /// literally), so a value with a control character can't be written correctly there. The refusal
+    /// names the line and the marker, never the value.
+    /// </summary>
+    private static void RefuseControlCharactersOnEnvLine(string prefix, string value, string marker, int line)
+    {
+        if (prefix.TrimEnd() is [.., '='] && HasControlCharacter(value))
+            throw new TswapException(
+                $"Line {line}: '# tswap: {marker}' is on a KEY= line, which can't carry a value with line breaks or control characters. Use a YAML file, or pass the value with a {{{{{marker}}}}} token.");
     }
 
     private static string EscapeForQuote(string value, string quoteChar) => quoteChar switch
