@@ -16,11 +16,9 @@ namespace TswapTests;
 /// </summary>
 public class PeerIdentityLivenessTests(ITestOutputHelper output)
 {
-    [Fact]
+    [LinuxFact("pidfds are Linux-only")]
     public void ALiveProcessOfAnotherUid_IsAlive()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // pidfds are Linux-only
         // The test detects the bug only where signal 0 to pid 1 is refused: pid 1 of another uid, and this
         // process not root (a CAP_KILL holder would also be allowed; CI runners have none). Say so when it can't.
         var ownUid = StatusUid("/proc/self/status");
@@ -34,11 +32,9 @@ public class PeerIdentityLivenessTests(ITestOutputHelper output)
         Assert.True(PeerIdentity.DefaultPidfdAlive(peer));
     }
 
-    [Fact]
+    [LinuxFact]
     public void AnExitedAndReapedProcess_IsNotAlive()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         using var child = Process.Start(new ProcessStartInfo("sleep", "30") { UseShellExecute = false })!;
         var fd = BrokerSandboxNative.PidfdOpen(child.Id);
         Assert.True(fd >= 0, "pidfd_open(child) failed");
@@ -51,11 +47,9 @@ public class PeerIdentityLivenessTests(ITestOutputHelper output)
         Assert.False(PeerIdentity.DefaultPidfdAlive(peer));
     }
 
-    [Fact]
+    [LinuxFact]
     public void AZombie_ExitedButNotReaped_IsNotAlive()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         // A zombie whose parent never reaps it: sh starts `sleep` in the background, prints its pid and execs into
         // a long sleep, which never waits for children. .NET reaps only its own children, so the grandchild stays
         // a zombie after it is killed.

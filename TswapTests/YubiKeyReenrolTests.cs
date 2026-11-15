@@ -542,11 +542,10 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         Assert.Matches(@"\(fingerprint [0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}\)", stdout);
     }
 
-    [Fact]
+    [UnixFact("the owner switch is Unix's (DirectoryOwnerMatcher never switches on Windows)")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void SlotAdd_Reenrol_UnderSudo_RememberedFileKeepsOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the owner switch is Unix's (DirectoryOwnerMatcher never switches on Windows)
         var m = ConvertedTwoKeyVault();
         Reprogram(m, SerialA);
         File.Delete(HintPath(m));

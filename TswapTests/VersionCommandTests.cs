@@ -153,13 +153,12 @@ public sealed class VersionCommandTests
     /// Line 2(a): with an empty, unwritable HOME (and no TSWAP_CONFIG_DIR or XDG_CONFIG_HOME) nothing is read or created:
     /// the folder is still empty afterwards and nothing is printed but the version line.
     /// </summary>
-    [Theory]
+    [UnixTheory("HOME and its mode bits are the Unix inputs")]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     [InlineData("--version")]
     [InlineData("version")]
     public void Version_WithAnEmptyUnwritableHome_CreatesNothing_AndPrintsOnlyTheLine(string form)
     {
-        if (OperatingSystem.IsWindows()) return; // HOME and its mode bits are the Unix inputs
-
         var home = Path.Combine(Path.GetTempPath(), "tswap-version-home-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(home);
         try

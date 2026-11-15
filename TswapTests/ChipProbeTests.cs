@@ -70,10 +70,9 @@ public class ChipProbeTests
         Assert.Equal(new MachineChip(null, "no access"), ChipProbe.FromProbe(HardwareBackend.Tpm, (false, "no access")));
     }
 
-    [Fact]
+    [LinuxFact]
     public void Detect_OnLinux_NeverOffersASecureEnclave()
     {
-        if (!OperatingSystem.IsLinux()) return;
         Assert.NotEqual(HardwareBackend.SecureEnclave, ChipProbe.Detect().Backend);
     }
 }

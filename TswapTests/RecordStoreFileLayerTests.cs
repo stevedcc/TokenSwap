@@ -46,11 +46,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
 
     private static string Full(string path) => Path.GetFullPath(path);
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
     public void UnderSudo_EveryRecordKeyringBackupAndTempFolderWrite_IsDoneAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         _keys.PluggedIn = [SerialA, SerialB];
         // Brief T16-S1: the XOR vault written as 0.1's init did (init makes record vaults now).
         ClassicVaultTestSupport.CreateXorVault(_m, secrets: new Dictionary<string, Secret> { ["s"] = new("v", DateTime.UtcNow, DateTime.UtcNow) });
@@ -86,11 +84,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void UnderSudo_AKeyringWrite_AndItsConfigBackup_AreDoneAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _keys.PluggedIn = [SerialA];
         InitRecordVault(_m);
         var fake = AsRoot();
@@ -105,11 +101,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         Assert.All(fake.Switches, s => Assert.Equal((UserUid, UserGid), (s.Uid, s.Gid)));
     }
 
-    [Fact]
+    [UnixFact]
     public void APlantedLinkToARootOnlyFile_IsNotReadThrough()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _keys.PluggedIn = [SerialA];
         var vaultKey = VaultKey(_m, InitRecordVault(_m));
         _m.Ok("v1", "ingest", "s");
@@ -136,11 +130,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         Assert.Equal(rootsFile, new FileInfo(record).LinkTarget);
     }
 
-    [Fact]
+    [UnixFact]
     public void APlantedLinkToARecordOutsideTheFolder_IsReplacedByAWrite_NeverWrittenThrough()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _keys.PluggedIn = [SerialA];
         var vaultKey = VaultKey(_m, InitRecordVault(_m));
         _m.Ok("v1", "ingest", "s");
@@ -162,11 +154,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
     [DllImport("libc", EntryPoint = "umask")]
     private static extern uint SetUmask(uint mask);
 
-    [Fact]
+    [UnixFact]
     public void NewFoldersAre0700_AndFiles0600_UnderUmask0()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _keys.PluggedIn = [SerialA];
         // Brief T16-S1: a classic keyring vault as 0.1's init --keyring made it, holding "s".
         var (vaultKey, _) = ClassicVaultTestSupport.CreateKeyringVault(_m, "--yubikey");
@@ -192,11 +182,9 @@ public sealed class RecordStoreFileLayerTests : IDisposable
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void AVaultWithWiderModes_IsTightenedOnTheNextWrite_WithOneNotice_AndAReadChangesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _keys.PluggedIn = [SerialA];
         InitRecordVault(_m);
         _m.Ok("v1", "ingest", "a");

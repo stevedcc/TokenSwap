@@ -17,11 +17,9 @@ public class UnixLockFileRaceTests
 {
     private const int Takers = 8;
 
-    [Fact]
+    [UnixFact("flock is Unix")]
     public void ASecondTaker_WhileTheLockIsHeld_GetsNullAndHeldElsewhere_WithoutThrowing()
     {
-        if (OperatingSystem.IsWindows())
-            return; // flock is Unix
         var dir = Directory.CreateTempSubdirectory("tswap-lock-").FullName;
         try
         {
@@ -43,11 +41,9 @@ public class UnixLockFileRaceTests
         }
     }
 
-    [Fact]
+    [UnixFact("flock is Unix")]
     public void ConcurrentTakers_ExactlyOneHoldsTheLock_EveryRound()
     {
-        if (OperatingSystem.IsWindows())
-            return; // flock is Unix
         var dir = Directory.CreateTempSubdirectory("tswap-lock-").FullName;
         try
         {

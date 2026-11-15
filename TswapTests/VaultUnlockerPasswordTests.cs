@@ -753,11 +753,9 @@ public class VaultUnlockerPasswordTests
         Assert.Equal(kek, recovered);
     }
 
-    [Fact]
+    [LinuxFact]
     public void LinuxTpm_UnsplitPasswordBlob_RefusedBeforeTpm2Tools()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         // Brief T17 task 8 replaced task 3's NotImplementedException placeholder: an unsplit TSTP blob is
         // still refused before tpm2-tools is touched, now with ruling 3's legacy-parser text
         // (Tpm2ArgvTests.UnsplitTstpBlob_SaysNewerTswap pins it in full).

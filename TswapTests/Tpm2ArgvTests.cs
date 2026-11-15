@@ -38,11 +38,9 @@ public class Tpm2ArgvTests
 
     private static string ExpectedAuthText(StretchedPassword p) => "hex:" + Convert.ToHexString(Bytes(p)).ToLowerInvariant();
 
-    [Fact]
+    [LinuxFact]
     public void PasswordSlot_Argv_HoldsNoSecret()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -74,11 +72,9 @@ public class Tpm2ArgvTests
         Assert.DoesNotContain("-p", load.Args); // tpm2_load takes no auth
     }
 
-    [Fact]
+    [LinuxFact]
     public void AuthContent_IsHexPrefixed64LowercaseHex_InTheMemfdAndOnStdin()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -92,11 +88,9 @@ public class Tpm2ArgvTests
         Assert.Equal(expected, Encoding.ASCII.GetString(tpm.Calls.Single(c => c.Command == "tpm2_unseal").Stdin!));
     }
 
-    [Fact]
+    [LinuxFact]
     public void AuthPath_IsAMemfd_NotAFile()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -107,11 +101,9 @@ public class Tpm2ArgvTests
         Assert.StartsWith("/memfd:", tpm.CreateAuthLinkTarget);
     }
 
-    [Fact]
+    [LinuxFact]
     public void Memfd_IsClosedAfterTheChildStarted()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -123,11 +115,9 @@ public class Tpm2ArgvTests
         Assert.False(IsOurMemfd(tpm.CreateAuthFd)); // and not open afterwards
     }
 
-    [Fact]
+    [LinuxFact]
     public void Memfd_IsClosedAfterAFailedStart()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools { FailToStart = "tpm2_create" };
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -139,11 +129,9 @@ public class Tpm2ArgvTests
         Assert.False(IsOurMemfd(tpm.CreateAuthFd));
     }
 
-    [Fact]
+    [LinuxFact]
     public void UnsealStdin_IsZeroedAfterTheCall()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -164,11 +152,9 @@ public class Tpm2ArgvTests
     private const string RsaPrimary =
         "tpm2_createprimary -C o -G rsa2048:null:aes128cfb -g sha256 -a fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt -c <tmp>/primary.ctx";
 
-    [Fact]
+    [LinuxFact]
     public void PasswordFreeSlot_Argv_EccPrimary_FlushBeforeEachStep()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         var key = RandomNumberGenerator.GetBytes(32);
@@ -196,11 +182,9 @@ public class Tpm2ArgvTests
         Assert.Null(tpm.Calls.Single(c => c.Command == "tpm2_unseal").Stdin);
     }
 
-    [Fact]
+    [LinuxFact]
     public void RsaUnseal_Argv_PinnedRsaTemplate_FlushBeforeEachStep()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         var key = RandomNumberGenerator.GetBytes(32);
@@ -222,13 +206,11 @@ public class Tpm2ArgvTests
         ], tpm.Calls.Select(c => c.Normalised).ToList());
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData(true)]
     [InlineData(false)]
     public void PasswordSlot_Argv_SealsUnderEcc_UnsealsUnderTheFlaggedPrimary(bool eccPrimary)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -240,11 +222,9 @@ public class Tpm2ArgvTests
         Assert.Equal([EccPrimary, eccPrimary ? EccPrimary : RsaPrimary], primaries);
     }
 
-    [Fact]
+    [LinuxFact]
     public void WrongPassword_OneUnseal_Ruling18Text()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var right = Password();
@@ -258,11 +238,9 @@ public class Tpm2ArgvTests
         Assert.Single(tpm.Calls, c => c.Command == "tpm2_unseal");
     }
 
-    [Fact]
+    [LinuxFact]
     public void Lockout_Ruling18Text()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -275,13 +253,11 @@ public class Tpm2ArgvTests
         Assert.Equal(VaultPasswordRefusal.Lockout, ex.Reason);
     }
 
-    [Fact]
+    [LinuxFact]
     public void LegacyUnseal_AuthFail_SaysStrippedHeader()
     {
         // Ruling 3: a password object whose TSTP header was removed is unsealed without an auth; the TPM
         // answers TPM_RC_AUTH_FAIL, which is the stripped-header case, not "different machine".
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();
@@ -293,14 +269,12 @@ public class Tpm2ArgvTests
         Assert.Equal(VaultPasswordRefusal.StrippedHeader, ex.Reason);
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData(1, 0x01)]
     [InlineData(2, 0x01)]
     [InlineData(1, 0x03)]
     public void UnsplitTstpBlob_SaysNewerTswap(byte version, byte flags)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.Password);
@@ -317,13 +291,11 @@ public class Tpm2ArgvTests
     /// Issue #261: an unsplit <c>TSTP</c> blob without the password bit (an ECC slot's <c>0x02</c>) gets the plain "needs
     /// a newer tswap" text, the one v0.2.0 says for it, and never claims the slot needs the vault password.
     /// </summary>
-    [Theory]
+    [LinuxTheory]
     [InlineData(1, 0x02)]
     [InlineData(2, 0x02)]
     public void UnsplitTstpBlob_WithoutThePasswordBit_DoesNotClaimThePassword(byte version, byte flags)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         var tstp = TpmSlotBlob.Wrap([5, 0, 0, 0, 1, 2, 3, 4, 5, 6], TpmSlotBlob.EccPrimary);
@@ -336,15 +308,13 @@ public class Tpm2ArgvTests
         Assert.Empty(tpm.Calls); // refused before tpm2-tools is touched
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData("TPM2_PT_PERMANENT:\n  ownerAuthSet:              0\n  endorsementAuthSet:        0\n  lockoutAuthSet:            0\n", 0, true)]
     [InlineData("TPM2_PT_PERMANENT:\n  ownerAuthSet:              0\n  lockoutAuthSet:            1\n", 0, false)]
     [InlineData("garbage", 0, null)]
     [InlineData("  lockoutAuthSet:            0\n", 1, null)]
     public void LockoutProbe_ParsesTheFlag_SilentOnFailure(string stdout, int exit, bool? expected)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         List<string> calls = [];
         using var _ = Tpm2ToolsInterop.UseRunner((command, args, stdin, started) =>
         {
@@ -357,21 +327,17 @@ public class Tpm2ArgvTests
         Assert.Equal(["tpm2_getcap properties-variable"], calls);
     }
 
-    [Fact]
+    [LinuxFact]
     public void LockoutProbe_NoTpm2Tools_IsNull()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         using var _ = Tpm2ToolsInterop.UseRunner((_, _, _, _) => throw new TswapException("Could not run 'tpm2_getcap'"));
 
         Assert.Null(TpmLockoutProbe.IsLockoutAuthEmpty());
     }
 
-    [Fact]
+    [LinuxFact]
     public void Service_PasswordSlot_RoundTrips_ProviderCalledOnce()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var tpm = new FakeTpm2Tools();
         using var _ = Tpm2ToolsInterop.UseRunner(tpm.Run);
         using var password = Password();

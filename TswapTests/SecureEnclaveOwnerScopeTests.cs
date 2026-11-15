@@ -151,10 +151,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // --- the Secure Enclave runs inside the owner switch ---
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
     public void Privileged_SecureEnclaveVault_Get_UnlocksAsTheFoldersOwner_AndReturnsTheValue()
     {
-        if (OperatingSystem.IsWindows()) return; // no identity switch on Windows
         var dir = SecureEnclaveVault();
 
         var value = Ok(dir, Root(), "", "get", "db").Trim();
@@ -163,12 +162,11 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         AssertSecureEnclaveCallsRanAsTheOwner("Unlock", dir);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("--with-touch")]
     [InlineData("--no-touch")]
     public void Privileged_InitSecureEnclave_CreatesTheKeyAsTheFoldersOwner(string touch)
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("mac");
 
         Ok(dir, Root(), "", "init", "--secure-enclave", touch);
@@ -178,10 +176,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Equal("ok", Ok(dir, null, "", "get", "check").Trim());
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_SlotRequestSecureEnclave_CreatesTheKeyAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("mac");
 
         Ok(dir, Root(), "", "slot", "request", "--secure-enclave", "--with-touch", Path.Combine(dir, "request.json"));
@@ -190,10 +187,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.NotNull(LoadConfig(dir).PendingSlotHwBlob);
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_RecoverSecureEnclave_CreatesTheKeyAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows()) return;
         var (router, recoveryKey) = TpmVault();
         var dir = Folder("mac");
         CopyVault(router, dir);
@@ -205,10 +201,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Equal("router-pw", Ok(dir, null, "", "get", "router").Trim());
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_SlotAcceptOfAPendingSecureEnclaveRequest_UnwrapsAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows()) return;
         var (router, _) = TpmVault();
         var dir = Folder("mac");
         var request = Path.Combine(dir, "request.json");
@@ -226,10 +221,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // --- only the Secure Enclave ---
 
-    [Fact]
+    [UnixFact]
     public void Privileged_TpmVault_InitAndUnlock_RunWithoutASwitch()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("router");
 
         Ok(dir, Root(), "", "init", "--tpm");
@@ -258,10 +252,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Contains(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Unlock" && c.As is null);
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_FolderOwnedByRoot_NoSwitch_AndTheValueComesBack()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = SecureEnclaveVault();
         var fake = Root(dirUid: 0, dirGid: 0);
 
@@ -274,10 +267,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // Decision 2: AsOwner(path) acts as the owner of path's nearest existing PARENT folder, so the
     // scope must name config.json (whose parent is the config folder), not the config folder.
-    [Fact]
+    [UnixFact]
     public void Privileged_ConfigFolderAndItsParentOwnedByDifferentUsers_TheSwitchGoesToTheConfigFoldersOwner()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = SecureEnclaveVault();
         var fake = Root(dirUid: 2000, dirGid: 2001); // the parent (and everything else)
         fake.Owners[dir] = (UserUid, UserGid);
@@ -324,10 +316,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     private string SwitchFailure(string dir) => $"Could not switch to uid {UserUid} for {ConfigJson(dir)}; nothing was done with it.";
 
-    [Fact]
+    [UnixFact]
     public void Privileged_TheSwitchFails_TheCommandFailsWithT5sError_AndTheSecureEnclaveIsNeverCalled()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = SecureEnclaveVault();
         var scopeAttempt = SecureEnclaveSwitchAttempt(dir, "get", "db");
         var fake = Root();
@@ -346,10 +337,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
     // Fix round 1 (orchestrator's ruling, MiMo 1, GLM F1): a failed owner switch is a hard stop. In a
     // keyring vault that also has a one-key YubiKey slot (which would open it), the command fails
     // with T5's message alone: no "another machine" hint, no YubiKey slot tried.
-    [Fact]
+    [UnixFact]
     public void Privileged_TheSwitchFails_InAVaultWithAYubiKeySlot_IsAHardStop()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = SecureEnclaveVault();
         Ok(dir, null, "", "slot", "add", "--yubikey");
         Assert.Equal("s3cret", Ok(dir, null, "", "get", "db").Trim());
@@ -369,10 +359,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // Round 2 (MiMo round 2, finding 1): every failure to establish the owner identity at the
     // scope is the hard-stop type, including T5's "could not read the folder's owner" refusal.
-    [Fact]
+    [UnixFact]
     public void Privileged_TheFoldersOwnerCannotBeReadAtTheScope_IsAHardStop()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = SecureEnclaveVault();
         Ok(dir, null, "", "slot", "add", "--yubikey"); // a slot that would open the vault
         var (_, ownerRead) = ScopePoint([dir, dir], "", "get", "db");
@@ -390,10 +379,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Equal(ownerRead + 1, fake.OwnerReads); // nothing read an owner after the refusal
     }
 
-    [Fact]
+    [UnixFact]
     public void Scope_TheFoldersOwnerCannotBeRead_ThrowsOwnerSwitchException_AndTheActionNeverRuns()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("mac");
         var fake = Root();
         fake.FailOwnerReadAt = 0;
@@ -419,10 +407,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // Round 2 (MiMo round 2, finding 2): the hard stop reaches the CLI root from the enrolment path
     // too, and nothing is written.
-    [Fact]
+    [UnixFact]
     public void Privileged_InitSecureEnclave_TheSwitchFails_ExitsWithT5sError_AndWritesNothing()
     {
-        if (OperatingSystem.IsWindows()) return;
         var (attempt, _) = ScopePoint([Folder("probe1"), Folder("probe2")], "", "init", "--secure-enclave", "--with-touch");
         var dir = Folder("mac");
         var fake = Root();
@@ -436,10 +423,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(dir));
     }
 
-    [Fact]
+    [UnixFact]
     public void Privileged_RecoverSecureEnclave_TheSwitchFails_ExitsWithT5sError_AndChangesNothing()
     {
-        if (OperatingSystem.IsWindows()) return;
         var (router, recoveryKey) = TpmVault();
         string Copy(string name)
         {
@@ -463,10 +449,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
     }
 
     // MiMo 2: the exception type the brief asks for, below the CLI (which shows only the message).
-    [Fact]
+    [UnixFact]
     public void Scope_ASwitchThatFails_ThrowsT5sOwnerSwitchException_AndTheActionNeverRuns()
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("mac");
         var fake = Root();
         fake.FailSwitchAt = 0;
@@ -482,10 +467,9 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
     // GLM F2 / MiMo 8: first init with no config folder yet: the scope acts as the owner of the
     // nearest existing folder (the folder-to-be's parent, the user's).
-    [Fact]
+    [UnixFact]
     public void Privileged_InitSecureEnclave_BeforeTheConfigFolderExists_CreatesTheKeyAsItsParentsOwner()
     {
-        if (OperatingSystem.IsWindows()) return;
         var parent = Path.Combine(_root, "home");
         Directory.CreateDirectory(parent);
         var dir = Path.Combine(parent, "tswap");
@@ -564,12 +548,11 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
     }
 
     // T11's flag byte: the decorator hands requirePresence through unchanged.
-    [Theory]
+    [UnixTheory]
     [InlineData("--with-touch", 1)]
     [InlineData("--no-touch", 0)]
     public void Privileged_TheDecoratorPassesRequirePresenceThrough(string touch, byte flag)
     {
-        if (OperatingSystem.IsWindows()) return;
         var dir = Folder("mac");
 
         Ok(dir, Root(), "", "init", "--secure-enclave", touch);
@@ -580,13 +563,12 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
     }
 
     // T7's lazy store: building the decorated backends resolves no folder.
-    [Theory]
+    [UnixTheory("HOME/XDG are the Unix inputs")]
     [InlineData("help")]
     [InlineData("prompt")]
     [InlineData("completion", "bash")]
     public void WithTheBackendsWired_AVaultFreeCommand_NeverResolvesTheStore(params string[] args)
     {
-        if (OperatingSystem.IsWindows()) return; // HOME/XDG are the Unix inputs
         var fake = Root();
         var env = new Dictionary<string, string?> { ["TSWAP_TEST_KEY"] = TestKeyHex }; // no HOME, no TSWAP_CONFIG_DIR
 

@@ -171,31 +171,12 @@ public static class SshAgentMessages
 /// </summary>
 public static class SshTestSkip
 {
-    /// <summary>True on Windows, where the broker doesn't run (Unix sockets and peer credentials).</summary>
-    [System.Runtime.Versioning.SupportedOSPlatformGuard("windows")]
-    public static bool OnWindows(Xunit.Abstractions.ITestOutputHelper output)
-    {
-        if (!OperatingSystem.IsWindows())
-            return false;
-        output.WriteLine("SKIPPED: the broker is Unix-only (Unix sockets and kernel peer credentials).");
-        return true;
-    }
-
     /// <summary>True when ssh-keygen or openssl (or Unix) is missing, so keys can't be generated here.</summary>
     public static bool WithoutKeyTools(Xunit.Abstractions.ITestOutputHelper output)
     {
         if (SshTestKeys.HaveTools)
             return false;
         output.WriteLine("SKIPPED: ssh-keygen or openssl is not installed (or this is Windows); the in-process key tests cover the parser.");
-        return true;
-    }
-
-    /// <summary>True off Linux (the binary's serve tests use prctl and /proc).</summary>
-    public static bool OffLinux(Xunit.Abstractions.ITestOutputHelper output)
-    {
-        if (OperatingSystem.IsLinux())
-            return false;
-        output.WriteLine("SKIPPED: the end-to-end serve test is Linux-only.");
         return true;
     }
 }
