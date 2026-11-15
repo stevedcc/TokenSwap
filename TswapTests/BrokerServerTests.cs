@@ -545,13 +545,64 @@ public class BrokerServerTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ bounded unlock
 
-    private Task WaitForUnlocksStartedAsync(int count)
+    /// <summary>
+    /// Waits until <paramref name="count"/> unlocks have started and the unlock timeout of this request is armed, so
+    /// an <see cref="BrokerManualClock.Advance"/> reaches it (#288: the read starts on the pool before the handler
+    /// arms the timeout, and an advance in between was lost). <paramref name="armedBefore"/> is
+    /// <see cref="BrokerManualClock.UnlockTimersArmed"/> read before the send: every earlier timer was armed before
+    /// its response was read, so the next one is this request's. Needs a gated read (<see cref="FakeBrokerSecrets.Gate"/>):
+    /// an ungated one may complete before <c>WaitAsync</c>, which then arms no timer, and this would never return.
+    /// </summary>
+    private Task WaitForUnlockArmedAsync(int count, int armedBefore)
     {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Check()
+        {
+            if (_h.Secrets.Unlocks >= count && _h.Clock.UnlockTimersArmed > armedBefore)
+                ready.TrySetResult();
+        }
+        _h.Secrets.UnlockStarted += _ => Check();
+        _h.Clock.UnlockTimerArmed += Check;
+        Check(); // subscribed to both first, so neither signal in between is missed
+        return ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task WaitForUnlockArmed_WaitsForTheTimeoutToBeArmed_NotOnlyForTheReadToStart()
+    {
+        // #288: the fake's read starts on the pool before the handler arms the unlock timeout; an Advance in between
+        // was lost and the request hung until the harness's guard. Here the arming is held, with the read started.
+        if (OperatingSystem.IsWindows())
+            return;
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _h.Secrets.UnlockStarted += n => { if (n >= count) started.TrySetResult(); };
-        if (_h.Secrets.Unlocks >= count) // subscribed first, so a start in between is not missed
-            started.TrySetResult();
-        return started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        _h.Secrets.Gate = hang;
+        _h.Secrets.UnlockStarted += _ => started.TrySetResult();
+        _h.Clock.HoldUnlockTimerCreation = hold;
+        _h.Clock.UnlockTimerCreationHeld += () => held.TrySetResult();
+        await _h.StartAsync();
+        try
+        {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
+            var request = _h.GetAsync("lane1", "/echo/a");
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await held.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var wait = WaitForUnlockArmedAsync(1, armedBefore);
+            Assert.False(wait.IsCompleted);
+
+            hold.TrySetResult();
+            await wait;
+            _h.Clock.Advance(TimeSpan.FromSeconds(30));
+            Assert.Equal(503, BrokerHarness.StatusOf(await request));
+        }
+        finally
+        {
+            hold.TrySetResult();
+            hang.TrySetResult();
+        }
     }
 
     [Fact]
@@ -566,8 +617,9 @@ public class BrokerServerTests : IAsyncLifetime
         await _h.StartAsync();
         try
         {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var request = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(1);
+            await WaitForUnlockArmedAsync(1, armedBefore);
             _h.Clock.Advance(TimeSpan.FromSeconds(29));
             Assert.False(request.IsCompleted);
             _h.Clock.Advance(TimeSpan.FromSeconds(1));
@@ -596,8 +648,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 3; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
                 Assert.Equal(i == 3, _h.Server!.Fatal.IsCompleted);
@@ -623,8 +676,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 2; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -632,8 +686,9 @@ public class BrokerServerTests : IAsyncLifetime
             _h.Secrets.Gate = null;
             Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/echo/a")));
             _h.Secrets.Gate = hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var armedBeforeAgain = _h.Clock.UnlockTimersArmed;
             var again = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBeforeAgain);
             _h.Clock.Advance(TimeSpan.FromSeconds(30));
             Assert.Equal(503, BrokerHarness.StatusOf(await again));
             Assert.False(_h.Server!.Fatal.IsCompleted);
@@ -656,8 +711,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             for (var i = 1; i <= 2; i++)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(i);
+                await WaitForUnlockArmedAsync(i, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -667,8 +723,9 @@ public class BrokerServerTests : IAsyncLifetime
             Assert.Equal(502, BrokerHarness.StatusOf(await _h.GetAsync("other", "/second/a")));
             _h.Secrets.Fail = false;
             _h.Secrets.Gate = hang;
+            var armedBeforeAgain = _h.Clock.UnlockTimersArmed;
             var again = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBeforeAgain);
             _h.Clock.Advance(TimeSpan.FromSeconds(30));
             Assert.Equal(503, BrokerHarness.StatusOf(await again));
             Assert.False(_h.Server!.Fatal.IsCompleted);
@@ -691,8 +748,9 @@ public class BrokerServerTests : IAsyncLifetime
         {
             async Task TimeoutAsync(int startedCount)
             {
+                var armedBefore = _h.Clock.UnlockTimersArmed;
                 var request = _h.GetAsync("lane1", "/echo/a");
-                await WaitForUnlocksStartedAsync(startedCount);
+                await WaitForUnlockArmedAsync(startedCount, armedBefore);
                 _h.Clock.Advance(TimeSpan.FromSeconds(30));
                 Assert.Equal(503, BrokerHarness.StatusOf(await request));
             }
@@ -707,8 +765,9 @@ public class BrokerServerTests : IAsyncLifetime
             await TimeoutAsync(3);
 
             // A client that gives up while queued behind the wedged unlock.
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var stuck = _h.GetAsync("lane1", "/echo/a");
-            await WaitForUnlocksStartedAsync(4);
+            await WaitForUnlockArmedAsync(4, armedBefore);
             var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
             var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -739,8 +798,9 @@ public class BrokerServerTests : IAsyncLifetime
         await _h.StartAsync();
         try
         {
+            var armedBefore = _h.Clock.UnlockTimersArmed;
             var first = _h.GetAsync("lane1", "/echo/first");
-            await WaitForUnlocksStartedAsync(1);
+            await WaitForUnlockArmedAsync(1, armedBefore);
             var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _h.Server!.Handler.WaitingForUnlock += () => queued.TrySetResult();
             var client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
