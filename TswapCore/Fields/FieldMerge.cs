@@ -10,7 +10,8 @@ namespace TswapCore.Fields;
 /// them changes nothing.
 /// <list type="bullet">
 /// <item><b>Lineage:</b> <see cref="FieldSet.Since"/> is the largest input's; entries (values and
-/// delete markers) changed before it belong to an earlier life of the name and are dropped.</item>
+/// delete markers) and history changes stamped before it belong to an earlier life of the name and
+/// are dropped.</item>
 /// <item><b>Per field:</b> the entry with the newest change stamp wins, a marker over a value and a
 /// value over a marker alike. Equal stamps with different content (damage only) are decided by the
 /// ordinally smallest (deleted flag, value bytes), then the smallest encoded who.</item>
@@ -47,7 +48,8 @@ public static class FieldMerge
             var replaced = candidates
                 .Where(e => !SameState(e, winner))
                 .Select(e => new FieldChange(e.Value, e.Changed, e.Who));
-            entries.Add(winner with { History = CanonicalHistory(candidates.SelectMany(e => e.History).Concat(replaced)) });
+            var kept = candidates.SelectMany(e => e.History).Where(c => c.Changed.CompareTo(since) >= 0);
+            entries.Add(winner with { History = CanonicalHistory(kept.Concat(replaced)) });
         }
         return new FieldSet(since, entries);
     }

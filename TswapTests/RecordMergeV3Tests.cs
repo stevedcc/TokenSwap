@@ -490,4 +490,49 @@ public class RecordMergeV3Tests
         Assert.Equal(80, FieldsCodec.TryGet(written.Extensions)!.Live.Count());
         Assert.True(RecordMerge.MergeAll([written, onA, onB]).SameState(merged));
     }
+
+    private static (RecordMetadata, IReadOnlyDictionary<Stamp, byte[]>) MetaOf(SecretRecord r) =>
+        (new RecordMetadata(r.RecordId, r.Write, r.Type, r.Version, r.Name, r.CreatedMs, r.Burns, r.Fingerprints,
+            r.Previous?.Version, r.Previous?.Fingerprints, r.Extensions),
+         new Dictionary<Stamp, byte[]> { [r.Version] = [1, 2, 3] });
+
+    /// <summary>Review I1: a Fields extension that can't be decoded is a conflict (that record unreadable), on both paths.</summary>
+    [Theory]
+    [InlineData(new byte[] { 1 })] // version 1, truncated
+    [InlineData(new byte[] { 2, 0, 0 })]
+    public void MergeAll_MalformedFields_IsAConflict_OnBothPaths(byte[] data)
+    {
+        var damaged = Rec(S(1000), "v", write: S(5000)) with { Extensions = [new RecordExtension(FieldsExtension.Type, data)] };
+        var good = Rec(S(1000), "v", write: S(4000)) with { Extensions = [FieldsExt(S(1000), Field("host", "db", S(1500)))] };
+
+        foreach (var inputs in new[] { new[] { damaged }, [damaged, good], [good, damaged] })
+        {
+            var full = Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAll(inputs));
+            Assert.Contains("fields extension", full.Message);
+            var meta = Assert.Throws<RecordConflictException>(() => RecordMerge.MergeAllMetadata([.. inputs.Select(MetaOf)]));
+            Assert.Equal(full.Message, meta.Message);
+        }
+    }
+
+    /// <summary>Review M1 ruling: the merged Fields extension keeps its place in the list.</summary>
+    [Fact]
+    public void MergeAll_FieldsFirst_KeepsItsPosition()
+    {
+        var x = Rec(S(2000), "v", write: S(2500)) with
+        {
+            Extensions = [FieldsExt(S(2000), Field("host", "db", S(2400))), new RecordExtension(0x7777, [7])],
+        };
+        var copy = SecretRecordCodec.Decode(SecretRecordCodec.Encode(x, VaultKey, 3), VaultKey);
+
+        var merged = MergeEveryOrder([x, copy])!;
+
+        Assert.True(merged.SameState(x));
+        Assert.Equal(x.Extensions, merged.Extensions);
+        Assert.Equal([FieldsExtension.Type, (ushort)0x7777], merged.Extensions.Select(e => e.Type));
+        var (metaMerged, _) = RecordMerge.MergeAllMetadata([MetaOf(x), MetaOf(copy)]);
+        Assert.Equal(x.Extensions, metaMerged.Extensions);
+        // Merged with a copy whose Fields differ, the place stays too.
+        var edited = x with { Write = S(2600), Extensions = [FieldsExt(S(2000), Field("host", "db2", S(2550))), new RecordExtension(0x7777, [7])] };
+        Assert.Equal([FieldsExtension.Type, (ushort)0x7777], MergeEveryOrder([x, edited])!.Extensions.Select(e => e.Type));
+    }
 }

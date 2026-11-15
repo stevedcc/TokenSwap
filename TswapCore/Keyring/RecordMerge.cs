@@ -307,23 +307,53 @@ public static class RecordMerge
     /// The merged extension list, the same rule in both merge paths. Every type but
     /// <see cref="FieldsExtension"/>: the whole list of the input with the largest write stamp
     /// (<paramref name="write"/>), its <c>Fields</c> entry left out; ties by the ordinal order of that
-    /// encoded list. Then the <c>Fields</c> extension (issue #311), merged per field from every input
-    /// that has one (<see cref="FieldMerge"/>) and added at the end: never on a tombstone (spec Merge
-    /// rule 1), always on a live record when any input had one, even with no entries (rule 6).
+    /// encoded list, then by the earlier <c>Fields</c> position. Then the <c>Fields</c> extension
+    /// (issue #311), merged per field from every input that has one (<see cref="FieldMerge"/>), in the
+    /// place it has in that chosen list (at the end when that list has none): never on a tombstone
+    /// (spec Merge rule 1), always on a live record when any input had one, even with no entries (rule 6).
+    /// A <c>Fields</c> extension that can't be decoded (damage, or a format a later tswap writes) is a
+    /// <see cref="RecordConflictException"/>, so only that record is unreadable.
     /// </summary>
     private static IReadOnlyList<RecordExtension> MergeExtensions(
         IReadOnlyList<(Stamp Write, IReadOnlyList<RecordExtension> Extensions)> inputs, Stamp write, bool isTombstone)
     {
-        var others = inputs
+        var (others, fieldsAt, _) = inputs
             .Where(r => r.Write.Equals(write))
-            .Select(r => FieldsCodec.With(r.Extensions, null))
-            .Select(list => (List: list, Encoded: EncodeExtensions(list)))
-            .Aggregate((x, y) => y.Encoded.AsSpan().SequenceCompareTo(x.Encoded) < 0 ? y : x)
-            .List;
+            .Select(r =>
+            {
+                var list = FieldsCodec.With(r.Extensions, null);
+                return (List: list, At: FieldsPosition(r.Extensions), Encoded: EncodeExtensions(list));
+            })
+            .Aggregate((x, y) =>
+            {
+                var order = y.Encoded.AsSpan().SequenceCompareTo(x.Encoded);
+                return order < 0 || (order == 0 && y.At < x.At) ? y : x;
+            });
         if (isTombstone)
             return others;
-        List<FieldSet> fields = [.. inputs.Select(r => FieldsCodec.TryGet(r.Extensions)).OfType<FieldSet>()];
-        return fields.Count == 0 ? others : FieldsCodec.With(others, FieldMerge.Merge(fields));
+        List<FieldSet> fields;
+        try
+        {
+            fields = [.. inputs.Select(r => FieldsCodec.TryGet(r.Extensions)).OfType<FieldSet>()];
+        }
+        catch (TswapException ex)
+        {
+            throw new RecordConflictException($"a copy's fields extension can't be read ({ex.Message})");
+        }
+        if (fields.Count == 0)
+            return others;
+        List<RecordExtension> result = [.. others];
+        result.Insert(Math.Min(fieldsAt, result.Count), new RecordExtension(FieldsExtension.Type, FieldsCodec.Encode(FieldMerge.Merge(fields))));
+        return result;
+    }
+
+    /// <summary>The index of the <c>Fields</c> extension in <paramref name="extensions"/>, or <see cref="int.MaxValue"/> (none).</summary>
+    private static int FieldsPosition(IReadOnlyList<RecordExtension> extensions)
+    {
+        for (var i = 0; i < extensions.Count; i++)
+            if (extensions[i].Type == FieldsExtension.Type)
+                return i;
+        return int.MaxValue;
     }
 
     /// <summary>The extension list as format 3 stores it (count, then type, length, data), for the tie order.</summary>

@@ -376,6 +376,32 @@ public sealed class RecordStoreV3Tests : IDisposable
         Assert.Equal(["t", "u"], db.Secrets.Keys.Order());
     }
 
+    /// <summary>
+    /// Issue #311 task 2 review I1: a damaged or future-version <c>Fields</c> extension (the merge now
+    /// decodes it) marks only its record unreadable, in the listing and the full load; the others list.
+    /// </summary>
+    [Theory]
+    [InlineData(new byte[] { 1 })] // version 1, truncated
+    [InlineData(new byte[] { 2, 0, 0 })] // a Fields format this build doesn't read
+    public void MalformedFieldsExtension_MarksOnlyThatRecordUnreadable(byte[] data)
+    {
+        WriteMarker(_m);
+        _m.Ok("s-value", "ingest", "s");
+        _m.Ok("t-value", "ingest", "t");
+        Plant(File("s"), Read("s") with { Extensions = [new RecordExtension(TswapCore.Fields.FieldsExtension.Type, data)], Sealed = null }, _key);
+
+        var warnings = new StringWriter();
+        var metadata = Store(_m).LoadMetadata(_key, warnings);
+        var db = Store(_m).LoadSecrets(_key, TextWriter.Null);
+
+        Assert.Equal(["t"], metadata.Records.Select(r => r.Name));
+        Assert.Equal([Path.GetFileName(File("s"))], metadata.Unreadable);
+        Assert.Contains("fields extension", warnings.ToString());
+        Assert.Equal(["t"], db.Secrets.Keys);
+        Assert.Contains(Path.GetFileName(File("s")), db.UnreadableFiles!);
+        Assert.Equal("t-value", _m.Get("t"));
+    }
+
     [Fact]
     public void FullLoad_SameStampDifferentValues_MarksOnlyThatRecordUnreadable()
     {

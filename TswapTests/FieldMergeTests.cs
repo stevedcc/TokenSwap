@@ -70,8 +70,8 @@ public sealed class FieldMergeTests
     private static readonly FieldWho[] WhoPool = [Claude, Owner, ClaudeElevated];
 
     /// <summary>
-    /// A random <b>valid</b> set as a write produces it (canonical: every entry at or after its
-    /// <c>Since</c>, each history older than its entry, of distinct identities, at most three long),
+    /// A random <b>valid</b> set as a write produces it (canonical: every entry and history change at or
+    /// after its <c>Since</c>, each history older than its entry, of distinct identities, at most three long),
     /// drawn from small pools so equal stamps, equal identities and lineage drops are common.
     /// </summary>
     internal static FieldSet RandomSet(Random random)
@@ -88,7 +88,7 @@ public sealed class FieldMergeTests
             var changed = stamps[random.Next(stamps.Length)];
             var who = WhoPool[random.Next(WhoPool.Length)];
             List<FieldChange> history = [];
-            var older = StampPool.Where(s => s.CompareTo(changed) < 0).ToList();
+            var older = StampPool.Where(s => s.CompareTo(changed) < 0 && s.CompareTo(since) >= 0).ToList();
             for (var h = random.Next(4); h > 0 && older.Count > 0; h--)
             {
                 var at = older[random.Next(older.Count)];
@@ -265,6 +265,20 @@ public sealed class FieldMergeTests
         Assert.Equal(At(3000), merged.Since);
         Assert.Equal(["note", "user"], merged.Entries.Select(e => e.Name));
         Assert.Equal("late", merged.Get("note")!.Value);
+    }
+
+    /// <summary>Review M2 ruling: history entries older than the lineage stamp belong to an earlier life too.</summary>
+    [Fact]
+    public void FieldMerge_HistoryOlderThanSince_Dropped()
+    {
+        var earlier = Set(At(1000), Live("host", "v", At(5000), Claude,
+            new FieldChange("at-since", At(3000), Owner), new FieldChange("before", At(2000), Owner)));
+        var current = Set(At(3000), Live("user", "u", At(4000), Owner));
+
+        var merged = MergeEveryOrder(earlier, current);
+
+        Assert.Equal([new FieldChange("at-since", At(3000), Owner)], merged.Get("host")!.History);
+        Assert.Empty(merged.Get("user")!.History);
     }
 
     [Fact]
