@@ -11,7 +11,10 @@ namespace TswapTests;
 /// priority order over the original text, and differs from the plaintext engine
 /// (<see cref="PlaintextRedactOracle"/>) exactly where the plan lists: no match inside text tswap
 /// inserted (difference 2), tocomment's context from the original neighbours (3), and redact masks
-/// multi-line values across lines (4).
+/// multi-line values across lines (4). Two later engine-only differences in <c>tocomment</c> are not in
+/// the oracle either: brief T20 adopts a YAML literal block scalar whose content is one stored value's
+/// plain form, and brief T22 leaves a block-scalar content line holding an encoded form (base64,
+/// base64url, whitespace-stripped) of a value unchanged (<see cref="ToCommentBlockScalarTests"/>).
 /// </summary>
 public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
 {
@@ -97,7 +100,10 @@ public class RedactEngineTests(Xunit.Abstractions.ITestOutputHelper output)
     /// or LF (4). Texts span lines, use CRLF, and hold astral-plane characters next to and inside
     /// secrets (difference 5 needs no exclusion: neither engine matches a split surrogate pair).
     /// The secrets include burned ones, previous values, equal values under two names and values
-    /// that are prefixes of each other.
+    /// that are prefixes of each other. The corpus is not constrained by the T20 and T22 differences:
+    /// it can in principle produce a block start (<c>key: |+</c> say) followed by a deeper line holding a
+    /// value or an encoded form; the fixed seed produces no such case, and a seed that did would fail
+    /// here by design, not by a fault in either engine.
     /// </summary>
     [Fact]
     public void Engine_MatchesOracle_OnRandomCorpus()

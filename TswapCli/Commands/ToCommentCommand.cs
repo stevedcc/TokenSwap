@@ -27,11 +27,18 @@ public sealed class ToCommentCommand : ICliCommand
         var matcher = FingerprintRedaction.Matcher(ctx, view, keys, "tocomment", changesFile: true);
 
         var content = File.ReadAllText(filePath);
-        var (newContent, changes) = Redact.ToComment(content, matcher);
+        var (newContent, changes, unreplaced) = Redact.ToCommentReporting(content, matcher);
 
         if (changes.Count == 0)
         {
-            ctx.Console.Error.WriteLine("No secrets found. File unchanged.");
+            // Brief T22: nothing replaced, so nothing is written (a CRLF file keeps its line ends).
+            if (unreplaced.Count == 0)
+            {
+                ctx.Console.Error.WriteLine("No secrets found. File unchanged.");
+                return 0;
+            }
+            WriteWarnings(ctx, unreplaced);
+            ctx.Console.Error.WriteLine("File unchanged.");
             return 0;
         }
 
@@ -68,6 +75,8 @@ public sealed class ToCommentCommand : ICliCommand
             }
         }
 
+        WriteWarnings(ctx, unreplaced);
+
         if (dryRun)
         {
             ctx.Console.Error.WriteLine($"\n(dry run) {changes.Count} line(s) would be modified.");
@@ -77,5 +86,17 @@ public sealed class ToCommentCommand : ICliCommand
         File.WriteAllText(filePath, newContent);
         ctx.Console.Error.WriteLine($"\n✓ {changes.Count} line(s) updated in {filePath}");
         return 0;
+    }
+
+    /// <summary>
+    /// Brief T22 (#319): one warning per line left unchanged, naming the line and the token only, never the
+    /// line's text or any form of the value. A warning, not a refusal: the exit code stays 0.
+    /// </summary>
+    private static void WriteWarnings(CommandContext ctx, IReadOnlyList<UnreplacedLine> unreplaced)
+    {
+        foreach (var line in unreplaced)
+            ctx.Console.Error.WriteLine(
+                $"Warning: line {line.LineNumber} holds an encoded form (base64 or similar) of the value of '{line.Token}' inside a YAML block scalar. " +
+                "A '# tswap:' marker is filled with the plain value, so it was not replaced: move the value out of the block by hand, or keep the block as a whole secret.");
     }
 }
