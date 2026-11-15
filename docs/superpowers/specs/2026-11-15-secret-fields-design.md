@@ -3,7 +3,8 @@
 Issue: https://github.com/stevedcc/TokenSwap/issues/311 (draft in comment 6896762774). Date: 2026-11-15.
 Status: **approved by the owner 2026-11-15**. Builder check done. Round-1 design review by MiMo and DeepSeek
 (`~/RiderProjects/tswap-wt/tools/fields-design-r1-{mimo,deepseek}.md`, both "not ready for planning") and round 2
-(`fields-design-r2-{mimo,deepseek}.md`: DeepSeek "ready", MiMo "no" on the lineage anchor, now fixed) folded in:
+(`fields-design-r2-{mimo,deepseek}.md`: DeepSeek "ready", MiMo "no" on the lineage anchor) and MiMo's round 3
+(`fields-design-r3-mimo.md`: anchor fixed; `ingest --rotate` same-write gap, export note, cap wording) folded in:
 the owner chose to drop field tokens from `run` (decision A); the other findings are settled below and marked
 "my call" or with the reviewer's tag (MiMo S1…T2, DeepSeek C1…M9).
 
@@ -148,12 +149,13 @@ test like the existing one (my call, DeepSeek I3, MiMo M3). Other extension type
    origin), sorted newest first, trimmed to 5. Two history entries with the same identity but different content
    (damage only) are decided like rule 4: the ordinally smallest encoding wins (MiMo r2 N3b, DeepSeek r2 N2). Merging the same inputs twice, or in a different order, gives the
    same bytes (tested with three copies merged in different orders).
-7. **Caps after a merge** (my call, MiMo r2 N5): a merge never trims fields. A merged record may exceed the 64-field
-   or 64 KiB caps (two legal copies with different field names); it stays readable, and the next field write to it
-   is refused until fields are removed (the refusal names the secret and the cap). The docs say so.
-6. The merged record carries a `Fields` extension whenever any input carried one, even with no entries left, so
-   `since` is never lost (MiMo r2 N1). It is omitted only when no input had one (a record written by a version
-   before this one).
+6. A **live** merged record carries a `Fields` extension whenever any input carried one, even with no entries left,
+   so `since` is never lost (MiMo r2 N1). It is omitted only when no input had one (a record written by a version
+   before this one). A tombstone carries none (rule 1).
+7. **Caps after a merge** (my call, MiMo r2 N5, r3 N8b): a merge never trims fields. A merged record may exceed the
+   64-field or 64 KiB caps (two legal copies with different field names); it stays readable. A write that would leave
+   it over a cap is refused (the refusal names the secret and the cap); a write that shrinks it (`field unset`, or a
+   `field set` that replaces values with shorter ones) is allowed, so the owner can bring it back under the caps.
 
 **Mixed versions** (MiMo M3c): a 0.3.x machine keeps the extension's bytes, but merges by its own whole-list rule.
 In a folder shared with 0.3.x machines, field state is decided per record, not per field: a 0.3.x merge can drop a
@@ -245,8 +247,9 @@ write the value into the command.` The broker's templates are unchanged. A test 
    username with the same value, works; MiMo r2 N2). If it
    contains one, the write is refused, **without naming which secret** (my call, MiMo S1):
    `Refused: the value for 'NAME.FIELD' contains a stored secret value. Fields are visible; a secret never goes in one.`
-   - **Same write** (my call, MiMo S6): with `create`/`ingest`/`add`/`rotate`, every field is also checked against
-     the value being written in that call.
+   - **Same write** (my call, MiMo S6, r3 N6): with every command that writes a value and fields together
+     (`create`, `ingest`, `add`, `rotate`, `ingest --rotate`), every field is also checked against the value being
+     written in that call.
    - It **warns** (does not refuse) on a long random-looking value (at least 20 characters of a base64 or hex
      alphabet with no space), asking whether it is a secret.
    - `field adopt` skips the check against SECRET itself, but refuses when another **live** secret holds the same
@@ -303,8 +306,9 @@ a way to pass values into commands. The same framing opens the fields section in
 ### Export and import
 
 - The export format carries each exported secret's current fields (no history, no deleted markers). An export is a
-  point-in-time snapshot: a field removed after the export comes back when that export is imported, unless a copy
-  that holds the removal is merged afterwards; the export docs say so (DeepSeek r2 N3). This is a new
+  point-in-time snapshot: a field removed after the export comes back when that export is imported, and stays back
+  (the import stamps it fresh, so an earlier removal can't win in a merge); it has to be unset again. Only a removal
+  stamped after the import wins. The export docs say so (DeepSeek r2 N3, MiMo r3 N7). This is a new
   export file version: older exports still import (no fields); an older tswap meeting a newer export refuses it
   with its existing unknown-version error (DeepSeek M8).
 - **Import writes value and fields in one write**, with fresh stamps from the importing machine and `since` = the
@@ -332,8 +336,9 @@ Independent of T20 (#315) now that markers never take fields.
   bytes; delete wins over a concurrent field write; a later edit restores a deleted field, an older one can't; the
   lineage rule after delete and re-creation, including re-creation **without** fields and a merged-to-empty record
   merged afterwards with two stale copies (old fields must not land; MiMo r2 N1); equal-identity history entries;
-  a merge exceeding the caps stays readable and the next write is refused; deleted secrets' values not checked by
-  guard rail 1; equal stamps with different content converge; histories trimmed to 5)
+  a merge exceeding the caps stays readable, a growing write is refused and `field unset` works; a tombstone merge
+  carries no `Fields`; an old export imported, then merged with a copy that removed a field earlier (the field stays);
+  the same-write check on `ingest --rotate --field`; deleted secrets' values not checked by guard rail 1; equal stamps with different content converge; histories trimmed to 5)
   in **both** merge paths with a parity test; a field write never changes `Version` or `{{NAME}}` resolution; a
   0.3.0-shaped record round trip (unknown extension kept); the tombstone dropping `Fields` but keeping other
   extensions; export and import with fields, then a merge with an older copy; every refusal and warning of guard
