@@ -186,21 +186,82 @@ public sealed class FieldSecretCheckTests : IDisposable
     [Fact]
     public void FieldsContaining_NormalisesFieldValues()
     {
-        _m.Ok("v1", "ingest", "s");
-        SetFields("s", new FieldEdit("owner", "x"));
-        var path = RecordFile(_m, _key, "s");
-        var record = SecretRecordCodec.Decode(File.ReadAllBytes(path), _key);
-        var since = Assert.IsType<FieldSet>(FieldsCodec.TryGet(record.Extensions)).Since;
-        var at = new Stamp(new Hlc(since.Hlc.PhysicalMs + 1, 0), since.Origin);
-        record = record with
-        {
-            Extensions = FieldsCodec.With(record.Extensions, new FieldSet(since, [new FieldEntry("notes", "cafe\u0301-new", false, at, Claude, [])])),
-        };
-        File.WriteAllBytes(path, SecretRecordCodec.Encode(record, _key, KeyringFormat.RecordFormatVersion));
+        PlantField("s", "notes", "cafe\u0301-new");
 
         using var view = View();
         Assert.Equal("cafe\u0301-new", view.Fields("s")!.Get("notes")!.Value);
 
         Assert.Equal(["s.notes"], FieldSecretCheck.FieldsContaining(view, SameWrite("caf\u00e9-new")));
+    }
+
+    /// <summary>
+    /// Review (task 4, Minor 1): a secret value is stored as given, not normalised, so one in decomposed
+    /// form (NFD) must still be found in a field value given in the same form: the raw value is scanned
+    /// as well as its NFC form.
+    /// </summary>
+    [Fact]
+    public void Refused_WhenStoredSecretIsDecomposed()
+    {
+        const string decomposed = "cafe\u0301-decomposed-secret";
+        _m.Ok(decomposed, "ingest", "db");
+
+        Assert.Equal(Expected, Check(decomposed));
+        Assert.Equal(Expected, Check($"x {decomposed} y"));
+        Assert.Equal(Expected, FieldSecretCheck.Refusal(
+            FingerprintIndex.Build([], _keys), SameWrite(decomposed), "grafana", "username", decomposed));
+    }
+
+    /// <summary>Review (task 4, Minor 1), the reverse: a decomposed new value is found in a field holding those exact characters.</summary>
+    [Fact]
+    public void FieldsContaining_FindsDecomposedValueInDecomposedField()
+    {
+        PlantField("s", "notes", "cafe\u0301-new");
+
+        using var view = View();
+
+        Assert.Equal(["s.notes"], FieldSecretCheck.FieldsContaining(view, SameWrite("cafe\u0301-new")));
+    }
+
+    /// <summary>
+    /// Review (task 4, Minor 2): <see cref="FieldSecretCheck.FieldsContaining"/> works from the metadata
+    /// the view already holds, as <see cref="VaultView.BuildIndex"/> does, instead of reloading it with
+    /// <see cref="FormatTwoRecords.Skip"/> over a caller's <see cref="FormatTwoRecords.Decode"/> load.
+    /// </summary>
+    [Fact]
+    public void FieldsContaining_KeepsTheViewsLoadedMetadata()
+    {
+        using var m2 = new FleetMachine("field-secret-check-f2", SimulatedYubiKeyService.WithKeys(SerialA));
+        var key2 = VaultKey(m2, InitFormatTwoVault(m2));
+        m2.Ok("legacy-value", "ingest", "legacy");
+        using var keys2 = FingerprintKeys.Derive(key2);
+        using var view = new VaultView(Store(m2), key2, TextWriter.Null);
+        var loaded = view.LoadAll(FormatTwoRecords.Decode);
+        Assert.Equal(1, view.FormatTwoDecoded);
+
+        Assert.Empty(FieldSecretCheck.FieldsContaining(view, FingerprintIndex.Build(
+            [("new", false, Fingerprinter.Compute(Encoding.UTF8.GetBytes("legacy-value"), keys2))], keys2)));
+
+        Assert.Same(loaded, view.LoadAll(FormatTwoRecords.Decode));
+        Assert.Equal(1, view.FormatTwoDecoded);
+    }
+
+    /// <summary>
+    /// Gives secret <paramref name="name"/> (created here) one field holding <paramref name="value"/>
+    /// exactly as given, through the codec: writes normalise, so only an unchecked merge or import
+    /// brings a decomposed value.
+    /// </summary>
+    private void PlantField(string name, string field, string value)
+    {
+        _m.Ok("v1", "ingest", name);
+        SetFields(name, new FieldEdit("owner", "x"));
+        var path = RecordFile(_m, _key, name);
+        var record = SecretRecordCodec.Decode(File.ReadAllBytes(path), _key);
+        var since = Assert.IsType<FieldSet>(FieldsCodec.TryGet(record.Extensions)).Since;
+        var at = new Stamp(new Hlc(since.Hlc.PhysicalMs + 1, 0), since.Origin);
+        record = record with
+        {
+            Extensions = FieldsCodec.With(record.Extensions, new FieldSet(since, [new FieldEntry(field, value, false, at, Claude, [])])),
+        };
+        File.WriteAllBytes(path, SecretRecordCodec.Encode(record, _key, KeyringFormat.RecordFormatVersion));
     }
 }

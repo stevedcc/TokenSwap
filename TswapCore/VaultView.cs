@@ -118,7 +118,7 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
     /// </summary>
     public FingerprintIndex BuildIndex(FingerprintKeys keys)
     {
-        var metadata = _metadata ?? LoadAll(FormatTwoRecords.Skip);
+        var metadata = LoadedMetadata();
         return FingerprintIndex.Build(
             from record in metadata.Records
             from version in record.RetainedVersions()
@@ -126,6 +126,14 @@ public sealed class VaultView(RecordVaultStore store, byte[] vaultKey, TextWrite
             select (record.Name, version.IsPrevious, version.Fingerprints!),
             keys);
     }
+
+    /// <summary>
+    /// The metadata <see cref="LoadAll"/> already loaded, under whichever policy the caller chose, or
+    /// (when nothing is loaded yet) a load with <see cref="FormatTwoRecords.Skip"/>: a reader that
+    /// needs every record's metadata but no particular policy uses this, so it never replaces a
+    /// caller's <see cref="FormatTwoRecords.Decode"/> load.
+    /// </summary>
+    internal VaultMetadata LoadedMetadata() => _metadata ?? LoadAll(FormatTwoRecords.Skip);
 
     /// <summary>True when <paramref name="name"/>'s current value has an outstanding burn (from metadata).</summary>
     public bool IsBurned(string name) => Find(name)?.BurnedAt is not null;
