@@ -56,7 +56,7 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         ? ["--tpm"]
         : ["--secure-enclave", _withTouch ? "--with-touch" : "--no-touch"];
 
-    /// <summary>The flags as <c>LegacyPairOwnSlotText</c> names them.</summary>
+    /// <summary>The flags as <c>LegacyPairOwnSlotText</c> and <c>OwnSlotUncheckedText</c> name them.</summary>
     public string FlagsText => _backend == HardwareBackend.Tpm ? "--tpm" : "--secure-enclave --with-touch|--no-touch";
 
     private string EnrollCall => $"{_backend}:Enroll";
@@ -311,9 +311,6 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         return s with { Wrapped = wrapped };
     });
 
-    /// <summary>The <c>recover</c> flags <c>OwnSlotUncheckedText</c> names for this chip.</summary>
-    public string RecoverFlags => FlagsText;
-
     public void DeadOwnChipSlot_AddsANewOne()
     {
         var recoveryKey = ChipVault(password: false);
@@ -365,12 +362,12 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
         var (exit, _, stderr, calls) = Observed(() => M.Run("", Add("--no-password")));
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(SlotCommand.OwnSlotUncheckedText(error, Name, ShortId(own), RecoverFlags), stderr);
+        Assert.Contains(SlotCommand.OwnSlotUncheckedText(error, Name, ShortId(own), FlagsText), stderr);
         Assert.Equal(
             $"{error} This machine's {Name} slot {ShortId(own)} couldn't be checked, so no new slot is added. If this " +
-            $"machine's {Name} was cleared or replaced, sudo tswap recover {RecoverFlags} --recovery-key-stdin makes it this " +
+            $"machine's {Name} was cleared or replaced, sudo tswap recover {FlagsText} --recovery-key-stdin makes it this " +
             "machine's own slot again. Nothing was changed.",
-            SlotCommand.OwnSlotUncheckedText(error, Name, ShortId(own), RecoverFlags));
+            SlotCommand.OwnSlotUncheckedText(error, Name, ShortId(own), FlagsText));
         Assert.DoesNotContain(EnrollCall, calls);
         AssertNothingWritten(before);
     }
@@ -390,10 +387,79 @@ internal sealed class SlotAddHardwareScenarios : IDisposable
 
         Assert.NotEqual(0, exit);
         Assert.Contains($"This machine's {Name} slot {ShortId(own)} couldn't be checked, so no new slot is added.", stderr);
-        Assert.Contains($"sudo tswap recover {RecoverFlags} --recovery-key-stdin", stderr);
+        Assert.Contains($"sudo tswap recover {FlagsText} --recovery-key-stdin", stderr);
         Assert.Contains(UnlockCall, calls);
         Assert.DoesNotContain(EnrollCall, calls);
         AssertNothingWritten(before);
+    }
+
+    /// <summary>Review r1 (GLM minor 3): a mistyped password for a working password own slot's check.</summary>
+    public void WrongPasswordForTheOwnSlotCheck_Refused_NothingWritten()
+    {
+        ChipVault(password: true);
+        var before = Snapshot();
+
+        var (exit, _, stderr, calls) = Observed(() => M.RunOnTerminal("not the password\n", Add("--password")));
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(VaultPasswordChoice.WrongPasswordText, stderr);
+        Assert.DoesNotContain("couldn't be checked", stderr);
+        Assert.Contains(UnlockCall, calls); // the check asked the chip
+        Assert.DoesNotContain(EnrollCall, calls);
+        AssertNothingWritten(before);
+    }
+
+    /// <summary>
+    /// Review r1 (GLM minor 1): with a password-free own slot the new slot's password is decided after the unlock, so a
+    /// refusal of the check comes before any password question or line, and in the overlap case (password slots
+    /// without the vault-password file, and a working own slot) the working slot is what is refused.
+    /// </summary>
+    public void WorkingChipSlot_RefusedBeforeAnyPasswordStep()
+    {
+        ChipVault(password: false);
+        M.Keys.PluggedIn = [SerialB];
+        M.Ok(Password + "\n" + Password + "\n", "slot", "add", "--yubikey", "--password");
+        M.Keys.PluggedIn = [];
+        File.Delete(VaultPasswordPath);
+        var own = OwnSlot();
+        var before = Snapshot();
+
+        var (exit, stdout, stderr) = M.Run(Password + "\n" + Password + "\n", Add("--password"));
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(SlotCommand.WorkingHardwareSlotText(Name, ShortId(own)), stderr);
+        Assert.DoesNotContain(VaultPasswordMessages.MissingFile, stderr);
+        Assert.DoesNotContain(VaultPasswordChoice.VersionLine, stdout + stderr); // Decide didn't run
+        Assert.Equal(Password + "\n" + Password + "\n", M.LastConsole!.In.ReadToEnd());
+        AssertNothingWritten(before);
+    }
+
+    /// <summary>Review r1 (GLM minor 1): no way in is refused before the new slot's password is decided.</summary>
+    public void NoWayIn_RefusedBeforeAnyPasswordStep()
+    {
+        YubiKeyVault();
+        M.Keys.PluggedIn = [];
+
+        var (exit, stdout, stderr) = M.Run(Password + "\n" + Password + "\n", Add("--password"));
+
+        Assert.NotEqual(0, exit);
+        Assert.DoesNotContain("Usage:", stderr);
+        Assert.DoesNotContain(VaultPasswordChoice.VersionLine, stdout + stderr);
+        Assert.DoesNotContain("New vault password", stderr);
+    }
+
+    /// <summary>Review r1 (GLM minor 1): the first-password guard comes after the unlock and before any password prompt.</summary>
+    public void FirstPasswordGuard_BeforeAnyPrompt()
+    {
+        YubiKeyVaultWithAPasswordSlot();
+        File.Delete(VaultPasswordPath);
+
+        var (exit, _, stderr) = M.Run(Password + "\n" + Password + "\n", Add("--password"));
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains(VaultPasswordMessages.MissingFile, stderr);
+        Assert.DoesNotContain("New vault password", stderr);
+        Assert.DoesNotContain(TerminalPasswordProvider.PromptText, stderr);
     }
 
     public void LegacyPairOwnSlot_Refused()

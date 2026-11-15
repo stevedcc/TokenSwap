@@ -30,6 +30,10 @@ public sealed class SlotAddSecureEnclaveTests : IDisposable
     [Fact] public void SlotAddSecureEnclave_DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce() => _s.DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce();
     [Fact] public void SlotAddSecureEnclave_ReplacedSecureEnclave_Refused_NamesRecover() => _s.ClearedChip_Refused_NamesRecover();
     [Fact] public void SlotAddSecureEnclave_OwnSlotCheck_HardwareError_Refused_NothingWritten() => _s.OwnSlotCheck_HardwareError_Refused_NothingWritten();
+    [Fact] public void SlotAddSecureEnclave_WrongPasswordForTheOwnSlotCheck_Refused_NothingWritten() => _s.WrongPasswordForTheOwnSlotCheck_Refused_NothingWritten();
+    [Fact] public void SlotAddSecureEnclave_WorkingSecureEnclaveSlot_RefusedBeforeAnyPasswordStep() => _s.WorkingChipSlot_RefusedBeforeAnyPasswordStep();
+    [Fact] public void SlotAddSecureEnclave_NoWayIn_RefusedBeforeAnyPasswordStep() => _s.NoWayIn_RefusedBeforeAnyPasswordStep();
+    [Fact] public void SlotAddSecureEnclave_FirstPasswordGuard_BeforeAnyPrompt() => _s.FirstPasswordGuard_BeforeAnyPrompt();
     [Fact] public void SlotAddSecureEnclave_LegacyPairOwnSlot_Refused() => _s.LegacyPairOwnSlot_Refused();
     [Fact] public void SlotAddSecureEnclave_NoWayIn_Refused_NothingWritten() => _s.NoWayIn_Refused_NothingWritten();
     [Fact] public void SlotAddSecureEnclave_ClassicVault_Refused() => _s.ClassicVault_Refused();

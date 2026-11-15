@@ -43,8 +43,10 @@ public sealed class SlotAcceptReceiptTextTests : IDisposable
         _router.Ok("", "slot", "approve", Request, Approve);
     }
 
+    // The code writes a literal "\n" before these lines (inside the message) and Environment.NewLine after each
+    // (WriteLine), so the expected text does the same and holds on Windows too.
     private static string FolderLines(string folder, string receipt) =>
-        $"{Environment.NewLine}The new slot is in the keyring of the vault folder {folder}: every machine that shares that folder has it, with no merge.{Environment.NewLine}" +
+        $"\nThe new slot is in the keyring of the vault folder {folder}: every machine that shares that folder has it, with no merge.{Environment.NewLine}" +
         $"Receipt written to: {receipt} (only for a machine with its own copy of the vault, not this folder: there, run sudo tswap slot merge <receipt-file>).{Environment.NewLine}";
 
     private const string TodaysLastLine = "Until then, only this machine's copy of the vault has the new slot.";
@@ -85,7 +87,7 @@ public sealed class SlotAcceptReceiptTextTests : IDisposable
         var stdout = _desktop.Ok("", "slot", "accept", Approve);
 
         Assert.EndsWith(
-            $"{Environment.NewLine}Receipt written to: {Receipt}{Environment.NewLine}" +
+            $"\nReceipt written to: {Receipt}{Environment.NewLine}" +
             $"Carry it back to the approving machine yourself (scp/USB/paste) and run there:{Environment.NewLine}" +
             $"  sudo tswap slot merge <receipt-file>{Environment.NewLine}" +
             $"{TodaysLastLine}{Environment.NewLine}",

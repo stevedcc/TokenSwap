@@ -100,7 +100,7 @@ public class VaultPasswordJoinTests : IDisposable
     }
 
     [Fact]
-    public void RequestWithPassword_FolderWithoutVaultPasswordFile_RefusesWithRuling16Text()
+    public void RequestWithPassword_FolderWithoutVaultPasswordFile_SaysHowToCreateTheFirstPassword()
     {
         using var plain = new FleetMachine("plain") { Tpm = RandomNumberGenerator.GetBytes(32) };
         plain.Ok("", "init", "--tpm", "--no-password", "--no-recovery");

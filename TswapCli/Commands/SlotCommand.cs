@@ -938,10 +938,11 @@ public sealed class SlotCommand : ICliCommand
                 return ExecuteAddFido2(ctx, serial, passwordFlag, withRecoveryKey);
             case ["--tpm"] when serial is null:
                 return ExecuteAddHardware(ctx, HardwareBackend.Tpm, requirePresence: true, passwordFlag, withRecoveryKey);
-            case ["--secure-enclave"] when serial is null:
+            // Split guarantees a touch choice with --secure-enclave; the pattern keeps that local (review r1, GLM minor 4).
+            case ["--secure-enclave"] when serial is null && requirePresence is { } presence:
                 // Brief T11 decision 7: the --no-touch warning right after the argument checks, before any prompt or write.
-                SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, requirePresence);
-                return ExecuteAddHardware(ctx, HardwareBackend.SecureEnclave, requirePresence!.Value, passwordFlag, withRecoveryKey);
+                SecureEnclaveTouchChoice.WarnIfNoTouch(ctx.Console, presence);
+                return ExecuteAddHardware(ctx, HardwareBackend.SecureEnclave, presence, passwordFlag, withRecoveryKey);
             case ["--yubikey"] when serial is null:
                 break;
             default:
@@ -1053,15 +1054,15 @@ public sealed class SlotCommand : ICliCommand
     /// <item>The arguments (<see cref="ExecuteAdd"/>), then the keyring and sudo (<see cref="LoadKeyringForAdd"/>), then the
     /// hardware for this OS (<see cref="HardwareServices.Enrollment"/>).</item>
     /// <item>A legacy pair own slot is refused: the chip as the own slot would make the unlock skip the pair here.</item>
-    /// <item>The new slot's password is decided; a first password while password slots exist without the folder's
-    /// <c>vault-password</c> file is refused (a freshly salted file would strand them).</item>
     /// <item>The working-slot check (owner decision 2026-11-15), only for this machine's own slot of this backend
     /// (<see cref="VaultUnlocker.HardwareSlotOpens"/>): it opens, refused; the hardware answered and it didn't unwrap,
     /// dead, a new slot is added and the old one kept; anything thrown, refused (orchestrator ruling: never "dead").
     /// A password own slot needs the vault password for the check (a missing one is never "dead"); with
     /// <c>--recovery-key-stdin</c> the key is read first and the password from the next line, each once.</item>
     /// <item>The unlock (the recovery key already read, else any way in), the typed password against the verifier,
-    /// the new slot's password, then one enrolment and one write (<see cref="NewSlotWrite.Save"/>).</item>
+    /// the new slot's password (decided here unless the own slot needed it for the check; a first password while password
+    /// slots exist without the folder's <c>vault-password</c> file is refused before any prompt), then one enrolment and
+    /// one write (<see cref="NewSlotWrite.Save"/>).</item>
     /// </list>
     /// </summary>
     private static int ExecuteAddHardware(CommandContext ctx, HardwareBackend hardware, bool requirePresence, bool? passwordFlag,
@@ -1086,11 +1087,21 @@ public sealed class SlotCommand : ICliCommand
         var store = ctx.Storage as RecordVaultStore;
         if (passwordFlag == true && store is null)
             throw new TswapException(VaultPasswordChoice.NeedsRecordVaultText);
-        // Decide with this backend, so a TPM password slot gets the lockout notice.
-        var newSlotPassword = store is not null && VaultPasswordChoice.Decide(ctx, passwordFlag, hardware);
         var file = store?.ReadVaultPassword(keyring.VaultId);
-        if (newSlotPassword && file is null && keyring.Slots.Any(SlotPassword.Requires))
-            throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+        // Review r1 (GLM minor 1): the new slot's password is decided where it is first needed: before the check when the
+        // own slot needs the password (the brief's step 5), else after the unlock (step 7, as slot add --yubikey does), so
+        // a refusal of the check or of the unlock never follows a password question. Decided with this backend, so a TPM
+        // password slot gets the lockout notice; then the first-password guard, before any password prompt: a first
+        // password while password slots exist without the folder's file would strand them.
+        var passwordOwnSlot = config.Backend == hardware && own is not null && SlotPassword.Classify(own) == SlotPasswordKind.Password;
+        bool DecideNewSlotPassword()
+        {
+            var chosen = store is not null && VaultPasswordChoice.Decide(ctx, passwordFlag, hardware);
+            if (chosen && file is null && keyring.Slots.Any(SlotPassword.Requires))
+                throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
+            return chosen;
+        }
+        var newSlotPassword = passwordOwnSlot && DecideNewSlotPassword();
 
         StretchedPassword? typed = null;
         StretchedPassword? asked = null;
@@ -1104,7 +1115,7 @@ public sealed class SlotCommand : ICliCommand
             if (config.Backend == hardware && own is not null)
             {
                 var shortId = ShortId(own.SlotId);
-                if (SlotPassword.Classify(own) == SlotPasswordKind.Password)
+                if (passwordOwnSlot)
                 {
                     if (file is null)
                         throw new VaultPasswordUnavailableException(VaultPasswordMessages.MissingFile);
@@ -1128,6 +1139,8 @@ public sealed class SlotCommand : ICliCommand
                 throw new TswapException(
                     $"This machine's {name} slot isn't added: the vault password didn't match this vault's (checked against the " +
                     "vault's password verifier). Nothing was changed.");
+            if (!passwordOwnSlot)
+                newSlotPassword = DecideNewSlotPassword();
 
             // The new slot's password: the one typed for the check, else the vault's (checked with K_v), else the first.
             var slotPassword = newSlotPassword ? typed : null;
@@ -1753,7 +1766,7 @@ public sealed class SlotCommand : ICliCommand
 
     private static bool SameSlot(Slot a, Slot b) => KeyringUnion.SameSlot(a, b);
 
-    internal static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
+    private static string ShortId(byte[] slotId) => Convert.ToHexString(slotId).ToLowerInvariant()[..8];
 
     /// <summary>
     /// One line naming a slot for a merge: kind, device, fingerprint. A FIDO2 slot is "YubiKey N, FIDO2" (its model when

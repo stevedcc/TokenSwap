@@ -28,6 +28,10 @@ public sealed class SlotAddTpmTests : IDisposable
     [Fact] public void SlotAddTpm_DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce() => _s.DeadPasswordOwnSlot_RecoveryKeyStdin_ReadsEachLineOnce();
     [Fact] public void SlotAddTpm_ClearedTpm_Refused_NamesRecover() => _s.ClearedChip_Refused_NamesRecover();
     [Fact] public void SlotAddTpm_OwnSlotCheck_HardwareError_Refused_NothingWritten() => _s.OwnSlotCheck_HardwareError_Refused_NothingWritten();
+    [Fact] public void SlotAddTpm_WrongPasswordForTheOwnSlotCheck_Refused_NothingWritten() => _s.WrongPasswordForTheOwnSlotCheck_Refused_NothingWritten();
+    [Fact] public void SlotAddTpm_WorkingTpmSlot_RefusedBeforeAnyPasswordStep() => _s.WorkingChipSlot_RefusedBeforeAnyPasswordStep();
+    [Fact] public void SlotAddTpm_NoWayIn_RefusedBeforeAnyPasswordStep() => _s.NoWayIn_RefusedBeforeAnyPasswordStep();
+    [Fact] public void SlotAddTpm_FirstPasswordGuard_BeforeAnyPrompt() => _s.FirstPasswordGuard_BeforeAnyPrompt();
     [Fact] public void SlotAddTpm_LegacyPairOwnSlot_Refused() => _s.LegacyPairOwnSlot_Refused();
     [Fact] public void SlotAddTpm_NoWayIn_Refused_NothingWritten() => _s.NoWayIn_Refused_NothingWritten();
     [Fact] public void SlotAddTpm_ClassicVault_Refused() => _s.ClassicVault_Refused();
