@@ -59,6 +59,16 @@ public static class Validation
     }
 
     /// <summary>
+    /// Brief T21 (#314): values shorter than this many characters (UTF-16 code units, the unit
+    /// <c>create</c>'s length uses) get a warning when they are stored: redaction matches a value
+    /// anywhere, also inside longer words and numbers, so a short one hides unrelated output.
+    /// </summary>
+    public const int ShortValueLength = 8;
+
+    /// <summary>Brief T21: true when <paramref name="value"/> is shorter than <see cref="ShortValueLength"/>.</summary>
+    public static bool IsShortValue(string value) => value.Length < ShortValueLength;
+
+    /// <summary>
     /// Validate a requested secret length: must be between 1 and 4096.
     /// Throws a user-friendly exception on failure.
     /// </summary>
