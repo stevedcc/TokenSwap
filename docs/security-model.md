@@ -241,7 +241,7 @@ Limits:
 - **Values are matched anywhere**, including inside longer words and numbers: a value `123` is
   masked inside `65123`, a value `abc` inside every `abcd` and `xabc`. A short value is
   therefore hidden in unrelated output, and the mask shows where it appears, so it gives itself away.
-  `add`, `ingest`, `create` and `rotate` warn when they store a value shorter than 8 characters
+  `add`, `ingest`, `ingest --rotate`, `create` and `rotate` warn when they store a value shorter than 8 characters
   ([commands](commands.md#commands)).
 - **A secret split between stdout and stderr** is not recognised when output is redirected
   (RedactingPty's pipe runner redacts each stream on its own).

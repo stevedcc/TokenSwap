@@ -66,7 +66,11 @@ public static class Validation
     public const int ShortValueLength = 8;
 
     /// <summary>Brief T21: true when <paramref name="value"/> is shorter than <see cref="ShortValueLength"/>.</summary>
-    public static bool IsShortValue(string value) => value.Length < ShortValueLength;
+    public static bool IsShortValue(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return value.Length < ShortValueLength;
+    }
 
     /// <summary>
     /// Validate a requested secret length: must be between 1 and 4096.

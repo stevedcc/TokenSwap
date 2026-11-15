@@ -19,6 +19,11 @@ public class ValidationTests
     [InlineData("\U0001F511\U0001F511\U0001F511\U0001F511", false)]
     public void IsShortValue(string value, bool expected) => Assert.Equal(expected, Validation.IsShortValue(value));
 
+    /// <summary>Like <see cref="Validation.EndsInWhitespace"/>: a null value is a caller bug, reported as such.</summary>
+    [Fact]
+    public void IsShortValue_Null_ThrowsArgumentNull() =>
+        Assert.Equal("value", Assert.Throws<ArgumentNullException>(() => Validation.IsShortValue(null!)).ParamName);
+
     // --- ValidateName ---
 
     [Fact]
