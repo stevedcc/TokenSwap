@@ -22,17 +22,21 @@ namespace TswapCli.Commands;
 /// record in record format 3 with fingerprints and marks the vault folder
 /// (<see cref="RecordVaultStore.Reindex"/>). It prints counts only, never names or values.
 /// </para>
+/// <para>
+/// Brief T25: <c>vault move &lt;new-folder&gt; [--yes]</c> (no sudo; <c>VaultCommand.Move.cs</c>) moves this machine's
+/// vault folder. <see cref="RequiresSudo"/> stays true for the help screen only, as for <c>slot</c>.
+/// </para>
 /// </summary>
 public sealed partial class VaultCommand : ICliCommand
 {
     public string Name => "vault";
-    public string HelpUsage => "vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex";
-    public string Description => "Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules; reindex: rewrite every record in record format 3 with fingerprints";
+    public string HelpUsage => "vault merge <other-vault-dir> [--yes] (takes --recovery-key-stdin) | vault reindex | vault move <new-folder> [--yes]";
+    public string Description => "Merge another copy of this record-store vault folder (scp/rsync/USB) into this one: keyring union, records by the merge rules; reindex: rewrite every record in record format 3 with fingerprints; move (no sudo): move this machine's vault folder (copied, checked, the old one kept renamed), e.g. out of the config folder before sharing it";
     public bool RequiresSudo => true;
 
     public int Execute(CommandContext ctx, string[] args)
     {
-        var usage = $"sudo {ctx.Prefix} vault merge <other-vault-dir> [--yes] [{SlotCommand.RecoveryKeyFlag}] | sudo {ctx.Prefix} vault reindex";
+        var usage = $"sudo {ctx.Prefix} vault merge <other-vault-dir> [--yes] [{SlotCommand.RecoveryKeyFlag}] | sudo {ctx.Prefix} vault reindex | {ctx.Prefix} vault move <new-folder> [--yes]";
         if (args is ["reindex"])
             return Reindex(ctx);
         if (args is ["move", ..])
