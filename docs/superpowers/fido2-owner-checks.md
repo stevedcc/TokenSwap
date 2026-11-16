@@ -433,9 +433,11 @@ programming). Paste back the test output lines and the summary.
    tswap to finish with the YubiKey or security key (it may be waiting for a touch or a PIN)...` and
    nothing else. Touch the key for terminal 1: its `names` completes. Terminal 2 then prints `The
    other tswap is done; going on (touch the key again if it flashes).`, the key flashes again; touch
-   it, and terminal 2's `names` completes. The old busy text, `YubiKey <spare> is busy (another tswap
-   or app is using it); try again.`, is now what an app other than tswap holding the key gives (or
-   record the text you get).
+   it, and terminal 2's `names` completes. The busy text this check expected before T29, `YubiKey
+   <spare> is busy (another tswap or app is waiting for a touch); try again when it's done.`, is now
+   what an app other than tswap holding the key gives (when the key is hidden from the listing; an
+   app caught mid-command gives `YubiKey <spare> is busy (another tswap or app is using it); try
+   again.`). Record the text you get.
 2. The FIDO2 one. A FIDO2-only vault on the spare:
 
    ```bash

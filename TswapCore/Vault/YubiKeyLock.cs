@@ -71,7 +71,8 @@ public sealed class YubiKeyLock(Func<string> lockPath, TextWriter notices, TimeP
 
     /// <summary>
     /// Amendment A2: takes made in this scope (this thread and the tasks it starts) wait at most
-    /// <paramref name="budget"/> instead of <see cref="Timeout"/>. The broker's unlock paths pass
+    /// <paramref name="budget"/> instead of <see cref="Timeout"/>. The broker's vault sources
+    /// (<c>VaultBrokerSecretSource</c>, <c>VaultSshKeySource</c>: every broker-side unlock) pass
     /// <c>BrokerLimits.YubiKeyWaitBudget</c>, so a lock wait ends before the broker abandons the unlock. An ambient
     /// scope because the take happens deep inside the unlock (<c>VaultUnlocker</c>, the decorators), which the broker
     /// doesn't reach into.
@@ -120,7 +121,17 @@ public sealed class YubiKeyLock(Func<string> lockPath, TextWriter notices, TimeP
             {
                 Volatile.Write(ref _rememberedTimeout, null);
                 if (waited)
-                    notices.WriteLine(GoingOnLine);
+                {
+                    try
+                    {
+                        notices.WriteLine(GoingOnLine);
+                    }
+                    catch
+                    {
+                        held.Dispose(); // fix round 1 (GLM M3): a failed write never leaves the lock taken
+                        throw;
+                    }
+                }
                 return held;
             }
             if (Volatile.Read(ref _rememberedTimeout) is { } remembered)

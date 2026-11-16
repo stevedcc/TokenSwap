@@ -290,12 +290,8 @@ public sealed class SshAgentListener
             if (_server.Password is { } password && (lease = password.TryEnter()) is null)
                 return (null, "locked", false);
             guard.RecordAttempt(socket);
-            // Brief T29 (A2): a wait for the YubiKey lock ends, as a failed unlock, before the timeout below abandons it.
-            var sign = Task.Run(() =>
-            {
-                using (TswapCore.Vault.YubiKeyLock.WithWaitBudget(_server.Limits.YubiKeyWaitBudget))
-                    return SshKeySigner.Sign(_agent.KeySource, key, data, flags);
-            });
+            // Brief T29 (A2): the vault key source waits for the YubiKey lock within BrokerLimits.YubiKeyWaitBudget.
+            var sign = Task.Run(() => SshKeySigner.Sign(_agent.KeySource, key, data, flags));
             if (lease is not null)
                 _ = sign.ContinueWith(_ => lease.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             byte[] signature;

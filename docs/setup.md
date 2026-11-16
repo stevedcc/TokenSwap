@@ -210,7 +210,8 @@ slot's PIN prompt of the second command only appears once the first is done.
 - **60 seconds** at most: then the command stops with `Another tswap has been using the YubiKey or
   security key for 60 seconds, so this one stopped waiting. …`. If the first one is waiting for a
   touch or a PIN in another terminal, answer or cancel it there. A broker waits at most 25 seconds
-  (below its own unlock timeout), then fails that request as a failed unlock.
+  on every unlock it makes (below its own unlock timeout), then fails that request as a failed
+  unlock.
 - **Who shares the wait:** every tswap of one user: `sudo tswap …` and your own commands (under
   sudo the lock is your home's, not root's), and several vaults of yours (another
   `TSWAP_CONFIG_DIR`). The lock is `~/.cache/tswap/yubikey.lock` (Windows

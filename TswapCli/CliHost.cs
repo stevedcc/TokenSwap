@@ -150,10 +150,14 @@ internal static class CliHost
     /// The FIDO2 service (FIDO2 plan, tasks 4 and 5) over <see cref="Fido2Keys"/>; none in test mode (a test that needs
     /// one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, loads libfido2 or calls into
     /// <c>webauthn.dll</c> until a command calls it.
+    /// Brief T29: the device layer under <paramref name="hardwareLock"/> (<see cref="WithLock"/>); <paramref name="keys"/> is a
+    /// test seam for the device layer (as <see cref="YubiKeyService"/>'s <c>real</c>), outside test mode only.
     /// </summary>
     internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null, bool privileged = false,
-        Func<Libfido2LoadResult>? loadOther = null, YubiKeyLock? hardwareLock = null) =>
-        Fido2Keys(testKey, verbose, notices, privileged, loadOther) is { } keys ? new Fido2Service(WithLock(keys, hardwareLock), verbose) : null;
+        Func<Libfido2LoadResult>? loadOther = null, YubiKeyLock? hardwareLock = null, Func<IFido2Keys>? keys = null) =>
+        (testKey is null && keys is not null ? keys() : Fido2Keys(testKey, verbose, notices, privileged, loadOther)) is { } device
+            ? new Fido2Service(WithLock(device, hardwareLock), verbose)
+            : null;
 
     /// <summary>
     /// The FIDO2 device layer: on Linux and macOS (brief T19, item 3) <see cref="CompositeFido2Keys"/>, Yubico's SDK

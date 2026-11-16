@@ -250,6 +250,30 @@ public sealed class YubiKeyLockWiringTests : IDisposable
         Assert.Same(fake, CliHost.WithLock(fake, null));
     }
 
+    /// <summary>
+    /// Fix round 1 (MiMo I1): the composition's FIDO2 service reaches its device layer under the lock (B7.2's fix), and
+    /// without a lock the device layer is called as it is.
+    /// </summary>
+    [Fact]
+    public void CliHost_Fido2Service_WithALock_CallsTheKeysUnderIt_AndWithoutOne_Unwrapped()
+    {
+        var lk = NewLock();
+        var locked = new RecordingFido2Keys { Lock = lk };
+        var unlocked = new RecordingFido2Keys { Lock = lk };
+
+        var withLock = CliHost.Fido2Service(testKey: null, hardwareLock: lk, keys: () => locked);
+        var withoutLock = CliHost.Fido2Service(testKey: null, keys: () => unlocked);
+        Assert.NotNull(withLock);
+        Assert.NotNull(withoutLock);
+        withLock.ListKeys();
+        withoutLock.ListKeys();
+
+        Assert.Contains(("Find", true), locked.Calls);
+        Assert.Contains(("Find", false), unlocked.Calls);
+        Assert.DoesNotContain(("Find", true), unlocked.Calls);
+        Assert.Null(CliHost.Fido2Service(testKey: new byte[32], hardwareLock: lk, keys: () => locked));
+    }
+
     [Fact]
     public void CliHost_HardwareLock_IsMadeForHardware_AndOffInTestMode()
     {
@@ -374,67 +398,111 @@ public sealed class YubiKeyLockWiringTests : IDisposable
         Assert.Equal(2, machine.Keys.Challenges.Count);
     }
 
-    // ------------------------------------------------------------------ the broker's wait budget (A2)
+    // ------------------------------------------------------------------ the broker's wait budget (A2, fix round 1)
 
-    /// <summary>Amendment A2: a route's unlock (and a template's: the same <c>UnlockAsync</c>) runs under the broker's budget.</summary>
-    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
-    public async Task BrokerRouteUnlock_RunsWithTheBrokersYubiKeyWaitBudget()
-    {
-        await using var h = new BrokerHarness();
-        var budgets = new List<TimeSpan?>();
-        h.Secrets.UnlockStarted += _ =>
-        {
-            lock (budgets)
-                budgets.Add(YubiKeyLock.CurrentWaitBudget);
-        };
-        await h.StartAsync();
-
-        Assert.Equal(200, BrokerHarness.StatusOf(await h.GetAsync("lane1", "/echo/a")));
-
-        Assert.Equal([new BrokerLimits().YubiKeyWaitBudget], budgets);
-    }
-
-    private sealed class BudgetRecordingKeySource(byte[] key) : ISshKeySource
+    /// <summary>Forwards every member to <paramref name="inner"/>, recording the ambient YubiKey wait budget at each call.</summary>
+    internal sealed class BudgetRecordingYubiKeys(IYubiKeyService inner) : IYubiKeyService
     {
         public List<TimeSpan?> Budgets { get; } = [];
 
-        public byte[] ReadKey(string secretName)
+        private T Record<T>(Func<T> call)
         {
             lock (Budgets)
                 Budgets.Add(YubiKeyLock.CurrentWaitBudget);
-            return (byte[])key.Clone();
+            return call();
         }
+
+        public bool IsSimulated => inner.IsSimulated;
+        public IReadOnlyList<int> ListSerials() => Record(inner.ListSerials);
+        public byte[] Challenge(int serial, string challenge) => Record(() => inner.Challenge(serial, challenge));
+        public bool? DetectTouchRequirement(int serial) => Record(() => inner.DetectTouchRequirement(serial));
+        public YubiKeyResponse ChallengeReportingTouch(int serial, string challenge) => Record(() => inner.ChallengeReportingTouch(serial, challenge));
+        public IReadOnlyList<YubiKeyInfo> FindKeys() => Record(inner.FindKeys);
+        public string? DescribeUnreachable() => Record(inner.DescribeUnreachable);
+        public Slot2State GetSlot2State(int serial) => Record(() => inner.GetSlot2State(serial));
+        public void ProgramSlot2(int serial, bool requireTouch) => Record(() => { inner.ProgramSlot2(serial, requireTouch); return 0; });
     }
 
-    /// <summary>Amendment A2: an ssh-agent signature's unlock runs under the broker's budget.</summary>
-    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
-    public async Task SshAgentSignUnlock_RunsWithTheBrokersYubiKeyWaitBudget()
+    /// <summary>A YubiKey record vault with the secret <c>tok</c>, its store, and an unlocker over a budget-recording service.</summary>
+    internal static (FleetMachine Machine, RecordVaultStore Store, VaultUnlocker Unlocker, BudgetRecordingYubiKeys Keys) BrokerVault(string name, string? sshKeyPem = null)
     {
-        await using var h = new SshAgentHarness();
-        var host = TestHostKey.NewEd25519();
-        var key = SshTestKeyMaker.Ed25519Pem(RandomNumberGenerator.GetBytes(32));
-        var blob = SshTestKeyMaker.PublicBlob(key);
-        var source = new BudgetRecordingKeySource(key);
-        var config = $$"""
-            {
-              "version": 1,
-              "socket_dir": {{JsonSerializer.Serialize(h.Broker.SocketDir)}},
-              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{BrokerHarness.MyUid}}"], "routes": [], "ssh_keys": ["a"] } ],
-              "routes": [],
-              "ssh_keys": [ { "name": "a", "secret": "sa", "allowed_host_keys": ["{{host.Fingerprint}}"] } ]
-            }
-            """;
-        await h.StartAsync(config, p => new SshAgentOptions { Keys = SshAgentKeyLoader.Load(p, source), KeySource = source });
-        lock (source.Budgets)
-            source.Budgets.Clear(); // the load's reads ran outside any unlock
+        var machine = new FleetMachine(name, SimulatedYubiKeyService.WithKeys(RecordVaultTestSupport.SerialA));
+        RecordVaultTestSupport.InitRecordVault(machine);
+        machine.Ok("tok-value\n", "ingest", "tok");
+        if (sshKeyPem is not null)
+            machine.Ok(sshKeyPem, "ingest", "deploy-key");
+        var store = Assert.IsType<RecordVaultStore>(VaultStores.Open(machine.Dir));
+        var keys = new BudgetRecordingYubiKeys(machine.Keys);
+        return (machine, store, new VaultUnlocker(keys), keys);
+    }
 
-        using var client = await h.ConnectAsync("lane1");
-        var sid = RandomNumberGenerator.GetBytes(32);
-        Assert.Equal(new[] { SshAgentProtocol.Success }, await client.RequestAsync(SshBindMessages.Bind(host.Blob, sid, host.Sign(sid))));
-        var reply = await client.RequestAsync(SshBindMessages.SignRequest(blob, SshBindMessages.Userauth(sid, "ssh-ed25519", blob)));
+    /// <summary>Every device call of the unlock saw <paramref name="budget"/>, and none was made outside it.</summary>
+    internal static void AssertEveryCallUnder(BudgetRecordingYubiKeys keys, TimeSpan budget)
+    {
+        Assert.NotEmpty(keys.Budgets);
+        Assert.All(keys.Budgets, seen => Assert.Equal(budget, seen));
+        Assert.Null(YubiKeyLock.CurrentWaitBudget);
+    }
 
-        Assert.NotEqual(SshAgentProtocol.FailureReply, reply);
-        Assert.Equal([new BrokerLimits().YubiKeyWaitBudget], source.Budgets);
+    /// <summary>
+    /// Amendment A2, fix round 1 (MiMo I2): the budget is set where the broker reads the vault, so every broker path
+    /// gets it: an HTTP route's unlock (<see cref="VaultBrokerSecretSource.Read"/>).
+    /// </summary>
+    [Fact]
+    public void VaultBrokerSecretSource_Read_UnlocksUnderTheBrokersBudget()
+    {
+        var (machine, store, unlocker, keys) = BrokerVault("ykl-src-read");
+        using var _ = machine;
+
+        using var secret = new VaultBrokerSecretSource(store, unlocker).Read("tok");
+
+        Assert.Equal("tok-value", System.Text.Encoding.UTF8.GetString(secret.Value));
+        AssertEveryCallUnder(keys, new BrokerLimits().YubiKeyWaitBudget);
+    }
+
+    /// <summary>GLM I2: a template call's unlock (<see cref="VaultBrokerSecretSource.ReadMany"/>, BrokerTemplateCalls' one unlock).</summary>
+    [Fact]
+    public void VaultBrokerSecretSource_ReadMany_ATemplatesUnlock_IsUnderTheBrokersBudget()
+    {
+        var (machine, store, unlocker, keys) = BrokerVault("ykl-src-many");
+        using var _ = machine;
+
+        var values = new VaultBrokerSecretSource(store, unlocker).ReadMany(["tok"]);
+
+        Assert.Equal("tok-value", System.Text.Encoding.UTF8.GetString(values["tok"].Value));
+        foreach (var v in values.Values)
+            v.Dispose();
+        AssertEveryCallUnder(keys, new BrokerLimits().YubiKeyWaitBudget);
+    }
+
+    /// <summary>
+    /// MiMo I2: an ssh key read (<see cref="VaultSshKeySource.ReadKey"/>): an ssh-agent signature, the key load at
+    /// <c>serve</c> start, and the control socket's key load after <c>broker unlock</c> all read through it.
+    /// </summary>
+    [Fact]
+    public void VaultSshKeySource_ReadKey_TheAgentAndTheControlSocketsLoad_AreUnderTheBrokersBudget()
+    {
+        var (machine, store, unlocker, keys) = BrokerVault("ykl-src-ssh");
+        using var _ = machine;
+
+        var value = new VaultSshKeySource(store, unlocker).ReadKey("tok");
+
+        Assert.Equal("tok-value", System.Text.Encoding.UTF8.GetString(value));
+        AssertEveryCallUnder(keys, new BrokerLimits().YubiKeyWaitBudget);
+    }
+
+    /// <summary>The budget comes from the broker's limits (UnlockTimeout less 5 s), not a literal.</summary>
+    [Fact]
+    public void VaultSources_TakeTheBudgetFromTheGivenLimits()
+    {
+        var (machine, store, unlocker, keys) = BrokerVault("ykl-src-limits");
+        using var _ = machine;
+        var limits = new BrokerLimits { UnlockTimeout = TimeSpan.FromSeconds(20) };
+
+        using (new VaultBrokerSecretSource(store, unlocker, limits: limits).Read("tok")) { }
+        new VaultSshKeySource(store, unlocker, limits: limits).ReadKey("tok");
+
+        AssertEveryCallUnder(keys, TimeSpan.FromSeconds(15));
     }
 }
 
@@ -495,5 +563,44 @@ public sealed class YubiKeyLockServeAsRootTests : IDisposable
         Assert.Contains("Don't run the agent as root", console.ErrorText);
         Assert.Equal(0, resolves());
         Assert.Empty(machine.Keys.Challenges);
+    }
+}
+
+/// <summary>
+/// Fix round 1 (MiMo I2): a password broker's ssh keys load on the control socket after <c>broker unlock</c>, through
+/// the vault's <see cref="VaultSshKeySource"/>, so that unlock waits for the YubiKey within the broker's budget too.
+/// In the static-seam collection, as the other control-socket tests.
+/// </summary>
+[Collection(StaticSeamCollection.Name)]
+public sealed class YubiKeyLockControlSocketTests : IAsyncDisposable
+{
+    private readonly ControlHarness _c = new();
+
+    public async ValueTask DisposeAsync() => await _c.DisposeAsync();
+
+    [UnixFact("the control socket is a Unix socket")]
+    public async Task BrokerUnlock_TheSshKeyLoad_UnlocksUnderTheBrokersBudget()
+    {
+        var pem = System.Text.Encoding.UTF8.GetString(SshTestKeyMaker.Ed25519Pem(RandomNumberGenerator.GetBytes(32)));
+        var (machine, store, unlocker, keys) = YubiKeyLockWiringTests.BrokerVault("ykl-control", pem);
+        using var _ = machine;
+        var policy = BrokerPolicy.Parse($$"""
+            {
+              "version": 1,
+              "socket_dir": "/tmp",
+              "sockets": [ { "name": "lane1", "uid_only": true, "uids": ["{{ControlHarness.MyUid}}"], "routes": [], "ssh_keys": ["deploy"] } ],
+              "routes": [],
+              "ssh_keys": [ { "name": "deploy", "secret": "deploy-key", "allowed_host_keys": ["{{SshAgentHarness.SomeHostFingerprint}}"] } ]
+            }
+            """);
+        var deferred = new DeferredSshKeys();
+        _c.LoadSshKeys = () => deferred.Load(policy, new VaultSshKeySource(store, unlocker));
+        await _c.StartAsync();
+        keys.Budgets.Clear();
+
+        Assert.IsType<BrokerControlAnswer.Done>(await _c.UnlockAsync());
+
+        Assert.Single(deferred.Current);
+        YubiKeyLockWiringTests.AssertEveryCallUnder(keys, new BrokerLimits().YubiKeyWaitBudget);
     }
 }

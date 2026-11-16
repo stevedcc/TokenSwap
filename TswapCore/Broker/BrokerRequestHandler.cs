@@ -286,12 +286,9 @@ public sealed partial class BrokerRequestHandler(
             if (Password is { } password && (lease = password.TryEnter()) is null)
                 return new UnlockOutcome<T>(null, 503, "locked", TimeSpan.Zero, 0);
             unlockGuard.RecordAttempt(socket);
-            // Brief T29 (A2): a wait for the YubiKey lock ends, as a failed unlock, before the timeout below abandons it.
-            var task = Task.Run(() =>
-            {
-                using (TswapCore.Vault.YubiKeyLock.WithWaitBudget(_limits.YubiKeyWaitBudget))
-                    return read();
-            });
+            // Brief T29 (A2): the vault source waits for the YubiKey lock within BrokerLimits.YubiKeyWaitBudget, so the
+            // wait ends, as a failed unlock, before the timeout below abandons the read.
+            var task = Task.Run(read);
             if (lease is not null)
                 _ = task.ContinueWith(_ => lease.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             try

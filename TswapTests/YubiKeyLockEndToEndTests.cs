@@ -10,6 +10,7 @@ namespace TswapTests;
 /// pointed at a temp folder, and runs <c>yubikey setup --no-touch --serial 1</c>: it can never program a key (after the
 /// locked listing it refuses, as no key 1 is plugged in).
 /// </summary>
+#if DEBUG // TSWAP_TEST_YUBIKEY_LOCK exists in Debug builds only (fix round 1, MiMo M3), as Libfido2Absent_TestSwitch
 [Trait("Category", "E2E")]
 public sealed class YubiKeyLockEndToEndTests(TswapBinaryFixture binary) : IClassFixture<TswapBinaryFixture>, IDisposable
 {
@@ -82,3 +83,4 @@ public sealed class YubiKeyLockEndToEndTests(TswapBinaryFixture binary) : IClass
             "no refusal after the going-on line: " + rest);
     }
 }
+#endif

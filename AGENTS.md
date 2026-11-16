@@ -173,10 +173,10 @@ prompt until the first is done. The file is `<home>/.cache/tswap/yubikey.lock` (
 process a `SemaphoreSlim` gate, tried without blocking, serialises threads (the broker's handlers). A held try writes
 `YubiKeyLock.WaitingLine` once on stderr, polls every 100 ms, and gives up after 60 s (`YubiKeyLock.Timeout`) with
 `OtpFailure.Busy` and `TimeoutText`; after a wait `GoingOnLine`. A timeout is remembered: the next take tries once
-without waiting and fails at once while still held, or takes the lock and forgets. The broker's unlocks
-(`BrokerRequestHandler.UnlockAsync`, `SshAgentListener.SignAsync`) wait at most `BrokerLimits.YubiKeyWaitBudget`
-(`UnlockTimeout` less 5 s, 25 s; `YubiKeyLock.WithWaitBudget`), so the wait ends as a failed unlock before the broker
-abandons it. When the lock can't be taken (no home, the folder can't be made, an owner switch fails) tswap prints
+without waiting and fails at once while still held, or takes the lock and forgets. Every broker unlock
+(its vault sources `VaultBrokerSecretSource` and `VaultSshKeySource`: routes, templates, ssh-agent signatures, the ssh
+keys' load at `serve` start and after `broker unlock`) waits at most `BrokerLimits.YubiKeyWaitBudget` (`UnlockTimeout`
+less 5 s, 25 s; `YubiKeyLock.WithWaitBudget`), so the wait ends as a failed unlock before the broker abandons it. When the lock can't be taken (no home, the folder can't be made, an owner switch fails) tswap prints
 `YubiKeyLock.Warning` once and goes on without it. The owner switch only happens in a privileged process, and
 `broker serve` and `agent serve` refuse root, so no multi-threaded process switches identity. Off in test mode
 (`TSWAP_TEST_KEY`) unless `TSWAP_TEST_YUBIKEY_LOCK=1` (Debug builds only), so tests never write into the real home.

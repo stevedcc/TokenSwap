@@ -194,8 +194,41 @@ public sealed class YubiKeyLockTests : IDisposable
             "when it's done (if it is waiting for a touch or a PIN in another terminal, answer or cancel it there).",
             YubiKeyLock.TimeoutText);
         Assert.Equal(YubiKeyLock.TimeoutTextFor(YubiKeyLock.Timeout), YubiKeyLock.TimeoutText);
+        // Fix round 1 (MiMo M4): the two lines the docs quote, pinned to their wording.
+        Assert.Equal("Waiting for another tswap to finish with the YubiKey or security key (it may be waiting for a touch or a PIN)...", YubiKeyLock.WaitingLine);
+        Assert.Equal("The other tswap is done; going on (touch the key again if it flashes).", YubiKeyLock.GoingOnLine);
         Assert.Equal(TimeSpan.FromSeconds(60), YubiKeyLock.Timeout);
         Assert.Equal(TimeSpan.FromMilliseconds(100), YubiKeyLock.PollInterval);
+    }
+
+    /// <summary>A writer whose going-on line fails (stderr a closed pipe).</summary>
+    private sealed class FailingGoingOnWriter : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            if (value == YubiKeyLock.GoingOnLine)
+                throw new IOException("stderr is gone");
+            base.WriteLine(value);
+        }
+    }
+
+    /// <summary>
+    /// Fix round 1 (GLM M3): the going-on line is written with the lock already taken; if that write throws, the lock is
+    /// released, so a surviving process (a broker) isn't wedged.
+    /// </summary>
+    [Fact]
+    public void TheGoingOnLineThrows_TheLockIsReleased()
+    {
+        var holder = Hold(LockPath);
+        var lk = new YubiKeyLock(() => LockPath, new FailingGoingOnWriter(), _clock, pause: _ => holder.Dispose());
+        var calls = 0;
+
+        Assert.Throws<IOException>(() => lk.Run(() => calls++));
+
+        Assert.Equal(0, calls);
+        Assert.False(lk.HeldByThisThread);
+        AssertFree(LockPath);
+        Assert.Equal(1, lk.Run(() => ++calls)); // the in-process gate is free too
     }
 
     [Fact]
