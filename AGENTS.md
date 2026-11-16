@@ -159,6 +159,30 @@ touch key first in plug order makes an unattended `create` wait for its touch. E
 (`init`, `slot add`, `slot request`: `ChooseSerial`/`ChooseSerialAmong`) still prompts which key
 to enroll. Tests: `TwoYubiKeysTests` (FleetMachine `RunOnTerminal` plays a terminal).
 
+**Several tswap processes (brief T29, #273, #301).** Every call that can reach a YubiKey or security key, OTP and
+FIDO2 alike, runs under one per-user cross-process lock, `YubiKeyLock` (TswapCore/Vault), through two decorators that
+`CliHost` puts around the one YubiKey service and the FIDO2 device layer: `LockedYubiKeyService` (every
+`IYubiKeyService` member implemented explicitly, `IsSimulated` without the lock) and `LockedFido2Keys` (`CanList` and
+`OtherBrands` without it). The lock is per device call, not per command: tswap's own prompts between calls (vault
+password, key choice) hold nothing, while the FIDO2 PIN prompt runs inside the call, so a second tswap shows no PIN
+prompt until the first is done. The file is `<home>/.cache/tswap/yubikey.lock` (Windows
+`%LOCALAPPDATA%\tswap\yubikey.lock`), the home resolved as for the config folder (the invoking user's under sudo,
+`CliEnvironment.YubiKeyLockPath`) and independent of `TSWAP_CONFIG_DIR`, so `sudo tswap get` and the user's own
+`tswap run` share it, and so do several vaults of one user. Unix: `UnixLockFile.TryTake` as the folder's owner
+(`DirectoryOwnerMatcher.AsOwner`), the folder made 0700 when missing; Windows: a `FileShare.None` stream. Within one
+process a `SemaphoreSlim` gate, tried without blocking, serialises threads (the broker's handlers). A held try writes
+`YubiKeyLock.WaitingLine` once on stderr, polls every 100 ms, and gives up after 60 s (`YubiKeyLock.Timeout`) with
+`OtpFailure.Busy` and `TimeoutText`; after a wait `GoingOnLine`. A timeout is remembered: the next take tries once
+without waiting and fails at once while still held, or takes the lock and forgets. The broker's unlocks
+(`BrokerRequestHandler.UnlockAsync`, `SshAgentListener.SignAsync`) wait at most `BrokerLimits.YubiKeyWaitBudget`
+(`UnlockTimeout` less 5 s, 25 s; `YubiKeyLock.WithWaitBudget`), so the wait ends as a failed unlock before the broker
+abandons it. When the lock can't be taken (no home, the folder can't be made, an owner switch fails) tswap prints
+`YubiKeyLock.Warning` once and goes on without it. The owner switch only happens in a privileged process, and
+`broker serve` and `agent serve` refuse root, so no multi-threaded process switches identity. Off in test mode
+(`TSWAP_TEST_KEY`) unless `TSWAP_TEST_YUBIKEY_LOCK=1` (Debug builds only), so tests never write into the real home.
+Without the lock (an older tswap, ykman, a browser), a challenge whose answer is cut short reports
+`OtpFailure.Interrupted` ("...'s answer was cut short: another tswap or app used the key at the same time").
+
 **The touch posture** is explained once where it is chosen (enrolment, `migrate`) on stderr and
 acknowledged in `config.json` (`AcknowledgedTouch`); everyday commands print one line only for a
 posture that changed since (`SecurityWarnings.NoticeIfChanged`); `tswap slots --ack` acknowledges.

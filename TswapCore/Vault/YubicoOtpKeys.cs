@@ -127,7 +127,7 @@ internal sealed class YubicoOtpKeys : IOtpKeys
         }
         catch (Exception e) when (e is not OtpKeysException)
         {
-            throw new OtpKeysException(Classify(e), serial, e.Message);
+            throw new OtpKeysException(ClassifyChallenge(e), serial, e.Message);
         }
         finally
         {
@@ -386,6 +386,17 @@ internal sealed class YubicoOtpKeys : IOtpKeys
     /// The SDK's exceptions as <see cref="OtpFailure"/>s (the table with the SDK source lines is in the stage 1 task 2
     /// report). Anything unmapped is <see cref="OtpFailure.Other"/>, its message passed through.
     /// </summary>
+    /// <summary>
+    /// Brief T29 (#301): <see cref="Classify"/> for a challenge. A <see cref="MalformedYubiKeyResponseException"/> that
+    /// <see cref="Classify"/> leaves as <see cref="OtpFailure.Other"/> (not the busy status report) is an answer cut
+    /// short by another writer: <see cref="OtpFailure.Interrupted"/>.
+    /// </summary>
+    internal static OtpFailure ClassifyChallenge(Exception e) => Classify(e) switch
+    {
+        OtpFailure.Other when e is MalformedYubiKeyResponseException => OtpFailure.Interrupted,
+        var kind => kind,
+    };
+
     internal static OtpFailure Classify(Exception e) => e switch
     {
         // KeyboardTransform.WaitFor: no acknowledgement of the write, or no answer within ~1 s. Either another

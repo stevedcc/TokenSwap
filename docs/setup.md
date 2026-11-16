@@ -192,6 +192,37 @@ as they are. A pair vault whose keyring is format version 2 cannot take new slot
 its own slot, create a new vault with `tswap init --yubikey` (or the guided `tswap init`) and move
 the secrets across.
 
+### Several tswap commands at once
+
+Two tswap commands that use the YubiKey or security key at the same moment take turns: the second
+waits for the first instead of failing or taking its touch. While it waits it prints, on stderr
+(so `$(tswap get …)` and pipes are unaffected):
+
+```
+Waiting for another tswap to finish with the YubiKey or security key (it may be waiting for a touch or a PIN)...
+```
+
+and once the first is done, `The other tswap is done; going on (touch the key again if it
+flashes).`: a touch-required key then asks for a second touch, for the second command. A FIDO2
+slot's PIN prompt of the second command only appears once the first is done.
+
+- **Ctrl-C** stops waiting; nothing was sent to the key yet.
+- **60 seconds** at most: then the command stops with `Another tswap has been using the YubiKey or
+  security key for 60 seconds, so this one stopped waiting. …`. If the first one is waiting for a
+  touch or a PIN in another terminal, answer or cancel it there. A broker waits at most 25 seconds
+  (below its own unlock timeout), then fails that request as a failed unlock.
+- **Who shares the wait:** every tswap of one user: `sudo tswap …` and your own commands (under
+  sudo the lock is your home's, not root's), and several vaults of yours (another
+  `TSWAP_CONFIG_DIR`). The lock is `~/.cache/tswap/yubikey.lock` (Windows
+  `%LOCALAPPDATA%\tswap\yubikey.lock`). Two different users on one machine don't share it: a
+  machine-wide lock would need a place every user can write, where any local user could hold it.
+- **Who doesn't take it:** ykman, a browser, another app, or a tswap older than this one. Those can
+  still disturb a command: then you get the busy text, or `YubiKey <serial>'s answer was cut short:
+  another tswap or app used the key at the same time. Try again.`
+- Scripts that run several tswap commands in parallel no longer need their own `flock` around them.
+- If tswap can't take the lock (for example no home folder), it says so once (`Warning: tswap
+  couldn't take its YubiKey lock (…)`) and goes on as before, without it.
+
 ## FIDO2 slots
 
 A YubiKey can open a vault in two ways, and each is a slot of its own:

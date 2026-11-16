@@ -234,6 +234,8 @@ public sealed class SdkYubiKeyService : IYubiKeyService
         // Also reached in the race where the look-up saw the key reachable and the seam's own listing didn't (it
         // turned busy in between): the probe decides, as in the look-up. Reachable count unknown here: 0.
         OtpFailure.NotReachable => Unreachable(serial, ExplainUnreachable([new OtpKeyInfo(serial, false, "")], reachableCount: 0)),
+        // Brief T29 (#301): the SDK's own text ("Exception of type ... was thrown.") says nothing to a person.
+        OtpFailure.Interrupted => new(OtpFailure.Interrupted, serial, $"{YubiKeyAccessTexts.Name(serial)}'s answer was cut short: another tswap or app used the key at the same time. Try again."),
         var kind => new(kind, serial, $"{YubiKeyAccessTexts.Name(serial)}: {e.Detail}"),
     };
 }

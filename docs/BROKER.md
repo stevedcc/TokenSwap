@@ -40,6 +40,10 @@ Linux and macOS only. On Windows, `tswap broker` says it is not supported.
   test host in [Platforms](#platforms)) that is about 2 s: a model API call through the broker gets about 2 s slower, and so does every git
   or registry request (a `git push` makes two or three).
 - Unlocks are serialised, so concurrent requests queue for the TPM.
+- A broker whose own slot is a YubiKey OTP slot waits for the key like any tswap (brief T29: tswap
+  commands take turns at the key, [setup.md](setup.md#several-tswap-commands-at-once)), but for at
+  most 25 s (its 30 s unlock timeout less 5 s); then that request fails as a failed unlock. A broker
+  machine's own slot should stay a TPM or Secure Enclave slot.
 - One request per connection: the broker answers every request with `Connection: close`.
 
 ## Redaction confirms whole guesses
