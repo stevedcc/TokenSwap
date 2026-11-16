@@ -15,7 +15,8 @@ CLAUDE.md first, then:
 - for Task 3: `TswapCore/InstallScript.cs` (`install_binary`, both copies), `TswapTests/InstallScriptUpgradeTests.cs`
   (`InstallBinary_ReplacesARunningBinary_AndTheRunningProcessKeepsGoing`, `FunctionText`, `Bash`);
 - for Task 4: `TswapTests/SshAgentTestSupport.cs` (`SshAgentTestClient`), `TswapTests/SshAgentFramingTests.cs`,
-  `TswapTests/BrokerContainerGateTests.cs` (`ExchangeAsync`, `TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`),
+  `TswapTests/BrokerContainerGateTests.cs` (class `BrokerContainerGateEndToEndTests`: `ExchangeAsync`,
+  `TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`),
   `TswapTests/BrokerTestSupport.cs` (`SendRawAsync` and commit 90ddf8d, the same fix for the HTTP sockets),
   `TswapCore/Broker/BrokerContainerGate.cs` (`Admit`, `Recheck`), `TswapCore/Broker/SshAgent/SshAgentListener.cs`
   (the connection loop around `Admit` and `Refusal`, `Reloaded`);
@@ -64,6 +65,22 @@ tests behave differently as root. Stop every container you started before you fi
 - GLM Minor 4 (`gh` may be unavailable): valid. A4: say so in the report and don't fetch the log another way.
 - GLM coverage note (`BrokerContainerGateTests` is `Category=E2E`): taken as A8, run by filter in Task 4.
 
+Round 2 (scoped, on 43346dc; MiMo: not ready, 1 Important and 6 Minors; GLM: not ready, 1 Important and 1 Minor). The
+design stands; every finding was wording or test detail:
+- MiMo Important 1 / GLM Important 1 (A8's filter `FullyQualifiedName~BrokerContainerGateTests` matches no test, and
+  `runtests.sh` takes no filter): valid. The class is `BrokerContainerGateEndToEndTests` (the file also holds
+  `BrokerContainerGateSeamTests` and `BrokerInternalErrorTests`, which are not E2E). A10 gives a direct `dotnet test`
+  with the right class under the lock, a check that the count is non-zero, and class names wherever a class is meant.
+- MiMo Minor 2 (the Report list doesn't carry A4's fallback): valid. A11.
+- MiMo Minor 3 / GLM Minor 1 ("both workflows' Linux runners were pinned" overstates; three release.yml jobs still
+  run on `ubuntu-latest`): valid. A12 narrows the sentence and names the three jobs, which stay as they are.
+- MiMo Minor 4 (AGENTS.md's verbs after the plural): valid. A13 gives the whole phrase.
+- MiMo Minor 5 (Task 1's temp tree has no cleanup): valid. A14.
+- MiMo Minor 6 (`/proc/<pid>/exe` is canonical, `target` may not be): valid. A15 compares against
+  `BrokerNative.RealPath(target)`.
+- MiMo Minor 7 (fifo, socket or device under a shimmed name falls outside the three cases): valid. A16 keeps today's
+  behaviour of binding over any non-directory that isn't a symlink.
+
 **Parallel briefs.** T34 (enrol follow-ups: `SlotEnrol*.cs`, `SlotStage.cs`, `ProcessSshTransport.cs`, `SlotCommand.cs`'s
 request/accept output, `docs/multi-machine.md`'s enrolling-over-SSH section, `SlotEnrolTests`/`SlotStdioTests`), T35
 (Windows output: `run`'s hints and refusals, console encoding and glyphs, ConPTY, `InitCommand`'s `--yubikey` Windows
@@ -84,8 +101,11 @@ skill-eval paragraph, "the Linux CI job" becomes "the Linux CI jobs"; T35 and T3
 `ReadingTheShimItself_IsACleanRead`, `Sandbox_TheAgentCannotUnmountOrRebindTheShims`,
 `Shim_IgnoresStatePathsFromTheEnvironment`; the issue says 11, the log has 12),
 `BrokerTemplateProgramAndEnvTests.ABindOverUsr_WithTheProgramInIt_AsksForANarrowerFolder` and
-`InstallScriptUpgradeTests.InstallBinary_ReplacesARunningBinary_AndTheRunningProcessKeepsGoing`. Both workflows' Linux
-runners were pinned to `ubuntu-24.04` the same day. The failing step stopped the job, so the later steps (AOT publish,
+`InstallScriptUpgradeTests.InstallBinary_ReplacesARunningBinary_AndTheRunningProcessKeepsGoing`. The build and test legs
+of both workflows were pinned to `ubuntu-24.04` the same day (ci.yml's matrix, and release.yml's `test` job and
+`build`'s Linux entries). release.yml's `verify-version`, `release` and `bump-version` jobs still run on `ubuntu-latest`,
+so on 26.04 already; they only check versions, create the release and open a PR, and Task 5 leaves them as they are
+(A12). The failing step stopped the job, so the later steps (AOT publish,
 package smoke, E2E) have **never run on 26.04**; Task 5 is where they first do.
 
 The controller checked the 26.04 layout in a throwaway `ubuntu:26.04` container (`Ubuntu 26.04.1 LTS`). The three
@@ -123,7 +143,7 @@ SshAgentFramingTests.cs:180. With `allowOwnUid: false`, `BrokerContainerGate.Adm
 reach the client before its first send, and the send then fails with EPIPE. The outcome the test checks (closed
 without a reply, `reason=own-uid` logged) happened. The test client just can't take the close arriving first. The HTTP
 side had the same race: `BrokerHarness.SendRawAsync` (BrokerTestSupport.cs, fixed in 90ddf8d) and
-`BrokerContainerGateTests.ExchangeAsync` (which has had the same catch since d997c77) count a send that fails with
+`BrokerContainerGateEndToEndTests.ExchangeAsync` (which has had the same catch since d997c77) count a send that fails with
 `SocketException { SocketErrorCode: SocketError.Shutdown or SocketError.ConnectionReset }` as "nothing answered" (.NET
 reports EPIPE as `SocketError.Shutdown`).
 
@@ -132,7 +152,8 @@ close before their send. `Admit` runs before the first frame is read. A reload's
 connection loop) runs only after a frame has been read, and `Reloaded` closes no connection of a kept socket. So:
 - **the race is possible in:** `SshAgentFramingTests.ThePeerWithTheBrokersOwnUid_IsClosed`,
   `SshAgentFramingTests.UidNotOnTheList_IsClosedBeforeAnythingIsParsed_AndLogged` and
-  `BrokerContainerGateTests.TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`;
+  `BrokerContainerGateEndToEndTests.TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame` (in
+  `BrokerContainerGateTests.cs`);
 - **the race is not possible in:** `OversizeOrEmptyFrame_...` and `TruncatedFrame_...` (the broker reads what was sent
   first); `AReloadThatDropsTheUid_ClosesAnOpenConnection_AtItsNextRequest`, `ARebindBetweenTwoSshMessages_RefusesTheSecond`
   and `BindingAUidOnlySocketBetweenTwoSshMessages_RefusesTheSecond_IdentityUnreadable` (refused after the frame is read);
@@ -180,8 +201,9 @@ Steps:
 bind the shim over, each once. `shim_paths` is the set of paths at which the shim then runs inside the sandbox (host
 and sandbox paths are the same, since the folders are bound at the same place). For each `name`, and each `d` in
 `system_dirs`, take `path = os.path.join(os.path.realpath(d), name)`, skipping paths that don't `lexists` and
-directories:
-- **A regular file:** bind over `path` (as today). Add to `shim_paths` `os.path.join(dd, name)` for every `dd` in
+directories. Anything else that isn't a symlink (a regular file, or a fifo, socket or device node under a shimmed name)
+is bound over as today, which binds any `lexists` non-directory (A16):
+- **A regular file (or another non-directory that isn't a symlink):** bind over `path` (as today). Add to `shim_paths` `os.path.join(dd, name)` for every `dd` in
   `system_dirs` with `os.path.realpath(dd) == os.path.dirname(path)` (as today's second loop does).
 - **A symlink:** `target = os.path.realpath(path)`. Bind over `target` when it is a regular file and its basename is
   `name` or another of `names` (sudo-rs's `/usr/lib/cargo/bin/sudo`, uutils' `.../coreutils/cat`, `gawk` for `awk`).
@@ -209,7 +231,8 @@ name** (busybox style). It isn't shimmed, because shimming the binary would shim
 
 **Tests (`SkillEvalTests`):**
 - `ShimMounts_FollowLinksIntoOtherFolders_ButNotIntoAMultiCallBinary` (`[LinuxFact]`, no bwrap needed, so not behind
-  `CanRun`): it builds a tree under a temp folder taken through `realpath`:
+  `CanRun`): it builds a tree under a temp folder taken through `realpath`, removed in a `finally` as
+`IsolationCheck_AbortsWhenARealTswapIsReachable` removes its folder (A14):
   - `usr/bin/` with `bin -> usr/bin`;
   - `usr/lib/cargo/bin/sudo` (a file), `etc/alternatives/sudo -> <root>/usr/lib/cargo/bin/sudo` and
     `usr/bin/sudo -> <root>/etc/alternatives/sudo`;
@@ -274,7 +297,9 @@ tests run on, and the helper `Bash` already needs it. Start it as
 `new ProcessStartInfo(target) { UseShellExecute = false, RedirectStandardInput = true }` with arguments `-c` and
 `read -r _`. It blocks on its open stdin, has no time limit, and `Process.Start` returns only after the exec. The
 existing assertions stay. **One sanctioned added assertion**, after `Assert.False(running.HasExited, ...)`:
-`Assert.Equal(target + " (deleted)", new FileInfo($"/proc/{running.Id}/exe").LinkTarget)`. It shows that the process
+`Assert.Equal(BrokerNative.RealPath(target) + " (deleted)", new FileInfo($"/proc/{running.Id}/exe").LinkTarget)`, with
+`BrokerNative.RealPath(target)` taken right after the copy, before the replace. `/proc/<pid>/exe` shows the canonical
+path, and a temp folder reached through a symlinked `TMPDIR` would otherwise not compare equal (A15). It shows that the process
 still running is the old binary, whose file the rename replaced, rather than some other process at that path. Update
 the test's comment: the stand-in is a copy of bash because a multi-call binary (26.04's uutils `sleep`) picks its tool
 from its own file name and exits at once under the name `tswap`. The teardown stays exactly as now,
@@ -303,7 +328,8 @@ owner may change).
 (`agent.` in the third); their assertions stay:
 - `SshAgentFramingTests.ThePeerWithTheBrokersOwnUid_IsClosed`;
 - `SshAgentFramingTests.UidNotOnTheList_IsClosedBeforeAnythingIsParsed_AndLogged`;
-- `BrokerContainerGateTests.TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame`.
+- `BrokerContainerGateEndToEndTests.TheSshAgentSocketOfAMismatchingSocket_ClosesBeforeTheFirstFrame` (file
+  `BrokerContainerGateTests.cs`).
 
 Either outcome of the send is correct there, so the result is discarded on purpose. The outcome the test cares about is
 `ClosedWithoutReplyAsync()` and the broker's log line. `ReadExactlyAsync` already reads ECONNRESET as a close, and after
@@ -322,10 +348,15 @@ EPIPE the receive sees end of stream. No catch anywhere else, no retries, no wai
   `ObjectDisposedException`. This guards against the catch growing into a blanket one. Break-it-once: widen the catch to
   `catch (Exception)`. The test fails.
 
-macOS runs these in CI's macOS job, where EPIPE is reported the same way. `BrokerContainerGateTests` is
-`Category=E2E`, so `--unit` doesn't run it: run it during this task with
-`--filter "FullyQualifiedName~BrokerContainerGateTests"` (it skips without a usable cgroup client, as it does now), and
-the final full `./runtests.sh` covers it (A8).
+macOS runs these in CI's macOS job, where EPIPE is reported the same way. The class that holds the third changed line,
+`BrokerContainerGateEndToEndTests`, is `Category=E2E` (its file's other two classes, `BrokerContainerGateSeamTests` and
+`BrokerInternalErrorTests`, run under `--unit`), so `--unit` doesn't run it. `runtests.sh` takes no extra filter, so
+run the class during this task directly, as `runtests.sh` runs `dotnet test`:
+`flock ~/.cache/tswap-suite.lock env TSWAP_TEST_KEY=$(openssl rand -hex 32) dotnet test ./TswapTests/TswapTests.csproj --filter "FullyQualifiedName~BrokerContainerGateEndToEndTests"`.
+Check that its summary counts more than zero tests: a filter that matches nothing exits 0 with "No test matches the
+given testcase filter", and that would be no evidence. Its tests skip without a usable cgroup client, as they do now,
+and the report says how many ran and how many skipped. The final full `./runtests.sh` covers it too (A8, corrected in
+A10).
 
 ## Task 5: CI runs Ubuntu 24.04 and 26.04
 
@@ -347,7 +378,8 @@ job stays on `ubuntu-24.04`, as the release's one test leg, matching the build i
 run on every PR before a tag. `build`'s `linux-x64` stays on `ubuntu-24.04` (glibc), and its comment stays. Change the
 `test` job's comment to: "24.04, the image the Linux binaries are built on; ci.yml also runs 26.04 (#339)."
 
-**AGENTS.md**: "set by the Linux CI job" becomes "set by the Linux CI jobs".
+**AGENTS.md**: "set by the Linux CI job, which installs bubblewrap and allows unprivileged user namespaces" becomes
+"set by the Linux CI jobs, which install bubblewrap and allow unprivileged user namespaces" (A13).
 
 **Verification** is the PR's CI run, which the controller starts by pushing the branch. You can't push. Your report
 says that every 26.04 step (unit tests, AOT publish, package smoke, E2E) is still to be seen on the runner. When the
@@ -364,7 +396,9 @@ it isn't).
 Write `t37-report.md` at the worktree's parent folder (`../t37-report.md`). It contains:
 - the commits;
 - the reproduction: the layout listing, the cause 3 by-hand result, the container's before and after test summary
-  lines, the `shim_mounts` output on the real 26.04 layout, and the CI log lines with the runner-image line;
+  lines, the `shim_mounts` output on the real 26.04 layout, and the CI log lines with the runner-image line (or,
+  under A4, the issue's failure lines and a note that `gh` was unavailable) (A11);
+- the `BrokerContainerGateEndToEndTests` run from Task 4: tests counted, run and skipped (A10);
 - which causes were reproduced in the container and which are left to the runner (expected: cause 1's eval run);
 - the red counts and each break-it-once (the line reverted, the test that failed and how);
 - the tests whose input changed (sanctioned) and the one added assertion;
