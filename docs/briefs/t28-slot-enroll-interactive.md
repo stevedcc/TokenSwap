@@ -16,6 +16,9 @@ simulated services, `TSWAP_CONFIG_DIR` and temp folders only. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion except where this brief
 sanctions it by name (say so in the commit). British spelling in new text.
 
+**Review history.** Round 1 (MiMo, GLM-5.3: both "no"; design judged sound). Their findings are folded in as the
+binding **Amendments** section at the end; where it differs from the text above, the amendments win.
+
 ## Why
 
 T27 carries the request and the approve file on the SSH session's stdin and stdout (`ssh -T`), so nothing on the host
@@ -151,6 +154,109 @@ As in "Docs" above; `Forms`, `Description`, usage texts for `slot stage` and the
 `slot stage` sudo-table row and driver; `SlotCommand`'s and `SlotEnroll`'s doc comments; the follow-up issue #331's
 docs points that this rewrite touches anyway (the label also covers ssh's own stderr in batch mode; "readable by you
 only" exact on Unix, the config folder's ACLs on Windows).
+
+## Amendments after brief review round 1 (binding)
+
+**A1. One read, then hash, then parse (MiMo C1).** `approve --staged` and `merge --staged` read the staged file
+**once** into a byte buffer, compare the buffer's SHA-256 with `--expect`, and parse **that buffer**; the path is never
+read again (no `File.ReadAllText(path)` after the check). Route the staged read through a seam (in the style of
+`RequestHooks`) so a test can swap the file **after** the hash check and before any later read; assert nothing is
+approved or merged and `ApprovedSlots`/keyring bytes are unchanged. Task 1's break-it-once becomes: re-read the file
+after hashing; the swap-under-the-read test fails. `put` writes the stdin bytes verbatim (no newline, BOM or CRLF
+normalisation), so the hash the joiner computed over what it sent matches.
+
+**A2. `--staged` and `--expect` are a pair (MiMo I3, GLM M-5).** Both or neither, else a usage error; `--expect` must
+match `^[0-9a-f]{64}$` (lower-case; the joiner sends `Convert.ToHexStringLower`), compared ordinally. Tests: `--staged`
+alone, `--expect` alone, a 63-character, an upper-case and a non-hex `--expect`: each a usage error before sudo or any
+read.
+
+**A3. The approve file coming back is not bound by a hash (GLM I-1), and the ruling must say so.** `--expect` binds
+what the joiner **sends**. The `approve.json` the host writes into the staging folder rests there between the approve
+and `get` calls, where a same-user process on the host could replace it with one it crafted: everything `slot accept`
+checks is public, and the wrap's associated data (format version, vault id, k, slot id) is public too, so a crafted
+approve file can wrap an attacker-chosen key to the joiner's public key. That gives the attacker no way into the real
+vault, but a joiner that then writes secrets would write them under a key the attacker knows. This is the same exposure
+as the hand-carried flow, where `approve.json` sits in the user's folder too; state it so in `docs/security-model.md`
+instead of "the hash makes staging safe". Proportionate binding, specified: `approve --staged` prints on its terminal,
+as its last line, `Approve file fingerprint: <first 16 hex of its SHA-256, in groups of 4>`; after `get`, `enroll`
+prints `Approve file received: <the same rendering of what get returned>. It must match the fingerprint the host
+printed above; if it doesn't, stop (Ctrl-C) before the vault password or touch here.` and then waits for Enter before
+step 4 (accept). A test pins both lines and that they agree in the happy path. The docs explain what a mismatch means.
+
+**A4. No recovery-key prompt exists (both, MiMo I1/GLM I-2).** Drop "a recovery key prompt" from "Why" and "Two
+modes", and drop the Task 1 recovery-key ruling. The recovery key stays stdin-only and refused on a terminal;
+`--staged` with `--recovery-key-stdin` stays a usage error. A host whose only way in is the recovery key uses the
+hand-carried flow; `docs/multi-machine.md`'s "what can't go over SSH" keeps saying so for both modes.
+
+**A5. Sanctioned changes, by name (both, MiMo I2/GLM I-3).** Allowed, each said in the commit message:
+`CommandReferenceTests.Subcommands_TokenisesBothUsageShapes`' slot list gains `stage` in `Forms`' order;
+`SlotEnrollTests.BuildArgv_PutsTheDestinationAfterDoubleDash` keeps passing **unchanged** because `BuildArgv` keeps its
+two-argument overload with no sharing (add the sharing and interactive forms as new overloads or a defaulted parameter,
+pinned by new tests); `ProcessSshTransport_RunsTheProgram_WithStdin_AndRelaysStderr` likewise runs without sharing
+(construct the transport with sharing off); `LoopbackSshTransport`'s fixed-prefix check may become a check of the
+exact prefix each call should carry (`tswap` for pre-flight and `stage`, `sudo tswap` for interactive steps,
+`sudo -n tswap` for `--batch`); every `ISshTransport` double may change only to compile (give the interface default
+implementations for the new members where that keeps doubles untouched). `--batch`'s messages stay byte-identical to
+T27's; interactive variants are new strings asserted by new tests. Argument and usage errors are checked before the
+no-terminal refusal, so the existing `UsageErrors` cases pass without `--batch`.
+
+**A6. The config folder under sudo can differ (MiMo I4).** `put` as the user resolves `TSWAP_CONFIG_DIR` /
+`XDG_CONFIG_HOME`; under sudo `CliEnvironment` uses `SUDO_USER`'s home `~/.config` (sudo resets the environment).
+`approve/merge --staged` with no staged file gives its own message, never the mismatch one: ``No staged <request
+file|receipt> for <id> in <the resolved staging path>. If the SSH user sets TSWAP_CONFIG_DIR or XDG_CONFIG_HOME,
+sudo doesn't see it: see docs/multi-machine.md#enrolling-over-ssh. Nothing was approved.`` (merge: `merged`). The docs
+reuse the existing `TSWAP_CONFIG_DIR` + `sudo --preserve-env` note (security-model.md, "which vault a command under
+sudo uses"). Test: a staging folder absent → this message, nothing approved.
+
+**A7. Honest prompt counts (both, MiMo I5/GLM M-7).** The docs enumerate: SSH authentication once on Linux/macOS with
+sharing, up to seven from a Windows client (pre-flight, put, approve, get, put, merge, clean); sudo twice (approve and
+merge, separate terminals); the host's vault unlock twice (approve and merge each unlock: password, and a touch on the
+host's own YubiKey or Secure Enclave, which someone must do **at the host**); the joining machine's own prompts
+(request's, accept's); the Enter after comparing the approve fingerprint. A recovery-key-only host is not covered.
+
+**A8. `slot stage` refuses real sudo escalation only (MiMo I6).** Refused when `SUDO_USER` is set and isn't root (the
+rule `CliEnvironment` uses), not for every root process: a root SSH login with `--no-remote-sudo` is the SSH user
+there and may stage. Tests: sudo-escalated → refused; a root process without `SUDO_USER` (seam) → runs.
+
+**A9. Closing the shared connection, and the socket folder (both, M1/M-2).** `ISshTransport` gains `void
+EndSession(string destination)` (default: nothing); `ProcessSshTransport` runs `ssh -o ControlPath=<socket> -O exit
+-- <destination>` there when sharing was on, ignoring its failure; `enroll` calls it in a `finally` around the run;
+the loopback double records it. The socket folder check uses `lstat` semantics: a symlink, another owner, or a mode
+other than 0700 means no sharing. The folder itself is left in place (it is reused); the socket goes with `-O exit`
+or after `ControlPersist=60`. `docs/security-model.md` says that during the run and up to 60 s after a crash, a
+same-user process on the joining machine can reuse the connection (no sudo, no staged-file power: A1 still binds).
+
+**A10. Messages for the new sub-steps (MiMo M3/M7, GLM M-1/M-6).**
+- Pre-flight in interactive mode: `<remote tswap> --version` without sudo; its failure text is a new string: ``Couldn't
+  run tswap on <destination> over SSH (`<cmd>` <reason>). Nothing was changed. Check that ssh <destination> works and
+  that tswap is on the SSH session's PATH there (or give --remote-tswap its full path).`` The batch pre-flight keeps
+  T27's text and `sudo -n`.
+- A failed `put` or `get`: T27's approve-failed message (put of the request, get) or merge-failed message (put of the
+  receipt), with `<reason>` as T27 defines it; a `get` whose output doesn't parse is `its output is not an approve
+  file`. When the remote exit code is 2 (usage) on `stage` or `--staged`, the reason is `the host's tswap has no 'slot
+  stage' (update it to this version)`.
+- Messages never name a host path (the joiner can't know it); they name `<host tswap> slot stage <id> clean`.
+- A failed `stage clean` after a successful merge: a note, ``Note: couldn't remove the host's staging folder; run
+  '<host tswap> slot stage <id> clean' there.``, exit 0 (the enrolment is done).
+- `--fresh`: the docs say an abandoned enrolment may leave a staging folder on the host, removed with `slot stage <old
+  id> clean`.
+
+**A11. Interactive merge on a terminal (MiMo M4).** Over `ssh -t` the host's merge has a terminal, so an unapproved slot
+is asked about (Yes/No) instead of refused; `enroll` still never passes `--yes`, and with `--expect` the receipt is the
+one the joiner sent. Reword the T27 sentence in `docs/security-model.md` ("refused because stdin is not a terminal")
+for both modes.
+
+**A12. Also in Task 3 (both).** AGENTS.md's privilege lists and `slot` bullet (`slot stage` no sudo, plumbing;
+`--staged/--expect` on approve and merge); `docs/agent-integration.md`'s callout covers `slot stage` with `enroll`;
+`Prompt.cs`: the `enroll` line unchanged, one `slot stage` line added to the NEVER list; completions only if they list
+`slot` subcommands. Docs keep T27's warnings that still apply: the host shell must print nothing on stdout at login
+(the batch-form calls, `get` included), and `slot stage <id> get approve` run by hand at a terminal puts the approve
+file in the scrollback. `--remote-tswap`: the non-sudo calls find `tswap` on the SSH session's PATH, the sudo calls on
+sudo's `secure_path`; a full path serves both.
+
+**A13. Owner check before release (MiMo M7).** One real interactive `slot enroll --via` against a host whose sudo asks
+for a password (and, if available, whose vault has a password slot). The Windows-host and Windows-client paths are
+untested by CI; say so in the PR.
 
 ## Out of scope
 
