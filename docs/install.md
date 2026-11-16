@@ -93,6 +93,16 @@ A plugged-in key's FIDO2 interface couldn't be read (OpenFailed:FIDO_ERR_...), s
 A security key is plugged in, but this user can't open it: Linux gives access to the user logged in at the machine (not over SSH).
 ```
 
+Right after a key is plugged in, udev may not have given that access yet (or the key may not answer
+yet), and a command that uses the key then fails with, for example:
+
+```
+YubiKey N: tswap couldn't talk to the key (HidrawFailed). If it was just plugged in, wait a second and run the command again. If that keeps failing: Linux lets only the user logged in at the machine open a security key (not over SSH); see docs/install.md.
+```
+
+Wait a second and run the command again. tswap doesn't retry by itself: the PIN may already have
+been typed, and it asks for one PIN per key operation, never a retry.
+
 ## Download a release
 
 Each [release](https://github.com/stevedcc/TokenSwap/releases) has an archive per platform:

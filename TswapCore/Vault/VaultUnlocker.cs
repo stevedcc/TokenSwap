@@ -446,12 +446,15 @@ public sealed class VaultUnlocker
 
     /// <summary>
     /// Linux and macOS: <see cref="IFido2Service.Locate"/> each slot (no PIN, no touch); a probe that fails (a busy key)
-    /// ends the pass. Of the found slots, one is opened, the password-free ones first.
+    /// ends the pass. Of the found slots, one is opened, the password-free ones first. Brief T31 (#291.1): when that key
+    /// was tried and failed, its failure leads, and the "plug it in" notes of absent keys' slots are left out (they are
+    /// named only when nothing plugged in could be tried).
     /// </summary>
     private static byte[]? TryLocatedFido2Slot(IFido2Service fido2, Keyring.Keyring keyring, List<(Slot Slot, Fido2SlotBlob Blob)> tryable,
         Fido2Pin pin, Action<string>? notice, RunPassword password, List<string> notes, out Fido2Outcome outcome)
     {
         List<(Slot Slot, Fido2SlotBlob Blob, Fido2KeyInfo Key)> found = [];
+        HashSet<int> plugInNotes = []; // indices in notes of the Fido2Locate.NotPluggedIn texts
         foreach (var (slot, blob) in tryable)
         {
             Fido2Locate located;
@@ -468,7 +471,11 @@ public sealed class VaultUnlocker
             if (located is Fido2Locate.Found hit)
                 found.Add((slot, blob, hit.Key));
             else if (Fido2Texts.Describe(located) is { } text)
+            {
+                if (located is Fido2Locate.NotPluggedIn)
+                    plugInNotes.Add(notes.Count);
                 notes.Add(text);
+            }
         }
         if (found.Count == 0)
         {
@@ -494,23 +501,23 @@ public sealed class VaultUnlocker
         }
         catch (Fido2Exception ex)
         {
-            notes.Add(ex.Message);
-            if (othersFound)
-                notes.Add(Fido2Texts.OtherSlotNotTried);
-            outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+            outcome = TriedAndFailed(ex.Message);
             return null;
         }
         var vaultKey = UnwrapFido2Slot(keyring, pickSlot, opened, typed);
         if (vaultKey is null)
         {
-            notes.Add(Fido2Texts.UnwrapFailed(name, pickBlob.RequiresPassword));
-            if (othersFound)
-                notes.Add(Fido2Texts.OtherSlotNotTried);
-            outcome = new(string.Join(" ", notes), PasswordUnavailable: false);
+            outcome = TriedAndFailed(Fido2Texts.UnwrapFailed(name, pickBlob.RequiresPassword));
             return null;
         }
         outcome = new("", PasswordUnavailable: false);
         return vaultKey;
+
+        // The tried key's failure first, then that other found slots weren't tried, then the remaining notes in their
+        // order (left out for the password, reset or lookalike keys), without the plug-it-in notes.
+        Fido2Outcome TriedAndFailed(string failure) => new(string.Join(" ",
+            [failure, .. othersFound ? [Fido2Texts.OtherSlotNotTried] : Array.Empty<string>(),
+                .. notes.Where((_, i) => !plugInNotes.Contains(i))]), PasswordUnavailable: false);
     }
 
     /// <summary>
@@ -556,8 +563,11 @@ public sealed class VaultUnlocker
         }
         catch (Fido2Exception ex)
         {
+            // Brief T31 (#294.1): a key holding none of the vault's credentials makes Windows' dialog say it "doesn't
+            // look familiar", and closing it is a cancel: say what that means.
+            var failure = ex.Kind == Fido2Failure.Cancelled ? ex.Message + " " + Fido2Texts.WindowsUnfamiliarKey : ex.Message;
             // The left-out slots are named too, so a key holding only such a slot isn't just told it holds none.
-            outcome = new(string.Join(" ", [ex.Message, .. notes]), PasswordUnavailable: false);
+            outcome = new(string.Join(" ", [failure, .. notes]), PasswordUnavailable: false);
             return null;
         }
         var (slot, blob) = allowed.First(c => c.Blob.CredentialId.AsSpan().SequenceEqual(opened.Blob.CredentialId));

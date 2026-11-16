@@ -19,6 +19,7 @@ in [hardware-backends.md](../design/hardware-backends.md#yubikey-fido2-slots-v03
 - **(C)** The Token2 PIN+ Dual (not a YubiKey) holds a FIDO2 slot through libfido2 (Linux, macOS) and
   Windows' dialog (brief T19): C1 to C6.
 - **(D)** Optional: a Security Key or Bio, if one is to hand.
+- **(E)** Brief T31: typeahead discarded at prompts, and the FIDO2 messages (H1 to H6).
 
 ## Setup on each machine
 
@@ -91,7 +92,8 @@ Expect:
 
 1. `Enrolling a FIDO2 credential on YubiKey <serial> (its PIN and a touch, twice)...`, then twice:
    `FIDO2 PIN for YubiKey <serial>: ` (nothing echoed while you type), and only after Enter,
-   `Touch your security key when it blinks.` Then the completion box with `FIDO2 key:      YubiKey
+   `Touch your security key when it blinks (it blinks only if the PIN is right).` Then the
+   completion box with `FIDO2 key:      YubiKey
    <serial>`, `Backend: FIDO2 keyring (k = 1, 1 slot: this key only)`, the
    `--no-recovery` warning, and `A FIDO2 reset of YubiKey <serial> deletes this slot's credential
    and kills the slot: ...`.
@@ -254,8 +256,9 @@ back (each one tells which Windows result it was):
 
 - ``The key you picked holds none of this vault's FIDO2 credentials: another key, or a FIDO2 reset
   deleted it (then enrol the key again with `tswap slot add --fido2`).`` (`NTE_NOT_FOUND`);
-- `The key you picked: the FIDO2 PIN or touch was cancelled.` (a cancel: say whether you cancelled
-  the dialog yourself, and what the dialog said before);
+- ``The key you picked: the FIDO2 PIN or touch was cancelled. If Windows said the key doesn't look familiar, it holds none of this vault's FIDO2 credentials: use a key that has a slot (`tswap slots` lists them), or, after a FIDO2 reset, enrol the key again with `tswap slot add --fido2`.``
+  (a cancel, since brief T31 with the "doesn't look familiar" hint: say whether you cancelled the
+  dialog yourself, and what the dialog said before);
 - `The key you picked: the FIDO2 operation failed (HRESULT 0x........).` (unmapped: paste the
   HRESULT).
 
@@ -312,7 +315,11 @@ Expect the list to read, per OS:
 
 Under the list, on every OS: `Using a key on other machines too? An OTP slot needs Input Monitoring
 ...`. Picking both gives two `machine` rows in `slots` (the OTP one and `..., FIDO2: PIN + touch,
-...`), and the FIDO2 reset warning after the FIDO2 slot. `names` then opens through the OTP slot
+...`), and the FIDO2 reset warning after the FIDO2 slot. Once a FIDO2 slot is enrolled it has one
+name (brief T31): the reset warning, the closing summary and the "losing ..." / "total hardware
+loss (...)" line all say the key's name, on Windows its model (for example `YubiKey 5 NFC or 5C
+NFC, FIDO2: no password` in the summary, where it said `a security key's FIDO2 slot`); the pick list
+keeps `a security key's FIDO2 slot (Windows' dialog: ...)`. `names` then opens through the OTP slot
 with no PIN (with a touch if the key's slot 2 requires one). On the Mac with Input Monitoring off, `names` should fall through to the FIDO2 slot
 and ask for the PIN.
 
@@ -341,7 +348,9 @@ export TSWAP_CONFIG_DIR="$W/spare-config"
 2. Answer `yes`, type `123` at `New FIDO2 PIN for YubiKey <spare>: `: expect `A FIDO2 PIN has at
    least 4 characters; type a longer one.` Then a 4-or-more PIN, and a different one at
    `Repeat the new FIDO2 PIN: `: expect `The two PINs differ; type the new PIN again.` Then press
-   Enter on an empty prompt to cancel, and record what happens.
+   Enter on an empty prompt to cancel: expect (brief T31) `YubiKey <spare> has no FIDO2 PIN; a FIDO2
+   slot needs one. No PIN was set. No slot was added.`, as for the `no` answer, with no "cancelled"
+   or touch text, and no config written.
 3. Answer `yes` and set the PIN properly: expect `✓ YubiKey <spare> has a FIDO2 PIN now.`, then the
    enrolment as in A1 (two PIN prompts with the new PIN).
 
@@ -358,7 +367,10 @@ it in again before the next try.`` and the counter at 7; after the second, 6 tri
 should say `YubiKey <spare>: three wrong FIDO2 PINs in a row. Unplug the key and plug it in again
 before the next try; 5 tries left ...` (or another "wrong PIN" line: record which; CTAP keys differ
 on whether the third wrong PIN or the next attempt reports the block). The fourth, without
-re-inserting, should refuse again: record its text and whether the counter moved. Every run asks for the PIN once and never retries.
+re-inserting, should refuse **before the PIN prompt** (brief T31: the 5C reports that it needs
+re-inserting when tswap reads it), with the same "three wrong FIDO2 PINs in a row" text: record its
+text, whether it still asked for the PIN (then the key doesn't report powerCycleState) and whether
+the counter moved. Every run asks for the PIN once and never retries.
 
 Then unplug and re-insert the spare, run `"$T" names` with the right PIN: expect it to open, and
 `fido info` to show the counter back at 8.
@@ -367,8 +379,8 @@ Then unplug and re-insert the spare, run `"$T" names` with the right PIN: expect
 
 Continue B2 to eight wrong PINs, re-inserting after every three. Expect the last to say
 `YubiKey <spare>: its FIDO2 PIN is blocked (8 wrong PINs). Only a FIDO2 reset unblocks it, ...
-tswap never resets a key. ...`, and a further `names` the same (record whether it still asks for
-the PIN first). Go on to B4.
+tswap never resets a key. ...`, and a further `names` the same with **no PIN prompt** (brief T31:
+a blocked key is refused before the prompt; record if it still asks). Go on to B4.
 
 ### B4. A FIDO2 reset, reported as a dead slot (Linux, macOS, Windows)
 
@@ -380,7 +392,9 @@ Authenticator.
 - Linux and macOS: `"$T" names`. Expect no PIN prompt, and ``YubiKey <spare> is plugged in but no
   longer holds this slot's credential: a FIDO2 reset deleted it, and the slot can't be opened
   again. Enrol the key again with `tswap slot add --fido2`.``
-- Windows: `& $T names`. Expect the "holds none" text of A6 (or record what comes back). The key now
+- Windows: `& $T names`. Expect the "holds none" text of A6, or, when Windows' dialog says the key
+  doesn't look familiar and you close it, the cancel text with its hint (A6's second bullet); record
+  which. The key now
   has no PIN: if the dialog asks to create one, cancel it and record that it asked (B5 needs the
   key without a PIN).
 
@@ -488,11 +502,14 @@ opened.
 
 With A3's joined Linux vault on Windows (`$env:TSWAP_CONFIG_DIR = "$W\join-linux-config"`), run
 `& $T -v names` and press **Esc** in Windows' security key dialog (don't touch the key). Expect
-`The key you picked: the FIDO2 PIN or touch was cancelled.` and a `Windows HRESULT` line; then run it
+``The key you picked: the FIDO2 PIN or touch was cancelled. If Windows said the key doesn't look familiar, it holds none of this vault's FIDO2 credentials: use a key that has a slot (`tswap slots` lists them), or, after a FIDO2 reset, enrol the key again with `tswap slot add --fido2`.`` (the hint
+since brief T31: an unlock's cancel can be the "doesn't look familiar" screen) and a `Windows HRESULT`
+line; then run it
 again with `& $T -v slot add --fido2 --no-password` from an elevated prompt. `slot add` runs three
 **operations**, each a set of Windows screens (choose the key, PIN, touch): 1 opens the vault, 2 makes
 the new credential, 3 checks it. Esc in operation 2 gives the same cancel text and `tswap slots`
-unchanged. `No slot was added and nothing was written. … running this again is safe` belongs to a
+unchanged (operation 2's cancel has no "doesn't look familiar" hint; operation 1's, an unlock, has
+it). `No slot was added and nothing was written. … running this again is safe` belongs to a
 cancel in operation **3**, after a credential exists: that needs a key with no slot in the vault for
 operation 2 (open with a key that has one, swap to the new key at "Create a passkey", cancel the next
 "Sign in"). Checked 2026-11-14: Esc in operation 2 as described; operation 3's cancel was not reached
@@ -524,8 +541,8 @@ export TSWAP_CONFIG_DIR="$W/token2-config"
 
 Expect `Enrolling a FIDO2 credential on Token2 PIN+ Dual (its PIN and a touch, twice)...` (or the
 product name the key's USB descriptor gives; record it), `FIDO2 PIN for <that name>: `, then
-`Touch your security key when it blinks.`, and the completion box with `Backend: FIDO2 keyring (k =
-1, 1 slot: this key only)`. `slots` shows the machine row as `the security key this slot was made
+`Touch your security key when it blinks (it blinks only if the PIN is right).`, and the completion
+box with `Backend: FIDO2 keyring (k = 1, 1 slot: this key only)`. `slots` shows the machine row as `the security key this slot was made
 with, FIDO2: PIN + touch, no password`. `names` (an unlock that can only use that slot) lists
 `token2-check`.
 
@@ -544,11 +561,14 @@ sudo --preserve-env=TSWAP_CONFIG_DIR "$T" slot add --fido2 --no-password
 
 Expect `Several security keys are plugged in:` listing `YubiKey <serial>` and the Token2's name; pick
 the Token2. The vault opens with the daily key (its PIN and a touch), then the Token2 is enrolled
-(its PIN and a touch, twice) and `✓ the security key this slot was made with added as a FIDO2 slot
-...`. `"$T" slots` shows a second `machine` row, `the security key this slot was made with, FIDO2: PIN
+(its PIN and a touch, twice) and `✓ <the Token2's name> added as a FIDO2 slot — it now opens this
+vault alone, with its PIN and a touch.` with the name the PIN prompts used (brief T31; before it said
+`the security key this slot was made with`), and the reset warning with the same name. `"$T" slots` shows a second `machine` row, `the security key this slot was made with, FIDO2: PIN
 + touch, no password`. Then **unplug the YubiKey** and run `"$T" names`: an unlock that can only use
-the Token2's slot. Make the same two observations as above: once with a wrong PIN (the tries shown),
-then with the right one, and whether the Token2 blinks before its PIN prompt (it must not).
+the Token2's slot. Make the same two observations as above: once with a wrong PIN (the tries shown;
+since brief T31 the message starts with the Token2's `<name>: wrong FIDO2 PIN; ...` text and has no
+`The FIDO2 slot of YubiKey <serial>: plug it in.`: the absent key is named only when nothing plugged
+in could be tried), then with the right one, and whether the Token2 blinks before its PIN prompt (it must not).
 
 Paste back: the whole output of each command, the name tswap used, the tries shown, and whether the
 key blinked before the PIN prompt, for both the `init` vault and the `slot add` slot.
@@ -669,6 +689,77 @@ If one is to hand: A1 and A3 with it. Expect it listed and named by model (for e
 `Security Key NFC by Yubico, FIDO2: PIN + touch, no password` in `slots`), enrolment and unlock as
 for the daily key, and `slot add --fido2` with the same key refused as a second slot. On a Bio,
 Linux and macOS ask for the PIN, not the fingerprint; record what Windows' dialog offers.
+
+## (E) Brief T31: typeahead and the FIDO2 messages (H1 to H6)
+
+What the unit tests can't show (brief T31, #293, #289, #290, #291, #294): a real console discarding
+typeahead, what a 5C and the Token2 report after wrong PINs, the udev timing behind `HidrawFailed`,
+and Windows' dialog. Record each run in its table.
+
+### H1. Typeahead is discarded (Linux, macOS)
+
+`sleep 3; "$T" names` on a vault with a vault password; during the sleep type `xx` (no Enter), then
+type the right password at the prompt: the vault opens. Then a FIDO2 vault: during the sleep, touch a
+YubiKey's OTP slot (a short press, which types a one-time code); at the PIN prompt type the right
+PIN: it opens, and `ykman fido info` still shows 8 tries.
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
+
+### H2. Typeahead is discarded (Windows PowerShell)
+
+`Start-Sleep 3; & $T names` on a vault with a vault password, `xx` typed during the sleep, then the
+right password: it opens.
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
+
+### H3. A key tswap couldn't reach (Linux, #289)
+
+Unplug and replug the spare and run `"$T" names` at once: either it works, or it shows
+`YubiKey <spare>: tswap couldn't talk to the key (HidrawFailed). If it was just plugged in, wait a
+second and run the command again. If that keeps failing: ...`; then run it again a second later.
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
+
+### H4. No PIN prompt for a key that can't take one (#290; the spare 5C and the Token2)
+
+Three wrong PINs, then `names` without a re-insert: on the 5C, no PIN prompt and the re-insert text
+(record if the key still asks: then it doesn't report powerCycleState); on the Token2 the PIN is
+asked as before (libfido2 reports no such state). A blocked 5C (B3): no PIN prompt. Every wrong-PIN
+run shows `Touch your security key when it blinks (it blinks only if the PIN is right).`
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
+
+### H5. The Token2's name and failure first (Linux, C1's set-up, #291)
+
+A wrong Token2 PIN with the 5C unplugged: the message starts with the Token2's wrong-PIN text and has
+no "plug it in". `slot add --fido2` picking the Token2 ends with `✓ <the Token2's name> added as a
+FIDO2 slot ...`; `init --fido2` with the Token2 names it in the closing box (`FIDO2 key:`), the reset
+warning and the "losing ..." line.
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
+
+### H6. Windows' texts (A6, A9, B4, #294)
+
+The unfamiliar key's cancel text with its hint (A6, B4: `... was cancelled. If Windows said the key
+doesn't look familiar, ...`); the `init --fido2` header (`... alone: tswap slot add --fido2 (with
+sudo, or from an elevated prompt on Windows)`); the guided `init` summary and closing line naming the
+model (A9); the touch warning's third line (`` `tswap slot add --yubikey` (from an elevated command
+prompt) to enrol the reprogrammed key again, then tswap names``, from `yubikey setup --no-touch`
+and an enrolment of that key).
+
+| Machine | Date | Result |
+|---|---|---|
+| | | |
 
 ## Clean up
 

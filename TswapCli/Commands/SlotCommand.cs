@@ -1148,7 +1148,7 @@ public sealed partial class SlotCommand : ICliCommand
 
         var extended = SaveWithNewSlot(ctx, config, keyring, newSlot, password);
 
-        var name = fido2.KeyName(blob);
+        var name = Fido2SlotEnrollment.EnrolledName(fido2, key, blob);
         c.Out.WriteLine($"\n✓ {name} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.");
         if (password is not null)
             c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");

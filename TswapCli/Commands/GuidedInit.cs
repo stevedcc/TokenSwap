@@ -79,6 +79,12 @@ internal static class GuidedInit
         public bool NeedsPassword { get; set; }
         public bool Enrolled { get; set; }
         public YubiKeySlotBlob? Blob { get; set; }
+
+        /// <summary>Brief T31 (#294.3): a FIDO2 slot's key name once enrolled (<see cref="Fido2SlotEnrollment.EnrolledName"/>).</summary>
+        public string? EnrolledName { get; set; }
+
+        /// <summary>The slot's name after its enrolment (the summary, the closing line); before it, the device's.</summary>
+        public string Label => EnrolledName is { } name ? $"{name}, FIDO2" : Device.Label;
     }
 
     /// <param name="vaultDir">The full path the vault is created in, already checked by <see cref="InitCommand.RefuseExistingVault"/>.</param>
@@ -340,11 +346,11 @@ internal static class GuidedInit
                 Fido2SlotBlob blob;
                 byte[]? kekSlot = null;
                 Slot? added = null;
+                var key = slot.Device.Fido2Key;
                 // The carry-on offer covers this key's enrolment only (the PIN offer, both key operations, the wrap),
                 // as for an OTP key above.
                 try
                 {
-                    var key = slot.Device.Fido2Key;
                     if (key is null)
                         c.Out.WriteLine(Fido2SlotEnrollment.WindowsDialogLine);
                     else if (!key.PinSet)
@@ -390,7 +396,8 @@ internal static class GuidedInit
                     newSlotIds.Add(Convert.ToBase64String(added!.SlotId));
                 }
                 slot.Enrolled = true;
-                Fido2SlotEnrollment.PrintResetWarning(c, Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid));
+                slot.EnrolledName = Fido2SlotEnrollment.EnrolledName(fido2!, key, blob);
+                Fido2SlotEnrollment.PrintResetWarning(c, slot.EnrolledName);
             }
 
             if (config is null)
@@ -442,7 +449,7 @@ internal static class GuidedInit
             c.Out.WriteLine("╚════════════════════════════════════════╝\n");
             c.Out.WriteLine("Slots (each opens the vault on its own):");
             foreach (var slot in enrolled)
-                c.Out.WriteLine($"  {SummaryLabel(slot.Device, requirePresence)}: {(slot.NeedsPassword && !passwordDropped ? "password" : "no password")}");
+                c.Out.WriteLine($"  {SummaryLabel(slot, requirePresence)}: {(slot.NeedsPassword && !passwordDropped ? "password" : "no password")}");
             if (includeRecovery)
                 c.Out.WriteLine("  Recovery key (shown below)");
             if (passwordDropped)
@@ -459,7 +466,7 @@ internal static class GuidedInit
             InitCommand.PrintVaultFolder(c, fileStore, vaultDir);
             InitCommand.PrintRecoveryKeyBackupWarning(c, ctx.Prefix, recoveryPrivateKey, JoinAnd(enrolled.Select(p => p.Device.Chip is { } b
                 ? $"this machine's {VaultPasswordChoice.HardwareName(b)}"
-                : p.Device.Label)), keyFile);
+                : p.Label)), keyFile);
             return 0;
         }
         finally
@@ -518,9 +525,9 @@ internal static class GuidedInit
         }
     }
 
-    private static string SummaryLabel(Device device, bool requirePresence) => device.Chip == HardwareBackend.SecureEnclave
+    private static string SummaryLabel(PlannedSlot slot, bool requirePresence) => slot.Device.Chip == HardwareBackend.SecureEnclave
         ? $"Secure Enclave ({(requirePresence ? "touch" : "no touch")})"
-        : device.Label;
+        : slot.Label;
 
     private static string JoinAnd(IEnumerable<string> parts)
     {

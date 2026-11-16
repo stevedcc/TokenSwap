@@ -521,6 +521,34 @@ public class SdkFido2KeysTests
     public void SdkFido2Keys_ProbeAnswer_OtherStatusesFail(CtapStatus status, Fido2Failure expected) =>
         Assert.Equal(expected, Assert.Throws<Fido2DeviceException>(() => SdkFido2Keys.ProbeHolds(CtapAnswer(status))).Kind);
 
+    /// <summary>
+    /// Brief T31 (#290.1): getPINRetries' answer, CTAP 2.1 <c>0x03</c> pinRetries and <c>0x04</c> powerCycleState
+    /// (absent: not reported), read before any PIN is asked, so a key that takes none is refused without a prompt.
+    /// </summary>
+    public static TheoryData<string, int, bool?> PinRetriesAnswers => new()
+    {
+        { "A10305", 5, null },
+        { "A2030504F5", 5, true },
+        { "A2030004F4", 0, false },
+    };
+
+    [Theory]
+    [MemberData(nameof(PinRetriesAnswers))]
+    public void PinState_ReadsRetriesAndPowerCycleState(string cbor, int retries, bool? reinsert)
+    {
+        var answer = new ResponseApdu(Convert.FromHexString(cbor), unchecked((short)0x9000));
+
+        Assert.Equal((retries, reinsert), SdkFido2Devices.PinState(answer));
+    }
+
+    [Fact]
+    public void PinState_CtapHidErrorFrame_Throws()
+    {
+        var answer = new ResponseApdu([0x06], unchecked((short)0x6F00));
+
+        Assert.Equal(Fido2Failure.Busy, Assert.Throws<Fido2DeviceException>(() => SdkFido2Devices.PinState(answer)).Kind);
+    }
+
     public static TheoryData<byte, Fido2Failure, string> CtapHidErrors => new()
     {
         // ERR_CHANNEL_BUSY: another process is mid-transaction on the shared hidraw node.
