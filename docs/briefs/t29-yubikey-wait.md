@@ -360,3 +360,45 @@ Release notes.
 ## Owner question (the ruling above stands unless answered otherwise)
 
 1. The 60-second wait: right for both a person and an agent, and fixed (no variable) in v1?
+
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+Round 1: GLM-5.3 "yes" with two fixes; MiMo "no" on three Importants (two the same as GLM's). All folded here.
+
+**A1. A remembered timeout re-probes; it never sticks (both).** Replace "every later take of this `YubiKeyLock` throws
+the same at once" with: after a timeout, a later take tries the in-process gate and the file lock **once, without
+blocking**; if both are free it takes the lock, clears the memory and goes on; if either is held it throws the
+remembered `Busy` at once. So a process never waits twice in a row, and a long-lived `broker serve` or `agent serve`
+recovers as soon as the other holder is done. Test: time out once (manual clock), free the lock, the next take
+succeeds and a third contention waits again; break-it-once: drop the re-probe, the recovery test fails.
+
+**A2. A caller-supplied wait budget, so the broker never abandons a waiting unlock (both).** `YubiKeyLock.Take` takes
+an optional wait budget (default `Timeout`, 60 s). The broker's unlock paths (`BrokerRequestHandler`,
+`SshAgentListener`, `BrokerTemplateCalls`) pass a budget of `BrokerLimits.UnlockTimeout - 5 s` (25 s today), computed
+from the constant, never a literal, so a lock wait ends, with the `Busy` text, before the broker's own timeout
+abandons the task; the broker then reports it as the failed unlock it is (counted as today). The agent's unlocks keep
+the default. Docs (`docs/BROKER.md` and the T29 docs paragraph): a broker whose own slot is a YubiKey OTP slot waits for
+the key like any tswap, up to 25 s, then fails that request; a broker machine's own slot should stay a TPM or Secure
+Enclave slot, as the docs already recommend. Test: a broker-path take with another holder fails within the budget on
+the manual clock, before `UnlockTimeout`.
+
+**A3. The owner switch runs only in a privileged, single-threaded process (MiMo I3).** The `AsOwner` switch happens
+only when the process is privileged; `broker serve` and `agent serve` refuse root (`BrokerCommand.cs`'s
+`Ownership.IsPrivileged` checks, `AgentCommand.RefuseRoot`), so no multi-threaded process ever switches identity, and
+the CLI's existing "one thread, one operation at a time" invariant (FileOwnership.cs) holds. State this in the design
+and add a debug assertion in the lock's privileged branch that the caller is not a broker/agent serve (or, simpler, a
+comment citing the refusals plus a test that `broker serve` and `agent serve` as root still refuse before any lock
+take). The security-model row also says: a root-owned lock file (only if the user's home is root's) is not a wedge,
+because the user's tswap warns and runs without the lock, but it removes the protection.
+
+**A4. Minors (both).**
+- The in-process gate is released before each pause; a held gate counts as a held try for the waiting line, which is
+  printed once per take.
+- On Windows, `ERROR_LOCK_VIOLATION` (33) counts as held elsewhere, like `ERROR_SHARING_VIOLATION` (32).
+- `TimeoutText` is built from `YubiKeyLock.Timeout` (and the broker's budget where it applies), not a literal "60".
+- "`Fido2Service` gains a trailing optional `YubiKeyLock? hardwareLock = null`" means `CliHost.Fido2Service(...)`,
+  the composition helper; the `Fido2Service` class itself is unchanged.
+- The `HardwareLock` "not null with `TSWAP_TEST_YUBIKEY_LOCK=1`" test row sits in `#if DEBUG`, like
+  `Libfido2Absent_TestSwitch`.
+- `YubiKeyLock.Warning` reads `...so tswap processes using the key at the same time could disturb each other.`
