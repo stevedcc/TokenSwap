@@ -676,7 +676,9 @@ public sealed partial class SlotCommand : ICliCommand
     /// <see cref="Config.PendingSlotPublicKey"/>/<see cref="Config.PendingSlotPrivateKey"/> are
     /// cleared now that they're baked into the real keyring.
     /// </summary>
-    private static int ExecuteAccept(CommandContext ctx, string[] args)
+    /// <param name="approveText">Brief T28: the approve file's text as <c>slot enroll</c> received it (its fingerprint was
+    /// computed over those bytes), parsed instead of a re-read of the file at the path; null: the file.</param>
+    private static int ExecuteAccept(CommandContext ctx, string[] args, string? approveText = null)
     {
         var acceptUsage = $"{ctx.Prefix} slot accept <approve-file> [--receipt <file>] [--vault-dir <shared folder>]";
         // Brief T6 decision 8: --vault-dir joins a shared vault folder (record store).
@@ -736,7 +738,7 @@ public sealed partial class SlotCommand : ICliCommand
                 : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName}' slot request has no hardware " +
                   "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(path));
+        var approve = SlotEnrollmentFileCodec.DeserializeApprove(approveText ?? File.ReadAllText(path));
 
         var pendingSlotId = DecodePending(config.PendingSlotId, "slot id");
         var pendingPublicKey = DecodePending(config.PendingSlotPublicKey, "public key");

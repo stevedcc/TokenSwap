@@ -376,7 +376,7 @@ internal static class SudoTableDrive
         using (var g = new FleetMachine("sudo-g", SimulatedYubiKeyService.WithKeys(44444444)) { Sudo = false })
         {
             g.Ssh = new LoopbackSshTransport(a, "sudo", "-n", "tswap");
-            var enroll = g.Run("", "slot", "enroll", "--via", "me@host");
+            var enroll = g.Run("", "slot", "enroll", "--via", "me@host", "--batch");
             results["slot enroll"] = R(enroll, enroll.Exit == 0 && g.Config.PendingSlotId is null
                 && a.Keyring.Slots.Any(s => Convert.ToBase64String(s.SlotId) == g.Config.KeyringSlotId));
         }

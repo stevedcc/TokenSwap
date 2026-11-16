@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
+using TswapCore;
 
 namespace TswapCli.Ssh;
 
@@ -9,13 +11,109 @@ namespace TswapCli.Ssh;
 /// a new host key at <c>/dev/tty</c> itself, which works with stdin piped. Stdin is written and then closed (approve
 /// and merge read all of it before they write), stdout is read to the end (past <see cref="SshRelay.MaxStdout"/> the
 /// ssh process tree is killed and the call refused), and stderr is relayed line by line as it arrives.
+/// <para>Brief T28: <see cref="RunInteractive"/> runs <c>ssh -t</c> on the local terminal; with
+/// <paramref name="shareConnection"/> (Linux and macOS clients only) every call passes OpenSSH's connection-sharing
+/// options with one socket per destination (<see cref="SocketDirectory"/>), so one enrolment logs in once, and
+/// <see cref="EndSession"/> closes that connection with <c>ssh -O exit</c>. Sharing is a convenience, never a
+/// requirement: any doubt about the socket folder means no sharing, with a one-line note.</para>
 /// </summary>
 /// <param name="program">The ssh program (default <c>ssh</c>, found on <c>PATH</c>); tests name a stub.</param>
-public sealed class ProcessSshTransport(string program = "ssh") : ISshTransport
+/// <param name="shareConnection">Brief T28: pass the connection-sharing options (off by default; <c>slot enroll</c>'s
+/// composition turns it on).</param>
+public sealed class ProcessSshTransport(string program = "ssh", bool shareConnection = false) : ISshTransport
 {
+    /// <summary>The longest Unix socket path OpenSSH can use, in bytes (with <c>%C</c>'s 40 characters expanded).</summary>
+    internal const int MaxSocketPath = 100;
+
+    /// <summary>The length of <c>%C</c> once ssh expands it (a SHA-1 in hex).</summary>
+    private const int ControlHashLength = 40;
+
+    private bool _resolved;
+    private string? _socketDirectory;
+
+    /// <summary>The environment the socket folder is chosen from (<c>XDG_RUNTIME_DIR</c>); tests give their own.</summary>
+    internal Func<string, string?> GetEnv { get; init; } = Environment.GetEnvironmentVariable;
+
+    /// <summary>The temp folder used when <c>XDG_RUNTIME_DIR</c> is unset; tests give their own.</summary>
+    internal string TempDirectory { get; init; } = Path.GetTempPath();
+
+    /// <summary>Whether this client is Windows' OpenSSH (no connection sharing); tests set it.</summary>
+    internal bool IsWindows { get; init; } = OperatingSystem.IsWindows();
+
     /// <summary>The ssh arguments: no pseudo-terminal, and the destination after <c>--</c>, so it is never an option.</summary>
     internal static IReadOnlyList<string> BuildArgv(string destination, IReadOnlyList<string> remoteArgs) =>
-        ["-T", "--", destination, string.Join(' ', remoteArgs)];
+        BuildArgv(destination, remoteArgs, interactive: false, controlPath: null);
+
+    /// <summary>
+    /// Brief T28: <c>-t</c> (a terminal for the remote command) or <c>-T</c>, then, with <paramref name="controlPath"/>,
+    /// the connection-sharing options, then <c>--</c>, the destination and the joined remote command.
+    /// </summary>
+    internal static IReadOnlyList<string> BuildArgv(string destination, IReadOnlyList<string> remoteArgs, bool interactive, string? controlPath)
+    {
+        List<string> argv = [interactive ? "-t" : "-T"];
+        if (controlPath is not null)
+            argv.AddRange(["-o", "ControlMaster=auto", "-o", $"ControlPath={controlPath}", "-o", "ControlPersist=60"]);
+        argv.AddRange(["--", destination, string.Join(' ', remoteArgs)]);
+        return argv;
+    }
+
+    /// <summary>The argv of one call of this transport (with its sharing options when they are on and usable).</summary>
+    internal IReadOnlyList<string> ArgvFor(string destination, IReadOnlyList<string> remoteArgs, bool interactive, TextWriter note) =>
+        BuildArgv(destination, remoteArgs, interactive, SocketDirectory(note) is { } dir ? Path.Combine(dir, "%C") : null);
+
+    /// <summary>
+    /// The folder of the shared connection's socket, resolved once: <c>$XDG_RUNTIME_DIR/tswap-ssh</c> when that variable is
+    /// an absolute path, else <c>&lt;temp dir&gt;/tswap-ssh-&lt;uid&gt;</c>, made 0700 when absent. Null (no sharing) when
+    /// sharing is off or on Windows, and, with a one-line note on <paramref name="note"/>, when the folder is a symlink,
+    /// another user's, of a mode other than 0700 or can't be made, or when its socket path would be over
+    /// <see cref="MaxSocketPath"/> bytes. The folder is left in place (it is reused).
+    /// </summary>
+    internal string? SocketDirectory(TextWriter note)
+    {
+        if (_resolved)
+            return _socketDirectory;
+        _resolved = true;
+        if (!shareConnection || IsWindows)
+            return null;
+        var runtime = GetEnv("XDG_RUNTIME_DIR");
+        var dir = !string.IsNullOrEmpty(runtime) && Path.IsPathRooted(runtime)
+            ? Path.Combine(runtime, "tswap-ssh")
+            : Path.Combine(TempDirectory, $"tswap-ssh-{new UnixOwnership().EffectiveUid}");
+        if (Encoding.UTF8.GetByteCount(dir) + 1 + ControlHashLength > MaxSocketPath)
+        {
+            note.WriteLine($"Note: not sharing one SSH connection (the socket path in {dir} would be over {MaxSocketPath} bytes); each step logs in again.");
+            return null;
+        }
+        if (OperatingSystem.IsWindows() || !IsOwnPrivateFolder(dir))
+        {
+            note.WriteLine($"Note: not sharing one SSH connection ({dir} is not this user's own 0700 folder); each step logs in again.");
+            return null;
+        }
+        return _socketDirectory = dir;
+    }
+
+    /// <summary>The folder exists (made 0700 when absent) as a real folder (lstat: no symlink) of this user, mode 0700.</summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static bool IsOwnPrivateFolder(string dir)
+    {
+        const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        try
+        {
+            var info = new DirectoryInfo(dir);
+            if (!info.Exists && info.LinkTarget is null && !File.Exists(dir))
+                Directory.CreateDirectory(dir, Private);
+            info = new DirectoryInfo(dir);
+            if (!info.Exists || info.LinkTarget is not null)
+                return false;
+            var ownership = new UnixOwnership();
+            return ownership.GetOwner(dir) is { } owner && owner.Uid == ownership.EffectiveUid
+                && File.GetUnixFileMode(dir) == Private;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     public SshResult Run(string destination, IReadOnlyList<string> remoteArgs, ReadOnlyMemory<byte> stdin, TextWriter stderr)
     {
@@ -26,75 +124,120 @@ public sealed class ProcessSshTransport(string program = "ssh") : ISshTransport
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        foreach (var arg in BuildArgv(destination, remoteArgs))
+        foreach (var arg in ArgvFor(destination, remoteArgs, interactive: false, stderr))
             start.ArgumentList.Add(arg);
 
-        Process process;
+        using var process = Start(start);
+        var relay = Task.Run(() =>
+        {
+            while (process.StandardError.ReadLine() is { } line)
+            {
+                lock (stderr)
+                    stderr.WriteLine(SshRelay.Line(destination, line));
+            }
+        });
+        var tooLarge = false;
+        var output = Task.Run(() =>
+        {
+            using var buffer = new MemoryStream();
+            var chunk = new byte[64 * 1024];
+            int read;
+            while ((read = process.StandardOutput.BaseStream.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                buffer.Write(chunk, 0, read);
+                if (buffer.Length > SshRelay.MaxStdout)
+                {
+                    tooLarge = true;
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // already exited
+                    }
+                    break;
+                }
+            }
+            return buffer.ToArray();
+        });
+
         try
         {
-            process = Process.Start(start) ?? throw new SshTransportException($"'{program}' did not start");
+            var input = process.StandardInput.BaseStream;
+            input.Write(stdin.Span);
+            input.Close();
+        }
+        catch (IOException)
+        {
+            // The remote side stopped reading (it failed early); its exit code says why.
+        }
+
+        var stdout = output.GetAwaiter().GetResult();
+        process.WaitForExit();
+        relay.GetAwaiter().GetResult();
+        if (tooLarge)
+        {
+            Array.Clear(stdout);
+            throw new SshTransportException("its output was larger than 1 MiB, so ssh was stopped");
+        }
+        return new SshResult(process.ExitCode, stdout);
+    }
+
+    /// <summary>Brief T28: <c>ssh -t</c> with this process's stdin, stdout and stderr (the local terminal); its exit code.</summary>
+    public int RunInteractive(string destination, IReadOnlyList<string> remoteArgs)
+    {
+        var start = new ProcessStartInfo(program) { UseShellExecute = false };
+        foreach (var arg in ArgvFor(destination, remoteArgs, interactive: true, Console.Error))
+            start.ArgumentList.Add(arg);
+        using var process = Start(start);
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+
+    /// <summary>
+    /// Brief T28 (A9): closes the shared connection (<c>ssh -o ControlPath=&lt;socket&gt; -O exit -- &lt;destination&gt;</c>)
+    /// when sharing was on; its output is discarded and its failure ignored (the master also goes after ControlPersist).
+    /// </summary>
+    public void EndSession(string destination)
+    {
+        if (_socketDirectory is null)
+            return;
+        var start = new ProcessStartInfo(program)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var arg in (string[])["-o", $"ControlPath={Path.Combine(_socketDirectory, "%C")}", "-O", "exit", "--", destination])
+            start.ArgumentList.Add(arg);
+        try
+        {
+            using var process = Process.Start(start);
+            if (process is null)
+                return;
+            process.StandardInput.Close();
+            var stderr = process.StandardError.ReadToEndAsync();
+            process.StandardOutput.ReadToEnd();
+            stderr.GetAwaiter().GetResult();
+            process.WaitForExit();
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+        {
+            // Ignored: the enrolment's result doesn't depend on it.
+        }
+    }
+
+    private Process Start(ProcessStartInfo start)
+    {
+        try
+        {
+            return Process.Start(start) ?? throw new SshTransportException($"'{program}' did not start");
         }
         catch (Win32Exception ex)
         {
             throw new SshTransportException($"'{program}' could not be started: {ex.Message}");
-        }
-
-        using (process)
-        {
-            var relay = Task.Run(() =>
-            {
-                while (process.StandardError.ReadLine() is { } line)
-                {
-                    lock (stderr)
-                        stderr.WriteLine(SshRelay.Line(destination, line));
-                }
-            });
-            var tooLarge = false;
-            var output = Task.Run(() =>
-            {
-                using var buffer = new MemoryStream();
-                var chunk = new byte[64 * 1024];
-                int read;
-                while ((read = process.StandardOutput.BaseStream.Read(chunk, 0, chunk.Length)) > 0)
-                {
-                    buffer.Write(chunk, 0, read);
-                    if (buffer.Length > SshRelay.MaxStdout)
-                    {
-                        tooLarge = true;
-                        try
-                        {
-                            process.Kill(entireProcessTree: true);
-                        }
-                        catch (InvalidOperationException)
-                        {
-                            // already exited
-                        }
-                        break;
-                    }
-                }
-                return buffer.ToArray();
-            });
-
-            try
-            {
-                var input = process.StandardInput.BaseStream;
-                input.Write(stdin.Span);
-                input.Close();
-            }
-            catch (IOException)
-            {
-                // The remote side stopped reading (it failed early); its exit code says why.
-            }
-
-            var stdout = output.GetAwaiter().GetResult();
-            process.WaitForExit();
-            relay.GetAwaiter().GetResult();
-            if (tooLarge)
-            {
-                Array.Clear(stdout);
-                throw new SshTransportException("its output was larger than 1 MiB, so ssh was stopped");
-            }
-            return new SshResult(process.ExitCode, stdout);
         }
     }
 }
