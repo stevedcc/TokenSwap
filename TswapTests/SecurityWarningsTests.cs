@@ -51,4 +51,18 @@ public class SecurityWarningsTests
         Assert.Equal(SecurityWarnings.NoTouch, posture.Posture);
         Assert.Equal(posture, Assert.Single(changed).Slot);
     }
+
+    /// <summary>Brief T31 (#294.5): the enrol command and what it does read as one phrase, on every OS.</summary>
+    [Fact]
+    public void ExplainTouch_NoTouch_EnrolCommandHasOneNote()
+    {
+        var console = new FakeConsole();
+
+        SecurityWarnings.ExplainTouch(console, "YubiKey 12", requiresTouch: false);
+
+        Assert.Contains(
+            "  " + ElevatedCommand.For("tswap", "slot add --yubikey") + " to enrol the reprogrammed key again, then tswap names",
+            console.ErrorText);
+        Assert.DoesNotContain("(it enrols", console.ErrorText);
+    }
 }

@@ -458,6 +458,47 @@ public class SlotAddFido2Tests : IDisposable
         Assert.Equal(before, Snapshot());
     }
 
+    // ---- Brief T31: one name per enrolled key (#291.2), and Enter at an empty new PIN (#290 comment)
+
+    /// <summary>The Token2 PIN+ Dual Ace R3.4 (another brand, no serial), named by its USB product through libfido2.</summary>
+    private static readonly Guid Token2 = Guid.Parse("eabb46cc-e241-80bf-ae9e-96fa6d2975cf");
+
+    private const string Token2Product = "TOKEN2 FIDO2 Security Key(0024)";
+
+    [Fact]
+    public void SlotAddFido2_OtherBrand_SuccessLineNamesTheKey()
+    {
+        OtpVault();
+        var token2 = _fido2.AddKey(null, Token2);
+        token2.Product = Token2Product;
+        _terminal = new FakeTerminal(Pin, Pin);
+
+        var (exit, stdout, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.True(exit == 0, stderr);
+        Assert.Contains($"✓ {Token2Product} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.", stdout);
+        Assert.Contains(Fido2SlotEnrollment.ResetWarning(Token2Product), stdout);
+        Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
+    }
+
+    [Fact]
+    public void SlotAddFido2_NoPin_EmptyNewPin_SaysNoPinWasSet()
+    {
+        OtpVault();
+        var key = _fido2.AddKey(SerialA, Fido2TestSlots.Aaguid, pin: null);
+        _terminal = new FakeTerminal("yes", "");
+        var before = Snapshot();
+
+        var (exit, _, stderr) = Run("", "slot", "add", "--fido2");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains($"YubiKey {SerialA} has no FIDO2 PIN; a FIDO2 slot needs one. No PIN was set. No slot was added.", stderr);
+        Assert.DoesNotContain("was cancelled", stderr);
+        Assert.Null(key.Pin);
+        Assert.DoesNotContain(FakeFido2Op.MakeCredential, Ops());
+        Assert.Equal(before, Snapshot());
+    }
+
     [Fact]
     public void SlotAddFido2_SeveralKeys_UsesSerialOrAsks()
     {

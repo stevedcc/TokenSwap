@@ -44,6 +44,9 @@ internal sealed class FakeFido2Keys : IFido2Keys
         public int? Serial { get; set; }
         public Guid Aaguid { get; set; }
 
+        /// <summary>The listing's USB product name (libfido2's, for keys of other brands); null when none.</summary>
+        public string? Product { get; set; }
+
         /// <summary>The FIDO2 PIN; null when none is set.</summary>
         public string? Pin { get; set; }
 
@@ -118,7 +121,7 @@ internal sealed class FakeFido2Keys : IFido2Keys
     /// What <see cref="Find"/> would say about <paramref name="key"/> now. <see cref="Fido2KeyInfo.ReinsertRequired"/> as
     /// the SDK reports it (brief T31): after three wrong PINs in a row, for a key with a PIN.
     /// </summary>
-    public static Fido2KeyInfo Info(Key key) => new(key.Ref, key.Serial, key.Aaguid, key.Pin is not null, key.Retries,
+    public static Fido2KeyInfo Info(Key key) => new(key.Ref, key.Serial, key.Aaguid, key.Pin is not null, key.Retries, key.Product,
         ReinsertRequired: key.Pin is null ? null : key.WrongInARow >= 3);
 
     /// <summary>A credential made on <paramref name="key"/> earlier (64 random bytes, like a YubiKey's id).</summary>
