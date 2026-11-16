@@ -149,6 +149,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         if (_pty is null)
             return;
         _pty.Type(StrayOtp);
+        _pty.ReadEcho(Wait, StrayOtp);
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
 
@@ -165,6 +166,7 @@ public sealed class ControllingTerminalPtyTests : IDisposable
         if (_pty is null)
             return;
         _pty.Type(StrayOtp);
+        _pty.ReadEcho(Wait, StrayOtp);
         var calls = new ObservedTermios();
         using var tty = ControllingTerminal.UnixTty.OpenPath(_pty.TerminalPath, calls)!;
 
@@ -288,6 +290,15 @@ public sealed class ControllingTerminalPtyTests : IDisposable
             var bytes = Encoding.UTF8.GetBytes(text);
             Assert.Equal(bytes.Length, (int)write(_controller, bytes, (nuint)bytes.Length));
         }
+
+        /// <summary>
+        /// Reads the terminal's echo of <paramref name="typed"/> off the controller side, as a terminal emulator does
+        /// (#293 fix round). TCSAFLUSH (tcsetattr TIOCSETAF) first drains the terminal's output queue on macOS (XNU
+        /// <c>ttioctl</c> calls <c>ttywait</c>), and a pty's output leaves that queue only when the controller reads it;
+        /// Linux doesn't wait on a pty. Echo left unread there blocks the read's own tcsetattr for ever on macOS, and
+        /// closing the descriptor then waits for that call: the hang of CI run 43901985635.
+        /// </summary>
+        public void ReadEcho(TimeSpan wait, string typed) => Assert.Contains(typed, Shown(wait, typed));
 
         /// <summary>What tswap wrote to the terminal so far, read until <paramref name="expected"/> shows or the time is up.</summary>
         public string Shown(TimeSpan wait, string expected)
