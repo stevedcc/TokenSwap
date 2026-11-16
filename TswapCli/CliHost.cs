@@ -69,9 +69,11 @@ internal static class CliHost
                 console = new TestTerminalConsole(console);
 #endif
 
-            IYubiKeyService yubiKeys = testKey is not null
-                ? new TestKeyYubiKeyService(testKey)
-                : new SdkYubiKeyService(env.Verbose ? console.Out : null);
+            // Brief T29: one lock per process around every device call, OTP and FIDO2 alike, so a second tswap waits
+            // for the key instead of colliding with this one. Its path is resolved at the first take only.
+            var hardwareLock = HardwareLock(testKey, getEnv, () => CliEnvironment.YubiKeyLockPath(getEnv, isPrivileged), console.Error,
+                time, owner ?? DirectoryOwnerMatcher.Default);
+            var yubiKeys = YubiKeyService(testKey, hardwareLock, env.Verbose ? console.Out : null);
             // Additional hardware backends (TPM on Windows/Linux, Apple Secure Enclave on macOS, or
             // their simulated stand-ins in test mode) register via the additionalBackends argument;
             // the YubiKey backend is always present and VaultUnlocker picks the right one from
@@ -86,7 +88,7 @@ internal static class CliHost
 #if DEBUG
             loadOther = Libfido2ForTests(getEnv);
 #endif
-            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error, isPrivileged, loadOther);
+            var fido2 = Fido2Service(testKey, env.Verbose ? console.Error : null, console.Error, isPrivileged, loadOther, hardwareLock);
             var unlocker = new VaultUnlocker(yubiKeys, overrideKey: testKey, additionalBackends: extraBackends, fido2: fido2);
 
             var ctx = new CommandContext(console, env, () => store.Value, yubiKeys, unlocker, testKey, sudoBypass)
@@ -113,13 +115,49 @@ internal static class CliHost
     }
 
     /// <summary>
+    /// Brief T29: this process's one YubiKey lock (for the YubiKey service and the FIDO2 device layer alike), or none
+    /// in test mode: test-mode runs would otherwise make <c>~/.cache/tswap/yubikey.lock</c> in the real home of whoever
+    /// runs the tests. A Debug build switches it on in test mode with <c>TSWAP_TEST_YUBIKEY_LOCK=1</c> (with the home
+    /// pointed at a temp folder), for the end-to-end test of a second process waiting.
+    /// </summary>
+    internal static YubiKeyLock? HardwareLock(byte[]? testKey, Func<string, string?> getEnv, Func<string> lockPath, TextWriter notices,
+        TimeProvider time, DirectoryOwnerMatcher owner)
+    {
+        var on = testKey is null;
+#if DEBUG
+        on |= getEnv("TSWAP_TEST_YUBIKEY_LOCK") == "1";
+#endif
+        return on ? new YubiKeyLock(lockPath, notices, time, owner) : null;
+    }
+
+    /// <summary>
+    /// The one YubiKey service (commands and the unlocker): <see cref="TestKeyYubiKeyService"/> in test mode, else
+    /// <paramref name="real"/> (a test seam) or <see cref="SdkYubiKeyService"/>; under <paramref name="hardwareLock"/>
+    /// when there is one (brief T29).
+    /// </summary>
+    internal static IYubiKeyService YubiKeyService(byte[]? testKey, YubiKeyLock? hardwareLock, TextWriter? verbose,
+        Func<IYubiKeyService>? real = null)
+    {
+        IYubiKeyService inner = testKey is not null ? new TestKeyYubiKeyService(testKey) : real?.Invoke() ?? new SdkYubiKeyService(verbose);
+        return hardwareLock is null ? inner : new LockedYubiKeyService(inner, hardwareLock);
+    }
+
+    /// <summary>Brief T29: <paramref name="keys"/> under <paramref name="hardwareLock"/>, or as they are without one.</summary>
+    internal static IFido2Keys WithLock(IFido2Keys keys, YubiKeyLock? hardwareLock) =>
+        hardwareLock is null ? keys : new LockedFido2Keys(keys, hardwareLock);
+
+    /// <summary>
     /// The FIDO2 service (FIDO2 plan, tasks 4 and 5) over <see cref="Fido2Keys"/>; none in test mode (a test that needs
     /// one sets <see cref="CommandContext.Fido2"/>). Nothing touches a key, loads libfido2 or calls into
     /// <c>webauthn.dll</c> until a command calls it.
+    /// Brief T29: the device layer under <paramref name="hardwareLock"/> (<see cref="WithLock"/>); <paramref name="keys"/> is a
+    /// test seam for the device layer (as <see cref="YubiKeyService"/>'s <c>real</c>), outside test mode only.
     /// </summary>
     internal static IFido2Service? Fido2Service(byte[]? testKey, TextWriter? verbose = null, TextWriter? notices = null, bool privileged = false,
-        Func<Libfido2LoadResult>? loadOther = null) =>
-        Fido2Keys(testKey, verbose, notices, privileged, loadOther) is { } keys ? new Fido2Service(keys, verbose) : null;
+        Func<Libfido2LoadResult>? loadOther = null, YubiKeyLock? hardwareLock = null, Func<IFido2Keys>? keys = null) =>
+        (testKey is null && keys is not null ? keys() : Fido2Keys(testKey, verbose, notices, privileged, loadOther)) is { } device
+            ? new Fido2Service(WithLock(device, hardwareLock), verbose)
+            : null;
 
     /// <summary>
     /// The FIDO2 device layer: on Linux and macOS (brief T19, item 3) <see cref="CompositeFido2Keys"/>, Yubico's SDK

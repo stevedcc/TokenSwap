@@ -84,6 +84,11 @@ public enum OtpFailure
     Other,
     /// <summary>No key with this serial is plugged in (task 4 review fix round: the kind of "YubiKey N is not plugged in").</summary>
     NotPluggedIn,
+    /// <summary>
+    /// Brief T29 (#301): the key's answer to a challenge was cut short (a malformed response other than the busy status
+    /// report): another program, or a tswap that doesn't take the YubiKey lock, used the key at the same time.
+    /// </summary>
+    Interrupted,
 }
 
 /// <summary>A failure at the device seam: its kind, the key's serial when known, and the SDK's own message.</summary>
