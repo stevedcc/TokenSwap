@@ -36,8 +36,8 @@ that already opens the vault.
 - **Move the files yourself** (scp, USB, a paste). Don't drop them in a sync folder: a request
   swapped on the way would get the vault key wrapped to someone else's key. Why carrying them is
   enough: [the design record](design/multi-machine-keying.md#hand-carried-enrollment-v0).
-- **Over SSH**, `tswap slot enroll --via <user@host>` on the new machine runs all four steps
-  ([Enrolling over SSH](#enrolling-over-ssh)). Steps 2 and 4 also take `-` for stdin and stdout
+- **Over SSH**, `tswap slot enroll --via <user@host>` on the new machine runs all four steps, with
+  the host's sudo and vault prompts on its own terminal ([Enrolling over SSH](#enrolling-over-ssh)). Steps 2 and 4 also take `-` for stdin and stdout
   ([below](#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step)).
 - `tswap slots` lists the slots.
 - On Windows, run the `sudo` steps from an administrator prompt, without `sudo`.
@@ -93,12 +93,11 @@ the four steps above: request and accept here, approve and merge on the other ma
 
 ```bash
 tswap slot enroll --via <user@host> [--tpm | --secure-enclave --with-touch|--no-touch] [--password|--no-password] \
-    [--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh]
+    [--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh] [--batch]
 ```
 
-For example, a desk YubiKey joining the TPM vault on the router (Fedora CoreOS, whose `core` user has
-passwordless sudo), with the YubiKey plugged into the desk machine (use a separate config folder if
-this machine has a vault of its own):
+For example, a desk YubiKey joining the TPM vault on the router, with the YubiKey plugged into the
+desk machine (use a separate config folder if this machine has a vault of its own):
 
 ```bash
 TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot enroll --via core@router
@@ -107,28 +106,117 @@ TSWAP_CONFIG_DIR=~/.config/tswap-router tswap slot enroll --via core@router
 Repeat with the wallet YubiKey plugged in (answer yes when it asks to overwrite the config): each key
 becomes its own slot on the router.
 
-What each step does:
+There are two modes:
+
+- **Interactive, the default.** It needs a terminal on this machine. The host's approve and merge run
+  on a terminal of their own (`ssh -t`), so the host's sudo asks for your password there, as when you
+  log in there, and the host's vault can ask for its vault password or a touch. No sudoers rule is
+  needed. The files travel separately, through a staging folder on the host
+  ([below](#the-hosts-staging-folder)).
+- **`--batch`, for scripts** (no terminal here): the files travel on the SSH session's stdin and
+  stdout, and nothing on the host may ask anything: its sudo must need no password
+  ([Batch mode for scripts](#batch-mode-for-scripts)).
+
+Without a terminal and without `--batch`, `slot enroll` refuses before doing anything. A host such as
+Fedora CoreOS, whose `core` user has passwordless sudo and logs in with a key only, shows no prompts in
+either mode.
+
+What each step does in the interactive mode:
 
 1. **Pre-flight.** It checks the flags (every refusal `slot request` would make) and this machine's
-   state, then runs `sudo -n tswap --version` on the host. If that fails, nothing has changed.
+   state, then runs `tswap --version` on the host, without sudo. If that fails, nothing has changed.
 2. **Request, here**, exactly as `tswap slot request` (its questions, touches and fingerprint).
    `--tpm`, `--secure-enclave --with-touch|--no-touch` and `--password|--no-password` go to this step;
    `--vault-dir` too, only with `--password`.
-3. **Approve, on the host**: `sudo -n tswap slot approve - -`, the request file on its stdin, the
-   approve file back on its stdout. The host's lines (its fingerprint of the new slot, touch prompts)
-   appear here prefixed `[<user@host>] `: compare that fingerprint with step 2's. The prefix labels the
-   host's text for you; it is not a security boundary.
+3. **Approve, on the host.** `tswap slot stage <id> put request` copies the request into the host's
+   staging folder. Then, on the host's terminal, `sudo tswap slot approve --staged <id> --expect <hash>`
+   unlocks the vault (sudo and the vault may ask there) and prints its fingerprint of the new slot:
+   compare it with step 2's. Before it, a line here says `On <user@host>: <the command> ...`, and after
+   it `Back on this machine.`, so you can tell whose prompt you are answering. The host's lines in this
+   step have no prefix: they are the host's terminal. It ends with `Approve file fingerprint: ...`.
+   `tswap slot stage <id> get approve` brings the approve file back, and this machine prints
+   `Approve file received: ...`: the two fingerprints must match. Press Enter to go on, or Ctrl-C if
+   they differ.
 4. **Accept, here**, exactly as `tswap slot accept`, with `--vault-dir <folder>` when given (a
    password-less shared folder is joined by accept alone). It checks the approve file against this
    machine's pending request, and asks for the vault password when the slot has one.
-5. **Merge, on the host**: `sudo -n tswap slot merge -`, the receipt on its stdin. It never passes
-   `--yes`, so the host adds only the slot it approved in step 3. Its output is shown here, prefixed.
+5. **Merge, on the host.** `slot stage <id> put receipt`, then, on the host's terminal,
+   `sudo tswap slot merge --staged <id> --expect <hash>`. It never passes `--yes`: the host adds the
+   slot it approved in step 3 without asking, and asks on its terminal about any other. Then
+   `slot stage <id> clean` removes the staging folder.
 6. It prints this machine's slot fingerprint again and `✓ Enrolled: ...`.
+
+### Prompts to expect
+
+- **SSH logins:** one on Linux and macOS, which share one SSH connection for the whole enrolment
+  (OpenSSH's `ControlMaster`, with its socket in `$XDG_RUNTIME_DIR/tswap-ssh`, or
+  `<temp folder>/tswap-ssh-<uid>`; if that folder isn't your own 0700 folder, or its path is too long
+  for a socket, tswap notes it and doesn't share). From a Windows machine, whose OpenSSH client can't
+  share a connection, each of the seven calls logs in again (pre-flight, put, approve, get, put, merge,
+  clean), so use a key with an agent there.
+- **sudo on the host: twice**, once for approve and once for merge. sudo remembers a password per
+  terminal, and each of the two steps is a terminal of its own.
+- **The host's vault: twice**, since approve and merge each unlock it: its vault password, and a touch
+  on the host's own YubiKey or Secure Enclave if its slot needs one, which someone must do **at the
+  host**.
+- **This machine's own prompts:** request's (a touch, the vault password question) and accept's.
+- **The Enter** after you have compared the approve file's fingerprints.
+
+### The host's staging folder
+
+The files go through `<config folder>/enrol-staged/<id>/` of the SSH user on the host (`<id>` is the
+same 8 hex characters as this machine's enrolment folder; 0700 on Unix, inside that user's config folder
+on Windows), moved by `tswap slot stage <id> put|get|clean`. `slot stage` runs as the SSH user, never
+under sudo (it refuses sudo on Unix), so its files are the user's. Under sudo, tswap finds the same
+folder through `SUDO_USER`; if the SSH user sets `TSWAP_CONFIG_DIR` or `XDG_CONFIG_HOME`, sudo doesn't
+see it, and approve says it found no staged file (see
+[which vault a command under sudo uses](security-model.md#which-vault-a-command-under-sudo-uses) for
+`sudo --preserve-env`).
+
+Why staging is safe enough:
+
+- **What this machine sends is bound.** `--expect` is the SHA-256 of the request (and later the
+  receipt) as this machine sent it. Approve and merge read the staged file once and refuse it unless
+  its hash is that one, so a file swapped in the staging folder is refused.
+- **The approve file coming back is checked by you.** It rests in the staging folder between approve
+  and `get`, where another process of the same user on the host could replace it: that is what the two
+  fingerprints are for. This is the same exposure as the hand-carried flow, where `approve.json` sits in
+  your folder too, and a human check, not a boundary (see
+  [security-model.md](security-model.md#enrolling-over-ssh-what-slot-enroll---via-trusts)).
+
+The staging folder is removed at the end. After a failure, the message names
+`tswap slot stage <id> clean` for the host, and an enrolment abandoned with `--fresh` may leave one
+behind: remove it with `tswap slot stage <old id> clean` there. `slot stage <id> get approve` run by
+hand at a terminal puts the approve file, a way into the vault for whoever made the request, in the
+scrollback.
+
+`--remote-tswap <path>` names tswap on the host: the calls without sudo find `tswap` on the SSH
+session's `PATH`, the sudo calls on sudo's `secure_path` (Fedora and RHEL leave out `/usr/local/bin`);
+a full path serves both. The host account's shell must print nothing on stdout at login: the
+batch-form calls, `get` among them, carry files on stdout, and start-up files that echo would corrupt
+the approve file (tswap then refuses it).
 
 ### Privilege on the host
 
-Approve and merge need sudo on the host, and no terminal reaches it (stdin carries the files), so
-they run as `sudo -n`: sudo must not wait for a password. tswap handles no sudo password. Pick one:
+Approve and merge need sudo on the host. In the interactive mode sudo asks for your password on the
+host's terminal; tswap never sees it. `--no-remote-sudo` drops `sudo`: for a login as root, or a
+Windows host.
+
+**Windows hosts:** OpenSSH Server is an optional Windows feature, needed only on the host. Its
+administrator logins get an elevated session, so use `--no-remote-sudo` (and `--remote-tswap` with
+the path of `tswap.exe` if it is not on that account's `PATH`). The SSH account must be an
+administrator; if its session turns out not to be elevated, approve refuses with "requires an
+administrator prompt" and the hand-carried flow below remains.
+
+### Batch mode for scripts
+
+`--batch` is the flow for a script with no terminal. The pre-flight is `sudo -n tswap --version`,
+approve is `sudo -n tswap slot approve - -` (the request file on its stdin, the approve file back on
+its stdout) and merge is `sudo -n tswap slot merge -` (the receipt on its stdin, its output shown
+here). The host's lines, and ssh's own messages on stderr, appear here prefixed `[<user@host>] `; the
+prefix labels them for you and is not a security boundary. No terminal reaches the host, so sudo runs
+as `sudo -n` and must not wait for a password, and the host's vault must open without a vault
+password or a touch. Pick one:
 
 - **A sudoers rule for exactly the three commands**, for the SSH user, with the full path where tswap
   is installed:
@@ -146,27 +234,24 @@ they run as `sudo -n`: sudo must not wait for a password. tswap handles no sudo 
 - **A user with passwordless sudo already**, such as Fedora CoreOS's `core`.
 - **`--no-remote-sudo`**, which drops `sudo -n`: for a login as root, or a Windows host.
 
-**Windows hosts:** OpenSSH Server is an optional Windows feature, needed only on the host. Its
-administrator logins get an elevated session, so use `--no-remote-sudo` (and `--remote-tswap` with
-the path of `tswap.exe` if it is not on that account's `PATH`). The SSH account must be an
-administrator; if its session turns out not to be elevated, approve refuses with "requires an
-administrator prompt" and the hand-carried flow below remains.
+### What can't go over SSH
 
-**What can't go over SSH** (there is no interactive `ssh -t` mode): a host that needs a password for
-sudo, the vault password or the recovery key to open its vault, or a presence check no one can answer
-over `ssh -T` (a `--with-touch` Secure Enclave slot, a vault whose only way in is a FIDO2 key). Use the
-hand-carried steps there. The host account's shell must also print nothing on stdout at login: start-up
-files that echo would corrupt the approve file (tswap then refuses it).
+- **A host whose only way in is the recovery key**, in either mode: the recovery key is read from stdin
+  only, never at a terminal. Use the hand-carried steps there.
+- **In batch mode**, a host that needs a password for sudo or the vault password to open its vault, or a
+  presence check no one can answer over `ssh -T` (a `--with-touch` Secure Enclave slot, a vault whose
+  only way in is a FIDO2 key): use the interactive mode, or the hand-carried steps.
 
 ### The enrolment folder and a retry
 
 The files of each step are kept in `<config folder>/enrol/<first 8 hex of the slot id>/` on this
-machine (`request.json`, `approve.json`, `receipt.json`; the folder is readable by you only): next to
-this machine's pending private key, never in the working directory, so the approve file can't land in
-a synced folder by accident. The folder is deleted on success.
+machine (`request.json`, `approve.json`, `receipt.json`; on Unix the folder is 0700, readable by you
+only, and on Windows it is inside your config folder, with that folder's access rules): next to this
+machine's pending private key, never in the working directory, so the approve file can't land in a
+synced folder by accident. The folder is deleted on success.
 
 On a failure, `slot enroll` stops at the failed step, changes nothing more and says what is left, with
-the kept files' paths:
+the kept files' paths (and, in the interactive mode, the host's `slot stage <id> clean`):
 
 - **Approve failed:** fix the cause and run the same `tswap slot enroll` again: it continues from the
   kept request (`Continuing the pending enrolment of ...`), against the `--via` host given then. A flag
@@ -174,8 +259,8 @@ the kept files' paths:
   refused; `--fresh` starts a new enrolment instead (it asks before overwriting the pending config, and
   deletes the other enrolment folders only once the new request is written).
 - **Merge failed:** this machine already has its copy. Finish it with the kept receipt:
-  `sudo tswap slot merge - < receipt.json` on the host. Running `slot enroll` again would start a new
-  enrolment.
+  `sudo tswap slot merge receipt.json` on the host (in batch mode the message names
+  `sudo tswap slot merge - < receipt.json`). Running `slot enroll` again would start a new enrolment.
 - **A pending request `slot enroll` has no files for** (a `slot request` by hand) is refused; finish
   it by hand, or start over with `--fresh`.
 
@@ -230,7 +315,7 @@ sudo /usr/local/bin/tswap slot approve - - < request.json > approve.json
 sudo /usr/local/bin/tswap slot merge - < approve.json.receipt.json
 ```
 
-The three-command sudoers rule of [Enrolling over SSH](#privilege-on-the-host) allows only these `-`
+The three-command sudoers rule of [batch mode](#batch-mode-for-scripts) allows only these `-`
 forms, with the exact path it names. Don't run `slot approve <request> -` at a terminal: the approve
 file, a way into the vault for whoever made the request, would land in the scrollback.
 

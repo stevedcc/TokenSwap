@@ -199,7 +199,7 @@ public class CommandReferenceTests
     [Fact]
     public void Subcommands_TokenisesBothUsageShapes()
     {
-        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "add"],
+        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "stage", "add"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "slot")));
         Assert.Equal(["serve", "unlock", "lock", "status", "forward", "call", "route", "socket", "template"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "broker")));
@@ -376,12 +376,16 @@ internal static class SudoTableDrive
         using (var g = new FleetMachine("sudo-g", SimulatedYubiKeyService.WithKeys(44444444)) { Sudo = false })
         {
             g.Ssh = new LoopbackSshTransport(a, "sudo", "-n", "tswap");
-            var enroll = g.Run("", "slot", "enroll", "--via", "me@host");
+            var enroll = g.Run("", "slot", "enroll", "--via", "me@host", "--batch");
             results["slot enroll"] = R(enroll, enroll.Exit == 0 && g.Config.PendingSlotId is null
                 && a.Keyring.Slots.Any(s => Convert.ToBase64String(s.SlotId) == g.Config.KeyringSlotId));
         }
 
         a.Sudo = false;
+        // slot stage (brief T28): run as the SSH user, never under sudo. Its job: the staged file is there, byte for byte.
+        var stage = a.Run("{}", "slot", "stage", "0a1b2c3d", "put", "request");
+        results["slot stage"] = R(stage, stage.Exit == 0
+            && File.ReadAllText(Path.Combine(a.Dir, "enrol-staged", "0a1b2c3d", "request.json")) == "{}");
         results["slot approve"] = R(a.Run("", "slot", "approve", a.PathOf("other-request.json"), a.PathOf("other-approve.json")));
         results["slot add"] = R(a.Run("", "slot", "add", "--yubikey"));
         results["slot merge"] = R(a.Run("", "slot", "merge", b.ConfigPath));
