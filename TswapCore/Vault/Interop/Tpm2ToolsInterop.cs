@@ -148,7 +148,7 @@ internal static partial class Tpm2ToolsInterop
                 $"simulator in dev/test — see docs/portable.md#linux-tpm). tpm2_getcap failed: {stderr.Trim()}");
     }
 
-    /// <summary>Enrollment: seals <paramref name="plaintextKey"/> under a freshly (re)created ECC P-256 storage primary.</summary>
+    /// <summary>Enrolment: seals <paramref name="plaintextKey"/> under a freshly (re)created ECC P-256 storage primary.</summary>
     public static byte[] Seal(byte[] plaintextKey) => SealCore(plaintextKey, null);
 
     /// <summary>
@@ -380,7 +380,7 @@ internal static partial class Tpm2ToolsInterop
                 : new VaultPasswordRefusedException(VaultPasswordMessages.StrippedHeader, VaultPasswordRefusal.StrippedHeader);
         return new TswapException(
             "Could not unlock with the TPM. The sealed key may have been created on a different " +
-            "machine, the TPM may have been cleared since enrollment, or config.json may be " +
+            "machine, the TPM may have been cleared since enrolment, or config.json may be " +
             $"corrupted. tpm2-tools reported: {stderr.Trim()}");
     }
 

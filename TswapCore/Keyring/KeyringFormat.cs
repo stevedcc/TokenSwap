@@ -90,7 +90,7 @@ public static class KeyringFormat
     /// to <see cref="KeyringCodec"/>'s slot layout (see that type's "kind (issue #120)" doc
     /// section). That change is additive at the <em>type</em> level — <see cref="Slot"/>'s
     /// <c>Kind</c> field has a default, so existing 3-argument <c>Slot(...)</c> call sites keep
-    /// compiling — but it is <em>not</em> additive at the serialized-<em>byte</em> level: every
+    /// compiling — but it is <em>not</em> additive at the serialised-<em>byte</em> level: every
     /// slot, including one that only ever used #119's original fields, now has one extra
     /// trailing byte it did not have before. A reader built against #119's original layout
     /// (pre-#120) would misinterpret or truncate-fail on #120-shaped bytes, and vice versa, so

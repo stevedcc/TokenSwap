@@ -199,7 +199,7 @@ public static class SecurityWarnings
                 break;
             default:
                 e.WriteLine($"{keyLabel}: Couldn't check the touch setting (the key's first answer didn't say whether it asked for a touch).");
-                e.WriteLine("  Fix: enroll the key again with it plugged in; until then");
+                e.WriteLine("  Fix: enrol the key again with it plugged in; until then");
                 e.WriteLine("  'tswap slots' shows it as unknown, and if it needs no touch, any process running as you can use it.");
                 break;
         }
@@ -219,7 +219,7 @@ public static class SecurityWarnings
         }
         var e = console.Error;
         e.WriteLine($"{keyLabel}: touch setting unknown (it wasn't checked when the key was enrolled). If it needs no touch,");
-        e.WriteLine("  any process running as you can unlock the vault while the key is plugged in. To record it, enroll the");
+        e.WriteLine("  any process running as you can unlock the vault while the key is plugged in. To record it, enrol the");
         e.WriteLine("  key again with yubikey-manager 5 or later on PATH. 'tswap slots' shows each key's setting.");
     }
 

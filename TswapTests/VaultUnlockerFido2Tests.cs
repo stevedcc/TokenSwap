@@ -105,7 +105,7 @@ public class VaultUnlockerFido2Tests
         public byte[] AddTpm(byte[] machineKey, bool password, bool opens = true)
         {
             using var stretched = password ? StretchedPassword.FromBytes(Password) : null;
-            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enroll(stretched);
+            var (kek, hwBlob) = new SimulatedHardwareService(HardwareBackend.Tpm, machineKey).Enrol(stretched);
             return Add(opens ? kek : RandomNumberGenerator.GetBytes(32), hwBlob);
         }
 

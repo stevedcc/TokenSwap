@@ -2,7 +2,7 @@
 
 **Status:** design note (no code yet). This is the *key-model* half of Phase 6; the
 *mergeable-on-disk-format* half is specified in `REFACTORING_PLAN.md` §Phase 6. Read this
-before implementing TPM or Secure Enclave enrollment — the byte layout it implies must be
+before implementing TPM or Secure Enclave enrolment — the byte layout it implies must be
 settled before any vault is written in the new format.
 
 A 2026-07-27 design review settled several open questions this doc previously left unresolved
@@ -17,13 +17,13 @@ needed to deliver the adoption story in the section below ("a user can adopt tsw
 extra hardware"):
 
 - **v0** — n slots, `k = 1` only. Backends: YubiKey, Secure Enclave, TPM, recovery keypair.
-  Hand-carried enrollment (new machine and enrolling machine exchange two files directly — scp,
+  Hand-carried enrolment (new machine and enrolling machine exchange two files directly — scp,
   USB, paste into a terminal — not over the sync transport). **No revocation, no `K_v` rotation,
   no merge engine.**
-- **v1** — revocation, `K_v` rotation, and automating the enrollment exchange over the sync
-  transport (which reinstates the enrollment fingerprint as the *primary* control, not
-  defense-in-depth — see §The landmine below).
-- **v2** — threshold (`k`-of-`n`) *enrollment* governance, and the merge engine's HLC/
+- **v1** — revocation, `K_v` rotation, and automating the enrolment exchange over the sync
+  transport (which reinstates the enrolment fingerprint as the *primary* control, not
+  defence-in-depth — see §The landmine below).
+- **v2** — threshold (`k`-of-`n`) *enrolment* governance, and the merge engine's HLC/
   commutativity work (the latter belongs to `REFACTORING_PLAN.md` §Phase 6, not this doc).
 
 The line between v0 and v1 is **extension without revocation**. Adding a machine needs no
@@ -34,7 +34,7 @@ answer for a tool with no deployed fleets yet, and it is exactly where the hard 
 ## Why: broaden hardware support to grow adoption
 
 Today tswap requires **two YubiKeys**. That is the single biggest barrier to adoption: it
-asks a new user to buy and enroll dedicated hardware before they can store their first
+asks a new user to buy and enrol dedicated hardware before they can store their first
 secret. Meanwhile the hardware we want is already in nearly every machine:
 
 - **TPM 2.0** — present on essentially all modern Windows and Linux PCs.
@@ -65,7 +65,7 @@ Two facts that drive everything below:
 Fact 2 matters: the moment backends are heterogeneous (a YubiKey yields HMAC bytes, a TPM
 unseals, a Secure Enclave decrypts), no single value can be *derived* from all of them. So
 `K_v` must become a **fixed random 256-bit key** that each backend *wraps*, not derives. This
-is the same realization every design path below arrives at.
+is the same realisation every design path below arrives at.
 
 ## The design space (and why it all funnels to one answer)
 
@@ -76,7 +76,7 @@ We walked several alternatives. Each is either the keyring or a strictly weaker 
 | Escrow raw `K_v` to a password manager | manual key wrapping, no crypto | simplest bootstrap, but exposes `K_v` in plaintext to a human + password-manager history |
 | Multiple derived keys + XOR shares | a keyring with XOR instead of AEAD | needs each backend to emit raw KEK bytes (SE can't); no slot authentication; one-time-pad reuse hazard on rotation |
 | Shamir 1-of-n | mathematically **equals** key wrapping | more machinery, identical result; each share still needs per-device protection → keyring anyway |
-| Shamir k-of-n (k≥2) for *unlock* | quorum-to-decrypt | wrong property for solo unlock; its real home is *enrollment governance*, not unlock |
+| Shamir k-of-n (k≥2) for *unlock* | quorum-to-decrypt | wrong property for solo unlock; its real home is *enrolment governance*, not unlock |
 | "Key in config + 2-of-n" (config holds one share) | 1-of-n hardware, publicly assisted | access structure = the keyring; the public config share is a permanent "+1", so it adds no security over wrapping |
 | **AEAD keyring of wrapped shares** | per-device `wrap(share, KEK_device)` | the honest answer; integrity-protected; heterogeneous backends uniform |
 
@@ -134,7 +134,7 @@ keyring {
 ```
 
 Each slot wraps the whole `K_v` (via an intermediate `KEK_slot` — see "Two-layer slot wrap"
-below); the "share" is just the key. This is today's YubiKey-pair convenience, generalized to
+below); the "share" is just the key. This is today's YubiKey-pair convenience, generalised to
 *n* heterogeneous devices: one machine, one device, unlock alone. No machine needs to be online,
 present, or aware for another to use the vault — adding a slot is an append, which is what makes
 the design work over a sync transport with zero coordination.
@@ -148,7 +148,7 @@ it slot-addition rights protects nothing real (see the enforcement rule above).
 
 Adding a machine requires wrapping `K_v` to the new machine's public key, which requires
 possessing `K_v`. Anything that can extend the fleet can therefore decrypt the vault — there is
-no way to grant "may enroll new machines" without also granting "may read everything."
+no way to grant "may enrol new machines" without also granting "may read everything."
 
 A genuine governance-only credential would need the keyring's **signing** key separated from
 `K_v`, with the credential holding only signing power. But that recovers no data, so it's
@@ -230,7 +230,7 @@ slot is re-wrapped, which needs every device physically present — the right pr
 (see "The landmine", below) and completely the wrong one for a counter that bumps on every
 write.
 
-**Encoding: fixed binary, length-prefixed fields, explicit ordering — not serialized JSON.**
+**Encoding: fixed binary, length-prefixed fields, explicit ordering — not serialised JSON.**
 `System.Text.Json` gives no byte-stability guarantee across versions or property reordering, and
 an incidental whitespace or property-order change would silently change every AAD computation
 and brick every vault on disk with no diagnosable cause. This is a format decision, not an
@@ -249,7 +249,7 @@ One extra step over the two-layer wrap alone. In exchange, **any holder of `K_v`
 fresh slot for any enrolled device offline** — including for YubiKey slots, which otherwise have
 no public key to encrypt to (challenge-response yields a symmetric KEK only, not a keypair).
 
-This keypair is also what the hand-carried enrollment exchange (below) trades. And it is **the
+This keypair is also what the hand-carried enrolment exchange (below) trades. And it is **the
 only item in the v0 format whose retrofit would require every enrolled device to be physically
 present again** — everything else in this design migrates mechanically (read with the old key,
 rewrite with the new, one pass, no ceremony). Without it, rotating `K_v` later means "plug in
@@ -280,18 +280,18 @@ one device, unlock alone" and "Do not use XOR here" above. Since T4:
    YubiKey blob whose serial is plugged in (the serial prompt when several match), and the first
    slot that authenticates wins. A YubiKey slot therefore works on any machine that has the
    vault files and that key, without `KeyringSlotId`.
-4. **`init --yubikey`** (until v0.2.0 `init --keyring`; the guided `init` makes the same slot) enrolls one plugged-in key: one YubiKey slot plus the recovery slot,
+4. **`init --yubikey`** (until v0.2.0 `init --keyring`; the guided `init` makes the same slot) enrols one plugged-in key: one YubiKey slot plus the recovery slot,
    with no pair fields in config. The original XOR vault can no longer be created.
 5. **`slot add --yubikey`** (sudo) adds another plugged-in key to **this machine's** keyring as
    its own slot. This is how the router's TPM vault gets the owner's keys: plug each key into the
    router and run it. Several keys are several slots, any one of which opens the vault.
-6. **`slot request`** enrolls one key; its request file carries the slot's blob, `slot approve`
+6. **`slot request`** enrols one key; its request file carries the slot's blob, `slot approve`
    passes it on in the approve file and `slot accept` writes it into the new slot (see
-   "Hand-carried enrollment").
+   "Hand-carried enrolment").
 7. **A legacy pair slot** is a YubiKey machine slot without a YubiKey blob: a pair keyring vault
    made before T4 (keyring version 2 or 3), whose `KEK_slot` still comes from the XOR share and
    the per-machine fields. Those vaults, and plain XOR vaults, keep working byte for byte. No
-   command makes new pair enrollments. A **version 2** keyring cannot take a one-key slot: it has
+   command makes new pair enrolments. A **version 2** keyring cannot take a one-key slot: it has
    no `hwBlob` column, and its slots' AEAD binds version 2, so moving it to version 3 would mean
    re-wrapping every slot with every device present. Such a vault keeps working with the slots it
    has; to give each key its own slot, create a new vault with `init --yubikey` (or the guided `init`).
@@ -329,7 +329,7 @@ key, generated however the user sees fit (this is a tool for technical users; cu
 call, same as the YubiKey XOR share already is today), or — better, where practical — generated
 non-extractably inside a TPM/Secure Enclave/YubiKey so a leaked public key alone grants nothing.
 Since brief T5 the key is used through `tswap recover` or `--recovery-key-stdin`, read only from
-stdin (see "Fleet enrollment" below). **Custody is the only real control** (see "Extension
+stdin (see "Fleet enrolment" below). **Custody is the only real control** (see "Extension
 implies decryption", above); the deferred
 v1 items (recovery-forces-rotation, evidence via generation bumps) are what stand in for the
 revocation this credential structurally cannot offer.
@@ -347,11 +347,13 @@ revocation this credential structurally cannot offer.
 in the keyring are useless off the enrolled machine, and useless without that machine's private
 key even if copied.
 
-## Hand-carried enrollment (v0)
+<a id="hand-carried-enrollment-v0"></a>
+
+## Hand-carried enrolment (v0)
 
 The steps for users (joining a machine with `slot request`, `approve`, `accept` and `merge`) are in [multi-machine.md](../multi-machine.md#joining-another-machine).
 
-The expensive part of enrollment in earlier drafts of this design was a fingerprint-comparison
+The expensive part of enrolment in earlier drafts of this design was a fingerprint-comparison
 ceremony, and that cost exists **only because the request travels over the sync transport**,
 where a MITM could substitute their own public key and the approving machine would obligingly
 wrap `K_v` to it.
@@ -360,7 +362,7 @@ If the user moves the files themselves — scp, USB, paste into a terminal — t
 trusted as their own hands, and there is no MITM to defend against. Four commands, no protocol
 work, reusing the per-slot X25519 keypair above:
 
-- `slot request` on the new machine — enrolls one YubiKey, or with `--tpm` / `--secure-enclave`
+- `slot request` on the new machine — enrols one YubiKey, or with `--tpm` / `--secure-enclave`
   this machine's own TPM or Secure Enclave (brief T5), and emits its X25519 public key and the
   slot's hardware blob (request file format version 2; a version 1 pair request from an older
   tswap is refused with a message to request again).
@@ -376,15 +378,17 @@ work, reusing the per-slot X25519 keypair above:
 
 A key for **this** machine needs no exchange at all: `slot add --yubikey` (see "YubiKey slots").
 
-Still display a short fingerprint on both machines as cheap defense in depth (a few dozen lines
+Still display a short fingerprint on both machines as cheap defence in depth (a few dozen lines
 of code), but it is no longer the load-bearing control in v0, so the usable-security question of
 whether people actually compare it isn't on the critical path yet. **v1's transport-borne
-enrollment reinstates the fingerprint as the primary control** — see "Deferred to v1".
+enrolment reinstates the fingerprint as the primary control** — see "Deferred to v1".
 
 **Document plainly, once implemented: move these two files yourself; do not drop them in the
 sync folder.** Automating the exchange over the transport is v1 work, not a v0 shortcut.
 
-### Fleet enrollment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
+<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a>
+
+### Fleet enrolment: receipts, merge and the recovery key (brief T5, issues #190, #152, #187)
 
 The four-step flow for users (a YubiKey at the desk enrolled into the router's TPM vault) is in [multi-machine.md](../multi-machine.md#remote-enrolment-of-a-yubikey-into-a-tpm-vault-step-by-step); the recovery-key route without an exchange, as it works on a record vault, is in [its appendix](../multi-machine.md#appendix-adding-a-key-with-the-recovery-key), as the fallback for when no enrolled machine is available (owner decision, 2026-11-05).
 
@@ -414,11 +418,11 @@ and the vault's home never opened with the joiner's device. Decisions made in br
      other new slot (from another copy, or a slot this machine never approved) is shown by
      fingerprint and confirmed on a terminal, or needs `--yes`; without either the merge is
      refused and nothing is written. The other copy's own `ApprovedSlots` are never read. This
-     is the defense against a slot smuggled into a copy: AEAD binding stops slots of *another*
+     is the defence against a slot smuggled into a copy: AEAD binding stops slots of *another*
      vault, but a slot of *this* vault is a new unlock path for whoever holds its device, so only
      the user can vouch for it.
-2. **`slot request --tpm` / `--secure-enclave`** (#152): the machine enrolls its own hardware
-   through `IHardwareEnrollmentService`, keeps the sealed blob as its pending slot's blob and
+2. **`slot request --tpm` / `--secure-enclave`** (#152): the machine enrols its own hardware
+   through `IHardwareEnrolmentService`, keeps the sealed blob as its pending slot's blob and
    sends it in the request (an optional `Backend` field names the backend; a YubiKey request is
    unchanged). `slot accept` unseals it through the backend and builds the slot with it. A
    keyring therefore holds YubiKey, TPM and Secure Enclave machine slots side by side.
@@ -442,7 +446,7 @@ and the vault's home never opened with the joiner's device. Decisions made in br
      name, quotes and marker included, which the strict reader refuses: stdin must be the base64
      key alone, surrounding whitespace allowed.)
    - **`recover --yubikey|--tpm|--secure-enclave`** (sudo): unlocks with the recovery key and
-     enrolls this machine's hardware as a new slot. The recovery slot stays. With `--tpm` /
+     enrols this machine's hardware as a new slot. The recovery slot stays. With `--tpm` /
      `--secure-enclave` the new slot becomes this machine's own (`Backend`, `KeyringSlotId`).
    - A wrong, truncated, empty or malformed key gets one actionable `TswapException`, whatever
      was wrong: no oracle, nothing written, nothing enrolled. The recovery slot's AEAD decides.
@@ -682,7 +686,7 @@ If `k` (or `formatVersion`) lived in a plaintext field, a thief with the synced 
 enrolled device** could just rewrite `k = 2 → k = 1` and unlock — a silent downgrade that would
 defeat the whole point of a stronger posture, if one is ever configured.
 
-Per the enforcement rule above, the **primary** defense is that `k`, `vaultId`, and
+Per the enforcement rule above, the **primary** defence is that `k`, `vaultId`, and
 `formatVersion` are bound into every slot's AEAD **associated data** (see "AAD binding"): they
 are not policy an attacker declines to honour, they are inputs whose mismatch makes the AEAD
 unwrap itself fail. Downgrading `k` for one slot without re-wrapping *every* slot to match
@@ -724,15 +728,15 @@ slot wrap" above — needs **no interface change**:
    wrap/unwrap seam across a second, non-YubiKey backend — already done today at the
    `IHardwareKeyService` level (see `HARDWARE_BACKENDS.md`); this step is about proving it
    through the new two-layer keyring format specifically.
-3. **Multi-machine keyring via hand-carried enrollment.** `slot request` / `approve` / `accept`
+3. **Multi-machine keyring via hand-carried enrolment.** `slot request` / `approve` / `accept`
    (see above), each slot getting its own X25519 keypair. Still `k = 1`. No revocation, no
    rotation, no merge engine — see `REFACTORING_PLAN.md` §Phase 6 for the per-secret record
    format this pairs with.
 
 **v1:**
 
-4. **Transport-borne enrollment** — automate the hand-carried exchange over the sync folder,
-   which reinstates the enrollment fingerprint as the primary defense against a MITM substituting
+4. **Transport-borne enrolment** — automate the hand-carried exchange over the sync folder,
+   which reinstates the enrolment fingerprint as the primary defence against a MITM substituting
    their own key (see "Deferred to v1").
 5. **Revocation + `K_v` rotation:** slot removal, `K_v` rotation, re-encrypt all records, bump a
    keyring generation counter so stale copies are detectably outdated. This is the step that
@@ -740,10 +744,10 @@ slot wrap" above — needs **no interface change**:
 
 **v2:**
 
-6. **User-set `k ≥ 2` unlock** — only if a genuine independent second factor materializes on some
+6. **User-set `k ≥ 2` unlock** — only if a genuine independent second factor materialises on some
    platform (see "Why not k ≥ 2 (yet)"); otherwise this stays a rationale note indefinitely.
-7. **k-of-n threshold *enrollment*** (governance over who may extend the fleet — distinct from
-   `k`-of-`n` *unlock*, demoted above). Shamir-split enrollment key; adding a machine requires k
+7. **k-of-n threshold *enrolment*** (governance over who may extend the fleet — distinct from
+   `k`-of-`n` *unlock*, demoted above). Shamir-split enrolment key; adding a machine requires k
    approvals.
 
 ## Open questions
@@ -761,7 +765,7 @@ slot wrap" above — needs **no interface change**:
   same secret can still produce conflicted copies" story visible, without capping `n` in the
   format itself.
 
-Filename determinism (`HMAC(K_names, name)` vs. randomized-filename-plus-internal-id) is
+Filename determinism (`HMAC(K_names, name)` vs. randomised-filename-plus-internal-id) is
 **settled, not open** — see `REFACTORING_PLAN.md` §Phase 6 for the decision and reasoning; it's
 a record-format question, not a key-model one, so it lives there.
 
@@ -771,15 +775,15 @@ Recorded so the work isn't lost, and so it doesn't leak into v0 scope by acciden
 
 - **Fleet signing key `K_s`** (Ed25519), wrapped alongside `K_v` in every slot, so any machine
   that can unlock can sign. Resolves the keyring-authenticity question above (a device learns
-  `fleetSigPub` from its enrollment response; successfully decrypting `K_v` with it authenticates
-  the response) and gives "The landmine" section a secondary defense beyond AAD binding.
+  `fleetSigPub` from its enrolment response; successfully decrypting `K_v` with it authenticates
+  the response) and gives "The landmine" section a secondary defence beyond AAD binding.
 - **Rotation atomicity — the largest open design question in this entire doc.** A partially
   rotated record directory syncing against another, not-yet-rotated copy needs a rotation
   generation per record, a merge rule that tolerates mixed generations mid-rotation, and
   resumability if a rotation is interrupted. Must be fully settled before v1 writes a single
   rotated record — this is exactly the kind of byte-layout decision that cannot be retrofitted.
-- **Fingerprint confirmation becomes the primary control**, not defense-in-depth, once
-  transport-borne enrollment (v1, above) removes the manual-file-movement trust boundary. Neither
+- **Fingerprint confirmation becomes the primary control**, not defence-in-depth, once
+  transport-borne enrolment (v1, above) removes the manual-file-movement trust boundary. Neither
   the Secure Enclave nor a TPM helps here — hardware attestation proves *some* device is
   involved, not *your* device specifically. This is also a usable-security question in its own
   right (whether users actually compare a fingerprint rather than pressing enter has a real
@@ -789,11 +793,11 @@ Recorded so the work isn't lost, and so it doesn't leak into v0 scope by acciden
   until `K_v` is rotated and a fresh recovery keypair enrolled — see "Extension implies
   decryption" above for why this substitutes for revocation on a credential that structurally
   can't be revoked.
-- **Pinned monotonic epoch counter in local (unsynced) config**, as defense in depth alongside
+- **Pinned monotonic epoch counter in local (unsynced) config**, as defence in depth alongside
   rotation — an old keyring yields the old `K_v`, which decrypts nothing written since, so this
   is a belt-and-suspenders check, not where the real work happens.
-- **Non-extractable enrollment-key custody per backend.** A transient software key is fine for
+- **Non-extractable enrolment-key custody per backend.** A transient software key is fine for
   v1 — the exposure window is seconds, on the machine about to hold `K_v` anyway. Backing the
-  enrollment keypair with a non-extractable key (SE ECIES public key, Windows CNG public key) is
+  enrolment keypair with a non-extractable key (SE ECIES public key, Windows CNG public key) is
   a later hardening pass; the Linux TPM path would need a TPM-resident ECC key rather than the
   keyed-hash object `tpm2_create` produces today.

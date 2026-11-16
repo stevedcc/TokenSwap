@@ -83,7 +83,7 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
     {
         using var password = Password();
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (kek, hwBlob) = Bounded("wrap_v3", () => service.Enroll(password));
+        var (kek, hwBlob) = Bounded("wrap_v3", () => service.Enrol(password));
         Assert.True(SecureEnclaveSlotBlob.HasHeader(hwBlob));
 
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
@@ -165,7 +165,7 @@ public class SecureEnclavePasswordRoundTripTests(ITestOutputHelper output)
     {
         using var password = Password();
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = Bounded("wrap_v3", () => service.Enroll(password));
+        var (_, hwBlob) = Bounded("wrap_v3", () => service.Enrol(password));
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(package), RequiresTouch: false);

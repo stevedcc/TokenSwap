@@ -381,18 +381,18 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     // --- the plumbing below the CLI (decisions 2 and 4) ---
 
     [Fact]
-    public void Enrollment_OfAnotherBackendWithoutPresence_Throws()
+    public void Enrolment_OfAnotherBackendWithoutPresence_Throws()
     {
         var key = RandomNumberGenerator.GetBytes(32);
 
-        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.Tpm, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
-        Assert.Throws<ArgumentException>(() => HardwareServices.Enrollment(HardwareBackend.YubiKey, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
+        Assert.Throws<ArgumentException>(() => HardwareServices.Enrolment(HardwareBackend.Tpm, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
+        Assert.Throws<ArgumentException>(() => HardwareServices.Enrolment(HardwareBackend.YubiKey, key, SecureEnclaveOwnerScopeTests.NoSwitchScope(), requirePresence: false));
         Assert.Throws<ArgumentException>(() => new SimulatedHardwareService(HardwareBackend.Tpm, key, requirePresence: false));
     }
 
     [Fact]
-    public void Enrollment_WithoutTheParameter_RequiresPresence() =>
-        Assert.Equal(1, FlagOf(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enroll(password: null).HwBlob));
+    public void Enrolment_WithoutTheParameter_RequiresPresence() =>
+        Assert.Equal(1, FlagOf(HardwareServices.Enrolment(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), SecureEnclaveOwnerScopeTests.NoSwitchScope()).Enrol(password: null).HwBlob));
 
     [Theory]
     [InlineData(true)]
@@ -401,7 +401,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key, requirePresence: false);
-        var (kekSlot, blob) = service.Enroll(password: null);
+        var (kekSlot, blob) = service.Enrol(password: null);
         if (!withFlag)
             blob = blob[..^1]; // a blob made before the flag byte existed
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
@@ -415,7 +415,7 @@ public class SecureEnclaveTouchChoiceTests : IDisposable
     {
         var key = RandomNumberGenerator.GetBytes(32);
         var service = new SimulatedHardwareService(HardwareBackend.SecureEnclave, key);
-        var blob = service.Enroll(password: null).HwBlob;
+        var blob = service.Enrol(password: null).HwBlob;
         blob[^1] = 2;
         var config = new Config([], "", TestTime.Fixed, Backend: HardwareBackend.SecureEnclave,
             SecureEnclaveWrappedKey: Convert.ToBase64String(blob));

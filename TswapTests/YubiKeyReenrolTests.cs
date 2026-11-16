@@ -380,7 +380,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     /// <summary>
     /// Final review item 10 (p6-I3, p1-M3): an unlock that leaves a key out (UnlockExcluding, for its re-enrolment) never
     /// challenges it through a legacy pair slot either. Only the excluded key plugged in: refused, the key not
-    /// challenged, and the text says it is left out because it's being enrolled again (not "not authorized, expected:
+    /// challenged, and the text says it is left out because it's being enrolled again (not "not authorised, expected:
     /// it"). Both plugged in: the pair's other key alone opens the vault.
     /// </summary>
     [Fact]
@@ -398,7 +398,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
 
         Assert.Contains($"YubiKey {PairA} is left out of this unlock because it's being enrolled again, and the pair's " +
             $"other key ({PairB}) isn't plugged in.", ex.Message);
-        Assert.DoesNotContain("not authorized", ex.Message);
+        Assert.DoesNotContain("not authorised", ex.Message);
         Assert.Empty(m.Keys.Challenges);
 
         m.Keys.PluggedIn = [PairA, PairB];
@@ -410,7 +410,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
     }
 
     /// <summary>
-    /// Round 2, B (MiMo M-1): the excluded key isn't plugged in, another key is: the "not authorized" refusal doesn't ask
+    /// Round 2, B (MiMo M-1): the excluded key isn't plugged in, another key is: the "not authorised" refusal doesn't ask
     /// for the key being enrolled again as one to plug in.
     /// </summary>
     [Fact]
@@ -423,7 +423,7 @@ public sealed partial class YubiKeyReenrolTests : IDisposable
         var ex = Assert.ThrowsAny<TswapException>(() =>
             new VaultUnlocker(m.Keys).Unlock(config, YubiKeySelection.Unattended with { ExcludeSerial = PairA }));
 
-        Assert.Contains($"YubiKey {SerialT} not authorized. Expected: {PairB} (YubiKey {PairA} is left out because it's " +
+        Assert.Contains($"YubiKey {SerialT} not authorised. Expected: {PairB} (YubiKey {PairA} is left out because it's " +
             "being enrolled again).", ex.Message);
         Assert.DoesNotContain($"{PairA}, {PairB}", ex.Message);
         Assert.Empty(m.Keys.Challenges);

@@ -207,7 +207,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     {
         if (_detached)
             return _machineConfig!;
-        var config = TryReadMachineConfig() ?? throw new TswapException("Not initialized. Run: tswap init");
+        var config = TryReadMachineConfig() ?? throw new TswapException("Not initialised. Run: tswap init");
         if (config.Store != StoreName)
             throw new TswapException($"{ConfigFile} is not a record store's config (Store is not \"{StoreName}\").");
         if (config.Keyring is not null)

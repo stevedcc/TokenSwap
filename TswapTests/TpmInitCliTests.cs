@@ -13,7 +13,7 @@ namespace TswapTests;
 /// "machine" is a temp config dir plus its own test key, wired exactly like the composition
 /// root (<c>Program.cs</c>) wires a Debug build with <c>TSWAP_TEST_KEY</c> set:
 /// <see cref="HardwareServices.UnlockBackends"/> for unlock and, inside <c>InitCommand</c>,
-/// <see cref="HardwareServices.Enrollment"/> for enrollment.
+/// <see cref="HardwareServices.Enrolment"/> for enrolment.
 /// </summary>
 public class TpmInitCliTests : IDisposable
 {
@@ -246,7 +246,7 @@ public class TpmInitCliTests : IDisposable
         // Decision 2: single-slot TPM vaults made before this brief keep working unchanged: the
         // blob in TpmSealedKey recovers the vault key directly (no keyring).
         var dir = NewTempDir();
-        var (vaultKey, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, KeyA).Enroll(password: null);
+        var (vaultKey, blob) = new SimulatedHardwareService(HardwareBackend.Tpm, KeyA).Enrol(password: null);
         var storage = new Storage(dir);
         storage.SaveConfig(new Config([], "", TestTime.Fixed, RequiresTouch: false, RngMode: RngMode.System,
             Backend: HardwareBackend.Tpm, TpmSealedKey: Convert.ToBase64String(blob)));
@@ -455,14 +455,14 @@ public class TpmInitCliTests : IDisposable
         var approveFile = Path.Combine(desktopDir, "approve.json");
         Assert.Equal(0, Run(desktopDir, KeyB, "", "slot", "request", requestFile).ExitCode);
         Assert.Equal(0, Run(routerDir, KeyA, "", "slot", "approve", requestFile, approveFile).ExitCode);
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(File.ReadAllText(approveFile));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(File.ReadAllText(approveFile));
         var tampered = approve with
         {
             ExistingSlots = approve.ExistingSlots
                 .Select(d => d.Kind == SlotKind.Recovery ? d with { HwBlob = Convert.ToBase64String([1, 2, 3]) } : d)
                 .ToList(),
         };
-        File.WriteAllText(approveFile, SlotEnrollmentFileCodec.SerializeApprove(tampered));
+        File.WriteAllText(approveFile, SlotEnrolmentFileCodec.SerializeApprove(tampered));
         var pendingConfig = File.ReadAllText(Path.Combine(desktopDir, "config.json"));
 
         var (exit, _, stderr) = Run(desktopDir, KeyB, "", "slot", "accept", approveFile);

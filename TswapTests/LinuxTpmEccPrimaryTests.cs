@@ -89,8 +89,8 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     [Fact]
     public void NewSlot_WithoutPassword_HasBit1_AndUnseals()
     {
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (kek, hwBlob) = enrollment.Enroll(password: null);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (kek, hwBlob) = enrolment.Enrol(password: null);
 
         Assert.Equal([.. "TSTP"u8, 1, TpmSlotBlob.EccPrimary], hwBlob[..6]);
         Assert.Equal(kek, new LinuxTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0,
@@ -101,8 +101,8 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     public void NewSlot_WithPassword_HasBits0And1_AndUnseals()
     {
         using var password = Password(0x00);
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (kek, hwBlob) = enrollment.Enroll(password);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (kek, hwBlob) = enrolment.Enrol(password);
         var provided = 0;
 
         var recovered = new LinuxTpmHardwareService().Unlock(ConfigWith(hwBlob), _ => 0, () => { provided++; return password.Clone(); });
@@ -155,8 +155,8 @@ public sealed class LinuxTpmEccPrimaryTests(ITestOutputHelper output)
     [Fact]
     public void EccPackage_ThroughTheRsaPath_Fails()
     {
-        IHardwareEnrollmentService enrollment = new LinuxTpmHardwareService();
-        var (_, hwBlob) = enrollment.Enroll(password: null);
+        IHardwareEnrolmentService enrolment = new LinuxTpmHardwareService();
+        var (_, hwBlob) = enrolment.Enrol(password: null);
         var (_, _, package) = TpmSlotBlob.Split(hwBlob);
 
         var direct = Assert.Throws<TswapException>(() => Tpm2ToolsInterop.Unseal(package, eccPrimary: false));

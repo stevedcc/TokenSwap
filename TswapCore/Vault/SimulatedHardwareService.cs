@@ -9,11 +9,11 @@ namespace TswapCore.Vault;
 /// <see cref="TestKeyYubiKeyService"/> and following its precedent: it is only ever selected
 /// when the Debug-only <c>TSWAP_TEST_KEY</c> is set (see <c>TswapCli.HardwareServices</c>), and
 /// the test key is its "machine". It implements both seams, <see cref="IHardwareKeyService"/>
-/// and <see cref="IHardwareEnrollmentService"/>, for whichever <see cref="HardwareBackend"/> it
+/// and <see cref="IHardwareEnrolmentService"/>, for whichever <see cref="HardwareBackend"/> it
 /// is constructed with, so <c>init --tpm</c>, a TPM keyring vault and its unlock run end to
 /// end in CI.
 ///
-/// <para>It models the shape the Secure Enclave and TPM backends share: <see cref="Enroll"/>
+/// <para>It models the shape the Secure Enclave and TPM backends share: <see cref="Enrol"/>
 /// generates a random <c>KEK_slot</c> and wraps it into an opaque blob; <see cref="Unlock"/>
 /// reads that blob from where the real backend would and recovers <c>KEK_slot</c>. The wrap is
 /// AES-256-GCM under <paramref name="machineKey"/> (<c>nonce(12) || tag(16) || ciphertext</c>),
@@ -46,7 +46,7 @@ namespace TswapCore.Vault;
 /// password-free blob. The Windows layout (a header-less package, <c>0x01</c>) is covered by the real Windows TPM
 /// tests only.</para>
 /// </summary>
-public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
+public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnrolmentService
 {
     private const int KeySize = 32;
     private static readonly int NonceSize = AesGcm.NonceByteSizes.MaxSize;
@@ -62,9 +62,9 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     private static readonly AsyncLocal<Action<HardwareBackend, string>?> CallObserver = new();
 
     /// <summary>
-    /// Brief T12 test seam: until the result is disposed, every <see cref="Enroll"/> and
+    /// Brief T12 test seam: until the result is disposed, every <see cref="Enrol"/> and
     /// <see cref="Unlock"/> made in the caller's async flow first calls <paramref name="observer"/>
-    /// with this service's backend and the call's name (<c>"Enroll"</c>, <c>"Unlock"</c>), so a
+    /// with this service's backend and the call's name (<c>"Enrol"</c>, <c>"Unlock"</c>), so a
     /// test can see the identity a call ran as. Flow-local, so parallel tests don't see each other.
     /// </summary>
     public static IDisposable ObserveCalls(Action<HardwareBackend, string> observer)
@@ -81,7 +81,7 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
 
     /// <param name="requirePresence">
     /// Brief T11: false only for a Secure Enclave enrolled with <c>--no-touch</c>; any other backend
-    /// without presence throws, as <c>HardwareServices.Enrollment</c> does.
+    /// without presence throws, as <c>HardwareServices.Enrolment</c> does.
     /// </param>
     public SimulatedHardwareService(HardwareBackend backend, byte[] machineKey, bool requirePresence = true)
     {
@@ -102,9 +102,9 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
     /// Generates a random <c>KEK_slot</c> and wraps it to this simulated machine; with
     /// <paramref name="password"/>, to the machine and the password (brief T17).
     /// </summary>
-    public HardwareEnrollment Enroll(StretchedPassword? password)
+    public HardwareEnrolment Enrol(StretchedPassword? password)
     {
-        CallObserver.Value?.Invoke(Backend, nameof(Enroll));
+        CallObserver.Value?.Invoke(Backend, nameof(Enrol));
         var kekSlot = RandomNumberGenerator.GetBytes(KeySize);
 
         var blob = new byte[NonceSize + TagSize + kekSlot.Length + 1 + (password is null ? 0 : 1)];
@@ -124,13 +124,13 @@ public sealed class SimulatedHardwareService : IHardwareKeyService, IHardwareEnr
         if (password is null)
         {
             blob[^1] = _requirePresence ? PresenceFlag : (byte)0; // the test seam (brief T11 decision 5)
-            return new HardwareEnrollment(kekSlot,
+            return new HardwareEnrolment(kekSlot,
                 Backend == HardwareBackend.Tpm ? TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary) : blob);
         }
 
         blob[^2] = _requirePresence ? PresenceFlag : (byte)0;
         blob[^1] = NeedsPasswordMarker;
-        return new HardwareEnrollment(kekSlot, Backend switch
+        return new HardwareEnrolment(kekSlot, Backend switch
         {
             HardwareBackend.Tpm => TpmSlotBlob.Wrap(blob, TpmSlotBlob.EccPrimary | TpmSlotBlob.Password),
             HardwareBackend.SecureEnclave => SecureEnclaveSlotBlob.Wrap(blob),

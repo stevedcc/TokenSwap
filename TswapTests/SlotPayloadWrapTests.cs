@@ -9,7 +9,7 @@ namespace TswapTests;
 /// exact AAD encoding (<see cref="SlotPayloadWrap.BuildAad"/>) for known inputs, not just
 /// round-tripping. Tamper tests flip one AAD-bound field at a time after wrapping to prove each
 /// field is actually mixed into the AEAD call, not just present in a parameter list that isn't
-/// wired up — this is the primary defense against the threshold-downgrade attack described in
+/// wired up — this is the primary defence against the threshold-downgrade attack described in
 /// <c>docs/design/multi-machine-keying.md</c> §The landmine.
 /// </summary>
 public class SlotPayloadWrapTests

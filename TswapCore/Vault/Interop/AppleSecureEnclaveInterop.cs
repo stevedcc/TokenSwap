@@ -189,7 +189,7 @@ internal static partial class AppleSecureEnclaveInterop
     }
 
     /// <summary>
-    /// Enrollment: creates a new Secure Enclave key and ECIES-wraps <paramref name="plaintextKey"/>
+    /// Enrolment: creates a new Secure Enclave key and ECIES-wraps <paramref name="plaintextKey"/>
     /// to it. <paramref name="requirePresence"/> is fixed into the key's access control: true,
     /// every unwrap prompts for Touch ID or the login password; false, no prompt (brief T11). It
     /// can't be changed or read back from the key later.

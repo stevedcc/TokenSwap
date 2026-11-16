@@ -83,13 +83,13 @@ public class SlotStdioTests : IDisposable
     {
         var request = Request();
         var requestText = File.ReadAllText(request);
-        var publicKey = Convert.FromBase64String(SlotEnrollmentFileCodec.DeserializeRequest(requestText).PublicKey);
+        var publicKey = Convert.FromBase64String(SlotEnrolmentFileCodec.DeserializeRequest(requestText).PublicKey);
 
         var (exit, stdout, stderr) = _host.Run(requestText, "slot", "approve", "-", "-");
 
         Assert.True(exit == 0, stderr);
         // Nothing before or after the file: parsing and re-serialising gives the very same text (untrimmed).
-        Assert.Equal(SlotEnrollmentFileCodec.SerializeApprove(SlotEnrollmentFileCodec.DeserializeApprove(stdout)), stdout);
+        Assert.Equal(SlotEnrolmentFileCodec.SerializeApprove(SlotEnrolmentFileCodec.DeserializeApprove(stdout)), stdout);
         Assert.Contains($"Requesting machine's slot fingerprint: {SlotFingerprint.Compute(publicKey)}", stderr);
         Assert.Contains("✓ Approved", stderr);
 
@@ -119,7 +119,7 @@ public class SlotStdioTests : IDisposable
         var (exit, stdout, stderr) = _host.Run("", "slot", "approve", request, "-");
 
         Assert.True(exit == 0, stderr);
-        Assert.Equal(SlotEnrollmentFileCodec.SerializeApprove(SlotEnrollmentFileCodec.DeserializeApprove(stdout)), stdout);
+        Assert.Equal(SlotEnrolmentFileCodec.SerializeApprove(SlotEnrolmentFileCodec.DeserializeApprove(stdout)), stdout);
         Assert.Contains("✓ Approved. Approve file written to stdout.", stderr);
         Assert.Contains($"Read slot request from: {request}", stderr);
         Accept(stdout);
@@ -297,7 +297,7 @@ public class SlotStdioTests : IDisposable
 
         public string? ReadLine() => _in.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => _in.ReadLine() ?? "";
-        public void SetForeground(ConsoleColor color) { }
+        public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }
 
         private sealed class ThrowingReader : TextReader

@@ -97,7 +97,7 @@ public static class BrokerControlClient
             PeerPolicy.BrokerServerUidAndLabel(ownerUid), StatusResponseTimeout);
 
     private static BrokerControlAnswer Send(BrokerControlOp op, string path, byte[] frame, PeerPolicy policy, TimeSpan responseTimeout) =>
-        // The CLI is synchronous; run the socket work off any caller's synchronization context.
+        // The CLI is synchronous; run the socket work off any caller's synchronisation context.
         Task.Run(() => SendAsync(op, path, frame, policy, responseTimeout)).GetAwaiter().GetResult();
 
     private static async Task<BrokerControlAnswer> SendAsync(BrokerControlOp op, string path, byte[] frame, PeerPolicy policy,

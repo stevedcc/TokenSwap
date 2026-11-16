@@ -9,7 +9,7 @@ namespace TswapTests;
 /// <summary>
 /// Proves the simulated hardware backend (and the YubiKey test key with it) cannot be selected
 /// in a Release build (issue #153, brief T2 item 2). The selection is
-/// <c>HardwareServices.UnlockBackends(testKey, scope)</c> / <c>Enrollment(backend, testKey, scope)</c>, which
+/// <c>HardwareServices.UnlockBackends(testKey, scope)</c> / <c>Enrolment(backend, testKey, scope)</c>, which
 /// pick <see cref="SimulatedHardwareService"/> only for a non-null test key; the test key comes
 /// only from <c>HardwareServices.ReadTestKey</c>. This test builds <c>TswapCli</c> in Release,
 /// loads that assembly into its own load context and calls its <c>ReadTestKey</c> with

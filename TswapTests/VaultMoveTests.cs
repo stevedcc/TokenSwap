@@ -190,7 +190,7 @@ public sealed class VaultMoveTests : IDisposable
         var (exit, _, stderr) = empty.Run("", "vault", "move", target);
 
         Assert.Equal(1, exit);
-        Assert.Contains("Not initialized. Run: tswap init", stderr);
+        Assert.Contains("Not initialised. Run: tswap init", stderr);
         Assert.False(Directory.Exists(target));
         Assert.False(File.Exists(empty.ConfigPath));
     }

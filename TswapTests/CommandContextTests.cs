@@ -6,7 +6,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// T7 fix round 1 (MiMo): CommandContext's lazily opened store. Its field initializer captures the
+/// T7 fix round 1 (MiMo): CommandContext's lazily opened store. Its field initialiser captures the
 /// primary constructor's Storage parameter; bound to the Storage property instead it would recurse.
 /// </summary>
 public class CommandContextTests

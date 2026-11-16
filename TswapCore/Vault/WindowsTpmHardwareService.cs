@@ -25,7 +25,7 @@ namespace TswapCore.Vault;
 /// <see cref="Keyring.Slot.HwBlob"/> and protects that slot's <c>KEK_slot</c>; it is versioned by
 /// the keyring's AEAD-bound format version. In a single-slot vault made before keyring vaults it
 /// is the legacy, unversioned <see cref="Config.TpmSealedKey"/> and protects the vault key itself.
-/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enroll"/> produces it.</para>
+/// <see cref="HardwareBlobLocator"/> picks the right one; <see cref="Enrol"/> produces it.</para>
 ///
 /// <para><b>Status: developed and tested only against this machine's (virtual) TPM in a
 /// Parallels VM, not yet verified against physical TPM hardware</b> — see
@@ -37,7 +37,7 @@ namespace TswapCore.Vault;
 /// tpm vault.</para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrollmentService
+public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwareEnrolmentService
 {
     /// <summary>Whether this machine can use the chip (a cheap presence check; creates no key). Lets the CLI probe without naming the interop.</summary>
     public static bool IsAvailable() => PlatformCryptoProviderInterop.IsAvailable();
@@ -46,21 +46,21 @@ public sealed class WindowsTpmHardwareService : TpmHardwareServiceBase, IHardwar
     public static (bool Available, string? Reason) Probe() => PlatformCryptoProviderInterop.Probe();
 
     /// <summary>
-    /// Enrollment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
+    /// Enrolment seam (issue #151): generates a random <c>KEK_slot</c> and wraps it to a fresh
     /// TPM-backed key via <see cref="Wrap"/>. The returned blob is useless off this machine.
     /// </summary>
-    public HardwareEnrollment Enroll(StretchedPassword? password)
+    public HardwareEnrolment Enrol(StretchedPassword? password)
     {
         var kekSlot = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         // Brief T17 task 9: a password slot's key carries the stretched password as its PCP_USAGEAUTH,
         // and its blob the TSTP header (ruling 3).
         return password is null
-            ? new HardwareEnrollment(kekSlot, Wrap(kekSlot))
-            : new HardwareEnrollment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password), TpmSlotBlob.Password));
+            ? new HardwareEnrolment(kekSlot, Wrap(kekSlot))
+            : new HardwareEnrolment(kekSlot, TpmSlotBlob.Wrap(PlatformCryptoProviderInterop.Wrap(kekSlot, password), TpmSlotBlob.Password));
     }
 
     /// <summary>
-    /// Enrollment side: wraps <paramref name="plaintextKey"/> (the vault key) to a fresh
+    /// Enrolment side: wraps <paramref name="plaintextKey"/> (the vault key) to a fresh
     /// TPM-backed key. The returned blob is useless off this machine.
     /// </summary>
     public byte[] Wrap(byte[] plaintextKey) => PlatformCryptoProviderInterop.Wrap(plaintextKey);

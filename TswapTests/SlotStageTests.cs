@@ -13,7 +13,7 @@ namespace TswapTests;
 /// Brief T28 task 1: <c>slot stage &lt;id&gt; put|get|clean</c>, the host's staging folder
 /// (<c>&lt;config dir&gt;/enrol-staged/&lt;id&gt;/</c>), and <c>slot approve|merge --staged &lt;id&gt; --expect &lt;sha256&gt;</c>.
 /// The joining machine (<see cref="_joiner"/>, YubiKey B) and the host (<see cref="_host"/>, a vault opened by YubiKey A)
-/// each have their own config folder and keys, as in <see cref="SlotEnrollTests"/>. <c>stage</c> runs as the SSH user
+/// each have their own config folder and keys, as in <see cref="SlotEnrolTests"/>. <c>stage</c> runs as the SSH user
 /// (no sudo bypass); approve and merge run with the sudo bypass, as under <c>sudo</c>.
 /// </summary>
 public class SlotStageTests : IDisposable
@@ -80,7 +80,7 @@ public class SlotStageTests : IDisposable
         }
     }
 
-    private static string SlotIdOf(string requestText) => SlotEnrollmentFileCodec.DeserializeRequest(requestText).SlotId;
+    private static string SlotIdOf(string requestText) => SlotEnrolmentFileCodec.DeserializeRequest(requestText).SlotId;
 
     private static bool IsApproved(FleetMachine host, string slotId) => host.Config.ApprovedSlots?.Any(a => a.SlotId == slotId) == true;
 
@@ -124,11 +124,11 @@ public class SlotStageTests : IDisposable
         var (getExit, approve, getErr) = Stage(_host, "", Id, "get", "approve");
         Assert.True(getExit == 0, getErr);
         // Nothing before or after the file: parsing and re-serialising gives the very same text (untrimmed).
-        Assert.Equal(SlotEnrollmentFileCodec.SerializeApprove(SlotEnrollmentFileCodec.DeserializeApprove(approve)), approve);
+        Assert.Equal(SlotEnrolmentFileCodec.SerializeApprove(SlotEnrolmentFileCodec.DeserializeApprove(approve)), approve);
         Assert.True(IsApproved(_host, SlotIdOf(request)));
 
         // The staged closing lines (A3): the requester's fingerprint as the file form prints it, then the approve file's.
-        var publicKey = Convert.FromBase64String(SlotEnrollmentFileCodec.DeserializeRequest(request).PublicKey);
+        var publicKey = Convert.FromBase64String(SlotEnrolmentFileCodec.DeserializeRequest(request).PublicKey);
         Assert.Contains($"Requesting machine's slot fingerprint: {SlotFingerprint.Compute(publicKey)}", stdout);
         Assert.Contains("✓ Approved. The joining machine collects the approve file next.", stdout);
         Assert.Equal($"Approve file fingerprint: {SlotFingerprint.Compute(Encoding.UTF8.GetBytes(approve))}",
@@ -259,11 +259,11 @@ public class SlotStageTests : IDisposable
         Assert.True(exit == 0, stderr + stdout);
         _host.StagedSeams = null;
         var approve = Stage(_host, "", Id, "get", "approve").Out;
-        Assert.Equal(SlotIdOf(request), SlotEnrollmentFileCodec.DeserializeApprove(approve).NewSlotId);
+        Assert.Equal(SlotIdOf(request), SlotEnrolmentFileCodec.DeserializeApprove(approve).NewSlotId);
         Assert.True(IsApproved(_host, SlotIdOf(request)));
         Assert.False(IsApproved(_host, SlotIdOf(other)));
         Assert.DoesNotContain(SlotIdOf(other), approve);
-        Assert.DoesNotContain(SlotEnrollmentFileCodec.DeserializeRequest(other).PublicKey, approve);
+        Assert.DoesNotContain(SlotEnrolmentFileCodec.DeserializeRequest(other).PublicKey, approve);
         Accept(_joiner, approve); // the joiner's own request was approved
     }
 

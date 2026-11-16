@@ -102,9 +102,9 @@ the vault is open, would hand code running as you root and every secret. So:
 YubiKeys never go through libfido2 on Linux and macOS (Yubico's SDK, built into the binary, handles
 them; libfido2 skips Yubico's USB vendor id), so none of this applies to them.
 
-### Enrolling over SSH: what `slot enroll --via` trusts
+### Enrolling over SSH: what `slot enrol --via` trusts
 
-`tswap slot enroll --via <user@host>` ([multi-machine.md](multi-machine.md#enrolling-over-ssh)) runs
+`tswap slot enrol --via <user@host>` ([multi-machine.md](multi-machine.md#enrolling-over-ssh)) runs
 `slot request` and `slot accept` on the new machine without sudo, and approve and merge on the host
 over SSH, under the host's sudo. By default the host's approve and merge run on a terminal of their own
 (`ssh -t`), so the host's sudo and vault can ask there, and the files go through a staging folder on the

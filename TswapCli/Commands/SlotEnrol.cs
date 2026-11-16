@@ -8,7 +8,7 @@ using TswapCore.Keyring;
 namespace TswapCli.Commands;
 
 /// <summary>
-/// Brief T27 (issue #191): <c>slot enroll --via &lt;destination&gt;</c>, run on the joining machine: the four hand-carried
+/// Brief T27 (issue #191): <c>slot enrol --via &lt;destination&gt;</c>, run on the joining machine: the four hand-carried
 /// steps with approve and merge carried over SSH (<see cref="CommandContext.Ssh"/>). In order: the argument and machine
 /// state checks; a pre-flight <c>--version</c> on the host; <c>slot request</c> here, into the enrolment folder
 /// <c>&lt;config dir&gt;/enrol/&lt;8 hex of the slot id&gt;/</c>; approve on the host; <c>slot accept</c> here; merge on the
@@ -36,21 +36,21 @@ public sealed partial class SlotCommand
     [GeneratedRegex(@"^[A-Za-z0-9_./:\\-]+$")]
     private static partial Regex RemoteProgramPattern();
 
-    /// <summary>The help form of <c>slot enroll</c>, shared by <see cref="Forms"/> and its own usage.</summary>
-    private static string EnrollForm =>
-        $"slot enroll --via <user@host> [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} " +
+    /// <summary>The help form of <c>slot enrol</c>, shared by <see cref="Forms"/> and its own usage.</summary>
+    private static string EnrolForm =>
+        $"slot enrol --via <user@host> [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} " +
         "[--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh] [--batch]";
 
-    private static string EnrollUsage(CommandContext ctx) => $"{ctx.Prefix} {EnrollForm}";
+    private static string EnrolUsage(CommandContext ctx) => $"{ctx.Prefix} {EnrolForm}";
 
-    /// <summary>The refusal of an interactive <c>enroll</c> without a local terminal.</summary>
+    /// <summary>The refusal of an interactive <c>enrol</c> without a local terminal.</summary>
     internal const string NeedsTerminalText =
-        "slot enroll needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add " +
+        "slot enrol needs a terminal here, because the host's sudo and vault may ask for a password. In a script, add " +
         "--batch (the host then must need no password: docs/multi-machine.md#enrolling-over-ssh). Nothing was changed.";
 
-    private static int ExecuteEnroll(CommandContext ctx, string[] args)
+    private static int ExecuteEnrol(CommandContext ctx, string[] args)
     {
-        var usage = EnrollUsage(ctx);
+        var usage = EnrolUsage(ctx);
         // --- the arguments: every refusal slot request would make with the same flags, before anything else ---
         (args, var requirePresence) = SecureEnclaveTouchChoice.Split(args, usage);
         (args, var passwordFlag) = VaultPasswordChoice.Split(args, usage);
@@ -73,13 +73,13 @@ public sealed partial class SlotCommand
                 "\n--remote-tswap names the program on the host: letters, digits and _ . / : \\ - only, not starting with '-'.");
         HardwareBackend? backend = tpm ? HardwareBackend.Tpm : secureEnclave ? HardwareBackend.SecureEnclave : null;
         if (backend is { } hardware)
-            HardwareServices.Enrollment(hardware, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true); // refuses an OS without it
+            HardwareServices.Enrolment(hardware, ctx.TestKey, ctx.OwnerScope, requirePresence ?? true); // refuses an OS without it
         // Brief T28: the interactive default hands the host's commands this terminal; a script says --batch.
         if (!batch && (ctx.Console.IsInputRedirected || ctx.Console.IsOutputRedirected))
             throw new TswapException(NeedsTerminalText);
 
         var c = ctx.Console;
-        var fileStore = ctx.Storage as IFileVaultStore ?? throw new TswapException("'slot enroll' needs a file-based config.");
+        var fileStore = ctx.Storage as IFileVaultStore ?? throw new TswapException("'slot enrol' needs a file-based config.");
         var enrolRoot = Path.Combine(fileStore.ConfigDir, EnrolFolderName);
         var hostTswap = noRemoteSudo ? remoteProgram : $"sudo {remoteProgram}";
 
@@ -91,9 +91,9 @@ public sealed partial class SlotCommand
             var kept = EnrolmentFolder(enrolRoot, DecodePending(pendingId, "slot id"));
             if (!File.Exists(Path.Combine(kept, RequestFileName)))
                 throw new TswapException(
-                    "This machine has a pending slot request that 'slot enroll' has no files for. If you still have its request file, " +
+                    "This machine has a pending slot request that 'slot enrol' has no files for. If you still have its request file, " +
                     "finish it by hand (slot approve on the vault's machine, then slot accept here); otherwise, or to start over, " +
-                    $"run '{ctx.Prefix} slot enroll ... --fresh'.");
+                    $"run '{ctx.Prefix} slot enrol ... --fresh'.");
             if (!PendingMatches(existing, backend, requirePresence, passwordFlag))
                 throw new TswapException(
                     $"This machine's pending enrolment is for {PendingDevice(existing, qualified: true)}, not what this command names. " +
@@ -116,7 +116,7 @@ public sealed partial class SlotCommand
         }
     }
 
-    /// <summary>What every step of one <c>enroll</c> run needs: the context, the destination and the host's program.</summary>
+    /// <summary>What every step of one <c>enrol</c> run needs: the context, the destination and the host's program.</summary>
     private sealed record EnrolRun(CommandContext Ctx, string Via, string RemoteProgram, string HostTswap, bool NoRemoteSudo);
 
     /// <summary>
@@ -150,7 +150,7 @@ public sealed partial class SlotCommand
         if (approveFailure is not null)
             throw new TswapException(
                 $"The host didn't approve the request ({approveFailure}). This machine's pending request is kept; nothing was added on " +
-                $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enroll' again (it continues from the kept request), or " +
+                $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enrol' again (it continues from the kept request), or " +
                 $"carry {requestFile} to the host and run '{hostTswap} slot approve - - < request.json > approve.json' there, then " +
                 $"'{ctx.Prefix} slot accept approve.json' here.");
 
@@ -169,7 +169,7 @@ public sealed partial class SlotCommand
             throw new TswapException(
                 $"This machine has its copy of the vault, but {via} didn't add the slot ({mergeFailure}), so the host's own keyring " +
                 $"doesn't know it yet. Carry {receiptFile} to the host and run '{hostTswap} slot merge - < receipt.json' there. Running " +
-                "'slot enroll' again would start a new enrolment; the kept receipt is the way to finish this one.");
+                "'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one.");
         // The host's merge output, labelled as the host's.
         c.Out.WriteLine();
         SshRelay.WriteLines(c.Out, via, Encoding.UTF8.GetString(merge!.Stdout));
@@ -212,7 +212,7 @@ public sealed partial class SlotCommand
 
         TswapException ApproveFailed(string reason) => new(
             $"The host didn't approve the request ({reason}){versionNote}. This machine's pending request is kept; nothing was added on " +
-            $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enroll' again (it continues from the kept request), or " +
+            $"{via}. Fix the cause above and run the same '{ctx.Prefix} slot enrol' again (it continues from the kept request), or " +
             $"carry {requestFile} to the host and run '{hostTswap} slot approve request.json approve.json' there, then " +
             $"'{ctx.Prefix} slot accept approve.json' here." + cleanSentence);
 
@@ -250,7 +250,7 @@ public sealed partial class SlotCommand
             File.Delete(approveFile);
             throw new TswapException(
                 $"The approve file's fingerprint wasn't confirmed, so it was not accepted. This machine's pending request is kept; nothing " +
-                $"was added on {via}. Run the same '{ctx.Prefix} slot enroll' again to have it approved again (it continues from the kept " +
+                $"was added on {via}. Run the same '{ctx.Prefix} slot enrol' again to have it approved again (it continues from the kept " +
                 $"request); the host's staging folder is left: remove it with '{clean}' there.");
         }
 
@@ -265,7 +265,7 @@ public sealed partial class SlotCommand
         TswapException MergeFailed(string reason) => new(
             $"This machine has its copy of the vault, but {via} didn't add the slot ({reason}){versionNote}, so the host's own keyring " +
             $"doesn't know it yet. Carry {receiptFile} to the host and run '{hostTswap} slot merge receipt.json' there. Running " +
-            "'slot enroll' again would start a new enrolment; the kept receipt is the way to finish this one." + cleanSentence);
+            "'slot enrol' again would start a new enrolment; the kept receipt is the way to finish this one." + cleanSentence);
         var receipt = File.ReadAllBytes(receiptFile);
         if (Batch(ctx, via, [.. plain, "slot", "stage", id, "put", "receipt"], receipt) is { } putReceiptFailure)
             throw MergeFailed(putReceiptFailure);
@@ -337,7 +337,7 @@ public sealed partial class SlotCommand
             throw new TswapException(
                 $"The pending request was saved but its request file was not written ({OneLine(ex.Message)})" +
                 (hooks.BackupPath is null ? "" : $"; the previous config was backed up to {hooks.BackupPath}") +
-                $". Run '{ctx.Prefix} slot enroll ... --fresh' to start over, or '{ctx.Prefix} slot request <file>' by hand.");
+                $". Run '{ctx.Prefix} slot enrol ... --fresh' to start over, or '{ctx.Prefix} slot request <file>' by hand.");
         }
         if (hooks.Declined)
         {
@@ -388,7 +388,7 @@ public sealed partial class SlotCommand
             if (vaultDir is null)
                 throw new TswapException(
                     $"{ex.Message}\nThis machine has joined the vault but no receipt was written, so {via} doesn't know the slot. Run " +
-                    $"'{ctx.Prefix} slot enroll ... --fresh' for a new enrolment (the simplest way), or have the host merge this machine's " +
+                    $"'{ctx.Prefix} slot enrol ... --fresh' for a new enrolment (the simplest way), or have the host merge this machine's " +
                     $"vault folder with 'sudo {ctx.Prefix} vault merge <folder>' (that needs sudo beyond the three-command rule)." + cleanNote, exitCode);
             ctx.Console.Error.WriteLine($"Note: slot accept: {ex.Message}");
             ctx.Console.Out.WriteLine($"This machine has joined the shared vault folder {Path.GetFullPath(vaultDir)}; its keyring already has the new " +
@@ -442,7 +442,7 @@ public sealed partial class SlotCommand
     {
         try
         {
-            SlotEnrollmentFileCodec.DeserializeApprove(Encoding.UTF8.GetString(bytes));
+            SlotEnrolmentFileCodec.DeserializeApprove(Encoding.UTF8.GetString(bytes));
             return true;
         }
         catch (TswapException)
@@ -480,7 +480,7 @@ public sealed partial class SlotCommand
             var text = Encoding.UTF8.GetString(result.Stdout);
             try
             {
-                SlotEnrollmentFileCodec.DeserializeApprove(text);
+                SlotEnrolmentFileCodec.DeserializeApprove(text);
             }
             catch (TswapException)
             {

@@ -4,12 +4,12 @@ using System.Security.Cryptography;
 namespace TswapCore.Keyring;
 
 /// <summary>
-/// A YubiKey slot's recorded touch policy (slot 2's "require touch" setting at enrollment).
+/// A YubiKey slot's recorded touch policy (slot 2's "require touch" setting at enrolment).
 /// Explicit byte values: <see cref="YubiKeySlotBlob"/> persists this as a raw byte.
 /// </summary>
 public enum YubiKeyTouchPolicy : byte
 {
-    /// <summary>Detection failed at enrollment (for example the slot could not be read).</summary>
+    /// <summary>Detection failed at enrolment (for example the slot could not be read).</summary>
     Unknown = 0,
     NotRequired = 1,
     Required = 2,

@@ -30,6 +30,6 @@ public interface IConsole
     /// </summary>
     string ReadPassword(TextWriter? echo = null);
 
-    void SetForeground(ConsoleColor color);
+    void SetForeground(ConsoleColor colour);
     void ResetColor();
 }

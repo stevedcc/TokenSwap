@@ -171,7 +171,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Ok(dir, Root(), "", "init", "--secure-enclave", touch);
 
-        AssertSecureEnclaveCallsRanAsTheOwner("Enroll", dir);
+        AssertSecureEnclaveCallsRanAsTheOwner("Enrol", dir);
         Ok(dir, null, "ok\nok\n", "add", "check");
         Assert.Equal("ok", Ok(dir, null, "", "get", "check").Trim());
     }
@@ -183,7 +183,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Ok(dir, Root(), "", "slot", "request", "--secure-enclave", "--with-touch", Path.Combine(dir, "request.json"));
 
-        AssertSecureEnclaveCallsRanAsTheOwner("Enroll", dir);
+        AssertSecureEnclaveCallsRanAsTheOwner("Enrol", dir);
         Assert.NotNull(LoadConfig(dir).PendingSlotHwBlob);
     }
 
@@ -196,7 +196,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Ok(dir, Root(), recoveryKey + "\n", "recover", "--secure-enclave", "--with-touch");
 
-        AssertSecureEnclaveCallsRanAsTheOwner("Enroll", dir);
+        AssertSecureEnclaveCallsRanAsTheOwner("Enrol", dir);
         Assert.Equal(HardwareBackend.SecureEnclave, LoadConfig(dir).Backend);
         Assert.Equal("router-pw", Ok(dir, null, "", "get", "router").Trim());
     }
@@ -231,7 +231,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         var value = Ok(dir, Root(), "", "get", "router").Trim();
 
         Assert.Equal("pw", value);
-        Assert.Contains(_calls, c => c.Backend == HardwareBackend.Tpm && c.Call == "Enroll");
+        Assert.Contains(_calls, c => c.Backend == HardwareBackend.Tpm && c.Call == "Enrol");
         Assert.Contains(_calls, c => c.Backend == HardwareBackend.Tpm && c.Call == "Unlock");
         Assert.All(_calls, c => Assert.Equal(HardwareBackend.Tpm, c.Backend));
         Assert.All(_calls, c => Assert.Null(c.As));
@@ -478,16 +478,16 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
 
         Ok(dir, fake, "", "init", "--secure-enclave", "--with-touch");
 
-        var enroll = Assert.Single(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Enroll");
-        Assert.Equal((UserUid, UserGid), enroll.As);
-        Assert.Equal(ConfigJson(dir), enroll.SwitchPath);
+        var enrol = Assert.Single(_calls, c => c.Backend == HardwareBackend.SecureEnclave && c.Call == "Enrol");
+        Assert.Equal((UserUid, UserGid), enrol.As);
+        Assert.Equal(ConfigJson(dir), enrol.SwitchPath);
         Ok(dir, null, "ok\nok\n", "add", "check");
         Assert.Equal("ok", Ok(dir, null, "", "get", "check").Trim());
     }
 
     // MiMo 6: Backend and IsSimulated touch no hardware, so they never enter the scope.
     [Fact]
-    public void Decorator_BackendAndIsSimulated_NeverEnterTheScope_EnrollDoes()
+    public void Decorator_BackendAndIsSimulated_NeverEnterTheScope_EnrolDoes()
     {
         var opened = 0;
         var scope = new VaultOwnerScope(() => { opened++; return new Storage(_root); });
@@ -498,7 +498,7 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         _ = se.IsSimulated;
         Assert.Equal(0, opened);
 
-        ((IHardwareEnrollmentService)se).Enroll(password: null);
+        ((IHardwareEnrolmentService)se).Enrol(password: null);
         Assert.Equal(1, opened);
     }
 
@@ -513,16 +513,16 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
         var backends = HardwareServices.UnlockBackends(key, scope);
         var se = Assert.Single(backends, b => b.Backend == HardwareBackend.SecureEnclave);
         var tpm = Assert.Single(backends, b => b.Backend == HardwareBackend.Tpm);
-        var enrollSe = HardwareServices.Enrollment(HardwareBackend.SecureEnclave, key, scope);
-        var enrollTpm = HardwareServices.Enrollment(HardwareBackend.Tpm, key, scope);
+        var enrolSe = HardwareServices.Enrolment(HardwareBackend.SecureEnclave, key, scope);
+        var enrolTpm = HardwareServices.Enrolment(HardwareBackend.Tpm, key, scope);
 
         Assert.IsType<OwnerScopedHardwareService>(se);
         Assert.True(se.IsSimulated);
-        Assert.IsType<OwnerScopedHardwareService>(enrollSe);
-        Assert.Equal(HardwareBackend.SecureEnclave, enrollSe.Backend);
-        Assert.True(enrollSe.IsSimulated);
+        Assert.IsType<OwnerScopedHardwareService>(enrolSe);
+        Assert.Equal(HardwareBackend.SecureEnclave, enrolSe.Backend);
+        Assert.True(enrolSe.IsSimulated);
         Assert.IsNotType<OwnerScopedHardwareService>(tpm);
-        Assert.IsNotType<OwnerScopedHardwareService>(enrollTpm);
+        Assert.IsNotType<OwnerScopedHardwareService>(enrolTpm);
     }
 
     [Fact]
@@ -537,12 +537,12 @@ public sealed class SecureEnclaveOwnerScopeTests : IDisposable
             var se = Assert.Single(backends, b => b.Backend == HardwareBackend.SecureEnclave);
             Assert.IsType<OwnerScopedHardwareService>(se);
             Assert.False(se.IsSimulated);
-            Assert.IsType<OwnerScopedHardwareService>(HardwareServices.Enrollment(HardwareBackend.SecureEnclave, null, scope));
+            Assert.IsType<OwnerScopedHardwareService>(HardwareServices.Enrolment(HardwareBackend.SecureEnclave, null, scope));
         }
         else
         {
             Assert.DoesNotContain(backends, b => b.Backend == HardwareBackend.SecureEnclave);
-            Assert.Throws<TswapException>(() => HardwareServices.Enrollment(HardwareBackend.SecureEnclave, null, scope));
+            Assert.Throws<TswapException>(() => HardwareServices.Enrolment(HardwareBackend.SecureEnclave, null, scope));
         }
         Assert.DoesNotContain(backends, b => b is OwnerScopedHardwareService && b.Backend != HardwareBackend.SecureEnclave);
     }

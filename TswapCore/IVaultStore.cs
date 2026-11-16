@@ -16,7 +16,7 @@ namespace TswapCore;
 /// </summary>
 public interface IVaultStore
 {
-    /// <summary>Loads and deserializes the vault config. Throws if not initialized.</summary>
+    /// <summary>Loads and deserialises the vault config. Throws if not initialised.</summary>
     Config LoadConfig();
 
     /// <summary>Persists the vault config.</summary>
@@ -38,7 +38,7 @@ public interface IVaultStore
 /// An <see cref="IVaultStore"/> that is backed by plain files on disk, and is willing
 /// to say so. The three path members exist for the few commands that manage those
 /// files directly (e.g. <c>init</c> backing up the previous config/vault before
-/// re-initializing) — they are inherently file-store-specific, so they live here
+/// re-initialising) — they are inherently file-store-specific, so they live here
 /// rather than on the base interface. A future non-file backend (blob store, row
 /// store) simply doesn't implement this interface, and command logic that wants a
 /// path narrows to it explicitly (typically via a pattern match) instead of assuming

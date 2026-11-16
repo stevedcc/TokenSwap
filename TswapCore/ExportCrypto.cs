@@ -8,7 +8,7 @@ namespace TswapCore;
 /// separate from <see cref="Crypto.DeriveKeyFromPassphrase"/>. That method (and
 /// <see cref="Crypto.Pbkdf2Iterations"/>) stays exactly as-is: it's also used for the internal
 /// master-key path (<see cref="Crypto.DeriveKey"/>), which is unrelated to passphrases and must
-/// not change behavior for existing YubiKey/TPM/Secure Enclave vaults. This class is where the
+/// not change behaviour for existing YubiKey/TPM/Secure Enclave vaults. This class is where the
 /// export format's KDF is free to evolve across <see cref="ExportFile"/> versions instead.
 /// </summary>
 public static class ExportCrypto

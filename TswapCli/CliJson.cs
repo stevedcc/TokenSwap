@@ -4,10 +4,10 @@ using System.Text.Json.Serialization;
 namespace TswapCli;
 
 /// <summary>
-/// Machine-readable output DTOs and the source-generated serializer context backing
+/// Machine-readable output DTOs and the source-generated serialiser context backing
 /// the <c>--json</c> flag on <c>names</c>, <c>burned</c>, and <c>check</c>. Kept in the
 /// CLI layer because these shapes are a presentation concern, not part of the on-disk
-/// vault format. Property names serialize as camelCase; null fields are omitted.
+/// vault format. Property names serialise as camelCase; null fields are omitted.
 /// </summary>
 public sealed record NameEntry(string Name, bool Burned, DateTime? BurnedAt);
 

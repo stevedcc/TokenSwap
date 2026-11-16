@@ -32,7 +32,7 @@ public sealed class RedactCommand : ICliCommand
 
         var unknowns = Redact.FindUnknownSecrets(redacted);
         foreach (var (line, snippet) in unknowns)
-            ctx.Console.Error.WriteLine($"⚠ Line {line}: possible unrecognized secret: {snippet}");
+            ctx.Console.Error.WriteLine($"⚠ Line {line}: possible unrecognised secret: {snippet}");
         return 0;
     }
 }

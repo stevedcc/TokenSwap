@@ -12,7 +12,7 @@ namespace TswapTests;
 /// <see cref="KeyringFormat.KeyringFormatVersion"/> — this module's established bar after two
 /// prior version-check gaps (#146, #148).
 /// </summary>
-public class SlotEnrollmentFileCodecTests
+public class SlotEnrolmentFileCodecTests
 {
     [Fact]
     public void RequestFile_RoundTrips()
@@ -21,8 +21,8 @@ public class SlotEnrollmentFileCodecTests
         var publicKey = SlotKeyPair.Generate().PublicKey;
         var file = new SlotRequestFile(SlotRequestFile.CurrentFormatVersion, Convert.ToBase64String(slotId), Convert.ToBase64String(publicKey));
 
-        var json = SlotEnrollmentFileCodec.SerializeRequest(file);
-        var decoded = SlotEnrollmentFileCodec.DeserializeRequest(json);
+        var json = SlotEnrolmentFileCodec.SerializeRequest(file);
+        var decoded = SlotEnrolmentFileCodec.DeserializeRequest(json);
 
         Assert.Equal(file, decoded);
     }
@@ -34,7 +34,7 @@ public class SlotEnrollmentFileCodecTests
         // see SlotRequestFile's doc comment) but the field names are still a documented contract
         // a reviewer or future reader should be able to see stay stable.
         var file = new SlotRequestFile(1, "c2xvdA==", "cHVia2V5");
-        var json = SlotEnrollmentFileCodec.SerializeRequest(file);
+        var json = SlotEnrolmentFileCodec.SerializeRequest(file);
 
         Assert.Contains("\"FormatVersion\"", json);
         Assert.Contains("\"SlotId\"", json);
@@ -46,20 +46,20 @@ public class SlotEnrollmentFileCodecTests
     {
         var json = """{"FormatVersion":999,"SlotId":"AAAA","PublicKey":"AAAA"}""";
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeRequest(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeRequest(json));
         Assert.Contains("Unsupported slot request file format version", ex.Message);
     }
 
     [Fact]
     public void RequestFile_InvalidJson_ThrowsCleanTswapException()
     {
-        Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeRequest("not json at all"));
+        Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeRequest("not json at all"));
     }
 
     [Fact]
     public void RequestFile_NullJson_ThrowsCleanTswapException()
     {
-        Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeRequest("null"));
+        Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeRequest("null"));
     }
 
     private static SlotApproveFile MakeApproveFile() => new(
@@ -85,11 +85,11 @@ public class SlotEnrollmentFileCodecTests
         // Compared field-by-field (rather than via record Equals) because ExistingSlots is a
         // List<SlotDto>, and List<T> has no structural Equals of its own — the record-generated
         // Equals would compare list references, not contents, and always report "different" for
-        // a freshly-deserialized list even when every element matches.
+        // a freshly-deserialised list even when every element matches.
         var file = MakeApproveFile();
 
-        var json = SlotEnrollmentFileCodec.SerializeApprove(file);
-        var decoded = SlotEnrollmentFileCodec.DeserializeApprove(json);
+        var json = SlotEnrolmentFileCodec.SerializeApprove(file);
+        var decoded = SlotEnrolmentFileCodec.DeserializeApprove(json);
 
         Assert.Equal(file.FormatVersion, decoded.FormatVersion);
         Assert.Equal(file.KeyringFormatVersion, decoded.KeyringFormatVersion);
@@ -106,9 +106,9 @@ public class SlotEnrollmentFileCodecTests
     public void ApproveFile_UnsupportedFormatVersion_ThrowsCleanTswapException()
     {
         var file = MakeApproveFile() with { FormatVersion = 999 };
-        var json = SlotEnrollmentFileCodec.SerializeApprove(file);
+        var json = SlotEnrolmentFileCodec.SerializeApprove(file);
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
         Assert.Contains("Unsupported slot approve file format version", ex.Message);
     }
 
@@ -118,16 +118,16 @@ public class SlotEnrollmentFileCodecTests
         // The version-check-gap class this module has hit before (#146, #148): the embedded
         // keyring format version must be checked explicitly, not just this file's own version.
         var file = MakeApproveFile() with { KeyringFormatVersion = 255 };
-        var json = SlotEnrollmentFileCodec.SerializeApprove(file);
+        var json = SlotEnrolmentFileCodec.SerializeApprove(file);
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
         Assert.Contains("Unsupported keyring format version", ex.Message);
     }
 
     [Fact]
     public void ApproveFile_InvalidJson_ThrowsCleanTswapException()
     {
-        Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove("{ not json"));
+        Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove("{ not json"));
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class SlotEnrollmentFileCodecTests
     {
         var tooShort = Convert.ToBase64String(new byte[4]);
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DecodeFixed(tooShort, 16, "test field"));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DecodeFixed(tooShort, 16, "test field"));
         Assert.Contains("test field", ex.Message);
         Assert.Contains("16 bytes", ex.Message);
     }
@@ -143,7 +143,7 @@ public class SlotEnrollmentFileCodecTests
     [Fact]
     public void DecodeFixed_InvalidBase64_ThrowsCleanTswapException()
     {
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DecodeFixed("not-base64!!!", 16, "test field"));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DecodeFixed("not-base64!!!", 16, "test field"));
         Assert.Contains("test field", ex.Message);
         Assert.Contains("base64", ex.Message);
     }
@@ -151,6 +151,6 @@ public class SlotEnrollmentFileCodecTests
     [Fact]
     public void DecodeVariable_InvalidBase64_ThrowsCleanTswapException()
     {
-        Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DecodeVariable("not-base64!!!", "test field"));
+        Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DecodeVariable("not-base64!!!", "test field"));
     }
 }

@@ -73,7 +73,7 @@ public sealed record Slot(byte[] SlotId, byte[] PublicKey, byte[] Wrapped, SlotK
 /// associated data (see <see cref="SlotPayloadWrap.BuildAad"/>), the unlock threshold <c>k</c>
 /// (always 1 in v0 — see <c>docs/design/multi-machine-keying.md</c> §Why not k >= 2 (yet)), and the list of slots
 /// (always exactly one in v0, this machine's; #121 is where a second machine's slot gets
-/// appended via hand-carried enrollment).
+/// appended via hand-carried enrolment).
 /// </summary>
 public sealed record Keyring(byte FormatVersion, byte[] VaultId, byte K, IReadOnlyList<Slot> Slots);
 

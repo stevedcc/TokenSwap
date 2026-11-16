@@ -28,7 +28,7 @@ namespace TswapCli.Commands;
 /// doesn't exist; a future multi-backend keyring (design doc's v0 step 2) would need real
 /// per-slot metadata for this to stay accurate once a keyring can mix backends. Likewise, if a
 /// keyring ever holds more than one <see cref="SlotKind.Machine"/> slot (possible today per
-/// <see cref="KeyringCodec"/>'s format even though only #121's hand-carried enrollment, not yet
+/// <see cref="KeyringCodec"/>'s format even though only #121's hand-carried enrolment, not yet
 /// landed, would produce one), there is no data available to say which slot is "this machine's
 /// own" without attempting an actual hardware unwrap per slot — this command deliberately does
 /// not do that (it would turn a passive listing into a hardware-touching operation), so it lists
@@ -300,7 +300,7 @@ public sealed class SlotsCommand : ICliCommand
     /// <summary>
     /// A recovery slot's presence guarantee is not a weaker machine slot — it's a deliberately
     /// different kind of slot with a different job: a break-glass credential that must work
-    /// offline, with nobody present, potentially years after enrollment (see
+    /// offline, with nobody present, potentially years after enrolment (see
     /// <c>docs/design/multi-machine-keying.md</c>'s "The recovery slot" section and its per-backend table,
     /// where the recovery row is explicitly "none — this is the deliberately presence-free,
     /// offline-capable break-glass slot"). Custody of the recovery private key is the only real

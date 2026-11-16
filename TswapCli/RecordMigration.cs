@@ -359,8 +359,8 @@ internal static class RecordMigration
         foreach (var serial in config.YubiKeySerials.Distinct())
         {
             var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-            var (blob, kekSlot) = YubiKeySlotEnrollment.EnrollSerial(ctx, slotId, serial);
-            YubiKeySlotEnrollment.PrintTouchPolicy(ctx.Console, blob); // brief T7 item 5: acknowledged by the caller
+            var (blob, kekSlot) = YubiKeySlotEnrolment.EnrolSerial(ctx, slotId, serial);
+            YubiKeySlotEnrolment.PrintTouchPolicy(ctx.Console, blob); // brief T7 item 5: acknowledged by the caller
             try
             {
                 var keyPair = SlotKeyPair.Generate();

@@ -103,17 +103,17 @@ public static class SlotReceiptCodec
         if (file.Kind != SlotKind.Machine)
             throw new TswapException("Malformed slot receipt: a receipt carries a machine slot, nothing else.");
 
-        var vaultId = SlotEnrollmentFileCodec.DecodeFixed(Required(file.VaultId, "vault id"), KeyringFormat.VaultIdSize, "receipt's vault id");
-        var slotId = SlotEnrollmentFileCodec.DecodeFixed(Required(file.SlotId, "slot id"), KeyringFormat.SlotIdSize, "receipt's slot id");
-        var publicKey = SlotEnrollmentFileCodec.DecodeFixed(Required(file.PublicKey, "public key"), SlotKeyPair.KeySize, "receipt's public key");
-        var wrapped = SlotEnrollmentFileCodec.DecodeVariable(Required(file.Wrapped, "wrapped slot"), "receipt's wrapped slot");
+        var vaultId = SlotEnrolmentFileCodec.DecodeFixed(Required(file.VaultId, "vault id"), KeyringFormat.VaultIdSize, "receipt's vault id");
+        var slotId = SlotEnrolmentFileCodec.DecodeFixed(Required(file.SlotId, "slot id"), KeyringFormat.SlotIdSize, "receipt's slot id");
+        var publicKey = SlotEnrolmentFileCodec.DecodeFixed(Required(file.PublicKey, "public key"), SlotKeyPair.KeySize, "receipt's public key");
+        var wrapped = SlotEnrolmentFileCodec.DecodeVariable(Required(file.Wrapped, "wrapped slot"), "receipt's wrapped slot");
         if (wrapped.Length == 0 || wrapped.Length > MaxWrappedSize)
             throw new TswapException(
                 $"Malformed slot receipt: the wrapped slot is {wrapped.Length} bytes (expected 1 to {MaxWrappedSize}).");
 
         if (file.HwBlob is null)
             throw new TswapException("Malformed slot receipt: the slot has no hardware blob, so no device could open it.");
-        var hwBlob = ValidateHwBlob(SlotEnrollmentFileCodec.DecodeVariable(file.HwBlob, "receipt's hardware blob"), "slot receipt");
+        var hwBlob = ValidateHwBlob(SlotEnrolmentFileCodec.DecodeVariable(file.HwBlob, "receipt's hardware blob"), "slot receipt");
 
         return new SlotReceipt(file.KeyringFormatVersion, vaultId, file.K,
             new Slot(slotId, publicKey, wrapped, SlotKind.Machine, hwBlob));

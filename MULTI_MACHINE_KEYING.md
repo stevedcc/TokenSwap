@@ -40,9 +40,9 @@ Old links to these sections land here.
 
 <a id="per-backend-wrap-primitive"></a> [per-backend-wrap-primitive](docs/design/multi-machine-keying.md#per-backend-wrap-primitive)
 
-<a id="hand-carried-enrollment-v0"></a> [hand-carried-enrollment-v0](docs/design/multi-machine-keying.md#hand-carried-enrollment-v0)
+<a id="hand-carried-enrollment-v0"></a> [hand-carried-enrollment-v0](docs/design/multi-machine-keying.md#hand-carried-enrolment-v0)
 
-<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a> [fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187](docs/design/multi-machine-keying.md#fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187)
+<a id="fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187"></a> [fleet-enrollment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187](docs/design/multi-machine-keying.md#fleet-enrolment-receipts-merge-and-the-recovery-key-brief-t5-issues-190-152-187)
 
 <a id="shared-vault-folders-the-record-store-brief-t6"></a> [shared-vault-folders-the-record-store-brief-t6](docs/design/multi-machine-keying.md#shared-vault-folders-the-record-store-brief-t6)
 

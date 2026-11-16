@@ -111,9 +111,9 @@ public class SecretVariantsTests
         List<(MatchType Type, string Text)> list = [];
         if (string.IsNullOrEmpty(value)) return list;
         list.Add((MatchType.Plaintext, value));
-        var normalized = value.Replace("\r", "").Replace("\n", "").Replace(" ", "").Replace("\t", "");
-        if (normalized != value && !string.IsNullOrEmpty(normalized))
-            list.Add((MatchType.Plaintext, normalized));
+        var normalised = value.Replace("\r", "").Replace("\n", "").Replace(" ", "").Replace("\t", "");
+        if (normalised != value && !string.IsNullOrEmpty(normalised))
+            list.Add((MatchType.Plaintext, normalised));
         var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
         if (base64 != value)
             list.Add((MatchType.Base64, base64));

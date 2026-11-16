@@ -8,8 +8,8 @@ using TswapCore.VaultPassword;
 namespace TswapCli.Commands;
 
 /// <summary>
-/// Hand-carried multi-machine enrollment (issues #121/#122, <c>docs/design/multi-machine-keying.md</c>
-/// §Hand-carried enrollment): three subcommands, all dispatched through this one
+/// Hand-carried multi-machine enrolment (issues #121/#122, <c>docs/design/multi-machine-keying.md</c>
+/// §Hand-carried enrolment): three subcommands, all dispatched through this one
 /// <see cref="ICliCommand"/> — <c>slot request</c> (on the new, not-yet-enrolled machine),
 /// <c>slot approve</c> (on an already-enrolled machine), and <c>slot accept</c> (back on the new
 /// machine). No network protocol: the user physically moves the two files themselves (scp, USB,
@@ -38,7 +38,7 @@ namespace TswapCli.Commands;
 /// vault's secrets — see <see cref="RequiresSudo"/>'s doc comment for how that mixed reality maps
 /// onto this type's single <c>RequiresSudo</c> flag.</para>
 ///
-/// <para><b>Over SSH (briefs T27, T28).</b> <c>slot enroll --via</c> (<c>SlotEnroll.cs</c>) runs request and accept here
+/// <para><b>Over SSH (briefs T27, T28).</b> <c>slot enrol --via</c> (<c>SlotEnrol.cs</c>) runs request and accept here
 /// and approve and merge on the host. Brief T28 adds <c>slot stage &lt;id&gt; put|get|clean</c> (<c>SlotStage.cs</c>), no
 /// sudo and refused under a sudo escalation, which moves the enrolment files between an SSH session and the host's
 /// staging folder, and <c>--staged &lt;id&gt; --expect &lt;sha256&gt;</c> on approve and merge, which read the staged file
@@ -51,8 +51,8 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>The subcommand forms, shared by the help line and the no-argument usage so the two can't drift.</summary>
     private static string Forms =>
-        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot approve - - | {StagedApproveForm} | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot merge - | {StagedMergeForm} | {EnrollForm} | {StageForm} | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
-    public string Description => "Enroll another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or in one command run on the new machine over SSH (slot enroll --via <user@host>: request and accept there, approve and merge on the machine that opens the vault, under its sudo on a terminal of their own, so sudo and the vault may ask for a password there; it needs a terminal here, and --batch runs it without one, under sudo -n with no prompt on the host; --remote-tswap names tswap's path there, --no-remote-sudo drops sudo, --fresh starts a new enrolment instead of continuing a kept one; for a person, never an agent), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). A '-' file is stdin or stdout: slot approve - - reads the request from stdin and writes the approve file to stdout (every other line goes to stderr), as do slot approve - <approve-file> and slot approve <request-file> - for one of the two, and slot merge - reads the receipt from stdin. slot stage <id> put|get|clean (no sudo, refused under sudo; run by slot enroll) moves the enrolment files between an SSH session and the host's staging folder (<config dir>/enrol-staged/<id>), and slot approve --staged <id> --expect <sha256-hex> and slot merge --staged <id> --expect <sha256-hex> read the staged file, refusing one whose SHA-256 isn't the one given";
+        $"slot request [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} [--vault-dir <folder>] <file> | slot approve <request-file> <approve-file> | slot approve - - | {StagedApproveForm} | slot accept <file> [--receipt <file>] [--vault-dir <shared folder>] | slot merge <receipt> [--yes] | slot merge - | {StagedMergeForm} | {EnrolForm} | {StageForm} | slot add --tpm {VaultPasswordChoice.Flags} | slot add {SecureEnclaveTouchChoice.Flags} {VaultPasswordChoice.Flags} | slot add --fido2 [--serial <n>] | slot add --yubikey";
+    public string Description => "Enrol another machine into a keyring vault via hand-carried files (request, approve, accept, merge), or in one command run on the new machine over SSH (slot enrol --via <user@host>: request and accept there, approve and merge on the machine that opens the vault, under its sudo on a terminal of their own, so sudo and the vault may ask for a password there; it needs a terminal here, and --batch runs it without one, under sudo -n with no prompt on the host; --remote-tswap names tswap's path there, --no-remote-sudo drops sudo, --fresh starts a new enrolment instead of continuing a kept one; for a person, never an agent), or add this machine's TPM or Secure Enclave (--tpm, --secure-enclave with --with-touch or --no-touch; it then opens the vault on this machine) or a plugged-in YubiKey or other security key to this machine's keyring as its own slot (--yubikey: a YubiKey's OTP challenge-response; --fido2: a FIDO2 credential on a key of any brand, its PIN and a touch on every unlock, read at the terminal; --serial picks a YubiKey by its serial on Linux and macOS); slot request --secure-enclave and slot add --secure-enclave need --with-touch (Touch ID or password on every unlock) or --no-touch (no prompt; read its warning). A '-' file is stdin or stdout: slot approve - - reads the request from stdin and writes the approve file to stdout (every other line goes to stderr), as do slot approve - <approve-file> and slot approve <request-file> - for one of the two, and slot merge - reads the receipt from stdin. slot stage <id> put|get|clean (no sudo, refused under sudo; run by slot enrol) moves the enrolment files between an SSH session and the host's staging folder (<config dir>/enrol-staged/<id>), and slot approve --staged <id> --expect <sha256-hex> and slot merge --staged <id> --expect <sha256-hex> read the staged file, refusing one whose SHA-256 isn't the one given";
 
     /// <summary>
     /// <c>true</c> even though only <c>approve</c> actually calls <c>ctx.RequireSudo</c>
@@ -84,7 +84,9 @@ public sealed partial class SlotCommand : ICliCommand
             "accept" => ExecuteAccept(ctx, rest),
             "add" => ExecuteAdd(ctx, rest),
             "merge" => ExecuteMerge(ctx, rest),
-            "enroll" => ExecuteEnroll(ctx, rest),
+            "enrol" => ExecuteEnrol(ctx, rest),
+            // Brief T33 (#254): the US spelling is a synonym, so typing it isn't refused; help, the docs and the prompt name only enrol.
+            "enroll" => ExecuteEnrol(ctx, rest),
             "stage" => ExecuteStage(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
@@ -95,7 +97,7 @@ public sealed partial class SlotCommand : ICliCommand
     // --- slot request (runs on the new, not-yet-enrolled machine) ---
 
     /// <summary>
-    /// Enrolls <b>one</b> plugged-in YubiKey for this machine's future slot (brief T4 decision 6;
+    /// Enrols <b>one</b> plugged-in YubiKey for this machine's future slot (brief T4 decision 6;
     /// before T4 this ran the two-key pair dance): a random slot id and X25519 keypair, and the
     /// key's <see cref="YubiKeySlotBlob"/> (fresh challenge and salt, its touch policy). The key is
     /// challenged now, so a key without slot 2 configured fails here rather than at accept. Saves a
@@ -103,14 +105,14 @@ public sealed partial class SlotCommand : ICliCommand
     /// <c>RedundancyXor = ""</c>) holding the keypair and the blob in
     /// <see cref="Config.PendingSlotId"/>/<see cref="Config.PendingSlotPublicKey"/>/
     /// <see cref="Config.PendingSlotPrivateKey"/>/<see cref="Config.PendingSlotHwBlob"/> until
-    /// <c>slot accept</c> finalizes things, and writes the request file with the blob. No secrets
+    /// <c>slot accept</c> finalises things, and writes the request file with the blob. No secrets
     /// vault is created here: there is nothing to encrypt yet, and <see cref="VaultUnlocker"/>'s
-    /// pending-enrollment guard refuses ordinary use of this config until <c>slot accept</c> runs.
+    /// pending-enrolment guard refuses ordinary use of this config until <c>slot accept</c> runs.
     /// No test-mode branch: in test mode <see cref="TestKeyYubiKeyService"/> answers the challenge.
     /// </summary>
     private static int ExecuteRequest(CommandContext ctx, string[] args, RequestHooks? hooks = null)
     {
-        // Brief T5 decision 2: --tpm / --secure-enclave enroll this machine's own hardware
+        // Brief T5 decision 2: --tpm / --secure-enclave enrol this machine's own hardware
         // instead of a YubiKey (no flag: the one-YubiKey request, unchanged). Checked before any
         // prompt, hardware or write.
         // Brief T11: --secure-enclave needs --with-touch or --no-touch, taken out (and checked) first.
@@ -132,7 +134,7 @@ public sealed partial class SlotCommand : ICliCommand
         }
         var flags = args.Where(a => a.StartsWith("--")).ToArray();
         var positional = args.Where(a => !a.StartsWith("--")).ToArray();
-        // Brief T27: 'slot enroll' names no file; the path is made from the slot id (hooks.PathFor) after the save.
+        // Brief T27: 'slot enrol' names no file; the path is made from the slot id (hooks.PathFor) after the save.
         if (positional.Length != (hooks?.PathFor is null ? 1 : 0) || flags.Length > 1 || flags.Any(f => f is not ("--tpm" or "--secure-enclave")))
             throw new UsageException(usage);
         var path = hooks?.PathFor is null ? positional[0] : null;
@@ -168,12 +170,12 @@ public sealed partial class SlotCommand : ICliCommand
             ? ReadRequestVaultPassword(ctx, passwordFolder).Bytes
             : null;
 
-        c.Out.WriteLine("Insert the YubiKey to enroll and press Enter...");
+        c.Out.WriteLine("Insert the YubiKey to enrol and press Enter...");
         if (!c.IsInputRedirected) c.ReadLine();
 
         var slotKeyPair = SlotKeyPair.Generate();
         var slotId = RandomNumberGenerator.GetBytes(KeyringFormat.SlotIdSize);
-        var (blob, kekSlot) = YubiKeySlotEnrollment.Enroll(ctx, slotId);
+        var (blob, kekSlot) = YubiKeySlotEnrolment.Enrol(ctx, slotId);
         // Not kept: 'slot accept' re-derives KEK_slot from the same key and blob.
         CryptographicOperations.ZeroMemory(kekSlot);
         if (vaultPassword is not null)
@@ -220,7 +222,7 @@ public sealed partial class SlotCommand : ICliCommand
         c.Out.WriteLine("║  ✓ SLOT REQUEST CREATED                ║");
         c.Out.WriteLine("╚════════════════════════════════════════╝\n");
         c.Out.WriteLine($"YubiKey Serial: {blob.Serial}");
-        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        YubiKeySlotEnrolment.PrintTouchPolicy(c, blob);
         if (vaultPassword is not null)
             c.Out.WriteLine("This slot needs the vault password: 'slot accept' asks for it.");
         PrintFingerprint(c, "This machine's slot", slotKeyPair.PublicKey);
@@ -235,7 +237,7 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>
     /// Brief T5 decision 2 (issue #152): <c>slot request --tpm</c>/<c>--secure-enclave</c>. The
-    /// machine enrolls its own TPM or Secure Enclave through <see cref="IHardwareEnrollmentService"/>
+    /// machine enrols its own TPM or Secure Enclave through <see cref="IHardwareEnrolmentService"/>
     /// (as <c>init --tpm</c> does), keeps the sealed/wrapped <c>KEK_slot</c> blob in
     /// <see cref="Config.PendingSlotHwBlob"/> with <see cref="Config.Backend"/> set, and sends the
     /// blob in the request file. <c>KEK_slot</c> itself is zeroed: <c>slot accept</c> recovers it
@@ -246,7 +248,7 @@ public sealed partial class SlotCommand : ICliCommand
     {
         var c = ctx.Console;
         // Throws a clear TswapException on an OS without this hardware, before any output.
-        var enrollment = HardwareServices.Enrollment(backend, ctx.TestKey, ctx.OwnerScope, requirePresence);
+        var enrolment = HardwareServices.Enrolment(backend, ctx.TestKey, ctx.OwnerScope, requirePresence);
         var hardware = backend == HardwareBackend.Tpm ? "TPM" : "Secure Enclave";
 
         var fileStore = ctx.Storage as IFileVaultStore;
@@ -274,11 +276,11 @@ public sealed partial class SlotCommand : ICliCommand
             var (bytes, file) = ReadRequestVaultPassword(ctx, passwordFolder);
             vaultPassword = bytes;
             using var stretched = VaultPasswordChoice.AskUnverified(ctx, file);
-            (kekSlot, sealedBlob) = enrollment.Enroll(stretched);
+            (kekSlot, sealedBlob) = enrolment.Enrol(stretched);
         }
         else
         {
-            (kekSlot, sealedBlob) = enrollment.Enroll(password: null);
+            (kekSlot, sealedBlob) = enrolment.Enrol(password: null);
         }
         // Not kept: 'slot accept' recovers KEK_slot from the blob with this machine's hardware.
         CryptographicOperations.ZeroMemory(kekSlot);
@@ -339,7 +341,7 @@ public sealed partial class SlotCommand : ICliCommand
     }
 
     /// <summary>
-    /// Brief T27: what <c>slot enroll</c> learns from its request step. <see cref="PathFor"/> makes the request file's path
+    /// Brief T27: what <c>slot enrol</c> learns from its request step. <see cref="PathFor"/> makes the request file's path
     /// from the new slot id, after the pending config is saved; the other fields report what happened.
     /// </summary>
     private sealed class RequestHooks
@@ -359,7 +361,7 @@ public sealed partial class SlotCommand : ICliCommand
         return 0;
     }
 
-    /// <summary>The request file's path once the pending config is saved (brief T27: from the slot id, for enroll).</summary>
+    /// <summary>The request file's path once the pending config is saved (brief T27: from the slot id, for enrol).</summary>
     private static string SavedRequest(RequestHooks? hooks, string? path, byte[] slotId)
     {
         if (hooks is null)
@@ -441,7 +443,7 @@ public sealed partial class SlotCommand : ICliCommand
             Convert.ToBase64String(publicKey),
             hwBlob,
             backend);
-        ctx.WriteOutputFile(path, SlotEnrollmentFileCodec.SerializeRequest(file));
+        ctx.WriteOutputFile(path, SlotEnrolmentFileCodec.SerializeRequest(file));
     }
 
     // --- slot approve (runs on an already-enrolled machine) ---
@@ -508,10 +510,10 @@ public sealed partial class SlotCommand : ICliCommand
         else
             requestText = File.ReadAllText(requestPath);
 
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(requestText);
-        var requesterPublicKey = SlotEnrollmentFileCodec.DecodeFixed(request.PublicKey, SlotKeyPair.KeySize, "slot request file's public key");
-        var newSlotId = SlotEnrollmentFileCodec.DecodeFixed(request.SlotId, KeyringFormat.SlotIdSize, "slot request file's slot id");
-        // Brief T4 decision 6: the request enrolls one YubiKey and carries its blob (strictly
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(requestText);
+        var requesterPublicKey = SlotEnrolmentFileCodec.DecodeFixed(request.PublicKey, SlotKeyPair.KeySize, "slot request file's public key");
+        var newSlotId = SlotEnrolmentFileCodec.DecodeFixed(request.SlotId, KeyringFormat.SlotIdSize, "slot request file's slot id");
+        // Brief T4 decision 6: the request enrols one YubiKey and carries its blob (strictly
         // decoded by DeserializeRequest). Without one there is no slot to approve.
         // Brief T5 decision 2: or its TPM / Secure Enclave, whose blob is opaque here.
         var requestedBackend = request.Backend ?? HardwareBackend.YubiKey;
@@ -520,10 +522,10 @@ public sealed partial class SlotCommand : ICliCommand
         {
             if (request.HwBlob is null)
                 throw new TswapException(
-                    "This slot request carries no YubiKey slot blob, so it names no key to enroll. On the requesting " +
+                    "This slot request carries no YubiKey slot blob, so it names no key to enrol. On the requesting " +
                     "machine, run 'tswap slot request <file>' again with one YubiKey plugged in.");
             var requestedKey = RequestedOtpBlob(
-                SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's YubiKey slot blob"));
+                SlotEnrolmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's YubiKey slot blob"));
             enrolled = $"YubiKey {requestedKey.Serial}";
         }
         else
@@ -536,7 +538,7 @@ public sealed partial class SlotCommand : ICliCommand
         }
 
         c.Out.WriteLine($"Read slot request from: {(requestPath == StdioPath ? "stdin" : requestPath)}");
-        c.Out.WriteLine($"The requesting machine enrolls {enrolled} as its own slot.");
+        c.Out.WriteLine($"The requesting machine enrols {enrolled} as its own slot.");
         PrintFingerprint(c, "Requesting machine's slot", requesterPublicKey);
         c.Out.WriteLine("Compare this against the fingerprint shown on the requesting machine before continuing.\n");
 
@@ -552,7 +554,7 @@ public sealed partial class SlotCommand : ICliCommand
         // Brief T17 ruling 16: the approve file carries this vault's vault-password file. A request for a
         // password slot needs it; any other request gets it too when the folder has one, because the new
         // copy's other slots may need it.
-        var requestHwBlob = SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob");
+        var requestHwBlob = SlotEnrolmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob");
         var requestNeedsPassword = SlotPassword.Classify(new Slot(newSlotId, requesterPublicKey, [], SlotKind.Machine, requestHwBlob))
             == SlotPasswordKind.Password;
         var vaultPassword = ApproveVaultPassword(ctx, keyring, requestNeedsPassword);
@@ -588,7 +590,7 @@ public sealed partial class SlotCommand : ICliCommand
             request.Backend,
             vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
 
-        var approveText = SlotEnrollmentFileCodec.SerializeApprove(approveFile);
+        var approveText = SlotEnrolmentFileCodec.SerializeApprove(approveFile);
         // Brief T28 (A3): staged, the approve file is serialised once into a buffer, that buffer is written, and the
         // fingerprint printed below is computed over it (never a re-read of the file).
         byte[]? stagedApprove = null;
@@ -608,7 +610,7 @@ public sealed partial class SlotCommand : ICliCommand
         var approved = (config.ApprovedSlots ?? [])
             .Where(a => a.SlotId != request.SlotId)
             .Append(new ApprovedSlot(request.SlotId, request.PublicKey, ctx.Time.GetUtcNow().UtcDateTime,
-                Convert.ToHexString(SHA256.HashData(SlotEnrollmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob")))))
+                Convert.ToHexString(SHA256.HashData(SlotEnrolmentFileCodec.DecodeVariable(request.HwBlob, "slot request file's hardware blob")))))
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
 
@@ -676,13 +678,13 @@ public sealed partial class SlotCommand : ICliCommand
     /// mirroring <see cref="ExecuteApprove"/>'s wrap), then builds this machine's own real
     /// <see cref="SlotKind.Machine"/> slot exactly the way <c>InitCommand.BuildKeyringConfig</c>
     /// does for a fresh vault (via <see cref="MachineSlotWrap"/>) — this is functionally "the
-    /// enrollment half of a keyring <c>init</c>," not a new primitive. The finalized
+    /// enrolment half of a keyring <c>init</c>," not a new primitive. The finalised
     /// <see cref="Keyring"/> is the approve file's <see cref="SlotApproveFile.ExistingSlots"/>
     /// plus this new slot (design decision #3), and <see cref="Config.PendingSlotId"/>/
     /// <see cref="Config.PendingSlotPublicKey"/>/<see cref="Config.PendingSlotPrivateKey"/> are
     /// cleared now that they're baked into the real keyring.
     /// </summary>
-    /// <param name="approveText">Brief T28: the approve file's text as <c>slot enroll</c> received it (its fingerprint was
+    /// <param name="approveText">Brief T28: the approve file's text as <c>slot enrol</c> received it (its fingerprint was
     /// computed over those bytes), parsed instead of a re-read of the file at the path; null: the file.</param>
     private static int ExecuteAccept(CommandContext ctx, string[] args, string? approveText = null)
     {
@@ -734,29 +736,29 @@ public sealed partial class SlotCommand : ICliCommand
         if (config.PendingSlotId is null || config.PendingSlotPublicKey is null || config.PendingSlotPrivateKey is null)
             throw new TswapException("No pending 'slot request' found on this machine. Run 'tswap slot request <file>' first.");
 
-        // Brief T4 decision 6: a pending request now enrolls one YubiKey and keeps its blob. A
+        // Brief T4 decision 6: a pending request now enrols one YubiKey and keeps its blob. A
         // pending pair request from an older tswap has none and cannot be finished any more.
         if (config.PendingSlotHwBlob is null)
             throw new TswapException((config.Backend ?? HardwareBackend.YubiKey) == HardwareBackend.YubiKey
-                ? "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrollment), which " +
+                ? "This machine's pending 'slot request' was made by an older tswap (a YubiKey pair enrolment), which " +
                   "is no longer supported. Run 'tswap slot request <file>' again with one YubiKey plugged in, and have " +
                   "it approved again."
                 : $"Config is corrupted: this machine's pending '{config.Backend!.Value.DisplayName}' slot request has no hardware " +
                   "blob. Run 'tswap slot request' again on this machine, and have it approved again.");
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(approveText ?? File.ReadAllText(path));
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(approveText ?? File.ReadAllText(path));
 
         var pendingSlotId = DecodePending(config.PendingSlotId, "slot id");
         var pendingPublicKey = DecodePending(config.PendingSlotPublicKey, "public key");
         var pendingPrivateKey = DecodePending(config.PendingSlotPrivateKey, "private key");
 
-        var approveSlotId = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotId, KeyringFormat.SlotIdSize, "approve file's slot id");
+        var approveSlotId = SlotEnrolmentFileCodec.DecodeFixed(approve.NewSlotId, KeyringFormat.SlotIdSize, "approve file's slot id");
         if (!approveSlotId.AsSpan().SequenceEqual(pendingSlotId))
             throw new TswapException(
                 "This approve file targets a different slot id than this machine's pending request. " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
 
-        var approvePublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotPublicKey, SlotKeyPair.KeySize, "approve file's public key");
+        var approvePublicKey = SlotEnrolmentFileCodec.DecodeFixed(approve.NewSlotPublicKey, SlotKeyPair.KeySize, "approve file's public key");
         if (!approvePublicKey.AsSpan().SequenceEqual(pendingPublicKey))
             throw new TswapException(
                 "This approve file's echoed public key does not match this machine's pending request. " +
@@ -776,7 +778,7 @@ public sealed partial class SlotCommand : ICliCommand
                 $"match this machine's pending request ('{backend.DisplayName}'). " +
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
         var pendingHwBlob = DecodePending(config.PendingSlotHwBlob, "hardware blob");
-        var approveHwBlob = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot hardware blob");
+        var approveHwBlob = SlotEnrolmentFileCodec.DecodeVariable(approve.NewSlotHwBlob, "approve file's new slot hardware blob");
         if (!approveHwBlob.AsSpan().SequenceEqual(pendingHwBlob))
             throw new TswapException(
                 (backend == HardwareBackend.YubiKey ? "This approve file's YubiKey slot blob" : "This approve file's hardware blob") +
@@ -784,9 +786,9 @@ public sealed partial class SlotCommand : ICliCommand
                 "Make sure you're pairing the right approve file with this machine's own 'slot request' output.");
         var blob = backend == HardwareBackend.YubiKey ? RequestedOtpBlob(pendingHwBlob) : null;
 
-        var vaultId = SlotEnrollmentFileCodec.DecodeFixed(approve.VaultId, KeyringFormat.VaultIdSize, "approve file's vault id");
-        var ephemeralPublicKey = SlotEnrollmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
-        var wrapped = SlotEnrollmentFileCodec.DecodeVariable(approve.NewSlotWrapped, "approve file's wrapped slot payload");
+        var vaultId = SlotEnrolmentFileCodec.DecodeFixed(approve.VaultId, KeyringFormat.VaultIdSize, "approve file's vault id");
+        var ephemeralPublicKey = SlotEnrolmentFileCodec.DecodeFixed(approve.NewSlotEphemeralPublicKey, SlotKeyPair.KeySize, "approve file's ephemeral public key");
+        var wrapped = SlotEnrolmentFileCodec.DecodeVariable(approve.NewSlotWrapped, "approve file's wrapped slot payload");
 
         // Brief T17 ruling 16: the vault-password files of the request, the approve file and the target folder.
         var owner = (ctx.Storage as IFileVaultStore)?.Owner ?? DirectoryOwnerMatcher.Default;
@@ -853,11 +855,11 @@ public sealed partial class SlotCommand : ICliCommand
         }
 
         var existingSlots = approve.ExistingSlots.Select(dto => new Slot(
-            SlotEnrollmentFileCodec.DecodeFixed(dto.SlotId, KeyringFormat.SlotIdSize, "approve file's existing slot id"),
-            SlotEnrollmentFileCodec.DecodeFixed(dto.PublicKey, SlotKeyPair.KeySize, "approve file's existing slot public key"),
-            SlotEnrollmentFileCodec.DecodeVariable(dto.Wrapped, "approve file's existing slot wrapped bytes"),
+            SlotEnrolmentFileCodec.DecodeFixed(dto.SlotId, KeyringFormat.SlotIdSize, "approve file's existing slot id"),
+            SlotEnrolmentFileCodec.DecodeFixed(dto.PublicKey, SlotKeyPair.KeySize, "approve file's existing slot public key"),
+            SlotEnrolmentFileCodec.DecodeVariable(dto.Wrapped, "approve file's existing slot wrapped bytes"),
             dto.Kind,
-            dto.HwBlob is null ? null : SlotEnrollmentFileCodec.DecodeVariable(dto.HwBlob, "approve file's existing slot hardware blob"))).ToList();
+            dto.HwBlob is null ? null : SlotEnrolmentFileCodec.DecodeVariable(dto.HwBlob, "approve file's existing slot hardware blob"))).ToList();
 
         var finalKeyring = new TswapCore.Keyring.Keyring(
             approve.KeyringFormatVersion, vaultId, approve.K,
@@ -966,7 +968,7 @@ public sealed partial class SlotCommand : ICliCommand
                 "vault-password file. Run 'tswap slot request --password' again on this machine, and have it approved again.");
         var fromApprove = approve.VaultPassword is null
             ? null
-            : SlotEnrollmentFileCodec.DecodeVariable(approve.VaultPassword, "approve file's vault-password file");
+            : SlotEnrolmentFileCodec.DecodeVariable(approve.VaultPassword, "approve file's vault-password file");
         var approveFile = fromApprove is null ? null : VaultPasswordFile.Decode(fromApprove, vaultId);
         if (pending is null)
             return (approveFile, null);
@@ -1034,14 +1036,14 @@ public sealed partial class SlotCommand : ICliCommand
     private static int ExecuteAdd(CommandContext ctx, string[] args)
     {
         var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
-        var addUsage = $"{ctx.Prefix} slot add --yubikey|--fido2|--tpm|{SecureEnclaveTouchChoice.Flags} [{Fido2SlotEnrollment.SerialFlag} <n>] {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}] " +
-                       $"({Fido2SlotEnrollment.SerialFlag} only with --fido2)";
+        var addUsage = $"{ctx.Prefix} slot add --yubikey|--fido2|--tpm|{SecureEnclaveTouchChoice.Flags} [{Fido2SlotEnrolment.SerialFlag} <n>] {VaultPasswordChoice.Flags} [{RecoveryKeyFlag}] " +
+                       $"({Fido2SlotEnrolment.SerialFlag} only with --fido2)";
         // Brief T24: the touch choice first (Split refuses a touch flag without --secure-enclave, or neither, or both).
         (positional, var requirePresence) = SecureEnclaveTouchChoice.Split(positional, addUsage);
         // Brief T17 ruling 15: --password / --no-password (neither: asked on a terminal).
         (positional, var passwordFlag) = VaultPasswordChoice.Split(positional, addUsage);
         // FIDO2 plan, task 6: --serial picks the FIDO2 key (Linux, macOS).
-        (positional, var serial) = Fido2SlotEnrollment.SplitSerial(positional, addUsage);
+        (positional, var serial) = Fido2SlotEnrolment.SplitSerial(positional, addUsage);
         // Exactly one device, before any read, prompt, hardware call or write.
         switch (positional)
         {
@@ -1087,8 +1089,8 @@ public sealed partial class SlotCommand : ICliCommand
             // Brief T17 ruling 15: a later password slot is checked against the verifier with K_v.
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
                 vaultKey, keyring, "slot add --yubikey");
-            var chosen = YubiKeySlotEnrollment.ChooseEligibleSerial(ctx, enrolled);
-            (newSlot, blob) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, chosen, vaultKey, keyring, password?.Stretched);
+            var chosen = YubiKeySlotEnrolment.ChooseEligibleSerial(ctx, enrolled);
+            (newSlot, blob) = YubiKeySlotEnrolment.EnrolAsSlot(ctx, chosen, vaultKey, keyring, password?.Stretched);
         }
         finally
         {
@@ -1101,7 +1103,7 @@ public sealed partial class SlotCommand : ICliCommand
         c.Out.WriteLine($"\n✓ YubiKey {blob.Serial} added as its own slot — it now opens this vault alone.");
         if (password is not null)
             c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
-        YubiKeySlotEnrollment.PrintTouchPolicy(c, blob);
+        YubiKeySlotEnrolment.PrintTouchPolicy(c, blob);
         PrintAddedSlotFooter(c, newSlot, extended);
         return 0;
     }
@@ -1119,13 +1121,13 @@ public sealed partial class SlotCommand : ICliCommand
     {
         var c = ctx.Console;
         // The refusals that need no vault (no terminal, --serial on Windows) come before the sudo check, as in init.
-        var fido2 = Fido2SlotEnrollment.Require(ctx, serial);
+        var fido2 = Fido2SlotEnrolment.Require(ctx, serial);
         var (config, keyring) = LoadKeyringForAdd(ctx);
         Fido2KeyInfo? key = null;
         if (fido2.CanList)
         {
-            key = Fido2SlotEnrollment.PickKey(ctx, serial)!;
-            Fido2SlotEnrollment.RefuseIfEnrolled(fido2, key, Fido2SlotEnrollment.VaultFido2Slots(keyring));
+            key = Fido2SlotEnrolment.PickKey(ctx, serial)!;
+            Fido2SlotEnrolment.RefuseIfEnrolled(fido2, key, Fido2SlotEnrolment.VaultFido2Slots(keyring));
         }
 
         var vaultKey = UnlockForKeyringChange(ctx, config, keyring, withRecoveryKey, keyOnFirstLine: passwordFlag == true);
@@ -1137,8 +1139,8 @@ public sealed partial class SlotCommand : ICliCommand
         {
             password = VaultPasswordChoice.Resolve(ctx, passwordFlag, HardwareBackend.YubiKey, ctx.Storage as RecordVaultStore,
                 vaultKey, keyring, "slot add --fido2");
-            key = key is null ? Fido2SlotEnrollment.PickKey(ctx, serial) : Fido2SlotEnrollment.EnsurePin(ctx, key);
-            (newSlot, blob) = Fido2SlotEnrollment.EnrollAsSlot(ctx, key, vaultKey, keyring, password?.Stretched);
+            key = key is null ? Fido2SlotEnrolment.PickKey(ctx, serial) : Fido2SlotEnrolment.EnsurePin(ctx, key);
+            (newSlot, blob) = Fido2SlotEnrolment.EnrolAsSlot(ctx, key, vaultKey, keyring, password?.Stretched);
         }
         finally
         {
@@ -1148,11 +1150,11 @@ public sealed partial class SlotCommand : ICliCommand
 
         var extended = SaveWithNewSlot(ctx, config, keyring, newSlot, password);
 
-        var name = Fido2SlotEnrollment.EnrolledName(fido2, key, blob);
+        var name = Fido2SlotEnrolment.EnrolledName(fido2, key, blob);
         c.Out.WriteLine($"\n✓ {name} added as a FIDO2 slot — it now opens this vault alone, with its PIN and a touch.");
         if (password is not null)
             c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
-        Fido2SlotEnrollment.PrintResetWarning(c, name);
+        Fido2SlotEnrolment.PrintResetWarning(c, name);
         PrintAddedSlotFooter(c, newSlot, extended);
         return 0;
     }
@@ -1163,7 +1165,7 @@ public sealed partial class SlotCommand : ICliCommand
     /// way in. In order, every refusal before the first write:
     /// <list type="number">
     /// <item>The arguments (<see cref="ExecuteAdd"/>), then the keyring and sudo (<see cref="LoadKeyringForAdd"/>), then the
-    /// hardware for this OS (<see cref="HardwareServices.Enrollment"/>).</item>
+    /// hardware for this OS (<see cref="HardwareServices.Enrolment"/>).</item>
     /// <item>A legacy pair own slot is refused: the chip as the own slot would make the unlock skip the pair here.</item>
     /// <item>The working-slot check (owner decision 2026-11-15), only for this machine's own slot of this backend
     /// (<see cref="VaultUnlocker.HardwareSlotOpens"/>): it opens, refused; the hardware answered and it didn't unwrap,
@@ -1185,7 +1187,7 @@ public sealed partial class SlotCommand : ICliCommand
 
         var (config, keyring) = LoadKeyringForAdd(ctx);
         // Throws a clear TswapException on an OS without this hardware, as slot request and recover do.
-        var enrollment = HardwareServices.Enrollment(hardware, ctx.TestKey, ctx.OwnerScope, requirePresence);
+        var enrolment = HardwareServices.Enrolment(hardware, ctx.TestKey, ctx.OwnerScope, requirePresence);
 
         // A legacy pair own slot opens only through this machine's config: the chip as the own slot would make the
         // unlock skip it (Classify's "None" case), so the pair would stop opening the vault here.
@@ -1266,7 +1268,7 @@ public sealed partial class SlotCommand : ICliCommand
                 }
             }
 
-            newSlot = NewSlotWrite.EnrolOwnSlot(enrollment, vaultKey, keyring, slotId, slotPassword);
+            newSlot = NewSlotWrite.EnrolOwnSlot(enrolment, vaultKey, keyring, slotId, slotPassword);
         }
         finally
         {
@@ -1525,7 +1527,7 @@ public sealed partial class SlotCommand : ICliCommand
                     continue;
                 }
                 if (opens)
-                    throw new TswapException(WorkingSlotText(serial) + YubiKeySlotEnrollment.UnreachableNote(ctx));
+                    throw new TswapException(WorkingSlotText(serial) + YubiKeySlotEnrolment.UnreachableNote(ctx));
             }
             if (noAnswer is not null)
                 throw new TswapException($"{noAnswer} YubiKey {serial}'s slots couldn't all be checked, so it isn't enrolled again. Nothing was changed.");
@@ -1569,7 +1571,7 @@ public sealed partial class SlotCommand : ICliCommand
                     "vault's password verifier), so tswap can't tell whether its slot(s) that need the password still open the " +
                     "vault. Nothing was changed.");
 
-            var (newSlot, blob2) = YubiKeySlotEnrollment.EnrollAsSlot(ctx, serial, vaultKey, keyring, newSlotPassword ? typed : null);
+            var (newSlot, blob2) = YubiKeySlotEnrolment.EnrolAsSlot(ctx, serial, vaultKey, keyring, newSlotPassword ? typed : null);
             var newFile = firstPasswordFile is { } f ? VaultPasswordFile.Create(vaultKey, keyring.VaultId, typed!, f.Salt, f.Params) : null;
 
             var extended = keyring with { Slots = [.. keyring.Slots, newSlot] };
@@ -1586,7 +1588,7 @@ public sealed partial class SlotCommand : ICliCommand
                 $"slot(s) no longer open and are kept (`{ctx.Prefix} slots` lists them as other slots of this key).");
             if (newSlotPassword)
                 c.Out.WriteLine("It needs the vault password (or a running 'tswap agent') for every unlock.");
-            YubiKeySlotEnrollment.PrintTouchPolicy(c, blob2);
+            YubiKeySlotEnrolment.PrintTouchPolicy(c, blob2);
             c.Out.WriteLine($"Slots in this machine's keyring: {extended.Slots.Count}");
             c.Out.WriteLine("Only this machine's keyring has the new slot: other machines' copies don't (no sync in v0).");
 
@@ -1929,13 +1931,13 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>
     /// The OTP blob of a slot request (or this machine's pending one): never a FIDO2 slot's, which
-    /// <see cref="SlotEnrollmentFileCodec"/> refuses before this is reached (FIDO2 plan, task 2); a damaged or newer
+    /// <see cref="SlotEnrolmentFileCodec"/> refuses before this is reached (FIDO2 plan, task 2); a damaged or newer
     /// blob throws its parser's text, as <see cref="YubiKeySlotBlob.Decode"/> does.
     /// </summary>
     private static YubiKeySlotBlob RequestedOtpBlob(byte[] hwBlob) => YubiKeySlotKinds.Classify(hwBlob) switch
     {
         YubiKeySlotKind.Otp(var blob) => blob,
-        YubiKeySlotKind.Fido2 => throw new TswapException(SlotEnrollmentFileCodec.Fido2SlotNotEnrolledText),
+        YubiKeySlotKind.Fido2 => throw new TswapException(SlotEnrolmentFileCodec.Fido2SlotNotEnrolledText),
         YubiKeySlotKind.NeedsNewerTswap(var error) => throw new TswapException(error),
         YubiKeySlotKind.Corrupt(var error) => throw new TswapException(error),
         _ => YubiKeySlotBlob.Decode(hwBlob), // not a TSYK blob: throws "wrong magic" or "truncated", as before
@@ -1990,7 +1992,7 @@ public sealed partial class SlotCommand : ICliCommand
         public string? ReadLine() => inner.ReadLine();
         public string ReadPassword(TextWriter? echo = null) => inner.ReadPassword(echo ?? inner.Error);
         // No colours: on a terminal they are escape sequences written to stdout.
-        public void SetForeground(ConsoleColor color) { }
+        public void SetForeground(ConsoleColor colour) { }
         public void ResetColor() { }
     }
 
@@ -2074,7 +2076,7 @@ public sealed partial class SlotCommand : ICliCommand
 
     /// <summary>
     /// Prints the fingerprint (issue #122, <see cref="SlotFingerprint"/>) of a public key shown
-    /// during enrollment. Not load-bearing in v0 — see that type's doc comment — so this is
+    /// during enrolment. Not load-bearing in v0 — see that type's doc comment — so this is
     /// purely informational, not a gated confirmation prompt.
     /// </summary>
     internal static void PrintFingerprint(IConsole c, string label, byte[] publicKey)

@@ -250,7 +250,7 @@ public class SlotReceiptTests : IDisposable
         RouterVaultAndDesktopRequest();
         var keyringBefore = LoadConfig(_routerDir).Keyring;
         Assert.Null(LoadConfig(_routerDir).ApprovedSlots);
-        var request = SlotEnrollmentFileCodec.DeserializeRequest(File.ReadAllText(RequestFile));
+        var request = SlotEnrolmentFileCodec.DeserializeRequest(File.ReadAllText(RequestFile));
         var before = DateTime.UtcNow;
 
         Approve();

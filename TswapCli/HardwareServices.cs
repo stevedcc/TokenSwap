@@ -59,7 +59,7 @@ internal static class HardwareServices
     }
 
     /// <summary>
-    /// The enrollment service for <paramref name="backend"/> (<c>init --tpm</c> /
+    /// The enrolment service for <paramref name="backend"/> (<c>init --tpm</c> /
     /// <c>--secure-enclave</c>): simulated in test mode, else the real one for this OS. Throws
     /// <see cref="TswapException"/> when this OS has no such hardware.
     /// <paramref name="requirePresence"/> (brief T11) is false only for a Secure Enclave enrolled
@@ -68,7 +68,7 @@ internal static class HardwareServices
     /// <see cref="SecureEnclave"/>, so its key is created as the vault folder's owner
     /// (<paramref name="ownerScope"/>, brief T12).
     /// </summary>
-    public static IHardwareEnrollmentService Enrollment(HardwareBackend backend, byte[]? testKey, VaultOwnerScope ownerScope, bool requirePresence = true)
+    public static IHardwareEnrolmentService Enrolment(HardwareBackend backend, byte[]? testKey, VaultOwnerScope ownerScope, bool requirePresence = true)
     {
         if (!requirePresence && backend != HardwareBackend.SecureEnclave)
             throw new ArgumentException(
@@ -86,7 +86,7 @@ internal static class HardwareServices
                 throw new TswapException("--tpm is only supported on Windows and Linux.");
             default:
                 throw new ArgumentOutOfRangeException(nameof(backend), backend,
-                    "YubiKey derives KEK_slot in InitCommand; it has no enrollment service");
+                    "YubiKey derives KEK_slot in InitCommand; it has no enrolment service");
         }
     }
 

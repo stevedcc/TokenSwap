@@ -136,7 +136,7 @@ public sealed class MigrateCommand : ICliCommand
         // ── Items requiring re-init ───────────────────────────────────────────────
         if (needsReInit)
         {
-            c.Out.WriteLine("\n── Settings requiring re-initialization ─────────────────────────");
+            c.Out.WriteLine("\n── Settings requiring re-initialisation ─────────────────────────");
             if (needsChallengeMigration)
             {
                 c.Out.WriteLine("  • Unlock challenge: a vault-unique challenge requires re-challenging");
@@ -164,7 +164,7 @@ public sealed class MigrateCommand : ICliCommand
                 c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "export ~/tswap-backup.enc")}");
                 c.Out.WriteLine("  # Choose a strong passphrase — you will need it to import\n");
 
-                c.Out.WriteLine($"Step {step++}: Convert the vault (a classic vault is converted, never re-initialized)");
+                c.Out.WriteLine($"Step {step++}: Convert the vault (a classic vault is converted, never re-initialised)");
                 c.Out.WriteLine($"  {ElevatedCommand.Line(ctx.Prefix, "migrate --to-records")}");
                 c.Out.WriteLine(pairKeyring
                     ? "  # The vault keeps its pair slot, which belongs to both keys together.\n"

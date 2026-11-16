@@ -8,7 +8,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Brief T4 item 3 (decision 4): <c>init --yubikey</c> (until v0.2.0 <c>init --keyring</c>) enrolls <b>one</b> plugged-in YubiKey as a
+/// Brief T4 item 3 (decision 4): <c>init --yubikey</c> (until v0.2.0 <c>init --keyring</c>) enrols <b>one</b> plugged-in YubiKey as a
 /// one-key slot (plus the recovery slot unless <c>--no-recovery</c>), with no pair fields in
 /// config. Runs outside test mode against <see cref="SimulatedYubiKeyService"/>, so the slot's
 /// <c>KEK_slot</c> really comes from the key's HMAC response.
@@ -73,7 +73,7 @@ public class InitKeyringOneKeyTests : IDisposable
         Assert.Contains(SerialA.ToString(), stdout);
 
         // The key was challenged with the slot's own challenge, twice (the security review's
-        // consistency check at enrollment).
+        // consistency check at enrolment).
         Assert.Equal([(SerialA, blob.ChallengeString), (SerialA, blob.ChallengeString)], _keys.Challenges);
     }
 
@@ -114,7 +114,7 @@ public class InitKeyringOneKeyTests : IDisposable
         var keyring = DecodeKeyring(LoadConfig());
         var machine = Assert.Single(keyring.Slots);
         Assert.Equal(SerialB, YubiKeySlotBlob.Decode(machine.HwBlob!).Serial);
-        Assert.Equal([SerialB, SerialB], _keys.Challenges.Select(c => c.Serial)); // enrollment asks twice
+        Assert.Equal([SerialB, SerialB], _keys.Challenges.Select(c => c.Serial)); // enrolment asks twice
 
         _keys.PluggedIn = [SerialB];
         var vaultKey = Unlock();

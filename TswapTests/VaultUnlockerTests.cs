@@ -125,7 +125,7 @@ public class VaultUnlockerTests
         yubi.Connected = [33333333];
 
         var ex = Assert.Throws<TswapException>(() => new VaultUnlocker(yubi).Unlock(config, NoSelection));
-        Assert.Contains("not authorized", ex.Message);
+        Assert.Contains("not authorised", ex.Message);
     }
 
     [Fact]
@@ -236,7 +236,7 @@ public class VaultUnlockerTests
         var (yubi, config, _, _) = MakeVault();
         yubi.Connected = []; // YubiKey backend would throw if it were consulted
         var secureEnclave = Simulated(HardwareBackend.SecureEnclave);
-        var (kekSlot, hwBlob) = secureEnclave.Enroll(password: null);
+        var (kekSlot, hwBlob) = secureEnclave.Enrol(password: null);
 
         var unlocker = new VaultUnlocker(yubi, additionalBackends: [secureEnclave]);
         var key = unlocker.Unlock(config with

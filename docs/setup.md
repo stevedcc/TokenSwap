@@ -186,7 +186,7 @@ or an agent's `tswap run`:
   has no slot in the vault, is an error. `sudo` drops the variable unless you keep it
   (`sudo --preserve-env=TSWAP_YUBIKEY_SERIAL tswap ...`); that is intended.
 
-Enrolling a key (`init`, `slot add`, `slot request`) still asks which key to enroll when several
+Enrolling a key (`init`, `slot add`, `slot request`) still asks which key to enrol when several
 qualify (on stderr). With nothing to answer (stdin at its end), it takes the first key listed.
 `TSWAP_YUBIKEY_SERIAL` picks the key for an unlock (and for the entropy below), not for an
 enrolment.
@@ -519,7 +519,7 @@ recovery key can't come out of that vault when its hardware is lost: keep the ke
 doesn't depend on that vault (`init` says to store it offline).
 
 ```bash
-# Total hardware loss (TPM cleared, keys lost): enroll new hardware as a new slot
+# Total hardware loss (TPM cleared, keys lost): enrol new hardware as a new slot
 sudo TSWAP_CONFIG_DIR=<main vault's config folder> tswap get recovery-key | sudo tswap recover --yubikey
 #   (or --tpm / --secure-enclave --with-touch|--no-touch)
 

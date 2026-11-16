@@ -588,8 +588,8 @@ public static class BrokerTemplateValidator
         BrokerConfigException Ex(string what) => new($"Template '{template}': bind {BrokerPolicy.Printable(path)} {what}");
         if (!path.StartsWith('/') || HasControl(path))
             throw Ex("must be an absolute path.");
-        var normalized = Path.GetFullPath(path);
-        if (ForbiddenRoots.Any(r => IsAtOrUnder(normalized, r)))
+        var normalised = Path.GetFullPath(path);
+        if (ForbiddenRoots.Any(r => IsAtOrUnder(normalised, r)))
             throw Ex("may not be at or under /dev, /proc, /sys or /run.");
         var resolved = BrokerNative.RealPath(path) ?? throw Ex("does not exist (or can't be resolved).");
         if (ForbiddenRoots.Any(r => IsAtOrUnder(resolved, r)))
@@ -636,7 +636,7 @@ public static class BrokerTemplateValidator
         }
         foreach (var runFolder in host.RunFolders)
         {
-            if (RunFolderRelation([normalized, resolved], self, ancestors, runFolder) is { } relation)
+            if (RunFolderRelation([normalised, resolved], self, ancestors, runFolder) is { } relation)
                 throw Ex($"{relation} the broker's run folder {runFolder} (a template could delete or use the control socket).");
         }
         return resolved;

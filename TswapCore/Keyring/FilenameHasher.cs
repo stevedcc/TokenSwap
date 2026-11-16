@@ -11,7 +11,7 @@ namespace TswapCore.Keyring;
 ///
 /// <para><b>Settled, not open</b> (see <c>docs/design/refactoring-plan.md</c> §Phase 6, "per-file security
 /// considerations", item 2, and <c>docs/design/multi-machine-keying.md</c>): deterministic filenames were
-/// chosen over randomizing the filename per write plus an internal record-id and a periodic
+/// chosen over randomising the filename per write plus an internal record-id and a periodic
 /// compaction pass. Randomizing defeats which-secret correlation but not "an edit of about this
 /// size happened around now", and the compaction machinery needed to keep it bounded is real,
 /// ongoing complexity for a marginal privacy gain against tswap's actual threat model — a

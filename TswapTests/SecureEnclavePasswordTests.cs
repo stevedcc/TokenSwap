@@ -45,7 +45,7 @@ public class SecureEnclavePasswordTests
         using var password = Password(1);
         var service = new SecureEnclaveHardwareService(requirePresence);
 
-        var (kek, hwBlob) = service.Enroll(password);
+        var (kek, hwBlob) = service.Enrol(password);
         var recovered = service.Unlock(ConfigWith(hwBlob), _ => 0, () => password.Clone());
 
         Assert.Equal(kek, recovered);
@@ -65,7 +65,7 @@ public class SecureEnclavePasswordTests
         using var right = Password(1);
         using var wrong = Password(2);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = service.Enroll(right);
+        var (_, hwBlob) = service.Enrol(right);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => service.Unlock(ConfigWith(hwBlob), _ => 0, () => wrong.Clone()));
 
@@ -80,7 +80,7 @@ public class SecureEnclavePasswordTests
         var simulated = new SimulatedHardwareService(HardwareBackend.SecureEnclave, machineKey, requirePresence: false);
         using var right = Password(1);
         using var wrong = Password(2);
-        var (kek, hwBlob) = simulated.Enroll(right);
+        var (kek, hwBlob) = simulated.Enrol(right);
 
         var ex = Assert.Throws<VaultPasswordRefusedException>(() => simulated.Unlock(ConfigWith(hwBlob), _ => 0, () => wrong.Clone()));
 
@@ -96,7 +96,7 @@ public class SecureEnclavePasswordTests
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
 
-        var (kek, hwBlob) = service.Enroll(password: null);
+        var (kek, hwBlob) = service.Enrol(password: null);
         var recovered = service.Unlock(ConfigWith(hwBlob), _ => 0,
             () => throw new InvalidOperationException("a password-free slot must not ask for the password"));
 
@@ -150,7 +150,7 @@ public class SecureEnclavePasswordTests
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         using var password = Password(3);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = service.Enroll(password);
+        var (_, hwBlob) = service.Enrol(password);
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(package), _ => 0,
@@ -165,7 +165,7 @@ public class SecureEnclavePasswordTests
     {
         var simulated = new SimulatedHardwareService(HardwareBackend.SecureEnclave, RandomNumberGenerator.GetBytes(32), requirePresence: false);
         using var password = Password(3);
-        var (_, hwBlob) = simulated.Enroll(password);
+        var (_, hwBlob) = simulated.Enrol(password);
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<TswapException>(() => simulated.Unlock(ConfigWith(package), _ => 0, password: null));
@@ -254,7 +254,7 @@ public class SecureEnclavePasswordTests
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         using var password = Password(6);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = service.Enroll(password);
+        var (_, hwBlob) = service.Enrol(password);
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(package, requiresTouch: false), _ => 0,
@@ -272,7 +272,7 @@ public class SecureEnclavePasswordTests
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         using var password = Password(7);
         var service = new SecureEnclaveHardwareService(requirePresence: true);
-        var (_, hwBlob) = service.Enroll(password);
+        var (_, hwBlob) = service.Enrol(password);
         var (_, package) = SecureEnclaveSlotBlob.Split(hwBlob);
 
         var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(package, requiresTouch: true), _ => 0, password: null));
@@ -287,7 +287,7 @@ public class SecureEnclavePasswordTests
         var shim = new FakeSecureEnclaveShim();
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (kek, hwBlob) = service.Enroll(password: null);
+        var (kek, hwBlob) = service.Enrol(password: null);
 
         var recovered = service.Unlock(ConfigWith(hwBlob, requiresTouch: false), _ => 0,
             () => throw new InvalidOperationException("a password-free slot must not ask for the password"));
@@ -304,7 +304,7 @@ public class SecureEnclavePasswordTests
         var shim = new FakeSecureEnclaveShim();
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         var service = new SecureEnclaveHardwareService(requirePresence: true);
-        var (kek, hwBlob) = service.Enroll(password: null);
+        var (kek, hwBlob) = service.Enrol(password: null);
 
         var recovered = service.Unlock(ConfigWith(hwBlob, requiresTouch), _ => 0, password: null);
 
@@ -318,7 +318,7 @@ public class SecureEnclavePasswordTests
         var shim = new FakeSecureEnclaveShim { WithoutNewEntryPoints = true };
         using var _ = AppleSecureEnclaveInterop.UseShim(shim);
         var service = new SecureEnclaveHardwareService(requirePresence: false);
-        var (_, hwBlob) = service.Enroll(password: null);
+        var (_, hwBlob) = service.Enrol(password: null);
 
         var ex = Assert.Throws<TswapException>(() => service.Unlock(ConfigWith(hwBlob, requiresTouch: false), _ => 0, password: null));
 

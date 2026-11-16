@@ -76,7 +76,7 @@ public sealed class FleetMachine : IDisposable
     /// <summary>FIDO2 plan, task 8: the OS the guided init words and orders its list for (null: this one).</summary>
     public System.Runtime.InteropServices.OSPlatform? Os { get; set; }
 
-    /// <summary>Brief T27: the SSH transport this machine's <c>slot enroll --via</c> uses (null: the context's default).</summary>
+    /// <summary>Brief T27: the SSH transport this machine's <c>slot enrol --via</c> uses (null: the context's default).</summary>
     internal TswapCli.Ssh.ISshTransport? Ssh { get; set; }
 
     /// <summary>Brief T6: the record store's time seam (null: the system clock).</summary>
@@ -179,7 +179,7 @@ public sealed class FleetMachine : IDisposable
         if (SecureEnclave is not null) backends.Add(new SimulatedHardwareService(HardwareBackend.SecureEnclave, SecureEnclave));
         var fido2 = Fido2Keys is null ? null : new TswapCore.Vault.Fido2.Fido2Service(Fido2Keys);
         var unlocker = new VaultUnlocker(Keys, overrideKey: null, additionalBackends: backends, fido2: fido2);
-        // The test key is what HardwareServices.Enrollment seals to (init/request --tpm|--secure-enclave).
+        // The test key is what HardwareServices.Enrolment seals to (init/request --tpm|--secure-enclave).
         var storeTime = Time ?? (Clock is null ? null : new FuncTimeProvider(Clock));
         var store = VaultStores.Open(Dir, Ownership, storeTime, console.Error);
         if (store is RecordVaultStore records)

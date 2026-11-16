@@ -152,7 +152,7 @@ With YK2:  K2 = challenge(YK2),  K1 = K2 XOR xor_share
 Both produce the same master key. This meant:
 
 - **Carry one key daily, lock the other in a safe:** cold storage backup.
-- **No need to re-enroll if you lose one:** the XOR share and the remaining key reconstruct
+- **No need to re-enrol if you lose one:** the XOR share and the remaining key reconstruct
   everything.
 - **The XOR share alone is useless:** it needs a physical YubiKey to derive anything.
 - **Either key alone opens the vault** (with the vault files). Losing one key costs you no access:

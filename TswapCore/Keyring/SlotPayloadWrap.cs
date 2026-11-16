@@ -12,7 +12,7 @@ namespace TswapCore.Keyring;
 /// itself, but nothing here assumes a specific payload shape or length), this type AES-256-GCM
 /// encrypts/decrypts the payload with associated data binding <c>formatVersion</c>,
 /// <c>vaultId</c>, <c>k</c>, and <c>slotId</c> — see <see cref="BuildAad"/> for the exact
-/// layout. Binding these fields into the AEAD is the <b>primary</b> defense against threshold
+/// layout. Binding these fields into the AEAD is the <b>primary</b> defence against threshold
 /// downgrade: an attacker holding the synced files plus one enrolled device cannot silently
 /// rewrite <c>k = 2 -&gt; k = 1</c> (or swap in a different vault's slot, or replay an old
 /// <c>formatVersion</c>) because a mismatch on any bound field makes the AEAD unwrap itself

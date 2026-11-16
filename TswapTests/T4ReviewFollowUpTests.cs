@@ -8,7 +8,7 @@ using Xunit;
 namespace TswapTests;
 
 /// <summary>
-/// Follow-ups from the external security review of brief T4: (1) enrollment challenges the key
+/// Follow-ups from the external security review of brief T4: (1) enrolment challenges the key
 /// twice and refuses one that answers differently; (2) a corrupt YubiKey blob in one slot does
 /// not stop another slot from unlocking; (3) <c>slot add --yubikey</c> refuses a version 2
 /// keyring before sudo and before any unlock.
@@ -36,7 +36,7 @@ public class T4ReviewFollowUpTests : IDisposable
         return (exit, console.OutText, console.ErrorText);
     }
 
-    // --- 1. Enrollment double challenge ---
+    // --- 1. Enrolment double challenge ---
 
     /// <summary>One plugged-in key whose response to the same challenge alternates between two values.</summary>
     private sealed class AlternatingYubiKey(int serial) : IYubiKeyService
@@ -108,7 +108,7 @@ public class T4ReviewFollowUpTests : IDisposable
     }
 
     [Fact]
-    public void Enroll_ChallengesTheKeyTwiceWithTheSameChallenge()
+    public void Enrol_ChallengesTheKeyTwiceWithTheSameChallenge()
     {
         var keys = SimulatedYubiKeyService.WithKeys(SerialA);
 

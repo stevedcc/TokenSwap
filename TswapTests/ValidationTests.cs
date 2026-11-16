@@ -62,7 +62,7 @@ public class ValidationTests
         // A name containing a control character (ESC = 0x1B) should have it replaced with
         // '?' in the error message, not echoed raw, to prevent terminal injection.
         var ex = Assert.Throws<Exception>(() => Validation.ValidateName("bad\u001bname"));
-        // The sanitized form must appear (ESC replaced with '?')
+        // The sanitised form must appear (ESC replaced with '?')
         Assert.Contains("bad?name", ex.Message);
         // Every character in the message must be in the printable ASCII range or whitespace
         Assert.All(ex.Message, c => Assert.True(c >= 0x20 || c == '\n' || c == '\r' || c == '\t',

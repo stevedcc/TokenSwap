@@ -110,7 +110,7 @@ internal static class PlatformCryptoProviderInterop
     }
 
     /// <summary>
-    /// Enrollment: creates a new, randomly-named, non-exportable TPM-backed key and
+    /// Enrolment: creates a new, randomly-named, non-exportable TPM-backed key and
     /// RSA-OAEP-SHA256-encrypts <paramref name="plaintextKey"/> to it. The returned blob bundles
     /// the key's name with the ciphertext, so it is self-contained and useless off this machine.
     /// </summary>

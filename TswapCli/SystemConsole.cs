@@ -36,7 +36,7 @@ public sealed class SystemConsole : IConsole
             _input.DiscardTypeahead();
     }
 
-    public void SetForeground(ConsoleColor color) => Console.ForegroundColor = color;
+    public void SetForeground(ConsoleColor colour) => Console.ForegroundColor = colour;
     public void ResetColor() => Console.ResetColor();
 
     public string ReadPassword(TextWriter? echo = null)

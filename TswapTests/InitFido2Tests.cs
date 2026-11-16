@@ -88,8 +88,8 @@ public class InitFido2Tests : IDisposable
         Assert.Equal(vaultKey, SlotSecretPayload.Decode(payload).VaultKey);
 
         Assert.Equal([FakeFido2Op.MakeCredential, FakeFido2Op.GetHmacSecret], _fido2.Calls.Select(c => c.Op).Where(op => op != FakeFido2Op.Find));
-        Assert.Contains(Fido2SlotEnrollment.ResetWarning($"YubiKey {SerialA}"), stdout);
-        Assert.DoesNotContain(Fido2SlotEnrollment.MultiOsHint, stdout + stderr);
+        Assert.Contains(Fido2SlotEnrolment.ResetWarning($"YubiKey {SerialA}"), stdout);
+        Assert.DoesNotContain(Fido2SlotEnrolment.MultiOsHint, stdout + stderr);
         // The closing line says how to add a spare on every OS (final review).
         Assert.Contains("  tswap slot add --fido2 (with sudo, or from an elevated prompt on Windows)", stdout);
     }
@@ -121,7 +121,7 @@ public class InitFido2Tests : IDisposable
 
         Assert.True(exit == 0, stderr);
         Assert.Contains($"FIDO2 key:      {product}", stdout);
-        Assert.Contains(Fido2SlotEnrollment.ResetWarning(product), stdout);
+        Assert.Contains(Fido2SlotEnrolment.ResetWarning(product), stdout);
         Assert.Contains($"losing {product} and every key added later", stdout);
         Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
     }
@@ -294,7 +294,7 @@ public class InitFido2Tests : IDisposable
 
         var (exit, stdout, stderr) = Run(Dir("b"), "", "init", "--fido2");
         Assert.True(exit == 0, stderr);
-        Assert.Contains(Fido2SlotEnrollment.WindowsDialogLine, stdout);
+        Assert.Contains(Fido2SlotEnrolment.WindowsDialogLine, stdout);
         Assert.Empty(_terminal!.Reads);
         // Windows doesn't say which key answered: no serial, the model's AAGUID.
         var blob = Fido2Blob(DecodeKeyring(LoadConfig(Dir("b"))).Slots[0]);
@@ -312,7 +312,7 @@ public class InitFido2Tests : IDisposable
         var (exit, _, stderr) = Run(Dir(), "", "init", "--fido2");
 
         Assert.NotEqual(0, exit);
-        Assert.Contains(Fido2SlotEnrollment.RetrySafeText, stderr);
+        Assert.Contains(Fido2SlotEnrolment.RetrySafeText, stderr);
         Assert.False(File.Exists(Path.Combine(Dir(), "config.json")));
         Assert.False(Directory.Exists(Path.Combine(Dir(), "vault")));
     }

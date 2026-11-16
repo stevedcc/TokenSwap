@@ -37,7 +37,7 @@ private let ephemeralPublicKeyLength = 65 // 0x04 || X(32) || Y(32), uncompresse
 private let nonceLength = 12
 private let tagLength = 16
 
-/// Enrollment: creates a new Secure Enclave key (presence/biometry-gated) and ECIES-wraps
+/// Enrolment: creates a new Secure Enclave key (presence/biometry-gated) and ECIES-wraps
 /// `plaintext` to it. `outBlob` receives the key's own `dataRepresentation` — the caller must
 /// persist this; it is what `tswap_se_unwrap` needs to reconstitute the key later. `outCiphertext`
 /// receives the wrapped payload: ephemeral pubkey || nonce || ciphertext || tag.
@@ -81,7 +81,7 @@ public func tswap_se_wrap(
   }
 }
 
-/// Enrollment, brief T11: as `tswap_se_wrap`, plus the key's presence policy. `requirePresence`
+/// Enrolment, brief T11: as `tswap_se_wrap`, plus the key's presence policy. `requirePresence`
 /// 1 creates the key with `[.privateKeyUsage, .userPresence]` (every unwrap prompts for Touch ID
 /// or the login password), 0 with `[.privateKeyUsage]` (no prompt); any other value returns -4
 /// without creating a key, so a caller passing garbage never gets a key without presence. A new
@@ -224,7 +224,7 @@ private func laErrorCode(_ error: Error) -> Int? {
   return nil
 }
 
-/// Enrollment, brief T17: as `tswap_se_wrap_v2`, but the key's flags add `.applicationPassword` and the
+/// Enrolment, brief T17: as `tswap_se_wrap_v2`, but the key's flags add `.applicationPassword` and the
 /// key is created under a context carrying `credential` (the 32-byte stretched vault password).
 /// `requirePresence` 1 gives `[.privateKeyUsage, .userPresence, .applicationPassword]`, 0
 /// `[.privateKeyUsage, .applicationPassword]`. Returns 0 on success; -1 buffer too small; -2 a

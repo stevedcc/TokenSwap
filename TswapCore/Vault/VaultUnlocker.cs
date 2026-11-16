@@ -149,9 +149,9 @@ public sealed class VaultUnlocker
 
     private byte[] Unlock(Config config, YubiKeySelection selection, UnlockSources sources, SlotTrace trace)
     {
-        // Issue #121 pending-enrollment guard: a machine that has run 'slot request' but not yet
+        // Issue #121 pending-enrolment guard: a machine that has run 'slot request' but not yet
         // 'slot accept' has real, working hardware fields (YubiKeySerials/RedundancyXor/etc.) but
-        // no finalized Keyring — its hardware-recovered bytes are a KEK_slot with nothing real to
+        // no finalised Keyring — its hardware-recovered bytes are a KEK_slot with nothing real to
         // unwrap yet, not a usable vault key. Without this check that KEK_slot would silently be
         // treated as the vault master key directly (the same code path a legacy non-keyring vault
         // uses), letting a command write secrets under a key that 'slot accept' is about to make
@@ -159,7 +159,7 @@ public sealed class VaultUnlocker
         // approve file and overwrites Config.Keyring. See Config.PendingSlotId's doc comment.
         if (config.Keyring is null && config.PendingSlotId is not null)
             throw new TswapException(
-                "This machine has a pending 'slot request' enrollment that has not been completed yet. " +
+                "This machine has a pending 'slot request' enrolment that has not been completed yet. " +
                 "Run 'tswap slot accept <approve-file>' (using the approve file from an already-enrolled " +
                 "machine) before using this vault.");
 
@@ -1241,7 +1241,7 @@ public sealed class VaultUnlocker
     /// <summary>
     /// Recovers this machine's hardware-backed key material — <c>KEK_slot</c> for a keyring
     /// vault, or the vault master key directly for a classic non-keyring vault — without
-    /// attempting any keyring unwrap and without the pending-enrollment guard <see cref="Unlock"/>
+    /// attempting any keyring unwrap and without the pending-enrolment guard <see cref="Unlock"/>
     /// applies. <c>slot accept</c> calls it for a pending <c>slot request --tpm</c> /
     /// <c>--secure-enclave</c> (brief T5), whose blob <see cref="HardwareBlobLocator"/> reads from
     /// <see cref="Config.PendingSlotHwBlob"/>; a one-key YubiKey request re-derives <c>KEK_slot</c>
@@ -1348,7 +1348,7 @@ public sealed class VaultUnlocker
     }
 
     /// <summary>
-    /// Resolves which connected YubiKey to use for enrollment/entropy flows (init,
+    /// Resolves which connected YubiKey to use for enrolment/entropy flows (init,
     /// create's hardware-entropy path). YubiKey-specific: other backends have no serials.
     /// </summary>
     public int SelectConnectedSerial(Func<IReadOnlyList<int>, int> chooseSerial, int? requiredSerial = null)

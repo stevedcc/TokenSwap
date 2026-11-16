@@ -12,7 +12,7 @@ Old links to these sections land here.
 
 <a id="the-seam"></a> [the-seam](docs/design/hardware-backends.md#the-seam)
 
-<a id="the-enrollment-seam-issue-151"></a> [the-enrollment-seam-issue-151](docs/design/hardware-backends.md#the-enrollment-seam-issue-151)
+<a id="the-enrollment-seam-issue-151"></a> [the-enrollment-seam-issue-151](docs/design/hardware-backends.md#the-enrolment-seam-issue-151)
 
 <a id="the-simulated-backend-issue-153"></a> [the-simulated-backend-issue-153](docs/design/hardware-backends.md#the-simulated-backend-issue-153)
 

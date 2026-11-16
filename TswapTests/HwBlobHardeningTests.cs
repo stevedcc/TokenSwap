@@ -22,7 +22,7 @@ public class HwBlobHardeningTests
         hwBlob is null ? null : Convert.ToBase64String(hwBlob));
 
     private static string ApproveJson(byte keyringVersion, params ReadOnlySpan<SlotDto> slots) =>
-        SlotEnrollmentFileCodec.SerializeApprove(new SlotApproveFile(
+        SlotEnrolmentFileCodec.SerializeApprove(new SlotApproveFile(
             SlotApproveFile.CurrentFormatVersion,
             keyringVersion,
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyringFormat.VaultIdSize)),
@@ -38,7 +38,7 @@ public class HwBlobHardeningTests
     {
         var json = ApproveJson(2, Slot(SlotKind.Machine, [1, 2, 3]));
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
         Assert.Contains("Malformed slot approve file", ex.Message);
         Assert.Contains("version 2", ex.Message);
     }
@@ -48,7 +48,7 @@ public class HwBlobHardeningTests
     {
         var json = ApproveJson(3, Slot(SlotKind.Machine, [1, 2, 3]), Slot(SlotKind.Recovery, [4]));
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
         Assert.Contains("Malformed slot approve file", ex.Message);
         Assert.Contains("recovery slot", ex.Message);
     }
@@ -58,7 +58,7 @@ public class HwBlobHardeningTests
     {
         var json = ApproveJson(3, Slot(SlotKind.Machine, new byte[KeyringFormat.MaxHwBlobSize + 1]));
 
-        var ex = Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        var ex = Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
         Assert.Contains("Malformed slot approve file", ex.Message);
         Assert.Contains($"{KeyringFormat.MaxHwBlobSize}", ex.Message);
     }
@@ -68,7 +68,7 @@ public class HwBlobHardeningTests
     {
         var json = ApproveJson(3, Slot(SlotKind.Machine, null) with { HwBlob = "not base64!!" });
 
-        Assert.Throws<TswapException>(() => SlotEnrollmentFileCodec.DeserializeApprove(json));
+        Assert.Throws<TswapException>(() => SlotEnrolmentFileCodec.DeserializeApprove(json));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class HwBlobHardeningTests
     {
         var json = ApproveJson(3, Slot(SlotKind.Machine, new byte[KeyringFormat.MaxHwBlobSize]), Slot(SlotKind.Recovery, null));
 
-        var file = SlotEnrollmentFileCodec.DeserializeApprove(json);
+        var file = SlotEnrolmentFileCodec.DeserializeApprove(json);
 
         Assert.Equal(2, file.ExistingSlots.Count);
     }

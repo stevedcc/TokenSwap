@@ -148,11 +148,11 @@ public class KeyringV2FixtureTests : IDisposable
     [Fact]
     public void Fixture_RefusesToApproveAOneKeyYubiKeyMachine_AndKeepsWorking()
     {
-        // Brief T4: a slot request now enrolls one YubiKey, whose slot carries its parameters in a
+        // Brief T4: a slot request now enrols one YubiKey, whose slot carries its parameters in a
         // hwBlob. A version 2 keyring has no hwBlob column and its slots' AEAD binds version 2, so
         // it cannot take such a slot: approve refuses with what to do instead, writes nothing, and
         // the vault keeps working with its existing slots. (Before T4 this test approved a pair
-        // machine into the version 2 keyring; pair enrollments are gone.)
+        // machine into the version 2 keyring; pair enrolments are gone.)
         var newMachineDir = Path.Combine(_dir, "new-machine");
         Directory.CreateDirectory(newMachineDir);
         var newMachineKey = Convert.FromHexString("E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5E5");

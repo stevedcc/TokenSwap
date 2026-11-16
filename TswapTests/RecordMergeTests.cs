@@ -212,10 +212,10 @@ public class RecordMergeTests
         var burns = Enumerable.Range(0, 20).Select(i => Burn(S(10 + i), S(2000 + i), $"old {i}")).ToList();
         burns.Add(Burn(current, S(1500), "current"));
 
-        var normalized = Value(current, "v", [.. burns]);
+        var normalised = Value(current, "v", [.. burns]);
 
-        Assert.Equal(RecordMerge.MaxBurns, normalized.Burns.Count);
-        Assert.Equal("current", normalized.OutstandingBurn!.Reason);
+        Assert.Equal(RecordMerge.MaxBurns, normalised.Burns.Count);
+        Assert.Equal("current", normalised.OutstandingBurn!.Reason);
     }
 
     [Fact]

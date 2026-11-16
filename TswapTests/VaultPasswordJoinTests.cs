@@ -250,7 +250,7 @@ public class VaultPasswordJoinTests : IDisposable
         var json = JsonNode.Parse(File.ReadAllText(ApprovePath))!.AsObject();
         json["SomeFutureMember"] = "ignored by this reader";
 
-        var approve = SlotEnrollmentFileCodec.DeserializeApprove(json.ToJsonString());
+        var approve = SlotEnrolmentFileCodec.DeserializeApprove(json.ToJsonString());
 
         Assert.Equal(Convert.ToBase64String(ApproverVaultPasswordBytes), approve.VaultPassword);
     }

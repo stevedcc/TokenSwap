@@ -53,7 +53,7 @@ internal sealed class VaultOwnerScope(Func<IVaultStore> openStore)
 /// Brief T12 decision 1 (issue #157): the Secure Enclave service, run as the vault folder's owner.
 /// Under sudo, LocalAuthentication evaluates Touch ID / the password for the <b>effective</b> uid; as
 /// root that asks for "System Administrator", which nobody can answer. Each entry point that reaches
-/// the Secure Enclave (<see cref="Unlock"/>, <see cref="Enroll"/>; <c>Wrap</c>/<c>Unwrap</c> are on
+/// the Secure Enclave (<see cref="Unlock"/>, <see cref="Enrol"/>; <c>Wrap</c>/<c>Unwrap</c> are on
 /// no interface, so nothing reaches them past this decorator) runs once inside
 /// <see cref="VaultOwnerScope"/>; <see cref="Backend"/> and <see cref="IsSimulated"/> touch no
 /// hardware and pass through. Only <see cref="HardwareServices"/> builds it, and it wraps only the
@@ -65,22 +65,22 @@ internal sealed class VaultOwnerScope(Func<IVaultStore> openStore)
 /// the calling thread: it blocks during the Touch ID prompt, inside the scope. An enrolment that
 /// reached a scoped call from inside another would only nest a switch to the same owner (harmless).</para>
 /// </summary>
-internal sealed class OwnerScopedHardwareService : IHardwareKeyService, IHardwareEnrollmentService
+internal sealed class OwnerScopedHardwareService : IHardwareKeyService, IHardwareEnrolmentService
 {
     private readonly IHardwareKeyService _unlock;
-    private readonly IHardwareEnrollmentService _enroll;
+    private readonly IHardwareEnrolmentService _enrol;
     private readonly VaultOwnerScope _scope;
 
-    private OwnerScopedHardwareService(IHardwareKeyService unlock, IHardwareEnrollmentService enroll, VaultOwnerScope scope)
+    private OwnerScopedHardwareService(IHardwareKeyService unlock, IHardwareEnrolmentService enrol, VaultOwnerScope scope)
     {
         _unlock = unlock;
-        _enroll = enroll;
+        _enrol = enrol;
         _scope = scope;
     }
 
     /// <summary>Wraps <paramref name="service"/> (both seams of one Secure Enclave service).</summary>
     public static OwnerScopedHardwareService Wrap<TService>(TService service, VaultOwnerScope scope)
-        where TService : IHardwareKeyService, IHardwareEnrollmentService
+        where TService : IHardwareKeyService, IHardwareEnrolmentService
     {
         var backend = ((IHardwareKeyService)service).Backend;
         if (backend != HardwareBackend.SecureEnclave)
@@ -95,6 +95,6 @@ internal sealed class OwnerScopedHardwareService : IHardwareKeyService, IHardwar
     public byte[] Unlock(Config config, Func<IReadOnlyList<int>, int> chooseSerial, VaultPasswordProvider? password) =>
         _scope.Run(() => _unlock.Unlock(config, chooseSerial, password));
 
-    /// <summary>Creates the key (the inner <c>Enroll</c> calls <c>Wrap</c> itself: one scope).</summary>
-    public HardwareEnrollment Enroll(StretchedPassword? password) => _scope.Run(() => _enroll.Enroll(password));
+    /// <summary>Creates the key (the inner <c>Enrol</c> calls <c>Wrap</c> itself: one scope).</summary>
+    public HardwareEnrolment Enrol(StretchedPassword? password) => _scope.Run(() => _enrol.Enrol(password));
 }
