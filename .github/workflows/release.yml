@@ -36,7 +36,8 @@ permissions:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    # Pinned to 24.04 like ci.yml (ubuntu-latest became 26.04 on 2026-11-16; see the 26.04 support issue).
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -112,7 +113,9 @@ jobs:
       matrix:
         include:
           - rid: linux-x64
-            os: ubuntu-latest
+            # 24.04, like linux-arm64: a NativeAOT binary needs at least the glibc of the image it was built on,
+            # so building on 26.04 would stop the release running on older distributions.
+            os: ubuntu-24.04
           - rid: linux-arm64
             os: ubuntu-24.04-arm
           - rid: win-x64

@@ -69,9 +69,13 @@ public sealed record Fido2KeyRef(string Id);
 
 /// <summary>
 /// A plugged-in key as <see cref="IFido2Keys.Find"/> read it: its handle, serial (null when the key reports none),
-/// AAGUID (model), whether a FIDO2 PIN is set (what enrolment checks) and the PIN tries left (null when unknown).
+/// AAGUID (model), whether a FIDO2 PIN is set (what enrolment checks), the PIN tries left (null when unknown), the USB
+/// product name (libfido2 only) and, brief T31 (#290.1), <paramref name="ReinsertRequired"/>: the key reported that it
+/// takes no PIN until it is unplugged and plugged in again (CTAP 2.1 powerCycleState; null: not reported, as libfido2
+/// never does). Keep it the last member: a decorator copies a record with <c>with</c>, never rebuilds it positionally.
 /// </summary>
-public sealed record Fido2KeyInfo(Fido2KeyRef Key, int? Serial, Guid Aaguid, bool PinSet, int? PinRetries, string? Product = null);
+public sealed record Fido2KeyInfo(Fido2KeyRef Key, int? Serial, Guid Aaguid, bool PinSet, int? PinRetries, string? Product = null,
+    bool? ReinsertRequired = null);
 
 /// <summary>
 /// A credential make-credential returned: its id, the AAGUID from the attested credential data (zero on Windows when

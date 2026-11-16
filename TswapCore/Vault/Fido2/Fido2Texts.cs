@@ -19,8 +19,12 @@ public static class Fido2Texts
     public const string NoTerminal =
         "A FIDO2 slot needs a person at a terminal to type the key's PIN and touch the key; there is no terminal here, so the key was not used.";
 
-    /// <summary>Said after the PIN is typed for each FIDO2 key operation on Linux and macOS (the device layer has no touch callback).</summary>
-    public const string TouchLine = "Touch your security key when it blinks.";
+    /// <summary>
+    /// Said after the PIN is typed for each FIDO2 key operation on Linux and macOS (the device layer has no touch
+    /// callback, and libfido2 checks the PIN and asks for the touch in one call), so it comes before the key has checked
+    /// the PIN: brief T31 (#290.2) says the blink depends on it.
+    /// </summary>
+    public const string TouchLine = "Touch your security key when it blinks (it blinks only if the PIN is right).";
 
     /// <summary>Said before each FIDO2 key operation on Windows.</summary>
     public const string WindowsTouchLine = "Follow Windows' security key dialog: the key's PIN, then a touch.";
@@ -88,6 +92,13 @@ public static class Fido2Texts
     public static string CredentialGone(string name) =>
         $"{name} no longer holds this slot's credential (a FIDO2 reset deletes it, and the slot can't be opened again); {EnrolAgain}.";
 
+    /// <summary>
+    /// Brief T31 (#294.1), Windows: added to a cancel at unlock. A key holding none of the vault's credentials makes
+    /// Windows' dialog say "This security key doesn't look familiar", and closing it is the only way out: a cancel.
+    /// </summary>
+    public const string WindowsUnfamiliarKey =
+        $"If Windows said the key doesn't look familiar, it holds none of this vault's FIDO2 credentials: use a key that has a slot (`tswap slots` lists them), or, after a FIDO2 reset, {EnrolAgain}.";
+
     /// <summary>Windows: the key picked in the dialog holds none of the credentials asked for (no probe, so no certainty).</summary>
     public const string PickedHoldsNone =
         $"The key you picked holds none of this vault's FIDO2 credentials: another key, or a FIDO2 reset deleted it (then {EnrolAgain}).";
@@ -149,6 +160,23 @@ public static class Fido2Texts
     public static string Unsupported(string? detail) => detail is null
         ? "Windows' WebAuthn API on this machine is too old for FIDO2 slots (needs version 4)."
         : $"Windows' WebAuthn API on this machine is too old for FIDO2 slots (version {detail}; needs 4).";
+
+    /// <summary>
+    /// Brief T31 (#289): the device-layer details that mean no answer came from the key: the SDK's <c>HidrawFailed</c>
+    /// and <c>HidOpenFailed</c>, libfido2's <c>FIDO_ERR_TX</c> and <c>FIDO_ERR_RX</c>, and every <c>OpenFailed:…</c>.
+    /// </summary>
+    internal static bool IsUnreachable(string? detail) =>
+        detail is "HidrawFailed" or "HidOpenFailed" or "FIDO_ERR_TX" or "FIDO_ERR_RX"
+        || detail?.StartsWith(OpenFailedPrefix, StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// Brief T31 (#289): a key tswap couldn't reach (<see cref="IsUnreachable"/>), often one just plugged in that udev
+    /// hasn't given access to yet. No claim about PIN tries: a read failure after the PIN was sent can't tell whether
+    /// the key counted it. On Linux, a second sentence for the case that keeps failing (no active local seat).
+    /// </summary>
+    public static string CouldNotTalk(string name, string detail, bool linux) =>
+        $"{name}: tswap couldn't talk to the key ({detail}). If it was just plugged in, wait a second and run the command again."
+        + (linux ? " If that keeps failing: Linux lets only the user logged in at the machine open a security key (not over SSH); see docs/install.md." : "");
 
     public static string Other(string name, string? detail) =>
         detail is null ? $"{name}: the FIDO2 operation failed." : $"{name}: the FIDO2 operation failed ({detail}).";

@@ -8,6 +8,16 @@ procedure for a no-touch Secure Enclave slot on a Mac, with its recorded results
 Install tswap first: [install.md](install.md). What each kind of slot protects against, and how
 they compare, is in [security-model.md](security-model.md#posture-per-backend).
 
+**Type your answer after the prompt appears.** At a terminal, tswap discards anything typed before
+it reads an answer (#293), at every prompt: the vault password, the guided `init`'s questions, the
+YubiKey choice, `add`'s value, `export` and `import` passphrases, a FIDO2 PIN. That keeps a stray
+touch on a YubiKey (which types a one-time code) from becoming the answer or a wrong PIN, but it
+also drops a real answer typed early, while tswap is still listing keys, stretching a password or
+enrolling a key; on a question with a default (`(Y/n)`, `(y/N)`), Enter after a dropped answer then
+takes the default. Questions that destroy or replace something are `(yes/no)`, with no default, and
+ask again. Piped or redirected input is never discarded. (A second line typed in the same burst as an
+earlier answer may already have been read and can answer the next question.)
+
 ## Preparing a YubiKey
 
 Skip this if you won't use a YubiKey, or will use only its FIDO2 slot ([FIDO2 slots](#fido2-slots):
@@ -224,7 +234,11 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
 
 - **Linux and macOS:** tswap asks at the terminal, `FIDO2 PIN for YubiKey N: `, without echo. It
   reads the PIN from the terminal itself (`/dev/tty`), not from stdin, so `--recovery-key-stdin`
-  works alongside. Once the PIN is typed it says `Touch your security key when it blinks.`
+  works alongside. Once the PIN is typed it says `Touch your security key when it blinks (it
+  blinks only if the PIN is right).`
+  Anything typed before a prompt (a YubiKey's one-time code from a stray touch, say) is discarded
+  when tswap reads the answer, so it can't become the answer or a wrong PIN; piped input is never
+  discarded.
 - **Windows:** Windows' security key dialog asks for the PIN and the touch; tswap says
   `Follow Windows' security key dialog: the key's PIN, then a touch.` The dialog owns PIN entry:
   tswap can't count the tries there, and the dialog may ask for the PIN again after a wrong one
@@ -236,6 +250,8 @@ PIN is the key's own FIDO2 PIN (the one websites ask for), not a tswap password.
   allows 8 wrong PINs in all). After three wrong PINs in a row, unplug the key and plug it in again
   before the next try.` Eight wrong PINs in all block the key's FIDO2 until a FIDO2 reset, which
   deletes every FIDO2 credential on it (below).
+  A key whose PIN is blocked, or a YubiKey that needs re-inserting after three wrong PINs, is
+  refused before the PIN prompt.
 - **tswap never changes a PIN and never resets a key.** The one PIN it writes is a first one: on
   Linux and macOS a key without a FIDO2 PIN gets `YubiKey N has no FIDO2 PIN; a FIDO2 slot needs
   one. Set a FIDO2 PIN on it now? (Y/n): ` (Enter is yes) at enrolment, then the new PIN twice (at least 4

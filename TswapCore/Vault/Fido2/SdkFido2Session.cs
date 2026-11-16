@@ -118,16 +118,25 @@ internal sealed class SdkFido2Devices(TextWriter? notices = null) : ISdkFido2Dev
         using var session = new Fido2Session(device);
         var info = session.AuthenticatorInfo;
         var pinSet = info.GetOptionValue(AuthenticatorOptions.clientPin) == OptionValue.True;
-        int? retries = pinSet ? PinRetries(session.Connection) : null;
-        return new Fido2KeyInfo(RefFor(device), device.SerialNumber, Fido2Aaguid.ToGuid(info.Aaguid.Span), pinSet, retries);
+        var (retries, reinsert) = pinSet ? PinRetries(session.Connection) : ((int?)null, (bool?)null);
+        return new Fido2KeyInfo(RefFor(device), device.SerialNumber, Fido2Aaguid.ToGuid(info.Aaguid.Span), pinSet, retries,
+            ReinsertRequired: reinsert);
     }
 
-    /// <summary>The PIN tries left (ClientPin getPINRetries), a CTAPHID error frame refused as for the ceremonies.</summary>
-    private static int PinRetries(IYubiKeyConnection connection)
+    /// <summary>The key's PIN state (ClientPin getPINRetries), read through <see cref="PinState"/>.</summary>
+    private static (int? Retries, bool? ReinsertRequired) PinRetries(IYubiKeyConnection connection) =>
+        PinState(SdkAnswer.Of(connection, new GetPinRetriesCommand()));
+
+    /// <summary>
+    /// Brief T31 (#290.1): getPINRetries' answer, a CTAPHID error frame refused as for the ceremonies: the tries left
+    /// (CTAP 2.1 <c>0x03</c> pinRetries) and whether the key takes no PIN until it is re-inserted (<c>0x04</c>
+    /// powerCycleState; null when the key leaves it out).
+    /// </summary>
+    internal static (int Retries, bool? ReinsertRequired) PinState(ResponseApdu answer)
     {
-        var answer = SdkAnswer.Of(connection, new GetPinRetriesCommand());
         SdkFido2Keys.RequireOk(answer);
-        return new GetPinRetriesResponse(answer).GetData().retriesRemaining;
+        var (retriesRemaining, powerCycleRequired) = new GetPinRetriesResponse(answer).GetData();
+        return (retriesRemaining, powerCycleRequired);
     }
 }
 

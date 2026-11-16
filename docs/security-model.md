@@ -496,7 +496,9 @@ it would need the PIN (for example from a keylogger) and someone to touch the ke
 - **PIN tries are counted by the key.** Eight wrong PINs in all block the key's FIDO2 until a FIDO2
   reset (which deletes every credential on it); after three wrong in a row the key takes no more
   until it is unplugged and plugged in again. tswap never retries a wrong PIN itself, shows the
-  tries left, and tries FIDO2 slots last, after every slot that needs no PIN.
+  tries left, and tries FIDO2 slots last, after every slot that needs no PIN. A key whose PIN is
+  blocked, or a YubiKey that needs re-inserting after three wrong PINs, is refused before the PIN
+  prompt.
 - **On Windows the dialog owns PIN entry.** Windows' security key dialog asks for the PIN, so tswap
   can't count the tries there, and the dialog may ask again after a wrong PIN within one unlock:
   those tries are the dialog's, not tswap's. tswap never sees the PIN on Windows.

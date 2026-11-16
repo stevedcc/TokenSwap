@@ -133,6 +133,43 @@ public sealed class GuidedInitFido2Tests : IDisposable
         Assert.True(namesExit == 0, namesErr);
     }
 
+    // ---- Brief T31 (#294.3): once enrolled, a FIDO2 slot has one name in the reset warning, the summary and the
+    // closing "losing ..." line
+
+    [Fact]
+    public void GuidedInit_Windows_Fido2SlotNamedByItsModelOnceEnrolled()
+    {
+        Assert.Equal(Fido2TestSlots.ModelName, YubicoAaguids.ModelName(Fido2TestSlots.Aaguid));
+        var m = Machine(OSPlatform.Windows);
+        m.Fido2Keys!.Picked = m.Fido2Keys.AddKey(null, Fido2TestSlots.Aaguid);
+
+        // Enter, pick 1, recovery (default yes), other machines no.
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Equal([WindowsFido2Entry], Entries(stdout));
+        Assert.Contains($"  {Fido2TestSlots.ModelName}, FIDO2: no password", stdout);
+        Assert.Contains(Fido2SlotEnrollment.ResetWarning(Fido2TestSlots.ModelName), stdout);
+        Assert.Contains($"total hardware loss ({Fido2TestSlots.ModelName}, FIDO2", stdout);
+        Assert.DoesNotContain("a security key's FIDO2 slot: ", stdout);
+    }
+
+    [Fact]
+    public void GuidedInit_OtherBrand_ResetWarningNamesTheProduct()
+    {
+        const string product = "TOKEN2 FIDO2 Security Key(0024)";
+        var m = Machine(OSPlatform.Linux);
+        m.Fido2Keys!.AddKey(null, Guid.Parse("eabb46cc-e241-80bf-ae9e-96fa6d2975cf")).Product = product;
+        m.Terminal!.Enqueue(Pin, Pin);
+
+        var (exit, stdout, stderr) = m.RunOnTerminal("\n1\n\nn\n", "init", "--no-password");
+
+        Assert.True(exit == 0, stderr + stdout);
+        Assert.Contains(Fido2SlotEnrollment.ResetWarning(product), stdout);
+        Assert.Contains($"  {product}, FIDO2: no password", stdout);
+        Assert.DoesNotContain("the security key this slot was made with", stdout + stderr);
+    }
+
     [Fact]
     public void GuidedInit_BothSlotsForOneKey_GivesTwoSlots()
     {

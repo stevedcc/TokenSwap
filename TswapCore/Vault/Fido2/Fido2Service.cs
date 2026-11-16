@@ -42,6 +42,7 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null, bo
         {
             if (!key.PinSet)
                 throw new Fido2Exception(Fido2Failure.NoPin, key.Serial, null, Fido2Texts.NoPin(name));
+            RefuseKeyThatTakesNoPin(key, name);
             foreach (var slot in vaultFido2Slots)
             {
                 var holder = Call(() => keys.FindHolder(slot.CredentialId), name, key.Serial);
@@ -78,6 +79,8 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null, bo
         var serial = key?.Serial ?? (blobs.Count == 1 ? blobs[0].Serial : null);
         if (pin is null)
             throw new Fido2Exception(Fido2Failure.NoTerminal, serial, null, Fido2Texts.NoTerminal);
+        if (key is not null)
+            RefuseKeyThatTakesNoPin(key, name);
 
         List<(byte[] CredentialId, byte[] PrfInput)> allowed = [.. blobs.Select(b => (b.CredentialId, b.PrfInput))];
         var answer = Call(() => keys.GetHmacSecret(key?.Key, allowed, DevicePin(pin, name, key?.PinRetries, newPin: false)),
@@ -149,6 +152,21 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null, bo
     public string KeyName(Fido2SlotBlob blob) => Fido2SlotBlob.DisplayName(blob.Serial, blob.Aaguid);
 
     public string KeyName(Fido2KeyInfo key) => Fido2Texts.KeyName(key);
+
+    /// <summary>
+    /// Brief T31 (#290.1): a key whose PIN is blocked, or one that reported it needs re-inserting, is refused before any
+    /// device call and before the PIN is asked, with the texts the key's own refusal would give. The state is the one
+    /// read when the key was listed or located earlier in the run (at enrolment that can be a minute earlier); libfido2
+    /// reports no re-insert state, so such a key is asked as before and refused by the key.
+    /// </summary>
+    private static void RefuseKeyThatTakesNoPin(Fido2KeyInfo key, string name)
+    {
+        if (key.PinRetries == 0)
+            throw new Fido2Exception(Fido2Failure.PinBlocked, key.Serial, 0, Fido2Texts.PinBlocked(name));
+        if (key.ReinsertRequired == true)
+            throw new Fido2Exception(Fido2Failure.PinNeedsReinsert, key.Serial, key.PinRetries,
+                Fido2Texts.PinNeedsReinsert(name, key.PinRetries));
+    }
 
     private void RequireKeyExactlyWhenListing(Fido2KeyInfo? key)
     {
@@ -223,9 +241,9 @@ public sealed class Fido2Service(IFido2Keys keys, TextWriter? verbose = null, bo
             // Windows: its WebAuthn API is too old. Linux and macOS (libfido2): the key refused an option or extension.
             Fido2Failure.Unsupported => CanList ? Fido2Texts.KeyUnsupported(name, e.Detail) : Fido2Texts.Unsupported(e.Detail),
             Fido2Failure.CredentialExcluded => Fido2Texts.AlreadyHasSlot(name),
-            // Brief T19: a listed key this user can't open (Linux: no active local seat, e.g. over SSH).
-            _ when _linux && e.Detail?.StartsWith(Fido2Texts.OpenFailedPrefix, StringComparison.Ordinal) == true =>
-                Fido2Texts.Other(name, e.Detail) + " " + Fido2Texts.NoDeviceAccess,
+            // Brief T31 (#289): no answer from the key (often one just plugged in), or, brief T19, a listed key this user
+            // can't open (Linux: no active local seat, e.g. over SSH): wait and run the command again.
+            Fido2Failure.Other when Fido2Texts.IsUnreachable(e.Detail) => Fido2Texts.CouldNotTalk(name, e.Detail!, _linux),
             _ => Fido2Texts.Other(name, e.Detail),
         };
         return new Fido2Exception(e.Kind, serial, e.RetriesLeft, text);

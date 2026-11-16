@@ -154,7 +154,15 @@ internal static class Fido2SlotEnrollment
             if (!YesNo.Ask(terminal.Write, terminal.ReadLine, $"{Fido2Texts.NoPin(name)} Set a FIDO2 PIN on it now?", defaultAnswer: true))
                 throw new TswapException($"{Fido2Texts.NoPin(name)} No PIN was set. No slot was added.");
         }
-        fido2.SetPin(key, Fido2PinPrompt.For(ctx));
+        try
+        {
+            fido2.SetPin(key, Fido2PinPrompt.For(ctx));
+        }
+        catch (Fido2Exception e) when (e.Kind == Fido2Failure.Cancelled)
+        {
+            // Brief T31 (#290 comment): Enter at an empty new PIN is the "no" answer, said as such (there was no touch).
+            throw new TswapException($"{Fido2Texts.NoPin(name)} No PIN was set. No slot was added.", 1, e);
+        }
         ctx.Console.Out.WriteLine($"✓ {name} has a FIDO2 PIN now.");
         return fido2.ListKeys().FirstOrDefault(k => k.Key == key.Key)
             ?? throw new TswapException(Fido2Texts.NotPluggedIn(name));
@@ -235,6 +243,14 @@ internal static class Fido2SlotEnrollment
             CryptographicOperations.ZeroMemory(opened.Output);
         }
     }
+
+    /// <summary>
+    /// Brief T31 (#291.2, #294.3): the one name of an enrolled key, for the lines after its enrolment. On Linux and macOS
+    /// the listed key's (serial, Yubico model, or USB product), as the enrolment's own lines and PIN prompts said it; on
+    /// Windows, where no key is listed, the slot's (the model from the AAGUID).
+    /// </summary>
+    public static string EnrolledName(IFido2Service fido2, Fido2KeyInfo? key, Fido2SlotBlob blob) =>
+        key is not null ? fido2.KeyName(key) : fido2.KeyName(blob);
 
     /// <summary>After a FIDO2 enrolment: what a reset does.</summary>
     public static void PrintResetWarning(IConsole c, string keyName) => c.Out.WriteLine(ResetWarning(keyName));
