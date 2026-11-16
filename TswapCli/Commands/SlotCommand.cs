@@ -79,6 +79,7 @@ public sealed partial class SlotCommand : ICliCommand
             "add" => ExecuteAdd(ctx, rest),
             "merge" => ExecuteMerge(ctx, rest),
             "enroll" => ExecuteEnroll(ctx, rest),
+            "stage" => ExecuteStage(ctx, rest),
             _ => throw new UsageException(Usage(ctx)),
         };
     }
@@ -455,12 +456,17 @@ public sealed partial class SlotCommand : ICliCommand
     /// </summary>
     private static int ExecuteApprove(CommandContext ctx, string[] args)
     {
-        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(args);
         var approveUsage = $"{ctx.Prefix} slot approve <request-file> <approve-file> [{RecoveryKeyFlag}]";
-        if (positional.Length != 2 || positional.Any(a => a.StartsWith("--")))
+        // Brief T28: --staged <id> --expect <sha256> reads the request from the staging folder and writes approve.json there.
+        var (stagedArgs, stagedId, expect) = SplitStaged(args, $"{ctx.Prefix} {StagedApproveForm}");
+        var (positional, withRecoveryKey) = SplitRecoveryKeyFlag(stagedArgs);
+        if (stagedId is not null && (positional.Length != 0 || withRecoveryKey))
+            throw new UsageException($"{ctx.Prefix} {StagedApproveForm}" +
+                "\n--staged takes no file and no --recovery-key-stdin: the request is the staged one, and the vault opens with this machine's hardware.");
+        if (stagedId is null && (positional.Length != 2 || positional.Any(a => a.StartsWith("--"))))
             throw new UsageException(approveUsage);
-        var requestPath = positional[0];
-        var approvePath = positional[1];
+        var requestPath = stagedId is null ? positional[0] : "";
+        var approvePath = stagedId is null ? positional[1] : "";
         // Brief T27: a '-' request file is read from stdin, which then can't carry the recovery key too.
         if (requestPath == StdioPath && withRecoveryKey)
             throw new UsageException(approveUsage + StdinCarriesOneText("request file"));
@@ -483,7 +489,13 @@ public sealed partial class SlotCommand : ICliCommand
         var c = ctx.Console;
 
         string requestText;
-        if (requestPath == StdioPath)
+        string? stagedFolder = null;
+        if (stagedId is not null)
+        {
+            (requestText, stagedFolder) = ReadStaged(ctx, stagedId, expect!, RequestFileName, "request file", "approved");
+            requestPath = Path.Combine(stagedFolder, RequestFileName);
+        }
+        else if (requestPath == StdioPath)
             requestText = ReadStdinFile(ctx, "slot approve", "request file");
         else if (!File.Exists(requestPath))
             throw new TswapException($"Slot request file not found: {requestPath}");
@@ -571,7 +583,17 @@ public sealed partial class SlotCommand : ICliCommand
             vaultPassword is null ? null : Convert.ToBase64String(vaultPassword));
 
         var approveText = SlotEnrollmentFileCodec.SerializeApprove(approveFile);
-        if (approveOut is null)
+        // Brief T28 (A3): staged, the approve file is serialised once into a buffer, that buffer is written, and the
+        // fingerprint printed below is computed over it (never a re-read of the file).
+        byte[]? stagedApprove = null;
+        if (stagedFolder is not null)
+        {
+            stagedApprove = System.Text.Encoding.UTF8.GetBytes(approveText);
+            var stagedApprovePath = Path.Combine(stagedFolder, ApproveFileName);
+            ctx.WriteOutputFile(stagedApprovePath, stagedApprove);
+            ctx.StagedSeams?.AfterApproveWritten?.Invoke(stagedApprovePath);
+        }
+        else if (approveOut is null)
             ctx.WriteOutputFile(approvePath, approveText);
 
         // Brief T5 decision 1: remember what was approved, so 'slot merge' can add the finished
@@ -584,6 +606,13 @@ public sealed partial class SlotCommand : ICliCommand
             .ToList();
         ctx.Storage.SaveConfig(config with { ApprovedSlots = approved });
 
+        if (stagedApprove is not null)
+        {
+            c.Out.WriteLine("✓ Approved. The joining machine collects the approve file next.");
+            c.Out.WriteLine($"Approve file fingerprint: {ApproveFileFingerprint(stagedApprove)}");
+            CryptographicOperations.ZeroMemory(stagedApprove);
+            return 0;
+        }
         if (approveOut is not null)
         {
             // Brief T27: once, after the ApprovedSlots save, to the original stdout.
@@ -1605,12 +1634,20 @@ public sealed partial class SlotCommand : ICliCommand
     private static int ExecuteMerge(CommandContext ctx, string[] args)
     {
         var usage = $"{ctx.Prefix} slot merge <receipt> [--yes] [{RecoveryKeyFlag}]";
-        var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(args);
+        // Brief T28: --staged <id> --expect <sha256> reads the receipt from the staging folder.
+        var stagedUsage = $"{ctx.Prefix} {StagedMergeForm}";
+        var (stagedArgs, stagedId, expect) = SplitStaged(args, stagedUsage);
+        var (rest, withRecoveryKey) = SplitRecoveryKeyFlag(stagedArgs);
         var yes = rest.Contains("--yes");
         var positional = rest.Where(a => a != "--yes").ToArray();
-        if (positional.Length != 1 || positional[0].StartsWith("--") || rest.Count(a => a == "--yes") > 1)
+        if (rest.Count(a => a == "--yes") > 1)
+            throw new UsageException(stagedId is null ? usage : stagedUsage);
+        if (stagedId is not null && (positional.Length != 0 || withRecoveryKey))
+            throw new UsageException(stagedUsage +
+                "\n--staged takes no file and no --recovery-key-stdin: the receipt is the staged one, and the vault opens with this machine's hardware.");
+        if (stagedId is null && (positional.Length != 1 || positional[0].StartsWith("--")))
             throw new UsageException(usage);
-        var path = positional[0];
+        var path = stagedId is null ? positional[0] : "";
         // Brief T27: a '-' receipt is read from stdin, which then can't carry the recovery key too.
         if (path == StdioPath && withRecoveryKey)
             throw new UsageException(usage + StdinCarriesOneText("receipt"));
@@ -1627,9 +1664,12 @@ public sealed partial class SlotCommand : ICliCommand
 
         ctx.RequireSudo("slot merge");
 
-        var (incoming, source) = path == StdioPath
-            ? ReadMergeText(ReadStdinFile(ctx, "slot merge", "receipt"), "stdin", ctx.Prefix)
-            : ReadMergeFile(path, ctx.Prefix);
+        var (incoming, source) = stagedId is not null
+            ? ReadMergeText(ReadStaged(ctx, stagedId, expect!, ReceiptFileName, "receipt", "merged").Text,
+                Path.Combine(StagedFolder(ctx, stagedId), ReceiptFileName), ctx.Prefix)
+            : path == StdioPath
+                ? ReadMergeText(ReadStdinFile(ctx, "slot merge", "receipt"), "stdin", ctx.Prefix)
+                : ReadMergeFile(path, ctx.Prefix);
         if (incoming.FormatVersion != keyring.FormatVersion)
             throw new TswapException(
                 $"The {source} is for a keyring format version {incoming.FormatVersion}; this vault's is version " +
@@ -1909,6 +1949,12 @@ public sealed partial class SlotCommand : ICliCommand
         if (!ctx.Console.IsInputRedirected)
             throw new TswapException(
                 $"{command}: '-' reads the {what} from stdin, and stdin is a terminal here. Pipe the file in, or name it.");
+        return ReadBoundedStdin(ctx, command, what);
+    }
+
+    /// <summary>All of stdin, refused past <see cref="MaxStdinFileSize"/> (nothing past that is read); brief T28's <c>slot stage put</c> too.</summary>
+    private static string ReadBoundedStdin(CommandContext ctx, string command, string what)
+    {
         var buffer = new char[MaxStdinFileSize + 1];
         var read = ctx.Console.In.ReadBlock(buffer, 0, buffer.Length);
         // A UTF-8 character is at least one byte, so more characters than the limit is more bytes too.

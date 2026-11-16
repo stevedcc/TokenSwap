@@ -175,6 +175,9 @@ public sealed record CommandContext(
     /// </summary>
     public ISshTransport Ssh { get; init; } = new ProcessSshTransport();
 
+    /// <summary>Brief T28 test seams of <c>slot approve|merge --staged</c> (null outside tests).</summary>
+    public Commands.StagedFileSeams? StagedSeams { get; init; }
+
     /// <summary>Brief T6 test seams for <c>migrate --to-records</c> (null outside tests).</summary>
     public RecordMigrationSeams? MigrationSeams { get; init; }
 
@@ -414,6 +417,18 @@ public sealed record CommandContext(
             fileStore.WriteFile(path, contents);
         else
             TswapCore.DirectoryOwnerMatcher.Default.WriteAtomic(path, System.Text.Encoding.UTF8.GetBytes(contents));
+    }
+
+    /// <summary>
+    /// Brief T28: <see cref="WriteOutputFile(string, string)"/> for exact bytes (a staged file, or an approve file whose
+    /// fingerprint is computed over the very buffer written).
+    /// </summary>
+    public void WriteOutputFile(string path, ReadOnlySpan<byte> bytes)
+    {
+        if (Storage is TswapCore.IFileVaultStore fileStore)
+            fileStore.Owner.WriteAtomic(path, bytes);
+        else
+            TswapCore.DirectoryOwnerMatcher.Default.WriteAtomic(path, bytes);
     }
 
     /// <param name="reason">Brief T6: why sudo is needed here, for a command that needs it only sometimes.</param>
