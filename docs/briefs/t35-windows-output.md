@@ -58,7 +58,7 @@ M6b (paragraph placement) → A6; MiMo M3 (the line-686 argv) → A7; MiMo M4 / 
 MiMo M5 (PowerShell 5.1 `-File` and `"`) → A9; MiMo M6 / GLM M4 (PowerShell mechanism stated as fact on bash) → A10;
 MiMo M7 (VT left on after Ctrl+C) → A11; MiMo M8 (`IsConsole` is private) → A12; GLM M1 (`print.ps1` doesn't exist) →
 A13; GLM M2 (the "63 `.Reason` assertions" figure) → A14; GLM M3 (the seam is live in in-process tests) → A15; GLM M5
-(the ingest check shows names, not the value) → A16; GLM M6a (where the braces warning goes) → A17. All folded in
+(the ingest check shows names, not the value) → A16; GLM M6a (where the braces warning goes) → A17. Controller: banner sentinel independent of T34's respelling → A18. All folded in
 below; none rejected.
 
 **Parallel briefs.** T34 (SlotEnrol*.cs, SlotStage.cs, ProcessSshTransport.cs, SlotCommand.cs's request/accept output,
@@ -69,6 +69,9 @@ upgrade test, SshAgentFramingTests) touch none of T35's code paths. Shared files
 - `TswapTests/EndToEndTests.cs`: T35 adds three tests at the end of its "Windows ConPTY coverage" section and touches no
   helper; T37's install-script upgrade test may land in the same file.
 - `TswapCore/Prompt.cs`: two lines (Task 1), in the `run` bullet and rule 3.
+- The init banner literals (`✓ INITIALIZATION COMPLETE`, `tswap - FIDO2 Keyring Initialization`, ...): T34 owns their
+  wording (its Task 6 A1 respells them `INITIALISATION`). T35 changes none of them, and no T35 test depends on that
+  word (A18).
 - `docs/install.md`: T35 adds bullets to "Windows notes" only. The sshd-title note of #349's comment goes there, not into
   T34's enrolling-over-SSH section of `docs/multi-machine.md`.
 
@@ -407,7 +410,7 @@ Windows-only (CI), in `TswapTests/EndToEndTests.cs` at the end of its ConPTY sec
 `Run_CompoundCommand_RedactedOutput_WindowsConPty` does off Windows 10 1809+:
 - `Glyphs_ReachTheConsole_WindowsConPty`: `RunTswapInConPty` of `run tool {x}` (no token; nothing is opened): the capture
   contains `❌` and `Error: No {{tokens}}`, and not `? Error`. Then `init --yubikey --no-recovery --no-password` in the
-  outer ConPTY: the capture contains `✓ INITIALIZATION COMPLETE` and `╔═`. (Before the change tswap writes the OEM code
+  outer ConPTY: the capture contains `✓`, `COMPLETE` and `╔═` (A18). (Before the change tswap writes the OEM code
   page's best fit, which the outer pseudo console renders as `?` and `V`.) Assert with the `EscapeVt` dump as the existing
   test does, short fragments only (ConPTY may wrap long lines).
 - `NonAsciiValue_Redacted_WindowsConPty`: `ingest umlaut` with stdin `pässwört-conpty` (`RunTswapWithStdin`: .NET's
@@ -595,7 +598,7 @@ paragraph that starts "`init` needs no sudo either".
 
 **A8. `Glyphs_ReachTheConsole_WindowsConPty` makes two captures**, each its own `RunTswapInConPty` call with its own
 sentinel, which is ASCII and printed both before and after the change: the refused `run` waits for `No {{tokens}}`; the
-`init` waits for `INITIALIZATION COMPLETE`. The assertions about `❌` apply to the first capture, and those about `✓` and
+`init` waits for `COMPLETE` (A18). The assertions about `❌` apply to the first capture, and those about `✓` and
 `╔═` to the second.
 
 **A9. Owner question 3 gains:** "Windows PowerShell 5.1's `-File` builds the script's arguments from the raw command
@@ -632,3 +635,10 @@ the redaction. Also, in the report, the CI revert of A4 failing is the proof tha
 
 **A17. Where the braces warning goes:** immediately after the root check for `{{@file}}` (line 100), before the
 `if (ctx.Verbose)` block, so it comes after every refusal made before the vault opens and before any verbose line.
+
+**A18 (controller). The banner sentinels don't depend on T34's respelling.** T34 (Task 6, its A1) respells the init
+banners (`✓ INITIALISATION COMPLETE`, `tswap - FIDO2 Keyring Initialisation`) and fixes a banner's missing space, so a T35
+test that names `INITIALIZATION` breaks whichever brief merges second. In `Glyphs_ReachTheConsole_WindowsConPty`, the
+`init` capture waits for `COMPLETE` (in the `║ ✓ ... COMPLETE ║` line; T34 doesn't change that word), and asserts three
+fragments separately: `✓`, `COMPLETE` and `╔═`. Never `INITIALIZATION` or `INITIALISATION`, and never the banner's spacing.
+No other T35 test names a banner literal. If one is added while you build, the same rule applies.
