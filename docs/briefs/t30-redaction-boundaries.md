@@ -423,3 +423,10 @@ The broker; a JSON mode (#314 proposal 2); a decimal-number rule; flagging exist
 fingerprint format (no reindex); carrying left context through `ScanState` or a RedactingPty API change for it;
 `Redact.RedactLine` (used by tests only); entropy checks (#9). Owner, before release: `TSWAP_PERF=1 ./runtests.sh
 --perf` (the redaction throughput budget, now with `HoldOutsideWord` and the short forms in the matcher).
+
+## Owner answers (2026-11-16)
+
+- `-` counts as a word character: yes (the ruling above stands).
+- A decimal-number rule: no (`.` stays a boundary; `465` is still masked in `1.465`).
+- `check`/`names` flagging existing short values (#314 proposal 4) and the JSON mode (#314 proposal 2): follow-up issues, not T30.
+- The fields guard's refusal for short secrets stays as it is (out of scope).
