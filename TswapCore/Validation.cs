@@ -99,8 +99,10 @@ public static class Validation
 
     /// <summary>
     /// Brief T21 (#314): values shorter than this many characters (UTF-16 code units, the unit
-    /// <c>create</c>'s length uses) get a warning when they are stored: redaction matches a value
-    /// anywhere, also inside longer words and numbers, so a short one hides unrelated output.
+    /// <c>create</c>'s length uses) get a warning when they are stored. Brief T30: <c>run</c> and
+    /// <c>redact</c> match such a value, in every form, only where it stands as a whole word or number
+    /// (<see cref="Fingerprints.TokenBoundary"/>), and longer values anywhere; <c>tocomment</c>'s own
+    /// boundary applies to every value. One threshold for the warning and the matching.
     /// </summary>
     public const int ShortValueLength = 8;
 

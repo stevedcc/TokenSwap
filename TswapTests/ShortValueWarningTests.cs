@@ -6,8 +6,9 @@ namespace TswapTests;
 /// <summary>
 /// Brief T21 (#314): the commands that store a new value (<c>add</c>, <c>ingest</c>, <c>ingest --rotate</c>,
 /// <c>create</c>, <c>rotate</c>) warn on stderr, after their success line, when that value is shorter than
-/// 8 characters: redaction matches a value anywhere, also inside longer words and numbers. The warning names
-/// the secret and the reason only, never the value or its length, and never refuses: exit 0, value stored.
+/// 8 characters: redaction hides a value that short only where it stands as a whole word or number (brief T30), so
+/// a secret that short can show inside a longer one. The warning names the secret and the reason only, never the
+/// value or its length, and never refuses: exit 0, value stored.
 /// </summary>
 public sealed class ShortValueWarningTests : IDisposable
 {
@@ -19,9 +20,9 @@ public sealed class ShortValueWarningTests : IDisposable
 
     /// <summary>The exact line, written out here so the test pins the text (and its number) itself.</summary>
     private static string Warning(string name) =>
-        $"Warning: the value of '{name}' is shorter than 8 characters. 'run', 'redact' and 'tocomment' match a value " +
-        "wherever it appears, also inside longer words and numbers, so a short value gets hidden in unrelated output " +
-        "and gives itself away. If it isn't a secret (a username, a port, a setting), it doesn't belong in tswap.";
+        $"Warning: the value of '{name}' is shorter than 8 characters. 'run', 'redact' and 'tocomment' hide a value this " +
+        "short only where it stands as a whole word or number, not inside a longer one, so a secret this short can show " +
+        "unmasked there. If it isn't a secret (a username, a port, a setting), store it as a field of the secret it belongs to.";
 
     private static string WarningLine(string name) => Warning(name) + Environment.NewLine;
 
@@ -284,5 +285,18 @@ public sealed class ShortValueWarningTests : IDisposable
         var last = rules[numbered[^1].Index..].Trim();
         Assert.StartsWith("12. NEVER store usernames, ports, hostnames or other non-secret settings as secrets", last);
         Assert.EndsWith("get burned for no reason", last);
+    }
+
+    /// <summary>Brief T30: rule 12 says what redaction now does with a short value (whole words only).</summary>
+    [Fact]
+    public void Prompt_Rule12_SaysWholeWord()
+    {
+        var text = TswapCore.Prompt.GetText("tswap");
+        var start = text.IndexOf("\n12. ", text.IndexOf("## Key rules", StringComparison.Ordinal), StringComparison.Ordinal);
+        var end = text.IndexOf("\n## ", start, StringComparison.Ordinal);
+        var rule = System.Text.RegularExpressions.Regex.Replace(text[start..end], @"\s+", " ");
+
+        Assert.Contains("wherever it stands as a whole word or number", rule);
+        Assert.DoesNotContain("also inside longer words", rule);
     }
 }
