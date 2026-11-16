@@ -15,7 +15,7 @@ simulated services, `TSWAP_CONFIG_DIR` and temp folders only. Commits end with
 report when the brief can't be built as written. Never change an existing test's assertion. British spelling in new
 text (enrol, enrolment); existing identifiers and messages that say "enroll" stay as they are.
 
-**Review history.** Round 2: GLM ready yes; MiMo no on four text slips (a leftover retry ruling, `--fresh` deleting
+**Review history.** Round 3 (MiMo): the two failure texts added in round 2 were wrong for `--vault-dir` and untested; folded (split message, two tests, three wording fixes). Round 2: GLM ready yes; MiMo no on four text slips (a leftover retry ruling, `--fresh` deleting
 before the confirmation, hand commands with a bare `tswap` that sudo's `secure_path` can't find, pinned help
 literals), folded with both reviewers' Minors. Round 1 (MiMo and GLM-5.3, both "Ready to implement: no", no Critical, design judged sound) found
 gaps in the brief's text, all folded in below: the machine states a retry depends on (a pending request without
@@ -51,8 +51,9 @@ folder on its own, as `docs/multi-machine.md` "Sharing a vault folder" shows).
   `This machine already has a config. Overwrite and start a new slot request?` question on a complete config. A "no"
   or EOF there stops `enroll` with exit 1 and `Nothing was changed.`; nothing is sent. If step 2 fails after it
   saved the pending config but before `request.json` was written (`ExecuteRequest` saves first), `enroll` stops with
-  ``The pending request was saved but its request file was not written (<reason>); the previous config was backed
-  up to <backup path>. Run 'tswap slot enroll ... --fresh' to start over, or 'tswap slot request <file>' by hand.``
+  ``The pending request was saved but its request file was not written (<reason>)[; the previous config was backed
+  up to <backup path>]. Run 'tswap slot enroll ... --fresh' to start over, or 'tswap slot request <file>' by hand.``
+  (the bracketed clause only when a config existed, which is when `ExecuteRequest` backs it up)
   (never "Nothing was changed").
 - **A pending request and `<config dir>/enrol/<id>/request.json` for its slot id**: continue from it (skip step 2),
   printing first `Continuing the pending enrolment of <device> kept in <folder> (run with --fresh to start over).`
@@ -63,8 +64,9 @@ folder on its own, as `docs/multi-machine.md` "Sharing a vault folder" shows).
   for <device>, not what this command names. Run the same command without those flags to continue it, or add
   --fresh to start over.`` A retry re-runs steps 3 to 5 against the `--via` destination given now.
 - **A pending request with no such `request.json`** (a hand-made `slot request`, or the files are gone): refuse with
-  ``This machine has a pending slot request that 'slot enroll' has no files for. Finish it by hand (slot approve on
-  the vault's machine, then slot accept here), or run 'tswap slot enroll ... --fresh' to start over.``
+  ``This machine has a pending slot request that 'slot enroll' has no files for. If you still have its request
+  file, finish it by hand (slot approve on the vault's machine, then slot accept here); otherwise, or to start over,
+  run 'tswap slot enroll ... --fresh'.``
 - **`--fresh`**: run step 2 (which asks its overwrite question about the pending config as `slot request` does), and
   only once step 2 has written the new `request.json` delete the other `<config dir>/enrol/` folders (they may hold a
   receipt a failed merge said to keep). A "no" or EOF changes nothing, folders included. Ruling: `--fresh` never
@@ -126,7 +128,8 @@ a control character. No `BatchMode`: ssh asks for a key passphrase or a new host
 with stdin piped. `-T` (no pseudo-terminal).
 
 **The `-` forms of approve and merge** (new, also usable by hand). In `Forms` they are **additional entries**
-(`slot approve - -`, `slot merge -`); the existing entries and help literals stay verbatim, because
+(exactly `slot approve - -` and `slot merge -`; the mixed forms `approve - <file>` and `approve <file> -` are named
+in the `Description` and the four-step docs); the existing entries and help literals stay verbatim, because
 `SlotHelp_MergeTakesAReceipt`, `SlotHelp_AcceptNamesVaultDir` and `SlotUsage_IsTheHelpWithThePrefix` pin them
 (the help suffix keeps beginning ` (approve, merge and add take`). Check `CommandReferenceTests` with the extra
 entries too:
@@ -163,9 +166,13 @@ program this run used on the host: `sudo <--remote-tswap value>` (default `sudo 
   slot approve - - < request.json > approve.json' there, then 'tswap slot accept approve.json' here.` (A retry
   follows "Machine states" above: it continues iff `enrol/<id>/request.json` exists for the pending slot id.)
 - accept failed: its own message (unchanged); if this machine no longer has a pending request afterwards (accept
-  saves the config before writing the receipt), then `This machine has joined the vault but no receipt was written;
-  run 'tswap slot enroll ... --fresh' for a new enrolment, or merge this machine's vault folder on the host with
-  'vault merge'.` Otherwise `The host approved this slot but its keyring is unchanged. After fixing that, run 'tswap
+  saves the config before writing the receipt, so only a failed receipt write lands here), split as `ExecuteAccept`
+  itself splits (SlotCommand.cs ~:825-830): with `--vault-dir`, `This machine has joined the shared vault folder
+  <folder>; its keyring already has the new slot, so nothing more is needed (a receipt is only for a machine with its
+  own copy).` and exit 0 after the step-6 lines; with its own copy, `This machine has joined the vault but no receipt
+  was written, so <destination> doesn't know the slot. Run 'tswap slot enroll ... --fresh' for a new enrolment (the
+  simplest way), or have the host merge this machine's vault folder with 'sudo tswap vault merge <folder>' (that
+  needs sudo beyond the three-command rule).` Otherwise `The host approved this slot but its keyring is unchanged. After fixing that, run 'tswap
   slot accept <approve.json>' here, then '<host tswap> slot merge - < receipt.json' on <destination>.`
 - merge failed: `This machine has its copy of the vault, but <destination> didn't add the slot (<reason>), so the
   host's own keyring doesn't know it yet. Carry <receipt.json> to the host and run '<host tswap> slot merge -
@@ -229,12 +236,18 @@ left.
   unchanged; a pending request with no `enrol/<id>/request.json`: the refusal above, no SSH call; continuing with
   `--tpm` when the pending request is a YubiKey's: refused, no SSH call; `--fresh` deletes the folder and asks the
   overwrite question; a hand-made pending request plus `--fresh` and "yes": a new enrolment completes.
+- Step 2 fails after its save: pre-create `enrol/<id>`'s `request.json` path as a directory (or the equivalent seam)
+  so `WriteRequestFile` fails; assert the post-save message, a pending config and no `request.json`, the backup
+  clause present only when a config existed, and that "Nothing was changed" never appears.
+- Accept's receipt write fails (pre-create `receipt.json` as a directory): own copy → the "no receipt was written"
+  line, exit non-zero, joined config, no receipt, no merge call; with `--vault-dir` → the "nothing more is needed"
+  line, exit 0, no merge call, and the shared folder's keyring has the slot.
 - Each step's failure: pre-flight fails (double returns 255): nothing written locally (no pending config, no folder);
   approve fails (double returns 1 / empty stdout / garbage): pending request and `request.json` kept, host keyring
   unchanged, message names the kept path; **retry** after that continues from the kept request (no second request:
   the simulated key's challenge counter or a recording YubiKey service shows one enrolment) and succeeds; accept fails
   (double returns an approve file for another request, made by a second pending folder): accept's own refusal, then
-  the T27 line; host keyring unchanged; merge fails (double returns 1 for merge): joining folder opens, host keyring
+  the T27 "Otherwise" line (the pending request survives); host keyring unchanged; merge fails (double returns 1 for merge): joining folder opens, host keyring
   unchanged, `receipt.json` kept and named.
 - Usage refusals: destination `-oProxyCommand=x`, `a b`, empty; `--remote-tswap 'tswap; rm'`; unknown flag; no
   `--via`. Each before any SSH call (the double saw nothing).
