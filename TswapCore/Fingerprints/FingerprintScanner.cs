@@ -27,7 +27,9 @@ namespace TswapCore.Fingerprints;
 /// <see cref="PendingFrom"/> reads the text's characters and per-class aggregates only (each class's
 /// longest raw length and the largest whitespace count of a free entry), both rounded up to a multiple
 /// of 256, never a hash, bitset or HMAC: what it holds back is observable through timing, so it must not
-/// tell a guess that shares a secret's prefix from any other word of its class.
+/// tell a guess that shares a secret's prefix from any other word of its class. In whole-token mode
+/// (brief T30) it then moves back to the start of a word it would split, by the text and a constant only
+/// (<see cref="TokenBoundary.HoldOutsideWord"/>).
 /// </para>
 /// <para>
 /// Like <see cref="FingerprintIndex"/>, the scanner keeps a reference to the <see cref="FingerprintKeys"/>
@@ -48,6 +50,8 @@ public sealed class FingerprintScanner
     // Free entries: distinct (length, whitespace count); a count of -1 means any (an unknown kind).
     private readonly (int Length, int Whitespace)[] _freeShapes;
     private readonly int _capWhitespaceFree, _capBase64, _capBase64Url, _capFree, _maxFreeWhitespace;
+    // Brief T30: null in Anywhere mode; in WholeToken mode, whether each value version (name, previous) is short.
+    private readonly Dictionary<(string Name, bool IsPrevious), bool>? _short;
 
     [Flags]
     private enum Classes : byte
@@ -67,9 +71,11 @@ public sealed class FingerprintScanner
         FingerprintKeys keys,
         Dictionary<(int, ulong), Candidate[]> candidates,
         (int, Classes)[] runLengths,
-        (int, int)[] freeShapes)
+        (int, int)[] freeShapes,
+        Dictionary<(string, bool), bool>? isShort)
     {
         _keys = keys;
+        _short = isShort;
         _candidates = candidates;
         _runLengths = runLengths;
         _freeShapes = freeShapes;
@@ -105,8 +111,16 @@ public sealed class FingerprintScanner
     /// </summary>
     public int MaxRawLength { get; }
 
-    /// <summary>Indexes every entry of every set; sets computed under other keys simply never match.</summary>
-    public static FingerprintScanner Build(IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys)
+    /// <summary>
+    /// Indexes every entry of every set; sets computed under other keys simply never match. With
+    /// <see cref="ShortValueMatching.WholeToken"/> (brief T30, <c>run</c>) a short value version
+    /// (<see cref="TokenBoundary.IsShort"/>) is reported, in every form, only where it is delimited in the
+    /// scanned window (whose edges count as boundaries), and <see cref="PendingFrom(ReadOnlySpan{char})"/>
+    /// never splits a word it can hold (<see cref="TokenBoundary.HoldOutsideWord"/>).
+    /// </summary>
+    public static FingerprintScanner Build(
+        IEnumerable<(string Name, bool IsPrevious, FingerprintSet Set)> sets, FingerprintKeys keys,
+        ShortValueMatching shortValues = ShortValueMatching.Anywhere)
     {
         ArgumentNullException.ThrowIfNull(sets);
         ArgumentNullException.ThrowIfNull(keys);
@@ -114,8 +128,12 @@ public sealed class FingerprintScanner
         Dictionary<(int, ulong), List<Candidate>> candidates = [];
         Dictionary<int, Classes> runLengths = [];
         HashSet<(int, int)> freeShapes = [];
+        Dictionary<(string, bool), bool>? isShort = shortValues == ShortValueMatching.WholeToken ? [] : null;
         foreach (var (name, isPrevious, set) in sets)
         {
+            // As FingerprintIndex: two sets under one key are short only if both are (the masking side).
+            if (isShort is not null)
+                isShort[(name, isPrevious)] = TokenBoundary.IsShort(set) && isShort.GetValueOrDefault((name, isPrevious), true);
             var stripped = set.Entries.FirstOrDefault(e => e.Kind == VariantKind.WhitespaceStripped && e.Length > 0);
             foreach (var entry in set.Entries)
             {
@@ -155,7 +173,8 @@ public sealed class FingerprintScanner
             keys,
             candidates.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray()),
             [.. runLengths.OrderBy(kv => kv.Key).Select(kv => (kv.Key, kv.Value))],
-            [.. freeShapes.OrderBy(f => f.Item1).ThenBy(f => f.Item2)]);
+            [.. freeShapes.OrderBy(f => f.Item1).ThenBy(f => f.Item2)],
+            isShort);
 
         static void AddRun(Dictionary<int, Classes> runs, int length, Classes c) =>
             runs[length] = runs.GetValueOrDefault(length) | c;
@@ -193,7 +212,9 @@ public sealed class FingerprintScanner
     /// <summary>
     /// Adds every confirmed hit in <paramref name="text"/> to <paramref name="hits"/>, in text
     /// coordinates, ordered by start, then length descending. Hits with an equal span are reported once:
-    /// the first in tie order (name ordinal, current before previous, then kind).
+    /// the first in tie order (name ordinal, current before previous, then kind). In whole-token mode a
+    /// short version's hit that isn't delimited in <paramref name="text"/> is dropped first, so it never
+    /// hides an equal span of another value.
     /// </summary>
     public void Scan(ReadOnlySpan<char> text, List<FingerprintHit> hits) => Scan(text, hits, state: null);
 
@@ -284,11 +305,22 @@ public sealed class FingerprintScanner
             cmp = x.IsPrevious.CompareTo(y.IsPrevious);
             return cmp != 0 ? cmp : x.Kind.CompareTo(y.Kind);
         });
-        for (var i = 0; i < found.Count; i++)
+        // Brief T30: the state keeps the raw hits (a carried one is filtered again against the next window,
+        // where its right neighbour may be known); the filter runs before the dedupe.
+        var kept = found;
+        if (_short is not null)
         {
-            if (i > 0 && found[i].Start == found[i - 1].Start && found[i].Length == found[i - 1].Length)
+            kept = new List<FingerprintHit>(found.Count);
+            foreach (var hit in found)
+                if (!(_short.TryGetValue((hit.Name, hit.IsPrevious), out var isShort) && isShort)
+                    || TokenBoundary.IsDelimited(text, hit.Start, hit.Length))
+                    kept.Add(hit);
+        }
+        for (var i = 0; i < kept.Count; i++)
+        {
+            if (i > 0 && kept[i].Start == kept[i - 1].Start && kept[i].Length == kept[i - 1].Length)
                 continue;
-            hits.Add(found[i]);
+            hits.Add(kept[i]);
         }
     }
 
@@ -299,7 +331,9 @@ public sealed class FingerprintScanner
     /// largest whitespace count (CR, LF, space, tab, counted with <c>\r\n</c> folded), and no earlier than
     /// <c>text.Length − (cap − 1)</c>; caps and the whitespace count are rounded up to a multiple of 256.
     /// With free entries at least the last character is always held, so a <c>\r</c> waiting for its
-    /// <c>\n</c> is never emitted early.
+    /// <c>\n</c> is never emitted early. In whole-token mode (brief T30) a point inside a run of word
+    /// characters moves back to the run's start when that is at most <see cref="TokenBoundary.WordHoldLimit"/>
+    /// characters back.
     /// </summary>
     public int PendingFrom(ReadOnlySpan<char> text) => PendingFrom(text, state: null);
 
@@ -341,7 +375,12 @@ public sealed class FingerprintScanner
             }
             pending = Math.Min(pending, start);
         }
-        return Math.Max(0, pending);
+        pending = Math.Max(0, pending);
+        // Brief T30: the next window starts on a word's first character, where "the window's start is a
+        // boundary" is true. Reads the text and a constant only, like everything above.
+        if (_short is not null && _candidates.Count > 0)
+            pending = TokenBoundary.HoldOutsideWord(text, pending);
+        return pending;
     }
 
     // ── scanning ─────────────────────────────────────────────────────────────────────
