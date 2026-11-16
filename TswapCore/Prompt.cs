@@ -31,7 +31,7 @@ automated/silent unlocking by malicious processes.
   `%CMD% rotate db-pw && %CMD% run psql ""postgresql://app:{{db-pw:previous}}@db/app"" -c ""ALTER ROLE app PASSWORD '{{db-pw}}'""`
   (that works for a burned db-pw; if it isn't burned, the user runs the rotate with sudo, then you run the `run`).
   A rotation is visible (the burn stays in the record) and reversible: the user can run `sudo %CMD% restore <name>`
-- `%CMD% names` — List all secret names (no values shown)
+- `%CMD% names [<pattern>...]` — List secret names (no values shown); with quoted glob patterns (`*`, `?`, whole names, case ignored) only the names that match, e.g. `%CMD% names 'k8s-*'`
 - `%CMD% migrate` — Guide to upgrade YubiKey slots for touch requirement
 - `%CMD% run <command>` — Execute a command with {{secret-name}} token substitution; `{{@path}}` hands the command a private copy of a file whose `# tswap:` markers are filled in
 - `%CMD% burn <name> [reason]` — Mark a secret as burned if you accidentally see its value

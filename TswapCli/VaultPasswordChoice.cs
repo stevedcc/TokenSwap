@@ -49,6 +49,14 @@ internal static class VaultPasswordChoice
     public const string NeedsRecordVaultText =
         "A vault password needs a record vault: its vault folder holds the vault-password file.";
 
+    /// <summary>
+    /// Brief T32 (#320): a slot was to get the vault password, the vault has password slots, and the folder has no
+    /// <c>vault-password</c> file. A new file would lock those slots out, and <c>--no-password</c> still adds the slot.
+    /// </summary>
+    public const string FirstPasswordWithoutFileText = VaultPasswordMessages.MissingFile +
+        " Until it is back, no new slot gets the vault password: a new vault-password file would lock out the slots that need the old one." +
+        " To add this slot without a password instead, run the command again with --no-password. Nothing was changed.";
+
     /// <summary>Test seam (ruling 17): whether this is Windows, for the TPM lockout line.</summary>
     internal static Func<bool> IsWindows = OperatingSystem.IsWindows;
 
@@ -257,24 +265,41 @@ internal static class VaultPasswordChoice
     }
 
     /// <summary>
+    /// Brief T32 (#320): refuses a first vault password (<see cref="FirstPasswordWithoutFileText"/>) when the folder has
+    /// no <c>vault-password</c> file (<paramref name="file"/> null) and <paramref name="keyring"/> already has slots that
+    /// need the password (<see cref="TswapCore.Keyring.SlotPassword.Requires"/>, as brief T24's guard): a freshly salted file would lock
+    /// them out. Does nothing otherwise.
+    /// </summary>
+    internal static void RefuseFirstPasswordWithoutFile(VaultPasswordFile? file, TswapCore.Keyring.Keyring keyring)
+    {
+        if (file is null && keyring.Slots.Any(TswapCore.Keyring.SlotPassword.Requires))
+            throw new VaultPasswordUnavailableException(FirstPasswordWithoutFileText);
+    }
+
+    /// <summary>
     /// Ruling 15 for a slot added to an existing vault (<c>slot add</c>, <c>recover</c>): <see cref="Decide"/>,
     /// then, with a password, <see cref="AskExisting"/> when <paramref name="store"/>'s folder has a
     /// <c>vault-password</c> file, else <see cref="CreateNew"/>. Null when no password was chosen.
+    /// <para>Brief T32 (#320): without the file, a vault whose <paramref name="keyring"/> has password slots is refused
+    /// (<see cref="RefuseFirstPasswordWithoutFile"/>) after <see cref="Decide"/> and before any password prompt; the
+    /// vault id is <paramref name="keyring"/>'s.</para>
     ///
     /// <para>Deviation from the brief's signature (which returns the stretched password and writes the file
     /// itself): a new file is returned in <see cref="Resolved.NewFile"/>, and the caller writes it with
     /// <c>NewSlotWrite.Save</c> only once the hardware enrolment has succeeded, just before it
     /// saves the keyring. A failed enrolment then leaves no file behind.</para>
     /// </summary>
-    public static Resolved? Resolve(CommandContext ctx, bool? flag, HardwareBackend backend, RecordVaultStore? store, byte[] vaultKey, byte[] vaultId, string command)
+    public static Resolved? Resolve(CommandContext ctx, bool? flag, HardwareBackend backend, RecordVaultStore? store, byte[] vaultKey,
+        TswapCore.Keyring.Keyring keyring, string command)
     {
         if (flag == true && store is null)
             throw new TswapException(NeedsRecordVaultText);
         if (store is null || !Decide(ctx, flag, backend))
             return null;
-        if (store.ReadVaultPassword(vaultId) is { } existing)
+        if (store.ReadVaultPassword(keyring.VaultId) is { } existing)
             return new Resolved(AskExisting(ctx, existing, vaultKey), null);
-        var (stretched, file) = CreateNew(ctx, vaultKey, vaultId, command);
+        RefuseFirstPasswordWithoutFile(null, keyring);
+        var (stretched, file) = CreateNew(ctx, vaultKey, keyring.VaultId, command);
         return new Resolved(stretched, file);
     }
 
