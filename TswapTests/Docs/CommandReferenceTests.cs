@@ -199,7 +199,7 @@ public class CommandReferenceTests
     [Fact]
     public void Subcommands_TokenisesBothUsageShapes()
     {
-        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "add"],
+        Assert.Equal(["request", "approve", "accept", "merge", "enroll", "stage", "add"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "slot")));
         Assert.Equal(["serve", "unlock", "lock", "status", "forward", "call", "route", "socket", "template"],
             CommandReference.Subcommands(CommandRegistry.All.Single(c => c.Name == "broker")));
@@ -382,6 +382,10 @@ internal static class SudoTableDrive
         }
 
         a.Sudo = false;
+        // slot stage (brief T28): run as the SSH user, never under sudo. Its job: the staged file is there, byte for byte.
+        var stage = a.Run("{}", "slot", "stage", "0a1b2c3d", "put", "request");
+        results["slot stage"] = R(stage, stage.Exit == 0
+            && File.ReadAllText(Path.Combine(a.Dir, "enrol-staged", "0a1b2c3d", "request.json")) == "{}");
         results["slot approve"] = R(a.Run("", "slot", "approve", a.PathOf("other-request.json"), a.PathOf("other-approve.json")));
         results["slot add"] = R(a.Run("", "slot", "add", "--yubikey"));
         results["slot merge"] = R(a.Run("", "slot", "merge", b.ConfigPath));

@@ -48,8 +48,10 @@ password and the agent: [vault-password-and-agent.md](vault-password-and-agent.m
 
 `slot enroll --via <user@host>` needs no sudo on the machine it runs on either, but it is the human's
 too: it adds this machine's key or chip to the vault on another machine over SSH, where approve and
-merge run under that machine's sudo, so it creates a new way into that vault. The skill lists it among
-the commands an agent must never use ([multi-machine.md](multi-machine.md#enrolling-over-ssh)).
+merge run under that machine's sudo, so it creates a new way into that vault. `slot stage`, which
+`slot enroll` runs on the host to move the enrolment files through its staging folder, needs no sudo
+either and is the human's as well. The skill lists both among the commands an agent must never use
+([multi-machine.md](multi-machine.md#enrolling-over-ssh)).
 
 ### Fields
 

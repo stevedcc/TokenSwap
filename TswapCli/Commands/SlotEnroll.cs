@@ -10,12 +10,20 @@ namespace TswapCli.Commands;
 /// <summary>
 /// Brief T27 (issue #191): <c>slot enroll --via &lt;destination&gt;</c>, run on the joining machine: the four hand-carried
 /// steps with approve and merge carried over SSH (<see cref="CommandContext.Ssh"/>). In order: the argument and machine
-/// state checks; a pre-flight <c>&lt;remote prefix&gt; --version</c>; <c>slot request</c> here, into the enrolment folder
-/// <c>&lt;config dir&gt;/enrol/&lt;8 hex of the slot id&gt;/</c>; <c>slot approve - -</c> on the host with the request on
-/// stdin; <c>slot accept</c> here; <c>slot merge -</c> on the host with the receipt on stdin (never <c>--yes</c>: the host
-/// adds only the slot it approved). It stops at the first failed step and says what is left; the folder is kept on any
-/// failure and deleted on success. No remote output is ever echoed in a failure message: a partial approve file is a
-/// way into the vault while this machine's pending private key is in its config.
+/// state checks; a pre-flight <c>--version</c> on the host; <c>slot request</c> here, into the enrolment folder
+/// <c>&lt;config dir&gt;/enrol/&lt;8 hex of the slot id&gt;/</c>; approve on the host; <c>slot accept</c> here; merge on the
+/// host (never <c>--yes</c>: the host adds only the slot it approved). It stops at the first failed step and says what
+/// is left; the folder is kept on any failure and deleted on success. No remote output is ever echoed in a failure
+/// message (only the host's sanitised <c>--version</c> line): a partial approve file is a way into the vault while this
+/// machine's pending private key is in its config.
+/// <para>Brief T28: two modes. <c>--batch</c> is T27's: <c>sudo -n</c>, the files on the session's stdin and stdout
+/// (<c>slot approve - -</c>, <c>slot merge -</c>), no prompt on the host. The default, interactive, needs a terminal
+/// here: the files travel through the host's staging folder on batch-form calls without sudo (<c>slot stage</c>), and
+/// approve and merge run with <c>--staged &lt;id&gt; --expect &lt;sha256&gt;</c> on a terminal of their own
+/// (<see cref="Ssh.ISshTransport.RunInteractive"/>, <c>ssh -t</c>) under plain <c>sudo</c>, so sudo and the vault can ask
+/// there. <c>--expect</c> binds the files this machine sends; the approve file coming back is bound by the fingerprint
+/// the person compares and confirms with Enter. Every run ends its SSH session
+/// (<see cref="Ssh.ISshTransport.EndSession"/>).</para>
 /// </summary>
 public sealed partial class SlotCommand
 {
@@ -31,7 +39,7 @@ public sealed partial class SlotCommand
     /// <summary>The help form of <c>slot enroll</c>, shared by <see cref="Forms"/> and its own usage.</summary>
     private static string EnrollForm =>
         $"slot enroll --via <user@host> [--tpm|{SecureEnclaveTouchChoice.Flags}] {VaultPasswordChoice.Flags} " +
-        "[--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh]";
+        "[--vault-dir <folder>] [--remote-tswap <path>] [--no-remote-sudo] [--fresh] [--batch]";
 
     private static string EnrollUsage(CommandContext ctx) => $"{ctx.Prefix} {EnrollForm}";
 

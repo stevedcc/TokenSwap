@@ -105,21 +105,53 @@ them; libfido2 skips Yubico's USB vendor id), so none of this applies to them.
 ### Enrolling over SSH: what `slot enroll --via` trusts
 
 `tswap slot enroll --via <user@host>` ([multi-machine.md](multi-machine.md#enrolling-over-ssh)) runs
-`slot request` and `slot accept` on the new machine without sudo, and `slot approve - -` and
-`slot merge -` on the host over SSH, under the host's sudo. What it relies on:
+`slot request` and `slot accept` on the new machine without sudo, and approve and merge on the host
+over SSH, under the host's sudo. By default the host's approve and merge run on a terminal of their own
+(`ssh -t`), so the host's sudo and vault can ask there, and the files go through a staging folder on the
+host; `--batch` carries the files on the session's stdin and stdout (`slot approve - -`,
+`slot merge -`) under `sudo -n`. What it relies on:
 
 - **SSH authenticates the channel**: the host key (checked by ssh, as for any login) and your user key.
   tswap passes the destination after `--` (never an option), builds the remote command from fixed words
-  and a checked program path, and handles no password.
+  and a checked program path, and handles no password: sudo's and the vault's prompts are the host's
+  own, on its terminal.
 - **The files are the same reviewed formats** as the hand-carried ones (request, approve file,
   receipt), so nothing new is parsed. The joining side still checks the approve file against its
-  pending request (slot id, echoed public key, backend, hardware blob), and the host merges only the
-  slot it approved (`slot merge` without `--yes`, with stdin not a terminal, refuses any other).
-- **The host's output is untrusted text.** Its lines are shown labelled `[<user@host>] ` (control
-  characters replaced), and no failure message quotes what the host printed: a partial approve file is
-  a way into the vault while this machine's pending private key is in its config.
+  pending request (slot id, echoed public key, backend, hardware blob), and the host merges without
+  asking only the slot it approved (`slot merge` never gets `--yes`). In batch mode stdin is not a
+  terminal, so any other slot is refused; in the interactive mode the host's merge has a terminal and
+  asks about any other slot (Yes/No) instead, and with `--expect` the receipt is the one the joining
+  machine sent.
+- **The staging folder and `--expect`.** In the interactive mode the request and the receipt wait in
+  the SSH user's `<config folder>/enrol-staged/<id>/` on the host (0700 on Unix), written by
+  `slot stage`, which runs as that user and refuses sudo. `--expect` is the SHA-256 of the file as the
+  joining machine sent it: approve and merge read the staged file once, compare that buffer's hash and
+  parse that buffer, so a file swapped in the folder, before or during the read, is refused or has no
+  effect.
+- **The approve file coming back is bound only by a fingerprint you compare.** It rests in the staging
+  folder between approve and `slot stage <id> get approve`, where another process of the same user on
+  the host could replace it with one it made: everything `slot accept` checks is public, so a crafted
+  approve file could wrap a key of its choosing to the joining machine's public key. That gives it no
+  way into the real vault, but a joining machine that then wrote secrets would write them under a key
+  the attacker knows. The host prints `Approve file fingerprint: ...` over the exact bytes it wrote,
+  the joining machine prints `Approve file received: ...` over the exact bytes it got, and waits for
+  Enter. Like the requester's fingerprint, this is a human check, not a boundary (a same-user process on
+  the host can also write to the session's terminal): it raises the bar from swapping a file to spoofing
+  a terminal. It is the same exposure as the hand-carried flow, where `approve.json` sits in your folder
+  too. In batch mode the approve file travels on the SSH session and never rests on the host.
+- **The host's output is untrusted text.** In batch mode its lines (and ssh's own stderr) are shown
+  labelled `[<user@host>] ` with control characters replaced; the interactive steps are the host's raw
+  terminal, framed by local `On <user@host>: ...` and `Back on this machine.` lines. No failure message
+  quotes what the host printed (only its `--version` line, sanitised, when the versions differ): a
+  partial approve file is a way into the vault while this machine's pending private key is in its
+  config.
+- **The shared SSH connection** (Linux and macOS): during the run, and up to 60 seconds after a crash
+  (`ControlPersist`), another process of the same user on the joining machine can reuse the connection
+  through its socket (in a 0700 folder of that user's). That gives it the SSH login, not sudo on the
+  host and no power over the staged files beyond what the `--expect` binding allows.
 
-**The sudoers trade-off.** The recommended sudoers rule lets the SSH user run exactly
+**The sudoers trade-off (batch mode only).** The interactive mode needs no sudoers rule: sudo asks for
+your password on the host. For `--batch`, the recommended sudoers rule lets the SSH user run exactly
 `tswap --version`, `tswap slot approve - -` and `tswap slot merge -` as root without a password. Any
 process running as that user on the host can then approve a request, which hands out a way into the
 vault: the same class of risk as `export`, and the reason `slot approve` needs sudo at all. Give the
