@@ -104,10 +104,11 @@ public sealed class ImportCommand : ICliCommand
                     skippedNul++;
                     continue;
                 }
-                // A v1/v2 file has no fields; a v3 file's fields are written with the value, in one write.
+                // A v1/v2 file has no fields; a v3 file's fields are written with the value, in one write. No caps
+                // (final review I2 ruling): an export may hold a secret a merge legally left over them, as a merge does.
                 var fields = secret.Fields?.OrderBy(f => f.Key, StringComparer.Ordinal).Select(f => new FieldEdit(f.Key, f.Value)).ToList();
                 writer.SetValue(name, secret.Value, secret.Created, importedBurnAt: secret.BurnedAt, importedBurnReason: secret.BurnReason,
-                    fields: fields, who: who);
+                    fields: fields, who: who, checkFieldCaps: false);
                 imported++;
             }
 

@@ -321,6 +321,9 @@ a way to pass values into commands. The same framing opens the fields section in
 - **Import writes value and fields in one write**, with fresh stamps from the importing machine and `since` = the
   imported record's new `Version` (my call, MiMo M4), so the lineage rule never drops imported fields at the next
   merge. A merge of the imported copy with an older copy of the same secret follows the normal rules.
+- **Import applies no caps** (final review I2, ruling), as a merge doesn't: it restores what a merge may legally have
+  produced (Merge rule 7), so an export of an over-cap secret imports whole, stays readable, and accepts only
+  shrinking writes afterwards. The rules on names and characters still apply.
 
 ### Docs
 

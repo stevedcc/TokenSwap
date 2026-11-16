@@ -74,10 +74,12 @@ public sealed class VaultWriter : IDisposable
     /// there is no live record; an imported burn is kept on the new version with its own time.
     /// Issue #311: <paramref name="fields"/> (made by <paramref name="who"/>) are written in the same
     /// record write; when the value is the same they are still written, as a metadata-only field write.
-    /// A write with fields is written in format 3.
+    /// A write with fields is written in format 3. With <paramref name="checkFieldCaps"/> false (<c>import</c>, final
+    /// review I2 ruling) the fields' caps are not checked, as a merge doesn't check them.
     /// </summary>
     public void SetValue(string name, string value, DateTime created, bool always = false,
-        DateTime? importedBurnAt = null, string? importedBurnReason = null, IReadOnlyList<FieldEdit>? fields = null, FieldWho? who = null)
+        DateTime? importedBurnAt = null, string? importedBurnReason = null, IReadOnlyList<FieldEdit>? fields = null, FieldWho? who = null,
+        bool checkFieldCaps = true)
     {
         ArgumentNullException.ThrowIfNull(value);
         if (fields is { Count: > 0 })
@@ -86,7 +88,8 @@ public sealed class VaultWriter : IDisposable
             return;
         var bytes = Encoding.UTF8.GetBytes(value);
         _values.Add(bytes);
-        Stage(new ValueWrite(name, opened.Entry, bytes, always, Restored: false, created, importedBurnAt, importedBurnReason, fields, who));
+        Stage(new ValueWrite(name, opened.Entry, bytes, always, Restored: false, created, importedBurnAt, importedBurnReason, fields, who,
+            checkFieldCaps));
     }
 
     /// <summary>

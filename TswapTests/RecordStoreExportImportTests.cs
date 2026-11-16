@@ -267,4 +267,30 @@ public sealed class RecordStoreExportImportTests : IDisposable
         Assert.Contains("Secret 'crafted': " + refusal, stderr);
         Assert.Equal(before, _m.RecordFiles);
     }
+
+    /// <summary>
+    /// Final review I2 (ruling): import applies no caps, as a merge doesn't (spec Merge rule 7: two legal copies
+    /// can leave a secret over them, and an export is the backup of that). An export over the 64-field cap or the
+    /// 64 KiB cap imports whole; the secret stays readable, and only a growing write is refused afterwards.
+    /// </summary>
+    [Theory]
+    [InlineData(65, 8)]
+    [InlineData(17, FieldRules.MaxValueLength)]
+    public void Import_OverACap_ImportsEveryField(int count, int length)
+    {
+        var fields = Enumerable.Range(0, count).ToDictionary(i => $"f{i:D2}", i => new string((char)('a' + i % 26), length));
+        var export = _m.PathOf("over-cap.json");
+        WriteExport(export, "pass", PayloadOf(("big", JsonSerializer.Serialize(fields)), ("small", """{ "url": "https://x.example" }""")));
+        Assert.NotNull(FieldRules.CheckCaps(new FieldSet(Stamp.Zero,
+            [.. fields.Select(f => new FieldEntry(f.Key, f.Value, false, Stamp.Zero, new FieldWho("00000000", null, false, false, null), []))])));
+
+        var stdout = _m.Ok("pass\n", "import", export);
+
+        Assert.Contains("Imported 2 secret(s)", stdout);
+        Assert.Equal(fields, Live(_m, _vaultKey, "big"));
+        Assert.Equal("big-value-0042", _m.Get("big"));
+        var (exit, _, stderr) = _m.Run("", "field", "set", "big", "extra=x");
+        Assert.Equal(1, exit);
+        Assert.Contains("Refused: the fields of 'big' are over a cap.", stderr);
+    }
 }

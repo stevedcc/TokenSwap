@@ -20,7 +20,8 @@ internal abstract record PendingWrite(string Name, SecretEntry? Entry);
 /// <param name="Created">The creation time of a secret that has no live record.</param>
 /// <param name="ImportedBurnAt">An imported burn, kept on the new version with its own time.</param>
 internal sealed record ValueWrite(string Name, SecretEntry? Entry, byte[] Value, bool Always, bool Restored, DateTime Created,
-    DateTime? ImportedBurnAt = null, string? ImportedBurnReason = null, IReadOnlyList<FieldEdit>? Fields = null, FieldWho? Who = null)
+    DateTime? ImportedBurnAt = null, string? ImportedBurnReason = null, IReadOnlyList<FieldEdit>? Fields = null, FieldWho? Who = null,
+    bool CheckFieldCaps = true)
     : PendingWrite(Name, Entry);
 
 /// <summary>A burn of the current version (nothing is written when it is burned already).</summary>

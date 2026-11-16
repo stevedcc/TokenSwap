@@ -28,9 +28,11 @@ public static class FieldEdits
     /// A field name or value the rules refuse (<see cref="FieldRules.Validate"/>); or the result is over a
     /// cap (<see cref="FieldRules.CheckCaps"/>) and the write doesn't shrink it (spec Merge rule 7: it
     /// adds a live field or sets a value at least as long as the one it replaces). The message names
-    /// <paramref name="secretName"/>.
+    /// <paramref name="secretName"/>. With <paramref name="checkCaps"/> false (<c>import</c>, final review I2
+    /// ruling: it restores what a merge may legally have produced) no cap is checked.
     /// </exception>
-    public static FieldSet Apply(FieldSet current, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp, string secretName)
+    public static FieldSet Apply(FieldSet current, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp, string secretName,
+        bool checkCaps = true)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(edits);
@@ -71,7 +73,7 @@ public static class FieldEdits
             return current;
 
         var next = new FieldSet(current.Since, [.. byName.Values.OrderBy(e => e.Name, StringComparer.Ordinal)]);
-        if (grows && FieldRules.CheckCaps(next) is { } cap)
+        if (checkCaps && grows && FieldRules.CheckCaps(next) is { } cap)
             throw new TswapException($"Refused: the fields of '{secretName}' are over a cap. {cap}");
         return next;
     }
@@ -83,22 +85,22 @@ public static class FieldEdits
     /// record carried; a live record keeps its own (one written before fields existed gets one, with
     /// <see cref="FieldSet.Since"/> = <see cref="Stamp.Zero"/>, only when edits change it). Then
     /// <paramref name="edits"/> are applied (<see cref="Apply"/>, stamped after the version). Every
-    /// other extension keeps its place and bytes.
+    /// other extension keeps its place and bytes. <paramref name="checkCaps"/>: as for <see cref="Apply"/>.
     /// </summary>
     internal static IReadOnlyList<RecordExtension> ForWrite(IReadOnlyList<RecordExtension> extensions, Stamp? createdAt,
-        IReadOnlyList<FieldEdit>? edits, FieldWho? who, Func<Stamp>? nextStamp, string secretName)
+        IReadOnlyList<FieldEdit>? edits, FieldWho? who, Func<Stamp>? nextStamp, string secretName, bool checkCaps = true)
     {
         if (edits is { Count: > 0 } && (who is null || nextStamp is null))
             throw new ArgumentException("A field write needs who made it and a stamp source.", nameof(edits));
         if (createdAt is { } since)
         {
             var fresh = new FieldSet(since, []);
-            return FieldsCodec.With(extensions, edits is { Count: > 0 } ? Apply(fresh, edits, who!, nextStamp!, secretName) : fresh);
+            return FieldsCodec.With(extensions, edits is { Count: > 0 } ? Apply(fresh, edits, who!, nextStamp!, secretName, checkCaps) : fresh);
         }
         if (edits is not { Count: > 0 })
             return extensions;
         var before = FieldsCodec.TryGet(extensions) ?? new FieldSet(Stamp.Zero, []);
-        var after = Apply(before, edits, who!, nextStamp!, secretName);
+        var after = Apply(before, edits, who!, nextStamp!, secretName, checkCaps);
         return ReferenceEquals(after, before) ? extensions : FieldsCodec.With(extensions, after);
     }
 

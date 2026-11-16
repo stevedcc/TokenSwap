@@ -28,7 +28,8 @@ internal static class RecordWrites
     public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections)? Next(
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Func<bool> sameValue,
         bool rotated, bool restored, DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
-        Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null)
+        Func<Stamp, (byte[] Section, FingerprintSet Fingerprints)> seal, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null,
+        bool checkFieldCaps = true)
     {
         // NextRecord's order: a new version when there is no live record, when rotated, or when the
         // value differs (asked last, so add's comparison runs only when it decides something).
@@ -37,7 +38,7 @@ internal static class RecordWrites
             var version = nextStamp();
             var (section, fingerprints) = seal(version);
             return NewVersion(state, heldSections, recordId, name, version, section, fingerprints, restored, created, burnedAt, burnReason, origin,
-                edits, who, nextStamp);
+                edits, who, nextStamp, checkFieldCaps);
         }
         // The same value: a burn of the current version, stamped now, when it has none; then the
         // field edits (issue #311), as a metadata-only write; null when neither changes anything.
@@ -45,7 +46,7 @@ internal static class RecordWrites
         if (burnedAt is not null && live.Burns.All(b => !b.Version.Equals(live.Version)))
             next = Burn(live, nextStamp(), burnReason)!;
         if (edits is { Count: > 0 })
-            next = SetFields(next, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp);
+            next = SetFields(next, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp, checkFieldCaps);
         return ReferenceEquals(next, live) || (next.Burns.SequenceEqual(live.Burns) && next.Extensions.SequenceEqual(live.Extensions))
             ? null
             : (next, heldSections);
@@ -72,7 +73,8 @@ internal static class RecordWrites
     public static (RecordMetadata Metadata, IReadOnlyDictionary<Stamp, byte[]> Sections) NewVersion(
         RecordMetadata? state, IReadOnlyDictionary<Stamp, byte[]> heldSections, byte[] recordId, string name, Stamp version,
         byte[] newSection, FingerprintSet newFingerprints, bool restored, DateTime created, DateTime? importedBurnAt,
-        string? importedBurnReason, byte[] origin, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, Func<Stamp>? nextStamp = null)
+        string? importedBurnReason, byte[] origin, IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, Func<Stamp>? nextStamp = null,
+        bool checkFieldCaps = true)
     {
         var live = state is { Type: not RecordType.Tombstone };
         List<BurnEntry> burns = [.. state?.Burns ?? []];
@@ -88,7 +90,7 @@ internal static class RecordWrites
         if (importedBurnAt is { } at)
             burns.Add(new BurnEntry(version, new Stamp(new Hlc(new DateTimeOffset(UtcOf(at)).ToUnixTimeMilliseconds(), 0), origin), importedBurnReason));
         var createdMs = live ? state!.CreatedMs : new DateTimeOffset(DateTime.SpecifyKind(created, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
-        var extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name);
+        var extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps);
         var metadata = new RecordMetadata(recordId, Stamp.Zero, RecordType.Value, version, name, createdMs, burns, newFingerprints,
             live ? state!.Version : null, live ? state!.Fingerprints : null, extensions);
         return (RecordMerge.Normalize(metadata), sections);
@@ -124,11 +126,12 @@ internal static class RecordWrites
     /// (the caller writes nothing).
     /// </summary>
     /// <exception cref="TswapException"><paramref name="state"/> is a tombstone (<c>No secret 'NAME'.</c>), or a refusal of <see cref="FieldEdits.Apply"/>.</exception>
-    public static RecordMetadata SetFields(RecordMetadata state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp)
+    public static RecordMetadata SetFields(RecordMetadata state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp,
+        bool checkCaps = true)
     {
         if (state.Type == RecordType.Tombstone)
             throw new TswapException($"No secret '{state.Name}'.");
-        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name) };
+        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name, checkCaps) };
     }
 
     // RecordVaultStore.UnixMs's rule: an unspecified time is UTC, a local one is converted.

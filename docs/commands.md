@@ -213,7 +213,8 @@ tswap field show opnsense-root --history    # each field's last changes, removed
   Deleting a secret drops its fields; a secret created again under that name starts with none.
 - `export` carries each secret's current fields (no history, no removed fields); see the
   [export note](security-model.md#a-shared-vault-folder-what-a-sync-provider-sees-and-what-isnt-detected) on a
-  field removed after an export.
+  field removed after an export. `import` applies no caps, as a merge doesn't: a secret a merge left over 64 fields
+  or 64 KiB is restored with every field, and afterwards accepts only writes that shrink it.
 
 ## Commands
 

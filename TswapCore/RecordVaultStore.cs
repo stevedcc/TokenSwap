@@ -852,7 +852,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                     var next = write switch
                     {
                         ValueWrite v => NextRecord(state, recordId, write.Name, v.Value, v.Always, v.Restored, v.Created, v.ImportedBurnAt,
-                            v.ImportedBurnReason, origin, NextStamp, v.Fields, v.Who),
+                            v.ImportedBurnReason, origin, NextStamp, v.Fields, v.Who, v.CheckFieldCaps),
                         FieldsWrite f when SetFieldsRecord(state!, f.Edits, f.Who, NextStamp) is var withFields
                             && !withFields.Extensions.SequenceEqual(state!.Extensions) => withFields,
                         BurnWrite b when state is { Type: not RecordType.Tombstone } =>
@@ -877,7 +877,7 @@ public sealed class RecordVaultStore : IFileVaultStore
                         if (RecordWrites.Next(current, held, recordId, write.Name, () => SameValue(write.Name, entry, v.Value, keys), v.Always,
                                 v.Restored, v.Created, v.ImportedBurnAt, v.ImportedBurnReason, origin, NextStamp,
                                 version => (SecretRecordCodec.SealValue(recordId, version, v.Value, key), Fingerprinter.Compute(v.Value, keys)),
-                                v.Fields, v.Who)
+                                v.Fields, v.Who, v.CheckFieldCaps)
                             is { } next)
                             (metadata, sections) = next;
                         break;
@@ -1519,7 +1519,7 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// </param>
     internal static SecretRecord? NextRecord(SecretRecord? state, byte[] recordId, string name, byte[] value, bool rotated, bool restored,
         DateTime created, DateTime? burnedAt, string? burnReason, byte[] origin, Func<Stamp> nextStamp,
-        IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null)
+        IReadOnlyList<FieldEdit>? edits = null, FieldWho? who = null, bool checkFieldCaps = true)
     {
         SecretRecord? next = null;
         if (state is null || state.Type == RecordType.Tombstone || rotated || !state.Value.AsSpan().SequenceEqual(value))
@@ -1552,7 +1552,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             {
                 // Ruling 6: unknown extensions survive every rewrite. Issue #311: a new life gets a fresh
                 // Fields anchor (Since = this version), then the edits, stamped after the version.
-                Extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name),
+                Extensions = FieldEdits.ForWrite(state?.Extensions ?? [], live ? null : version, edits, who, nextStamp, name, checkFieldCaps),
                 Sealed = sealedPrevious,
             };
         }
@@ -1563,7 +1563,7 @@ public sealed class RecordVaultStore : IFileVaultStore
             if (burnedAt is not null && state.OutstandingBurn is null)
                 same = state with { Burns = [.. state.Burns, new BurnEntry(state.Version, nextStamp(), burnReason)] };
             if (edits is { Count: > 0 })
-                same = SetFieldsRecord(same, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp);
+                same = SetFieldsRecord(same, edits, who ?? throw new ArgumentNullException(nameof(who)), nextStamp, checkFieldCaps);
             if (!ReferenceEquals(same, state) && !(same.Burns.SequenceEqual(state.Burns) && same.Extensions.SequenceEqual(state.Extensions)))
                 next = same;
         }
@@ -1576,11 +1576,12 @@ public sealed class RecordVaultStore : IFileVaultStore
     /// extension, everything else kept; the write stamp is the commit's.
     /// </summary>
     /// <exception cref="TswapException"><paramref name="state"/> is a tombstone (<c>No secret 'NAME'.</c>), or a refusal of <see cref="FieldEdits.Apply"/>.</exception>
-    internal static SecretRecord SetFieldsRecord(SecretRecord state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp)
+    internal static SecretRecord SetFieldsRecord(SecretRecord state, IReadOnlyList<FieldEdit> edits, FieldWho who, Func<Stamp> nextStamp,
+        bool checkCaps = true)
     {
         if (state.Type == RecordType.Tombstone)
             throw new TswapException($"No secret '{state.Name}'.");
-        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name) };
+        return state with { Extensions = FieldEdits.ForWrite(state.Extensions, null, edits, who, nextStamp, state.Name, checkCaps) };
     }
 
     /// <summary>

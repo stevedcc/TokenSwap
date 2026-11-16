@@ -723,7 +723,8 @@ How to share one, and the merge rules: [multi-machine.md](multi-machine.md#shari
     export is imported, and stays back: the import writes the fields as a change made on the importing
     machine at that moment (fresh stamps, a new lineage), so the earlier removal can't win in a merge.
     Unset it again; only a removal stamped after the import wins. Imported fields are not checked
-    against the stored values ([fields](#fields-plain-visible-data)).
+    against the stored values ([fields](#fields-plain-visible-data)), and no cap applies to them: an
+    export of a secret a merge left over 64 fields or 64 KiB imports with every field, as the merge kept them.
 - **Permissions:** the vault folder, `records/` and the config folder are created 0700 and their
   files 0600; an existing vault with wider permissions is narrowed on the next write, with a notice.
   Under sudo, tswap does its file work as the folder's owner. (Windows: no change; files inherit
