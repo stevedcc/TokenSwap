@@ -24,8 +24,18 @@ internal static partial class KeyMaterial
     /// </list>
     /// And no run of hex groups separated by <c>-</c>, <c>:</c> or spaces adding up to 32 or more hex characters.
     /// </summary>
-    public static void AssertNone(string output)
+    public static void AssertNone(string output) => AssertNone(output, Path.GetTempPath());
+
+    /// <summary>
+    /// <see cref="AssertNone(string)"/> with the test run's temp folder given: <paramref name="tempRoot"/> is the
+    /// tests' own folder, never a key, so it is read as <c>/tmp</c> (#345: a macOS runner's per-user temp folder,
+    /// <c>/var/folders/&lt;2&gt;/&lt;30 random characters&gt;/T</c>, can read as base64). What follows it is checked as usual.
+    /// </summary>
+    internal static void AssertNone(string output, string tempRoot)
     {
+        var root = tempRoot.TrimEnd('/', '\\');
+        if (root.Length > 1)
+            output = output.Replace(root, "/tmp", StringComparison.Ordinal);
         foreach (var printed in output.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             var token = TrimPunctuation(printed);

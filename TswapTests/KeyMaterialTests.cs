@@ -44,6 +44,26 @@ public sealed class KeyMaterialTests
     [InlineData("no vault in /tmp/tswap-setup-1gZce3/pair-d49ddcb5.")]
     public void AssertNone_LetsOrdinaryOutputThrough(string output) => KeyMaterial.AssertNone(output);
 
+    // #345: a macOS runner's per-user temp folder is a random 30-character name; this one has no '_' and reads as base64.
+    private const string MacTemp = "/var/folders/q2/p1t6rgxj5fj32g1dc7dmd49r0000gn/T/";
+
+    [Theory]
+    [InlineData(MacTemp + "tswap-setup-vMFq0C/pair-81f89a5f")]
+    [InlineData("/private" + MacTemp + "tswap-move-53ebcfad/sync/tswap-vault")]
+    [InlineData("/var/folders/q2/p1t6rgxj5fj32g1dc7dmd49r0000gn/T")]
+    public void AssertNone_TheTestsOwnTempFolder_IsNotAKey(string path) =>
+        KeyMaterial.AssertNone($"no vault in {path}", tempRoot: MacTemp);
+
+    [Fact]
+    public void AssertNone_TheSameFolder_IsFlaggedWhenItIsNotTheTempFolder() =>
+        Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            KeyMaterial.AssertNone($"no vault in {MacTemp}tswap-setup-vMFq0C/pair-81f89a5f", tempRoot: "/tmp/"));
+
+    [Fact]
+    public void AssertNone_AKeyUnderTheTempFolder_IsStillCaught() =>
+        Assert.Throws<Xunit.Sdk.TrueException>(() => KeyMaterial.AssertNone(
+            $"wrote {MacTemp}{Convert.ToHexString(RandomNumberGenerator.GetBytes(16))}/x.json", tempRoot: MacTemp));
+
     [Fact]
     public void AssertNotEchoed_CatchesTheTypedValue() =>
         Assert.Throws<Xunit.Sdk.FalseException>(() => KeyMaterial.AssertNotEchoed("the key was correct horse battery staple", "correct horse battery staple"));
