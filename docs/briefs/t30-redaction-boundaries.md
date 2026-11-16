@@ -430,3 +430,36 @@ fingerprint format (no reindex); carrying left context through `ScanState` or a 
 - A decimal-number rule: no (`.` stays a boundary; `465` is still masked in `1.465`).
 - `check`/`names` flagging existing short values (#314 proposal 4) and the JSON mode (#314 proposal 2): follow-up issues, not T30.
 - The fields guard's refusal for short secrets stays as it is (out of scope).
+- (Recorded with A3) every encoded form of a short value is whole-token too.
+
+## Amendments after brief review round 1 (binding; they win over the text above)
+
+Round 1: GLM-5.3 "yes" after I-1; MiMo "no" on I1 (the same test) and I2. No leak outside the owner-accepted class was
+found by either.
+
+**A1. `FingerprintScannerTests.Matcher_CarriedState_SameOutputForEveryChunkSize` (both).** It compares
+`FingerprintStreamMatcher.For` (now `WholeToken`) with a stateless `FingerprintScanner.Build(sets, keys)` (`Anywhere`)
+over a random vault that can hold short values, so it can fail. **Sanctioned input change:** build the stateless
+reference with `WholeToken` too, so the test still proves that carried state across chunks gives the same output as
+no carried state, under the shipped rule. Say so in Task 2's commit.
+
+**A2. Quantise the short-forms hold (MiMo I2).** In `FingerprintStreamMatcher.PendingFrom`, the term from the longest
+short form is rounded up to a multiple of 256 like the scanner's caps: hold at least the trailing
+`RoundUp256(longestShortForm) - 1` characters whenever short forms exist (never a figure derived exactly from a value's
+length). `docs/security-model.md`'s "The hold-back is observable" bullet then stays true as written. Test: the
+matcher-level analogue of `PendingFrom_WholeToken_DependsOnTextOnly`: two matchers whose longest short forms differ but
+round to the same multiple of 256 hold back identical amounts for the same text; break-it-once: use the exact length,
+the test fails.
+
+**A3. Encoded forms of a short value are whole-token too (MiMo M1).** Shortness belongs to the value: every form of a
+value under 8 characters (its base64, hex, URL and file forms, even when those are 8+ characters) is masked only where
+it stands alone. This follows from the owner's answer (masking a short value's base64 inside unrelated base64 runs is
+the corruption #314 is about); recorded here and in the owner answers.
+
+**A4. Minors.**
+- `docs/security-model.md`'s "What `run` masks" table: a footnote on the "yes" rows, "short values (under 8
+  characters): only where they stand alone, see Limits" (MiMo M3).
+- `TokenBoundary.IsShort(FingerprintSet)` for a set with no `Plain` entry: not short (anywhere matching, the masking
+  side). Record it as a ruling with a test (MiMo M2).
+- Where a text is present both as an anywhere form and a whole-token form, the anywhere entry wins (masks more); if
+  that changes a label compared with today, the label of the anywhere entry is used; record it in the commit.
