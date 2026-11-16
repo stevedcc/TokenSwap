@@ -50,7 +50,6 @@ public sealed class FieldTokenRefusalTests : IDisposable
         { "{{a.b}}", FieldMessage("{{a.b}}", "a") },
         { "{{db.username}}", FieldMessage("{{db.username}}", "db") },
         { "{{a.b.c}}", MalformedMessage("{{a.b.c}}") },
-        { "{{.x}}", MalformedMessage("{{.x}}") },
         { "{{x.}}", MalformedMessage("{{x.}}") },
         { "{{a.B}}", MalformedMessage("{{a.B}}") },
         { "{{a.b:previous}}", MalformedMessage("{{a.b:previous}}") },
@@ -65,6 +64,27 @@ public sealed class FieldTokenRefusalTests : IDisposable
         Assert.Equal(1, exit);
         Assert.Equal("", stdout);
         Assert.Contains(message, stderr);
+    }
+
+    /// <summary>
+    /// Final review I1 (ruling): only a valid secret name right after <c>{{</c>, then a dot, is refused. Go-template
+    /// text (<c>docker/podman inspect --format</c>, <c>kubectl -o go-template</c>) passes through literally, as
+    /// before #311: next to a real token the command reaches the vault (with no vault, its error).
+    /// </summary>
+    [Theory]
+    [InlineData("{{.x}}")]
+    [InlineData("{{.State.Pid}}")]
+    [InlineData("{{range .items}}{{.metadata.name}}{{end}}")]
+    [InlineData("{{ .Name }}")]
+    [InlineData("{{ db.username }}")]
+    [InlineData("{{json .Config}}")]
+    public void Run_GoTemplateText_PassesThrough(string template)
+    {
+        var (exit, _, stderr) = _bare.Run("", "run", "tool", "--format=" + template, "{{name}}");
+
+        Assert.Equal(1, exit);
+        Assert.DoesNotContain("is not a valid token", stderr);
+        Assert.Contains(NoVaultError, stderr);
     }
 
     [Theory]

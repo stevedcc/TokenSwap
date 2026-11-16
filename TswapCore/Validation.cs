@@ -20,13 +20,16 @@ public static class Validation
                     $"Unknown token '{{{{{m.Groups[1].Value}}}}}': the only suffix is ':previous' (the value the last rotation replaced).");
     }
 
-    // Any '{{…}}' without braces inside and with a dot, other than a '{{@file}}' token (a file name may have dots).
-    private static readonly Regex DottedTokenRegex = new(@"\{\{(?!@)([^{}]*\.[^{}]*)\}\}");
+    // A '{{…}}' without braces inside that starts with a secret name followed by a dot. Anything else with a dot
+    // ('{{.State.Pid}}', '{{range .items}}', '{{ .Name }}', a '{{@file}}' token) is left alone, as before #311.
+    private static readonly Regex DottedTokenRegex = new(@"\{\{([a-zA-Z0-9_-]+\.[^{}]*)\}\}");
 
     /// <summary>
-    /// #311 (owner decision A): commands never substitute fields. Throws for a dotted <c>{{…}}</c> token:
-    /// <c>{{NAME.FIELD}}</c> (a valid secret name, a valid field name) with the field message, any other
-    /// dotted shape (<c>{{a.b.c}}</c>, <c>{{.x}}</c>, <c>{{x.}}</c>, <c>{{a.B}}</c>) as not a valid token.
+    /// #311 (owner decision A): commands never substitute fields. Throws for a <c>{{…}}</c> token that starts
+    /// with a secret name and a dot: <c>{{NAME.FIELD}}</c> (a valid field name) with the field message, any
+    /// other such shape (<c>{{a.b.c}}</c>, <c>{{x.}}</c>, <c>{{a.B}}</c>, <c>{{a.b:previous}}</c>) as not a valid
+    /// token. Final review I1 (ruling): text with no secret name right after <c>{{</c> (<c>{{.x}}</c>, Go
+    /// templates such as <c>{{.State.Pid}}</c> or <c>{{range .items}}</c>) passes through literally.
     /// </summary>
     public static void ThrowIfFieldOrMalformedToken(string command)
     {

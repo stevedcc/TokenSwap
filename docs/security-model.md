@@ -665,7 +665,9 @@ formats: [commands.md](commands.md#fields-plain-data-next-to-a-secret).
     done.
 - **Guard rail 2: no field reaches a command.** `run` refuses any `{{NAME.anything}}` token, and
   `run … {{@file}}` and `apply` any `# tswap: NAME.anything` marker, before anything is filled in, so a
-  dotted token or marker is never read as NAME plus text. The broker's templates have no field tokens. A
+  dotted token or marker is never read as NAME plus text. Brace text that doesn't start with a secret name
+  (Go templates such as `{{.State.Pid}}` or `{{range .items}}`) passes through as before. The broker's
+  templates have no field tokens. A
   field can't change where a secret is sent: the person approving a command sees every non-secret part of
   it.
 - **Guard rail 3: injection is reduced, not prevented.** A field value is text written by people and

@@ -238,8 +238,12 @@ tswap field set opnsense-root @fields.json
 `{{NAME.FIELD}}` in `run` (and a `# tswap: NAME.FIELD` marker in a `{{@file}}`) is **refused**, not passed through
 as text (today a dotted token matches no token regex and would stay literal; MiMo F2, DeepSeek M3). The detection
 runs on the whole `{{…}}` before secret tokens are resolved, so `{{NAME.FIELD}}` is never read as `{{NAME}}` plus
-text; any dotted or malformed brace token (`{{a.b.c}}`, `{{.x}}`, `{{x.}}`) is refused the same way (MiMo r2 N3a,
-DeepSeek r2 N4):
+text; any other brace token that starts with a valid secret name followed by a dot (`{{a.b.c}}`, `{{x.}}`,
+`{{a.B}}`, `{{a.b:previous}}`) is refused the same way (MiMo r2 N3a, DeepSeek r2 N4). Amended by the final review's
+ruling (I1): brace text with no secret name right after `{{` (`{{.x}}`, Go templates such as `{{.State.Pid}}`,
+`{{range .items}}`, `{{ .Name }}`) can never resolve to a secret and passes through `run` literally, as before, so
+`docker`/`podman inspect --format` and `kubectl -o go-template` keep working. Markers still refuse any
+`# tswap: NAME.` tail. The refusal:
 `'{{NAME.FIELD}}' is a field: fields aren't substituted into commands. Read it with 'tswap field show NAME' and
 write the value into the command.` The broker's templates are unchanged. A test pins the refusal.
 
