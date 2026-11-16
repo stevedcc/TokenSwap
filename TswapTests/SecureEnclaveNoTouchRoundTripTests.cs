@@ -63,10 +63,11 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
         return task.GetAwaiter().GetResult();
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void ANoTouchKey_RoundTrips_AndATamperedPackageFails()
     {
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         NoTouchRoundTrip();
     }
@@ -88,12 +89,13 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
         Assert.Contains("Could not unlock with the Secure Enclave", ex.Message);
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void ANoTouchSlot_Unlocks_WithoutInteraction()
     {
         // T17 fix round 2: a slot recorded as made without presence (RequiresTouch false) unwraps through
         // tswap_se_unwrap_no_interaction; a key made without presence must open there as before.
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         NoTouchSlotUnlocks();
     }
@@ -109,12 +111,13 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
         Assert.Equal(kek, Bounded(() => service.Unlock(config, _ => 0, password: null)));
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void ATouchKey_WithoutInteraction_RefusedAtOnce()
     {
         // A presence key under the no-interaction unwrap (a slot recorded wrongly as no-touch) is refused with the
         // generic text, without a Touch ID prompt: interactionNotAllowed holds for presence too.
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         TouchKeyRefusedWithoutInteraction();
     }
@@ -132,12 +135,13 @@ public class SecureEnclaveNoTouchRoundTripTests(ITestOutputHelper output)
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"refused after {watch.Elapsed.TotalSeconds:F1} s, not at once");
     }
 
-    [Fact]
+    [MacFact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     public void ATouchKey_Wraps_WithoutUnwrapping()
     {
         // Creating a presence-gated key doesn't prompt; only using it does. This runs
         // tswap_se_wrap_v2's 1 branch and its access-control guard on hardware.
-        if (!CanRun() || !OperatingSystem.IsMacOS())
+        if (!CanRun())
             return;
         TouchKeyWraps();
     }

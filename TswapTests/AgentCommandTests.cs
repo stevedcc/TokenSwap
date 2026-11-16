@@ -247,13 +247,11 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Empty(_children.Started);
     }
 
-    [Fact]
+    [UnixFact]
     public void Start_AsRoot_Refuses_LeavesNothing()
     {
         // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
         // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
-        if (OperatingSystem.IsWindows())
-            return;
         var (m, _) = TpmPasswordVault("start-root");
         var before = Directory.EnumerateFileSystemEntries(m.Dir, "*", SearchOption.AllDirectories).Order().ToList();
         m.Ownership = new DirectoryOwnerMatcher(new FakeRoot());
@@ -578,13 +576,11 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Contains($"No tswap agent is running for this vault ({Address(m)}).", stopErr);
     }
 
-    [Fact]
+    [UnixFact]
     public void StopAndStatus_UnderSudo_SayForWhom()
     {
         // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
         // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
-        if (OperatingSystem.IsWindows())
-            return;
         var (m, _) = TpmPasswordVault("sudo-status");
         Assert.Equal(0, Start(m).Exit);
         m.Ownership = new DirectoryOwnerMatcher(new FakeRoot());
@@ -815,15 +811,13 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Contains(AskingLine + " (Touch ID may ask)" + Environment.NewLine, stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void SudoRoot_FindsOwnersAgent()
     {
         // Review focus 5: under sudo the environment is gone (no TSWAP_AGENT_SOCK); the client finds the
         // agent through the vault owner's uid. The run folder's root is a temp folder here (seam).
         // Root and sudo are Unix's: on Windows the agent has no root refusal and no "(as root, …)" suffix by design
         // (AgentCommand checks !OperatingSystem.IsWindows()); CI run 41619549912 ran this on Windows.
-        if (OperatingSystem.IsWindows())
-            return;
         var (m, _) = TpmPasswordVault("sudo-get");
         var home = ShortFolder("home");
         AgentUnlock.PathInputs = new AgentSocketPath.Inputs(Path.Combine(m.Dir, "no-run-user"), _ => home, new UnixOwnership(), MacOs: false);
@@ -839,12 +833,10 @@ public sealed class AgentCommandTests : IDisposable
         Assert.Contains(AskingLine, stderr);
     }
 
-    [Fact]
+    [UnixFact("the variable is Unix only")]
     public void Client_TooLongAgentSockVariable_SaysSo_ThenPrompts()
     {
         // Review T17 p3 MiMo M-11: a TSWAP_AGENT_SOCK the client can't use is reported, not silently skipped.
-        if (OperatingSystem.IsWindows())
-            return; // the variable is Unix only
         var (m, _) = TpmPasswordVault("long-sock");
         m.AgentSocket = "/" + new string('a', 120) + "/agent.sock";
 
@@ -856,12 +848,10 @@ public sealed class AgentCommandTests : IDisposable
         Assert.True(stderr.IndexOf("103-byte", StringComparison.Ordinal) < stderr.IndexOf(TerminalPasswordProvider.PromptText, StringComparison.Ordinal), stderr);
     }
 
-    [Fact]
+    [UnixFact]
     public void Client_NoAgentSockVariable_NoHomeFolder_StaysSilent()
     {
         // ...while an unset variable with no owner home folder to find an agent by stays silent (none can be asked).
-        if (OperatingSystem.IsWindows())
-            return;
         var (m, _) = TpmPasswordVault("no-home");
         m.AgentSocket = null;
         AgentUnlock.PathInputs = new AgentSocketPath.Inputs(Path.Combine(m.Dir, "no-run-user"), _ => null, new UnixOwnership(), MacOs: false);

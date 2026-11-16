@@ -50,11 +50,10 @@ public class ClassicVaultModeTests : IDisposable
         return warnings.ToString();
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Ingest_TightensFolderAndFiles_WithOneNotice()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         WideClassicVault();
 
         var stderr = Write("second", "v2");
@@ -68,11 +67,10 @@ public class ClassicVaultModeTests : IDisposable
         Assert.Contains("second", new Storage(_m.Dir).LoadSecrets(_key, TextWriter.Null).Secrets.Keys);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void Names_ChangesNothing()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         WideClassicVault();
         var warnings = new StringWriter();
 
@@ -85,11 +83,10 @@ public class ClassicVaultModeTests : IDisposable
         Assert.DoesNotContain("tightened", warnings.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void AlreadyTightVault_WriteGivesNoNotice()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _key = ClassicVaultTestSupport.CreateXorVault(_m, SerialA, SerialB); // written through the store, as init did: already 0700/0600
 
         var stderr = Write("first", "v1");

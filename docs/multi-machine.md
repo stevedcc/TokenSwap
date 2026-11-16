@@ -47,6 +47,8 @@ that already opens the vault.
   another machine's TPM: merge receipts instead.
 - **A YubiKey for this machine** needs no exchange: plug it in and run `sudo tswap slot add --yubikey`
   ([setup.md](setup.md#setting-up-with-a-yubikey-one-key-per-slot)).
+- **This machine's own TPM or Secure Enclave**, on a machine that already opens the vault, needs no
+  exchange either: `sudo tswap slot add --tpm` (or `--secure-enclave --with-touch|--no-touch`).
 
 ### What `slot merge` adds
 
@@ -74,8 +76,11 @@ prints the steps for your vault, as commands for "there" and "here":
   `sudo tswap slot add --yubikey`.
 - **A vault in a folder of its own** (made with `init --folder`): sync the folder to the other
   machine, run `tswap init --vault-dir <its copy of the folder>` there, and optionally give that
-  machine's chip a slot with `slot request`, `slot approve` and `slot accept`. The slot goes
-  straight into the shared keyring, so there is no merge step.
+  machine's chip a slot there with `sudo tswap slot add --tpm` (on a Mac
+  `sudo tswap slot add --secure-enclave --with-touch`), with a YubiKey that has a slot plugged in or
+  `--recovery-key-stdin`. With no way in there, approve it from here instead: `slot request`,
+  `slot approve` and `slot accept`. Either way the slot goes straight into the shared keyring, so
+  there is no merge step.
 - On Windows, run the `sudo` steps from an administrator prompt, without `sudo`.
 
 ## Remote enrolment of a YubiKey into a TPM vault, step by step
@@ -125,7 +130,10 @@ tswap init --folder ~/OneDrive/tswap-vault
 
 # Another machine joins the same folder:
 tswap init --vault-dir ~/OneDrive/tswap-vault        # opens with a YubiKey slot or the recovery key
-# ...then, for that machine's own TPM / Secure Enclave slot:
+# ...then, for that machine's own TPM / Secure Enclave slot, there (a YubiKey with a slot plugged in,
+# or --recovery-key-stdin):
+sudo tswap slot add --tpm                            # or --secure-enclave --with-touch|--no-touch
+# ...or, with no way in there:
 tswap slot request --tpm request.json                # then 'sudo tswap slot approve' on an enrolled machine
 tswap slot accept approve.json                       # the new slot goes straight into the shared keyring
 # (a machine that hasn't run 'init --vault-dir' can instead finish with
@@ -152,6 +160,20 @@ see [upgrading-from-0.1.md](upgrading-from-0.1.md#what-the-conversion-does).
 **Only the vault folder is shared.** Each machine's `config.json` stays in its config folder and
 must never be synced. The default vault folder sits inside the config folder, so if you sync the
 config folder you sync `config.json` too: give `--vault-dir` a folder of its own and sync that.
+
+A vault made with plain `init` or `migrate --to-records` is in that default folder. Move it out of
+the config folder first, then share the new folder:
+
+```bash
+tswap vault move ~/Sync/tswap-vault    # no sudo; copies the folder, checks the copy, points this machine at it
+```
+
+The old folder is kept, renamed `<old folder>.moved-<UTC timestamp>`, until you delete it (once
+`tswap names` and a `tswap run` work). Stop other tswap commands on this machine while it runs, and
+restart `tswap broker serve` afterwards if it runs here: it keeps serving, but its template sandbox
+protects the folders it saw at startup. A known limit on Windows: a junction or symlink in a folder
+above the new folder is not resolved when tswap checks that the new folder isn't inside the vault
+folder or the config folder, so don't give it a path that goes through one.
 
 ### Three ways to share
 

@@ -83,4 +83,18 @@ public class OtherMachinesGuideTests
         Assert.DoesNotContain("--receipt", text);
         Assert.Contains(ConfigDir, text);
     }
+
+    /// <summary>Brief T24: a joined machine with a way in adds its own chip there with slot add, before the request route.</summary>
+    [Fact]
+    public void FolderVariant_OffersSlotAddThere()
+    {
+        var text = Render(true);
+        AssertInOrder(text,
+            $"tswap init --vault-dir <its copy of {VaultDir}>",
+            "there  sudo tswap slot add --tpm",
+            "there  (on a Mac: sudo tswap slot add --secure-enclave --with-touch)",
+            "tswap slot request --tpm request.json");
+        Assert.DoesNotContain("slot merge", text);
+        Assert.DoesNotContain("--receipt", text);
+    }
 }

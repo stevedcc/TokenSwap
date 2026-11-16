@@ -76,11 +76,9 @@ public sealed class InstallScriptInstalledCopyTests
             lines.First(line => line.StartsWith("echo ", StringComparison.Ordinal)));
     }
 
-    [Fact]
+    [UnixFact]
     public void GetMacOSScript_BinaryInstalled_PassesBashSyntaxCheck()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var file = Path.Combine(Directory.CreateTempSubdirectory("tswap-peruser-").FullName, "installTswap.sh");
         File.WriteAllText(file, PerUser());
         try
@@ -114,11 +112,9 @@ public sealed class InstallScriptInstalledCopyTests
         Assert.False(InstalledCopy.IsSame(new FileId(16777232, 4242), null));
 
     /// <summary>The real stat: a symlink is its target's file, a copy is another file, a missing path has no id.</summary>
-    [Fact]
+    [UnixFact]
     public void UnixFileIds_FollowSymlinks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var dir = Directory.CreateTempSubdirectory("tswap-fileid-").FullName;
         try
         {

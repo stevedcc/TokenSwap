@@ -18,6 +18,13 @@ public sealed class KeyMaterialTests
         { "grouped base64, no digit", "abcd-EFGH-ijkl-MNOP-qrst-UVWX-yzab" },
         { "grouped base64, no capital", "abcd-1234-ijkl-5678-qrst-9012-yzab" },
         { "base64 in a path", "/tmp/" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(20)).Replace('/', '+') + "/x.json" },
+        // #258: next to punctuation.
+        { "hex ending a sentence", Convert.ToHexString(RandomNumberGenerator.GetBytes(16)) + "." },
+        { "base64 in parentheses", "(" + Convert.ToBase64String(RandomNumberGenerator.GetBytes(20)) + ")" },
+        { "grouped base64 in parentheses", "(q83v-EjRW-eJCr-ze8S-NFZ4-kKvN-7xI=)" },
+        { "grouped base64 with / ending a sentence", "q83v-EjRW/eJCr-ze8S-NFZ4-kKvN-7xI=." },
+        { "hex in parentheses in a path", "/tmp/(" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)) + ")/x.json" },
+        { "hex after a name and a /", "secret_name/" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)) + "." },
     };
 
     [Theory]
@@ -31,6 +38,10 @@ public sealed class KeyMaterialTests
     [InlineData("no vault in /tmp/tswap-setup-1gZce3/pair-d49ddcb5")]
     [InlineData(@"C:\Users\someone\AppData\tswap-fleet-reenrol-d0ae5afb\config.json")]
     [InlineData("~/.config/tswap-fleet-reenrol-d0ae5afb/yubikey-slots.json")]
+    // A bare hyphenated identifier that degroups to under 24 characters. (A bare tswap-fleet-reenrol-d0ae5afb outside a
+    // path degroups to 25 base64-alphabet characters: it is flagged today and stays flagged.)
+    [InlineData("wrote record-name-hash for the slot")]
+    [InlineData("no vault in /tmp/tswap-setup-1gZce3/pair-d49ddcb5.")]
     public void AssertNone_LetsOrdinaryOutputThrough(string output) => KeyMaterial.AssertNone(output);
 
     [Fact]

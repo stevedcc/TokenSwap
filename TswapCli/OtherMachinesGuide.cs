@@ -22,7 +22,12 @@ public static class OtherMachinesGuide
             o.WriteLine($"The vault lives in {vaultDir}, a folder meant for syncing. Sync it to the other machine, then:");
             Section(o, "Join the shared folder (any YubiKey that already has a slot there, or the recovery key, then opens it)",
                 [(There, $"{prefix} init --vault-dir <its copy of {vaultDir}>")]);
-            Section(o, "Optional: give that machine's own chip a slot (the slot goes straight into the shared keyring, so there is no merge step)",
+            // Brief T24: a joined machine with a way in adds its own chip there; one without approves it from here.
+            Section(o, "Optional: give that machine's own chip a slot, there, with a YubiKey that has a slot plugged in (or --recovery-key-stdin); " +
+                       "the slot goes straight into the shared keyring, so there is no merge step",
+                [(There, $"sudo {prefix} slot add --tpm"),
+                 (There, $"(on a Mac: sudo {prefix} slot add --secure-enclave --with-touch)")]);
+            Section(o, "Or, with no way in there, approve it from here",
                 [(There, $"{prefix} slot request --tpm request.json"),
                  (There, $"(on a Mac: {prefix} slot request --secure-enclave --with-touch request.json; Touch ID or password at that Mac on every unlock)"),
                  (Here, $"sudo {prefix} slot approve request.json approve.json"),

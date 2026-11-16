@@ -45,11 +45,9 @@ public class BrokerClientTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ forward
 
-    [Fact]
+    [UnixFact]
     public async Task Forward_RelaysARequestEndToEnd_ForwardSocketBrokerUpstream()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartAsync();
         await using var relay = BrokerTcpRelay.Start(BrokerTcpRelay.ParseListen("127.0.0.1:0"), _h.SocketPath("lane1"));
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{relay.LocalEndPoint.Port}") };
@@ -67,10 +65,10 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.Equal(2, _h.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Forward_OnIPv6Loopback_Works()
     {
-        if (OperatingSystem.IsWindows() || !System.Net.Sockets.Socket.OSSupportsIPv6)
+        if (!System.Net.Sockets.Socket.OSSupportsIPv6)
             return;
         await StartAsync();
         await using var relay = BrokerTcpRelay.Start(BrokerTcpRelay.ParseListen("[::1]:0"), _h.SocketPath("lane1"));
@@ -81,7 +79,7 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix only")]
     [InlineData("0.0.0.0:8080")]
     [InlineData("[::]:8080")]
     [InlineData("localhost:8080")]
@@ -97,29 +95,23 @@ public class BrokerClientTests : IAsyncLifetime
     [InlineData("127.0.0.1:99999")]
     public void Forward_RefusesAnyListenAddressButALiteralLoopback(string listen)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         Assert.Throws<TswapException>(() => BrokerTcpRelay.ParseListen(listen));
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix only")]
     [InlineData("127.0.0.1:8080", "127.0.0.1")]
     [InlineData("[::1]:8080", "::1")]
     [InlineData("::1:8080", "::1")]
     public void Forward_AcceptsALiteralLoopback(string listen, string address)
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var endPoint = BrokerTcpRelay.ParseListen(listen);
         Assert.Equal(IPAddress.Parse(address), endPoint.Address);
         Assert.Equal(8080, endPoint.Port);
     }
 
-    [Fact]
+    [UnixFact]
     public void ForwardCommand_RefusesALanAddress_WithoutTouchingAVault()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("fwd");
         var (exit, _, err) = m.Run("", "broker", "forward", "--listen", "0.0.0.0:8080");
 
@@ -130,11 +122,9 @@ public class BrokerClientTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ the log
 
-    [Fact]
+    [UnixFact]
     public async Task LogLines_HaveTheirFields()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartAsync();
         _up.Respond = async (http, _) => await http.Response.WriteAsync("twelve bytes");
 
@@ -150,11 +140,9 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.Matches("request socket=lane1 uid=\\d+ pid=\\d+ route=- method=GET path=\"/nope/x\" status=404 bytes_in=0 bytes_out=0 unlocks=0 unlock_ms=0 reason=route$", refused);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task CrLfInAPath_CantForgeALogLine()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartAsync();
         const string forged = "2026-01-01T00:00:00.000Z tswap-broker request socket=lane1 uid=0 pid=1 route=bearer method=GET path=\"x\" status=200";
 
@@ -168,21 +156,17 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.DoesNotContain(lines, l => l.StartsWith("2026-01-01", StringComparison.Ordinal));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void Escape_HandlesControlCharacters_Quotes_AndCapsTheLength()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         Assert.Equal(@"a\r\nb\""c\\d\u0007\u2028", BrokerLog.Escape("a\r\nb\"c\\d\u0007\u2028", 100));
         Assert.Equal("abc...", BrokerLog.Escape("abcdef", 3));
         Assert.Equal(BrokerLog.MaxPathLength + 3, BrokerLog.Escape(new string('p', 5000), BrokerLog.MaxPathLength).Length);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task NoCredentialAppearsInTheLog_AfterRequestsThatUsedOne()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await StartAsync();
         _up.Respond = async (http, _) =>
         {
@@ -202,11 +186,10 @@ public class BrokerClientTests : IAsyncLifetime
         Assert.DoesNotContain("echo", log);
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task BrokerLogFile_Is0600_AndAppended()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var path = Path.Combine(_h.Root, BrokerLog.FileName);
         using (var log = new BrokerLog(null, path, _h.Clock))
             log.Event("first");
@@ -222,11 +205,9 @@ public class BrokerClientTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ the real secret source
 
-    [Fact]
+    [UnixFact]
     public async Task VaultSecretSource_UnlocksTheSimulatedTpmVault_PerRequest_AndSendsOnlyThatRoutesSecret()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var m = new FleetMachine("brokervault") { Tpm = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32) };
         m.Ok("", "init", "--tpm", "--no-recovery");
         m.Ok("vault-token-value\nvault-token-value\n", "add", "tok");

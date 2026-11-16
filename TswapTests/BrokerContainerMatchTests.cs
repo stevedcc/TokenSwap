@@ -313,11 +313,9 @@ public sealed class BrokerContainerMatchTests : IDisposable
 
     // ------------------------------------------------------------------ the real thing (Linux)
 
-    [Fact]
+    [LinuxFact("SO_PEERPIDFD and /proc are Linux; this fails (never skips) on a Linux kernel without SO_PEERPIDFD")]
     public async Task Observe_Real_ReturnsThisProcesssOwnCgroup_AndIsAllowedWhenBoundToIt()
     {
-        if (!OperatingSystem.IsLinux())
-            return; // SO_PEERPIDFD and /proc are Linux; this fails (never skips) on a Linux kernel without SO_PEERPIDFD
         PeerIdentity.ResetSeamsForTests();
         var own = PeerIdentity.ParseCgroupV2(File.ReadAllBytes("/proc/self/cgroup"));
         Assert.NotNull(own);

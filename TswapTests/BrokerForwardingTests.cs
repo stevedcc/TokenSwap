@@ -47,11 +47,9 @@ public class BrokerForwardingTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ allowed requests
 
-    [Fact]
+    [UnixFact]
     public async Task Bearer_UpstreamGetsTheAuthHeader_Host_PathAndQueryUnchanged()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var response = await _h.GetAsync("lane1", "/bearer/a/b?x=1&y=%2F%2e");
 
         Assert.Equal(200, BrokerHarness.StatusOf(response));
@@ -64,11 +62,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal(1, _h.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Basic_UpstreamGetsBase64OfUserColonSecret()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/basic/stevedcc/croft.git/info/refs?service=git-upload-pack")));
 
         var hit = SingleHit();
@@ -76,11 +72,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("x-access-token:" + Secret)), hit.Header("Authorization"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Header_UpstreamGetsTheNamedHeader_AndNoAuthorization()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/header/v2/", "Authorization: Bearer client-token\r\n")));
 
         var hit = SingleHit();
@@ -89,11 +83,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.False(hit.HasHeader("Authorization"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ClientAuthorizationAndHost_AreReplaced()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var raw = "GET /bearer/x HTTP/1.1\r\nHost: evil.example\r\nAuthorization: Bearer client-token\r\n" +
                   "Proxy-Authorization: Basic Y2xpZW50\r\nCookie: session=client\r\nConnection: close\r\n\r\n";
         Assert.Equal(200, BrokerHarness.StatusOf(Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", raw))));
@@ -107,11 +99,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.DoesNotContain(hit.Headers, h => h.Value.Contains("client") || h.Value.Contains("evil.example"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ConnectionNamedHeaders_AndHopByHopHeaders_AreDropped_OthersPass()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var headers = "Connection: x-secret-header, X-Other\r\nX-Secret-Header: drop-me\r\nX-Other: drop-me-too\r\n" +
                       "Keep-Alive: timeout=5\r\nTE: trailers\r\nTrailer: X-T\r\nUpgrade: websocket\r\nProxy-Connection: keep-alive\r\n" +
                       "X-Kept: kept\r\nUser-Agent: git/2.47\r\n";
@@ -126,11 +116,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("git/2.47", hit.Header("User-Agent"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task RangeIfRangeAndAcceptEncoding_DontReachTheUpstream_ItSeesIdentity()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var headers = "Range: bytes=0-3\r\nIf-Range: \"etag\"\r\nAccept-Encoding: gzip, br\r\n";
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/x", headers)));
 
@@ -140,11 +128,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("identity", hit.Header("Accept-Encoding"));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task BareChunkedRequest_IsReframed_NeitherFramingHeaderOfTheClientLeaks()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // "Chunked" with a capital C: HttpClient's own framing header is lower-case "chunked", so the
         // upstream seeing exactly "chunked" shows the client's header did not pass.
         var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nTransfer-Encoding: Chunked\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n" +
@@ -159,11 +145,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal(["chunked"], hit.Headers.Where(h => h.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)).Select(h => h.Value));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ContentLengthPlusTransferEncoding_NeverReachesTheUpstreamWithTheClientsFraming()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // A smuggling attempt: CL says 4 (so "0\r\n\r" would be the body), TE says chunked and a
         // second request hides after the terminating chunk.
         var raw = "POST /bearer/upload HTTP/1.1\r\nHost: b\r\nContent-Length: 4\r\nTransfer-Encoding: Chunked\r\nConnection: close\r\n\r\n" +
@@ -179,11 +163,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal(["chunked"], hit.Headers.Where(h => h.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)).Select(h => h.Value));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AQueryWithAFragmentMark_IsTheUniform404_AnEncodedOneIsForwardedUnchanged()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var raw = await _h.GetAsync("lane1", "/bearer/x?a=1#frag");
         var encoded = await _h.GetAsync("lane1", "/bearer/x?a=1%23frag");
 
@@ -192,22 +174,18 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("/base/x?a=1%23frag", SingleHit().RawTarget);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void BuildOutbound_RefusesAQueryWithAFragmentMark_TheQueryIsNeverAltered()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         Assert.Null(BrokerRequestTarget.BuildOutbound(route, ["x"], "?a=1#b"));
         Assert.Equal("?a=1%23b", BrokerRequestTarget.BuildOutbound(route, ["x"], "?a=1%23b")!.Query);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ContentLengthRequest_KeepsItsLength_ReframedByTheForwarder()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var raw = "PUT /bearer/blob HTTP/1.1\r\nHost: b\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world";
         Assert.Equal(200, BrokerHarness.StatusOf(Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", raw))));
 
@@ -216,32 +194,26 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("hello world", Encoding.ASCII.GetString(hit.Body));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Segments_AreDecodedOnce_AndReencoded()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/v2/img/blobs/sha256%3Aabc/a%20b/%C3%A9/x+y@z")));
 
         Assert.Equal("/base/v2/img/blobs/sha256:abc/a%20b/%C3%A9/x+y@z", SingleHit().RawTarget);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TrailingSlash_IsKept_RouteSlashAloneIsTheBasePath()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/")));
         Assert.Equal(200, BrokerHarness.StatusOf(await _h.GetAsync("lane1", "/bearer/v2/")));
 
         Assert.Equal(["/base/", "/base/v2/"], _up.Hits.Select(h => h.RawTarget));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Redirect_IsPassedBack_NeverFollowed()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _up.Respond = (http, _) =>
         {
             http.Response.StatusCode = 302;
@@ -285,12 +257,10 @@ public class BrokerForwardingTests : IAsyncLifetime
         "//evil.com/x",
     };
 
-    [Theory]
+    [UnixTheory]
     [MemberData(nameof(PathTricks))]
     public async Task PathTricks_AreTheUniform404_WithNoUpstreamHitAndNoUnlock(string target)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var response = await _h.GetAsync("lane1", target);
 
         Assert.Equal(404, BrokerHarness.StatusOf(response));
@@ -298,13 +268,11 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal(0, _h.Secrets.Unlocks);
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData("/bearer/a\\b")]
     [InlineData("/bearer/%00")]
     public async Task RefusedByKestrelOrTheBroker_BackslashAndEncodedNul_NeverReachTheUpstream(string target)
     {
-        if (OperatingSystem.IsWindows())
-            return;
         // Kestrel itself answers 400 to some of these before the broker sees the request.
         var response = await _h.GetAsync("lane1", target);
 
@@ -313,11 +281,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal(0, _h.Secrets.Unlocks);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task UnknownRoute_OtherSocketsRoute_MethodOutsideTheRoute_PathOutsideTheRegex_AreTheUniform404()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var unknown = await _h.GetAsync("lane1", "/nope/x");
         var otherSockets = await _h.GetAsync("lane1", "/second/x");
         var method = await _h.GetAsync("lane1", "/narrow/allowed/x", method: "POST");
@@ -333,11 +299,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Contains("reason=path-regex", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TheUniform404_IsByteIdentical_HeadersIncluded()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         List<string> responses = [];
         foreach (var target in ((IEnumerable<object[]>)PathTricks).Select(t => (string)t[0]).Concat(["/nope/x", "/second/x", "/narrow/other/x"]))
             responses.Add(await _h.GetAsync("lane1", target));
@@ -348,11 +312,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Empty(_up.Hits);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Connect_AndAbsoluteForm_Are400_WithNoUpstreamHit()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var connect = Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", $"CONNECT 127.0.0.1:{_up.Port} HTTP/1.1\r\nHost: 127.0.0.1:{_up.Port}\r\nConnection: close\r\n\r\n"));
         var absolute = Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", $"GET {_up.BaseUrl}/bearer/x HTTP/1.1\r\nHost: 127.0.0.1:{_up.Port}\r\nConnection: close\r\n\r\n"));
         var asterisk = Encoding.Latin1.GetString(await _h.SendRawAsync("lane1", "OPTIONS * HTTP/1.1\r\nHost: b\r\nConnection: close\r\n\r\n"));
@@ -366,11 +328,9 @@ public class BrokerForwardingTests : IAsyncLifetime
 
     // ------------------------------------------------------------------ building, the assertion and the seam
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void OutboundAuthority_EqualsTheUpstreams_EvenForDoubleSlashEvilCom()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example:8443"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         var built = BrokerRequestTarget.BuildOutbound(route, ["", "evil.com", "x"], "");
@@ -384,11 +344,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Equal("/base/%2Fevil.com/x", leadingSlash.AbsolutePath);
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void TheAssertion_RefusesAnotherAuthority_OrAPathOutsideTheBasePath()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         var route = BrokerPolicy.Parse(_h.Config(Routes("https://upstream.example"), lane1Routes: "\"bearer\"")).Routes["bearer"];
 
         Assert.True(BrokerRequestTarget.IsWithinUpstream(route, new Uri("https://upstream.example/base/x")));
@@ -399,11 +357,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.False(BrokerRequestTarget.IsWithinUpstream(route, new Uri("https://upstream.example/other")));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task TheCertificateSeam_IsOffByDefault_ASelfSignedUpstreamIsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         using var plain = new HttpBrokerForwarder(_h.Clock);
         Assert.Null(plain.Handler.SslOptions.RemoteCertificateValidationCallback);
         Assert.NotNull(_forwarder.Handler.SslOptions.RemoteCertificateValidationCallback);
@@ -418,11 +374,9 @@ public class BrokerForwardingTests : IAsyncLifetime
         Assert.Contains("reason=upstream-error", h2.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void ForwarderHandler_NeverFollowsRedirects_DecompressesOrUsesCookiesOrProxies()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         using var forwarder = new HttpBrokerForwarder(_h.Clock);
         Assert.False(forwarder.Handler.AllowAutoRedirect);
         Assert.Equal(System.Net.DecompressionMethods.None, forwarder.Handler.AutomaticDecompression);

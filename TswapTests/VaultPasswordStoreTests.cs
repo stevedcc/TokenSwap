@@ -87,11 +87,9 @@ public sealed class VaultPasswordStoreTests : IDisposable
         Assert.Equal(keyring.Value.Uid, vaultPassword.Value.Uid);
     }
 
-    [Fact]
+    [UnixFact("no identity switch on Windows")]
     public void UnderSudo_TheWrite_IsDoneAsTheFoldersOwner()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no identity switch on Windows
         var fake = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0);
         var store = new RecordVaultStore(_home.Dir, new DirectoryOwnerMatcher(fake));
 

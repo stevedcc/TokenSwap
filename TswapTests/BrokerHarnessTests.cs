@@ -15,11 +15,9 @@ public sealed class BrokerHarnessTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _h.DisposeAsync();
 
-    [Fact]
+    [UnixFact("Unix sockets as the broker uses them")]
     public async Task SendRawAsync_ToAPeerThatClosesBeforeTheRequestIsWritten_ReturnsZeroBytes()
     {
-        if (OperatingSystem.IsWindows())
-            return; // Unix sockets as the broker uses them
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixDomainSocketEndPoint(_h.SocketPath("closer")));
         listener.Listen(1);

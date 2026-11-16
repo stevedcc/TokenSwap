@@ -12,15 +12,9 @@ namespace TswapTests;
 /// </summary>
 public class Libfido2SmokeTests(ITestOutputHelper output)
 {
-    [Fact]
+    [UnixFact("libfido2 is never loaded on this OS")]
     public void RealLibrary_LoadsAndListsDevices()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-        {
-            output.WriteLine("SKIPPED: libfido2 is never loaded on this OS.");
-            return;
-        }
-
         var loader = Libfido2Loader.ForThisProcess(privileged: false);
         var status = loader.TryLoad();
         if (status == Libfido2Status.NotInstalled)

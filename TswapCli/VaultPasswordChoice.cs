@@ -263,7 +263,7 @@ internal static class VaultPasswordChoice
     ///
     /// <para>Deviation from the brief's signature (which returns the stretched password and writes the file
     /// itself): a new file is returned in <see cref="Resolved.NewFile"/>, and the caller writes it with
-    /// <see cref="Resolved.WriteNewFile"/> only once the hardware enrolment has succeeded, just before it
+    /// <c>NewSlotWrite.Save</c> only once the hardware enrolment has succeeded, just before it
     /// saves the keyring. A failed enrolment then leaves no file behind.</para>
     /// </summary>
     public static Resolved? Resolve(CommandContext ctx, bool? flag, HardwareBackend backend, RecordVaultStore? store, byte[] vaultKey, byte[] vaultId, string command)
@@ -283,13 +283,6 @@ internal static class VaultPasswordChoice
     {
         public StretchedPassword Stretched { get; } = stretched;
         public VaultPasswordFile? NewFile { get; } = newFile;
-
-        /// <summary>Writes <see cref="NewFile"/> (when there is one) into <paramref name="store"/>'s vault folder.</summary>
-        public void WriteNewFile(RecordVaultStore store)
-        {
-            if (NewFile is not null)
-                store.WriteVaultPassword(NewFile);
-        }
 
         public void Dispose() => Stretched.Dispose();
     }

@@ -153,14 +153,12 @@ public class HelpTests : IDisposable
         Assert.Contains("run [--env NAME={{name}}]... [--] <cmd> [args...]", stdout);
     }
 
-    [Fact]
+    [UnixFact("POSIX sh only")]
     public void RunChildCommandHelp_GoesToTheChild()
     {
         // Exit code 7 can only come from the child: a script that exits 7, given `--help` and a
         // token (run needs one; #105 refuses inline `sh -c` code). Printing run's usage would
         // exit 0, a vault or validation error 1.
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX sh only (until #181: reported as Passed on Windows)
         Run(sudoBypass: true, "init", "--yubikey");
         Run(sudoBypass: true, "create", "child-token");
         var script = Path.Combine(_tempDir, "exit7.sh");

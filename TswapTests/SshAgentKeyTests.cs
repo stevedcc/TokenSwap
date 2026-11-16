@@ -588,10 +588,10 @@ public class SshAgentVaultKeyTests(Xunit.Abstractions.ITestOutputHelper output) 
         _keys.Dispose();
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     public void LoadAndEachSignature_DecryptOnlyTheKeysRecord()
     {
-        if (SshTestSkip.OnWindows(_output) || SshTestSkip.WithoutKeyTools(_output))
+        if (SshTestSkip.WithoutKeyTools(_output))
             return;
         var path = _keys.Generate("k", "ed25519");
         _m.Ok("", "init", "--tpm", "--no-recovery");

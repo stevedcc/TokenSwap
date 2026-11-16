@@ -39,12 +39,10 @@ public class VaultFreeCommandTests
         ["version"],
     ];
 
-    [Theory]
+    [UnixTheory("HOME/XDG are the Unix inputs (APPDATA on Windows)")]
     [MemberData(nameof(VaultFreeCommandLines))]
     public void VaultFreeCommand_WorksWithoutAHomeFolder(string[] args)
     {
-        if (OperatingSystem.IsWindows()) return; // HOME/XDG are the Unix inputs (APPDATA on Windows)
-
         var (exit, stdout, stderr) = Run(new(), args);
 
         Assert.True(exit == 0, $"'{string.Join(' ', args)}' exit {exit}: {stderr}");
@@ -62,11 +60,9 @@ public class VaultFreeCommandTests
         Assert.Equal(["completion", "installscript", "prompt", "prompt-hash", "version", "yubikey"], vaultFree);
     }
 
-    [Fact]
+    [UnixFact]
     public void EveryVaultFreeCommand_WorksWithoutAHomeFolder()
     {
-        if (OperatingSystem.IsWindows()) return;
-
         // yubikey setup always ends in a refusal in test mode (the test key's slot is configured and can't be
         // programmed): YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn covers it.
         foreach (var command in CommandRegistry.All.Where(c => !c.NeedsVault && c.Name != "yubikey"))
@@ -82,11 +78,9 @@ public class VaultFreeCommandTests
     /// and <c>--replace</c> (typed serial at a terminal) warns that it couldn't check a vault and goes on to programming,
     /// which test mode refuses.
     /// </summary>
-    [Fact]
+    [LinuxFact("only there does a missing HOME leave no config folder (see below)")]
     public void YubiKeySetup_WithoutAHomeFolder_ChecksNoVaultAndGoesOn()
     {
-        if (!OperatingSystem.IsLinux()) return; // only there does a missing HOME leave no config folder (see below)
-
         var env = new Dictionary<string, string?> { ["TSWAP_TEST_KEY"] = TestKeyHex };
         var console = new FakeConsole($"{TswapCore.Vault.TestKeyYubiKeyService.Serial1}\n") { IsInputRedirected = false };
         var exit = CliHost.Run(["yubikey", "setup", "--touch", "--replace"], console, name => env.GetValueOrDefault(name),
@@ -98,12 +92,11 @@ public class VaultFreeCommandTests
         Assert.Contains("Test mode (TSWAP_TEST_KEY) can't program a YubiKey", console.ErrorText);
     }
 
-    [Fact]
+    [LinuxFact]
     public void VaultCommand_WithoutAHomeFolder_SaysItCannotDetermineTheConfigFolder()
     {
         // Linux only: the folder comes from XDG_CONFIG_HOME/HOME there. On macOS .NET asks the OS
         // for Application Support (not HOME), and on Windows for %APPDATA%, so both still find one.
-        if (!OperatingSystem.IsLinux()) return;
 
         var (exit, _, stderr) = Run(new(), "names");
 
@@ -113,11 +106,9 @@ public class VaultFreeCommandTests
     }
 
     // XDG Base Directory spec (#180's comment): a relative XDG_CONFIG_HOME is ignored.
-    [Fact]
+    [LinuxFact("macOS and Windows take .NET's folder (not XDG)")]
     public void RelativeXdgConfigHome_FallsBackToHomeDotConfig()
     {
-        if (!OperatingSystem.IsLinux()) return; // macOS and Windows take .NET's folder (not XDG)
-
         var dir = CliEnvironment.ApplicationDataDir(name => name switch
         {
             "XDG_CONFIG_HOME" => "relative/config",
@@ -128,11 +119,9 @@ public class VaultFreeCommandTests
         Assert.Equal("/home/alice/.config", dir);
     }
 
-    [Fact]
+    [LinuxFact]
     public void AbsoluteXdgConfigHome_IsUsed()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var dir = CliEnvironment.ApplicationDataDir(name => name switch
         {
             "XDG_CONFIG_HOME" => "/srv/cfg",
@@ -143,11 +132,9 @@ public class VaultFreeCommandTests
         Assert.Equal("/srv/cfg", dir);
     }
 
-    [Fact]
+    [LinuxFact]
     public void RelativeXdgConfigHome_WithoutHome_CannotDetermine_NamingXdg()
     {
-        if (!OperatingSystem.IsLinux()) return;
-
         var (exit, _, stderr) = Run(new() { ["XDG_CONFIG_HOME"] = "relative/config" }, "names");
 
         Assert.Equal(1, exit);

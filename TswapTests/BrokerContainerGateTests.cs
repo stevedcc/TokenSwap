@@ -393,11 +393,9 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
     }
 
     // 5, ssh: a uid-only socket bound between two messages (r3 MiMo R1)
-    [Fact]
+    [LinuxFact]
     public async Task BindingAUidOnlySocketBetweenTwoSshMessages_RefusesTheSecond_IdentityUnreadable()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await StartAsync(null);
         using var agent = new SshAgentTestClient(await ConnectUnixAsync(SshAgentListener.SocketPath(_h.SocketDir, "lane1")));
         Assert.Single(SshAgentMessages.ParseIdentities((await agent.RequestAsync(SshAgentMessages.RequestIdentities))!));
@@ -412,11 +410,9 @@ public sealed class BrokerContainerGateEndToEndTests : IClassFixture<TswapBinary
     }
 
     // 5, HTTP: a uid-only socket bound after accept (r3 MiMo R1)
-    [Fact]
+    [LinuxFact]
     public async Task BindingAUidOnlySocketAfterAccept_RefusesTheRequest_IdentityUnreadable()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         await StartAsync(null);
         using var socket = await ConnectUnixAsync(BrokerServer.SocketPath(_h.SocketDir, "lane1"));
         await _admitted.Task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -522,11 +518,9 @@ public sealed class BrokerContainerGateSeamTests : IAsyncLifetime
         return await BrokerContainerGateEndToEndTests.ExchangeAsync(socket, Get);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task ProcHidden_IsRefused_AndTheHidepidEventIsLoggedOncePerServe()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         PeerIdentity.OpenPeerDetailed = _ => PeerOpenResult.Failed(4242, gotPidfd: true, pidfdAlive: true, errno: 13);
         await StartAsync();
         Assert.Empty(await RefusedAsync());
@@ -539,11 +533,9 @@ public sealed class BrokerContainerGateSeamTests : IAsyncLifetime
         Assert.Equal(0, _h.FakeForwarder.Calls);
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AnObservedCgroup_IsEscapedThenCappedAt256_InTheLog()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var hostile = "/evil\nrequest socket=lane1 \"x\\" + new string('a', 400);
         PeerIdentity.OpenPeerDetailed = _ => PeerOpenResult.Opened(new PeerProcess(4242,
             new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(100000), ownsHandle: false),
@@ -578,11 +570,9 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
             throw new InvalidOperationException("secret-looking message s3cr3t");
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AForwarderThatThrows_GetsTheUniform502_AndOneInternalErrorLine()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync(forwarder: new ThrowingForwarder());
         var thrown = await _h.SendRawAsync("lane1", "GET /echo/a HTTP/1.1\r\nHost: b\r\n\r\n");
 
@@ -653,11 +643,9 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
     private string TheInternalErrorLine() =>
         Assert.Single(_h.LogText.ToString().Split('\n'), line => line.Contains("reason=internal-error", StringComparison.Ordinal));
 
-    [Fact]
+    [UnixFact]
     public async Task AForwarderThatThrows_WhenThe502CantBeWrittenEither_AbortsTheConnection_AndLogsOnce()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         await _h.StartAsync(forwarder: new ThrowingForwarderWithAFailingBody());
 
         // Connection: close, so a Kestrel 500 (keep-alive otherwise) would end the exchange and show.
@@ -671,11 +659,9 @@ public sealed class BrokerInternalErrorTests : IAsyncLifetime
         Assert.DoesNotContain("s3cr3t", _h.LogText.ToString());
     }
 
-    [Fact]
+    [UnixFact]
     public async Task AForwarderThatThrowsAfterTheHeaders_AbortsTheConnection_AndLogsTheStatusSent()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var forwarder = new ThrowingForwarderAfterTheHeaders();
         await _h.StartAsync(forwarder: forwarder);
 

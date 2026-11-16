@@ -43,11 +43,9 @@ public class TwoYubiKeysTests : IDisposable
         return script;
     }
 
-    [Fact]
+    [UnixFact("POSIX sh only")]
     public void Unattended_RunUnlocks_WithoutReadingStdin_AndNothingExtraOnStdout()
     {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return; // POSIX sh only (until #181: reported as Passed on Windows)
         KeyringVaultWithTouchAAndNoTouchB();
         var script = ExitScript();
 

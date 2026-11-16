@@ -15,11 +15,9 @@ public class InstallScriptUpgradeTests
 
     // ── Every generated bash script is valid bash ─────────────────────────────
 
-    [Fact]
+    [UnixFact("no bash")]
     public void TheBashScripts_PassBashSyntaxCheck()
     {
-        if (OperatingSystem.IsWindows())
-            return; // no bash
         foreach (var script in new[] { InstallScript.GetBashScript("/tmp/tswap", Cil), InstallScript.GetBashScript("/tmp/tswap"),
                      InstallScript.GetMacOSScript("/tmp/tswap", [1, 2, 3]) })
         {
@@ -30,14 +28,12 @@ public class InstallScriptUpgradeTests
 
     // ── Replacing a binary that is running ────────────────────────────────────
 
-    [Fact]
+    [LinuxFact]
     public void InstallBinary_ReplacesARunningBinary_AndTheRunningProcessKeepsGoing()
     {
         // What install_binary must do. On Linux `cp -f` already survives a running target (it unlinks and
         // recreates on ETXTBSY), so this pins the function, not a Linux regression; the hazard it removes is
         // macOS's in-place rewrite of a running binary (and the Secure Enclave library), which CI can't provoke.
-        if (!OperatingSystem.IsLinux())
-            return;
         var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
         try
         {
@@ -197,11 +193,10 @@ public class InstallScriptUpgradeTests
         Assert.Equal(File.ReadAllText(Path.Combine(RepoRoot(), "contrib", "selinux", "tswap-broker.cil")), decoded);
     }
 
-    [Fact]
+    [LinuxFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void InstallBinary_WorksUnderTheScriptsOwnShellOptions_AndLeavesNoTemp()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
         var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
         try
         {
@@ -222,11 +217,9 @@ public class InstallScriptUpgradeTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void AStopBetweenTheModuleAndTheCopy_SaysToRunAgain_AndTemporaryFilesAreRemoved()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var dir = Directory.CreateTempSubdirectory("tswap-install-").FullName;
         try
         {
@@ -245,21 +238,17 @@ public class InstallScriptUpgradeTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void ASuccessfulRun_SaysNothingAboutAMismatch()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var (exit, error) = Bash(["-c", "set -euo pipefail\n" + Prelude(InstallScript.GetBashScript("/tmp/tswap")) + "\nBROKER_PENDING=\"\"\ntrue"], "");
         Assert.Equal(0, exit);
         Assert.DoesNotContain("must match", error);
     }
 
-    [Fact]
+    [WindowsFact("Windows PowerShell ships with every Windows runner")]
     public void ThePowerShellScript_Parses()
     {
-        if (!OperatingSystem.IsWindows())
-            return; // Windows PowerShell ships with every Windows runner
         var path = Path.Combine(Path.GetTempPath(), $"tswap-install-{Guid.NewGuid():N}.ps1");
         File.WriteAllText(path, InstallScript.GetPowerShellScript("C:\\tswap.exe"));
         try

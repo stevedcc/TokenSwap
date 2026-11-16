@@ -82,11 +82,9 @@ public sealed class MacSigningScriptTests : IDisposable
 
     // ---- keychain-setup ----
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_MissingSecret_NamesItAndFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["MACOS_SIGN_INSTALLER_P12_BASE64"] = "";
         _fake.Environment["MACOS_TEAM_ID"] = "";
 
@@ -99,12 +97,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Empty(_fake.Log("security"));
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_NeverPrintsThePasswordOrTheP12()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = KeychainSetup();
 
         Assert.True(exitCode == 0, output);
@@ -127,12 +122,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Single(output.Split('\n'), line => line.Contains(keychainPassword));
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_ImportsBothP12s()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = KeychainSetup();
 
         Assert.True(exitCode == 0, output);
@@ -150,11 +142,9 @@ public sealed class MacSigningScriptTests : IDisposable
             $"list-keychains -d user -s {Keychain} /Users/runner/Library/Keychains/login.keychain-db /Library/Keychains/System.keychain");
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_ImportFails_NamesTheFormatHint()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("import.fails", "");
 
         var (exitCode, output) = KeychainSetup();
@@ -165,11 +155,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain(P12Password, output);
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_ImportFails_RemovesTheP12sAndTheKeychain()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("import.fails", "");
 
         var (exitCode, output) = KeychainSetup();
@@ -181,11 +169,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Equal("", File.ReadAllText(_fake.GitHubOutput));
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_WithoutAnInstallerIdentity_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Identities("basic", $"Developer ID Application: Test Person ({MacFakeTools.Team})");
 
         var (exitCode, output) = KeychainSetup();
@@ -196,11 +182,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.False(File.Exists(Keychain));
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_TwoApplicationIdentities_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Identities("codesigning", $"Developer ID Application: Test Person ({MacFakeTools.Team})",
             $"Developer ID Application: Test Person ({MacFakeTools.Team})");
 
@@ -210,11 +194,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("expected exactly one \"Developer ID Application\" identity of team TEAMID1234, found 2", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_IdentityOfAnotherTeam_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Identities("codesigning", "Developer ID Application: Someone Else (OTHERTEAM1)");
 
         var (exitCode, output) = KeychainSetup();
@@ -224,12 +206,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("\"Developer ID Application: Someone Else (OTHERTEAM1)\"", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_AllowsCodesignAndProductsignOnly()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = KeychainSetup();
 
         Assert.True(exitCode == 0, output);
@@ -246,11 +225,9 @@ public sealed class MacSigningScriptTests : IDisposable
 
     // ---- sign ----
 
-    [Fact]
+    [UnixFact]
     public void Sign_UsesRuntimeTimestampAndIdentifierAndNoEntitlements()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var publish = Publish();
 
         var (exitCode, output) = Sign(publish);
@@ -262,12 +239,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain("--deep", signing);
     }
 
-    [Fact]
+    [UnixFact]
     public void Sign_PutsSignBeforeOptions()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Sign(Publish());
 
         Assert.True(exitCode == 0, output);
@@ -277,11 +251,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Equal("runtime", words[words.IndexOf("--options") + 1]);
     }
 
-    [Fact]
+    [UnixFact]
     public void Sign_UnsignedDylib_FailsBeforeSigningTswap()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-libtswapse.dylib", MacFakeTools.Details("libtswapse", flags: "0x20002(adhoc,linker-signed)", team: "not set"));
 
         var (exitCode, output) = Sign(Publish());
@@ -293,11 +265,9 @@ public sealed class MacSigningScriptTests : IDisposable
 
     // ---- verify ----
 
-    [Fact]
+    [UnixFact]
     public void Verify_SignedBuild_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
 
         var (exitCode, output) = Verify(Publish());
@@ -307,11 +277,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Equal(2, _fake.Log("codesign").Count(line => line.StartsWith("--verify --strict --verbose=2 ", StringComparison.Ordinal)));
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_WrongTeam_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", team: "OTHERTEAM1"));
 
         var (exitCode, output) = Verify(Publish());
@@ -320,11 +288,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: TeamIdentifier is OTHERTEAM1, expected TEAMID1234", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_NoRuntimeFlag_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", flags: "0x0(none)"));
 
         var (exitCode, output) = Verify(Publish());
@@ -333,11 +299,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: flags= does not name runtime (the hardened runtime)", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_RuntimeAmongOtherFlags_Passes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", flags: "0x10002(adhoc,runtime)"));
 
         var (exitCode, output) = Verify(Publish());
@@ -345,11 +309,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.True(exitCode == 0, output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_DylibWithoutRuntime_ReportOnly_PrintsAndPasses()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-libtswapse.dylib", MacFakeTools.Details("dev.crawford.tswap.libtswapse", flags: "0x0(none)"));
 
         var (exitCode, output) = Verify(Publish());
@@ -359,11 +321,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("::warning::REPORT-ONLY dylib-runtime:", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_DylibWithoutRuntime_Gated_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
         _fake.Write("details-libtswapse.dylib", MacFakeTools.Details("dev.crawford.tswap.libtswapse", flags: "0x0(none)"));
 
@@ -373,11 +333,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("::error::dylib-runtime: libtswapse.dylib: flags= does not name runtime", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_NoTimestamp_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-libtswapse.dylib", MacFakeTools.Details("dev.crawford.tswap.libtswapse", timestamp: false));
 
         var (exitCode, output) = Verify(Publish());
@@ -386,11 +344,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("libtswapse.dylib: no Timestamp= line (no secure timestamp)", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_NotDeveloperIdApplication_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", authority: "Apple Development: Test Person (TEAMID1234)"));
 
         var (exitCode, output) = Verify(Publish());
@@ -399,11 +355,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: the first Authority= is 'Apple Development: Test Person (TEAMID1234)', expected Developer ID Application:", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_WrongIdentifier_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-libtswapse.dylib", MacFakeTools.Details("libtswapse"));
 
         var (exitCode, output) = Verify(Publish());
@@ -412,11 +366,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("libtswapse.dylib: Identifier is libtswapse, expected dev.crawford.tswap.libtswapse", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_BadSignature_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("verify-tswap.exit", "1");
 
         var (exitCode, output) = Verify(Publish());
@@ -425,11 +377,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: codesign --verify --strict failed", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_Entitlements_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("entitlements-tswap", "<?xml version=\"1.0\"?><plist><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>\n");
 
         var (exitCode, output) = Verify(Publish());
@@ -438,11 +388,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: has entitlements; it must have none", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_DifferentMinOs_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("minos-libtswapse.dylib", "26.0");
 
         var (exitCode, output) = Verify(Publish());
@@ -453,11 +401,9 @@ public sealed class MacSigningScriptTests : IDisposable
 
     // ---- notarise and zip-for-notary ----
 
-    [Fact]
+    [UnixFact]
     public void Notarise_PassesIssuerAndKeyId()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var zip = Zip();
 
         var (exitCode, output) = Notarise(zip);
@@ -476,11 +422,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_fake.RunnerTemp, "notary-log-tswap.zip.json")), "the log is always fetched");
     }
 
-    [Fact]
+    [UnixFact]
     public void Notarise_Invalid_PrintsLogIssuesAndFails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("notary-submit.out", """{"message":"Processing complete","id":"99999999-8888-7777-6666-555555555555","status":"Invalid"}""");
         _fake.Write("notary-log.json", """
             {
@@ -499,11 +443,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains(_fake.Log("xcrun"), line => line.StartsWith("notarytool log 99999999-8888-7777-6666-555555555555 ", StringComparison.Ordinal));
     }
 
-    [Fact]
+    [UnixFact]
     public void Notarise_Error1048_SaysToAcceptTheAgreements()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("notary-submit.out", "");
         _fake.Write("notary-submit.err", "Error: HTTP status code: 403. A required agreement is missing or has expired. (1048)\n");
         _fake.Write("notary-submit.exit", "1");
@@ -514,11 +456,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("error 1048: the Account Holder must accept Apple's current developer agreements at https://appstoreconnect.apple.com", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Notarise_RemovesTheKeyFileOnFailure()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("notary-submit.exit", "1");
 
         var (exitCode, _) = Notarise(Zip());
@@ -528,12 +468,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Empty(LeftoverKeyMaterial());
     }
 
-    [Fact]
+    [UnixFact]
     public void Notarise_RemovesTheKeyFileOnSuccess()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Notarise(Zip());
 
         Assert.True(exitCode == 0, output);
@@ -541,11 +478,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Empty(LeftoverKeyMaterial());
     }
 
-    [Fact]
+    [UnixFact]
     public void ZipForNotary_HoldsExactlyTheTwoFiles()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var zip = Path.Combine(_fake.Dir, "out", "tswap.zip");
 
         var (exitCode, output) = _fake.Run(_script, "zip-for-notary", Publish(), zip);
@@ -557,11 +492,9 @@ public sealed class MacSigningScriptTests : IDisposable
 
     // ---- keychain-cleanup ----
 
-    [Fact]
+    [UnixFact]
     public void KeychainCleanup_RemovesKeychainAndFiles()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.WriteAllText(Keychain, "");
         File.WriteAllText(Path.Combine(_fake.RunnerTemp, "tswap-app.p12"), "left by a cancelled run");
         Directory.CreateDirectory(Path.Combine(_fake.RunnerTemp, "notary-key.abc123"));
@@ -575,11 +508,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Empty(LeftoverKeyMaterial());
     }
 
-    [Fact]
+    [UnixFact]
     public void KeychainCleanup_NothingToClean_Succeeds()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.WriteTool("security", "echo \"$*\" >> \"$FAKE_DIR/security.log\"\necho 'security: The specified keychain could not be found.' >&2\nexit 50\n");
 
         var (exitCode, output) = _fake.Run(_script, "keychain-cleanup");
@@ -592,12 +523,9 @@ public sealed class MacSigningScriptTests : IDisposable
     private (int ExitCode, string Output) RunnerCheck(string status) =>
         _fake.Run("-c", $". '{RepoFile("contrib", "packaging", "macos", "runner-checks.sh")}' && runner_check demo-check {status} 'what was seen' && echo carried-on");
 
-    [Fact]
+    [UnixFact]
     public void RunnerCheck_ReportOnly_WarnsAndContinues()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = RunnerCheck("1");
 
         Assert.True(exitCode == 0, output);
@@ -606,11 +534,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("carried-on", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void RunnerCheck_Gated_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
 
         var (exitCode, output) = RunnerCheck("1");
@@ -620,12 +546,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain("carried-on", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void RunnerCheck_Passed_SaysOkInBothModes()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var reportOnly = RunnerCheck("0");
         _fake.Environment["TSWAP_MACOS_GATE_RUNNER_CHECKS"] = "1";
         var gated = RunnerCheck("0");
@@ -670,12 +593,9 @@ public sealed class MacSigningScriptTests : IDisposable
     // ---- code review fixes (2026-11-07) ----
 
     /// <summary>The key file notarytool reads is the owner's only (0600, in a 0700 folder) while it exists.</summary>
-    [Fact]
+    [UnixFact]
     public void Notarise_KeyFileIsOwnerOnly()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = Notarise(Zip());
 
         Assert.True(exitCode == 0, output);
@@ -684,11 +604,9 @@ public sealed class MacSigningScriptTests : IDisposable
     }
 
     /// <summary>The zip's and the pkg's submissions share a stem (tswap-osx-arm64): each keeps its own log.</summary>
-    [Fact]
+    [UnixFact]
     public void Notarise_ZipAndPkg_KeepTwoLogs()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var zip = Path.Combine(_fake.Dir, "tswap-osx-arm64.zip");
         var pkg = Path.Combine(_fake.Dir, "tswap-osx-arm64.pkg");
         File.WriteAllText(zip, "zip");
@@ -705,11 +623,9 @@ public sealed class MacSigningScriptTests : IDisposable
     }
 
     /// <summary>"1048" inside a submission id is not Apple's agreements error.</summary>
-    [Fact]
+    [UnixFact]
     public void Notarise_IdContaining1048_SaysNothingAboutAgreements()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("notary-submit.out", """{"message":"Processing complete","id":"10481048-1048-1048-1048-104810481048","status":"Accepted"}""");
 
         var (exitCode, output) = Notarise(Zip());
@@ -718,11 +634,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain("error 1048", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void ZipForNotary_Failure_LeavesNoStagingFolder()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var temp = Path.Combine(_fake.Dir, "tmp");
         Directory.CreateDirectory(temp);
         _fake.Environment["TMPDIR"] = temp;
@@ -735,11 +649,9 @@ public sealed class MacSigningScriptTests : IDisposable
     }
 
     /// <summary>codesign failing to show the entitlements is reported as that, not as "has entitlements".</summary>
-    [Fact]
+    [UnixFact]
     public void Verify_EntitlementsCheckFails_SaysSo()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("entitlements-tswap.exit", "1");
 
         var (exitCode, output) = Verify(Publish());
@@ -749,11 +661,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.DoesNotContain("has entitlements", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_NoTimestampOnTswap_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("dev.crawford.tswap", timestamp: false));
 
         var (exitCode, output) = Verify(Publish());
@@ -762,11 +672,9 @@ public sealed class MacSigningScriptTests : IDisposable
         Assert.Contains("tswap: no Timestamp= line (no secure timestamp)", output);
     }
 
-    [Fact]
+    [UnixFact]
     public void Verify_WrongIdentifierOnTswap_Fails()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.Write("details-tswap", MacFakeTools.Details("tswap"));
 
         var (exitCode, output) = Verify(Publish());
@@ -776,11 +684,9 @@ public sealed class MacSigningScriptTests : IDisposable
     }
 
     /// <summary>Without vtool, minos comes from otool -l, and a difference still fails.</summary>
-    [Fact]
+    [UnixFact]
     public void Verify_WithoutVtool_ReadsOtool()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _fake.OtoolInsteadOfVtool();
         _fake.Write("minos-libtswapse.dylib", "26.0");
 
@@ -792,12 +698,9 @@ public sealed class MacSigningScriptTests : IDisposable
     }
 
     /// <summary>Task 10 records the identities' subjects: keychain-setup prints them (never a key).</summary>
-    [Fact]
+    [UnixFact]
     public void KeychainSetup_PrintsTheSubjects()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var (exitCode, output) = KeychainSetup();
 
         Assert.True(exitCode == 0, output);

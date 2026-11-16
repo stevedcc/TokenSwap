@@ -79,12 +79,10 @@ public class SshAgentRecordedFramesTests(Xunit.Abstractions.ITestOutputHelper ou
         Assert.Null(SshUserauth.Refusal(data, new SshBinding(hostBlob, sessionId, SshFingerprint.Of(hostBlob)), key, flags));
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSession_BindsAndSigns_AsInTheLiveRun(string name)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var session = Session(name);
         var hostBlob = Convert.FromBase64String(session.HostKeyBlob);
         var source = await StartAsync(session, SshFingerprint.Of(hostBlob));
@@ -108,12 +106,10 @@ public class SshAgentRecordedFramesTests(Xunit.Abstractions.ITestOutputHelper ou
         Assert.Equal(1, source.Reads - loads);
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSession_WithTheHostNotAllowed_IsRefusedAtTheBind(string name)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var session = Session(name);
         var source = await StartAsync(session, SshAgentHarness.SomeHostFingerprint);
         var loads = source.Reads;
@@ -124,12 +120,10 @@ public class SshAgentRecordedFramesTests(Xunit.Abstractions.ITestOutputHelper ou
         Assert.Equal(0, source.Reads - loads);
     }
 
-    [Theory]
+    [UnixTheory("the broker is Unix-only (Unix sockets and kernel peer credentials)")]
     [MemberData(nameof(SessionNames))]
     public async Task ReplayedSignRequest_WithoutTheBind_IsRefused(string name)
     {
-        if (SshTestSkip.OnWindows(_output))
-            return;
         var session = Session(name);
         var source = await StartAsync(session, SshFingerprint.Of(Convert.FromBase64String(session.HostKeyBlob)));
         var loads = source.Reads;

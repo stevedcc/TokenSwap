@@ -25,11 +25,9 @@ public class BrokerCommandTests : IDisposable
     private static readonly string[] AddLane =
         ["broker", "socket", "add", "lane1", "--uids", "100999,200000-265535", "--routes", "github", "--socket-dir", "/run/tswap-broker", "--uid-only"];
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void WithoutSudo_ConfigChangesAreRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         if (Environment.IsPrivilegedProcess)
             return; // only meaningful when this process is unprivileged (Windows CI runs elevated)
         if (OperatingSystem.IsWindows())
@@ -46,11 +44,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Empty(Directory.GetFiles(_m.Dir));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public void WithoutSudo_AnExistingFileIsLeftUnchanged()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         if (Environment.IsPrivilegedProcess || OperatingSystem.IsWindows())
             return;
         _m.Ok("", AddGithub);
@@ -64,11 +60,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void SimulatedSudo_RouteAdd_WritesAsTheFolderOwner_Mode0600_Atomically_AndLoadsInServe()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var fake = new FileOwnershipTests.FakeOwnership(privileged: true, euid: 0);
         _m.Ownership = new DirectoryOwnerMatcher(fake);
         // An existing broker.json with a second hard link: an atomic write (new file, then rename)
@@ -99,11 +93,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Equal("/stevedcc", route.BasePath);
     }
 
-    [Fact]
+    [UnixFact]
     public void Sudo_AddsAndRemoves_RoutesAndSockets()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddGithub);
         _m.Ok("", AddLane);
 
@@ -124,11 +116,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Empty(policy.Sockets);
     }
 
-    [Fact]
+    [UnixFact]
     public void Sudo_InvalidRoute_IsRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var (exit, _, err) = _m.Run("", "broker", "route", "add", "plain", "--upstream", "http://a.example", "--auth", "bearer", "--secret", "k", "--path", "");
 
         Assert.NotEqual(0, exit);
@@ -136,11 +126,9 @@ public class BrokerCommandTests : IDisposable
         Assert.False(File.Exists(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void Sudo_DuplicateRoute_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddGithub);
         var before = File.ReadAllBytes(BrokerJson);
 
@@ -151,11 +139,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void ConcurrentEdit_HoldingTheEditLock_IsRefused_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         _m.Ok("", AddGithub);
         var before = File.ReadAllBytes(BrokerJson);
 
@@ -176,11 +162,9 @@ public class BrokerCommandTests : IDisposable
     private static readonly string[] AddOther =
         ["broker", "route", "add", "other", "--upstream", "https://a.example", "--auth", "bearer", "--secret", "k", "--path", ""];
 
-    [Fact]
+    [UnixFact]
     public void EditLock_ThatCantBeOpened_IsACleanErrorNamingTheFile_NotAConcurrentChange()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         Directory.CreateDirectory(EditLock); // a folder where the lock file should be
 
         var (exit, _, err) = _m.Run("", AddOther);
@@ -191,11 +175,9 @@ public class BrokerCommandTests : IDisposable
         Assert.False(File.Exists(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
     public void EditLock_ThatIsASymlink_IsRefused()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         var target = Path.Combine(_m.Dir, "elsewhere");
         File.WriteAllText(target, "");
         File.CreateSymbolicLink(EditLock, target);
@@ -207,11 +189,10 @@ public class BrokerCommandTests : IDisposable
         Assert.False(File.Exists(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void EditLock_IsTightenedTo0600()
     {
-        if (OperatingSystem.IsWindows())
-            return;
         File.WriteAllText(EditLock, "");
         File.SetUnixFileMode(EditLock, (UnixFileMode)0b110_110_110);
 
@@ -220,12 +201,9 @@ public class BrokerCommandTests : IDisposable
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(EditLock));
     }
 
-    [Fact]
+    [WindowsFact("the Unix behaviour is everything else in these classes")]
     public void OnWindows_BrokerSaysItIsNotSupported()
     {
-        if (!OperatingSystem.IsWindows())
-            return; // the Unix behaviour is everything else in these classes
-
         foreach (var args in new[] { new[] { "broker", "serve" }, ["broker", "forward", "--listen", "127.0.0.1:1"], AddGithub })
         {
             var (exit, _, err) = _m.Run("", args);
@@ -235,11 +213,9 @@ public class BrokerCommandTests : IDisposable
         Assert.False(File.Exists(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact("the broker is Unix only")]
     public async Task EditLock_HeldByAnotherProcess_IsAConcurrentChange_AndNothingIsWritten()
     {
-        if (OperatingSystem.IsWindows())
-            return; // the broker is Unix only
         _m.Ok("", AddGithub);
         var before = File.ReadAllBytes(BrokerJson);
         using var held = await BrokerHarness.HoldLockInAnotherProcessAsync(EditLock);
@@ -253,10 +229,11 @@ public class BrokerCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BrokerJson));
     }
 
-    [Fact]
+    [UnixFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void EditLock_ThatCantBeCreated_EACCES_IsAnErrorNamingTheFile()
     {
-        if (OperatingSystem.IsWindows() || Environment.IsPrivilegedProcess)
+        if (Environment.IsPrivilegedProcess)
             return; // root creates the file anyway
         File.SetUnixFileMode(_m.Dir, UnixFileMode.UserRead | UnixFileMode.UserExecute); // 0500: no new files
         try

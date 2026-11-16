@@ -56,6 +56,7 @@ public class StretchedPasswordTests(ITestOutputHelper output)
     }
 
     [Fact]
+    [Trait("Category", "Perf")] // wall clock: run on purpose with ./runtests.sh --perf (#300)
     public void Stretch_UnderOneSecond()
     {
         // Warm up the JIT and the allocator once, so the measured run is the derivation itself.
